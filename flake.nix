@@ -24,10 +24,24 @@
             pkg: (pkgs.lib.getName pkg) == "claude-code";
         };
       in
-      {
-        packages.default = pkgs.writeShellScriptBin "clown" ''
+      let
+        clown-bin = pkgs.writeShellScriptBin "clown" ''
           exec ${pkgs-master.claude-code}/bin/claude "$@"
         '';
+
+        clown-completions = pkgs.runCommand "clown-completions" { } ''
+          mkdir -p $out/share/fish/vendor_completions.d
+          cp ${./completions/clown.fish} $out/share/fish/vendor_completions.d/clown.fish
+        '';
+      in
+      {
+        packages.default = pkgs.symlinkJoin {
+          name = "clown";
+          paths = [
+            clown-bin
+            clown-completions
+          ];
+        };
 
         devShells.default = pkgs.mkShell {
           packages = [
