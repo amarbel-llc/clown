@@ -19,3 +19,6 @@ NOT immediately start resolving or fixing the problem the question may suggest.
 
 When an instruction from the user is ambiguous, you MUST NEVER assume their
 intent. Instead, you MUST ask clarifying questions.
+
+When debugging or troubleshooting, keep track of a list of assumptions made by
+you and the user and what has been done to verify / invalidate them.
