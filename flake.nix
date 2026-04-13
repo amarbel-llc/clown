@@ -77,7 +77,7 @@
           done
 
           # Build claude args
-          extra_args=()
+          extra_args=(--disallowed-tools 'Bash(*)')
 
           if [[ -n "$system_prompt_file" ]]; then
             extra_args+=(--system-prompt-file "$system_prompt_file")
