@@ -18,17 +18,25 @@
       system:
       let
         pkgs = import nixpkgs { inherit system; };
-        pkgs-master = import nixpkgs-master {
-          inherit system;
-          config.allowUnfreePredicate =
-            pkg: (pkgs.lib.getName pkg) == "claude-code";
-        };
+        pkgs-master = import nixpkgs-master { inherit system; };
+
+        # Inline fetch — not a flake input, so cannot be overridden via follows.
+        pkgs-claude-code-pinned = import
+          (builtins.fetchTarball {
+            url = "https://github.com/NixOS/nixpkgs/archive/5b471d29a84be70e8f5577258721b89865660493.tar.gz";
+            sha256 = "1s420i7savy8njafgkh3qq4xwx9nw1h648g7jlpwig37ndlnfk7k";
+          })
+          {
+            inherit system;
+            config.allowUnfreePredicate =
+              pkg: (pkgs.lib.getName pkg) == "claude-code";
+          };
       in
       let
         clown-bin = pkgs.writeShellScriptBin "clown" ''
           set -euo pipefail
 
-          claude=${pkgs-master.claude-code}/bin/claude
+          claude=${pkgs-claude-code-pinned.claude-code}/bin/claude
 
           # Walk from PWD up to HOME, collecting .circus/ directories
           walkup_dirs=()
