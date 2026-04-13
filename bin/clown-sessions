@@ -1,0 +1,49 @@
+#!/usr/bin/env python3
+"""List resumable claude-code sessions for shell completion."""
+
+import json
+import os
+import sys
+from pathlib import Path
+
+
+def main():
+    claude_dir = Path.home() / ".claude"
+    sessions_dir = claude_dir / "sessions"
+    projects_dir = claude_dir / "projects"
+
+    # Build session ID -> name map from active session metadata
+    names = {}
+    if sessions_dir.is_dir():
+        for f in sessions_dir.iterdir():
+            if f.suffix != ".json":
+                continue
+            try:
+                data = json.loads(f.read_bytes())
+                sid = data.get("sessionId", "")
+                name = data.get("name", "")
+                if sid and name:
+                    names[sid] = name
+            except (json.JSONDecodeError, OSError):
+                continue
+
+    # Scan all project directories for top-level .jsonl transcript files
+    if not projects_dir.is_dir():
+        return
+
+    for project in projects_dir.iterdir():
+        if not project.is_dir():
+            continue
+        for f in project.iterdir():
+            if f.suffix != ".jsonl" or not f.is_file():
+                continue
+            sid = f.stem
+            name = names.get(sid, "")
+            if name:
+                print(f"{name}\t{sid}")
+            else:
+                print(sid)
+
+
+if __name__ == "__main__":
+    main()

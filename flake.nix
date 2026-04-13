@@ -111,6 +111,11 @@
           exec "$claude" "''${extra_args[@]}" "$@"
         '';
 
+        clown-sessions = pkgs.writeScriptBin "clown-sessions" ''
+          #!${pkgs.python3}/bin/python3
+          ${builtins.readFile ./bin/clown-sessions}
+        '';
+
         clown-completions = pkgs.runCommand "clown-completions" { } ''
           mkdir -p $out/share/fish/vendor_completions.d
           cp ${./completions/clown.fish} $out/share/fish/vendor_completions.d/clown.fish
@@ -121,6 +126,7 @@
           name = "clown";
           paths = [
             clown-bin
+            clown-sessions
             clown-completions
           ];
         };
@@ -128,6 +134,7 @@
         devShells.default = pkgs.mkShell {
           packages = [
             pkgs-master.just
+            pkgs.fish
           ];
         };
       }
