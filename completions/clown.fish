@@ -1,3 +1,5 @@
+complete -c clown -w claude
+
 function __clown_sessions
   for f in ~/.claude/sessions/*.json
     set -l sid (jq -r '.sessionId' $f 2>/dev/null)
