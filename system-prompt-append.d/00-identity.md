@@ -22,3 +22,7 @@ intent. Instead, you MUST ask clarifying questions.
 
 When debugging or troubleshooting, keep track of a list of assumptions made by
 you and the user and what has been done to verify / invalidate them.
+
+When bumping into new issues with tools and identifying them as pre-existing,
+immediately stop and present them to the user and ask for guidance. These issues
+cannot be allowed to fester and hide behind agent shortcuts.
