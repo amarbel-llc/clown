@@ -47,8 +47,18 @@
             reversed+=("''${walkup_dirs[$i]}")
           done
 
-          # Collect system-prompt.d fragments (shallowest first, sorted within each dir)
+          # Builtin system prompt append (always included, before user fragments)
           append_fragments=""
+          for f in $(find ${./system-prompt-append.d} -maxdepth 1 -name '*.md' -type f | sort); do
+            content=$(<"$f")
+            if [[ -n "$content" ]]; then
+              append_fragments+="$content"
+              append_fragments+=$'\n\n'
+            fi
+          done
+
+          # Collect .circus/system-prompt.d fragments (shallowest first, sorted within each dir)
+
           for dir in "''${reversed[@]}"; do
             prompt_d="$dir/.circus/system-prompt.d"
             if [[ -d "$prompt_d" ]]; then
