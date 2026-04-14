@@ -2,32 +2,48 @@
 """List resumable claude-code sessions for shell completion."""
 
 import json
-import os
 import sys
 from pathlib import Path
 
+TAIL_BYTES = 4096
+
+
+def extract_session_name(transcript: Path) -> str:
+    """Read the last TAIL_BYTES of a .jsonl transcript for a session name.
+
+    Claude Code writes custom-title and agent-name entries near the end
+    of the transcript. Prefer custom-title if both exist.
+    """
+    try:
+        size = transcript.stat().st_size
+    except OSError:
+        return ""
+    if size == 0:
+        return ""
+
+    name = ""
+    try:
+        with transcript.open("rb") as fh:
+            fh.seek(max(0, size - TAIL_BYTES))
+            tail = fh.read().decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+
+    for line in tail.splitlines():
+        try:
+            entry = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        entry_type = entry.get("type", "")
+        if entry_type == "agent-name" and not name:
+            name = entry.get("agentName", "")
+        elif entry_type == "custom-title":
+            name = entry.get("customTitle", "")
+    return name
+
 
 def main():
-    claude_dir = Path.home() / ".claude"
-    sessions_dir = claude_dir / "sessions"
-    projects_dir = claude_dir / "projects"
-
-    # Build session ID -> name map from active session metadata
-    names = {}
-    if sessions_dir.is_dir():
-        for f in sessions_dir.iterdir():
-            if f.suffix != ".json":
-                continue
-            try:
-                data = json.loads(f.read_bytes())
-                sid = data.get("sessionId", "")
-                name = data.get("name", "")
-                if sid and name:
-                    names[sid] = name
-            except (json.JSONDecodeError, OSError):
-                continue
-
-    # Scan all project directories for top-level .jsonl transcript files
+    projects_dir = Path.home() / ".claude" / "projects"
     if not projects_dir.is_dir():
         return
 
@@ -38,7 +54,7 @@ def main():
             if f.suffix != ".jsonl" or not f.is_file():
                 continue
             sid = f.stem
-            name = names.get(sid, "")
+            name = extract_session_name(f)
             if name:
                 print(f"{name}\t{sid}")
             else:
