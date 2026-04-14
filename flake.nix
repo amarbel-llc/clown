@@ -33,6 +33,34 @@
           };
       in
       let
+        # Subagent definitions use TOML frontmatter (+++ delimiters) so Nix
+        # can parse config natively via builtins.fromTOML. The markdown body
+        # after the closing +++ becomes the agent's system prompt.
+        parseAgent =
+          file:
+          let
+            raw = builtins.readFile file;
+            parts = builtins.split "\\+\\+\\+" raw;
+            # split yields: ["", [], "\ntoml\n", [], "\n\nbody"]
+            config = builtins.fromTOML (builtins.elemAt parts 2);
+            prompt = builtins.elemAt parts 4;
+          in
+          {
+            name = config.name;
+            value = {
+              inherit (config) description tools model;
+              inherit prompt;
+            };
+          };
+
+        agentFiles = builtins.attrNames (builtins.readDir ./subagents);
+        agents = builtins.listToAttrs (
+          map (f: parseAgent (./subagents + "/${f}")) (
+            builtins.filter (f: pkgs.lib.hasSuffix ".md" f) agentFiles
+          )
+        );
+        agents-json = builtins.toJSON agents;
+
         clown-bin = pkgs.writeShellScriptBin "clown" ''
           set -euo pipefail
 
@@ -95,7 +123,9 @@
           done
 
           # Build claude args
-          extra_args=(--disallowed-tools 'Bash(*)')
+          extra_args=(--disallowed-tools 'Bash(*)' --disallowed-tools 'Agent(Explore)')
+          agents_file=${pkgs.writeText "clown-agents.json" agents-json}
+          extra_args+=(--agents "$(<"$agents_file")")
 
           if [[ -n "$system_prompt_file" ]]; then
             extra_args+=(--system-prompt-file "$system_prompt_file")
