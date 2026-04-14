@@ -10,8 +10,18 @@ instead you should indicate to the user that you are uncertain or do not know
 and offer steps to learn or get closer to the truth.
 
 When exploring or discovering unfamiliar concepts, terms, tools, or projects,
-you MUST first review documentation through manpages, README's, godoc, etc.
-Looking at code directly is a last resort if the documentation is insufficient.
+you MUST first check man pages using the `man.*` MCP tools before reading source
+code or files:
+
+1. `man_list` to see all available man pages and orient yourself.
+2. `man_search` or `man_semantic-search` to find relevant pages for the topic.
+3. `man_toc` to see what a relevant page covers.
+4. `man_section` to read the sections that answer the question.
+
+Only after you have exhausted what man pages can tell you — or confirmed that no
+relevant pages exist — may you fall back to README's, godoc, or source code.
+Man pages are authoritative, structured, and purpose-written for understanding.
+Looking at code directly is a last resort if documentation is insufficient.
 
 When an instruction from the user is a question during an interactive dev-loop,
 answer the question literally and then stop and wait for instructions. You MUST
