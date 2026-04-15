@@ -8,9 +8,6 @@
     moxy.url = "github:amarbel-llc/moxy";
     moxy.inputs.nixpkgs.follows = "nixpkgs";
     moxy.inputs.nixpkgs-master.follows = "nixpkgs-master";
-    spinclass.url = "github:amarbel-llc/spinclass";
-    spinclass.inputs.nixpkgs.follows = "nixpkgs";
-    spinclass.inputs.nixpkgs-master.follows = "nixpkgs-master";
   };
 
   outputs =
@@ -20,7 +17,6 @@
       nixpkgs-master,
       utils,
       moxy,
-      spinclass,
     }:
     utils.lib.eachDefaultSystem (
       system:
@@ -73,7 +69,6 @@
         agents-file = pkgs.writeText "clown-agents.json" agents-json;
 
         moxyPluginDir = "${moxy.packages.${system}.default}/share/purse-first/moxy";
-        spinclassPluginDir = "${spinclass.packages.${system}.default}/share/purse-first/spinclass";
 
         sharedPromptLogic = ''
           # Walk from PWD up to HOME, collecting .circus/ directories.
@@ -189,7 +184,7 @@
             claude)
               extra_args+=(--disallowed-tools 'Bash(*)' --disallowed-tools 'Agent(Explore)')
               extra_args+=(--agents "$(<"${agents-file}")")
-              extra_args+=(--plugin-dir "${moxyPluginDir}" --plugin-dir "${spinclassPluginDir}")
+              extra_args+=(--plugin-dir "${moxyPluginDir}")
 
               if [[ -n "$system_prompt_file" ]]; then
                 extra_args+=(--system-prompt-file "$system_prompt_file")
