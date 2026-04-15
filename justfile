@@ -7,3 +7,7 @@ build-nix:
 
 clean:
     rm -rf result
+
+# Bump all flake inputs and rebuild to verify
+bump: && build
+    nix flake update
