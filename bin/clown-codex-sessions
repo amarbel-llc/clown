@@ -1,0 +1,37 @@
+#!/usr/bin/env python3
+"""List resumable Codex sessions for shell completion."""
+
+import sqlite3
+from pathlib import Path
+
+
+def main() -> None:
+    db_path = Path.home() / ".codex" / "state_5.sqlite"
+    if not db_path.is_file():
+        return
+
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return
+
+    query = """
+        select id, title
+        from threads
+        where archived = 0
+        order by updated_at desc
+    """
+
+    try:
+        with conn:
+            for session_id, title in conn.execute(query):
+                if title:
+                    print(f"{title}\t{session_id}")
+                else:
+                    print(session_id)
+    except sqlite3.Error:
+        return
+
+
+if __name__ == "__main__":
+    main()

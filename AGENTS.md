@@ -1,6 +1,7 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to coding agents working in this repository,
+including Codex and Claude Code.
 
 ## Overview
 
@@ -22,7 +23,7 @@ Format nix: `lux fmt flake.nix`
 
 The flake produces a `symlinkJoin` of three components:
 
-1. **`clown-bin`** (shell wrapper, defined inline in `flake.nix:36-112`): Wraps
+1. **`clown-bin`** (shell wrapper, defined inline in `flake.nix`): Wraps
    the pinned Claude Code binary. Walks from `$PWD` up to `$HOME` collecting
    `.circus/` directories for system prompt injection. Two modes:
    - **Replace**: Deepest `.circus/system-prompt` file wins (`--system-prompt-file`)
@@ -32,11 +33,10 @@ The flake produces a `symlinkJoin` of three components:
    - Always passes `--disallowed-tools 'Bash(*)'`
 
 2. **`clown-sessions`** (`bin/clown-sessions`, Python3): Scans
-   `~/.claude/sessions/` and `~/.claude/projects/` to list resumable sessions
-   for shell completion.
+   `~/.claude/projects/` to list resumable sessions for shell completion.
 
 3. **`clown-completions`** (`completions/clown.fish`): Fish completions covering
-   all Claude Code flags, with dynamic session ID completion via `clown-sessions`.
+   Claude Code flags, with dynamic session ID completion via `clown-sessions`.
 
 ## Nix Conventions
 
@@ -45,6 +45,12 @@ Follows the monorepo's stable-first pattern:
 - `nixpkgs-master` -> pinned SHA
 - Claude Code is fetched via inline `fetchTarball` (not a flake input) with
   `allowUnfree` — pinned to a specific nixpkgs SHA for version stability.
+
+## Codex Note
+
+This repository currently targets Claude Code directly. Supporting Codex would
+require changes beyond agent docs because the wrapper, completion script, and
+session discovery all assume the Claude CLI and its flag surface.
 
 ## Spinclass Integration
 
