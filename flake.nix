@@ -137,8 +137,9 @@
         clown-bin = pkgs.writeShellScriptBin "clown" ''
           set -euo pipefail
 
-          # --- Parse and consume --provider flag ---
+          # --- Parse and consume clown flags ---
           provider="''${CLOWN_PROVIDER:-claude}"
+          clean=false
           forwarded_args=()
           while [[ $# -gt 0 ]]; do
             case "$1" in
@@ -148,6 +149,10 @@
                 ;;
               --provider=*)
                 provider="''${1#--provider=}"
+                shift
+                ;;
+              --clean)
+                clean=true
                 shift
                 ;;
               *)
@@ -175,6 +180,10 @@
               exit 1
               ;;
           esac
+
+          if [[ "$clean" == true ]]; then
+            exec "$cli" "$@"
+          fi
 
           ${sharedPromptLogic}
 
