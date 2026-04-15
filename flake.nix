@@ -69,6 +69,7 @@
         agents-file = pkgs.writeText "clown-agents.json" agents-json;
 
         moxyPluginDir = "${moxy.packages.${system}.default}/share/purse-first/moxy";
+        bobPluginDir = "${moxy.inputs.bob.packages.${system}.default}/share/purse-first/bob";
 
         sharedPromptLogic = ''
           # Walk from PWD up to HOME, collecting .circus/ directories.
@@ -184,7 +185,7 @@
             claude)
               extra_args+=(--disallowed-tools 'Bash(*)' --disallowed-tools 'Agent(Explore)')
               extra_args+=(--agents "$(<"${agents-file}")")
-              extra_args+=(--plugin-dir "${moxyPluginDir}")
+              extra_args+=(--plugin-dir "${moxyPluginDir}" --plugin-dir "${bobPluginDir}")
 
               if [[ -n "$system_prompt_file" ]]; then
                 extra_args+=(--system-prompt-file "$system_prompt_file")
