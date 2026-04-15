@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
-"""List resumable claude-code sessions for shell completion."""
+"""List resumable coding-agent sessions for shell completion.
+
+Supports both Claude Code (JSONL transcripts) and Codex (SQLite state DB).
+Use --provider codex to list Codex sessions; defaults to Claude.
+"""
 
 import json
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -42,7 +47,7 @@ def extract_session_name(transcript: Path) -> str:
     return name
 
 
-def main():
+def list_claude_sessions():
     projects_dir = Path.home() / ".claude" / "projects"
     if not projects_dir.is_dir():
         return
@@ -59,6 +64,54 @@ def main():
                 print(f"{name}\t{sid}")
             else:
                 print(sid)
+
+
+def list_codex_sessions():
+    db_path = Path.home() / ".codex" / "state_5.sqlite"
+    if not db_path.is_file():
+        return
+
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return
+
+    query = """
+        select id, title
+        from threads
+        where archived = 0
+        order by updated_at desc
+    """
+
+    try:
+        with conn:
+            for session_id, title in conn.execute(query):
+                if title:
+                    print(f"{title}\t{session_id}")
+                else:
+                    print(session_id)
+    except sqlite3.Error:
+        return
+
+
+def main():
+    provider = "claude"
+    args = sys.argv[1:]
+    i = 0
+    while i < len(args):
+        if args[i] == "--provider" and i + 1 < len(args):
+            provider = args[i + 1]
+            i += 2
+        elif args[i].startswith("--provider="):
+            provider = args[i].split("=", 1)[1]
+            i += 1
+        else:
+            i += 1
+
+    if provider == "codex":
+        list_codex_sessions()
+    else:
+        list_claude_sessions()
 
 
 if __name__ == "__main__":

@@ -121,140 +121,125 @@
           done
         '';
 
-        # Provider-specific wrappers share prompt discovery but diverge at the
-        # final CLI contract. Claude supports prompt files and custom agents
-        # natively. Codex support is sketched as a separate wrapper/output so
-        # the flake shape is ready even if the exact Codex CLI flags evolve.
-        mkProviderWrapper =
-          {
-            name,
-            cliPath,
-            preExec ? "",
-            extraArgs ? "",
-            commandName ? name,
-          }:
-          pkgs.writeShellScriptBin commandName ''
-            set -euo pipefail
+        claudeCliPath = "${pkgs-claude-code-pinned.claude-code}/bin/claude";
 
-            cli=${cliPath}
+        # Unified wrapper dispatching to Claude (default) or Codex via
+        # --provider flag. Provider-specific flags (tool policy, prompt
+        # injection, subagents) are injected per-provider after shared
+        # prompt discovery runs.
+        clown-bin = pkgs.writeShellScriptBin "clown" ''
+          set -euo pipefail
 
-            ${sharedPromptLogic}
+          # --- Parse and consume --provider flag ---
+          provider="''${CLOWN_PROVIDER:-claude}"
+          forwarded_args=()
+          while [[ $# -gt 0 ]]; do
+            case "$1" in
+              --provider)
+                provider="$2"
+                shift 2
+                ;;
+              --provider=*)
+                provider="''${1#--provider=}"
+                shift
+                ;;
+              *)
+                forwarded_args+=("$1")
+                shift
+                ;;
+            esac
+          done
+          set -- "''${forwarded_args[@]}"
 
-            extra_args=()
-            ${extraArgs}
-
-            ${preExec}
-
-            exec "$cli" "''${extra_args[@]}" "$@"
-          '';
-
-        clown-bin-claude = mkProviderWrapper {
-          name = "claude";
-          commandName = "clown";
-          cliPath = "${pkgs-claude-code-pinned.claude-code}/bin/claude";
-          extraArgs = ''
-            extra_args+=(--disallowed-tools 'Bash(*)' --disallowed-tools 'Agent(Explore)')
-            extra_args+=(--agents "$(<"${agents-file}")")
-
-            if [[ -n "$system_prompt_file" ]]; then
-              extra_args+=(--system-prompt-file "$system_prompt_file")
-            fi
-
-            if [[ -n "$append_fragments" ]]; then
-              tmpfile=$(mktemp /tmp/clown-prompt.XXXXXX)
-              trap 'rm -f "$tmpfile"' EXIT
-              printf '%s' "$append_fragments" > "$tmpfile"
-              extra_args+=(--append-system-prompt-file "$tmpfile")
-            fi
-          '';
-        };
-
-        clown-bin-codex = mkProviderWrapper {
-          name = "codex";
-          commandName = "clown-codex";
-          cliPath = "\${CODEX_CLI:-$(command -v codex || true)}";
-          preExec = ''
-            if [[ -z "$cli" ]]; then
-              echo "clown-codex: no Codex CLI found; set \$CODEX_CLI or install \`codex\` on PATH" >&2
+          # --- Resolve provider CLI ---
+          case "$provider" in
+            claude)
+              cli="${claudeCliPath}"
+              ;;
+            codex)
+              cli="''${CODEX_CLI:-$(command -v codex || true)}"
+              if [[ -z "$cli" ]]; then
+                echo "clown: no Codex CLI found; set \$CODEX_CLI or install codex on PATH" >&2
+                exit 1
+              fi
+              ;;
+            *)
+              echo "clown: unknown provider '$provider'" >&2
               exit 1
-            fi
+              ;;
+          esac
 
-            if [[ "''${1:-}" == "resume" || "''${1:-}" == "fork" ]]; then
-              exec "$cli" "$@"
-            fi
+          ${sharedPromptLogic}
 
-            # Sketch for Codex support:
-            # - AGENTS.md is already the repo-level instruction file.
-            # - Reuse the same hierarchical prompt fragments by concatenating them.
-            # - The exact Codex flags for injecting prompt files, tool limits, and
-            #   custom subagents should be filled in once the CLI contract is pinned.
-            if [[ -n "$system_prompt_file" || -n "$append_fragments" ]]; then
-              tmpfile=$(mktemp /tmp/clown-codex-prompt.XXXXXX)
-              trap 'rm -f "$tmpfile"' EXIT
+          # --- Provider-specific flag injection ---
+          extra_args=()
+
+          case "$provider" in
+            claude)
+              extra_args+=(--disallowed-tools 'Bash(*)' --disallowed-tools 'Agent(Explore)')
+              extra_args+=(--agents "$(<"${agents-file}")")
 
               if [[ -n "$system_prompt_file" ]]; then
-                cat "$system_prompt_file" > "$tmpfile"
-                if [[ -n "$append_fragments" ]]; then
-                  printf '\n\n%s' "$append_fragments" >> "$tmpfile"
-                fi
-              else
-                printf '%s' "$append_fragments" > "$tmpfile"
+                extra_args+=(--system-prompt-file "$system_prompt_file")
               fi
 
-              echo "clown-codex: prompt bundle prepared at $tmpfile; wire this into the Codex CLI flags once selected" >&2
-            fi
-          '';
-        };
+              if [[ -n "$append_fragments" ]]; then
+                tmpfile=$(mktemp /tmp/clown-prompt.XXXXXX)
+                trap 'rm -f "$tmpfile"' EXIT
+                printf '%s' "$append_fragments" > "$tmpfile"
+                extra_args+=(--append-system-prompt-file "$tmpfile")
+              fi
+              ;;
+
+            codex)
+              extra_args+=(--sandbox workspace-write)
+
+              if [[ -n "$system_prompt_file" || -n "$append_fragments" ]]; then
+                tmpfile=$(mktemp /tmp/clown-prompt.XXXXXX)
+                trap 'rm -f "$tmpfile"' EXIT
+
+                if [[ -n "$system_prompt_file" ]]; then
+                  cat "$system_prompt_file" > "$tmpfile"
+                  if [[ -n "$append_fragments" ]]; then
+                    printf '\n\n%s' "$append_fragments" >> "$tmpfile"
+                  fi
+                else
+                  printf '%s' "$append_fragments" > "$tmpfile"
+                fi
+
+                extra_args+=(--config "experimental_instructions_file=$tmpfile")
+              fi
+              ;;
+          esac
+
+          # --- Future: moxin auto-loading ---
+          # When implemented, this section will:
+          # 1. Run `moxy list-moxins` to discover available moxins
+          # 2. Generate --mcp-config entries for each discoverable moxin
+          # 3. Append to extra_args
+          # Blocked on: defining which moxins should auto-load vs remain manual.
+
+          exec "$cli" "''${extra_args[@]}" "$@"
+        '';
 
         clown-sessions = pkgs.writeScriptBin "clown-sessions" ''
           #!${pkgs.python3}/bin/python3
           ${builtins.readFile ./bin/clown-sessions}
         '';
 
-        clown-codex-sessions = pkgs.writeScriptBin "clown-codex-sessions" ''
-          #!${pkgs.python3}/bin/python3
-          ${builtins.readFile ./bin/clown-codex-sessions}
-        '';
-
         clown-completions = pkgs.runCommand "clown-completions" { } ''
           mkdir -p $out/share/fish/vendor_completions.d
           cp ${./completions/clown.fish} $out/share/fish/vendor_completions.d/clown.fish
         '';
-
-        clown-codex-completions = pkgs.runCommand "clown-codex-completions" { } ''
-          mkdir -p $out/share/fish/vendor_completions.d
-          cp ${./completions/clown-codex.fish} $out/share/fish/vendor_completions.d/clown-codex.fish
-        '';
       in
       {
-        packages = rec {
-          default = dual;
-
-          claude = pkgs.symlinkJoin {
-            name = "clown";
-            paths = [
-              clown-bin-claude
-              clown-sessions
-              clown-completions
-            ];
-          };
-
-          codex = pkgs.symlinkJoin {
-            name = "clown-codex";
-            paths = [
-              clown-bin-codex
-              clown-codex-sessions
-              clown-codex-completions
-            ];
-          };
-
-          dual = pkgs.symlinkJoin {
-            name = "clown-dual";
-            paths = [
-              claude
-              codex
-            ];
-          };
+        packages.default = pkgs.symlinkJoin {
+          name = "clown";
+          paths = [
+            clown-bin
+            clown-sessions
+            clown-completions
+          ];
         };
 
         devShells.default = pkgs.mkShell {

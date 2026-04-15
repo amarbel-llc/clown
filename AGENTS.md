@@ -5,10 +5,12 @@ including Codex and Claude Code.
 
 ## Overview
 
-Clown is a Nix-packaged wrapper around Claude Code that injects custom system
-prompts, disables Bash by default, and provides fish shell completions and
-session management. Built entirely with Nix flakes; no standalone test suite
-(pre-merge validation via `just build`).
+Clown is a Nix-packaged wrapper around coding agents (Claude Code and Codex)
+that injects custom system prompts, applies per-provider safety defaults, and
+provides fish shell completions and session management. A single `clown` binary
+dispatches to the selected provider via `--provider <claude|codex>` (default:
+`claude`; override with `CLOWN_PROVIDER` env var). Built entirely with Nix
+flakes; no standalone test suite (pre-merge validation via `just build`).
 
 ## Build Commands
 
@@ -23,20 +25,24 @@ Format nix: `lux fmt flake.nix`
 
 The flake produces a `symlinkJoin` of three components:
 
-1. **`clown-bin`** (shell wrapper, defined inline in `flake.nix`): Wraps
-   the pinned Claude Code binary. Walks from `$PWD` up to `$HOME` collecting
-   `.circus/` directories for system prompt injection. Two modes:
-   - **Replace**: Deepest `.circus/system-prompt` file wins (`--system-prompt-file`)
+1. **`clown-bin`** (shell wrapper, defined inline in `flake.nix`): Unified
+   entrypoint that parses `--provider` and dispatches to Claude or Codex.
+   Walks from `$PWD` up to `$HOME` collecting `.circus/` directories for
+   system prompt injection. Two modes:
+   - **Replace**: Deepest `.circus/system-prompt` file wins
    - **Append**: All `.md` files from `.circus/system-prompt.d/` directories,
      shallowest-first, plus builtin fragments from `system-prompt-append.d/`
-     (`--append-system-prompt-file`)
-   - Always passes `--disallowed-tools 'Bash(*)'`
+   - Per-provider safety defaults:
+     - Claude: `--disallowed-tools 'Bash(*)'`, `--disallowed-tools 'Agent(Explore)'`
+     - Codex: `--sandbox workspace-write`
 
-2. **`clown-sessions`** (`bin/clown-sessions`, Python3): Scans
-   `~/.claude/projects/` to list resumable sessions for shell completion.
+2. **`clown-sessions`** (`bin/clown-sessions`, Python3): Lists resumable
+   sessions for shell completion. Accepts `--provider codex` to query Codex's
+   SQLite state DB; defaults to scanning Claude's JSONL transcripts.
 
-3. **`clown-completions`** (`completions/clown.fish`): Fish completions covering
-   Claude Code flags, with dynamic session ID completion via `clown-sessions`.
+3. **`clown-completions`** (`completions/clown.fish`): Provider-aware fish
+   completions. Detects `--provider` on the command line (or `CLOWN_PROVIDER`
+   env var) and offers Claude or Codex flags/subcommands accordingly.
 
 ## Nix Conventions
 
@@ -45,12 +51,6 @@ Follows the monorepo's stable-first pattern:
 - `nixpkgs-master` -> pinned SHA
 - Claude Code is fetched via inline `fetchTarball` (not a flake input) with
   `allowUnfree` — pinned to a specific nixpkgs SHA for version stability.
-
-## Codex Note
-
-This repository currently targets Claude Code directly. Supporting Codex would
-require changes beyond agent docs because the wrapper, completion script, and
-session discovery all assume the Claude CLI and its flag surface.
 
 ## Spinclass Integration
 
