@@ -9,6 +9,7 @@
     moxy.inputs.nixpkgs.follows = "nixpkgs";
     moxy.inputs.nixpkgs-master.follows = "nixpkgs-master";
     nixpkgs-claude-code.url = "github:NixOS/nixpkgs/e2dde111aea2c0699531dc616112a96cd55ab8b5";
+    nixpkgs-codex.url = "github:NixOS/nixpkgs/e2dde111aea2c0699531dc616112a96cd55ab8b5";
   };
 
   outputs =
@@ -17,6 +18,7 @@
       nixpkgs,
       nixpkgs-master,
       nixpkgs-claude-code,
+      nixpkgs-codex,
       utils,
       moxy,
     }:
@@ -29,6 +31,10 @@
           config.allowUnfree = true;
         };
         pkgs-claude-code = import nixpkgs-claude-code {
+          inherit system;
+          config.allowUnfree = true;
+        };
+        pkgs-codex = import nixpkgs-codex {
           inherit system;
           config.allowUnfree = true;
         };
@@ -126,6 +132,7 @@
         '';
 
         claudeCliPath = "${pkgs-claude-code.claude-code}/bin/claude";
+        codexCliPath = "${pkgs-codex.codex}/bin/codex";
 
         # Unified wrapper dispatching to Claude (default) or Codex via
         # --provider flag. Provider-specific flags (tool policy, prompt
@@ -166,11 +173,7 @@
               cli="${claudeCliPath}"
               ;;
             codex)
-              cli="''${CODEX_CLI:-$(command -v codex || true)}"
-              if [[ -z "$cli" ]]; then
-                echo "clown: no Codex CLI found; set \$CODEX_CLI or install codex on PATH" >&2
-                exit 1
-              fi
+              cli="${codexCliPath}"
               ;;
             *)
               echo "clown: unknown provider '$provider'" >&2
