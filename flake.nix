@@ -265,6 +265,8 @@
           ];
         };
 
+        packages.moxy = moxy.packages.${system}.default;
+
         devShells.default = pkgs.mkShell {
           packages = [
             pkgs-master.just
