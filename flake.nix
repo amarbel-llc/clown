@@ -248,6 +248,15 @@
           mkdir -p $out/share/fish/vendor_completions.d
           cp ${./completions/clown.fish} $out/share/fish/vendor_completions.d/clown.fish
         '';
+
+        clown-manpages = pkgs.runCommand "clown-manpages" { } ''
+          for section in 1 5 7; do
+            mkdir -p $out/share/man/man$section
+          done
+          cp ${./man/man1}/*.1 $out/share/man/man1/
+          cp ${./man/man5}/*.5 $out/share/man/man5/
+          cp ${./man/man7}/*.7 $out/share/man/man7/
+        '';
       in
       {
         packages.default = pkgs.symlinkJoin {
@@ -256,6 +265,7 @@
             clown-bin
             clown-sessions
             clown-completions
+            clown-manpages
           ];
         };
 

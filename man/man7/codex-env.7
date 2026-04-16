@@ -1,0 +1,288 @@
+.\" Copyright (c) 2024-2026 OpenAI
+.\" SPDX-License-Identifier: MIT
+.\"
+.Dd April 16, 2026
+.Dt CODEX-ENV 7
+.Os
+.Sh NAME
+.Nm codex-env
+.Nd environment variables and lifecycle hooks for
+.Xr codex 1
+.Sh DESCRIPTION
+This manual documents the environment variables recognized by
+.Xr codex 1 ,
+the shell environment policy that controls variable inheritance
+in sandboxed commands,
+and the lifecycle hooks system.
+.Sh ENVIRONMENT VARIABLES
+.Bl -tag -width Ds
+.It Ev CODEX_HOME
+Base directory for configuration and state files.
+Defaults to
+.Pa ~/.codex .
+When set, all paths that would normally resolve under
+.Pa ~/.codex
+use this directory instead:
+.Pp
+.Bl -dash -compact
+.It
+.Pa $CODEX_HOME/config.toml
+.It
+.Pa $CODEX_HOME/auth.json
+.It
+.Pa $CODEX_HOME/history.jsonl
+.It
+.Pa $CODEX_HOME/hooks.json
+.El
+.It Ev CODEX_CA_CERTIFICATE
+Path to a PEM-encoded CA certificate bundle.
+When set,
+.Nm codex
+uses this bundle for all TLS connections instead of the system default.
+Useful in corporate environments with custom root CAs.
+.It Ev CODEX_SQLITE_HOME
+Directory for the SQLite database that stores session state,
+trust decisions, and other persistent data.
+Defaults to
+.Pa $CODEX_HOME .
+.It Ev SSL_CERT_FILE
+Fallback CA certificate bundle path.
+Consulted only when
+.Ev CODEX_CA_CERTIFICATE
+is not set.
+This variable is also recognized by many other TLS-aware programs.
+.It Ev OPENAI_API_KEY
+API key for authenticating with the OpenAI API.
+Used when no other authentication method
+.Pq OAuth, custom provider auth
+is configured.
+This is the default
+.Va env_key
+for the built-in OpenAI provider.
+.El
+.Sh CUSTOM PROVIDER ENVIRONMENT VARIABLES
+Each custom model provider defined in
+.Xr codex-config 5
+under
+.Va [model_providers.id]
+can specify an
+.Va env_key
+field naming the environment variable that holds its API key.
+For example:
+.Bd -literal -offset indent
+[model_providers.anthropic]
+base_url = "https://api.anthropic.com/v1"
+env_key = "ANTHROPIC_API_KEY"
+wire_api = "openai"
+.Ed
+.Pp
+In this case,
+.Nm codex
+reads the API key from the
+.Ev ANTHROPIC_API_KEY
+environment variable.
+The variable name is arbitrary and user-defined.
+.Sh SHELL ENVIRONMENT POLICY
+When
+.Nm codex
+executes shell commands inside the sandbox,
+it does not blindly pass through the parent process environment.
+The
+.Va [shell_env]
+configuration table
+.Pq see Xr codex-config 5
+controls which variables are visible to sandboxed processes.
+.Ss Inheritance Mode
+.Bl -tag -width Ds
+.It Va inherit = true Pq default
+The sandboxed process starts with a copy of
+.Nm codex Ns 's
+own environment, then the
+.Va exclude
+list is applied to remove sensitive variables.
+.It Va inherit = false
+The sandboxed process starts with an empty environment.
+Only variables listed in
+.Va set
+are available.
+.El
+.Ss Filtering
+.Bl -tag -width Ds
+.It Va exclude Pq array of strings
+Variable names or glob patterns
+.Pq e.g., Ql *_SECRET , Ql AWS_*
+to remove from the inherited environment.
+A built-in default exclusion list removes common credential variables
+.Pq Ev OPENAI_API_KEY , Ev AWS_SECRET_ACCESS_KEY , No etc.
+unless
+.Va ignore_default_excludes
+is set.
+.It Va include_only Pq array of strings
+When set, only these variables are inherited.
+All others are stripped.
+Mutually exclusive with
+.Va exclude .
+.It Va ignore_default_excludes Pq boolean
+If
+.Cm true ,
+the built-in default exclusion list is skipped.
+Use with caution \(em this may expose credentials to sandboxed commands.
+.El
+.Ss Explicit Variables
+.Bl -tag -width Ds
+.It Va set Pq table
+Key-value pairs that are unconditionally set in the sandboxed environment,
+regardless of inheritance mode.
+Useful for ensuring deterministic behavior:
+.Bd -literal -offset indent
+[shell_env.set]
+LANG = "en_US.UTF-8"
+TERM = "xterm-256color"
+.Ed
+.Pp
+Values from
+.Va set
+override inherited variables of the same name.
+.El
+.Sh LIFECYCLE HOOKS
+.Bf -emphasis
+Lifecycle hooks are experimental and must be enabled via the
+.Va codex_hooks
+feature flag.
+.Ef
+.Pp
+Set
+.Va codex_hooks = true
+in the
+.Va [features]
+table of
+.Xr codex-config 5
+to enable hooks.
+.Pp
+Hooks are defined in JSON files at two locations:
+.Bl -tag -width Ds
+.It Pa ~/.codex/hooks.json
+User-level hooks.
+Apply to all projects.
+.It Pa .codex/hooks.json
+Project-level hooks.
+Apply only within the repository that contains this file.
+Subject to the project trust model.
+.El
+.Pp
+Both files use the same JSON format.
+Project hooks are merged with user hooks;
+project hooks take precedence for matching events.
+.Ss Hook Events
+The following lifecycle events can trigger hooks:
+.Bl -tag -width Ds
+.It Cm SessionStart
+Fired when a new
+.Nm codex
+session begins, before any prompts are processed.
+.It Cm PreToolUse
+Fired before a tool call is executed.
+The hook receives the tool name and arguments.
+Returning a non-zero exit code causes the tool call to be rejected.
+.It Cm PostToolUse
+Fired after a tool call completes.
+The hook receives the tool name, arguments, and result.
+.It Cm UserPromptSubmit
+Fired when the user submits a prompt in the TUI.
+.It Cm Stop
+Fired when the session is about to end.
+.El
+.Ss Hook Definition
+Each hook is a JSON object with the following fields:
+.Bl -tag -width Ds
+.It Va event Pq string
+One of the lifecycle events listed above.
+.It Va matcher Pq object, optional
+Conditions that must be met for the hook to fire.
+For
+.Cm PreToolUse
+and
+.Cm PostToolUse ,
+this can match on tool name patterns.
+When omitted, the hook fires on every occurrence of the event.
+.It Va type Pq string
+Hook type.
+Currently only
+.Cm command
+is supported.
+.It Va command Pq string
+Path to the executable to run when the hook fires.
+The executable receives event context as a JSON document on stdin.
+.It Va statusMessage Pq string, optional
+Message displayed in the TUI while the hook is running.
+.It Va timeout Pq integer, optional
+Maximum execution time in seconds.
+If the hook exceeds this timeout, it is killed
+and the event proceeds as if the hook returned success.
+Default is 30 seconds.
+.El
+.Ss Example hooks.json
+.Bd -literal -offset indent
+{
+  "hooks": [
+    {
+      "event": "SessionStart",
+      "type": "command",
+      "command": "/usr/local/bin/codex-session-init",
+      "statusMessage": "Initializing session...",
+      "timeout": 10
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": {
+        "tool_name": "shell"
+      },
+      "type": "command",
+      "command": "/usr/local/bin/codex-audit-shell",
+      "statusMessage": "Auditing shell command...",
+      "timeout": 5
+    },
+    {
+      "event": "PostToolUse",
+      "type": "command",
+      "command": "/usr/local/bin/codex-post-tool-log"
+    },
+    {
+      "event": "Stop",
+      "type": "command",
+      "command": "/usr/local/bin/codex-session-cleanup",
+      "timeout": 15
+    }
+  ]
+}
+.Ed
+.Pp
+The
+.Cm PreToolUse
+hook in this example runs
+.Pa codex-audit-shell
+before every shell command.
+If the script exits non-zero, the shell command is blocked
+and the model is informed that the tool call was rejected.
+.Sh FILES
+.Bl -tag -width Ds
+.It Pa ~/.codex/
+Default base directory for all
+.Nm codex
+state and configuration.
+Overridden by
+.Ev CODEX_HOME .
+.It Pa ~/.codex/hooks.json
+User-level lifecycle hooks.
+.It Pa .codex/hooks.json
+Project-level lifecycle hooks.
+.It Pa ~/.codex/config.toml
+User configuration; see
+.Xr codex-config 5 .
+.El
+.Sh SEE ALSO
+.Xr codex 1 ,
+.Xr codex-config 5
+.Sh AUTHORS
+OpenAI
+.Aq Mt https://openai.com

@@ -1,0 +1,664 @@
+.\" Copyright (c) 2024-2026 OpenAI
+.\" SPDX-License-Identifier: MIT
+.\"
+.Dd April 16, 2026
+.Dt CODEX 1
+.Os
+.Sh NAME
+.Nm codex
+.Nd terminal-based AI coding agent from OpenAI
+.Sh SYNOPSIS
+.Nm
+.Op Fl m Ar model
+.Op Fl C Ar dir
+.Op Fl a Ar policy
+.Op Fl s Ar mode
+.Op Fl p Ar profile
+.Op Fl c Ar key=value
+.Op Fl i Ar path
+.Op Fl Fl full-auto
+.Op Fl Fl oss
+.Op Ar prompt
+.Nm
+.Cm exec
+.Op Fl Fl json | Fl Fl experimental-json
+.Op Fl o
+.Op Fl Fl output-schema Ar schema
+.Op Fl Fl color Ar when
+.Op Fl Fl ephemeral
+.Op Fl Fl skip-git-repo-check
+.Op Ar prompt | Fl
+.Nm
+.Cm login
+.Op Fl Fl device-auth | Fl Fl with-api-key
+.Nm
+.Cm login status
+.Nm
+.Cm logout
+.Nm
+.Cm resume
+.Op Ar session_id | Fl Fl last
+.Op Fl Fl all
+.Nm
+.Cm fork
+.Op Ar session_id | Fl Fl last
+.Op Fl Fl all
+.Nm
+.Cm app
+.Op Ar path
+.Op Fl Fl download-url Ar url
+.Nm
+.Cm app-server
+.Fl Fl listen Ar transport
+.Op Ar auth-flags
+.Nm
+.Cm apply
+.Ar task_id
+.Nm
+.Cm cloud
+.Ar query
+.Fl Fl env Ar env_id
+.Op Fl Fl attempts Ar 1-4
+.Nm
+.Cm cloud list
+.Op Fl Fl env Ar env_id
+.Op Fl Fl json
+.Op Fl Fl limit Ar n
+.Op Fl Fl cursor Ar str
+.Nm
+.Cm completion
+.Ar bash | zsh | fish | power-shell | elvish
+.Nm
+.Cm mcp
+.Cm add | get | list | remove | login | logout
+.Op Ar args
+.Nm
+.Cm mcp-server
+.Nm
+.Cm features
+.Cm list | enable | disable
+.Op Ar feature
+.Nm
+.Cm execpolicy
+.Ar command ...
+.Fl Fl rules Ar path
+.Op Fl Fl pretty
+.Nm
+.Cm sandbox
+.Ar command ...
+.Op Fl Fl full-auto
+.Op Fl c Ar key=value
+.Sh DESCRIPTION
+.Nm
+is a terminal-based coding agent built by OpenAI in Rust.
+It provides an interactive TUI for conversational coding assistance,
+a non-interactive
+.Cm exec
+mode for CI pipelines and scripting,
+MCP server integration,
+multi-agent orchestration,
+lifecycle hooks,
+and sandboxed command execution.
+.Pp
+.Nm
+connects to OpenAI models by default but also supports local OSS models
+via Ollama or LM Studio using the
+.Fl Fl oss
+flag.
+Custom model providers can be configured for any OpenAI-compatible API endpoint.
+.Pp
+In interactive mode,
+.Nm
+presents a full-screen TUI where users can converse with the model,
+approve or reject tool calls,
+and observe file modifications in real time.
+The
+.Cm exec
+subcommand runs a single prompt to completion without the TUI,
+suitable for shell scripts and CI workflows.
+.Sh SUBCOMMANDS
+.Bl -tag -width Ds
+.It Cm exec , Cm e
+Run a prompt non-interactively and exit.
+Reads from
+.Ar prompt
+argument or standard input when
+.Fl
+is specified.
+Output is written to stdout.
+See
+.Sx EXEC OPTIONS
+for additional flags.
+.It Cm login
+Authenticate with OpenAI.
+By default uses ChatGPT OAuth device flow.
+Use
+.Fl Fl with-api-key
+to authenticate with an
+.Ev OPENAI_API_KEY
+instead.
+.It Cm login status
+Print current authentication state and exit.
+.It Cm logout
+Remove stored credentials from
+.Pa ~/.codex/auth.json .
+.It Cm resume Op Ar session_id | Fl Fl last
+Resume a previous session.
+If no
+.Ar session_id
+is given and
+.Fl Fl last
+is specified,
+resumes the most recent session.
+Pass
+.Fl Fl all
+to include all messages rather than a summary.
+.It Cm fork Op Ar session_id | Fl Fl last
+Fork a previous session into a new session, preserving its context.
+Accepts the same arguments as
+.Cm resume .
+.It Cm app Op Ar path
+Run or install a Codex App.
+When
+.Ar path
+is provided, runs the app at that location.
+Use
+.Fl Fl download-url Ar url
+to fetch and install an app from a remote URL.
+.It Cm app-server Fl Fl listen Ar transport
+Start Codex as a headless server for multi-agent or remote-control scenarios.
+The
+.Ar transport
+argument specifies the listening address.
+See
+.Sx APP-SERVER OPTIONS .
+.It Cm apply Ar task_id
+Apply the results of a cloud task to the local working tree.
+.It Cm cloud Ar query Fl Fl env Ar env_id
+Submit a task to Codex Cloud for remote execution.
+The
+.Fl Fl env
+flag specifies the cloud environment.
+Use
+.Fl Fl attempts
+to set retry count
+.Pq 1\(en4 .
+.It Cm cloud list
+List cloud tasks.
+Supports
+.Fl Fl json
+for machine-readable output and
+.Fl Fl limit Ns / Ns Fl Fl cursor
+for pagination.
+.It Cm completion Ar shell
+Generate shell completion scripts for
+.Ar bash ,
+.Ar zsh ,
+.Ar fish ,
+.Ar power-shell ,
+or
+.Ar elvish .
+.It Cm mcp Cm add
+Register an MCP server.
+Use
+.Fl Fl
+followed by the server command for stdio transport,
+or
+.Fl Fl url
+for HTTP transport.
+See
+.Sx MCP OPTIONS .
+.It Cm mcp Cm get Ar id
+Show configuration for a registered MCP server.
+.It Cm mcp Cm list
+List all registered MCP servers.
+.It Cm mcp Cm remove Ar id
+Unregister an MCP server.
+.It Cm mcp Cm login Ar id
+Authenticate with an MCP server that requires OAuth.
+.It Cm mcp Cm logout Ar id
+Remove stored credentials for an MCP server.
+.It Cm mcp-server
+Run
+.Nm
+itself as an MCP server, exposing its capabilities to other agents.
+.It Cm features Cm list
+List all feature flags and their current state.
+.It Cm features Cm enable Ar feature
+Enable a feature flag.
+.It Cm features Cm disable Ar feature
+Disable a feature flag.
+.It Cm execpolicy Ar command ... Fl Fl rules Ar path
+Evaluate a command against an exec-policy rules file.
+Prints the policy decision.
+Use
+.Fl Fl pretty
+for human-readable output.
+.It Cm sandbox Ar command ...
+Run a command inside the Codex sandbox.
+Useful for testing sandbox behavior.
+Use
+.Fl Fl full-auto
+to apply full-auto sandbox settings.
+Additional config overrides may be passed with
+.Fl c Ar key=value .
+.El
+.Sh GLOBAL OPTIONS
+.Bl -tag -width Ds
+.It Fl m Ar model , Fl Fl model Ar model
+Model to use for completions.
+Defaults to the
+.Va model
+key in configuration.
+Examples:
+.Ql o4-mini ,
+.Ql gpt-4.1 ,
+.Ql codex-mini-latest .
+.It Fl C Ar dir , Fl Fl cd Ar dir
+Change the working directory before starting.
+.It Fl a Ar policy , Fl Fl ask-for-approval Ar policy
+Set the approval policy for tool calls.
+.Ar policy
+is one of:
+.Bl -tag -width "on-request" -compact
+.It Cm untrusted
+Approve every tool call interactively.
+.It Cm on-request
+Approve only when the model requests it.
+.It Cm never
+Approve nothing; the model runs autonomously within sandbox constraints.
+.El
+.It Fl s Ar mode , Fl Fl sandbox Ar mode
+Set the sandbox execution mode.
+.Ar mode
+is one of:
+.Bl -tag -width "workspace-write" -compact
+.It Cm read-only
+No filesystem writes allowed.
+.It Cm workspace-write
+Writes allowed only within the project workspace.
+.It Cm danger-full-access
+No sandbox restrictions.
+Use with extreme caution.
+.El
+.It Fl c Ar key=value , Fl Fl config Ar key=value
+Override a configuration key for this invocation.
+May be specified multiple times.
+Dotted keys are supported
+.Pq e.g., Fl c Va sandbox_mode=read-only .
+.It Fl p Ar profile , Fl Fl profile Ar profile
+Activate a named configuration profile.
+Profiles are defined in
+.Pa config.toml
+under
+.Va [profiles.name] .
+.It Fl Fl enable Ar feature
+Enable a feature flag for this session.
+.It Fl Fl disable Ar feature
+Disable a feature flag for this session.
+.It Fl Fl add-dir Ar path
+Add an additional directory to the agent's context.
+May be specified multiple times.
+.It Fl i Ar path , Fl Fl image Ar path
+Attach an image to the initial prompt.
+Supports PNG, JPEG, GIF, and WebP.
+May be specified multiple times.
+.It Fl Fl full-auto
+Shorthand for
+.Fl a Cm never
+.Fl s Cm workspace-write .
+The agent runs without interactive approval, writing only within the workspace.
+.It Fl Fl oss
+Use a local OSS model via Ollama or LM Studio.
+Configurable via the
+.Va oss_provider
+key.
+.It Fl Fl search
+Enable web search tool for the session.
+.It Fl Fl no-alt-screen
+Disable the alternate screen buffer in the TUI.
+.It Fl Fl dangerously-bypass-approvals-and-sandbox , Fl Fl yolo
+Disable all approval checks and sandbox restrictions.
+.Bf -emphasis
+This is dangerous and should never be used on untrusted input.
+.Ef
+.It Fl Fl remote Ar ws://host:port
+Connect to a remote Codex app-server instead of running locally.
+.It Fl Fl remote-auth-token-env Ar var
+Environment variable containing the authentication token for
+.Fl Fl remote
+connections.
+.El
+.Sh EXEC OPTIONS
+These options apply only to the
+.Cm exec
+subcommand.
+.Bl -tag -width Ds
+.It Fl Fl json , Fl Fl experimental-json
+Emit structured JSON output instead of plain text.
+.It Fl o , Fl Fl output-last-message
+Print only the final assistant message to stdout.
+.It Fl Fl output-schema Ar schema
+Provide a JSON Schema that the model's output must conform to.
+.It Fl Fl color Ar when
+Control color output.
+.Ar when
+is one of
+.Cm always ,
+.Cm never ,
+or
+.Cm auto
+.Pq default .
+.It Fl Fl ephemeral
+Do not persist the session to history.
+.It Fl Fl skip-git-repo-check
+Skip the check that verifies the working directory is inside a git repository.
+.It Fl (stdin)
+When
+.Fl
+is the last argument, the prompt is read from standard input.
+Useful for piping content:
+.Bd -literal -offset indent
+echo "Explain this code" | codex exec -
+.Ed
+.El
+.Sh LOGIN OPTIONS
+These options apply only to the
+.Cm login
+subcommand.
+.Bl -tag -width Ds
+.It Fl Fl device-auth
+Use the OAuth device authorization flow.
+A browser window opens for the user to approve.
+.It Fl Fl with-api-key
+Authenticate using an API key from the
+.Ev OPENAI_API_KEY
+environment variable or interactive prompt.
+.El
+.Sh MCP OPTIONS
+These options apply to the
+.Cm mcp add
+subcommand.
+.Bl -tag -width Ds
+.It Fl Fl Ar command ...
+For stdio-based MCP servers, specify the server command after a
+.Ql --
+separator:
+.Bd -literal -offset indent
+codex mcp add my-server -- /path/to/server --flag
+.Ed
+.It Fl Fl url Ar url
+Register an HTTP-based MCP server at the given URL.
+.It Fl Fl bearer-token-env-var Ar var
+Name of the environment variable containing a bearer token
+for authenticating with the MCP server.
+.It Fl Fl env Ar KEY=VALUE
+Set an environment variable in the MCP server's process.
+May be specified multiple times.
+.El
+.Sh APP-SERVER OPTIONS
+These options apply to the
+.Cm app-server
+subcommand.
+.Bl -tag -width Ds
+.It Fl Fl listen Ar transport
+Listening transport.
+.Ar transport
+is one of:
+.Bl -tag -width "ws://IP:PORT" -compact
+.It Pa stdio://
+Communicate over stdin/stdout.
+.It Pa ws://IP:PORT
+Listen on a WebSocket endpoint.
+.El
+.It Fl Fl ws-auth Ar method
+Authentication method for WebSocket connections.
+.It Fl Fl ws-audience Ar audience
+Expected audience claim for JWT validation.
+.It Fl Fl ws-issuer Ar issuer
+Expected issuer claim for JWT validation.
+.It Fl Fl ws-max-clock-skew-seconds Ar n
+Maximum allowed clock skew in seconds for JWT validation.
+.It Fl Fl ws-shared-secret-file Ar path
+Path to a file containing the shared secret for HMAC JWT validation.
+.It Fl Fl ws-token-file Ar path
+Path to a file containing a pre-shared token for authentication.
+.El
+.Sh CLOUD OPTIONS
+These options apply to the
+.Cm cloud
+subcommand.
+.Bl -tag -width Ds
+.It Fl Fl env Ar env_id
+Codex Cloud environment identifier.
+Required for
+.Cm cloud
+task submission.
+.It Fl Fl attempts Ar n
+Number of attempts for the cloud task.
+Valid range is 1 to 4.
+Default is 1.
+.El
+.Sh INSTALLATION
+.Nm
+can be installed via several methods:
+.Bl -tag -width Ds
+.It npm
+.Bd -literal -offset indent
+npm install -g @openai/codex
+.Ed
+.It Homebrew
+.Bd -literal -offset indent
+brew install openai-codex
+.Ed
+.It Direct binary download
+Pre-built binaries for Linux and macOS are published as GitHub releases.
+Download the appropriate archive for your platform and place the binary
+on your
+.Ev PATH .
+.El
+.Sh AUTHENTICATION
+.Nm
+supports three authentication methods:
+.Bl -enum
+.It
+.Sy ChatGPT OAuth
+.Pq default .
+Run
+.Cm codex login
+to authenticate via browser-based OAuth device flow.
+Credentials are stored in
+.Pa ~/.codex/auth.json .
+.It
+.Sy API key .
+Set the
+.Ev OPENAI_API_KEY
+environment variable or use
+.Cm codex login --with-api-key .
+.It
+.Sy Custom provider auth .
+Configure a custom model provider with an
+.Va auth.command
+that returns credentials on stdout.
+The command is invoked before each API request.
+.El
+.Sh MODELS
+The model is selected via the
+.Va model
+configuration key or the
+.Fl m
+flag.
+Default models include
+.Ql o4-mini
+and
+.Ql codex-mini-latest .
+.Pp
+For local OSS models, use
+.Fl Fl oss
+which routes requests through Ollama or LM Studio
+depending on the
+.Va oss_provider
+setting.
+.Pp
+Custom model providers are configured in
+.Pa config.toml
+under
+.Va [model_providers.id]
+with a
+.Va base_url ,
+.Va env_key ,
+and optional
+.Va wire_api
+and
+.Va auth.command .
+.Sh APPROVAL POLICY
+The approval policy controls whether tool calls require interactive user consent.
+.Bl -tag -width Ds
+.It Cm untrusted
+Every tool invocation requires explicit approval.
+Safest mode for untrusted prompts.
+.It Cm on-request
+The model decides when to ask for approval.
+Tool calls annotated as safe by the model run without prompting.
+.It Cm never
+No approval prompts.
+The agent runs autonomously.
+Should only be used with appropriate sandbox settings.
+.El
+.Pp
+The
+.Va approvals_reviewer
+config key can be set to
+.Cm guardian_subagent
+to delegate approval decisions to a secondary model instead of the user.
+.Sh SANDBOX
+.Nm
+enforces sandboxed execution of shell commands to limit the blast radius
+of autonomous operation.
+.Pp
+On macOS, the sandbox uses
+.Xr sandbox-exec 1
+.Pq Seatbelt .
+On Linux, it uses Landlock LSM and seccomp-bpf.
+.Pp
+Three modes are available:
+.Bl -tag -width Ds
+.It Cm read-only
+No filesystem writes.
+Network access is blocked.
+.It Cm workspace-write
+Writes are allowed within the project workspace and configured
+.Va writable_roots .
+Network access is configurable via
+.Va sandbox_workspace_write.network_access .
+.It Cm danger-full-access
+No sandbox restrictions.
+Equivalent to running commands directly in the host shell.
+.El
+.Sh MULTI-AGENT
+.Nm
+supports multi-agent orchestration where a primary agent can spawn
+sub-agents to work on tasks in parallel.
+.Pp
+Configuration keys:
+.Bl -tag -width Ds
+.It Va max_threads
+Maximum number of concurrent sub-agent threads.
+.It Va max_depth
+Maximum nesting depth for sub-agent spawning.
+.El
+.Pp
+Per-agent configuration can be specified via
+.Va config_file ,
+.Va description ,
+and
+.Va nickname_candidates
+keys.
+.Sh FILES
+.Bl -tag -width Ds
+.It Pa /etc/codex/config.toml
+System-wide configuration.
+Lowest precedence.
+.It Pa ~/.codex/config.toml
+User configuration.
+.It Pa .codex/config.toml
+Project-level configuration.
+Highest file-based precedence
+.Pq CLI flags override all .
+.It Pa ~/.codex/auth.json
+Stored authentication credentials.
+.It Pa ~/.codex/history.jsonl
+Session history in JSON Lines format.
+.It Pa ~/.codex/hooks.json
+User-level lifecycle hooks.
+.It Pa .codex/hooks.json
+Project-level lifecycle hooks.
+.It Pa AGENTS.md
+Agent instructions file, loaded automatically when present in the
+project root.
+Analogous to a system prompt for the coding agent.
+.El
+.Sh ENVIRONMENT
+.Bl -tag -width Ds
+.It Ev CODEX_HOME
+Override the configuration and state directory.
+Defaults to
+.Pa ~/.codex .
+.It Ev OPENAI_API_KEY
+API key for OpenAI authentication.
+.It Ev CODEX_CA_CERTIFICATE
+Path to a PEM-encoded CA certificate bundle for TLS verification.
+.It Ev CODEX_SQLITE_HOME
+Directory for the SQLite state database.
+.It Ev SSL_CERT_FILE
+Fallback CA certificate bundle path when
+.Ev CODEX_CA_CERTIFICATE
+is not set.
+.El
+.Pp
+See
+.Xr codex-env 7
+for the complete list of environment variables and the shell environment
+policy system.
+.Sh EXAMPLES
+Start an interactive session:
+.Bd -literal -offset indent
+codex "Fix the failing tests in src/parser.rs"
+.Ed
+.Pp
+Run non-interactively in CI:
+.Bd -literal -offset indent
+codex exec --full-auto "Add error handling to all unwrap() calls"
+.Ed
+.Pp
+Pipe a diff for review:
+.Bd -literal -offset indent
+git diff HEAD~1 | codex exec -o "Review this diff for bugs" -
+.Ed
+.Pp
+Use a local model:
+.Bd -literal -offset indent
+codex --oss -m deepseek-coder-v2 "Refactor this module"
+.Ed
+.Pp
+Register an MCP server:
+.Bd -literal -offset indent
+codex mcp add my-tools -- /usr/local/bin/my-mcp-server
+codex mcp add remote-tools --url https://mcp.example.com/sse
+.Ed
+.Pp
+Generate shell completions:
+.Bd -literal -offset indent
+codex completion fish > ~/.config/fish/completions/codex.fish
+.Ed
+.Pp
+Submit a cloud task:
+.Bd -literal -offset indent
+codex cloud "Migrate database schema" --env prod-env-123
+.Ed
+.Sh SEE ALSO
+.Xr codex-config 5 ,
+.Xr codex-env 7
+.Sh AUTHORS
+OpenAI
+.Aq Mt https://openai.com

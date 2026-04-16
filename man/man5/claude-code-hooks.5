@@ -1,0 +1,294 @@
+.\" Copyright (c) 2026 Anthropic, PBC
+.\" SPDX-License-Identifier: MIT
+.Dd April 16, 2026
+.Dt CLAUDE-CODE-HOOKS 5
+.Os
+.Sh NAME
+.Nm claude-code-hooks
+.Nd hook system for Claude Code lifecycle events
+.Sh DESCRIPTION
+Hooks allow external programs and services to observe and intercept
+events during a
+.Xr claude-code 1
+session.
+They are configured in settings files
+.Pq see Xr claude-code-settings 5
+under the
+.Cm hooks
+key.
+.Pp
+Each hook is an array of handler objects keyed by event name.
+When an event fires, all matching handlers execute in order.
+Handlers can observe events passively, modify inputs, or control
+permission decisions.
+.Sh CONFIGURATION
+Hooks are configured in any settings file
+.Pq user, project, local, or managed
+under the top-level
+.Cm hooks
+object.
+The key is the event name and the value is an array of handler objects.
+.Pp
+Example:
+.Bd -literal -offset indent
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "type": "command",
+        "command": "/usr/local/bin/audit-tool-use"
+      }
+    ],
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": "echo session started >> /tmp/claude.log"
+      }
+    ]
+  }
+}
+.Ed
+.Sh HANDLER TYPES
+.Bl -tag -width Ds
+.It Cm command
+Execute a shell command.
+The event payload is passed as a JSON object on stdin.
+The handler's behavior is determined by its exit code:
+.Bl -tag -width Ds -compact
+.It Li 0
+Success.
+If the handler writes JSON to stdout, it is interpreted as the
+handler's response
+.Pq e.g., permission decisions or input rewrites .
+.It Li 2
+Explicit block.
+For permission-related events, this denies the action.
+For other events, the session continues but the event is marked as
+blocked.
+.It Li other
+Error.
+The hook failure is logged.
+Behavior depends on the event type: some events treat hook errors as
+non-fatal, others may abort the action.
+.El
+.It Cm http
+Send the event payload as an HTTP POST request to a URL.
+The response body is interpreted as the handler's response.
+HTTP errors are treated as hook failures.
+.It Cm prompt
+Display a prompt to the user with information from the event.
+Used for notification and confirmation workflows.
+.It Cm agent
+Invoke a named agent to process the event.
+The agent receives the event payload as context and its response is
+used as the handler's output.
+.El
+.Sh HOOK EVENTS
+Events are grouped by their firing cadence.
+.Ss Per-Session Events
+These events fire once per session lifecycle.
+.Bl -tag -width Ds
+.It Cm SessionStart
+Fires when a new session begins or an existing session is resumed.
+Use for initialization, logging, or environment setup.
+.It Cm SessionEnd
+Fires when a session terminates, whether by user action, turn limits,
+budget exhaustion, or error.
+Use for cleanup, reporting, or archival.
+.El
+.Ss Per-Turn Events
+These events fire once per assistant turn.
+.Bl -tag -width Ds
+.It Cm UserPromptSubmit
+Fires when the user submits a prompt, before it is sent to the model.
+The handler receives the prompt text and may rewrite it via
+.Cm updatedInput
+in its response.
+.It Cm Stop
+Fires when the assistant completes a turn normally.
+Use for turn-level logging or post-processing.
+.It Cm StopFailure
+Fires when the assistant turn ends due to an error
+.Pq API failure, context overflow, etc .
+.El
+.Ss Per-Tool Events
+These events fire for each tool invocation.
+.Bl -tag -width Ds
+.It Cm PreToolUse
+Fires before a tool is executed.
+The handler receives the tool name and input.
+It may return a
+.Cm permissionDecision
+to control whether the tool runs, or an
+.Cm updatedInput
+to modify the tool's arguments.
+See
+.Sx PERMISSION DECISIONS
+below.
+.It Cm PostToolUse
+Fires after a tool completes successfully.
+The handler receives the tool name, input, and output.
+.It Cm PostToolUseFailure
+Fires after a tool invocation fails.
+The handler receives the tool name, input, and error details.
+.It Cm PermissionRequest
+Fires when a tool invocation triggers a permission prompt.
+Allows hooks to intercept permission prompts before they reach the user.
+.It Cm PermissionDenied
+Fires when a tool invocation is denied, whether by the user, a hook, or
+a permission rule.
+Use for audit logging.
+.El
+.Ss Async Events
+These events fire asynchronously in response to various system changes.
+.Bl -tag -width Ds
+.It Cm WorktreeCreate
+Fires when a git worktree is created for a session.
+Receives the worktree path.
+.It Cm WorktreeRemove
+Fires when a git worktree is removed at session end or by user request.
+.It Cm Notification
+Fires when Claude generates a notification for the user
+.Pq e.g., task completion, errors .
+.It Cm ConfigChange
+Fires when a settings file is modified during a session.
+.It Cm InstructionsLoaded
+Fires when CLAUDE.md files are loaded or reloaded.
+.It Cm CwdChanged
+Fires when the working directory changes during a session.
+.It Cm FileChanged
+Fires when a file in the working tree is modified by Claude.
+.It Cm SubagentStart
+Fires when a subagent is spawned.
+.It Cm SubagentStop
+Fires when a subagent terminates.
+.It Cm TaskCreated
+Fires when a background task is created.
+.It Cm TaskCompleted
+Fires when a background task finishes.
+.It Cm TeammateIdle
+Fires when a teammate agent becomes idle and is waiting for work.
+.It Cm PreCompact
+Fires before conversation context is compacted
+.Pq summarized to reduce token usage .
+.It Cm PostCompact
+Fires after conversation context compaction completes.
+.It Cm Elicitation
+Fires when Claude requests additional information from the user via a
+structured elicitation.
+.It Cm ElicitationResult
+Fires when the user responds to an elicitation.
+.El
+.Sh COMMON INPUT FIELDS
+All hook events receive a JSON object on stdin with at least these
+fields:
+.Bl -tag -width "hook_event_name"
+.It Cm session_id
+The unique identifier for the current session.
+.It Cm transcript_path
+Filesystem path to the session's JSONL transcript file.
+.It Cm cwd
+The current working directory of the session.
+.It Cm permission_mode
+The active permission mode
+.Pq e.g., Cm default , Cm auto , Cm plan .
+.It Cm hook_event_name
+The name of the event that triggered this hook.
+.El
+.Pp
+Tool-related events additionally include:
+.Bl -tag -width "tool_input"
+.It Cm tool_name
+The name of the tool being invoked.
+.It Cm tool_input
+The JSON input object passed to the tool.
+.It Cm tool_output
+.Pq PostToolUse only
+The tool's output.
+.It Cm error
+.Pq PostToolUseFailure only
+The error message or object.
+.El
+.Sh SPECIAL ENVIRONMENT VARIABLES
+Hooks inherit the session's environment plus these additional variables:
+.Bl -tag -width "CLAUDE_PLUGIN_ROOT"
+.It Ev CLAUDE_PROJECT_DIR
+The root directory of the detected project
+.Pq typically the git repository root .
+.It Ev CLAUDE_ENV_FILE
+Path to a file where hooks can write
+.Ar KEY=VALUE
+pairs to inject environment variables into subsequent tool invocations.
+.It Ev CLAUDE_PLUGIN_ROOT
+For plugin-provided hooks, the root directory of the plugin.
+.It Ev CLAUDE_PLUGIN_DATA
+For plugin-provided hooks, a writable directory for plugin-specific
+persistent data.
+.El
+.Sh PERMISSION DECISIONS
+.Cm PreToolUse
+handlers may return a JSON object with a
+.Cm permissionDecision
+field to control tool execution:
+.Bl -tag -width "defer"
+.It Cm allow
+Permit the tool invocation without further prompting.
+.It Cm deny
+Block the tool invocation.
+An optional
+.Cm reason
+field provides an explanation shown to the user.
+.It Cm ask
+Escalate to the user for a manual decision.
+.It Cm defer
+Take no action; let subsequent hooks or the default permission logic
+decide.
+This is the default behavior when no
+.Cm permissionDecision
+is returned.
+.El
+.Pp
+Example response from a
+.Cm PreToolUse
+command handler:
+.Bd -literal -offset indent
+{
+  "permissionDecision": "deny",
+  "reason": "Writes to /etc are not permitted"
+}
+.Ed
+.Sh INPUT REWRITING
+.Cm PreToolUse
+and
+.Cm UserPromptSubmit
+handlers may return an
+.Cm updatedInput
+field in their JSON response to modify the input before it is processed.
+.Pp
+For
+.Cm PreToolUse ,
+.Cm updatedInput
+replaces the tool's input object:
+.Bd -literal -offset indent
+{
+  "updatedInput": {
+    "command": "ls -la",
+    "timeout": 30000
+  }
+}
+.Ed
+.Pp
+For
+.Cm UserPromptSubmit ,
+.Cm updatedInput
+replaces the user's prompt text:
+.Bd -literal -offset indent
+{
+  "updatedInput": "Modified prompt text"
+}
+.Ed
+.Sh SEE ALSO
+.Xr claude-code 1 ,
+.Xr claude-code-settings 5
+.Sh AUTHORS
+.An Anthropic , PBC

@@ -1,0 +1,488 @@
+.\" Copyright (c) 2024-2026 OpenAI
+.\" SPDX-License-Identifier: MIT
+.\"
+.Dd April 16, 2026
+.Dt CODEX-CONFIG 5
+.Os
+.Sh NAME
+.Nm codex-config
+.Nd configuration file format for
+.Xr codex 1
+.Sh DESCRIPTION
+.Xr codex 1
+reads its configuration from TOML files at several locations.
+Settings are merged with the following precedence, highest first:
+.Bl -enum -compact
+.It
+CLI flags
+.Pq Fl c Ar key=value , Fl m , Fl a , Fl s , No etc.
+.It
+Named profile
+.Pq Fl p Ar name
+.It
+Project config
+.Pq Pa .codex/config.toml
+.It
+User config
+.Pq Pa ~/.codex/config.toml
+.It
+System config
+.Pq Pa /etc/codex/config.toml
+.It
+Built-in defaults
+.El
+.Pp
+Project-level configuration files
+.Pq Pa .codex/config.toml
+are subject to the project trust model.
+On first encounter,
+.Nm codex
+prompts the user to trust or reject the project configuration.
+Trusted projects are recorded in the user-level state directory.
+.Sh FILE LOCATIONS
+.Bl -tag -width Ds
+.It Pa /etc/codex/config.toml
+System-wide defaults.
+Typically managed by an administrator.
+.It Pa ~/.codex/config.toml
+Per-user configuration.
+This is the primary location for personal preferences.
+.It Pa .codex/config.toml
+Project-level configuration, relative to the repository root.
+Overrides user and system settings when the project is trusted.
+.El
+.Pp
+The
+.Ev CODEX_HOME
+environment variable overrides the
+.Pa ~/.codex
+base directory.
+.Sh MODEL SETTINGS
+.Bl -tag -width Ds
+.It Va model Pq string
+Model identifier for the primary agent.
+Examples:
+.Ql o4-mini ,
+.Ql gpt-4.1 ,
+.Ql codex-mini-latest .
+.It Va model_provider Pq string
+Identifier of a custom model provider defined in
+.Va [model_providers] .
+When set, API requests are routed through the specified provider
+instead of the OpenAI default.
+.It Va model_reasoning_effort Pq string
+Reasoning effort hint passed to the model.
+Accepted values depend on the model; common values are
+.Ql low ,
+.Ql medium ,
+and
+.Ql high .
+.It Va model_reasoning_summary Pq string
+Controls whether the model emits reasoning summaries.
+.It Va model_verbosity Pq string
+Controls how verbose model responses are.
+.It Va model_context_window Pq integer
+Override the context window size in tokens.
+Useful when using a custom provider with a non-standard window.
+.It Va model_auto_compact_token_limit Pq integer
+Token threshold at which
+.Nm codex
+automatically compacts the conversation history.
+.It Va review_model Pq string
+Model identifier used for the approval guardian sub-agent
+when
+.Va approvals_reviewer
+is set to
+.Cm guardian_subagent .
+.El
+.Sh APPROVAL POLICY
+.Bl -tag -width Ds
+.It Va approval_policy Pq string
+Top-level approval mode:
+.Cm untrusted ,
+.Cm on-request ,
+or
+.Cm never .
+See
+.Xr codex 1
+for descriptions of each mode.
+.El
+.Pp
+Fine-grained approval sub-keys:
+.Bl -tag -width Ds
+.It Va approval_policy.mcp_elicitations Pq string
+Approval policy for MCP server elicitation requests.
+.It Va approval_policy.request_permissions Pq string
+Policy for model-initiated permission requests.
+.It Va approval_policy.rules Pq array of tables
+Exec-policy rules that match commands to allow, deny, or prompt.
+Each rule has a
+.Va pattern
+and an
+.Va action .
+.It Va approval_policy.sandbox_approval Pq string
+Policy for commands that would exceed sandbox restrictions.
+.It Va approval_policy.skill_approval Pq string
+Policy for skill invocations.
+.El
+.Bl -tag -width Ds
+.It Va approvals_reviewer Pq string
+Who reviews approval requests.
+One of
+.Cm user
+.Pq default, interactive prompts
+or
+.Cm guardian_subagent
+.Pq automated review by the Va review_model .
+.El
+.Sh SANDBOX SETTINGS
+.Bl -tag -width Ds
+.It Va sandbox_mode Pq string
+Sandbox execution mode:
+.Cm read-only ,
+.Cm workspace-write ,
+or
+.Cm danger-full-access .
+.El
+.Pp
+The
+.Va [sandbox_workspace_write]
+table configures the
+.Cm workspace-write
+sandbox mode:
+.Bl -tag -width Ds
+.It Va writable_roots Pq array of strings
+Additional filesystem paths the sandbox permits writes to,
+beyond the project workspace.
+Paths may be absolute or relative to the workspace root.
+.It Va network_access Pq boolean
+Whether to allow network access from sandboxed commands.
+Default is
+.Cm false .
+.El
+.Sh PERMISSIONS PROFILES
+Named permission profiles can be defined under
+.Va [permissions.name] :
+.Bd -literal -offset indent
+[permissions.ci]
+approval_policy = "never"
+sandbox_mode = "workspace-write"
+
+[permissions.review]
+approval_policy = "untrusted"
+sandbox_mode = "read-only"
+.Ed
+.Pp
+Activate a profile with
+.Fl p Ar name
+on the command line.
+Profile settings override file-based configuration
+but are overridden by explicit CLI flags.
+.Sh MCP SERVERS
+MCP servers are configured under
+.Va [mcp_servers.id] ,
+where
+.Va id
+is a user-chosen identifier:
+.Bd -literal -offset indent
+[mcp_servers.my-server]
+command = "/usr/local/bin/my-mcp-server"
+args = ["--verbose"]
+env = { API_KEY = "secret" }
+cwd = "/opt/my-server"
+enabled = true
+required = false
+.Ed
+.Bl -tag -width Ds
+.It Va command Pq string
+Path to the MCP server executable.
+Used for stdio transport.
+Mutually exclusive with
+.Va url .
+.It Va args Pq array of strings
+Arguments passed to the server command.
+.It Va url Pq string
+URL for HTTP-based MCP servers.
+Mutually exclusive with
+.Va command .
+.It Va env Pq table
+Environment variables to set in the server process.
+.It Va cwd Pq string
+Working directory for the server process.
+.It Va enabled Pq boolean
+Whether the server is active.
+Default is
+.Cm true .
+.It Va required Pq boolean
+If
+.Cm true ,
+.Nm codex
+fails to start when this server is unavailable.
+Default is
+.Cm false .
+.It Va enabled_tools Pq array of strings
+Allowlist of tool names to expose.
+When set, only these tools are available.
+.It Va disabled_tools Pq array of strings
+Denylist of tool names to hide.
+Applied after
+.Va enabled_tools .
+.It Va timeouts Pq table
+Timeout settings for the server connection:
+.Va connect ,
+.Va read ,
+.Va write
+in seconds.
+.It Va bearer_token_env_var Pq string
+Name of the environment variable containing a bearer token
+for HTTP authentication.
+.It Va supports_parallel_tool_calls Pq boolean
+Whether the server supports concurrent tool invocations.
+Default is
+.Cm true .
+.It Va scopes Pq array of strings
+OAuth scopes requested during MCP server authentication.
+.It Va oauth_resource Pq string
+OAuth resource identifier for token exchange.
+.El
+.Sh SHELL ENVIRONMENT POLICY
+The
+.Va [shell_env]
+table controls which environment variables are visible to
+sandboxed commands:
+.Bl -tag -width Ds
+.It Va inherit Pq boolean
+If
+.Cm true
+.Pq default ,
+the sandboxed process inherits the parent environment,
+subject to filtering by
+.Va exclude .
+If
+.Cm false ,
+the process starts with an empty environment.
+.It Va exclude Pq array of strings
+Variable names or glob patterns to strip from the inherited environment.
+Applied only when
+.Va inherit
+is
+.Cm true .
+.It Va include_only Pq array of strings
+If set, only these variables are inherited.
+Mutually exclusive with
+.Va exclude .
+.It Va ignore_default_excludes Pq boolean
+If
+.Cm true ,
+skip the built-in default exclusion list
+.Pq e.g., credentials, tokens .
+Default is
+.Cm false .
+.It Va set Pq table
+Explicit variable assignments.
+These are set regardless of inheritance mode.
+.Bd -literal -offset indent
+[shell_env.set]
+LANG = "en_US.UTF-8"
+NODE_ENV = "development"
+.Ed
+.El
+.Sh FEATURE FLAGS
+Feature flags are toggled under the
+.Va [features]
+table.
+All values are booleans.
+.Bl -tag -width Ds
+.It Va shell_tool
+Enable the shell tool for command execution.
+.It Va unified_exec
+Use the unified execution engine.
+.It Va shell_snapshot
+Take filesystem snapshots before and after shell commands.
+.It Va multi_agent
+Enable multi-agent orchestration.
+.It Va personality
+Enable personality customization.
+.It Va fast_mode
+Enable low-latency mode with reduced reasoning.
+.It Va enable_request_compression
+Compress API requests to reduce bandwidth.
+.It Va skill_mcp_dependency_install
+Automatically install MCP dependencies for skills.
+.It Va undo
+Enable undo support for file modifications.
+.It Va apps
+Enable Codex Apps.
+.It Va codex_hooks
+Enable lifecycle hooks
+.Pq see Xr codex-env 7 .
+.It Va smart_approvals
+Use heuristics to auto-approve low-risk tool calls.
+.It Va prevent_idle_sleep
+Prevent the system from sleeping while
+.Nm codex
+is running.
+.El
+.Sh AGENTS
+Multi-agent settings are configured under the
+.Va [agents]
+table:
+.Bl -tag -width Ds
+.It Va max_threads Pq integer
+Maximum number of concurrent sub-agent threads.
+.It Va max_depth Pq integer
+Maximum nesting depth for sub-agent spawning.
+.It Va job_max_runtime_seconds Pq integer
+Maximum runtime in seconds for any single agent job.
+.El
+.Pp
+Per-agent configuration is specified under
+.Va [agents.configs.name] :
+.Bl -tag -width Ds
+.It Va config_file Pq string
+Path to a TOML configuration file for this agent.
+.It Va description Pq string
+Human-readable description of the agent's purpose.
+.It Va nickname_candidates Pq array of strings
+List of nickname options for the sub-agent.
+One is chosen at random when spawning.
+.El
+.Sh NOTIFICATIONS
+.Bl -tag -width Ds
+.It Va notify Pq array of strings
+Command to run for desktop notifications.
+The command receives the notification text as its final argument.
+Example:
+.Bd -literal -offset indent
+notify = ["terminal-notifier", "-title", "Codex"]
+.Ed
+.It Va tui.notifications Pq boolean
+Enable in-TUI notification banners.
+.It Va tui.notification_method Pq string
+Method for TUI notifications.
+.El
+.Sh OBSERVABILITY
+OpenTelemetry configuration under
+.Va [otel] :
+.Bl -tag -width Ds
+.It Va exporters Pq table
+OTLP exporter configuration
+.Pq endpoint, protocol, headers .
+.It Va metrics Pq boolean
+Enable metrics export.
+.It Va traces Pq boolean
+Enable trace export.
+.El
+.Sh ANALYTICS
+.Bl -tag -width Ds
+.It Va [analytics]
+.It Va enabled Pq boolean
+Enable anonymous usage analytics.
+Default is
+.Cm true .
+.El
+.Sh AUTHENTICATION SETTINGS
+.Bl -tag -width Ds
+.It Va cli_auth_credentials_store Pq string
+Backend for storing CLI credentials.
+.It Va forced_login_method Pq string
+Force a specific login method, overriding the default.
+.It Va forced_chatgpt_workspace_id Pq string
+Pin authentication to a specific ChatGPT workspace.
+.El
+.Sh OSS PROVIDERS
+.Bl -tag -width Ds
+.It Va oss_provider Pq string
+Local OSS model provider.
+One of
+.Cm ollama
+or
+.Cm lmstudio .
+Used when
+.Fl Fl oss
+is passed on the command line.
+.El
+.Sh CUSTOM MODEL PROVIDERS
+Custom providers are defined under
+.Va [model_providers.id] :
+.Bd -literal -offset indent
+[model_providers.my-provider]
+base_url = "https://api.example.com/v1"
+env_key = "MY_PROVIDER_API_KEY"
+wire_api = "openai"
+
+[model_providers.my-provider.auth]
+command = "/usr/local/bin/get-token"
+.Ed
+.Bl -tag -width Ds
+.It Va base_url Pq string
+Base URL for the API endpoint.
+.It Va env_key Pq string
+Environment variable name containing the API key.
+.It Va wire_api Pq string
+Wire protocol.
+Currently only
+.Cm openai
+is supported.
+.It Va auth.command Pq string
+Path to an executable that prints authentication credentials to stdout.
+Invoked before each API request.
+.El
+.Sh LOGGING
+.Bl -tag -width Ds
+.It Va log_dir Pq string
+Directory for log files.
+Defaults to
+.Pa $CODEX_HOME/logs .
+.El
+.Sh EXAMPLES
+Minimal user configuration:
+.Bd -literal -offset indent
+model = "o4-mini"
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+.Ed
+.Pp
+CI configuration with custom provider:
+.Bd -literal -offset indent
+model = "gpt-4.1"
+model_provider = "azure"
+approval_policy = "never"
+sandbox_mode = "workspace-write"
+
+[model_providers.azure]
+base_url = "https://my-resource.openai.azure.com/v1"
+env_key = "AZURE_OPENAI_KEY"
+wire_api = "openai"
+
+[features]
+multi_agent = true
+codex_hooks = true
+
+[agents]
+max_threads = 4
+max_depth = 2
+.Ed
+.Pp
+Project config with MCP server and permissions:
+.Bd -literal -offset indent
+[mcp_servers.project-tools]
+command = "./tools/mcp-server"
+args = ["--config", ".codex/tools.json"]
+required = true
+enabled_tools = ["lint", "format", "test"]
+
+[permissions.safe]
+approval_policy = "never"
+sandbox_mode = "workspace-write"
+
+[sandbox_workspace_write]
+writable_roots = ["/tmp/codex-builds"]
+network_access = true
+.Ed
+.Sh SEE ALSO
+.Xr codex 1 ,
+.Xr codex-env 7
+.Sh AUTHORS
+OpenAI
+.Aq Mt https://openai.com

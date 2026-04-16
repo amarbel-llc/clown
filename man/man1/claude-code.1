@@ -1,0 +1,473 @@
+.\" Copyright (c) 2026 Anthropic, PBC
+.\" SPDX-License-Identifier: MIT
+.Dd April 16, 2026
+.Dt CLAUDE-CODE 1
+.Os
+.Sh NAME
+.Nm claude
+.Nd AI-powered coding assistant for the terminal
+.Sh SYNOPSIS
+.Nm
+.Op Ar query
+.Nm
+.Fl p Ar query
+.Op Fl -output-format Ar format
+.Nm
+.Fl c
+.Op Fl p Ar query
+.Nm
+.Fl r Ar session-id
+.Op Ar query
+.Nm
+.Cm update
+.Nm
+.Cm auth
+.Ar subcommand
+.Nm
+.Cm mcp
+.Ar subcommand
+.Op Ar args
+.Nm
+.Cm plugin
+.Ar subcommand
+.Op Ar args
+.Nm
+.Cm agents
+.Ar subcommand
+.Op Ar args
+.Nm
+.Cm auto-mode
+.Op Ar args
+.Nm
+.Cm remote-control
+.Op Ar args
+.Nm
+.Cm setup-token
+.Op Ar args
+.Sh DESCRIPTION
+.Nm
+is a command-line interface for interacting with Claude, Anthropic's AI
+assistant, in the context of software development.
+It provides an interactive REPL for conversations with Claude, with deep
+integration into the local filesystem, shell, and development tools.
+.Pp
+When invoked without arguments,
+.Nm
+starts an interactive session.
+When given a
+.Ar query
+argument, the query is sent as the initial user message.
+.Pp
+In print mode
+.Pq Fl p ,
+.Nm
+sends a single query, prints the response to stdout, and exits.
+This is designed for scripting and pipeline integration.
+.Sh OPTIONS
+.Ss Session Options
+.Bl -tag -width Ds
+.It Fl c , Fl -continue
+Continue the most recent conversation in the current directory.
+When combined with
+.Fl p ,
+sends a follow-up message in print mode.
+.It Fl r Ar session-id , Fl -resume Ar session-id
+Resume a specific conversation by its session ID.
+.It Fl -fork-session
+When used with
+.Fl c
+or
+.Fl r ,
+fork the session instead of continuing it in-place.
+Creates a new session branching from the existing conversation.
+.It Fl -from-pr Ar pr-number
+Start a session pre-loaded with context from the specified GitHub pull
+request number.
+.It Fl -session-id Ar id
+Set a specific session ID for the conversation.
+Useful for deterministic session management in automation.
+.It Fl n Ar name , Fl -name Ar name
+Assign a human-readable name to the session.
+.It Fl -no-session-persistence
+Do not persist the session to disk.
+The conversation will be lost when the process exits.
+.El
+.Ss Output Options
+.Bl -tag -width Ds
+.It Fl p , Fl -print
+Print mode.
+Send a single query, print the response, and exit with a zero status on
+success.
+Designed for non-interactive use and shell pipelines.
+Reads from stdin if no query argument is provided.
+.It Fl -output-format Ar format
+Set the output format for print mode.
+Valid values:
+.Bl -tag -width "stream-json" -compact
+.It Cm text
+Plain text output
+.Pq default .
+.It Cm json
+Single JSON object with the final response.
+.It Cm stream-json
+Newline-delimited JSON objects streamed as they arrive.
+.El
+.It Fl -input-format Ar format
+Set the input format when reading from stdin.
+Used to pass structured conversation history.
+.It Fl -json-schema Ar schema
+Provide a JSON schema that the model's output must conform to.
+Enables structured output mode.
+.It Fl -include-partial-messages
+In streaming JSON output, include partial message objects as they are
+assembled.
+.It Fl -include-hook-events
+In streaming JSON output, include hook execution events.
+.It Fl -replay-user-messages
+In streaming JSON output, replay user messages in the stream.
+.It Fl -verbose
+Enable verbose output, showing additional diagnostic information.
+.It Fl v , Fl -version
+Print the version of
+.Nm
+and exit.
+.El
+.Ss Model Options
+.Bl -tag -width Ds
+.It Fl -model Ar name
+Select the model to use.
+Accepts shorthand names
+.Pq Cm sonnet , Cm opus
+or fully-qualified model identifiers.
+.It Fl -fallback-model Ar name
+Specify a fallback model to use if the primary model is unavailable or
+returns an error.
+.It Fl -effort Ar level
+Set the reasoning effort level.
+Valid values:
+.Cm low ,
+.Cm medium ,
+.Cm high ,
+.Cm max .
+Higher effort levels use more tokens for reasoning but may produce
+better results for complex tasks.
+.El
+.Ss System Prompt Options
+.Bl -tag -width Ds
+.It Fl -system-prompt Ar text
+Replace the default system prompt with the specified text.
+.It Fl -system-prompt-file Ar path
+Replace the default system prompt with the contents of the specified
+file.
+.It Fl -append-system-prompt Ar text
+Append text to the default system prompt.
+The default prompt is preserved; the additional text is added after it.
+.It Fl -append-system-prompt-file Ar path
+Append the contents of the specified file to the default system prompt.
+.It Fl -exclude-dynamic-system-prompt-sections
+Exclude dynamically-generated system prompt sections such as git status,
+file listings, and other context that is normally injected at session
+start.
+.El
+.Ss Permission Options
+.Bl -tag -width Ds
+.It Fl -permission-mode Ar mode
+Set the permission mode for tool use.
+Valid values:
+.Bl -tag -width "bypassPermissions" -compact
+.It Cm default
+Prompt the user for each tool invocation not covered by allow/deny
+rules.
+.It Cm acceptEdits
+Automatically accept file edits but prompt for other tools.
+.It Cm plan
+Read-only mode.
+Claude can read files and search but cannot make changes.
+.It Cm auto
+Automatically approve most tool uses with safety checks.
+.It Cm dontAsk
+Approve all tool uses without prompting.
+.It Cm bypassPermissions
+Skip all permission checks entirely.
+Requires
+.Fl -allow-dangerously-skip-permissions .
+.El
+.It Fl -dangerously-skip-permissions
+Skip all permission checks.
+Requires acknowledgment via
+.Fl -allow-dangerously-skip-permissions .
+This is inherently unsafe and should only be used in sandboxed
+environments.
+.It Fl -allow-dangerously-skip-permissions
+Acknowledge and enable the
+.Fl -dangerously-skip-permissions
+flag.
+Both flags must be present for permission bypass to take effect.
+.It Fl -enable-auto-mode
+Allow Claude to escalate to auto-mode during a session when it
+determines it would be beneficial.
+.It Fl -permission-prompt-tool Ar tool-name
+Specify an external tool to use for permission prompts instead of the
+built-in terminal UI.
+Enables headless or custom permission workflows.
+.El
+.Ss Tool Options
+.Bl -tag -width Ds
+.It Fl -allowedTools Ar pattern ...
+Specify glob patterns for tools that should be allowed without
+prompting.
+May be specified multiple times.
+Example:
+.Fl -allowedTools Qq mcp__moxy__*
+.It Fl -disallowedTools Ar pattern ...
+Specify glob patterns for tools that should be denied.
+May be specified multiple times.
+Takes precedence over
+.Fl -allowedTools .
+.It Fl -tools Ar json
+Provide a JSON array of custom tool definitions.
+.El
+.Ss MCP and Plugin Options
+.Bl -tag -width Ds
+.It Fl -mcp-config Ar path
+Path to an MCP server configuration file.
+See the
+.Sx FILES
+section for the default location.
+.It Fl -strict-mcp-config
+Fail immediately if any MCP server in the configuration fails to
+connect, rather than continuing with degraded functionality.
+.It Fl -plugin-dir Ar path
+Load a plugin from the specified directory.
+The directory must contain a
+.Pa .claude-plugin/plugin.json
+manifest.
+May be specified multiple times.
+.It Fl -disable-slash-commands
+Disable slash command processing in interactive mode.
+.El
+.Ss Working Directory Options
+.Bl -tag -width Ds
+.It Fl -add-dir Ar path
+Add an additional directory to the session's working context.
+Claude will be aware of files in these directories.
+May be specified multiple times.
+.It Fl w , Fl -worktree
+Create a git worktree for the session.
+Isolates file changes from the main working tree.
+.It Fl -tmux
+Run the session inside a new tmux window.
+.El
+.Ss Agent Options
+.Bl -tag -width Ds
+.It Fl -agent Ar name
+Use a named agent configuration.
+Agents define specialized behaviors, tools, and system prompts.
+.It Fl -agents Ar json
+Provide agent configurations as a JSON object.
+.It Fl -teammate-mode Ar mode
+Control how subagents are spawned.
+Valid values:
+.Bl -tag -width "in-process" -compact
+.It Cm auto
+Let Claude decide based on task complexity.
+.It Cm in-process
+Run subagents in the same process.
+.It Cm tmux
+Spawn subagents in separate tmux panes.
+.El
+.El
+.Ss Limit Options
+.Bl -tag -width Ds
+.It Fl -max-turns Ar n
+Limit the conversation to at most
+.Ar n
+assistant turns.
+When the limit is reached, the session ends.
+Useful for automated workflows.
+.It Fl -max-budget-usd Ar amount
+Set a maximum spending budget in US dollars for the session.
+The session will stop when the budget is exhausted.
+.El
+.Ss Remote Options
+.Bl -tag -width Ds
+.It Fl -remote
+Run in remote mode, connecting to a remote
+.Nm
+instance.
+.It Fl -remote-control , Fl -rc
+Enable remote control mode, allowing external processes to send commands
+to the running session.
+.It Fl -remote-control-session-name-prefix Ar prefix
+Set a prefix for the remote control session name.
+.It Fl -teleport
+Enable teleport mode for remote sessions.
+.El
+.Ss Initialization Options
+.Bl -tag -width Ds
+.It Fl -init
+Initialize a new project configuration in the current directory.
+Creates
+.Pa .claude/settings.json
+and optionally
+.Pa CLAUDE.md .
+.It Fl -init-only
+Perform initialization and exit without starting a session.
+.It Fl -maintenance
+Run in maintenance mode for automated upkeep tasks.
+.It Fl -bare
+Start with minimal configuration, skipping project detection and
+context loading.
+.El
+.Ss Debug Options
+.Bl -tag -width Ds
+.It Fl -debug Op Ar category
+Enable debug logging.
+An optional category filter limits output to matching categories.
+Debug output is written to stderr unless
+.Fl -debug-file
+is specified.
+.It Fl -debug-file Ar path
+Write debug output to the specified file instead of stderr.
+.El
+.Ss Settings Options
+.Bl -tag -width Ds
+.It Fl -settings Ar json
+Provide settings as a JSON string, overriding file-based settings.
+.It Fl -setting-sources Ar json
+Provide a JSON object specifying the source of each setting for
+diagnostic purposes.
+.El
+.Sh SUBCOMMANDS
+.Bl -tag -width "remote-control"
+.It Cm update
+Update
+.Nm
+to the latest version.
+.It Cm auth Cm login | Cm logout | Cm status | Cm switch
+Manage authentication.
+.Cm login
+initiates an OAuth flow or accepts an API key.
+.Cm logout
+clears stored credentials.
+.Cm status
+shows the current authentication state.
+.Cm switch
+changes the active authentication profile.
+.It Cm mcp Cm list | Cm add | Cm remove | Cm serve
+Manage MCP (Model Context Protocol) server connections.
+.Cm list
+shows configured servers.
+.Cm add
+registers a new server.
+.Cm remove
+deletes a server configuration.
+.Cm serve
+starts
+.Nm
+as an MCP server itself.
+.It Cm plugin Cm install | Cm uninstall | Cm list | Cm update
+Manage plugins.
+.Cm install
+adds a plugin from a directory or marketplace.
+.Cm uninstall
+removes a plugin.
+.Cm list
+shows installed plugins.
+.Cm update
+refreshes plugin manifests.
+.It Cm agents Cm list | Cm show
+Inspect available agent configurations.
+.Cm list
+shows all agents.
+.Cm show
+displays details of a specific agent.
+.It Cm auto-mode
+Configure or enter auto-mode, which allows Claude to approve its own
+tool uses with safety guardrails.
+.It Cm remote-control
+Start or manage remote control sessions.
+Allows external processes to programmatically interact with a running
+.Nm
+session via JSON messages.
+.It Cm setup-token
+Configure an authentication token non-interactively.
+Designed for CI/CD and automated provisioning.
+.El
+.Sh ENVIRONMENT
+See
+.Xr claude-code-env 7
+for a comprehensive list of environment variables.
+Key variables include:
+.Bl -tag -width Ds
+.It Ev ANTHROPIC_API_KEY
+API key for direct Anthropic API access.
+.It Ev ANTHROPIC_MODEL
+Override the default model.
+.It Ev CLAUDE_CODE_SHELL
+Override the shell used for Bash tool invocations.
+.El
+.Sh FILES
+.Bl -tag -width Ds
+.It Pa ~/.claude/settings.json
+User-level settings.
+Applies to all projects.
+See
+.Xr claude-code-settings 5 .
+.It Pa .claude/settings.json
+Project-level settings.
+Checked into version control.
+Shared with all collaborators.
+.It Pa .claude/settings.local.json
+Local project settings.
+Not checked into version control.
+Overrides project settings.
+.It Pa ~/.claude.json
+Global configuration for UI preferences, editor integration, and
+behavioral defaults.
+.It Pa .mcp.json
+MCP server configuration for the project.
+Defines servers available during sessions in this directory.
+.It Pa CLAUDE.md
+Project instructions file.
+Loaded into the system prompt at session start.
+Searched for in the current directory and parent directories.
+.It Pa ~/.claude/CLAUDE.md
+User-level instructions.
+Appended to the system prompt for all sessions.
+.El
+.Sh EXIT STATUS
+.Ex -std
+.Pp
+In print mode, a non-zero exit status indicates that the query could
+not be completed successfully.
+.Sh EXAMPLES
+Start an interactive session:
+.Dl $ claude
+.Pp
+Ask a question in print mode:
+.Dl $ claude -p \(dqExplain the error in main.go\(dq
+.Pp
+Continue the last conversation:
+.Dl $ claude -c
+.Pp
+Pipe input and get JSON output:
+.Dl $ cat error.log | claude -p \(dqDiagnose this error\(dq --output-format json
+.Pp
+Start a session with a specific model and budget:
+.Dl $ claude --model opus --max-budget-usd 5.00 \(dqRefactor the auth module\(dq
+.Pp
+Run in fully automated mode inside a sandbox:
+.Dl $ claude -p \(dqFix all lint errors\(dq --dangerously-skip-permissions --allow-dangerously-skip-permissions
+.Pp
+Resume a specific session:
+.Dl $ claude -r abc123-def456 \(dqContinue where we left off\(dq
+.Pp
+Start with a git worktree:
+.Dl $ claude -w \(dqWork on the feature branch\(dq
+.Sh SEE ALSO
+.Xr claude-code-hooks 5 ,
+.Xr claude-code-settings 5 ,
+.Xr claude-code-env 7
+.Sh AUTHORS
+.An Anthropic , PBC

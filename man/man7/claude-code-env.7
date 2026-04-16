@@ -1,0 +1,423 @@
+.\" Copyright (c) 2026 Anthropic, PBC
+.\" SPDX-License-Identifier: MIT
+.Dd April 16, 2026
+.Dt CLAUDE-CODE-ENV 7
+.Os
+.Sh NAME
+.Nm claude-code-env
+.Nd environment variables for Claude Code
+.Sh DESCRIPTION
+.Xr claude-code 1
+reads numerous environment variables to configure API access, model
+selection, resource limits, display behavior, and other runtime
+parameters.
+This page documents all recognized variables grouped by category.
+.Pp
+Environment variables generally have lower precedence than command-line
+flags and settings files.
+See
+.Xr claude-code-settings 5
+for the full precedence order.
+.Sh API AND AUTHENTICATION
+.Bl -tag -width Ds
+.It Ev ANTHROPIC_API_KEY
+API key for direct access to the Anthropic API.
+When set, bypasses OAuth authentication.
+.It Ev ANTHROPIC_AUTH_TOKEN
+Bearer token for Anthropic API authentication.
+Alternative to
+.Ev ANTHROPIC_API_KEY
+for token-based auth flows.
+.It Ev ANTHROPIC_BETAS
+Comma-separated list of beta feature flags to enable on API requests.
+.It Ev ANTHROPIC_CUSTOM_HEADERS
+JSON object or comma-separated
+.Ar key:value
+pairs of additional HTTP headers to include in all API requests.
+.It Ev ANTHROPIC_BASE_URL
+Override the base URL for the Anthropic API.
+Used for proxies or alternative API endpoints.
+.It Ev CLAUDE_CODE_OAUTH_TOKEN
+OAuth access token for authentication.
+.It Ev CLAUDE_CODE_OAUTH_REFRESH_TOKEN
+OAuth refresh token for automatic token renewal.
+.It Ev CLAUDE_CODE_OAUTH_SCOPES
+Comma-separated OAuth scopes to request.
+.El
+.Sh CLOUD PROVIDER CONFIGURATION
+.Ss Amazon Bedrock
+.Bl -tag -width Ds
+.It Ev ANTHROPIC_BEDROCK_BASE_URL
+Base URL for the Amazon Bedrock API endpoint.
+Setting this variable enables Bedrock mode.
+.It Ev AWS_BEARER_TOKEN_BEDROCK
+Bearer token for Bedrock authentication.
+Alternative to standard AWS credential chain.
+.It Ev CLAUDE_CODE_SKIP_BEDROCK_AUTH
+When set to
+.Qq 1 ,
+skip Bedrock-specific authentication setup.
+Useful when authentication is handled externally.
+.El
+.Ss Google Cloud Vertex AI
+.Bl -tag -width Ds
+.It Ev ANTHROPIC_VERTEX_PROJECT_ID
+Google Cloud project ID for Vertex AI.
+.It Ev ANTHROPIC_VERTEX_REGION
+Google Cloud region for the Vertex AI endpoint
+.Pq e.g., Qq us-east5 .
+.It Ev CLAUDE_CODE_SKIP_VERTEX_AUTH
+When set to
+.Qq 1 ,
+skip Vertex-specific authentication setup.
+.El
+.Ss Azure AI Foundry
+.Bl -tag -width Ds
+.It Ev ANTHROPIC_FOUNDRY_BASE_URL
+Base URL for the Azure AI Foundry API endpoint.
+.It Ev ANTHROPIC_FOUNDRY_AUTH_TOKEN
+Authentication token for Azure AI Foundry.
+.It Ev ANTHROPIC_FOUNDRY_RESOURCE_ID
+Azure resource identifier for the Foundry deployment.
+.It Ev CLAUDE_CODE_SKIP_FOUNDRY_AUTH
+When set to
+.Qq 1 ,
+skip Foundry-specific authentication setup.
+.El
+.Sh MODEL SELECTION
+.Bl -tag -width Ds
+.It Ev ANTHROPIC_MODEL
+Override the default model.
+Equivalent to
+.Fl -model
+on the command line.
+Accepts shorthand names
+.Pq Cm sonnet , Cm opus
+or fully-qualified model identifiers.
+.It Ev ANTHROPIC_DEFAULT_SONNET_MODEL
+Set the model identifier that the
+.Cm sonnet
+shorthand resolves to.
+.It Ev ANTHROPIC_DEFAULT_OPUS_MODEL
+Set the model identifier that the
+.Cm opus
+shorthand resolves to.
+.It Ev ANTHROPIC_DEFAULT_HAIKU_MODEL
+Set the model identifier that the
+.Cm haiku
+shorthand resolves to.
+.It Ev ANTHROPIC_CUSTOM_MODEL_OPTION
+Add a custom model name to the model selection menu in interactive mode.
+.It Ev CLAUDE_CODE_SUBAGENT_MODEL
+Override the model used for subagent invocations.
+By default, subagents use the same model as the parent session.
+.El
+.Sh THINKING AND REASONING
+.Bl -tag -width Ds
+.It Ev CLAUDE_CODE_DISABLE_THINKING
+When set to
+.Qq 1 ,
+disable extended thinking
+.Pq chain-of-thought reasoning
+entirely.
+.It Ev MAX_THINKING_TOKENS
+Maximum number of tokens allocated to extended thinking.
+Higher values allow deeper reasoning at the cost of latency and token
+usage.
+.It Ev CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING
+When set to
+.Qq 1 ,
+disable adaptive thinking, which dynamically adjusts
+thinking budget based on query complexity.
+.It Ev CLAUDE_CODE_EFFORT_LEVEL
+Set the reasoning effort level.
+One of:
+.Cm low ,
+.Cm medium ,
+.Cm high ,
+.Cm max .
+Equivalent to
+.Fl -effort
+on the command line.
+.El
+.Sh TOKEN LIMITS
+.Bl -tag -width Ds
+.It Ev CLAUDE_CODE_MAX_OUTPUT_TOKENS
+Maximum number of tokens in the model's response.
+.It Ev CLAUDE_CODE_FILE_READ_MAX_OUTPUT_TOKENS
+Maximum output tokens when the model is performing file reads.
+Allows larger responses for file-heavy operations.
+.It Ev CLAUDE_CODE_MAX_CONTEXT_TOKENS
+Maximum context window size in tokens.
+Limits how much conversation history and context is sent to the model.
+.El
+.Sh TIMEOUTS
+.Bl -tag -width Ds
+.It Ev API_TIMEOUT_MS
+Timeout in milliseconds for API requests.
+Applies to the initial connection and response headers.
+.It Ev BASH_DEFAULT_TIMEOUT_MS
+Default timeout in milliseconds for Bash tool invocations.
+.It Ev BASH_MAX_TIMEOUT_MS
+Maximum allowed timeout for Bash tool invocations.
+The model may request longer timeouts, but they are capped at this
+value.
+.It Ev CLAUDE_STREAM_IDLE_TIMEOUT_MS
+Timeout in milliseconds for idle streaming connections.
+If no data is received for this duration, the stream is considered
+stalled.
+.It Ev CLAUDE_CODE_EXIT_AFTER_STOP_DELAY
+Delay in milliseconds before the process exits after a stop event.
+Allows pending operations to complete.
+.El
+.Sh BASH AND SHELL
+.Bl -tag -width Ds
+.It Ev BASH_MAX_OUTPUT_LENGTH
+Maximum number of characters captured from Bash tool output.
+Output exceeding this limit is truncated.
+.It Ev CLAUDE_CODE_SHELL
+Override the shell used for Bash tool invocations.
+Defaults to the user's login shell.
+.It Ev CLAUDE_CODE_SHELL_PREFIX
+Command prefix prepended to all Bash tool invocations.
+Useful for wrapping commands with
+.Xr nix-shell 1
+or similar environments.
+.It Ev CLAUDE_CODE_BASH_MAINTAIN_PROJECT_WORKING_DIR
+When set to
+.Qq 1 ,
+always reset the working directory to the project root before each
+Bash tool invocation.
+.It Ev CLAUDECODE
+Set to
+.Qq 1
+by
+.Xr claude-code 1
+in the environment of all child processes.
+Scripts can check this variable to detect when they are running inside a
+Claude Code session.
+.El
+.Sh MEMORY AND FILES
+.Bl -tag -width Ds
+.It Ev CLAUDE_CODE_DISABLE_AUTO_MEMORY
+When set to
+.Qq 1 ,
+disable automatic memory updates.
+Claude will not write to
+.Pa CLAUDE.md
+files automatically.
+.It Ev CLAUDE_CODE_DISABLE_CLAUDE_MDS
+When set to
+.Qq 1 ,
+do not load any
+.Pa CLAUDE.md
+files into the system prompt.
+.It Ev CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING
+When set to
+.Qq 1 ,
+disable automatic file checkpointing.
+Claude normally takes snapshots of files before editing them.
+.It Ev CLAUDE_CODE_GLOB_MAX_FILES
+Maximum number of files returned by glob operations.
+.It Ev CLAUDE_CODE_GLOB_MAX_DEPTH
+Maximum directory depth for glob traversal.
+.El
+.Sh CONTEXT MANAGEMENT
+.Bl -tag -width Ds
+.It Ev CLAUDE_AUTOCOMPACT_PCT_OVERRIDE
+Override the context usage percentage at which automatic compaction
+triggers.
+Value is an integer from 0 to 100.
+Lower values compact more aggressively.
+.It Ev CLAUDE_CODE_AUTO_COMPACT_WINDOW
+Number of recent messages to preserve during automatic compaction.
+Messages within this window are not summarized.
+.El
+.Sh PLUGINS
+.Bl -tag -width Ds
+.It Ev CLAUDE_CODE_PLUGIN_CACHE_DIR
+Override the directory used for caching downloaded plugin assets.
+.It Ev CLAUDE_CODE_PLUGIN_SEED_DIR
+Directory containing pre-installed plugins.
+Plugins in this directory are available without installation.
+.It Ev CLAUDE_CODE_SYNC_PLUGIN_INSTALL
+When set to
+.Qq 1 ,
+install plugins synchronously at session start rather than in the
+background.
+.El
+.Sh DEBUG AND LOGGING
+.Bl -tag -width Ds
+.It Ev CLAUDE_CODE_DEBUG_LOGS_DIR
+Directory where debug log files are written.
+.It Ev CLAUDE_CODE_DEBUG_LOG_LEVEL
+Minimum log level for debug output.
+One of:
+.Cm trace ,
+.Cm debug ,
+.Cm info ,
+.Cm warn ,
+.Cm error .
+.El
+.Sh DISPLAY AND ACCESSIBILITY
+.Bl -tag -width Ds
+.It Ev CLAUDE_CODE_NO_FLICKER
+When set to
+.Qq 1 ,
+disable UI animations and transitions that may cause flickering.
+.It Ev CLAUDE_CODE_DISABLE_MOUSE
+When set to
+.Qq 1 ,
+disable mouse input handling in the terminal UI.
+.It Ev CLAUDE_CODE_SCROLL_SPEED
+Set the scroll speed for the terminal UI.
+Integer value; higher is faster.
+.It Ev CLAUDE_CODE_SYNTAX_HIGHLIGHT
+When set to
+.Qq 0 ,
+disable syntax highlighting in code output.
+.It Ev CLAUDE_CODE_TMUX_TRUECOLOR
+When set to
+.Qq 1 ,
+enable 24-bit true color output inside tmux sessions.
+.It Ev CLAUDE_CODE_CODE_ACCESSIBILITY
+When set to
+.Qq 1 ,
+enable accessibility features for code display
+.Pq e.g., high-contrast themes, screen reader hints .
+.El
+.Sh FEATURES
+.Bl -tag -width Ds
+.It Ev CLAUDE_CODE_DISABLE_BACKGROUND_TASKS
+When set to
+.Qq 1 ,
+disable background task processing.
+.It Ev CLAUDE_CODE_ENABLE_TASKS
+When set to
+.Qq 1 ,
+enable the task management system for tracking and resuming long-running
+work.
+.It Ev CLAUDE_CODE_DISABLE_CRON
+When set to
+.Qq 1 ,
+disable scheduled/cron task execution.
+.It Ev CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
+When set to
+.Qq 1 ,
+enable experimental multi-agent team collaboration features.
+.It Ev CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS
+When set to
+.Qq 1 ,
+do not include git repository context
+.Pq status, recent commits
+in the system prompt.
+.El
+.Sh MCP AND TOOLS
+.Bl -tag -width Ds
+.It Ev ENABLE_TOOL_SEARCH
+When set to
+.Qq 1 ,
+enable semantic search over available tools.
+Helps Claude discover relevant tools for complex tasks.
+.It Ev CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY
+Maximum number of tool invocations that can run concurrently.
+Default is 1
+.Pq sequential execution .
+.It Ev MCP_TIMEOUT
+Timeout in milliseconds for MCP server initialization and tool
+invocations.
+.It Ev MAX_MCP_OUTPUT_TOKENS
+Maximum number of tokens in MCP tool output.
+Large outputs are truncated to this limit.
+.El
+.Sh SECURITY
+.Bl -tag -width Ds
+.It Ev CLAUDE_CODE_SUBPROCESS_ENV_SCRUB
+Comma-separated list of environment variable names to remove from the
+environment of child processes spawned by tools.
+Prevents sensitive variables from leaking to subprocesses.
+.It Ev CLAUDE_CODE_SCRIPT_CAPS
+Comma-separated list of capability flags for script execution.
+Controls what operations scripts invoked by hooks and commands are
+allowed to perform.
+.El
+.Sh TELEMETRY AND UPDATES
+.Bl -tag -width Ds
+.It Ev DISABLE_TELEMETRY
+When set to
+.Qq 1 ,
+disable all telemetry reporting.
+.It Ev DISABLE_AUTOUPDATER
+When set to
+.Qq 1 ,
+disable automatic update checks and installation.
+.It Ev CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC
+When set to
+.Qq 1 ,
+disable non-essential network traffic including telemetry, update
+checks, and analytics.
+.It Ev CLAUDE_CODE_ENABLE_TELEMETRY
+When set to
+.Qq 1 ,
+explicitly enable telemetry.
+Overrides
+.Ev DISABLE_TELEMETRY
+when both are set.
+.El
+.Sh TLS AND CERTIFICATES
+.Bl -tag -width Ds
+.It Ev CLAUDE_CODE_CERT_STORE
+Path to a custom CA certificate store file
+.Pq PEM format .
+Used for corporate proxies or self-signed certificates.
+.It Ev CLAUDE_CODE_CLIENT_CERT
+Path to a client certificate file for mutual TLS authentication.
+.It Ev CLAUDE_CODE_CLIENT_KEY
+Path to the private key file corresponding to
+.Ev CLAUDE_CODE_CLIENT_CERT .
+.El
+.Sh SESSION AND PATHS
+.Bl -tag -width Ds
+.It Ev CLAUDE_CONFIG_DIR
+Override the default configuration directory
+.Pq normally Pa ~/.claude .
+.It Ev CLAUDE_CODE_TMPDIR
+Override the temporary directory used for session data, file
+checkpoints, and other transient files.
+.It Ev CLAUDE_ENV_FILE
+Path to a file where hooks and tools can write
+.Ar KEY=VALUE
+pairs.
+Variables defined in this file are injected into subsequent tool
+invocations.
+See
+.Xr claude-code-hooks 5 .
+.It Ev CLAUDE_CODE_SIMPLE
+When set to
+.Qq 1 ,
+use a simplified UI mode with reduced visual complexity.
+.It Ev CLAUDE_CODE_REMOTE
+When set to
+.Qq 1 ,
+indicates the session is running in remote mode.
+Adjusts UI and behavior for remote connections.
+.El
+.Sh NETWORK AND STREAMING
+.Bl -tag -width Ds
+.It Ev CLAUDE_ENABLE_STREAM_WATCHDOG
+When set to
+.Qq 1 ,
+enable the stream watchdog timer.
+Detects and recovers from stalled API response streams.
+.It Ev CLAUDE_ENABLE_BYTE_WATCHDOG
+When set to
+.Qq 1 ,
+enable byte-level watchdog monitoring.
+Detects stalls at the TCP byte stream level rather than the
+application-level message stream.
+.El
+.Sh SEE ALSO
+.Xr claude-code 1 ,
+.Xr claude-code-settings 5
+.Sh AUTHORS
+.An Anthropic , PBC
