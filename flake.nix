@@ -3,7 +3,7 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
-    nixpkgs-master.url = "github:NixOS/nixpkgs/5b471d29a84be70e8f5577258721b89865660493";
+    nixpkgs-master.url = "github:NixOS/nixpkgs/9b53530a5f6887b6903cffeb8a418f3079d6698d";
     utils.url = "https://flakehub.com/f/numtide/flake-utils/0.1.102";
     moxy.url = "github:amarbel-llc/moxy";
     moxy.inputs.nixpkgs.follows = "nixpkgs";
@@ -22,19 +22,10 @@
       system:
       let
         pkgs = import nixpkgs { inherit system; };
-        pkgs-master = import nixpkgs-master { inherit system; };
-
-        # Inline fetch — not a flake input, so cannot be overridden via follows.
-        pkgs-claude-code-pinned = import
-          (builtins.fetchTarball {
-            url = "https://github.com/NixOS/nixpkgs/archive/5b471d29a84be70e8f5577258721b89865660493.tar.gz";
-            sha256 = "1s420i7savy8njafgkh3qq4xwx9nw1h648g7jlpwig37ndlnfk7k";
-          })
-          {
-            inherit system;
-            config.allowUnfreePredicate =
-              pkg: (pkgs.lib.getName pkg) == "claude-code";
-          };
+        pkgs-master = import nixpkgs-master {
+          inherit system;
+          config.allowUnfree = true;
+        };
       in
       let
         lib = pkgs.lib;
@@ -128,7 +119,7 @@
           done
         '';
 
-        claudeCliPath = "${pkgs-claude-code-pinned.claude-code}/bin/claude";
+        claudeCliPath = "${pkgs-master.claude-code}/bin/claude";
 
         # Unified wrapper dispatching to Claude (default) or Codex via
         # --provider flag. Provider-specific flags (tool policy, prompt
@@ -236,7 +227,12 @@
           # 3. Append to extra_args
           # Blocked on: defining which moxins should auto-load vs remain manual.
 
-          exec "$cli" "''${extra_args[@]}" "$@"
+          # Run without exec so we can clean up TTY state after exit.
+          # Workaround for anthropics/claude-code#39272 (dirty terminal on exit).
+          "$cli" "''${extra_args[@]}" "$@"
+          status=$?
+          printf '\e[?2004l\e[?1l\e[?25h\e[J'
+          exit $status
         '';
 
         clown-sessions = pkgs.writeScriptBin "clown-sessions" ''
