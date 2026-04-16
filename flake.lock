@@ -1399,6 +1399,22 @@
         "url": "https://flakehub.com/f/NixOS/nixpkgs/0"
       }
     },
+    "nixpkgs-claude-code": {
+      "locked": {
+        "lastModified": 1774366223,
+        "narHash": "sha256-EkNxFNHtu8q9oUcmcaQk/fsNrErrAMUMx4uMN5qjDIM=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "e2dde111aea2c0699531dc616112a96cd55ab8b5",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "e2dde111aea2c0699531dc616112a96cd55ab8b5",
+        "type": "github"
+      }
+    },
     "nixpkgs-lib": {
       "locked": {
         "lastModified": 1769909678,
@@ -1805,6 +1821,7 @@
       "inputs": {
         "moxy": "moxy",
         "nixpkgs": "nixpkgs_13",
+        "nixpkgs-claude-code": "nixpkgs-claude-code",
         "nixpkgs-master": "nixpkgs-master_5",
         "utils": "utils_6"
       }

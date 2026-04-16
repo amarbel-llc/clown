@@ -8,6 +8,7 @@
     moxy.url = "github:amarbel-llc/moxy";
     moxy.inputs.nixpkgs.follows = "nixpkgs";
     moxy.inputs.nixpkgs-master.follows = "nixpkgs-master";
+    nixpkgs-claude-code.url = "github:NixOS/nixpkgs/e2dde111aea2c0699531dc616112a96cd55ab8b5";
   };
 
   outputs =
@@ -15,6 +16,7 @@
       self,
       nixpkgs,
       nixpkgs-master,
+      nixpkgs-claude-code,
       utils,
       moxy,
     }:
@@ -23,6 +25,10 @@
       let
         pkgs = import nixpkgs { inherit system; };
         pkgs-master = import nixpkgs-master {
+          inherit system;
+          config.allowUnfree = true;
+        };
+        pkgs-claude-code = import nixpkgs-claude-code {
           inherit system;
           config.allowUnfree = true;
         };
@@ -119,7 +125,7 @@
           done
         '';
 
-        claudeCliPath = "${pkgs-master.claude-code}/bin/claude";
+        claudeCliPath = "${pkgs-claude-code.claude-code}/bin/claude";
 
         # Unified wrapper dispatching to Claude (default) or Codex via
         # --provider flag. Provider-specific flags (tool policy, prompt
