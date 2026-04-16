@@ -1372,11 +1372,11 @@
         "utils": "utils_5"
       },
       "locked": {
-        "lastModified": 1776339410,
-        "narHash": "sha256-0O+2R9g0vTfXChWJdjGMr9sn08KStylTTByTBbtHnqE=",
+        "lastModified": 1776340074,
+        "narHash": "sha256-f4cFoS8TPNOoXfK/AMaB91yxyA34T4oUQ3THhLn2bZo=",
         "owner": "amarbel-llc",
         "repo": "moxy",
-        "rev": "8a123d885a9f3106f5c437d7f6c339a25b7873a0",
+        "rev": "62d26863e7a87580ccf70648f1ecee7c93ca4f4c",
         "type": "github"
       },
       "original": {
@@ -1540,11 +1540,11 @@
     },
     "nixpkgs_13": {
       "locked": {
-        "lastModified": 1775811116,
-        "narHash": "sha256-t+HZK42pB6N+i5RGbuy7Xluez/VvWbembBdvzsc23Ss=",
+        "lastModified": 1776067740,
+        "narHash": "sha256-B35lpsqnSZwn1Lmz06BpwF7atPgFmUgw1l8KAV3zpVQ=",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "54170c54449ea4d6725efd30d719c5e505f1c10e",
+        "rev": "7e495b747b51f95ae15e74377c5ce1fe69c1765f",
         "type": "github"
       },
       "original": {
