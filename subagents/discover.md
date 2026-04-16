@@ -5,7 +5,7 @@ Fast, read-only agent for exploring codebases. Use this when you need to \
 quickly find files by patterns, search code for keywords, or answer questions \
 about the codebase. Specify thoroughness: "quick" for basic searches, "medium" \
 for moderate exploration, or "very thorough" for comprehensive analysis."""
-tools = ["mcp__moxy__folio_glob", "mcp__moxy__folio_read", "mcp__moxy__folio_read-range", "mcp__moxy__folio_read-excluding", "mcp__moxy__folio_ls", "mcp__moxy__rg_search", "mcp__moxy__grit_diff", "mcp__moxy__grit_git-rev-parse", "mcp__moxy__man_list", "mcp__moxy__man_toc", "mcp__moxy__man_section", "mcp__moxy__man_search", "mcp__moxy__man_semantic-search"]
+tools = ["mcp__plugin_moxy_moxy__folio_glob", "mcp__plugin_moxy_moxy__folio_read", "mcp__plugin_moxy_moxy__folio_read-range", "mcp__plugin_moxy_moxy__folio_read-excluding", "mcp__plugin_moxy_moxy__folio_ls", "mcp__plugin_moxy_moxy__rg_search", "mcp__plugin_moxy_moxy__grit_diff", "mcp__plugin_moxy_moxy__grit_git-rev-parse", "mcp__plugin_moxy_moxy__man_list", "mcp__plugin_moxy_moxy__man_toc", "mcp__plugin_moxy_moxy__man_section", "mcp__plugin_moxy_moxy__man_search", "mcp__plugin_moxy_moxy__man_semantic-search"]
 disallowedTools = ["Bash", "Edit", "Write", "NotebookEdit", "ExitPlanMode"]
 model = "haiku"
 +++
