@@ -3,17 +3,27 @@
 
 Supports both Claude Code (JSONL transcripts) and Codex (SQLite state DB).
 Use --provider codex to list Codex sessions; defaults to Claude.
+
+Output format (one session per line, tab-separated):
+    <session-id>\t<description>
+
+Fish uses <session-id> as the completion value and <description> as the
+hint shown alongside.
 """
 
 import json
+import os
 import sqlite3
 import sys
+import time
 from pathlib import Path
 
-TAIL_BYTES = 4096
+TAIL_BYTES = 65536  # 64 KB: enough for the last-written title in most sessions
+HEAD_LINES = 20
+MAX_SESSIONS = 100  # Cap completion output — older sessions rarely completed against
 
 
-def extract_session_name(transcript: Path) -> str:
+def extract_title(transcript: Path) -> str:
     """Read the last TAIL_BYTES of a .jsonl transcript for a session name.
 
     Claude Code writes custom-title and agent-name entries near the end
@@ -47,23 +57,128 @@ def extract_session_name(transcript: Path) -> str:
     return name
 
 
-def list_claude_sessions():
+def extract_head_meta(transcript: Path) -> tuple[str, str]:
+    """Return (cwd, git_branch) found in the first HEAD_LINES of a transcript.
+
+    The first user message typically carries both fields.
+    """
+    cwd = ""
+    git_branch = ""
+    try:
+        with transcript.open("r", encoding="utf-8", errors="replace") as fh:
+            for _ in range(HEAD_LINES):
+                line = fh.readline()
+                if not line:
+                    break
+                try:
+                    entry = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                if not cwd and entry.get("cwd"):
+                    cwd = entry["cwd"]
+                if not git_branch and entry.get("gitBranch"):
+                    git_branch = entry["gitBranch"]
+                if cwd and git_branch:
+                    break
+    except OSError:
+        pass
+    return cwd, git_branch
+
+
+def decode_project_dir(name: str) -> str:
+    """Best-effort decode of a Claude project directory name to a path.
+
+    Claude encodes cwd by replacing both '/' and '.' with '-', so the
+    decode is lossy. Used only when the transcript has no cwd field.
+    """
+    if name.startswith("-"):
+        return "/" + name[1:].replace("-", "/")
+    return name.replace("-", "/")
+
+
+def shorten_path(path: str) -> str:
+    """Trim $HOME and common eng prefixes for a compact display."""
+    home = str(Path.home())
+    if path.startswith(home + "/"):
+        path = path[len(home) + 1 :]
+    elif path == home:
+        return "~"
+    # Collapse eng/repos/<name> to <name> and keep worktree suffix.
+    parts = path.split("/")
+    if len(parts) >= 3 and parts[0] == "eng" and parts[1] == "repos":
+        parts = parts[2:]
+    return "/".join(parts)
+
+
+def format_reldate(mtime: float) -> str:
+    now = time.time()
+    delta = now - mtime
+    if delta < 60:
+        return "just now"
+    if delta < 3600:
+        return f"{int(delta // 60)}m ago"
+    if delta < 86400:
+        return f"{int(delta // 3600)}h ago"
+    if delta < 7 * 86400:
+        return f"{int(delta // 86400)}d ago"
+    return time.strftime("%Y-%m-%d", time.localtime(mtime))
+
+
+def format_description(cwd: str, git_branch: str, title: str, mtime: float) -> str:
+    parts = []
+    if cwd:
+        location = shorten_path(cwd)
+    else:
+        location = ""
+    if git_branch and not location.endswith(f"/{git_branch}") and git_branch != location:
+        location = f"{location}@{git_branch}" if location else git_branch
+    if location:
+        parts.append(location)
+    parts.append(format_reldate(mtime))
+    if title:
+        parts.append(title)
+    return "  ".join(parts)
+
+
+def collect_claude_transcripts():
+    """Return a list of (mtime, project_dir_name, transcript_path) for all sessions."""
     projects_dir = Path.home() / ".claude" / "projects"
     if not projects_dir.is_dir():
-        return
+        return []
 
+    entries = []
     for project in projects_dir.iterdir():
         if not project.is_dir():
             continue
         for f in project.iterdir():
             if f.suffix != ".jsonl" or not f.is_file():
                 continue
-            sid = f.stem
-            name = extract_session_name(f)
-            if name:
-                print(f"{name}\t{sid}")
-            else:
-                print(sid)
+            try:
+                mtime = f.stat().st_mtime
+            except OSError:
+                continue
+            entries.append((mtime, project.name, f))
+    return entries
+
+
+def list_claude_sessions():
+    # Stat-only pass first so we can rank and truncate before paying for
+    # per-transcript head/tail reads.
+    entries = collect_claude_transcripts()
+    entries.sort(key=lambda e: e[0], reverse=True)
+    entries = entries[:MAX_SESSIONS]
+
+    for mtime, project_name, transcript in entries:
+        cwd, git_branch = extract_head_meta(transcript)
+        if not cwd:
+            cwd = decode_project_dir(project_name)
+        title = extract_title(transcript)
+        desc = format_description(cwd, git_branch, title, mtime)
+        sid = transcript.stem
+        if desc:
+            print(f"{sid}\t{desc}")
+        else:
+            print(sid)
 
 
 def list_codex_sessions():
@@ -77,7 +192,7 @@ def list_codex_sessions():
         return
 
     query = """
-        select id, title
+        select id, title, updated_at
         from threads
         where archived = 0
         order by updated_at desc
@@ -85,9 +200,18 @@ def list_codex_sessions():
 
     try:
         with conn:
-            for session_id, title in conn.execute(query):
+            for session_id, title, updated_at in conn.execute(query):
+                desc_parts = []
+                if updated_at:
+                    try:
+                        desc_parts.append(format_reldate(float(updated_at)))
+                    except (TypeError, ValueError):
+                        pass
                 if title:
-                    print(f"{title}\t{session_id}")
+                    desc_parts.append(title)
+                desc = "  ".join(desc_parts)
+                if desc:
+                    print(f"{session_id}\t{desc}")
                 else:
                     print(session_id)
     except sqlite3.Error:
