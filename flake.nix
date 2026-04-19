@@ -137,7 +137,29 @@
         # claude-code-settings(5) for the precedence chain.
         clownManagedSettings = pkgs.writeText "clown-managed-settings.json" (
           builtins.toJSON {
-            permissions.disableAutoMode = "disable";
+            permissions = {
+              # Block auto-mode (no prompts, classifier-gated tool calls).
+              disableAutoMode = "disable";
+              # Block --dangerously-skip-permissions and bypassPermissions mode.
+              disableBypassPermissionsMode = "disable";
+              # Hard denylist of destructive Bash patterns. Redundant with
+              # clown-bin's --disallowed-tools 'Bash(*)' today, but keeps
+              # guardrails intact if that ever narrows.
+              deny = [
+                "Bash(rm -rf *)"
+                "Bash(sudo *)"
+                "Bash(curl * | sh)"
+                "Bash(wget * | sh)"
+              ];
+            };
+            # Replace Claude's stock commit/PR attribution with clown's. The
+            # system-prompt append (00-identity.md) still tells the model to
+            # sign off in chat and non-git contexts; these keys enforce the
+            # footer at the CLI level where the prompt can't reach.
+            attribution = {
+              commit = "Co-Authored-By: Clown <https://github.com/amarbel-llc/clown>";
+              pr = "🤡 Generated with [Clown](https://github.com/amarbel-llc/clown)";
+            };
           }
         );
 
