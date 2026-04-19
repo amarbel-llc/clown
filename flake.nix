@@ -8,6 +8,9 @@
     moxy.url = "github:amarbel-llc/moxy";
     moxy.inputs.nixpkgs.follows = "nixpkgs";
     moxy.inputs.nixpkgs-master.follows = "nixpkgs-master";
+    moxy.inputs.bob.follows = "bob";
+    bob.url = "github:amarbel-llc/bob";
+    bob.inputs.nixpkgs.follows = "nixpkgs";
     nixpkgs-claude-code.url = "github:NixOS/nixpkgs/b2b9662ffe1e9a5702e7bfbd983595dd56147dbf";
     nixpkgs-codex.url = "github:NixOS/nixpkgs/e2dde111aea2c0699531dc616112a96cd55ab8b5";
   };
@@ -21,6 +24,7 @@
       nixpkgs-codex,
       utils,
       moxy,
+      bob,
     }:
     utils.lib.eachDefaultSystem (
       system:
@@ -72,7 +76,7 @@
         agents-file = pkgs.writeText "clown-agents.json" agents-json;
 
         moxyPluginDir = "${moxy.packages.${system}.default}/share/purse-first/moxy";
-        bobPluginDir = "${moxy.inputs.bob.packages.${system}.default}/share/purse-first/bob";
+        bobPluginDir = "${bob.packages.${system}.default}/share/purse-first/bob";
 
         sharedPromptLogic = ''
           # Walk from PWD up to HOME, collecting .circus/ directories.
