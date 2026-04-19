@@ -35,6 +35,11 @@ The flake produces a `symlinkJoin` of three components:
    - Per-provider safety defaults:
      - Claude: `--disallowed-tools 'Bash(*)'`, `--disallowed-tools 'Agent(Explore)'`
      - Codex: `--sandbox workspace-write`
+   - The `claude-code` derivation is patched to redirect its managed-settings
+     path from `/etc/claude-code` to `$out/etc/claude`, and a managed
+     `managed-settings.json` is shipped with `permissions.disableAutoMode:
+     "disable"`. Auto-mode is therefore permanently unavailable through
+     clown regardless of user settings, project settings, or CLI flags.
 
 2. **`clown-sessions`** (`bin/clown-sessions`, Python3): Lists resumable
    sessions for shell completion. Accepts `--provider codex` to query Codex's

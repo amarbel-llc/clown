@@ -131,7 +131,65 @@
           done
         '';
 
-        claudeCliPath = "${pkgs-claude-code.claude-code}/bin/claude";
+        # Managed settings burned into the patched claude-code derivation.
+        # Lives at the highest precedence tier, so it cannot be overridden by
+        # user settings, project settings, or CLI flags. See
+        # claude-code-settings(5) for the precedence chain.
+        clownManagedSettings = pkgs.writeText "clown-managed-settings.json" (
+          builtins.toJSON {
+            permissions.disableAutoMode = "disable";
+          }
+        );
+
+        # Patch upstream claude-code to read its managed-settings from a path
+        # under its own $out instead of /etc/claude-code, then ship the
+        # settings file alongside. This guarantees auto-mode is disabled for
+        # every clown invocation without requiring writes to /etc.
+        #
+        # The "/etc/claude-code" string is hardcoded in cli.js — no env var,
+        # no flag. --replace-fail breaks the build if Anthropic ever moves
+        # the string, so we catch upgrade drift loudly.
+        patchClaudeCodeManagedPath =
+          replacement:
+          pkgs-claude-code.claude-code.overrideAttrs (old: {
+            # The upstream npm tarball places cli.js at the source root.
+            # After install, it lands under lib/node_modules/@anthropic-ai/
+            # claude-code/cli.js, but patchPhase sees the source layout.
+            # Double-quote the replacement so $out expands in bash.
+            postPatch =
+              (old.postPatch or "")
+              + ''
+                substituteInPlace cli.js \
+                  --replace-fail '/etc/claude-code' "${replacement}"
+              '';
+          });
+
+        patchedClaudeCode =
+          (patchClaudeCodeManagedPath "$out/etc/claude").overrideAttrs
+            (old: {
+              postInstall =
+                (old.postInstall or "")
+                + ''
+                  mkdir -p "$out/etc/claude"
+                  cp ${clownManagedSettings} "$out/etc/claude/managed-settings.json"
+                '';
+
+              doInstallCheck = true;
+              installCheckPhase = ''
+                cli=$out/lib/node_modules/@anthropic-ai/claude-code/cli.js
+                if grep -q '/etc/claude-code' "$cli"; then
+                  echo "FAIL: /etc/claude-code still present after patch" >&2
+                  exit 1
+                fi
+                if ! grep -q "$out/etc/claude" "$cli"; then
+                  echo "FAIL: patched path $out/etc/claude missing from cli.js" >&2
+                  exit 1
+                fi
+                test -f "$out/etc/claude/managed-settings.json"
+              '';
+            });
+
+        claudeCliPath = "${patchedClaudeCode}/bin/claude";
         codexCliPath = "${pkgs-codex.codex}/bin/codex";
 
         # Unified wrapper dispatching to Claude (default) or Codex via
@@ -262,9 +320,36 @@
           cp ${./man/man5}/*.5 $out/share/man/man5/
           cp ${./man/man7}/*.7 $out/share/man/man7/
         '';
+
+        # Runtime proof that the managed-settings patch is live: bake a
+        # writable test path into a sibling claude-code, write invalid JSON
+        # there, and confirm claude logs a parse error to the diagnostics
+        # stream. If the patch were broken, claude would read the unpatched
+        # /etc/claude-code path, find nothing, and log zero errors.
+        managedSettingsTestPath = "/build/clown-test-managed-settings";
+        badSettingsClaude = patchClaudeCodeManagedPath managedSettingsTestPath;
+
+        managedSettingsReadTest = pkgs.runCommand "clown-managed-settings-read-test" { } ''
+          mkdir -p ${managedSettingsTestPath}
+          printf '%s' 'NOT VALID JSON {{{' > ${managedSettingsTestPath}/managed-settings.json
+          export HOME=$TMPDIR/home
+          mkdir -p "$HOME"
+          export CLAUDE_CODE_DIAGNOSTICS_FILE=$TMPDIR/diag.jsonl
+          ${badSettingsClaude}/bin/claude mcp list > /dev/null 2>&1 || true
+          if [[ ! -s $TMPDIR/diag.jsonl ]]; then
+            echo "FAIL: no diagnostics produced — claude may not have launched" >&2
+            exit 1
+          fi
+          if ! grep -q '"error_count":[1-9]' $TMPDIR/diag.jsonl; then
+            echo "FAIL: no settings parse errors logged — claude did not read ${managedSettingsTestPath}" >&2
+            cat $TMPDIR/diag.jsonl >&2
+            exit 1
+          fi
+          touch $out
+        '';
       in
       {
-        packages.default = pkgs.symlinkJoin {
+        packages.default = (pkgs.symlinkJoin {
           name = "clown";
           paths = [
             clown-bin
@@ -272,9 +357,19 @@
             clown-completions
             clown-manpages
           ];
-        };
+        }).overrideAttrs (old: {
+          passthru = (old.passthru or { }) // {
+            tests = {
+              managedSettingsRead = managedSettingsReadTest;
+            };
+          };
+        });
 
         packages.moxy = moxy.packages.${system}.default;
+
+        checks = {
+          managedSettingsRead = managedSettingsReadTest;
+        };
 
         devShells.default = pkgs.mkShell {
           packages = [
