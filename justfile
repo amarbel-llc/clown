@@ -39,3 +39,45 @@ test-managed-live: build
     fi
     echo "OK: clown launched claude, settings loaded without errors"
     echo "(For path-read proof, run: nix build .#checks.x86_64-linux.managedSettingsRead)"
+
+# Tag a release. The "v" prefix is added for you, so pass the semver
+# without it. Usage: just tag 0.1.0 "feat: managed settings burnin"
+[group("maint")]
+tag version message:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tag="v{{version}}"
+    prev=$(git tag --sort=-v:refname -l "v*" | head -1)
+    if [[ -n "$prev" ]]; then
+        gum log --level info "Previous: $prev"
+        git log --oneline "$prev"..HEAD
+    fi
+    git tag -s -m "{{message}}" "$tag"
+    gum log --level info "Created tag: $tag"
+    git push origin "$tag"
+    gum log --level info "Pushed $tag"
+    git tag -v "$tag"
+
+# Cut a release: assemble a changelog-style message from commits
+# since the last v* tag, then call `tag` to sign, push, and verify.
+# The "v" prefix is added for you, so pass the semver without it.
+# Usage: just release 0.1.0
+#
+# Use `just tag <version> <message>` directly if you want full
+# control over the tag message.
+[group("maint")]
+release version:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "{{version}}" > version.txt
+    git add version.txt
+    git commit -m "release v{{version}}"
+    prev=$(git tag --sort=-v:refname -l "v*" | head -1)
+    header="release v{{version}}"
+    if [[ -n "$prev" ]]; then
+        summary=$(git log --format='- %s' "$prev"..HEAD)
+        msg="$header"$'\n\n'"$summary"
+    else
+        msg="$header"
+    fi
+    just tag "{{version}}" "$msg"

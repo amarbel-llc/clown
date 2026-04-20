@@ -78,6 +78,7 @@
         moxyPluginDir = "${moxy.packages.${system}.default}/share/purse-first/moxy";
         bobPluginDir = "${bob.packages.${system}.default}/share/purse-first/bob";
 
+        clownVersion = lib.trim (builtins.readFile ./version.txt);
         clownRev = self.rev or self.dirtyRev or "dirty";
         clownShortRev = self.shortRev or self.dirtyShortRev or "dirty";
         claudeCodeVersion = pkgs-claude-code.claude-code.version;
@@ -244,7 +245,7 @@
                 printf '%-14s %-12s %s\n' COMPONENT VERSION REV
                 printf '%-14s %-12s %s\n' bob - '${bobRev}'
                 printf '%-14s %-12s %s\n' claude-code '${claudeCodeVersion}' -
-                printf '%-14s %-12s %s\n' clown - '${clownRev}'
+                printf '%-14s %-12s %s\n' clown '${clownVersion}' '${clownRev}'
                 printf '%-14s %-12s %s\n' codex '${codexVersion}' -
                 printf '%-14s %-12s %s\n' moxy - '${moxyRev}'
                 exit 0
