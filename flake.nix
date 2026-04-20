@@ -82,7 +82,9 @@
         clownRev = self.rev or self.dirtyRev or "dirty";
         clownShortRev = self.shortRev or self.dirtyShortRev or "dirty";
         claudeCodeVersion = pkgs-claude-code.claude-code.version;
+        claudeCodeRev = nixpkgs-claude-code.rev or "dirty";
         codexVersion = pkgs-codex.codex.version;
+        codexRev = nixpkgs-codex.rev or "dirty";
         moxyRev = moxy.rev or "dirty";
         moxyShortRev = moxy.shortRev or "dirty";
         bobRev = bob.rev or "dirty";
@@ -244,9 +246,9 @@
               version|--version|-v)
                 printf '%-14s %-12s %s\n' COMPONENT VERSION REV
                 printf '%-14s %-12s %s\n' bob - '${bobRev}'
-                printf '%-14s %-12s %s\n' claude-code '${claudeCodeVersion}' -
+                printf '%-14s %-12s %s\n' claude-code '${claudeCodeVersion}' '${claudeCodeRev}'
                 printf '%-14s %-12s %s\n' clown '${clownVersion}' '${clownRev}'
-                printf '%-14s %-12s %s\n' codex '${codexVersion}' -
+                printf '%-14s %-12s %s\n' codex '${codexVersion}' '${codexRev}'
                 printf '%-14s %-12s %s\n' moxy - '${moxyRev}'
                 exit 0
                 ;;
