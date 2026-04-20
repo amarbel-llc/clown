@@ -5,7 +5,7 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
     nixpkgs-master.url = "github:NixOS/nixpkgs/9b53530a5f6887b6903cffeb8a418f3079d6698d";
     utils.url = "https://flakehub.com/f/numtide/flake-utils/0.1.102";
-    moxy.url = "github:amarbel-llc/moxy";
+    moxy.url = "github:amarbel-llc/moxy/a90e0dfbc830700efe28d2238bd2acb5bf8095dc";
     moxy.inputs.nixpkgs.follows = "nixpkgs";
     moxy.inputs.nixpkgs-master.follows = "nixpkgs-master";
     moxy.inputs.bob.follows = "bob";
@@ -77,6 +77,15 @@
 
         moxyPluginDir = "${moxy.packages.${system}.default}/share/purse-first/moxy";
         bobPluginDir = "${bob.packages.${system}.default}/share/purse-first/bob";
+
+        clownRev = self.rev or self.dirtyRev or "dirty";
+        clownShortRev = self.shortRev or self.dirtyShortRev or "dirty";
+        claudeCodeVersion = pkgs-claude-code.claude-code.version;
+        codexVersion = pkgs-codex.codex.version;
+        moxyRev = moxy.rev or "dirty";
+        moxyShortRev = moxy.shortRev or "dirty";
+        bobRev = bob.rev or "dirty";
+        bobShortRev = bob.shortRev or "dirty";
 
         sharedPromptLogic = ''
           # Walk from PWD up to HOME, collecting .circus/ directories.
@@ -231,6 +240,15 @@
           forwarded_args=()
           while [[ $# -gt 0 ]]; do
             case "$1" in
+              version|--version|-v)
+                printf '%-14s %-12s %s\n' COMPONENT VERSION REV
+                printf '%-14s %-12s %s\n' bob - '${bobRev}'
+                printf '%-14s %-12s %s\n' claude-code '${claudeCodeVersion}' -
+                printf '%-14s %-12s %s\n' clown - '${clownRev}'
+                printf '%-14s %-12s %s\n' codex '${codexVersion}' -
+                printf '%-14s %-12s %s\n' moxy - '${moxyRev}'
+                exit 0
+                ;;
               --provider)
                 provider="$2"
                 shift 2
@@ -401,6 +419,8 @@
           packages = [
             pkgs-master.just
             pkgs.fish
+            pkgs-claude-code.claude-code
+            pkgs-codex.codex
           ];
         };
       }
