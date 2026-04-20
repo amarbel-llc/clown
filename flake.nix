@@ -5,12 +5,6 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
     nixpkgs-master.url = "github:NixOS/nixpkgs/9b53530a5f6887b6903cffeb8a418f3079d6698d";
     utils.url = "https://flakehub.com/f/numtide/flake-utils/0.1.102";
-    moxy.url = "github:amarbel-llc/moxy/a90e0dfbc830700efe28d2238bd2acb5bf8095dc";
-    moxy.inputs.nixpkgs.follows = "nixpkgs";
-    moxy.inputs.nixpkgs-master.follows = "nixpkgs-master";
-    moxy.inputs.bob.follows = "bob";
-    bob.url = "github:amarbel-llc/bob";
-    bob.inputs.nixpkgs.follows = "nixpkgs";
     nixpkgs-claude-code.url = "github:NixOS/nixpkgs/b2b9662ffe1e9a5702e7bfbd983595dd56147dbf";
     nixpkgs-codex.url = "github:NixOS/nixpkgs/e2dde111aea2c0699531dc616112a96cd55ab8b5";
   };
@@ -23,8 +17,6 @@
       nixpkgs-claude-code,
       nixpkgs-codex,
       utils,
-      moxy,
-      bob,
     }:
     utils.lib.eachDefaultSystem (
       system:
@@ -75,9 +67,6 @@
         agents-json = builtins.toJSON agents;
         agents-file = pkgs.writeText "clown-agents.json" agents-json;
 
-        moxyPluginDir = "${moxy.packages.${system}.default}/share/purse-first/moxy";
-        bobPluginDir = "${bob.packages.${system}.default}/share/purse-first/bob";
-
         clownVersion = lib.trim (builtins.readFile ./version.txt);
         clownRev = self.rev or self.dirtyRev or "dirty";
         clownShortRev = self.shortRev or self.dirtyShortRev or "dirty";
@@ -85,11 +74,6 @@
         claudeCodeRev = nixpkgs-claude-code.rev or "dirty";
         codexVersion = pkgs-codex.codex.version;
         codexRev = nixpkgs-codex.rev or "dirty";
-        moxyRev = moxy.rev or "dirty";
-        moxyShortRev = moxy.shortRev or "dirty";
-        bobRev = bob.rev or "dirty";
-        bobShortRev = bob.shortRev or "dirty";
-
         sharedPromptLogic = ''
           # Walk from PWD up to HOME, collecting .circus/ directories.
           walkup_dirs=()
@@ -230,11 +214,7 @@
         claudeCliPath = "${patchedClaudeCode}/bin/claude";
         codexCliPath = "${pkgs-codex.codex}/bin/codex";
 
-        # Unified wrapper dispatching to Claude (default) or Codex via
-        # --provider flag. Provider-specific flags (tool policy, prompt
-        # injection, subagents) are injected per-provider after shared
-        # prompt discovery runs.
-        clown-bin = pkgs.writeShellScriptBin "clown" ''
+        mkClownBin = pluginMeta: pkgs.writeShellScriptBin "clown" ''
           set -euo pipefail
 
           # --- Parse and consume clown flags ---
@@ -244,12 +224,15 @@
           while [[ $# -gt 0 ]]; do
             case "$1" in
               version|--version|-v)
-                printf '%-14s %-12s %s\n' COMPONENT VERSION REV
-                printf '%-14s %-12s %s\n' bob - '${bobRev}'
-                printf '%-14s %-12s %s\n' claude-code '${claudeCodeVersion}' '${claudeCodeRev}'
-                printf '%-14s %-12s %s\n' clown '${clownVersion}' '${clownRev}'
-                printf '%-14s %-12s %s\n' codex '${codexVersion}' '${codexRev}'
-                printf '%-14s %-12s %s\n' moxy - '${moxyRev}'
+                {
+                  printf '%-20s %-12s %s\n' COMPONENT VERSION REV
+                  printf '%-20s %-12s %s\n' claude-code '${claudeCodeVersion}' '${claudeCodeRev}'
+                  printf '%-20s %-12s %s\n' clown '${clownVersion}' '${clownRev}'
+                  printf '%-20s %-12s %s\n' codex '${codexVersion}' '${codexRev}'
+                  if [[ -f "${pluginMeta}/version-info" ]]; then
+                    cat "${pluginMeta}/version-info"
+                  fi
+                } | (IFS= read -r header; printf '%s\n' "$header"; sort)
                 exit 0
                 ;;
               --provider)
@@ -299,7 +282,11 @@
             claude)
               extra_args+=(--disallowed-tools 'Bash(*)' --disallowed-tools 'Agent(Explore)')
               extra_args+=(--agents "$(<"${agents-file}")")
-              extra_args+=(--plugin-dir "${moxyPluginDir}" --plugin-dir "${bobPluginDir}")
+              if [[ -f "${pluginMeta}/plugin-dirs" ]]; then
+                while IFS= read -r dir; do
+                  extra_args+=(--plugin-dir "$dir")
+                done < "${pluginMeta}/plugin-dirs"
+              fi
 
               if [[ -n "$system_prompt_file" ]]; then
                 extra_args+=(--system-prompt-file "$system_prompt_file")
@@ -394,25 +381,111 @@
           fi
           touch $out
         '';
-      in
-      {
-        packages.default = (pkgs.symlinkJoin {
-          name = "clown";
-          paths = [
-            clown-bin
-            clown-sessions
-            clown-completions
-            clown-manpages
-          ];
-        }).overrideAttrs (old: {
-          passthru = (old.passthru or { }) // {
-            tests = {
+
+        emptyPluginMeta = pkgs.runCommand "clown-empty-plugin-meta" { } ''
+          mkdir -p $out
+          touch $out/plugin-dirs
+          touch $out/version-info
+        '';
+
+        resolvePlugins =
+          plugins:
+          let
+            hasGlob = s: builtins.match ".*[*?\\[].*" s != null;
+
+            pluginBlocks = lib.concatMapStringsSep "\n" (
+              plugin:
+              let
+                pkg = plugin.flake.packages.${system}.default;
+                flakeName = pkg.name;
+                flakeRev = plugin.flake.rev or plugin.flake.dirtyRev or "dirty";
+                dirBlocks = lib.concatMapStringsSep "\n" (
+                  dir:
+                  if hasGlob dir then
+                    ''
+                      glob_count=0
+                      for candidate in ${pkg}/${dir}; do
+                        if [[ -d "$candidate/.claude-plugin" ]] && [[ -f "$candidate/.claude-plugin/plugin.json" ]]; then
+                          echo "$candidate" >> $out/plugin-dirs
+                          pname=$(${pkgs.jq}/bin/jq -r '.name // empty' "$candidate/.claude-plugin/plugin.json")
+                          pver=$(${pkgs.jq}/bin/jq -r '.version // "-"' "$candidate/.claude-plugin/plugin.json")
+                          printf '%-20s %-12s %s\n' "${flakeName}/$pname" "$pver" "${flakeRev}" >> $out/version-info
+                          glob_count=$((glob_count + 1))
+                        fi
+                      done
+                      if [[ $glob_count -eq 0 ]]; then
+                        echo "clown: glob matched no plugin directories:" >&2
+                        echo "  flake: ${flakeName}" >&2
+                        echo "  pattern: ${pkg}/${dir}" >&2
+                        exit 1
+                      fi
+                    ''
+                  else
+                    ''
+                      if [[ ! -d "${pkg}/${dir}/.claude-plugin" ]] || [[ ! -f "${pkg}/${dir}/.claude-plugin/plugin.json" ]]; then
+                        echo "clown: plugin directory does not contain .claude-plugin/:" >&2
+                        echo "  flake: ${flakeName}" >&2
+                        echo "  path: ${pkg}/${dir}" >&2
+                        exit 1
+                      fi
+                      echo "${pkg}/${dir}" >> $out/plugin-dirs
+                      pname=$(${pkgs.jq}/bin/jq -r '.name // empty' "${pkg}/${dir}/.claude-plugin/plugin.json")
+                      pver=$(${pkgs.jq}/bin/jq -r '.version // "-"' "${pkg}/${dir}/.claude-plugin/plugin.json")
+                      printf '%-20s %-12s %s\n' "${flakeName}/$pname" "$pver" "${flakeRev}" >> $out/version-info
+                    ''
+                ) plugin.dirs;
+              in
+              dirBlocks
+            ) plugins;
+          in
+          pkgs.runCommand "clown-plugin-meta" { } ''
+            mkdir -p $out
+            touch $out/plugin-dirs
+            touch $out/version-info
+            ${pluginBlocks}
+          '';
+
+        mkClownPkg =
+          pluginMeta:
+          (pkgs.symlinkJoin {
+            name = "clown";
+            paths = [
+              (mkClownBin pluginMeta)
+              clown-sessions
+              clown-completions
+              clown-manpages
+            ];
+          }).overrideAttrs (old: {
+            passthru = (old.passthru or { }) // {
+              tests = {
+                managedSettingsRead = managedSettingsReadTest;
+              };
+            };
+          });
+
+        mkCircus =
+          { plugins ? [ ] }:
+          let
+            pluginMeta =
+              if plugins == [ ] then emptyPluginMeta else resolvePlugins plugins;
+          in
+          {
+            packages.default = mkClownPkg pluginMeta;
+            devShells.default = pkgs.mkShell {
+              packages = [
+                pkgs-master.just
+                pkgs.fish
+                pkgs-claude-code.claude-code
+                pkgs-codex.codex
+              ];
+            };
+            checks = {
               managedSettingsRead = managedSettingsReadTest;
             };
           };
-        });
-
-        packages.moxy = moxy.packages.${system}.default;
+      in
+      {
+        packages.default = mkClownPkg emptyPluginMeta;
 
         checks = {
           managedSettingsRead = managedSettingsReadTest;
@@ -426,6 +499,8 @@
             pkgs-codex.codex
           ];
         };
+
+        lib.mkCircus = mkCircus;
       }
     );
 }
