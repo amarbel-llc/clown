@@ -1,15 +1,19 @@
 # clown
 
 A Nix-packaged wrapper around [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
-that injects custom system prompts hierarchically and disables Bash by default.
+that injects custom system prompts hierarchically, disables Bash by default,
+and supports parameterized plugin loading.
 
 ## Install
 
-Clown is a Nix flake. Add it as an input or run directly:
+Clown is a Nix flake. The bare wrapper (no plugins) can be run directly:
 
 ```sh
 nix run github:amarbel-llc/clown
 ```
+
+To build clown with plugins, use `mkCircus` from your own flake (see
+[Plugins](#plugins) below).
 
 ## What it does
 
@@ -40,6 +44,78 @@ Clown wraps the `claude` binary with four additions:
    `clown-sessions` utility.
 
 All other arguments are passed through to `claude` unchanged.
+
+## Plugins
+
+Clown ships with zero default plugins. Consumers supply plugin flake inputs
+via `mkCircus`, which resolves plugin directories and burns `--plugin-dir`
+flags into the wrapper at build time.
+
+### mkCircus
+
+`clown.lib.${system}.mkCircus` accepts a single attribute set with a
+`plugins` list. Each plugin definition has two fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `flake` | flake input | The plugin's flake input value |
+| `dirs` | list of strings | Paths relative to the flake's default package output. Literal paths or glob patterns. |
+
+It returns `{ packages.default, devShells.default, checks }`.
+
+### Consumer example
+
+```nix
+{
+  inputs = {
+    clown.url = "github:amarbel-llc/clown";
+    clown.inputs.nixpkgs.follows = "nixpkgs";
+    moxy.url = "github:amarbel-llc/moxy";
+    moxy.inputs.nixpkgs.follows = "nixpkgs";
+    bob.url = "github:amarbel-llc/bob";
+    bob.inputs.nixpkgs.follows = "nixpkgs";
+  };
+
+  outputs = { self, nixpkgs, clown, moxy, bob, ... }:
+    let
+      system = "aarch64-darwin";
+      circus = clown.lib.${system}.mkCircus {
+        plugins = [
+          { flake = moxy; dirs = [ "share/purse-first/moxy" ]; }
+          { flake = bob;  dirs = [ "share/purse-first/*" ]; }
+        ];
+      };
+    in {
+      packages.${system}.default = circus.packages.default;
+    };
+}
+```
+
+### Plugin directory requirements
+
+Each path in `dirs` must point to a directory containing
+`.claude-plugin/plugin.json` with at minimum a `name` field. Glob patterns
+(`*`, `?`, `[`) are expanded at build time; non-plugin directories are
+silently skipped. A glob that matches zero plugins fails the build.
+
+### Version output
+
+`clown version` displays all components including dynamically loaded plugins:
+
+```
+COMPONENT            VERSION      REV
+bob/bob              -            474d0c4fac8a084c5378dba51337fea45b86ee2d
+bob/caldav           -            474d0c4fac8a084c5378dba51337fea45b86ee2d
+claude-code          1.0.46       b2b9662ffe1e9a5702e7bfbd983595dd56147dbf
+clown                0.0.1        edc5db5...
+codex                0.0.1-beta   e2dde111aea2c0699531dc616112a96cd55ab8b5
+moxy/moxy            -            a90e0dfbc830700efe28d2238bd2acb5bf8095dc
+```
+
+Plugin rows use `<flake-name>/<plugin-name>` format. Version and rev come
+from `plugin.json` and the flake input respectively.
+
+For the full specification, see [RFC 0001](docs/rfcs/0001-parameterized-plugin-loading.md).
 
 ## .circus directory
 

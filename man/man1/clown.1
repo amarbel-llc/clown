@@ -1,0 +1,214 @@
+.\" Copyright (c) 2026 amarbel, LLC
+.\" SPDX-License-Identifier: MIT
+.Dd April 20, 2026
+.Dt CLOWN 1
+.Os
+.Sh NAME
+.Nm clown
+.Nd coding-agent wrapper with prompt injection and plugin loading
+.Sh SYNOPSIS
+.Nm
+.Op Ar query
+.Nm
+.Cm version
+.Nm
+.Fl -provider Ar name
+.Op Ar args
+.Nm
+.Fl -clean
+.Op Ar args
+.Sh DESCRIPTION
+.Nm
+wraps
+.Xr claude-code 1
+with system prompt injection, managed security settings, and
+parameterized plugin loading.
+All unrecognized arguments are forwarded to the underlying provider CLI.
+.Pp
+By default,
+.Nm
+disables
+.Cm Bash
+tool use and auto-mode, injects hierarchical system prompts from
+.Pa .circus/
+directories, and loads Claude Code plugins specified at build time.
+.Sh OPTIONS
+.Bl -tag -width Ds
+.It Cm version , Fl -version , Fl v
+Print version information for all components (clown, claude-code, codex,
+and loaded plugins) and exit.
+.It Fl -provider Ar name
+Select the provider CLI.
+Valid values are
+.Cm claude
+(default) and
+.Cm codex .
+Can also be set via the
+.Ev CLOWN_PROVIDER
+environment variable.
+.It Fl -clean
+Bypass all clown wrapping (prompt injection, plugin loading, tool
+restrictions) and exec the provider CLI directly.
+.El
+.Sh SYSTEM PROMPT INJECTION
+.Nm
+walks from
+.Ev PWD
+up to
+.Ev HOME ,
+collecting
+.Pa .circus/
+directories at each level.
+.Ss Replace mode
+If any directory contains
+.Pa .circus/system-prompt ,
+the deepest one replaces Claude's system prompt entirely via
+.Fl -system-prompt-file .
+.Ss Append mode
+All
+.Pa *.md
+files found in
+.Pa .circus/system-prompt.d/
+directories are concatenated shallowest-first and appended to the
+system prompt via
+.Fl -append-system-prompt-file .
+Builtin fragments shipped with
+.Nm
+are always prepended before user fragments.
+.Sh PLUGINS
+.Nm
+ships with zero default plugins.
+Consumers supply plugin flake inputs via
+.Fn mkCircus
+at build time (see
+.Sx NIX INTERFACE
+below).
+Each plugin directory is passed to
+.Xr claude-code 1
+via
+.Fl -plugin-dir .
+.Pp
+A plugin directory must contain
+.Pa .claude-plugin/plugin.json
+with at minimum a
+.Fa name
+field.
+See
+.Xr claude-code-settings 5
+for the full plugin manifest schema.
+.Sh NIX INTERFACE
+.Nm
+exports
+.Fn lib.${system}.mkCircus
+within its flake outputs.
+This function accepts a single attribute set:
+.Bd -literal -offset indent
+mkCircus {
+  plugins = [
+    { flake = moxy; dirs = [ "share/purse-first/moxy" ]; }
+    { flake = bob;  dirs = [ "share/purse-first/*" ]; }
+  ];
+}
+.Ed
+.Pp
+Each element in
+.Fa plugins
+is an attribute set with two fields:
+.Bl -tag -width Ds
+.It Fa flake
+The plugin's flake input value.
+Used to resolve the default package and extract revision metadata.
+.It Fa dirs
+A list of paths relative to the flake's default package output.
+Each entry is either a literal path to a plugin directory or a glob
+pattern.
+Glob characters
+.Pq Li * , Li \&? , Li \&[
+trigger shell expansion at build time; non-plugin directories in
+the expansion are silently skipped.
+A glob that matches zero valid plugins fails the build.
+.El
+.Pp
+The function returns an attribute set containing:
+.Bl -tag -width Ds
+.It Fa packages.default
+The
+.Nm
+wrapper with plugins burned in.
+.It Fa devShells.default
+Development shell.
+.It Fa checks
+Build-time validation tests.
+.El
+.Ss Consumer example
+.Bd -literal -offset indent
+{
+  inputs = {
+    clown.url = "github:amarbel-llc/clown";
+    moxy.url = "github:amarbel-llc/moxy";
+    bob.url = "github:amarbel-llc/bob";
+  };
+
+  outputs = { clown, moxy, bob, ... }:
+    let
+      system = "aarch64-darwin";
+      circus = clown.lib.${system}.mkCircus {
+        plugins = [
+          { flake = moxy; dirs = [ "share/purse-first/moxy" ]; }
+          { flake = bob;  dirs = [ "share/purse-first/*" ]; }
+        ];
+      };
+    in {
+      packages.${system}.default = circus.packages.default;
+    };
+}
+.Ed
+.Sh MANAGED SETTINGS
+.Nm
+patches the upstream
+.Xr claude-code 1
+bundle to read managed settings from a path under its own Nix store
+output instead of
+.Pa /etc/claude-code .
+The shipped managed settings enforce:
+.Bl -bullet
+.It
+.Cm disableAutoMode : \(lqdisable\(rq
+.It
+.Cm disableBypassPermissionsMode : \(lqdisable\(rq
+.It
+A deny list for destructive Bash patterns
+.Pq Li "rm -rf *" , Li "sudo *" , Li "curl * | sh" , Li "wget * | sh"
+.El
+.Pp
+These sit at the highest precedence tier; neither user settings nor CLI
+flags can override them.
+See
+.Xr claude-code-settings 5
+for the precedence chain.
+.Sh ENVIRONMENT
+.Bl -tag -width Ds
+.It Ev CLOWN_PROVIDER
+Default provider CLI.
+Overridden by
+.Fl -provider .
+Valid values:
+.Cm claude
+(default),
+.Cm codex .
+.El
+.Sh FILES
+.Bl -tag -width Ds
+.It Pa .circus/system-prompt
+Replace-mode system prompt file (deepest wins).
+.It Pa .circus/system-prompt.d/*.md
+Append-mode prompt fragments (shallowest first).
+.El
+.Sh SEE ALSO
+.Xr claude-code 1 ,
+.Xr codex 1 ,
+.Xr claude-code-settings 5 ,
+.Xr claude-code-hooks 5
+.Sh AUTHORS
+.An amarbel, LLC
+.Lk https://github.com/amarbel-llc/clown
