@@ -511,6 +511,7 @@
           packages = [
             pkgs-master.just
             pkgs.fish
+            pkgs.go
             pkgs-claude-code.claude-code
             pkgs-codex.codex
           ];

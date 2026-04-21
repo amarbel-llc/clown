@@ -117,6 +117,36 @@ from `plugin.json` and the flake input respectively.
 
 For the full specification, see [RFC 0001](docs/rfcs/0001-parameterized-plugin-loading.md).
 
+### HTTP MCP Servers (`clown.json`)
+
+Plugins can declare HTTP-based MCP servers that clown automatically launches
+and manages. This enables MCP features unavailable over stdio, including
+`notifications/tools/list_changed` and server-initiated requests.
+
+A plugin ships a `clown.json` alongside `.claude-plugin/`:
+
+```json
+{
+  "version": 1,
+  "httpServers": {
+    "my-server": {
+      "command": "bin/my-server",
+      "transport": "streamable-http",
+      "healthcheck": {
+        "path": "/healthz",
+        "interval": "1s",
+        "timeout": "30s"
+      }
+    }
+  }
+}
+```
+
+Servers must implement the clown plugin protocol: bind to an ephemeral port,
+print a handshake line to stdout (`1|1|tcp|<addr>|streamable-http`), and
+respond to health checks. See [RFC 0002](docs/rfcs/0002-clown-plugin-protocol.md)
+for the full specification.
+
 ## .circus directory
 
 Place prompt fragments anywhere in your directory hierarchy:

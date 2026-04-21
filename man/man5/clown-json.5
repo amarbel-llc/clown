@@ -1,0 +1,152 @@
+.\" Copyright (c) 2026 amarbel, LLC
+.\" SPDX-License-Identifier: MIT
+.Dd April 21, 2026
+.Dt CLOWN-JSON 5
+.Os
+.Sh NAME
+.Nm clown.json
+.Nd HTTP MCP server manifest for clown plugins
+.Sh DESCRIPTION
+A
+.Nm
+file declares HTTP-based MCP servers that
+.Xr clown-plugin-host 1
+should launch and manage during a Claude Code session.
+It is located at the root of a plugin directory, as a sibling to the
+.Pa .claude-plugin/
+directory.
+.Pp
+HTTP MCP servers enable features unavailable over stdio transport,
+including
+.Li notifications/tools/list_changed
+(server-initiated tool list updates) and server-initiated requests via
+persistent SSE connections.
+.Sh FORMAT
+.Nm
+is a JSON file with the following top-level fields:
+.Bl -tag -width Ds
+.It Fa version Pq integer, required
+Schema version.
+Must be
+.Li 1 .
+.It Fa httpServers Pq object, required
+A map of server name to server definition.
+Each key is a short identifier used in MCP server naming
+.Pq combined with the plugin name as Ar plugin Ns / Ns Ar server .
+.El
+.Ss Server Definition
+Each server definition is an object with the following fields:
+.Bl -tag -width Ds
+.It Fa command Pq string, required
+Path to the server binary.
+Relative paths are resolved against the plugin directory.
+.It Fa args Pq array of strings, optional
+Command-line arguments.
+Default:
+.Li [] .
+.It Fa env Pq object, optional
+Environment variables as key-value string pairs.
+These are added to the inherited process environment.
+Default:
+.Li {} .
+.It Fa transport Pq string, optional
+MCP transport type.
+Valid values:
+.Li streamable-http
+(default),
+.Li sse .
+The handshake line from the server is authoritative if it differs
+from this value.
+.It Fa healthcheck Pq object, optional
+Health check configuration.
+.El
+.Ss Healthcheck Definition
+.Bl -tag -width Ds
+.It Fa path Pq string, optional
+HTTP path to poll.
+Default:
+.Pa /healthz .
+.It Fa interval Pq string, optional
+Go
+.Xr time.ParseDuration 3
+format polling interval.
+Default:
+.Li 1s .
+.It Fa timeout Pq string, optional
+Maximum time to wait for the server to become healthy.
+Default:
+.Li 30s .
+.El
+.Sh EXAMPLES
+Minimal manifest:
+.Bd -literal -offset indent
+{
+  "version": 1,
+  "httpServers": {
+    "my-server": {
+      "command": "bin/my-server"
+    }
+  }
+}
+.Ed
+.Pp
+Full manifest with all fields:
+.Bd -literal -offset indent
+{
+  "version": 1,
+  "httpServers": {
+    "my-server": {
+      "command": "bin/my-server",
+      "args": ["--mode", "mcp"],
+      "env": { "LOG_LEVEL": "info" },
+      "transport": "streamable-http",
+      "healthcheck": {
+        "path": "/healthz",
+        "interval": "1s",
+        "timeout": "30s"
+      }
+    }
+  }
+}
+.Ed
+.Sh SERVER REQUIREMENTS
+Servers declared in
+.Nm
+must conform to the clown plugin protocol:
+.Bl -enum
+.It
+Bind to
+.Li 127.0.0.1:0
+(ephemeral port).
+.It
+Print a handshake line to stdout (see
+.Xr clown-plugin-host 1 ,
+.Sx HANDSHAKE PROTOCOL ) .
+.It
+Flush stdout.
+.It
+Respond to HTTP GET on the health check path with status 200 when
+ready.
+.It
+Shut down gracefully on
+.Dv SIGTERM .
+.El
+.Sh FILES
+.Bl -tag -width Ds
+.It Pa <plugin-dir>/clown.json
+The manifest file.
+Must be a sibling to
+.Pa .claude-plugin/ .
+.It Pa <plugin-dir>/.claude-plugin/plugin.json
+The Claude Code plugin manifest.
+Its
+.Fa name
+field is used as the plugin name prefix in MCP server naming.
+.El
+.Sh SEE ALSO
+.Xr clown-plugin-host 1 ,
+.Xr clown 1 ,
+.Xr claude-code-settings 5
+.Sh AUTHORS
+.An amarbel, LLC
+.Lk https://github.com/amarbel-llc/clown

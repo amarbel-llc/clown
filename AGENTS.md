@@ -16,6 +16,8 @@ flakes; no standalone test suite (pre-merge validation via `just build`).
 
 ```sh
 just build       # Default: nix build --show-trace
+just build-go    # Build Go binaries (clown-plugin-host)
+just test-go     # Run Go unit tests
 just clean       # rm -rf result
 ```
 
@@ -23,7 +25,7 @@ Format nix: `lux fmt flake.nix`
 
 ## Architecture
 
-The flake produces a `symlinkJoin` of three components:
+The flake produces a `symlinkJoin` of four components:
 
 1. **`clown-bin`** (shell wrapper, defined inline in `flake.nix`): Unified
    entrypoint that parses `--provider` and dispatches to Claude or Codex.
@@ -45,7 +47,17 @@ The flake produces a `symlinkJoin` of three components:
    sessions for shell completion. Accepts `--provider codex` to query Codex's
    SQLite state DB; defaults to scanning Claude's JSONL transcripts.
 
-3. **`clown-completions`** (`completions/clown.fish`): Provider-aware fish
+3. **`clown-plugin-host`** (`cmd/clown-plugin-host/main.go`, Go binary):
+   Lifecycle manager for HTTP MCP servers declared in `clown.json` manifests.
+   Sits between the shell wrapper and Claude Code. Scans `--plugin-dir`
+   directories for `clown.json`, launches declared HTTP servers as child
+   processes, reads their handshake lines (port negotiation via go-plugin
+   protocol), polls `/healthz`, generates a temporary `.mcp.json` with
+   server URLs, and passes it to Claude via `--mcp-config`. When no
+   `clown.json` is found, exec's directly into claude (zero overhead).
+   See `clown-plugin-host(1)` and `clown-json(5)`.
+
+4. **`clown-completions`** (`completions/clown.fish`): Provider-aware fish
    completions. Detects `--provider` on the command line (or `CLOWN_PROVIDER`
    env var) and offers Claude or Codex flags/subcommands accordingly.
 

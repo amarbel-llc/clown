@@ -96,6 +96,19 @@ field.
 See
 .Xr claude-code-settings 5
 for the full plugin manifest schema.
+.Ss HTTP MCP Servers
+Plugins may also declare HTTP-based MCP servers in a
+.Pa clown.json
+manifest (see
+.Xr clown-json 5 ) .
+These servers are automatically launched and managed by
+.Xr clown-plugin-host 1 ,
+which
+.Nm
+invokes transparently.
+HTTP transport enables features unavailable over stdio, including
+.Li notifications/tools/list_changed
+and server-initiated requests.
 .Sh NIX INTERFACE
 .Nm
 exports
@@ -205,6 +218,8 @@ Replace-mode system prompt file (deepest wins).
 Append-mode prompt fragments (shallowest first).
 .El
 .Sh SEE ALSO
+.Xr clown-plugin-host 1 ,
+.Xr clown-json 5 ,
 .Xr claude-code 1 ,
 .Xr codex 1 ,
 .Xr claude-code-settings 5 ,

@@ -1,0 +1,142 @@
+.\" Copyright (c) 2026 amarbel, LLC
+.\" SPDX-License-Identifier: MIT
+.Dd April 21, 2026
+.Dt CLOWN-PLUGIN-HOST 1
+.Os
+.Sh NAME
+.Nm clown-plugin-host
+.Nd lifecycle manager for HTTP MCP servers in clown plugins
+.Sh SYNOPSIS
+.Nm
+.Op Fl -plugin-dir Ar dir
+.Ar ...
+.Cm --
+.Ar command
+.Op Ar args
+.Sh DESCRIPTION
+.Nm
+scans plugin directories for
+.Xr clown-json 5
+manifests declaring HTTP-based MCP servers, launches them as child
+processes, waits for their handshake and health checks, generates a
+temporary MCP configuration file, and passes it to the downstream
+command via
+.Fl -mcp-config .
+.Pp
+When no
+.Pa clown.json
+files are found in any plugin directory,
+.Nm
+exec's directly into the downstream command with zero overhead.
+.Pp
+.Nm
+is not intended to be invoked directly by users.
+The
+.Xr clown 1
+shell wrapper inserts
+.Nm
+into the command chain automatically when plugin directories are present.
+.Sh OPTIONS
+.Bl -tag -width Ds
+.It Fl -plugin-dir Ar dir
+Add
+.Ar dir
+to the list of plugin directories to scan for
+.Pa clown.json
+manifests.
+May be specified multiple times.
+.It Cm --
+Separates
+.Nm
+flags from the downstream command.
+Everything after
+.Cm --
+is treated as the command to exec (typically
+.Xr claude-code 1 ) .
+.El
+.Sh SERVER LIFECYCLE
+For each HTTP server declared in a discovered
+.Pa clown.json :
+.Bl -enum
+.It
+The server command is launched as a child process in its own process
+group
+.Pq via Dv setpgid .
+.It
+The first line of the server's stdout is read as a handshake line
+(see
+.Sx HANDSHAKE PROTOCOL ) .
+.It
+.Nm
+polls the server's health endpoint until it returns HTTP 200 or the
+configured timeout elapses.
+.It
+Once all servers are healthy, a temporary
+.Pa .mcp.json
+file is generated with the server URLs and passed to the downstream
+command via
+.Fl -mcp-config .
+.El
+.Pp
+When the downstream command exits,
+.Nm
+sends
+.Dv SIGTERM
+to each server's process group, waits up to 5 seconds for graceful
+shutdown, then sends
+.Dv SIGKILL
+if necessary.
+.Nm
+exits with the downstream command's exit code.
+.Sh HANDSHAKE PROTOCOL
+Each HTTP MCP server MUST print a single pipe-delimited line to stdout
+before serving requests:
+.Pp
+.Dl 1|1|tcp|127.0.0.1:54321|streamable-http
+.Pp
+The fields are:
+.Bl -column "Field" "Name" "Values" -offset indent
+.It Sy Field Ta Sy Name Ta Sy Values
+.It 0 Ta Core protocol version Ta Must be Li 1
+.It 1 Ta App protocol version Ta Integer (reserved, must be Li 1 )
+.It 2 Ta Network type Ta Must be Li tcp
+.It 3 Ta Network address Ta Ar host Ns Li \&: Ns Ar port
+.It 4 Ta Protocol Ta Li streamable-http No or Li sse
+.El
+.Pp
+This protocol is modeled on hashicorp/go-plugin.
+The server MUST bind to
+.Li 127.0.0.1:0
+(ephemeral port), write the handshake line, flush stdout, then begin
+serving.
+.Sh MCP CONFIGURATION
+The generated MCP configuration uses server names of the form
+.Ar plugin-name Ns / Ns Ar server-name ,
+where
+.Ar plugin-name
+is read from the plugin's
+.Pa .claude-plugin/plugin.json
+manifest.
+.Pp
+For
+.Li streamable-http
+servers, the URL path is
+.Pa /mcp .
+For
+.Li sse
+servers, the URL path is
+.Pa /sse .
+.Sh EXIT STATUS
+.Nm
+exits with the downstream command's exit code.
+If
+.Nm
+itself fails (e.g., no downstream command, server launch failure),
+it exits with status 1.
+.Sh SEE ALSO
+.Xr clown 1 ,
+.Xr clown-json 5 ,
+.Xr claude-code 1
+.Sh AUTHORS
+.An amarbel, LLC
+.Lk https://github.com/amarbel-llc/clown

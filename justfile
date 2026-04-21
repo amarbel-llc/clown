@@ -2,6 +2,56 @@ default: build
 
 build: build-nix
 
+# Build Go binaries
+[group("go")]
+build-go:
+    go build ./cmd/...
+
+# Run Go tests
+[group("go")]
+test-go:
+    go test ./internal/...
+
+# Build the mock MCP server used by integration tests
+[group("go")]
+build-mock-server:
+    go build -o tests/synthetic-plugin/bin/mock-mcp-server ./internal/pluginhost/testdata/mockserver
+
+# Integration test: launch clown-plugin-host with the synthetic plugin's
+# clown.json and verify the mock HTTP MCP server starts, completes the
+# handshake, passes health checks, and generates valid MCP config.
+[group("test")]
+test-plugin-host: build build-mock-server
+    #!/usr/bin/env bash
+    set -euo pipefail
+    plugin_dir="$(pwd)/tests/synthetic-plugin"
+    echo "Starting clown-plugin-host with synthetic plugin..."
+    # Run with a dummy downstream that just prints its args and exits.
+    # We use 'echo' as the downstream — clown-plugin-host will pass
+    # --mcp-config <file> to it, so we can inspect the output.
+    output=$(timeout 30 ./result/bin/clown-plugin-host \
+        --plugin-dir "$plugin_dir" \
+        -- echo DOWNSTREAM_MARKER 2>&1) || {
+        echo "FAIL: clown-plugin-host exited with $?" >&2
+        echo "$output" >&2
+        exit 1
+    }
+    echo "$output"
+    # Verify the downstream received --mcp-config
+    if echo "$output" | grep -q -- '--mcp-config'; then
+        echo "OK: downstream received --mcp-config flag"
+    else
+        echo "FAIL: downstream did not receive --mcp-config" >&2
+        exit 1
+    fi
+    if echo "$output" | grep -q 'DOWNSTREAM_MARKER'; then
+        echo "OK: downstream received its original args"
+    else
+        echo "FAIL: downstream did not receive original args" >&2
+        exit 1
+    fi
+    echo "OK: plugin-host integration test passed"
+
 build-nix:
     nix build --show-trace
 

@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "httpServers": {
+    "mock-mcp": {
+      "command": "bin/mock-mcp-server",
+      "transport": "streamable-http",
+      "healthcheck": {
+        "path": "/healthz",
+        "interval": "500ms",
+        "timeout": "10s"
+      }
+    }
+  }
+}
