@@ -34,6 +34,73 @@ run-circus *ARGS:
     just build-circus
     exec ./result/bin/clown {{ARGS}}
 
+# Verify plugin agents appear in `claude agents list` using the in-repo
+# synthetic test plugin.
+[group("test")]
+test-plugin-agents: build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    plugin_dir="$(pwd)/tests/synthetic-plugin"
+    if [[ ! -f "$plugin_dir/.claude-plugin/plugin.json" ]]; then
+        echo "FAIL: synthetic plugin manifest missing" >&2
+        exit 1
+    fi
+    agents_output=$(./result/bin/clown --clean --plugin-dir "$plugin_dir" \
+        agents list 2>&1) || true
+    echo "$agents_output"
+    echo "---"
+    failed=0
+    for agent in yaml-test-agent toml-test-agent; do
+        if echo "$agents_output" | grep -q "$agent"; then
+            echo "OK: $agent loaded"
+            echo "--- $agent details ---"
+            ./result/bin/clown --clean --plugin-dir "$plugin_dir" \
+                agents show "$agent" 2>&1 || true
+        else
+            echo "FAIL: $agent NOT loaded" >&2
+            failed=1
+        fi
+    done
+    exit $failed
+
+# Probe the plugin.json "agents" field schema by trying different formats
+# and reporting which ones pass validation. Requires a built clown.
+[group("explore")]
+explore-agents-schema: build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    plugin_dir="$(pwd)/tests/synthetic-plugin"
+    manifest="$plugin_dir/.claude-plugin/plugin.json"
+    base='{"name":"synthetic-test","version":"0.0.1","description":"probe"'
+    cli="./result/bin/clown --clean --plugin-dir $plugin_dir plugin list"
+    try_variant() {
+        local label="$1" json="$2"
+        echo "$json" > "$manifest"
+        output=$($cli 2>&1) || true
+        if echo "$output" | grep -q '✔ loaded'; then
+            echo "OK   $label"
+        elif echo "$output" | grep -q 'Invalid input'; then
+            echo "FAIL $label  (Invalid input)"
+        else
+            echo "??   $label"
+            echo "     $output" | head -3
+        fi
+    }
+    echo "=== Probing agents field schema ==="
+    try_variant 'no agents field'            "$base}"
+    try_variant 'agents: {}'                 "$base,\"agents\":{}}"
+    try_variant 'agents: []'                 "$base,\"agents\":[]}"
+    try_variant 'agents: ["agents/*.md"]'    "$base,\"agents\":[\"agents/*.md\"]}"
+    try_variant 'agents: ["./agents/yaml-agent"]' "$base,\"agents\":[\"./agents/yaml-agent\"]}"
+    try_variant 'agents: ["./agents/yaml-agent.md"]' "$base,\"agents\":[\"./agents/yaml-agent.md\"]}"
+    try_variant 'agents: "agents"'           "$base,\"agents\":\"agents\"}"
+    try_variant 'agents: true'               "$base,\"agents\":true}"
+    try_variant 'agents: {"yaml-test-agent":{"description":"test"}}' \
+                "$base,\"agents\":{\"yaml-test-agent\":{\"description\":\"test\"}}}"
+    # Restore clean manifest
+    echo "$base}" > "$manifest"
+    echo "=== Done ==="
+
 # Bump all flake inputs and rebuild to verify
 bump: && build
     nix flake update

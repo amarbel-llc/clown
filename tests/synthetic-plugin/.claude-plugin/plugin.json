@@ -1,0 +1,9 @@
+{
+  "name": "synthetic-test",
+  "version": "0.0.1",
+  "description": "Synthetic plugin for testing agent loading",
+  "agents": [
+    "./agents/yaml-agent.md",
+    "./agents/toml-agent.md"
+  ]
+}
