@@ -247,9 +247,9 @@ manifest file in the plugin root directory.
   "name": "my-plugin",
   "version": "1.0.0",
   "description": "Example plugin",
-  "skills": ["skills/*.md"],
-  "commands": ["commands/*.md"],
-  "agents": ["agents/*.md"],
+  "skills": ["./skills/my-skill"],
+  "commands": ["./commands/my-command.md"],
+  "agents": ["./agents/my-agent.md"],
   "hooks": {
     "PreToolUse": [
       {
@@ -270,11 +270,15 @@ Semantic version string.
 .It Cm description
 Human-readable description.
 .It Cm skills
-Array of glob patterns matching skill definition files.
+Array of paths to skill definition files or directories.
 .It Cm commands
-Array of glob patterns matching command definition files.
+Array of paths to command definition files or directories.
 .It Cm agents
-Array of glob patterns matching agent definition files.
+Array of explicit file paths to agent definition files
+.Pq e.g., Qq ./agents/my-agent.md .
+Glob patterns are not supported; each entry must name a specific
+.Pa .md
+file.
 .It Cm hooks
 Hook handlers provided by the plugin.
 Same schema as the settings
