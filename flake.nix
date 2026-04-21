@@ -7,6 +7,8 @@
     utils.url = "https://flakehub.com/f/numtide/flake-utils/0.1.102";
     nixpkgs-claude-code.url = "github:NixOS/nixpkgs/b2b9662ffe1e9a5702e7bfbd983595dd56147dbf";
     nixpkgs-codex.url = "github:NixOS/nixpkgs/e2dde111aea2c0699531dc616112a96cd55ab8b5";
+    gomod2nix.url = "github:amarbel-llc/gomod2nix";
+    gomod2nix.inputs.nixpkgs.follows = "nixpkgs";
   };
 
   outputs =
@@ -16,6 +18,7 @@
       nixpkgs-master,
       nixpkgs-claude-code,
       nixpkgs-codex,
+      gomod2nix,
       utils,
     }:
     utils.lib.eachDefaultSystem (
@@ -75,19 +78,22 @@
         codexVersion = pkgs-codex.codex.version;
         codexRev = nixpkgs-codex.rev or "dirty";
 
-        clown-plugin-host = pkgs.buildGoModule {
+        buildGoApplication = gomod2nix.legacyPackages.${system}.buildGoApplication;
+
+        clown-plugin-host = buildGoApplication {
           pname = "clown-plugin-host";
           version = clownVersion;
           src = lib.fileset.toSource {
             root = ./.;
             fileset = lib.fileset.unions [
               ./go.mod
+              ./gomod2nix.toml
               ./cmd
               ./internal
             ];
           };
           subPackages = [ "cmd/clown-plugin-host" ];
-          vendorHash = null;
+          modules = ./gomod2nix.toml;
           ldflags = [
             "-s" "-w"
             "-X main.version=${clownVersion}"
@@ -493,6 +499,7 @@
                 pkgs.fish
                 pkgs-claude-code.claude-code
                 pkgs-codex.codex
+                gomod2nix.packages.${system}.default
               ];
             };
             checks = {
@@ -514,6 +521,7 @@
             pkgs.go
             pkgs-claude-code.claude-code
             pkgs-codex.codex
+            gomod2nix.packages.${system}.default
           ];
         };
 
