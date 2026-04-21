@@ -8,6 +8,32 @@ build-nix:
 clean:
     rm -rf result
 
+# Build clown with moxy + bob plugins via mkCircus, using the local worktree
+# as the clown input. Only evaluates clown/moxy/bob — not the full eng flake.
+build-circus *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    root=$(git rev-parse --show-toplevel)
+    nix build --show-trace {{ARGS}} --impure --expr "
+      let
+        clown = builtins.getFlake \"path:$root\";
+        moxy  = builtins.getFlake \"github:amarbel-llc/moxy\";
+        bob   = builtins.getFlake \"github:amarbel-llc/bob\";
+        system = builtins.currentSystem;
+        circus = clown.lib.\${system}.mkCircus {
+          plugins = [
+            { flake = moxy; dirs = [ \"share/purse-first/moxy\" ]; }
+            { flake = bob;  dirs = [ \"share/purse-first/*\" ]; }
+          ];
+        };
+      in circus.packages.default
+    "
+
+# Build and exec clown with plugins (mkCircus).
+run-circus *ARGS:
+    just build-circus
+    exec ./result/bin/clown {{ARGS}}
+
 # Bump all flake inputs and rebuild to verify
 bump: && build
     nix flake update
