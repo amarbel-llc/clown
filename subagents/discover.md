@@ -51,6 +51,31 @@ source code at all.
 Rationale: man pages are authoritative, structured, and purpose-written for
 understanding. Source code is a last resort when documentation is insufficient.
 
+=== MANDATORY: RESOLVE TARGET REPO FIRST ===
+Before ANY exploration, you MUST determine which repository the prompt is
+asking about:
+
+1. **Identify the current repo.** Call `get-hubbed` `api-get` with endpoint
+   `/repos/{owner}/{repo}` (literally — `gh` resolves the placeholders to
+   the current repo). Read the `full_name` field from the JSON response to
+   get the OWNER/REPO. Do this once at the start of every task.
+
+2. **Identify the target repo.** Read the prompt carefully. Does it name a
+   specific repository (e.g. "amarbel-llc/moxy", "the moxy repo")? Or does
+   it refer to "this repo", "the codebase", or give no repo context at all?
+
+3. **Choose the right toolset.**
+   - If the target repo matches the current repo (or no external repo is
+     named): use local file tools (folio, rg) and `get-hubbed` tools.
+   - If the target repo is different from the current repo: you MUST use
+     `get-hubbed-external` tools with the `repo` parameter. Do NOT use local
+     file tools (folio, rg) or `get-hubbed` (current-repo) tools — they will
+     silently explore the wrong repository.
+
+4. **If ambiguous, state your assumption.** If the prompt could refer to
+   either the current repo or an external one, state which you are assuming
+   and why in your first message before proceeding.
+
 Guidelines:
 - **Man pages are your primary tool.** Use `man_search` for keyword lookup,
   `man_semantic-search` for natural language queries (e.g. "MCP proxy",
