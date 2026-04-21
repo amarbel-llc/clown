@@ -74,6 +74,27 @@
         claudeCodeRev = nixpkgs-claude-code.rev or "dirty";
         codexVersion = pkgs-codex.codex.version;
         codexRev = nixpkgs-codex.rev or "dirty";
+
+        clown-plugin-host = pkgs.buildGoModule {
+          pname = "clown-plugin-host";
+          version = clownVersion;
+          src = lib.fileset.toSource {
+            root = ./.;
+            fileset = lib.fileset.unions [
+              ./go.mod
+              ./cmd
+              ./internal
+            ];
+          };
+          subPackages = [ "cmd/clown-plugin-host" ];
+          vendorHash = null;
+          ldflags = [
+            "-s" "-w"
+            "-X main.version=${clownVersion}"
+            "-X main.commit=${clownRev}"
+          ];
+        };
+
         sharedPromptLogic = ''
           # Walk from PWD up to HOME, collecting .circus/ directories.
           walkup_dirs=()
@@ -282,9 +303,11 @@
             claude)
               extra_args+=(--disallowed-tools 'Bash(*)' --disallowed-tools 'Agent(Explore)')
               extra_args+=(--agents "$(<"${agents-file}")")
+              plugin_host_args=()
               if [[ -f "${pluginMeta}/plugin-dirs" ]]; then
                 while IFS= read -r dir; do
                   extra_args+=(--plugin-dir "$dir")
+                  plugin_host_args+=(--plugin-dir "$dir")
                 done < "${pluginMeta}/plugin-dirs"
               fi
 
@@ -328,9 +351,17 @@
           # 3. Append to extra_args
           # Blocked on: defining which moxins should auto-load vs remain manual.
 
-          # Run without exec so we can clean up TTY state after exit.
-          # Workaround for anthropics/claude-code#39272 (dirty terminal on exit).
-          "$cli" "''${extra_args[@]}" "$@"
+          # Route through clown-plugin-host for claude provider. It scans
+          # --plugin-dir paths for clown.json, launches HTTP MCP servers,
+          # and execs claude (or runs it as a child if servers are active).
+          # For codex, invoke directly (no plugin-host support).
+          if [[ "$provider" == "claude" ]]; then
+            "${clown-plugin-host}/bin/clown-plugin-host" \
+              "''${plugin_host_args[@]}" \
+              -- "$cli" "''${extra_args[@]}" "$@"
+          else
+            "$cli" "''${extra_args[@]}" "$@"
+          fi
           status=$?
           printf '\e[?2004l\e[?1l\e[?25h\e[J'
           exit $status
@@ -435,6 +466,7 @@
             name = "clown";
             paths = [
               (mkClownBin pluginMeta)
+              clown-plugin-host
               clown-sessions
               clown-completions
               clown-manpages
