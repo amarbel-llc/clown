@@ -1,0 +1,244 @@
+.\" Copyright (c) 2026 amarbel, LLC
+.\" SPDX-License-Identifier: MIT
+.Dd April 21, 2026
+.Dt CLOWN-PLUGIN-PROTOCOL 7
+.Os
+.Sh NAME
+.Nm clown-plugin-protocol
+.Nd HTTP MCP server lifecycle protocol for clown plugins
+.Sh DESCRIPTION
+The clown plugin protocol enables Claude Code plugins to declare HTTP-based
+MCP servers as local commands that are automatically launched at session
+start and torn down at session end.
+.Pp
+HTTP MCP transports
+.Pq Li streamable-http , Li sse
+enable features unavailable over stdio:
+.Bl -bullet -offset indent
+.It
+.Li notifications/tools/list_changed
+\(em the server can push tool list updates to the client without polling
+.It
+Server-initiated requests via persistent SSE connections
+.El
+.Pp
+The protocol covers four phases: discovery, handshake, health checking, and
+shutdown.
+It is modeled on the
+.Lk https://github.com/hashicorp/go-plugin "hashicorp/go-plugin"
+handshake protocol.
+.Sh DISCOVERY
+.Xr clown-plugin-host 1
+receives plugin directories via
+.Fl -plugin-dir
+flags.
+For each directory, it checks for a
+.Pa clown.json
+manifest (see
+.Xr clown-json 5 ) .
+Directories without
+.Pa clown.json
+are silently skipped.
+.Pp
+If no
+.Pa clown.json
+files are found in any plugin directory,
+.Xr clown-plugin-host 1
+exec's directly into the downstream command with zero overhead \(em no
+child process, no intermediate config file.
+.Pp
+Each entry in
+.Fa httpServers
+within a discovered
+.Pa clown.json
+becomes a managed server.
+The plugin name is read from
+.Pa .claude-plugin/plugin.json
+in the same directory.
+.Sh HANDSHAKE PROTOCOL
+Each HTTP MCP server MUST print a single pipe-delimited line to stdout
+before serving requests:
+.Pp
+.Dl 1|1|tcp|127.0.0.1:54321|streamable-http
+.Pp
+.Ss Fields
+.Bl -column "Pos" "Name" "Values" -offset indent
+.It Sy Pos Ta Sy Name Ta Sy Values
+.It 0 Ta Core protocol version Ta MUST be Li 1
+.It 1 Ta App protocol version Ta Integer; MUST be Li 1 No (reserved)
+.It 2 Ta Network type Ta MUST be Li tcp
+.It 3 Ta Network address Ta Ar host Ns Li \&: Ns Ar port
+.It 4 Ta Protocol Ta Li streamable-http No or Li sse
+.El
+.Ss Requirements
+.Bl -bullet -offset indent
+.It
+The server MUST bind to
+.Li 127.0.0.1:0
+(ephemeral port, loopback only).
+.It
+The server MUST print the handshake line to stdout and flush.
+.It
+The server MUST begin serving HTTP requests after the handshake.
+.It
+The server MUST NOT write additional data to stdout after the handshake.
+Diagnostic output MUST go to stderr.
+.It
+Extra fields beyond position 4 MAY be present and MUST be ignored by the
+host.
+.It
+Leading and trailing whitespace MUST be tolerated by the parser.
+.El
+.Ss Protocol Authority
+The protocol field in the handshake line is authoritative.
+If it differs from the
+.Fa transport
+field in
+.Pa clown.json ,
+the handshake value takes precedence.
+This allows servers to negotiate transport at runtime.
+.Sh HEALTH CHECKING
+After reading the handshake, the host polls
+.Li http://<addr><healthcheck.path>
+at the configured interval.
+The server is considered healthy when it returns HTTP 200.
+.Pp
+Default health check parameters (overridable in
+.Pa clown.json ) :
+.Bl -tag -width Ds -offset indent
+.It path
+.Pa /healthz
+.It interval
+.Li 1s
+.It timeout
+.Li 30s
+.El
+.Pp
+If the timeout elapses before a 200 response, the server process is
+killed and an error is reported.
+All servers are launched and health-checked in parallel.
+If any server fails, all successfully started servers are shut down.
+.Sh MCP CONFIGURATION
+Once all servers are healthy, the host generates a temporary MCP
+configuration file:
+.Bd -literal -offset indent
+{
+  "mcpServers": {
+    "<plugin-name>/<server-name>": {
+      "url": "http://127.0.0.1:<port>/mcp"
+    }
+  }
+}
+.Ed
+.Pp
+Server names use the format
+.Ar plugin-name Ns / Ns Ar server-name .
+The URL path is
+.Pa /mcp
+for
+.Li streamable-http
+servers and
+.Pa /sse
+for
+.Li sse
+servers.
+.Pp
+The file is passed to the downstream command
+.Pq typically Xr claude-code 1
+via
+.Fl -mcp-config .
+.Sh SHUTDOWN
+When the downstream command exits:
+.Bl -enum -offset indent
+.It
+.Dv SIGTERM
+is sent to each server's process group.
+.It
+The host waits up to 5 seconds for each server to exit gracefully.
+.It
+If a server has not exited after the grace period,
+.Dv SIGKILL
+is sent to its process group.
+.It
+The temporary MCP configuration file is removed.
+.It
+The host exits with the downstream command's exit code.
+.El
+.Sh PROCESS ISOLATION
+Each server runs in its own process group
+.Pq via Dv setpgid .
+This provides:
+.Bl -bullet -offset indent
+.It
+Clean signal delivery \(em the entire server process tree receives
+.Dv SIGTERM .
+.It
+Reliable cleanup \(em
+.Dv SIGKILL
+reaches all child processes.
+.It
+Isolation between servers \(em one server's crash does not affect others.
+.El
+.Pp
+The server's stderr is forwarded to the host's stderr with a
+.Li [plugin-name/server-name]
+prefix.
+.Sh SECURITY CONSIDERATIONS
+.Bl -bullet -offset indent
+.It
+Servers MUST bind to
+.Li 127.0.0.1
+only.
+The protocol does not support remote addresses.
+.It
+Servers inherit the same trust level as any other code in the plugin \(em
+they can read files, make network requests, and serve MCP tools that
+influence model behavior.
+.It
+Clown's managed-settings guardrails (Bash disabled, auto-mode disabled)
+apply regardless of which HTTP MCP servers are running.
+Servers cannot override managed settings.
+.El
+.Sh ARCHITECTURE
+.Bd -literal -offset indent
+clown (shell wrapper)
+  \(da exec clown-plugin-host --plugin-dir A -- claude [args]
+       \(br\(em [no clown.json] \(-> exec claude directly
+       \(da\(em [clown.json found]
+            \(br\(em launch HTTP server children
+            \(br\(em read handshake + poll healthz
+            \(br\(em generate temp .mcp.json
+            \(br\(em run claude as child with --mcp-config
+            \(br\(em forward signals (SIGTERM, SIGINT)
+            \(br\(em wait for claude to exit
+            \(br\(em SIGTERM servers \(-> grace period \(-> SIGKILL
+            \(da\(em exit with claude's exit code
+.Ed
+.Sh COMPATIBILITY
+This protocol is additive.
+Plugins without
+.Pa clown.json
+are unaffected (exec pass-through).
+Existing stdio MCP servers in
+.Pa .mcp.json
+continue to work.
+A plugin MAY ship both
+.Pa clown.json
+(for HTTP servers) and
+.Pa .mcp.json
+(for stdio servers) simultaneously.
+.Sh SEE ALSO
+.Xr clown-plugin-host 1 ,
+.Xr clown-json 5 ,
+.Xr clown 1 ,
+.Xr claude-code 1
+.Sh STANDARDS
+This protocol is specified in full in
+.Pa docs/rfcs/0002-clown-plugin-protocol.md
+within the clown source repository.
+.Pp
+The handshake format is adapted from
+.Lk https://github.com/hashicorp/go-plugin "hashicorp/go-plugin" .
+.Sh AUTHORS
+.An amarbel, LLC
+.Lk https://github.com/amarbel-llc/clown
