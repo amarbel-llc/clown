@@ -1,10 +1,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"syscall"
+
+	"github.com/amarbel-llc/clown/internal/pluginhost"
 )
 
 var (
@@ -19,13 +23,85 @@ func main() {
 		os.Exit(1)
 	}
 
-	_ = pluginDirs // Phase 2: scan these for clown.json
+	host := &pluginhost.Host{PluginDirs: pluginDirs}
+	discovered, err := host.Discover()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clown-plugin-host: %v\n", err)
+		os.Exit(1)
+	}
 
-	execDownstream(downstream)
+	if len(discovered) == 0 {
+		execDownstream(downstream)
+		return // unreachable after exec
+	}
+
+	os.Exit(runManaged(host, discovered, downstream))
 }
 
-// splitArgs separates our flags (before --) from the downstream command
-// (after --). Only --plugin-dir is recognized.
+func runManaged(host *pluginhost.Host, discovered []pluginhost.DiscoveredServer, downstream []string) int {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	fmt.Fprintf(os.Stderr, "clown-plugin-host: launching %d HTTP MCP server(s)\n", len(discovered))
+
+	if err := host.StartAll(ctx, discovered); err != nil {
+		fmt.Fprintf(os.Stderr, "clown-plugin-host: %v\n", err)
+		return 1
+	}
+	defer host.Shutdown()
+
+	mcpJSON, err := pluginhost.GenerateMCPConfig(host.ServerURLs())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clown-plugin-host: generating mcp config: %v\n", err)
+		return 1
+	}
+
+	tmpFile, err := os.CreateTemp("", "clown-mcp-*.json")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clown-plugin-host: creating temp file: %v\n", err)
+		return 1
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.Write(mcpJSON); err != nil {
+		tmpFile.Close()
+		fmt.Fprintf(os.Stderr, "clown-plugin-host: writing mcp config: %v\n", err)
+		return 1
+	}
+	tmpFile.Close()
+
+	args := append([]string{downstream[0], "--mcp-config", tmpFile.Name()}, downstream[1:]...)
+
+	binary, err := exec.LookPath(args[0])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clown-plugin-host: %v\n", err)
+		return 1
+	}
+
+	cmd := exec.Command(binary, args[1:]...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	go func() {
+		sig := <-sigCh
+		if cmd.Process != nil {
+			cmd.Process.Signal(sig)
+		}
+	}()
+
+	if err := cmd.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return exitErr.ExitCode()
+		}
+		fmt.Fprintf(os.Stderr, "clown-plugin-host: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
 func splitArgs(args []string) (pluginDirs []string, downstream []string) {
 	for i := 0; i < len(args); i++ {
 		if args[i] == "--" {
