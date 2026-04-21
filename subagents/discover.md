@@ -5,7 +5,7 @@ Fast, read-only agent for exploring codebases. Use this when you need to \
 quickly find files by patterns, search code for keywords, or answer questions \
 about the codebase. Specify thoroughness: "quick" for basic searches, "medium" \
 for moderate exploration, or "very thorough" for comprehensive analysis."""
-tools = ["mcp__plugin_moxy_moxy__folio_glob", "mcp__plugin_moxy_moxy__folio_read", "mcp__plugin_moxy_moxy__folio_read-range", "mcp__plugin_moxy_moxy__folio_read-excluding", "mcp__plugin_moxy_moxy__folio_ls", "mcp__plugin_moxy_moxy__rg_search", "mcp__plugin_moxy_moxy__grit_diff", "mcp__plugin_moxy_moxy__grit_git-rev-parse", "mcp__plugin_moxy_moxy__man_list", "mcp__plugin_moxy_moxy__man_toc", "mcp__plugin_moxy_moxy__man_section", "mcp__plugin_moxy_moxy__man_search", "mcp__plugin_moxy_moxy__man_semantic-search"]
+tools = ["mcp__plugin_moxy_moxy__folio_glob", "mcp__plugin_moxy_moxy__folio_read", "mcp__plugin_moxy_moxy__folio_read-range", "mcp__plugin_moxy_moxy__folio_read-excluding", "mcp__plugin_moxy_moxy__folio_ls", "mcp__plugin_moxy_moxy__rg_search", "mcp__plugin_moxy_moxy__grit_diff", "mcp__plugin_moxy_moxy__grit_git-rev-parse", "mcp__plugin_moxy_moxy__man_list", "mcp__plugin_moxy_moxy__man_toc", "mcp__plugin_moxy_moxy__man_section", "mcp__plugin_moxy_moxy__man_search", "mcp__plugin_moxy_moxy__man_semantic-search", "mcp__plugin_moxy_moxy__get-hubbed_api-get", "mcp__plugin_moxy_moxy__get-hubbed_ci-run-get", "mcp__plugin_moxy_moxy__get-hubbed_ci-run-logs", "mcp__plugin_moxy_moxy__get-hubbed_content-compare", "mcp__plugin_moxy_moxy__get-hubbed_content-get", "mcp__plugin_moxy_moxy__get-hubbed_content-search", "mcp__plugin_moxy_moxy__get-hubbed_content-tree", "mcp__plugin_moxy_moxy__get-hubbed_gist-list", "mcp__plugin_moxy_moxy__get-hubbed_gist-view", "mcp__plugin_moxy_moxy__get-hubbed_graphql-query", "mcp__plugin_moxy_moxy__get-hubbed_issue-get", "mcp__plugin_moxy_moxy__get-hubbed_issue-list", "mcp__plugin_moxy_moxy__get-hubbed_watch-list", "mcp__plugin_moxy_moxy__get-hubbed-external_content-get", "mcp__plugin_moxy_moxy__get-hubbed-external_content-tree", "mcp__plugin_moxy_moxy__get-hubbed-external_issue-get", "mcp__plugin_moxy_moxy__get-hubbed-external_issue-list"]
 disallowedTools = ["Bash", "Edit", "Write", "NotebookEdit", "ExitPlanMode"]
 model = "haiku"
 +++
@@ -62,6 +62,21 @@ Guidelines:
   - `folio_read` when you know the specific file path
   - `folio_read-range` to read a specific line range from a file
   - `grit_diff` and `grit_git-rev-parse` for git history queries
+- **Current repo** (`get-hubbed` tools — no `repo` parameter needed):
+  - `content-get`, `content-search`, `content-tree`, `content-compare` for
+    repo files and diffs
+  - `issue-get`, `issue-list` for issues and PRs
+  - `ci-run-get`, `ci-run-logs` for CI workflow runs
+  - `api-get`, `graphql-query` for arbitrary read-only GitHub API queries
+  - `gist-list`, `gist-view` for gists
+  - `watch-list` for watched CI targets
+- **Other repos** (`get-hubbed-external` tools — `repo` parameter REQUIRED):
+  - `content-get`, `content-tree` for reading files and directory trees
+  - `issue-get`, `issue-list` for issues and PRs
+  - When the prompt names a different repo (e.g. "amarbel-llc/moxy"), you
+    MUST use `get-hubbed-external` tools with the `repo` parameter. Do NOT
+    use `get-hubbed` (current-repo) tools or local file tools — they will
+    silently read from the wrong repository.
 - Adapt your search approach based on the thoroughness level specified by the
   caller
 - Communicate your final report directly as a regular message - do NOT attempt
