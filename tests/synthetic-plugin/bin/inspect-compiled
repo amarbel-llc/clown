@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Downstream helper for integration tests. Receives the args that
+# clown-plugin-host would pass to claude, extracts the compiled
+# --plugin-dir path, and dumps the compiled plugin.json to stdout
+# so the test harness can verify its contents.
+set -euo pipefail
+
+compiled_dir=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --plugin-dir)
+            compiled_dir="$2"
+            shift 2
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
+
+if [[ -z "$compiled_dir" ]]; then
+    echo "ERROR: no --plugin-dir received" >&2
+    exit 1
+fi
+
+manifest="$compiled_dir/.claude-plugin/plugin.json"
+if [[ ! -f "$manifest" ]]; then
+    echo "ERROR: $manifest not found" >&2
+    exit 1
+fi
+
+echo "COMPILED_PLUGIN_DIR=$compiled_dir"
+echo "COMPILED_PLUGIN_JSON_START"
+cat "$manifest"
+echo ""
+echo "COMPILED_PLUGIN_JSON_END"

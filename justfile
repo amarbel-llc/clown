@@ -34,35 +34,79 @@ gomod2nix:
 
 # Integration test: launch clown-plugin-host with the synthetic plugin's
 # clown.json and verify the mock HTTP MCP server starts, completes the
-# handshake, passes health checks, and compiles plugin manifests with
-# URL-based MCP entries.
+# handshake, passes health checks, compiles plugin manifests with
+# URL-based MCP entries, and preserves original server names.
 [group("test")]
 test-plugin-host: build build-mock-server
     #!/usr/bin/env bash
     set -euo pipefail
     plugin_dir="$(pwd)/tests/synthetic-plugin"
     echo "Starting clown-plugin-host with synthetic plugin..."
-    # Run with a dummy downstream that just prints its args and exits.
-    # clown-plugin-host will pass compiled --plugin-dir flags.
+    # The inspect-compiled helper extracts the compiled plugin.json
+    # before clown-plugin-host cleans up the staging dir on shutdown.
     output=$(timeout 30 ./result/bin/clown-plugin-host \
         --plugin-dir "$plugin_dir" \
-        -- echo DOWNSTREAM_MARKER 2>&1) || {
+        -- "$plugin_dir/bin/inspect-compiled" 2>&1) || {
         echo "FAIL: clown-plugin-host exited with $?" >&2
         echo "$output" >&2
         exit 1
     }
     echo "$output"
     # Verify the downstream received a compiled --plugin-dir
-    if echo "$output" | grep -qE -- '--plugin-dir[ =][^ ]*/clown-plugin-compile-'; then
+    if echo "$output" | grep -qE 'COMPILED_PLUGIN_DIR=.*/clown-plugin-compile-'; then
         echo "OK: downstream received compiled --plugin-dir"
     else
         echo "FAIL: downstream did not receive a clown-plugin-compile-* --plugin-dir path" >&2
         exit 1
     fi
-    if echo "$output" | grep -q 'DOWNSTREAM_MARKER'; then
-        echo "OK: downstream received its original args"
+    # Extract the compiled plugin.json and verify injected mcpServers
+    compiled_json=$(echo "$output" | sed -n '/COMPILED_PLUGIN_JSON_START/,/COMPILED_PLUGIN_JSON_END/p' \
+        | grep -v 'COMPILED_PLUGIN_JSON_')
+    if [[ -z "$compiled_json" ]]; then
+        echo "FAIL: could not extract compiled plugin.json from output" >&2
+        exit 1
+    fi
+    echo "Compiled plugin.json:"
+    echo "$compiled_json"
+    # Server name must be "mock-mcp" (original clown.json key), not renamed
+    if echo "$compiled_json" | jq -e '.mcpServers["mock-mcp"]' >/dev/null 2>&1; then
+        echo "OK: mcpServers contains 'mock-mcp' (original server name preserved)"
     else
-        echo "FAIL: downstream did not receive original args" >&2
+        echo "FAIL: mcpServers does not contain 'mock-mcp' key" >&2
+        exit 1
+    fi
+    # Entry must be url-based (type + url), not command-based
+    entry_type=$(echo "$compiled_json" | jq -r '.mcpServers["mock-mcp"].type')
+    entry_url=$(echo "$compiled_json" | jq -r '.mcpServers["mock-mcp"].url')
+    if [[ "$entry_type" == "http" ]]; then
+        echo "OK: type is 'http'"
+    else
+        echo "FAIL: type = '$entry_type', want 'http'" >&2
+        exit 1
+    fi
+    if [[ "$entry_url" =~ ^http://127\.0\.0\.1:[0-9]+/mcp$ ]]; then
+        echo "OK: url matches http://127.0.0.1:<port>/mcp pattern"
+    else
+        echo "FAIL: url = '$entry_url', want http://127.0.0.1:<port>/mcp" >&2
+        exit 1
+    fi
+    # Original command-based entry must be gone
+    if echo "$compiled_json" | jq -e '.mcpServers["mock-mcp"].command' >/dev/null 2>&1; then
+        echo "FAIL: command field still present in compiled entry" >&2
+        exit 1
+    fi
+    echo "OK: no command field in compiled entry"
+    # Other fields (name, agents) must survive compilation
+    if echo "$compiled_json" | jq -e '.name == "synthetic-test"' >/dev/null 2>&1; then
+        echo "OK: name field preserved"
+    else
+        echo "FAIL: name field lost or changed" >&2
+        exit 1
+    fi
+    if echo "$compiled_json" | jq -e '.agents | length > 0' >/dev/null 2>&1; then
+        echo "OK: agents field preserved"
+    else
+        echo "FAIL: agents field lost" >&2
         exit 1
     fi
     echo "OK: plugin-host integration test passed"
@@ -379,35 +423,6 @@ explore-agents-schema: build
     # Restore clean manifest
     echo "$base}" > "$manifest"
     echo "=== Done ==="
-
-# Verify whether plugin.json mcpServers accepts url-based (HTTP) entries.
-# Creates a throwaway plugin dir with a url-based mcpServers entry and
-# launches claude with --plugin-dir to check /mcp output.
-[group("debug")]
-debug-plugin-url-mcp: build
-    #!/usr/bin/env bash
-    set -euo pipefail
-    tmpdir=$(mktemp -d)
-    trap 'rm -rf "$tmpdir"' EXIT
-    mkdir -p "$tmpdir/.claude-plugin"
-    cat > "$tmpdir/.claude-plugin/plugin.json" <<'EOF'
-    {
-      "name": "url-mcp-probe",
-      "version": "0.0.1",
-      "description": "Probe whether plugin.json mcpServers accepts url entries",
-      "mcpServers": {
-        "probe-server": {
-          "type": "http",
-          "url": "http://127.0.0.1:19999/mcp"
-        }
-      }
-    }
-    EOF
-    echo ">> plugin.json:"
-    cat "$tmpdir/.claude-plugin/plugin.json"
-    echo ""
-    echo ">> launching: clown --clean --plugin-dir $tmpdir mcp list"
-    ./result/bin/clown --clean --plugin-dir "$tmpdir" mcp list 2>&1 || true
 
 # Bump all flake inputs and rebuild to verify
 bump: && build

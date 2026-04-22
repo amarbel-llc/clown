@@ -5,5 +5,11 @@
   "agents": [
     "./agents/yaml-agent.md",
     "./agents/toml-agent.md"
-  ]
+  ],
+  "mcpServers": {
+    "mock-mcp": {
+      "command": "bin/mock-mcp-server",
+      "args": ["--mode", "stdio"]
+    }
+  }
 }
