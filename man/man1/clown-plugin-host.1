@@ -11,6 +11,7 @@
 .Op Fl -plugin-dir Ar dir
 .Ar ...
 .Op Fl -skip-failed
+.Op Fl -disable-clown-protocol
 .Op Fl v | Fl -verbose
 .Cm --
 .Ar command
@@ -59,6 +60,23 @@ via the confirmation prompt described in
 .Sx FAILURE HANDLING .
 Also settable via the
 .Ev CLOWN_SKIP_FAILED_PLUGINS
+environment variable (see
+.Sx ENVIRONMENT ) .
+.It Fl -disable-clown-protocol
+Bypass the clown-plugin-host pipeline entirely.
+No
+.Pa clown.json
+discovery, no HTTP server launch, no plugin manifest compilation, and no
+.Fl -mcp-config
+generation.
+Plugin directories are passed to the downstream command unmodified via
+.Fl -plugin-dir ,
+so claude's native plugin loader (and its native MCP registration) is
+the only path active.
+Useful as an escape hatch when debugging, or when the user explicitly
+prefers native claude behavior.
+Also settable via the
+.Ev CLOWN_DISABLE_CLOWN_PROTOCOL
 environment variable (see
 .Sx ENVIRONMENT ) .
 .It Fl v , Fl -verbose
@@ -140,6 +158,59 @@ The server MUST bind to
 .Li 127.0.0.1:0
 (ephemeral port), write the handshake line, flush stdout, then begin
 serving.
+.Sh PLUGIN MANIFEST COMPILATION
+For each plugin directory whose
+.Pa clown.json
+contributes at least one HTTP MCP server,
+.Nm
+.Em compiles
+a replacement plugin manifest so Claude Code's native plugin loader does
+not re-register MCP servers that
+.Nm
+is already serving over HTTP.
+.Pp
+Compilation steps for each plugin directory:
+.Bl -enum
+.It
+Create a staging directory under the OS temp root
+.Pq Pa /tmp/clown-plugin-compile-* .
+.It
+Symlink every top-level entry of the source plugin directory (other than
+.Pa .claude-plugin )
+into the staging directory.
+.It
+Create a real
+.Pa .claude-plugin/
+directory in the staging dir and symlink every file under it other than
+.Pa plugin.json .
+.It
+Read the source
+.Pa .claude-plugin/plugin.json ,
+remove the
+.Li mcpServers
+key, and write the result to the staged
+.Pa plugin.json .
+.El
+.Pp
+Claude Code is handed the staged directory via
+.Fl -plugin-dir
+instead of the original, so hooks, skills, commands, agents, and
+sub-agents still load normally but the duplicate MCP registration goes
+away.
+The original plugin directory is never modified.
+.Pp
+Plugin directories that have no
+.Pa clown.json
+(or where
+.Pa clown.json
+declares no servers) are passed to Claude Code unmodified, so their
+native MCP registration continues to work.
+.Pp
+Compiled staging directories are tracked by the host and removed during
+shutdown.
+.Fl -disable-clown-protocol
+skips compilation entirely; see
+.Sx OPTIONS .
 .Sh MCP CONFIGURATION
 The generated MCP configuration uses server names of the form
 .Ar plugin-name Ns / Ns Ar server-name ,
@@ -197,6 +268,11 @@ When set to
 .Li 1 ,
 behaves the same as passing
 .Fl -skip-failed .
+.It Ev CLOWN_DISABLE_CLOWN_PROTOCOL
+When set to
+.Li 1 ,
+behaves the same as passing
+.Fl -disable-clown-protocol .
 .It Ev XDG_LOG_HOME
 Base directory for the log file (see
 .Sx LOGGING ) .

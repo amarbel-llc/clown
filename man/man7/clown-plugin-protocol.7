@@ -22,8 +22,8 @@ enable features unavailable over stdio:
 Server-initiated requests via persistent SSE connections
 .El
 .Pp
-The protocol covers six phases: discovery, handshake, health checking,
-failure handling, runtime, and shutdown.
+The protocol covers seven phases: discovery, handshake, health checking,
+failure handling, plugin manifest compilation, runtime, and shutdown.
 It is modeled on the
 .Lk https://github.com/hashicorp/go-plugin "hashicorp/go-plugin"
 handshake protocol.
@@ -148,6 +148,53 @@ appear in the generated MCP configuration
 .Pq see Sx MCP CONFIGURATION .
 Failed servers are absent from the configuration but retain their log
 records for later inspection.
+.Sh PLUGIN MANIFEST COMPILATION
+For each plugin directory whose
+.Pa clown.json
+contributed at least one HTTP MCP server,
+.Xr clown-plugin-host 1
+.Em compiles
+a replacement plugin manifest so Claude Code's native plugin loader does
+not re-register the same MCP servers that clown-plugin-host is already
+serving over HTTP.
+.Pp
+Compilation steps:
+.Bl -enum -offset indent
+.It
+Create a staging directory under the OS temp root.
+.It
+Symlink every top-level entry of the source plugin directory (other than
+.Pa .claude-plugin )
+into the staging directory.
+.It
+Create a real
+.Pa .claude-plugin/
+directory in the staging dir and symlink every file under it other than
+.Pa plugin.json .
+.It
+Read the source
+.Pa .claude-plugin/plugin.json ,
+remove the
+.Li mcpServers
+key, and write the result to the staged
+.Pa plugin.json .
+.El
+.Pp
+Claude Code is handed the staged directory via
+.Fl -plugin-dir
+instead of the original.
+The original plugin directory is never modified.
+Hooks, skills, commands, agents, and sub-agents continue to load from
+the staged directory via symlinks into the source tree.
+.Pp
+Compiled staging directories are tracked by the host and removed during
+shutdown.
+See
+.Xr clown-plugin-host 1
+for the
+.Fl -disable-clown-protocol
+opt-out, which bypasses compilation and passes plugin directories to
+Claude Code unmodified.
 .Sh MCP CONFIGURATION
 Once all servers are healthy, the host generates a temporary MCP
 configuration file:
@@ -186,6 +233,16 @@ The file is passed to the downstream command
 .Pq typically Xr claude-code 1
 via
 .Fl -mcp-config .
+.Pp
+.Xr clown-plugin-host 1
+also prepends one
+.Fl -plugin-dir
+flag per plugin directory, using the compiled staged path when the
+plugin was compiled and the original path otherwise.
+Callers MUST NOT add
+.Fl -plugin-dir
+directly to the downstream args themselves \(em clown-plugin-host owns
+that routing.
 .Sh SHUTDOWN
 When the downstream command exits:
 .Bl -enum -offset indent
@@ -200,6 +257,10 @@ If a server has not exited after the grace period,
 is sent to its process group.
 .It
 The temporary MCP configuration file is removed.
+.It
+Each compiled staging directory (see
+.Sx PLUGIN MANIFEST COMPILATION )
+is removed.
 .It
 The host exits with the downstream command's exit code.
 .El
@@ -254,19 +315,27 @@ for the authoritative field list.
 .Sh ARCHITECTURE
 .Bd -literal -offset indent
 clown (shell wrapper)
-  \(da exec clown-plugin-host --plugin-dir A [--skip-failed] -- claude [args]
+  \(da exec clown-plugin-host --plugin-dir A [--skip-failed]
+        [--disable-clown-protocol] -- claude [args]
        \(br\(em open $XDG_LOG_HOME/clown/clown-plugin-host-*.log
-       \(br\(em [no clown.json] \(-> exec claude directly
+       \(br\(em [--disable-clown-protocol]
+       \(br    \(-> exec claude with original --plugin-dir (pass-through)
+       \(br\(em [no clown.json found]
+       \(br    \(-> exec claude with original --plugin-dir (pass-through)
        \(da\(em [clown.json found]
             \(br\(em launch HTTP server children (parallel)
             \(br\(em read handshake + poll healthz
             \(br\(em collect per-server start report
             \(br\(em [any failures] \(-> skip / prompt / abort
+            \(br\(em compile plugin manifests (plugin.json mcpServers stripped)
+            \(br    into staging dirs
             \(br\(em generate temp .mcp.json for healthy servers
-            \(br\(em run claude as child with --mcp-config
+            \(br\(em run claude as child with --mcp-config and compiled
+            \(br    --plugin-dir flags
             \(br\(em forward signals (SIGTERM, SIGINT)
             \(br\(em wait for claude to exit
             \(br\(em SIGTERM servers \(-> grace period \(-> SIGKILL
+            \(br\(em remove compiled staging dirs
             \(da\(em exit with claude's exit code
 .Ed
 .Sh COMPATIBILITY

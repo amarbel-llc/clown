@@ -223,7 +223,31 @@ The host prints the resolved log path to stderr on startup so a concurrent
 guarantees log deletion does not affect correctness; the host does not
 rotate or prune files.
 
-#### 3.6 MCP Configuration
+#### 3.6 Plugin Manifest Compilation
+
+For each plugin directory whose `clown.json` contributed at least one
+`DiscoveredServer`, `clown-plugin-host` **compiles** a replacement plugin
+manifest so claude's native plugin loader does not re-register the same
+MCP servers that `clown-plugin-host` is already serving over HTTP. The
+compilation steps are:
+
+1. Create a staging directory under the OS temp root (e.g.
+   `/tmp/clown-plugin-compile-*`)
+2. Symlink every top-level entry of the source plugin directory (other
+   than `.claude-plugin`) into the staging directory
+3. Create a real `.claude-plugin/` directory in the staging dir and
+   symlink every file under it other than `plugin.json`
+4. Read the source `.claude-plugin/plugin.json`, remove the `mcpServers`
+   key, and write the result to the staged `plugin.json`
+
+Compiled staging directories are tracked by the host and removed during
+shutdown (section 3.8).
+
+Plugin directories without `clown.json` (or where `clown.json` declares
+no servers) MUST NOT be compiled — they are passed to claude unmodified
+so claude's native MCP registration continues to work.
+
+#### 3.7 MCP Configuration
 
 Once all servers are healthy, the host generates a temporary MCP
 configuration file:
@@ -247,16 +271,27 @@ configuration file:
 
 The file is passed to the downstream command via `--mcp-config`.
 
-#### 3.7 Downstream Execution
+#### 3.8 Downstream Execution
 
-The downstream command (typically `claude`) is started as a child process
-with the `--mcp-config <temp-file>` flag prepended to its arguments.
+The downstream command (typically `claude`) is started as a child process.
+Its argument list is assembled as:
+
+```
+<downstream[0]> --mcp-config <temp-file> \
+  --plugin-dir <dir1> --plugin-dir <dir2> ... \
+  <downstream[1:]...>
+```
+
+Each `<dirN>` is the compiled (staged) dir for plugins that were compiled
+in section 3.6, or the original dir otherwise. `clown-plugin-host` is the
+sole owner of `--plugin-dir` routing to claude; callers SHOULD NOT add
+`--plugin-dir` to the downstream args themselves.
+
 `SIGTERM` and `SIGINT` received by the host are forwarded to the downstream
-process.
+process. The host waits for the downstream command to exit, then proceeds
+to shutdown.
 
-The host waits for the downstream command to exit, then proceeds to shutdown.
-
-#### 3.8 Shutdown
+#### 3.9 Shutdown
 
 When the downstream command exits:
 
@@ -265,7 +300,8 @@ When the downstream command exits:
 3. If a server has not exited after the grace period, `SIGKILL` is sent to
    its process group
 4. The temporary MCP configuration file is removed
-5. The host exits with the downstream command's exit code
+5. Each compiled staging directory (section 3.6) is removed
+6. The host exits with the downstream command's exit code
 
 ### 4. Architecture Integration
 
@@ -273,27 +309,53 @@ The command chain with `clown-plugin-host`:
 
 ```
 clown (shell wrapper)
-  └─ exec clown-plugin-host --plugin-dir A [--skip-failed] -- claude [args]
+  └─ exec clown-plugin-host --plugin-dir A [--skip-failed]
+        [--disable-clown-protocol] -- claude [args]
        ├─ open $XDG_LOG_HOME/clown/clown-plugin-host-*.log
-       ├─ [no clown.json found] → exec claude directly (pass-through)
+       ├─ [--disable-clown-protocol] → exec claude with original
+       │                                --plugin-dir flags (pass-through)
+       ├─ [no clown.json found] → exec claude with original
+       │                           --plugin-dir flags (pass-through)
        └─ [clown.json found]
             ├─ launch HTTP server children (parallel)
             ├─ read handshake + poll healthz for each
             ├─ collect per-server start report
             ├─ [any failures] → skip / prompt / abort (§3.4)
+            ├─ compile plugin manifests (plugin.json mcpServers stripped)
+            │   into staging dirs
             ├─ generate temp .mcp.json for healthy servers
-            ├─ run claude as child with --mcp-config
+            ├─ run claude as child with --mcp-config and compiled
+            │   --plugin-dir flags
             ├─ forward signals
             ├─ wait for claude to exit
             ├─ SIGTERM servers → grace period → SIGKILL
+            ├─ remove compiled staging dirs
             └─ exit with claude's exit code
 ```
 
 The shell wrapper continues to handle TTY cleanup after `clown-plugin-host`
-exits, and recognizes `--skip-failed` as a clown-level flag that is
-forwarded into `plugin_host_args`. The `--plugin-dir` flags are also passed
-to claude for stdio plugin loading; `clown-plugin-host` only acts on plugin
-directories that contain `clown.json`.
+exits, and recognizes `--skip-failed` and `--disable-clown-protocol` as
+clown-level flags that are forwarded into `plugin_host_args`. The shell
+wrapper MUST NOT add `--plugin-dir` directly to claude's argument list —
+`clown-plugin-host` owns that routing (section 3.8) and emits compiled
+plugin dirs when appropriate.
+
+#### 4.1 Opt-out: `--disable-clown-protocol`
+
+The `--disable-clown-protocol` flag (also exposed on the `clown` wrapper
+and as the `CLOWN_DISABLE_CLOWN_PROTOCOL=1` environment variable)
+bypasses the entire clown-plugin-host pipeline:
+
+- No `clown.json` discovery
+- No HTTP server launch
+- No plugin manifest compilation
+- No `.mcp.json` generation
+- Plugin directories are passed to claude unmodified via
+  `--plugin-dir`
+
+In this mode, claude's native plugin loader is the sole MCP registration
+path. This is intended as an escape hatch for debugging or for users who
+prefer native claude behavior.
 
 ## Security Considerations
 

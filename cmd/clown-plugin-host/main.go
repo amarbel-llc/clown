@@ -50,6 +50,7 @@ func run(logger *slog.Logger, logPath string) int {
 	}
 
 	skipFailed := parsed.skipFailed || os.Getenv("CLOWN_SKIP_FAILED_PLUGINS") == "1"
+	disableClown := parsed.disableClownProtocol || os.Getenv("CLOWN_DISABLE_CLOWN_PROTOCOL") == "1"
 	verbose := parsed.verbose
 	if verbose {
 		fmt.Fprintf(os.Stderr, "clown-plugin-host: logging to %s\n", logPath)
@@ -57,9 +58,16 @@ func run(logger *slog.Logger, logPath string) int {
 	logger.Info("parsed arguments",
 		"plugin_dirs", parsed.pluginDirs,
 		"skip_failed", skipFailed,
+		"disable_clown_protocol", disableClown,
 		"verbose", verbose,
 		"downstream", parsed.downstream,
 	)
+
+	if disableClown {
+		logger.Info("clown protocol disabled; passing plugin dirs through to downstream unchanged")
+		execDownstream(buildDownstreamArgs(parsed.downstream, parsed.pluginDirs, nil, ""))
+		return 0 // unreachable after exec
+	}
 
 	host := &pluginhost.Host{PluginDirs: parsed.pluginDirs, Logger: logger, Verbose: verbose}
 	discovered, err := host.Discover()
@@ -70,15 +78,32 @@ func run(logger *slog.Logger, logPath string) int {
 	}
 
 	if len(discovered) == 0 {
-		logger.Info("no plugin servers discovered; exec'ing downstream directly", "downstream", parsed.downstream)
-		execDownstream(parsed.downstream)
+		logger.Info("no plugin servers discovered; passing plugin dirs through to downstream", "downstream", parsed.downstream)
+		execDownstream(buildDownstreamArgs(parsed.downstream, parsed.pluginDirs, nil, ""))
 		return 0 // unreachable after exec
 	}
 
-	return runManaged(host, discovered, parsed.downstream, skipFailed, verbose, logger)
+	dirMap, err := host.CompileForClaude(discovered)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clown-plugin-host: %v\n", err)
+		logger.Error("compiling plugin manifests failed", "err", err)
+		host.Shutdown()
+		return 1
+	}
+
+	return runManaged(host, discovered, parsed.downstream, parsed.pluginDirs, dirMap, skipFailed, verbose, logger)
 }
 
-func runManaged(host *pluginhost.Host, discovered []pluginhost.DiscoveredServer, downstream []string, skipFailed bool, verbose bool, logger *slog.Logger) int {
+func runManaged(
+	host *pluginhost.Host,
+	discovered []pluginhost.DiscoveredServer,
+	downstream []string,
+	pluginDirs []string,
+	dirMap map[string]string,
+	skipFailed bool,
+	verbose bool,
+	logger *slog.Logger,
+) int {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -130,8 +155,9 @@ func runManaged(host *pluginhost.Host, discovered []pluginhost.DiscoveredServer,
 	}
 
 	if len(report.Started) == 0 {
-		logger.Info("no plugin servers healthy; exec'ing downstream directly", "downstream", downstream)
-		execDownstream(downstream)
+		logger.Info("no plugin servers healthy; falling back to original plugin dirs so claude's native MCP still works")
+		host.Shutdown() // deletes compiled stage dirs synchronously — syscall.Exec won't fire defers
+		execDownstream(buildDownstreamArgs(downstream, pluginDirs, nil, ""))
 		return 0 // unreachable after exec
 	}
 	defer host.Shutdown()
@@ -160,7 +186,7 @@ func runManaged(host *pluginhost.Host, discovered []pluginhost.DiscoveredServer,
 	tmpFile.Close()
 	logger.Info("wrote mcp config", "path", tmpFile.Name())
 
-	args := append([]string{downstream[0], "--mcp-config", tmpFile.Name()}, downstream[1:]...)
+	args := buildDownstreamArgs(downstream, pluginDirs, dirMap, tmpFile.Name())
 
 	binary, err := exec.LookPath(args[0])
 	if err != nil {
@@ -198,11 +224,32 @@ func runManaged(host *pluginhost.Host, discovered []pluginhost.DiscoveredServer,
 	return 0
 }
 
+// buildDownstreamArgs assembles the argv that exec's the downstream (claude).
+// It prepends --mcp-config when mcpConfigPath is non-empty, then prepends one
+// --plugin-dir per entry in pluginDirs (substituting the compiled path from
+// dirMap if available). Order: [binary, --mcp-config X, --plugin-dir dir1,
+// --plugin-dir dir2, ..., <original downstream args>].
+func buildDownstreamArgs(downstream []string, pluginDirs []string, dirMap map[string]string, mcpConfigPath string) []string {
+	args := []string{downstream[0]}
+	if mcpConfigPath != "" {
+		args = append(args, "--mcp-config", mcpConfigPath)
+	}
+	for _, dir := range pluginDirs {
+		target := dir
+		if staged, ok := dirMap[dir]; ok {
+			target = staged
+		}
+		args = append(args, "--plugin-dir", target)
+	}
+	return append(args, downstream[1:]...)
+}
+
 type parsedArgs struct {
-	pluginDirs []string
-	downstream []string
-	skipFailed bool
-	verbose    bool
+	pluginDirs           []string
+	downstream           []string
+	skipFailed           bool
+	disableClownProtocol bool
+	verbose              bool
 }
 
 func parseArgs(args []string) (parsedArgs, error) {
@@ -220,6 +267,8 @@ func parseArgs(args []string) (parsedArgs, error) {
 			i++
 		case args[i] == "--skip-failed":
 			p.skipFailed = true
+		case args[i] == "--disable-clown-protocol":
+			p.disableClownProtocol = true
 		case args[i] == "--verbose", args[i] == "-v":
 			p.verbose = true
 		default:

@@ -266,6 +266,7 @@
           provider="''${CLOWN_PROVIDER:-claude}"
           clean=false
           skip_failed_plugins=false
+          disable_clown_protocol=false
           verbose_plugins=false
           forwarded_args=()
           while [[ $# -gt 0 ]]; do
@@ -296,6 +297,10 @@
                 ;;
               --skip-failed)
                 skip_failed_plugins=true
+                shift
+                ;;
+              --disable-clown-protocol)
+                disable_clown_protocol=true
                 shift
                 ;;
               --verbose|-v)
@@ -337,15 +342,23 @@
             claude)
               extra_args+=(--disallowed-tools 'Bash(*)' --disallowed-tools 'Agent(Explore)')
               extra_args+=(--agents "$(<"${agents-file}")")
+              # clown-plugin-host owns --plugin-dir routing to claude: it
+              # emits compiled plugin dirs (plugin.json rewritten to drop
+              # mcpServers) so claude's native plugin loader doesn't register
+              # MCP servers that clown-plugin-host is already serving over
+              # HTTP. Do NOT also add --plugin-dir to extra_args — that would
+              # re-introduce the double registration.
               plugin_host_args=()
               if [[ -f "${pluginMeta}/plugin-dirs" ]]; then
                 while IFS= read -r dir; do
-                  extra_args+=(--plugin-dir "$dir")
                   plugin_host_args+=(--plugin-dir "$dir")
                 done < "${pluginMeta}/plugin-dirs"
               fi
               if [[ "$skip_failed_plugins" == true ]]; then
                 plugin_host_args+=(--skip-failed)
+              fi
+              if [[ "$disable_clown_protocol" == true ]]; then
+                plugin_host_args+=(--disable-clown-protocol)
               fi
               if [[ "$verbose_plugins" == true ]]; then
                 plugin_host_args+=(--verbose)
@@ -393,7 +406,11 @@
 
           # Route through clown-plugin-host for claude provider. It scans
           # --plugin-dir paths for clown.json, launches HTTP MCP servers,
-          # and execs claude (or runs it as a child if servers are active).
+          # compiles a replacement plugin.json per plugin (mcpServers
+          # stripped) into a staging dir, and execs claude with
+          # --plugin-dir pointing at the staged dirs plus --mcp-config
+          # pointing at the generated entries. --disable-clown-protocol
+          # bypasses all of this and passes --plugin-dir through unchanged.
           # For codex, invoke directly (no plugin-host support).
           if [[ "$provider" == "claude" ]]; then
             "${clown-plugin-host}/bin/clown-plugin-host" \

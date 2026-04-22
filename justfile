@@ -1,4 +1,13 @@
-default: build
+default: build test check
+
+# Aggregator: run every test recipe (Go unit tests + plugin-host
+# integration tests). Moxy-dependent tests skip cleanly when moxy is not
+# on PATH, so this recipe is safe to run from any environment.
+test: test-go test-plugin-host test-plugin-host-moxy test-plugin-host-moxy-disabled
+
+# Aggregator: run every check recipe (currently: mandoc lint on
+# clown-authored man pages). Non-test correctness gates belong here.
+check: check-lint-man
 
 build: build-nix
 
@@ -7,10 +16,10 @@ build: build-nix
 build-go:
     go build ./cmd/...
 
-# Run Go tests
+# Run Go tests across the whole module (internal + cmd packages).
 [group("go")]
 test-go:
-    go test ./internal/...
+    go test ./...
 
 # Build the mock MCP server used by integration tests
 [group("go")]
@@ -66,22 +75,23 @@ test-plugin-host: build build-mock-server
 test-plugin-host-moxy: build
     #!/usr/bin/env bash
     set -euo pipefail
-    moxy_bin=$(command -v moxy) || {
-        echo "FAIL: moxy not found on PATH" >&2
-        exit 1
-    }
+    if ! moxy_bin=$(command -v moxy 2>/dev/null); then
+        echo "SKIP: moxy not found on PATH — skipping plugin-host-moxy integration test"
+        exit 0
+    fi
     moxy_prefix=$(dirname "$(dirname "$moxy_bin")")
     plugin_dir="$moxy_prefix/share/purse-first/moxy"
     echo "Using moxy at: $moxy_bin"
     echo "Plugin dir:    $plugin_dir"
     if [[ ! -f "$plugin_dir/clown.json" ]]; then
-        echo "FAIL: $plugin_dir/clown.json is missing." >&2
-        echo "      Your moxy on PATH is too old; update it to a version that" >&2
-        echo "      ships share/purse-first/moxy/clown.json." >&2
-        exit 1
+        echo "SKIP: $plugin_dir/clown.json is missing."
+        echo "      Your moxy on PATH is too old; update it to a version that"
+        echo "      ships share/purse-first/moxy/clown.json. Skipping test."
+        exit 0
     fi
     echo "Starting clown-plugin-host with moxy as the plugin..."
     output=$(timeout 60 ./result/bin/clown-plugin-host \
+        --verbose \
         --plugin-dir "$plugin_dir" \
         -- echo DOWNSTREAM_MARKER 2>&1) || {
         echo "FAIL: clown-plugin-host exited with $?" >&2
@@ -107,7 +117,61 @@ test-plugin-host-moxy: build
         echo "FAIL: no sign of the moxy/moxy managed server in host output" >&2
         exit 1
     fi
+    # Regression guard for the plugin.json compilation path: the downstream
+    # --plugin-dir must point at a clown-plugin-compile-* staging dir (the
+    # exact parent varies with $TMPDIR), not the source plugin_dir.
+    if echo "$output" | grep -qE -- '--plugin-dir[ =][^ ]*/clown-plugin-compile-'; then
+        echo "OK: downstream received compiled --plugin-dir"
+    else
+        echo "FAIL: downstream did not receive a clown-plugin-compile-* --plugin-dir path; compilation did not run" >&2
+        exit 1
+    fi
+    if echo "$output" | grep -qE -- "--plugin-dir[ =]$plugin_dir( |$)"; then
+        echo "FAIL: downstream received ORIGINAL --plugin-dir ($plugin_dir); compilation should have substituted it" >&2
+        exit 1
+    fi
     echo "OK: plugin-host-moxy integration test passed"
+
+# Like test-plugin-host-moxy but exercises --disable-clown-protocol. The
+# flag is expected to skip discovery, HTTP server launch, and plugin
+# manifest compilation, so the downstream should see the original
+# --plugin-dir path and no --mcp-config flag.
+[group("test")]
+test-plugin-host-moxy-disabled: build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! moxy_bin=$(command -v moxy 2>/dev/null); then
+        echo "SKIP: moxy not found on PATH — skipping plugin-host-moxy-disabled integration test"
+        exit 0
+    fi
+    moxy_prefix=$(dirname "$(dirname "$moxy_bin")")
+    plugin_dir="$moxy_prefix/share/purse-first/moxy"
+    echo "Using plugin dir: $plugin_dir"
+    output=$(timeout 30 ./result/bin/clown-plugin-host \
+        --disable-clown-protocol \
+        --plugin-dir "$plugin_dir" \
+        -- echo DOWNSTREAM_MARKER 2>&1) || {
+        echo "FAIL: clown-plugin-host exited with $?" >&2
+        echo "$output" >&2
+        exit 1
+    }
+    echo "$output"
+    if echo "$output" | grep -q -- '--mcp-config'; then
+        echo "FAIL: --disable-clown-protocol should NOT emit --mcp-config" >&2
+        exit 1
+    fi
+    echo "OK: no --mcp-config emitted"
+    if echo "$output" | grep -q -- "--plugin-dir $plugin_dir"; then
+        echo "OK: downstream received original --plugin-dir (pass-through)"
+    else
+        echo "FAIL: downstream did not receive --plugin-dir $plugin_dir" >&2
+        exit 1
+    fi
+    if echo "$output" | grep -q 'clown-plugin-compile-'; then
+        echo "FAIL: plugin manifest compilation ran despite --disable-clown-protocol" >&2
+        exit 1
+    fi
+    echo "OK: plugin-host-moxy-disabled integration test passed"
 
 build-nix:
     nix build --show-trace
@@ -129,18 +193,22 @@ build-man:
 render-man PAGE:
     nix shell nixpkgs#mandoc -c mandoc -Tutf8 {{PAGE}}
 
-# Lint all mdoc(7) manpages with mandoc -Tlint. Operates on the built
-# pages so @MDOCDATE@ has already been substituted, meaning we lint
-# what actually ships.
-[group("docs")]
-lint-man: build-man
+# Lint mdoc(7) manpages with mandoc -Tlint. Operates on the built pages
+# so @MDOCDATE@ has already been substituted, meaning we lint what
+# actually ships.
+#
+# Scope: only clown-authored pages (clown*). Upstream pages we repackage
+# (claude-code*, codex*) carry other copyrights and have pre-existing
+# mandoc warnings that we don't own.
+[group("check")]
+check-lint-man: build-man
     #!/usr/bin/env bash
     set -euo pipefail
     out=$(readlink -f result-man)
     pages=(
-        "$out"/share/man/man1/*.1
-        "$out"/share/man/man5/*.5
-        "$out"/share/man/man7/*.7
+        "$out"/share/man/man1/clown*.1
+        "$out"/share/man/man5/clown*.5
+        "$out"/share/man/man7/clown*.7
     )
     nix shell nixpkgs#mandoc -c bash -c '
         failed=0

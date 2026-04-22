@@ -57,6 +57,22 @@ The flake produces a `symlinkJoin` of four components:
    `clown.json` is found, exec's directly into claude (zero overhead).
    See `clown-plugin-host(1)` and `clown-json(5)`.
 
+   **Plugin manifest compilation.** When a plugin has both `clown.json`
+   (HTTP MCP servers) and `.claude-plugin/plugin.json` (claude-native
+   manifest), its MCP servers would otherwise register twice in claude —
+   once under `<plugin>/<server>` via the generated `.mcp.json` and once
+   under `plugin:<plugin>:<server>` via claude's native plugin loader.
+   To avoid this, `clown-plugin-host` **compiles** each affected plugin
+   dir into a temporary staging directory: top-level entries are symlinked
+   back to the source, but `.claude-plugin/plugin.json` is rewritten with
+   the `mcpServers` key removed. Claude is handed the staged dir via
+   `--plugin-dir`, so it still loads hooks/skills/commands/agents but no
+   longer registers the duplicated MCP servers. Staged dirs are cleaned
+   up on shutdown. The `--disable-clown-protocol` flag (and
+   `CLOWN_DISABLE_CLOWN_PROTOCOL=1` env var) bypasses the entire
+   clown-plugin-host pipeline — plugin dirs are passed to claude
+   unmodified, and claude's native MCP path is the only one active.
+
 4. **`clown-completions`** (`completions/clown.fish`): Provider-aware fish
    completions. Detects `--provider` on the command line (or `CLOWN_PROVIDER`
    env var) and offers Claude or Codex flags/subcommands accordingly.

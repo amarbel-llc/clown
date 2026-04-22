@@ -40,6 +40,10 @@ type Host struct {
 	Logger     *slog.Logger
 	Verbose    bool
 	Servers    []*ManagedServer
+
+	// compiledDirs tracks staging directories produced by
+	// CompileForClaude; Shutdown removes them.
+	compiledDirs []string
 }
 
 func (h *Host) Discover() ([]DiscoveredServer, error) {
@@ -148,4 +152,39 @@ func (h *Host) Shutdown() {
 		}(srv)
 	}
 	wg.Wait()
+
+	for _, dir := range h.compiledDirs {
+		if err := os.RemoveAll(dir); err != nil && h.Logger != nil {
+			h.Logger.Warn("failed to remove compiled plugin dir",
+				"dir", dir, "err", err)
+		}
+	}
+	h.compiledDirs = nil
+}
+
+// CompileForClaude produces a map from each plugin-dir that contributed a
+// DiscoveredServer to a staging directory containing a compiled
+// plugin.json (mcpServers stripped). Call this before launching claude so
+// the --plugin-dir flags handed downstream point at compiled copies.
+//
+// Dirs that appear in multiple DiscoveredServer entries are compiled once.
+// Compiled dirs are tracked on the Host and removed by Shutdown.
+func (h *Host) CompileForClaude(discovered []DiscoveredServer) (map[string]string, error) {
+	result := make(map[string]string)
+	for _, d := range discovered {
+		if _, done := result[d.PluginDir]; done {
+			continue
+		}
+		staged, err := CompilePluginDir(d.PluginDir)
+		if err != nil {
+			return nil, fmt.Errorf("compiling %s: %w", d.PluginDir, err)
+		}
+		h.compiledDirs = append(h.compiledDirs, staged)
+		result[d.PluginDir] = staged
+		if h.Logger != nil {
+			h.Logger.Info("compiled plugin manifest",
+				"source", d.PluginDir, "staged", staged)
+		}
+	}
+	return result, nil
 }

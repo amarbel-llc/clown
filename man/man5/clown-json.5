@@ -88,6 +88,15 @@ The Claude Code plugin manifest.
 Its
 .Fa name
 field is used as the plugin name prefix in MCP server naming.
+When this plugin dir is discovered by
+.Xr clown-plugin-host 1 ,
+a compiled copy of this file (with the
+.Li mcpServers
+key stripped) is written to a staging directory and handed to Claude
+Code instead of the original \(em see
+.Xr clown-plugin-host 1
+for the compilation details.
+The source file is never modified.
 .El
 .Sh EXAMPLES
 Minimal manifest:

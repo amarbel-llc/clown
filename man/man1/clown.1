@@ -55,6 +55,23 @@ Forwarded to
 When any discovered HTTP MCP plugin server fails to start,
 .Xr clown-plugin-host 1
 will proceed with only the healthy subset instead of aborting.
+.It Fl -disable-clown-protocol
+Forwarded to
+.Xr clown-plugin-host 1 .
+Bypasses the entire clown-plugin-host pipeline: no
+.Pa clown.json
+discovery, no HTTP MCP server launch, no plugin manifest compilation,
+and no
+.Fl -mcp-config
+generation.
+Plugin directories are passed to Claude Code unmodified so claude's
+native plugin loader (and its native MCP registration) is the only path
+active.
+Intended as an escape hatch for debugging or when native claude behavior
+is preferred.
+Also settable via the
+.Ev CLOWN_DISABLE_CLOWN_PROTOCOL
+environment variable.
 .It Fl v , Fl -verbose
 Forwarded to
 .Xr clown-plugin-host 1 .
@@ -223,6 +240,22 @@ Valid values:
 .Cm claude
 (default),
 .Cm codex .
+.It Ev CLOWN_SKIP_FAILED_PLUGINS
+When set to
+.Li 1 ,
+forwards
+.Fl -skip-failed
+to
+.Xr clown-plugin-host 1
+regardless of whether the wrapper flag was passed.
+.It Ev CLOWN_DISABLE_CLOWN_PROTOCOL
+When set to
+.Li 1 ,
+forwards
+.Fl -disable-clown-protocol
+to
+.Xr clown-plugin-host 1
+regardless of whether the wrapper flag was passed.
 .El
 .Sh FILES
 .Bl -tag -width Ds
