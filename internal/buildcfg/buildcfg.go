@@ -3,6 +3,7 @@ package buildcfg
 var (
 	ClaudeCliPath       string
 	CodexCliPath        string
+	CircusCliPath       string
 	AgentsFile          string
 	DisallowedToolsFile string
 	SystemPromptAppendD string

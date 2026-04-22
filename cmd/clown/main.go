@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -71,6 +72,8 @@ func run(rawArgs []string) int {
 		return runClaude(cliPath, flags, prompts, pluginDirs)
 	case "codex":
 		return runCodex(cliPath, flags, prompts)
+	case "circus":
+		return runCircus(cliPath, flags, prompts, pluginDirs)
 	default:
 		fmt.Fprintf(os.Stderr, "clown: unknown provider %q\n", flags.provider)
 		return 1
@@ -263,6 +266,102 @@ func runCodex(cliPath string, flags parsedFlags, prompts promptwalk.PromptResult
 	return 0 // unreachable
 }
 
+func runCircus(circusPath string, flags parsedFlags, prompts promptwalk.PromptResult, pluginDirs []string) int {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, circusPath, "start")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Stderr = os.Stderr
+
+	stdinPipe, err := cmd.StdinPipe()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clown: circus stdin pipe: %v\n", err)
+		return 1
+	}
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clown: circus stdout pipe: %v\n", err)
+		return 1
+	}
+
+	if err := cmd.Start(); err != nil {
+		fmt.Fprintf(os.Stderr, "clown: starting circus: %v\n", err)
+		return 1
+	}
+	defer func() {
+		stdinPipe.Close()
+		cmd.Wait()
+	}()
+
+	hs, err := readCircusHandshake(stdoutPipe)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clown: circus handshake: %v\n", err)
+		return 1
+	}
+
+	baseURL := "http://" + hs.Address
+
+	claudePath := buildcfg.ClaudeCliPath
+	args, cleanup, err := provider.BuildClaudeArgs(provider.ClaudeArgs{
+		CLIPath:             claudePath,
+		AgentsFile:          buildcfg.AgentsFile,
+		DisallowedToolsFile: buildcfg.DisallowedToolsFile,
+		SystemPromptFile:    prompts.SystemPromptFile,
+		AppendFragments:     prompts.AppendFragments,
+	}, flags.forwarded)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clown: building claude args: %v\n", err)
+		return 1
+	}
+	defer cleanup()
+
+	fullArgs := prependPluginDirs(args, pluginDirs, nil)
+
+	binary, err := exec.LookPath(claudePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
+		return 1
+	}
+
+	claudeCmd := exec.Command(binary, fullArgs...)
+	claudeCmd.Stdin = os.Stdin
+	claudeCmd.Stdout = os.Stdout
+	claudeCmd.Stderr = os.Stderr
+	claudeCmd.Env = append(os.Environ(), "ANTHROPIC_BASE_URL="+baseURL)
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	go func() {
+		sig := <-sigCh
+		if claudeCmd.Process != nil {
+			claudeCmd.Process.Signal(sig)
+		}
+	}()
+
+	if err := claudeCmd.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			resetTerminal()
+			return exitErr.ExitCode()
+		}
+		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
+		return 1
+	}
+	resetTerminal()
+	return 0
+}
+
+func readCircusHandshake(r io.Reader) (pluginhost.Handshake, error) {
+	scanner := bufio.NewScanner(r)
+	if !scanner.Scan() {
+		if err := scanner.Err(); err != nil {
+			return pluginhost.Handshake{}, err
+		}
+		return pluginhost.Handshake{}, fmt.Errorf("circus closed stdout before handshake")
+	}
+	return pluginhost.ParseHandshake(scanner.Text())
+}
+
 // prependPluginDirs inserts --plugin-dir flags at the start of args,
 // substituting compiled paths from dirMap where available.
 func prependPluginDirs(args []string, pluginDirs []string, dirMap map[string]string) []string {
@@ -283,6 +382,8 @@ func resolveProvider(name string) (string, error) {
 		return buildcfg.ClaudeCliPath, nil
 	case "codex":
 		return buildcfg.CodexCliPath, nil
+	case "circus":
+		return buildcfg.CircusCliPath, nil
 	default:
 		return "", fmt.Errorf("unknown provider %q", name)
 	}
