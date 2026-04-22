@@ -33,12 +33,16 @@ files are found in any plugin directory,
 exec's directly into the downstream command with zero overhead.
 .Pp
 .Nm
-is not intended to be invoked directly by users.
-The
+is a standalone binary retained for backward compatibility.
+As of clown 0.3.0, the
 .Xr clown 1
-shell wrapper inserts
+binary directly manages the plugin server lifecycle using the same
+.Nm internal/pluginhost
+library, eliminating the exec hop to
+.Nm .
+Direct invocation of
 .Nm
-into the command chain automatically when plugin directories are present.
+remains functional for external tooling that depends on it.
 .Sh OPTIONS
 .Bl -tag -width Ds
 .It Fl -plugin-dir Ar dir

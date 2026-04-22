@@ -19,10 +19,10 @@
 .Op Ar args
 .Sh DESCRIPTION
 .Nm
-wraps
+is a Go binary that wraps
 .Xr claude-code 1
-with system prompt injection, managed security settings, and
-parameterized plugin loading.
+with system prompt injection, managed security settings, plugin
+lifecycle management, and parameterized plugin loading.
 All unrecognized arguments are forwarded to the underlying provider CLI.
 .Pp
 By default,
@@ -31,7 +31,18 @@ disables
 .Cm Bash
 tool use and auto-mode, injects hierarchical system prompts from
 .Pa .circus/
-directories, and loads Claude Code plugins specified at build time.
+directories, launches HTTP MCP servers declared in plugin
+.Xr clown-json 5
+manifests, and loads Claude Code plugins specified at build time.
+.Pp
+.Nm
+directly manages the plugin server lifecycle that was previously
+delegated to a separate
+.Xr clown-plugin-host 1
+process.
+The standalone
+.Xr clown-plugin-host 1
+binary remains available for backward compatibility.
 .Sh OPTIONS
 .Bl -tag -width Ds
 .It Cm version
@@ -50,20 +61,17 @@ environment variable.
 Bypass all clown wrapping (prompt injection, plugin loading, tool
 restrictions) and exec the provider CLI directly.
 .It Fl -skip-failed
-Forwarded to
-.Xr clown-plugin-host 1 .
 When any discovered HTTP MCP plugin server fails to start,
-.Xr clown-plugin-host 1
-will proceed with only the healthy subset instead of aborting.
+.Nm
+proceeds with only the healthy subset instead of aborting.
+Also settable via the
+.Ev CLOWN_SKIP_FAILED_PLUGINS
+environment variable.
 .It Fl -disable-clown-protocol
-Forwarded to
-.Xr clown-plugin-host 1 .
-Bypasses the entire clown-plugin-host pipeline: no
+Bypass the plugin server pipeline entirely: no
 .Pa clown.json
-discovery, no HTTP MCP server launch, no plugin manifest compilation,
-and no
-.Fl -mcp-config
-generation.
+discovery, no HTTP MCP server launch, and no plugin manifest
+compilation.
 Plugin directories are passed to Claude Code unmodified so claude's
 native plugin loader (and its native MCP registration) is the only path
 active.
@@ -73,8 +81,6 @@ Also settable via the
 .Ev CLOWN_DISABLE_CLOWN_PROTOCOL
 environment variable.
 .It Fl v , Fl -verbose
-Forwarded to
-.Xr clown-plugin-host 1 .
 Emit informational progress on stderr in addition to the always-on
 log file.
 Without this flag, only errors, failure summaries, and the interactive
@@ -133,10 +139,12 @@ Plugins may also declare HTTP-based MCP servers in a
 manifest (see
 .Xr clown-json 5 ) .
 These servers are automatically launched and managed by
-.Xr clown-plugin-host 1 ,
-which
 .Nm
-invokes transparently.
+directly: it scans plugin directories for
+.Pa clown.json ,
+launches declared servers, reads their handshake, polls health endpoints,
+compiles replacement plugin manifests with URL-based MCP entries, and
+passes the compiled directories to the provider CLI.
 HTTP transport enables features unavailable over stdio, including
 .Li notifications/tools/list_changed
 and server-initiated requests.
@@ -243,19 +251,20 @@ Valid values:
 .It Ev CLOWN_SKIP_FAILED_PLUGINS
 When set to
 .Li 1 ,
-forwards
-.Fl -skip-failed
-to
-.Xr clown-plugin-host 1
-regardless of whether the wrapper flag was passed.
+behaves the same as passing
+.Fl -skip-failed .
 .It Ev CLOWN_DISABLE_CLOWN_PROTOCOL
 When set to
 .Li 1 ,
-forwards
-.Fl -disable-clown-protocol
-to
-.Xr clown-plugin-host 1
-regardless of whether the wrapper flag was passed.
+behaves the same as passing
+.Fl -disable-clown-protocol .
+.It Ev CLOWN_PLUGIN_META
+Path to the plugin metadata directory containing
+.Pa plugin-dirs
+and
+.Pa version-info
+files.
+Set automatically by the Nix wrapper; not intended for manual use.
 .El
 .Sh FILES
 .Bl -tag -width Ds

@@ -98,18 +98,20 @@
 
         buildGoApplication = gomod2nix.legacyPackages.${system}.buildGoApplication;
 
+        goSrc = lib.fileset.toSource {
+          root = ./.;
+          fileset = lib.fileset.unions [
+            ./go.mod
+            ./gomod2nix.toml
+            ./cmd
+            ./internal
+          ];
+        };
+
         clown-plugin-host = buildGoApplication {
           pname = "clown-plugin-host";
           version = clownVersion;
-          src = lib.fileset.toSource {
-            root = ./.;
-            fileset = lib.fileset.unions [
-              ./go.mod
-              ./gomod2nix.toml
-              ./cmd
-              ./internal
-            ];
-          };
+          src = goSrc;
           subPackages = [ "cmd/clown-plugin-host" ];
           modules = ./gomod2nix.toml;
           ldflags = [
@@ -119,62 +121,26 @@
           ];
         };
 
-        sharedPromptLogic = ''
-          # Walk from PWD up to HOME, collecting .circus/ directories.
-          walkup_dirs=()
-          d=$(pwd)
-          while true; do
-            walkup_dirs+=("$d")
-            if [[ "$d" == "$HOME" ]] || [[ "$d" == "/" ]]; then
-              break
-            fi
-            d=$(dirname "$d")
-          done
-
-          # Reverse to shallowest-first order.
-          reversed=()
-          for (( i=''${#walkup_dirs[@]}-1; i>=0; i-- )); do
-            reversed+=("''${walkup_dirs[$i]}")
-          done
-
-          # Builtin system prompt append (always included, before user fragments).
-          append_fragments=""
-          for f in $(find ${./system-prompt-append.d} -maxdepth 1 -name '*.md' -type f | sort); do
-            content=$(<"$f")
-            if [[ -n "$content" ]]; then
-              append_fragments+="$content"
-              append_fragments+=$'\n\n'
-            fi
-          done
-
-          # Collect .circus/system-prompt.d fragments (shallowest first, sorted within each dir).
-          for dir in "''${reversed[@]}"; do
-            prompt_d="$dir/.circus/system-prompt.d"
-            if [[ -d "$prompt_d" ]]; then
-              for f in $(find "$prompt_d" -maxdepth 1 -name '*.md' -type f | sort); do
-                content=$(<"$f")
-                if [[ -n "$content" ]]; then
-                  append_fragments+="$content"
-                  append_fragments+=$'\n\n'
-                fi
-              done
-            fi
-          done
-
-          # Find nearest (deepest) .circus/system-prompt file for replace mode.
-          system_prompt_file=""
-          d=$(pwd)
-          while true; do
-            if [[ -f "$d/.circus/system-prompt" ]]; then
-              system_prompt_file="$d/.circus/system-prompt"
-              break
-            fi
-            if [[ "$d" == "$HOME" ]] || [[ "$d" == "/" ]]; then
-              break
-            fi
-            d=$(dirname "$d")
-          done
-        '';
+        clown-go = buildGoApplication {
+          pname = "clown";
+          version = clownVersion;
+          src = goSrc;
+          subPackages = [ "cmd/clown" ];
+          modules = ./gomod2nix.toml;
+          ldflags = [
+            "-s" "-w"
+            "-X github.com/amarbel-llc/clown/internal/buildcfg.ClaudeCliPath=${claudeCliPath}"
+            "-X github.com/amarbel-llc/clown/internal/buildcfg.CodexCliPath=${codexCliPath}"
+            "-X github.com/amarbel-llc/clown/internal/buildcfg.AgentsFile=${agents-file}"
+            "-X github.com/amarbel-llc/clown/internal/buildcfg.SystemPromptAppendD=${./system-prompt-append.d}"
+            "-X github.com/amarbel-llc/clown/internal/buildcfg.Version=${clownVersion}"
+            "-X github.com/amarbel-llc/clown/internal/buildcfg.Commit=${clownRev}"
+            "-X github.com/amarbel-llc/clown/internal/buildcfg.ClaudeCodeVersion=${claudeCodeVersion}"
+            "-X github.com/amarbel-llc/clown/internal/buildcfg.ClaudeCodeRev=${claudeCodeRev}"
+            "-X github.com/amarbel-llc/clown/internal/buildcfg.CodexVersion=${codexVersion}"
+            "-X github.com/amarbel-llc/clown/internal/buildcfg.CodexRev=${codexRev}"
+          ];
+        };
 
         # Managed settings burned into the patched claude-code derivation.
         # Lives at the highest precedence tier, so it cannot be overridden by
@@ -259,169 +225,12 @@
         claudeCliPath = "${patchedClaudeCode}/bin/claude";
         codexCliPath = "${pkgs-codex.codex}/bin/codex";
 
+        # Thin wrapper: sets CLOWN_PLUGIN_META (varies per mkCircus) then
+        # execs the Go binary. All flag parsing, provider routing, and
+        # plugin-host orchestration live in cmd/clown.
         mkClownBin = pluginMeta: pkgs.writeShellScriptBin "clown" ''
-          set -euo pipefail
-
-          # --- Parse and consume clown flags ---
-          provider="''${CLOWN_PROVIDER:-claude}"
-          clean=false
-          skip_failed_plugins=false
-          disable_clown_protocol=false
-          verbose_plugins=false
-          forwarded_args=()
-          while [[ $# -gt 0 ]]; do
-            case "$1" in
-              version)
-                {
-                  printf '%-20s %-12s %s\n' COMPONENT VERSION REV
-                  printf '%-20s %-12s %s\n' claude-code '${claudeCodeVersion}' '${claudeCodeRev}'
-                  printf '%-20s %-12s %s\n' clown '${clownVersion}' '${clownRev}'
-                  printf '%-20s %-12s %s\n' codex '${codexVersion}' '${codexRev}'
-                  if [[ -f "${pluginMeta}/version-info" ]]; then
-                    cat "${pluginMeta}/version-info"
-                  fi
-                } | (IFS= read -r header; printf '%s\n' "$header"; sort)
-                exit 0
-                ;;
-              --provider)
-                provider="$2"
-                shift 2
-                ;;
-              --provider=*)
-                provider="''${1#--provider=}"
-                shift
-                ;;
-              --clean)
-                clean=true
-                shift
-                ;;
-              --skip-failed)
-                skip_failed_plugins=true
-                shift
-                ;;
-              --disable-clown-protocol)
-                disable_clown_protocol=true
-                shift
-                ;;
-              --verbose|-v)
-                verbose_plugins=true
-                shift
-                ;;
-              *)
-                forwarded_args+=("$1")
-                shift
-                ;;
-            esac
-          done
-          set -- "''${forwarded_args[@]}"
-
-          # --- Resolve provider CLI ---
-          case "$provider" in
-            claude)
-              cli="${claudeCliPath}"
-              ;;
-            codex)
-              cli="${codexCliPath}"
-              ;;
-            *)
-              echo "clown: unknown provider '$provider'" >&2
-              exit 1
-              ;;
-          esac
-
-          if [[ "$clean" == true ]]; then
-            exec "$cli" "$@"
-          fi
-
-          ${sharedPromptLogic}
-
-          # --- Provider-specific flag injection ---
-          extra_args=()
-
-          case "$provider" in
-            claude)
-              extra_args+=(--disallowed-tools 'Bash(*)' --disallowed-tools 'Agent(Explore)')
-              extra_args+=(--agents "$(<"${agents-file}")")
-              # clown-plugin-host owns --plugin-dir routing to claude: it
-              # emits compiled plugin dirs (plugin.json rewritten to drop
-              # mcpServers) so claude's native plugin loader doesn't register
-              # MCP servers that clown-plugin-host is already serving over
-              # HTTP. Do NOT also add --plugin-dir to extra_args — that would
-              # re-introduce the double registration.
-              plugin_host_args=()
-              if [[ -f "${pluginMeta}/plugin-dirs" ]]; then
-                while IFS= read -r dir; do
-                  plugin_host_args+=(--plugin-dir "$dir")
-                done < "${pluginMeta}/plugin-dirs"
-              fi
-              if [[ "$skip_failed_plugins" == true ]]; then
-                plugin_host_args+=(--skip-failed)
-              fi
-              if [[ "$disable_clown_protocol" == true ]]; then
-                plugin_host_args+=(--disable-clown-protocol)
-              fi
-              if [[ "$verbose_plugins" == true ]]; then
-                plugin_host_args+=(--verbose)
-              fi
-
-              if [[ -n "$system_prompt_file" ]]; then
-                extra_args+=(--system-prompt-file "$system_prompt_file")
-              fi
-
-              if [[ -n "$append_fragments" ]]; then
-                tmpfile=$(mktemp /tmp/clown-prompt.XXXXXX)
-                trap 'rm -f "$tmpfile"' EXIT
-                printf '%s' "$append_fragments" > "$tmpfile"
-                extra_args+=(--append-system-prompt-file "$tmpfile")
-              fi
-              ;;
-
-            codex)
-              extra_args+=(--sandbox workspace-write)
-
-              if [[ -n "$system_prompt_file" || -n "$append_fragments" ]]; then
-                tmpfile=$(mktemp /tmp/clown-prompt.XXXXXX)
-                trap 'rm -f "$tmpfile"' EXIT
-
-                if [[ -n "$system_prompt_file" ]]; then
-                  cat "$system_prompt_file" > "$tmpfile"
-                  if [[ -n "$append_fragments" ]]; then
-                    printf '\n\n%s' "$append_fragments" >> "$tmpfile"
-                  fi
-                else
-                  printf '%s' "$append_fragments" > "$tmpfile"
-                fi
-
-                extra_args+=(--config "experimental_instructions_file=$tmpfile")
-              fi
-              ;;
-          esac
-
-          # --- Future: moxin auto-loading ---
-          # When implemented, this section will:
-          # 1. Run `moxy list-moxins` to discover available moxins
-          # 2. Generate --mcp-config entries for each discoverable moxin
-          # 3. Append to extra_args
-          # Blocked on: defining which moxins should auto-load vs remain manual.
-
-          # Route through clown-plugin-host for claude provider. It scans
-          # --plugin-dir paths for clown.json, launches HTTP MCP servers,
-          # compiles a replacement plugin.json per plugin (injecting
-          # url-based mcpServers entries for the running servers) into a
-          # staging dir, and execs claude with --plugin-dir pointing at
-          # the staged dirs. --disable-clown-protocol bypasses all of
-          # this and passes --plugin-dir through unchanged.
-          # For codex, invoke directly (no plugin-host support).
-          if [[ "$provider" == "claude" ]]; then
-            "${clown-plugin-host}/bin/clown-plugin-host" \
-              "''${plugin_host_args[@]}" \
-              -- "$cli" "''${extra_args[@]}" "$@"
-          else
-            "$cli" "''${extra_args[@]}" "$@"
-          fi
-          status=$?
-          printf '\e[?2004l\e[?1l\e[?25h\e[J'
-          exit $status
+          export CLOWN_PLUGIN_META="${pluginMeta}"
+          exec "${clown-go}/bin/clown" "$@"
         '';
 
         clown-sessions = pkgs.writeScriptBin "clown-sessions" ''
