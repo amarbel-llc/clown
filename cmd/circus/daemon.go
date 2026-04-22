@@ -46,6 +46,14 @@ func portfilePath() (string, error) {
 	return filepath.Join(d, "llama-server.port"), nil
 }
 
+func logfilePath() (string, error) {
+	d, err := stateDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(d, "llama-server.log"), nil
+}
+
 // attachOrStart returns the port of a running llama-server, starting one
 // if none is alive. spawned is true when this call launched the process.
 func attachOrStart() (port int, spawned bool, err error) {
@@ -104,10 +112,23 @@ func startDaemon(pidPath, portPath string) (int, error) {
 		args = append(args, "--model", model)
 	}
 
+	logPath, err := logfilePath()
+	if err != nil {
+		return 0, err
+	}
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+		return 0, err
+	}
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return 0, fmt.Errorf("opening log file: %w", err)
+	}
+	defer logFile.Close()
+
 	cmd := exec.Command(binary, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
 
 	if err := cmd.Start(); err != nil {
 		return 0, fmt.Errorf("starting llama-server: %w", err)
@@ -214,7 +235,8 @@ func statusDaemon() error {
 		}
 	}
 
-	fmt.Printf("running  pid=%d  url=http://127.0.0.1:%d\n", pid, port)
+	logPath, _ := logfilePath()
+	fmt.Printf("running  pid=%d  url=http://127.0.0.1:%d  log=%s\n", pid, port, logPath)
 	return nil
 }
 
