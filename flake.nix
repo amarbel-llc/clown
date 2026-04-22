@@ -41,6 +41,16 @@
       let
         lib = pkgs.lib;
 
+        gemma3-270m-model = pkgs.fetchurl {
+          url = "https://huggingface.co/ggml-org/gemma-3-270m-it-GGUF/resolve/main/gemma-3-270m-it-Q8_0.gguf";
+          hash = "sha256-DvV9LIOEWKGVJmQmDcujjlvdo3SU869zLwbkrdJAaOM=";
+        };
+
+        qwen3-06b-model = pkgs.fetchurl {
+          url = "https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf";
+          hash = "sha256-lGXmOiKt1TVNm7S5npARcEPHEkAHZkkHJZvRbQQ7sDE=";
+        };
+
         # Subagent definitions use TOML frontmatter (+++ delimiters) so Nix
         # can parse config natively via builtins.fromTOML. The markdown body
         # after the closing +++ becomes the agent's system prompt.
@@ -164,7 +174,10 @@
           src = goSrc;
           subPackages = [ "cmd/circus" ];
           modules = ./gomod2nix.toml;
-          ldflags = [ "-s" "-w" ];
+          ldflags = [
+            "-s" "-w"
+            "-X github.com/amarbel-llc/clown/internal/buildcfg.DefaultModelPath=${gemma3-270m-model}"
+          ];
         };
 
         # Managed settings burned into the patched claude-code derivation.

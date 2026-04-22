@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/amarbel-llc/clown/internal/buildcfg"
 	"github.com/amarbel-llc/clown/internal/daemon"
 )
 
@@ -92,7 +93,11 @@ func startDaemon(pidPath, portPath string) (int, error) {
 		"--port", strconv.Itoa(port),
 		"--host", "127.0.0.1",
 	}
-	if model := os.Getenv("CIRCUS_MODEL"); model != "" {
+	model := os.Getenv("CIRCUS_MODEL")
+	if model == "" {
+		model = buildcfg.DefaultModelPath
+	}
+	if model != "" {
 		args = append(args, "--model", model)
 	}
 

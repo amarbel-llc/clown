@@ -13,4 +13,5 @@ var (
 	ClaudeCodeRev       string
 	CodexVersion        string
 	CodexRev            string
+	DefaultModelPath    string
 )
