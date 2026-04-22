@@ -1,6 +1,6 @@
 .\" Copyright (c) 2026 amarbel, LLC
 .\" SPDX-License-Identifier: MIT
-.Dd April 21, 2026
+.Dd April 22, 2026
 .Dt CLOWN-PLUGIN-PROTOCOL 7
 .Os
 .Sh NAME
@@ -22,8 +22,8 @@ enable features unavailable over stdio:
 Server-initiated requests via persistent SSE connections
 .El
 .Pp
-The protocol covers four phases: discovery, handshake, health checking, and
-shutdown.
+The protocol covers six phases: discovery, handshake, health checking,
+failure handling, runtime, and shutdown.
 It is modeled on the
 .Lk https://github.com/hashicorp/go-plugin "hashicorp/go-plugin"
 handshake protocol.
@@ -60,7 +60,6 @@ Each HTTP MCP server MUST print a single pipe-delimited line to stdout
 before serving requests:
 .Pp
 .Dl 1|1|tcp|127.0.0.1:54321|streamable-http
-.Pp
 .Ss Fields
 .Bl -column "Pos" "Name" "Values" -offset indent
 .It Sy Pos Ta Sy Name Ta Sy Values
@@ -115,9 +114,40 @@ Default health check parameters (overridable in
 .El
 .Pp
 If the timeout elapses before a 200 response, the server process is
-killed and an error is reported.
+killed and recorded as a failure.
 All servers are launched and health-checked in parallel.
-If any server fails, all successfully started servers are shut down.
+The host collects per-server outcomes into a start report and then
+decides whether to proceed with the healthy subset or abort; see
+.Sx FAILURE HANDLING .
+.Sh FAILURE HANDLING
+A server is considered failed if any of the following occur: the child
+process exits or cannot be exec'd, its first stdout line is not a valid
+handshake, its handshake times out, or its health check does not return
+HTTP 200 within the configured timeout.
+.Pp
+The host emits one failure record per affected server (to stderr and to
+the log described in
+.Sx LOGGING )
+and then chooses one of three branches:
+.Bl -tag -width Ds
+.It Li --skip-failed No or Ev CLOWN_SKIP_FAILED_PLUGINS Ns = Ns Li 1
+Continue with only the servers that came up healthy.
+If none came up, exec the downstream command directly.
+.It Interactive Pq stdin and stderr are terminals
+Render a confirmation prompt listing every failure.
+Continuing is equivalent to
+.Li --skip-failed ;
+declining aborts.
+.It Non-interactive, no opt-in
+Shut down any healthy servers and exit non-zero.
+This is the default and preserves pre-2026-04 behavior.
+.El
+.Pp
+When the host proceeds with a partial set, only the healthy servers
+appear in the generated MCP configuration
+.Pq see Sx MCP CONFIGURATION .
+Failed servers are absent from the configuration but retain their log
+records for later inspection.
 .Sh MCP CONFIGURATION
 Once all servers are healthy, the host generates a temporary MCP
 configuration file:
@@ -182,32 +212,48 @@ Isolation between servers \(em one server's crash does not affect others.
 .Pp
 The server's stderr is forwarded to the host's stderr with a
 .Li [plugin-name/server-name]
-prefix.
-.Sh SECURITY CONSIDERATIONS
-.Bl -bullet -offset indent
-.It
-Servers MUST bind to
-.Li 127.0.0.1
-only.
-The protocol does not support remote addresses.
-.It
-Servers inherit the same trust level as any other code in the plugin \(em
-they can read files, make network requests, and serve MCP tools that
-influence model behavior.
-.It
-Clown's managed-settings guardrails (Bash disabled, auto-mode disabled)
-apply regardless of which HTTP MCP servers are running.
-Servers cannot override managed settings.
-.El
+prefix, and each line is additionally captured as a structured record
+in the host's log file (see
+.Sx LOGGING ) .
+.Sh LOGGING
+The host writes a per-invocation log file to
+.Pa $XDG_LOG_HOME/clown/ ,
+defaulting to
+.Pa $HOME/.local/log/clown/
+when
+.Ev XDG_LOG_HOME
+is unset or empty (per the XDG Base Directory Specification).
+Filenames have the form
+.Pa clown-plugin-host- Ns Ar UTC-timestamp Ns Pa - Ns Ar pid Ns Pa .log ,
+so each invocation is isolated.
+.Pp
+Records use
+.Xr slog 3
+text format
+.Pq Li key=value
+and cover: startup arguments and policy; server start, handshake,
+healthcheck, and shutdown transitions; every line of managed-server
+stderr tagged with the server name; signal forwarding to the downstream;
+and the downstream's exit status.
+.Pp
+The host prints the resolved log path to stderr on startup.
+The XDG spec permits unbounded growth and guarantees log deletion does
+not affect correctness; the host does not rotate or prune files.
+See
+.Xr clown-plugin-host 1
+for the authoritative field list.
 .Sh ARCHITECTURE
 .Bd -literal -offset indent
 clown (shell wrapper)
-  \(da exec clown-plugin-host --plugin-dir A -- claude [args]
+  \(da exec clown-plugin-host --plugin-dir A [--skip-failed] -- claude [args]
+       \(br\(em open $XDG_LOG_HOME/clown/clown-plugin-host-*.log
        \(br\(em [no clown.json] \(-> exec claude directly
        \(da\(em [clown.json found]
-            \(br\(em launch HTTP server children
+            \(br\(em launch HTTP server children (parallel)
             \(br\(em read handshake + poll healthz
-            \(br\(em generate temp .mcp.json
+            \(br\(em collect per-server start report
+            \(br\(em [any failures] \(-> skip / prompt / abort
+            \(br\(em generate temp .mcp.json for healthy servers
             \(br\(em run claude as child with --mcp-config
             \(br\(em forward signals (SIGTERM, SIGINT)
             \(br\(em wait for claude to exit
@@ -228,10 +274,10 @@ A plugin MAY ship both
 .Pa .mcp.json
 (for stdio servers) simultaneously.
 .Sh SEE ALSO
-.Xr clown-plugin-host 1 ,
-.Xr clown-json 5 ,
+.Xr claude-code 1 ,
 .Xr clown 1 ,
-.Xr claude-code 1
+.Xr clown-plugin-host 1 ,
+.Xr clown-json 5
 .Sh STANDARDS
 This protocol is specified in full in
 .Pa docs/rfcs/0002-clown-plugin-protocol.md
@@ -242,3 +288,19 @@ The handshake format is adapted from
 .Sh AUTHORS
 .An amarbel, LLC
 .Lk https://github.com/amarbel-llc/clown
+.Sh SECURITY CONSIDERATIONS
+.Bl -bullet -offset indent
+.It
+Servers MUST bind to
+.Li 127.0.0.1
+only.
+The protocol does not support remote addresses.
+.It
+Servers inherit the same trust level as any other code in the plugin \(em
+they can read files, make network requests, and serve MCP tools that
+influence model behavior.
+.It
+Clown's managed-settings guardrails (Bash disabled, auto-mode disabled)
+apply regardless of which HTTP MCP servers are running.
+Servers cannot override managed settings.
+.El

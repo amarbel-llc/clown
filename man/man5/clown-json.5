@@ -1,6 +1,6 @@
 .\" Copyright (c) 2026 amarbel, LLC
 .\" SPDX-License-Identifier: MIT
-.Dd April 21, 2026
+.Dd April 22, 2026
 .Dt CLOWN-JSON 5
 .Os
 .Sh NAME
@@ -77,6 +77,18 @@ Maximum time to wait for the server to become healthy.
 Default:
 .Li 30s .
 .El
+.Sh FILES
+.Bl -tag -width Ds
+.It Pa <plugin-dir>/clown.json
+The manifest file.
+Must be a sibling to
+.Pa .claude-plugin/ .
+.It Pa <plugin-dir>/.claude-plugin/plugin.json
+The Claude Code plugin manifest.
+Its
+.Fa name
+field is used as the plugin name prefix in MCP server naming.
+.El
 .Sh EXAMPLES
 Minimal manifest:
 .Bd -literal -offset indent
@@ -131,23 +143,11 @@ ready.
 Shut down gracefully on
 .Dv SIGTERM .
 .El
-.Sh FILES
-.Bl -tag -width Ds
-.It Pa <plugin-dir>/clown.json
-The manifest file.
-Must be a sibling to
-.Pa .claude-plugin/ .
-.It Pa <plugin-dir>/.claude-plugin/plugin.json
-The Claude Code plugin manifest.
-Its
-.Fa name
-field is used as the plugin name prefix in MCP server naming.
-.El
 .Sh SEE ALSO
-.Xr clown-plugin-host 1 ,
-.Xr clown-plugin-protocol 7 ,
 .Xr clown 1 ,
-.Xr claude-code-settings 5
+.Xr clown-plugin-host 1 ,
+.Xr claude-code-settings 5 ,
+.Xr clown-plugin-protocol 7
 .Sh AUTHORS
 .An amarbel, LLC
 .Lk https://github.com/amarbel-llc/clown

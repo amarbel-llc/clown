@@ -1,6 +1,6 @@
 .\" Copyright (c) 2026 amarbel, LLC
 .\" SPDX-License-Identifier: MIT
-.Dd April 21, 2026
+.Dd April 22, 2026
 .Dt CLOWN-PLUGIN-HOST 1
 .Os
 .Sh NAME
@@ -10,6 +10,7 @@
 .Nm
 .Op Fl -plugin-dir Ar dir
 .Ar ...
+.Op Fl -skip-failed
 .Cm --
 .Ar command
 .Op Ar args
@@ -45,6 +46,20 @@ to the list of plugin directories to scan for
 .Pa clown.json
 manifests.
 May be specified multiple times.
+.It Fl -skip-failed
+Continue with only the plugin servers that started healthy when one or
+more servers fail to launch, hand shake, or become healthy within their
+timeout.
+Without this flag,
+.Nm
+fails closed on any server failure when run non-interactively.
+On an interactive terminal, the same effect can be selected at runtime
+via the confirmation prompt described in
+.Sx FAILURE HANDLING .
+Also settable via the
+.Ev CLOWN_SKIP_FAILED_PLUGINS
+environment variable (see
+.Sx ENVIRONMENT ) .
 .It Cm --
 Separates
 .Nm
@@ -126,18 +141,123 @@ For
 .Li sse
 servers, the URL path is
 .Pa /sse .
+.Sh FAILURE HANDLING
+Plugin servers that fail to start, fail the handshake, or fail the
+healthcheck are reported individually: each failure is written to stderr
+and to the log file (see
+.Sx LOGGING ) .
+.Nm
+then decides how to proceed based on context:
+.Bl -tag -width Ds
+.It Fl -skip-failed No or Ev CLOWN_SKIP_FAILED_PLUGINS Ns = Ns Li 1
+.Nm
+continues with only the healthy servers.
+If no servers came up healthy,
+.Nm
+exec's the downstream command directly, as if no
+.Pa clown.json
+had been discovered.
+.It Interactive Pq both stdin and stderr are terminals
+.Nm
+renders a confirmation prompt listing the failed servers and their
+errors, with the choice to continue with the healthy subset or abort.
+Continuing is equivalent to
+.Fl -skip-failed .
+.It Non-interactive, no opt-in
+.Nm
+shuts down any healthy servers and exits with status 1.
+This is the default and preserves backwards compatibility.
+.El
+.Sh ENVIRONMENT
+.Bl -tag -width Ds
+.It Ev CLOWN_SKIP_FAILED_PLUGINS
+When set to
+.Li 1 ,
+behaves the same as passing
+.Fl -skip-failed .
+.It Ev XDG_LOG_HOME
+Base directory for the log file (see
+.Sx LOGGING ) .
+When unset or empty, defaults to
+.Pa $HOME/.local/log ,
+per the XDG base directory specification.
+.It Ev HOME
+Consulted only when
+.Ev XDG_LOG_HOME
+is unset or empty, to resolve the default log directory.
+.El
+.Sh LOGGING
+.Nm
+writes a per-invocation log file to
+.Pa $XDG_LOG_HOME/clown/
+(default
+.Pa $HOME/.local/log/clown/ ) .
+The filename has the form
+.Pa clown-plugin-host- Ns Ar UTC-timestamp Ns Pa - Ns Ar pid Ns Pa .log ,
+e.g.
+.Pa clown-plugin-host-20260422T153012Z-12345.log .
+.Pp
+The log uses the Go
+.Xr slog 3
+text format
+.Pq Li key=value , one record per line
+and captures:
+.Bl -bullet -offset indent
+.It
+Startup arguments, resolved plugin directories, and the effective
+skip-failed policy.
+.It
+Per-server lifecycle events: start, handshake fields, health-check
+result, and graceful or forced shutdown.
+.It
+Each line of every managed server's stderr, tagged with the server
+name.
+The same lines continue to be mirrored to
+.Nm Ap s
+stderr with a
+.Li [plugin/server]
+prefix for the current terminal session.
+.It
+Signals received and forwarded to the downstream command, and the
+downstream's exit status.
+.El
+.Pp
+.Nm
+prints the absolute path of the log file to stderr on startup so a
+concurrent
+.Xr tail 1
+is easy to start.
+.Pp
+Log files are never rotated or pruned by
+.Nm .
+Deleting old files is safe; the XDG specification guarantees that log
+deletion does not affect application correctness.
+.Sh FILES
+.Bl -tag -width Ds
+.It Pa $XDG_LOG_HOME/clown/clown-plugin-host-*.log
+Per-invocation log files.
+See
+.Sx LOGGING .
+.It Pa $HOME/.local/log/clown/clown-plugin-host-*.log
+Default location when
+.Ev XDG_LOG_HOME
+is unset.
+.El
 .Sh EXIT STATUS
 .Nm
-exits with the downstream command's exit code.
-If
-.Nm
-itself fails (e.g., no downstream command, server launch failure),
-it exits with status 1.
+exits with the downstream command's exit code when it runs the
+downstream successfully.
+Exit status
+.Li 1
+indicates a host-level failure before the downstream was invoked:
+missing downstream command, invalid flags, discovery error, or plugin
+server failure that was not skipped (see
+.Sx FAILURE HANDLING ) .
 .Sh SEE ALSO
+.Xr claude-code 1 ,
 .Xr clown 1 ,
 .Xr clown-json 5 ,
-.Xr clown-plugin-protocol 7 ,
-.Xr claude-code 1
+.Xr clown-plugin-protocol 7
 .Sh AUTHORS
 .An amarbel, LLC
 .Lk https://github.com/amarbel-llc/clown

@@ -1,6 +1,6 @@
 ---
 status: testing
-date: 2026-04-21
+date: 2026-04-22
 ---
 
 # Clown Plugin Protocol: HTTP MCP Server Lifecycle Management
@@ -166,18 +166,64 @@ For each discovered server:
 4. The first line of stdout is read as the handshake (section 2)
 5. The health check endpoint is polled (section 3.3)
 
-All servers are launched in parallel. If any server fails to start (handshake
-timeout, health check timeout, process exit), all successfully started
-servers are shut down and the host exits with an error.
+All servers are launched in parallel. The host collects per-server outcomes
+into a start report and then decides whether to proceed, prompt, or abort;
+see section 3.4.
 
 #### 3.3 Health Checking
 
 After reading the handshake, the host polls `http://<addr><healthcheck.path>`
 at the configured interval. The server is considered healthy when it returns
 HTTP 200. If the configured timeout elapses before a 200 response, the server
-is killed and an error is reported.
+is killed and recorded as a failure.
 
-#### 3.4 MCP Configuration
+#### 3.4 Failure Handling
+
+A server is considered *failed* if any of the following occur: the child
+process cannot be exec'd or exits early, its first stdout line is not a
+valid handshake, its handshake does not arrive within the handshake timeout,
+or its health check does not return HTTP 200 within the configured timeout.
+
+The host emits one failure record per affected server (to stderr and to the
+log file described in section 3.5), then chooses one of three branches:
+
+| Context | Behavior |
+|---------|----------|
+| `--skip-failed` flag OR `CLOWN_SKIP_FAILED_PLUGINS=1` env var | Continue with only the healthy servers. If none came up, exec the downstream command directly (as in the no-`clown.json` case). |
+| Interactive terminal (both stdin and stderr are TTYs) and no opt-in | Render a confirmation prompt listing every failure. Continuing is equivalent to `--skip-failed`; declining shuts down the healthy subset and exits non-zero. |
+| Non-interactive, no opt-in | Shut down any healthy servers and exit non-zero. This is the default and preserves the pre-2026-04 behavior. |
+
+When the host proceeds with a partial set, only the healthy servers appear
+in the generated MCP configuration (section 3.5). Failed servers are absent
+from the configuration but retain their structured log records in the host
+log file.
+
+#### 3.5 Logging
+
+The host writes a per-invocation log file to `$XDG_LOG_HOME/clown/`,
+defaulting to `$HOME/.local/log/clown/` when `$XDG_LOG_HOME` is unset or
+empty (per the XDG Base Directory Specification). Filenames have the form
+`clown-plugin-host-<UTC-timestamp>-<pid>.log`, so each invocation is
+isolated.
+
+Records use Go's `slog` text format (`key=value`, one record per line) and
+cover:
+
+- Startup arguments, resolved plugin directories, and the effective
+  skip-failed policy
+- Server start, handshake fields, health-check outcome, and graceful or
+  forced shutdown
+- Every line of managed-server stderr, tagged with the server name (also
+  still mirrored to the host's stderr with a `[plugin/server]` prefix)
+- Signals received and forwarded to the downstream command, and the
+  downstream's exit status
+
+The host prints the resolved log path to stderr on startup so a concurrent
+`tail(1)` is easy to start. The XDG spec permits unbounded growth and
+guarantees log deletion does not affect correctness; the host does not
+rotate or prune files.
+
+#### 3.6 MCP Configuration
 
 Once all servers are healthy, the host generates a temporary MCP
 configuration file:
@@ -198,7 +244,7 @@ configuration file:
 
 The file is passed to the downstream command via `--mcp-config`.
 
-#### 3.5 Downstream Execution
+#### 3.7 Downstream Execution
 
 The downstream command (typically `claude`) is started as a child process
 with the `--mcp-config <temp-file>` flag prepended to its arguments.
@@ -207,7 +253,7 @@ process.
 
 The host waits for the downstream command to exit, then proceeds to shutdown.
 
-#### 3.6 Shutdown
+#### 3.8 Shutdown
 
 When the downstream command exits:
 
@@ -224,12 +270,15 @@ The command chain with `clown-plugin-host`:
 
 ```
 clown (shell wrapper)
-  └─ exec clown-plugin-host --plugin-dir A --plugin-dir B -- claude [args]
+  └─ exec clown-plugin-host --plugin-dir A [--skip-failed] -- claude [args]
+       ├─ open $XDG_LOG_HOME/clown/clown-plugin-host-*.log
        ├─ [no clown.json found] → exec claude directly (pass-through)
        └─ [clown.json found]
-            ├─ launch HTTP server children
+            ├─ launch HTTP server children (parallel)
             ├─ read handshake + poll healthz for each
-            ├─ generate temp .mcp.json
+            ├─ collect per-server start report
+            ├─ [any failures] → skip / prompt / abort (§3.4)
+            ├─ generate temp .mcp.json for healthy servers
             ├─ run claude as child with --mcp-config
             ├─ forward signals
             ├─ wait for claude to exit
@@ -238,9 +287,10 @@ clown (shell wrapper)
 ```
 
 The shell wrapper continues to handle TTY cleanup after `clown-plugin-host`
-exits. The `--plugin-dir` flags are also passed to claude for stdio plugin
-loading; `clown-plugin-host` only acts on plugin directories that contain
-`clown.json`.
+exits, and recognizes `--skip-failed` as a clown-level flag that is
+forwarded into `plugin_host_args`. The `--plugin-dir` flags are also passed
+to claude for stdio plugin loading; `clown-plugin-host` only acts on plugin
+directories that contain `clown.json`.
 
 ## Security Considerations
 
@@ -306,3 +356,5 @@ A plugin MAY ship both `clown.json` (for HTTP servers) and `.mcp.json`
 - [clown-plugin-host(1)](../../man/man1/clown-plugin-host.1) — Host binary
   man page
 - [clown-json(5)](../../man/man5/clown-json.5) — Manifest format man page
+- [clown-plugin-protocol(7)](../../man/man7/clown-plugin-protocol.7) —
+  Protocol overview man page

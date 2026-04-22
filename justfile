@@ -112,6 +112,30 @@ test-plugin-host-moxy: build
 build-nix:
     nix build --show-trace
 
+# Render a single manpage as utf8 through mandoc to preview how it looks.
+[group("docs")]
+render-man PAGE:
+    nix shell nixpkgs#mandoc -c mandoc -Tutf8 {{PAGE}}
+
+# Lint all mdoc(7) manpages with mandoc -Tlint. Exits nonzero on any
+# warning or error; quiet on a clean tree. Uses `nix shell` to pull
+# mandoc since it is not in the default devshell.
+[group("docs")]
+lint-man:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    pages=(man/man1/*.1 man/man5/*.5 man/man7/*.7)
+    nix shell nixpkgs#mandoc -c bash -c '
+        failed=0
+        for page in "$@"; do
+            [[ -f "$page" ]] || continue
+            if ! mandoc -Tlint -Wwarning "$page"; then
+                failed=1
+            fi
+        done
+        exit $failed
+    ' _ "${pages[@]}"
+
 # Smoke-test the --skip-failed / CLOWN_SKIP_FAILED_PLUGINS / no-opt-in
 # branches using a pre-built .tmp/bad-plugin that points at a nonexistent
 # binary. Assumes the plugin dir already exists (created by hand for now).
