@@ -145,6 +145,7 @@
             "-s" "-w"
             "-X github.com/amarbel-llc/clown/internal/buildcfg.ClaudeCliPath=${claudeCliPath}"
             "-X github.com/amarbel-llc/clown/internal/buildcfg.CodexCliPath=${codexCliPath}"
+            "-X github.com/amarbel-llc/clown/internal/buildcfg.CircusCliPath=${circus-go}/bin/circus"
             "-X github.com/amarbel-llc/clown/internal/buildcfg.AgentsFile=${agents-file}"
             "-X github.com/amarbel-llc/clown/internal/buildcfg.DisallowedToolsFile=${disallowed-tools-file}"
             "-X github.com/amarbel-llc/clown/internal/buildcfg.SystemPromptAppendD=${./system-prompt-append.d}"
@@ -155,6 +156,15 @@
             "-X github.com/amarbel-llc/clown/internal/buildcfg.CodexVersion=${codexVersion}"
             "-X github.com/amarbel-llc/clown/internal/buildcfg.CodexRev=${codexRev}"
           ];
+        };
+
+        circus-go = buildGoApplication {
+          pname = "circus";
+          version = clownVersion;
+          src = goSrc;
+          subPackages = [ "cmd/circus" ];
+          modules = ./gomod2nix.toml;
+          ldflags = [ "-s" "-w" ];
         };
 
         # Managed settings burned into the patched claude-code derivation.
@@ -402,6 +412,7 @@
       {
         packages.default = mkClownPkg emptyPluginMeta;
         packages.clown-manpages = clown-manpages;
+        packages.circus = circus-go;
 
         checks = {
           managedSettingsRead = managedSettingsReadTest;
