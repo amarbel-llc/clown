@@ -16,8 +16,8 @@ import (
 	"golang.org/x/term"
 
 	"github.com/amarbel-llc/clown/internal/buildcfg"
-	"github.com/amarbel-llc/clown/internal/promptwalk"
 	"github.com/amarbel-llc/clown/internal/pluginhost"
+	"github.com/amarbel-llc/clown/internal/promptwalk"
 	"github.com/amarbel-llc/clown/internal/provider"
 )
 
@@ -302,6 +302,11 @@ func runCircus(circusPath string, flags parsedFlags, prompts promptwalk.PromptRe
 
 	baseURL := "http://" + hs.Address
 
+	forwarded := flags.forwarded
+	if !hasFlag(forwarded, "--model") {
+		forwarded = append([]string{"--model", "claude-opus-4-7"}, forwarded...)
+	}
+
 	claudePath := buildcfg.ClaudeCliPath
 	args, cleanup, err := provider.BuildClaudeArgs(provider.ClaudeArgs{
 		CLIPath:             claudePath,
@@ -309,7 +314,7 @@ func runCircus(circusPath string, flags parsedFlags, prompts promptwalk.PromptRe
 		DisallowedToolsFile: buildcfg.DisallowedToolsFile,
 		SystemPromptFile:    prompts.SystemPromptFile,
 		AppendFragments:     prompts.AppendFragments,
-	}, flags.forwarded)
+	}, forwarded)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown: building claude args: %v\n", err)
 		return 1
@@ -374,6 +379,15 @@ func prependPluginDirs(args []string, pluginDirs []string, dirMap map[string]str
 		result = append(result, "--plugin-dir", target)
 	}
 	return append(result, args...)
+}
+
+func hasFlag(args []string, flag string) bool {
+	for _, a := range args {
+		if a == flag {
+			return true
+		}
+	}
+	return false
 }
 
 func resolveProvider(name string) (string, error) {
