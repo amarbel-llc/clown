@@ -6,8 +6,18 @@ import (
 	"testing"
 )
 
-func TestBuildClaudeArgs_DisallowedTools(t *testing.T) {
-	args, cleanup, err := BuildClaudeArgs(ClaudeArgs{}, nil)
+func TestBuildClaudeArgs_DisallowedToolsFromFile(t *testing.T) {
+	f, err := os.CreateTemp("", "disallowed-*.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(f.Name())
+	f.WriteString("Bash(*)\nAgent(Explore)\nWebFetch\n")
+	f.Close()
+
+	args, cleanup, err := BuildClaudeArgs(ClaudeArgs{
+		DisallowedToolsFile: f.Name(),
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -19,11 +29,81 @@ func TestBuildClaudeArgs_DisallowedTools(t *testing.T) {
 			found[args[i+1]] = true
 		}
 	}
-	if !found["Bash(*)"] {
-		t.Error("missing --disallowed-tools Bash(*)")
+	for _, want := range []string{"Bash(*)", "Agent(Explore)", "WebFetch"} {
+		if !found[want] {
+			t.Errorf("missing --disallowed-tools %s", want)
+		}
 	}
-	if !found["Agent(Explore)"] {
-		t.Error("missing --disallowed-tools Agent(Explore)")
+}
+
+func TestBuildClaudeArgs_DisallowedToolsFileEmpty(t *testing.T) {
+	f, err := os.CreateTemp("", "disallowed-*.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(f.Name())
+	f.Close()
+
+	args, cleanup, err := BuildClaudeArgs(ClaudeArgs{
+		DisallowedToolsFile: f.Name(),
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+
+	for _, a := range args {
+		if a == "--disallowed-tools" {
+			t.Error("no --disallowed-tools should be emitted for empty file")
+		}
+	}
+}
+
+func TestBuildClaudeArgs_DisallowedToolsFileCommentsAndBlanks(t *testing.T) {
+	f, err := os.CreateTemp("", "disallowed-*.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(f.Name())
+	f.WriteString("# comment\nBash(*)\n\n  \n# another comment\nWrite\n")
+	f.Close()
+
+	args, cleanup, err := BuildClaudeArgs(ClaudeArgs{
+		DisallowedToolsFile: f.Name(),
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+
+	var got []string
+	for i, a := range args {
+		if a == "--disallowed-tools" && i+1 < len(args) {
+			got = append(got, args[i+1])
+		}
+	}
+	want := []string{"Bash(*)", "Write"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("got[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestBuildClaudeArgs_NoDisallowedToolsFile(t *testing.T) {
+	args, cleanup, err := BuildClaudeArgs(ClaudeArgs{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+
+	for _, a := range args {
+		if a == "--disallowed-tools" {
+			t.Error("no --disallowed-tools should be emitted when file is unset")
+		}
 	}
 }
 

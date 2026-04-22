@@ -1,14 +1,17 @@
 package provider
 
 import (
+	"bufio"
 	"os"
+	"strings"
 )
 
 type ClaudeArgs struct {
-	CLIPath          string
-	AgentsFile       string
-	SystemPromptFile string
-	AppendFragments  string
+	CLIPath             string
+	AgentsFile          string
+	DisallowedToolsFile string
+	SystemPromptFile    string
+	AppendFragments     string
 }
 
 // BuildClaudeArgs assembles the argument list for the claude provider CLI.
@@ -19,8 +22,15 @@ func BuildClaudeArgs(cfg ClaudeArgs, forwarded []string) ([]string, func(), erro
 	var args []string
 	var cleanups []string
 
-	args = append(args, "--disallowed-tools", "Bash(*)")
-	args = append(args, "--disallowed-tools", "Agent(Explore)")
+	if cfg.DisallowedToolsFile != "" {
+		patterns, err := readDisallowedTools(cfg.DisallowedToolsFile)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, p := range patterns {
+			args = append(args, "--disallowed-tools", p)
+		}
+	}
 
 	if cfg.AgentsFile != "" {
 		data, err := os.ReadFile(cfg.AgentsFile)
@@ -57,4 +67,23 @@ func BuildClaudeArgs(cfg ClaudeArgs, forwarded []string) ([]string, func(), erro
 		}
 	}
 	return args, cleanup, nil
+}
+
+func readDisallowedTools(path string) ([]string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	var patterns []string
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		patterns = append(patterns, line)
+	}
+	return patterns, scanner.Err()
 }

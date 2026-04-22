@@ -368,7 +368,7 @@ test-plugin-agents: build
         echo "FAIL: synthetic plugin manifest missing" >&2
         exit 1
     fi
-    agents_output=$(./result/bin/clown --clean --plugin-dir "$plugin_dir" \
+    agents_output=$(./result/bin/clown --naked --plugin-dir "$plugin_dir" \
         agents list 2>&1) || true
     echo "$agents_output"
     echo "---"
@@ -377,7 +377,7 @@ test-plugin-agents: build
         if echo "$agents_output" | grep -q "$agent"; then
             echo "OK: $agent loaded"
             echo "--- $agent details ---"
-            ./result/bin/clown --clean --plugin-dir "$plugin_dir" \
+            ./result/bin/clown --naked --plugin-dir "$plugin_dir" \
                 agents show "$agent" 2>&1 || true
         else
             echo "FAIL: $agent NOT loaded" >&2
@@ -395,7 +395,7 @@ explore-agents-schema: build
     plugin_dir="$(pwd)/tests/synthetic-plugin"
     manifest="$plugin_dir/.claude-plugin/plugin.json"
     base='{"name":"synthetic-test","version":"0.0.1","description":"probe"'
-    cli="./result/bin/clown --clean --plugin-dir $plugin_dir plugin list"
+    cli="./result/bin/clown --naked --plugin-dir $plugin_dir plugin list"
     try_variant() {
         local label="$1" json="$2"
         echo "$json" > "$manifest"

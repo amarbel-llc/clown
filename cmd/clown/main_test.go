@@ -32,9 +32,9 @@ func TestParseFlags(t *testing.T) {
 			want: parsedFlags{provider: "codex"},
 		},
 		{
-			name: "clean flag",
-			in:   []string{"--clean"},
-			want: parsedFlags{provider: "claude", clean: true},
+			name: "naked flag",
+			in:   []string{"--naked"},
+			want: parsedFlags{provider: "claude", naked: true},
 		},
 		{
 			name: "skip-failed flag",

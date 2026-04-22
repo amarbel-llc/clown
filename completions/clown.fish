@@ -34,7 +34,7 @@ end
 complete -c clown -x -n __fish_use_subcommand -l provider -a 'claude codex' -d 'Coding agent provider'
 
 # --- Common options ---
-complete -c clown -f -n __fish_use_subcommand -l clean -d 'Run provider without clown modifications'
+complete -c clown -f -n __fish_use_subcommand -l naked -d 'Run provider without clown modifications'
 complete -c clown -f -n __fish_use_subcommand -s h -l help -d 'Display help'
 complete -c clown -f -n __fish_use_subcommand -l version -d 'Output the version number'
 complete -c clown -x -n __fish_use_subcommand -l model -d 'Model for the current session'

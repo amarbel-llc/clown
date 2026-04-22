@@ -15,7 +15,7 @@
 .Fl -provider Ar name
 .Op Ar args
 .Nm
-.Fl -clean
+.Fl -naked
 .Op Ar args
 .Sh DESCRIPTION
 .Nm
@@ -27,9 +27,9 @@ All unrecognized arguments are forwarded to the underlying provider CLI.
 .Pp
 By default,
 .Nm
-disables
-.Cm Bash
-tool use and auto-mode, injects hierarchical system prompts from
+disables a configurable set of Claude built-in tools (see
+.Sx DISALLOWED TOOLS
+below) and auto-mode, injects hierarchical system prompts from
 .Pa .circus/
 directories, launches HTTP MCP servers declared in plugin
 .Xr clown-json 5
@@ -57,7 +57,7 @@ Valid values are
 Can also be set via the
 .Ev CLOWN_PROVIDER
 environment variable.
-.It Fl -clean
+.It Fl -naked
 Bypass all clown wrapping (prompt injection, plugin loading, tool
 restrictions) and exec the provider CLI directly.
 .It Fl -skip-failed
@@ -215,6 +215,34 @@ Build-time validation tests.
     };
 }
 .Ed
+.Sh DISALLOWED TOOLS
+.Nm
+passes
+.Fl -disallowed-tools
+flags to the provider CLI, preventing use of a build-time configurable
+set of Claude built-in tools.
+The list is read from a file baked into the Nix derivation.
+The default set disables tools that are redundant with MCP-based
+replacements provided by plugins (e.g.\&
+.Nm moxy ) :
+.Pp
+.Bl -column "EnterWorktree" "Replacement" -compact
+.It Sy Tool Ta Sy Replacement
+.It Li Bash(*) Ta moxy tools
+.It Li Agent(Explore) Ta \(em
+.It Li Glob Ta folio.glob
+.It Li Grep Ta rg.search
+.It Li LSP Ta lux
+.It Li Write Ta folio.write
+.It Li WebFetch Ta chrest.web-fetch
+.It Li WebSearch Ta \(em
+.It Li EnterWorktree Ta spinclass
+.It Li NotebookEdit Ta \(em
+.It Li PowerShell Ta \(em
+.El
+.Pp
+To bypass all disallowed tools (and all other clown wrapping), use
+.Fl -naked .
 .Sh MANAGED SETTINGS
 .Nm
 patches the upstream

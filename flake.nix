@@ -70,6 +70,20 @@
         agents-json = builtins.toJSON agents;
         agents-file = pkgs.writeText "clown-agents.json" agents-json;
 
+        disallowed-tools-file = pkgs.writeText "disallowed-tools.txt" ''
+          Bash(*)
+          Agent(Explore)
+          WebFetch
+          WebSearch
+          Write
+          EnterWorktree
+          NotebookEdit
+          PowerShell
+          LSP
+          Glob
+          Grep
+        '';
+
         clownVersion = lib.trim (builtins.readFile ./version.txt);
         clownRev = self.rev or self.dirtyRev or "dirty";
         clownShortRev = self.shortRev or self.dirtyShortRev or "dirty";
@@ -132,6 +146,7 @@
             "-X github.com/amarbel-llc/clown/internal/buildcfg.ClaudeCliPath=${claudeCliPath}"
             "-X github.com/amarbel-llc/clown/internal/buildcfg.CodexCliPath=${codexCliPath}"
             "-X github.com/amarbel-llc/clown/internal/buildcfg.AgentsFile=${agents-file}"
+            "-X github.com/amarbel-llc/clown/internal/buildcfg.DisallowedToolsFile=${disallowed-tools-file}"
             "-X github.com/amarbel-llc/clown/internal/buildcfg.SystemPromptAppendD=${./system-prompt-append.d}"
             "-X github.com/amarbel-llc/clown/internal/buildcfg.Version=${clownVersion}"
             "-X github.com/amarbel-llc/clown/internal/buildcfg.Commit=${clownRev}"

@@ -42,7 +42,7 @@ func run(rawArgs []string) int {
 		return 1
 	}
 
-	if flags.clean {
+	if flags.naked {
 		execProcess(cliPath, flags.forwarded)
 		return 0 // unreachable
 	}
@@ -79,10 +79,11 @@ func run(rawArgs []string) int {
 
 func runClaude(cliPath string, flags parsedFlags, prompts circus.PromptResult, pluginDirs []string) int {
 	args, cleanup, err := provider.BuildClaudeArgs(provider.ClaudeArgs{
-		CLIPath:          cliPath,
-		AgentsFile:       buildcfg.AgentsFile,
-		SystemPromptFile: prompts.SystemPromptFile,
-		AppendFragments:  prompts.AppendFragments,
+		CLIPath:             cliPath,
+		AgentsFile:          buildcfg.AgentsFile,
+		DisallowedToolsFile: buildcfg.DisallowedToolsFile,
+		SystemPromptFile:    prompts.SystemPromptFile,
+		AppendFragments:     prompts.AppendFragments,
 	}, flags.forwarded)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown: building claude args: %v\n", err)
@@ -375,7 +376,7 @@ func execProcess(binary string, args []string) {
 
 type parsedFlags struct {
 	provider             string
-	clean                bool
+	naked                bool
 	skipFailed           bool
 	disableClownProtocol bool
 	verbose              bool
@@ -404,8 +405,8 @@ func parseFlags(args []string) (parsedFlags, error) {
 			i++
 		case strings.HasPrefix(args[i], "--provider="):
 			p.provider = strings.TrimPrefix(args[i], "--provider=")
-		case args[i] == "--clean":
-			p.clean = true
+		case args[i] == "--naked":
+			p.naked = true
 		case args[i] == "--skip-failed":
 			p.skipFailed = true
 		case args[i] == "--disable-clown-protocol":
