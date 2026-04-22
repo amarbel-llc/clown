@@ -34,7 +34,7 @@ tool use and auto-mode, injects hierarchical system prompts from
 directories, and loads Claude Code plugins specified at build time.
 .Sh OPTIONS
 .Bl -tag -width Ds
-.It Cm version , Fl -version , Fl v
+.It Cm version
 Print version information for all components (clown, claude-code, codex,
 and loaded plugins) and exit.
 .It Fl -provider Ar name
@@ -49,6 +49,20 @@ environment variable.
 .It Fl -clean
 Bypass all clown wrapping (prompt injection, plugin loading, tool
 restrictions) and exec the provider CLI directly.
+.It Fl -skip-failed
+Forwarded to
+.Xr clown-plugin-host 1 .
+When any discovered HTTP MCP plugin server fails to start,
+.Xr clown-plugin-host 1
+will proceed with only the healthy subset instead of aborting.
+.It Fl v , Fl -verbose
+Forwarded to
+.Xr clown-plugin-host 1 .
+Emit informational progress on stderr in addition to the always-on
+log file.
+Without this flag, only errors, failure summaries, and the interactive
+plugin-failure prompt are written to stderr; plugin servers' own
+stderr output is captured to the log but not mirrored to the terminal.
 .El
 .Sh SYSTEM PROMPT INJECTION
 .Nm

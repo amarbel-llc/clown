@@ -38,6 +38,7 @@ type StartReport struct {
 type Host struct {
 	PluginDirs []string
 	Logger     *slog.Logger
+	Verbose    bool
 	Servers    []*ManagedServer
 }
 
@@ -94,6 +95,7 @@ func (h *Host) StartAll(ctx context.Context, discovered []DiscoveredServer) Star
 				Def:       d.Def,
 				PluginDir: d.PluginDir,
 				Logger:    h.Logger,
+				Verbose:   h.Verbose,
 			}
 			err := srv.Start(ctx)
 			results <- startResult{server: srv, src: d, err: err}

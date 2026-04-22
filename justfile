@@ -155,7 +155,9 @@ lint-man: build-man
 
 # Smoke-test the --skip-failed / CLOWN_SKIP_FAILED_PLUGINS / no-opt-in
 # branches using a pre-built .tmp/bad-plugin that points at a nonexistent
-# binary. Assumes the plugin dir already exists (created by hand for now).
+# binary. MODE is one of: none | flag | env. Append "+v" to turn on
+# --verbose (e.g. `just explore-skip-failed flag+v`). Assumes the plugin
+# dir already exists (created by hand for now).
 [group("explore")]
 explore-skip-failed MODE: build
     #!/usr/bin/env bash
@@ -165,14 +167,21 @@ explore-skip-failed MODE: build
         echo "FAIL: $plugin_dir/clown.json not found. Create the bad-plugin fixture first." >&2
         exit 2
     fi
+    mode="{{MODE}}"
+    verbose=
+    if [[ "$mode" == *"+v" ]]; then
+        verbose=--verbose
+        mode="${mode%+v}"
+    fi
     env_skip=
     args=()
-    case "{{MODE}}" in
+    case "$mode" in
         none)        ;;
         flag)        args+=(--skip-failed) ;;
         env)         env_skip="CLOWN_SKIP_FAILED_PLUGINS=1" ;;
-        *) echo "MODE must be none|flag|env" >&2 ; exit 2 ;;
+        *) echo "MODE must be none|flag|env (optionally with +v)" >&2 ; exit 2 ;;
     esac
+    [[ -n "$verbose" ]] && args+=("$verbose")
     echo ">> mode={{MODE}} args=${args[*]:-(none)} env=${env_skip:-(none)}"
     set -x
     env $env_skip ./result/bin/clown-plugin-host \

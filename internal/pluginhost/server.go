@@ -20,6 +20,7 @@ type ManagedServer struct {
 	Def       ServerDef
 	PluginDir string
 	Logger    *slog.Logger
+	Verbose   bool
 
 	cmd       *exec.Cmd
 	handshake Handshake
@@ -172,7 +173,9 @@ func (s *ManagedServer) forwardStderr(r io.Reader) {
 	log := s.logger()
 	for scanner.Scan() {
 		line := scanner.Text()
-		fmt.Fprintln(os.Stderr, prefix+line)
+		if s.Verbose {
+			fmt.Fprintln(os.Stderr, prefix+line)
+		}
 		log.Info("plugin stderr", "line", line)
 	}
 }

@@ -266,10 +266,11 @@
           provider="''${CLOWN_PROVIDER:-claude}"
           clean=false
           skip_failed_plugins=false
+          verbose_plugins=false
           forwarded_args=()
           while [[ $# -gt 0 ]]; do
             case "$1" in
-              version|--version|-v)
+              version)
                 {
                   printf '%-20s %-12s %s\n' COMPONENT VERSION REV
                   printf '%-20s %-12s %s\n' claude-code '${claudeCodeVersion}' '${claudeCodeRev}'
@@ -295,6 +296,10 @@
                 ;;
               --skip-failed)
                 skip_failed_plugins=true
+                shift
+                ;;
+              --verbose|-v)
+                verbose_plugins=true
                 shift
                 ;;
               *)
@@ -341,6 +346,9 @@
               fi
               if [[ "$skip_failed_plugins" == true ]]; then
                 plugin_host_args+=(--skip-failed)
+              fi
+              if [[ "$verbose_plugins" == true ]]; then
+                plugin_host_args+=(--verbose)
               fi
 
               if [[ -n "$system_prompt_file" ]]; then

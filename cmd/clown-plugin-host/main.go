@@ -25,18 +25,18 @@ func main() {
 	}
 	defer logFile.Close()
 
-	fmt.Fprintf(os.Stderr, "clown-plugin-host: logging to %s\n", logPath)
 	logger.Info("clown-plugin-host starting",
 		"version", version,
 		"commit", commit,
 		"pid", os.Getpid(),
 		"args", os.Args[1:],
+		"log_path", logPath,
 	)
 
-	os.Exit(run(logger))
+	os.Exit(run(logger, logPath))
 }
 
-func run(logger *slog.Logger) int {
+func run(logger *slog.Logger, logPath string) int {
 	parsed, err := parseArgs(os.Args[1:])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown-plugin-host: %v\n", err)
@@ -50,13 +50,18 @@ func run(logger *slog.Logger) int {
 	}
 
 	skipFailed := parsed.skipFailed || os.Getenv("CLOWN_SKIP_FAILED_PLUGINS") == "1"
+	verbose := parsed.verbose
+	if verbose {
+		fmt.Fprintf(os.Stderr, "clown-plugin-host: logging to %s\n", logPath)
+	}
 	logger.Info("parsed arguments",
 		"plugin_dirs", parsed.pluginDirs,
 		"skip_failed", skipFailed,
+		"verbose", verbose,
 		"downstream", parsed.downstream,
 	)
 
-	host := &pluginhost.Host{PluginDirs: parsed.pluginDirs, Logger: logger}
+	host := &pluginhost.Host{PluginDirs: parsed.pluginDirs, Logger: logger, Verbose: verbose}
 	discovered, err := host.Discover()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown-plugin-host: %v\n", err)
@@ -70,14 +75,16 @@ func run(logger *slog.Logger) int {
 		return 0 // unreachable after exec
 	}
 
-	return runManaged(host, discovered, parsed.downstream, skipFailed, logger)
+	return runManaged(host, discovered, parsed.downstream, skipFailed, verbose, logger)
 }
 
-func runManaged(host *pluginhost.Host, discovered []pluginhost.DiscoveredServer, downstream []string, skipFailed bool, logger *slog.Logger) int {
+func runManaged(host *pluginhost.Host, discovered []pluginhost.DiscoveredServer, downstream []string, skipFailed bool, verbose bool, logger *slog.Logger) int {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	fmt.Fprintf(os.Stderr, "clown-plugin-host: launching %d HTTP MCP server(s)\n", len(discovered))
+	if verbose {
+		fmt.Fprintf(os.Stderr, "clown-plugin-host: launching %d HTTP MCP server(s)\n", len(discovered))
+	}
 	logger.Info("launching plugin servers", "count", len(discovered))
 
 	report := host.StartAll(ctx, discovered)
@@ -195,6 +202,7 @@ type parsedArgs struct {
 	pluginDirs []string
 	downstream []string
 	skipFailed bool
+	verbose    bool
 }
 
 func parseArgs(args []string) (parsedArgs, error) {
@@ -212,6 +220,8 @@ func parseArgs(args []string) (parsedArgs, error) {
 			i++
 		case args[i] == "--skip-failed":
 			p.skipFailed = true
+		case args[i] == "--verbose", args[i] == "-v":
+			p.verbose = true
 		default:
 			return p, fmt.Errorf("unknown flag %q", args[i])
 		}

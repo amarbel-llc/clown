@@ -11,6 +11,7 @@
 .Op Fl -plugin-dir Ar dir
 .Ar ...
 .Op Fl -skip-failed
+.Op Fl v | Fl -verbose
 .Cm --
 .Ar command
 .Op Ar args
@@ -60,6 +61,21 @@ Also settable via the
 .Ev CLOWN_SKIP_FAILED_PLUGINS
 environment variable (see
 .Sx ENVIRONMENT ) .
+.It Fl v , Fl -verbose
+Emit informational progress on stderr in addition to the log file (the
+log captures everything regardless; see
+.Sx LOGGING ) .
+Without this flag
+.Nm
+runs quietly: only errors, failure summaries, and the interactive
+plugin-failure confirmation prompt are written to stderr.
+Plugin servers' own stderr output is always captured into the log but
+only mirrored to the terminal in verbose mode.
+The startup
+.Dq logging to <path>
+breadcrumb and
+.Dq launching N HTTP MCP server(s)
+progress line are also gated behind this flag.
 .It Cm --
 Separates
 .Nm
