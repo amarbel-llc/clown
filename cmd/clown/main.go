@@ -15,7 +15,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/amarbel-llc/clown/internal/buildcfg"
-	"github.com/amarbel-llc/clown/internal/circus"
+	"github.com/amarbel-llc/clown/internal/promptwalk"
 	"github.com/amarbel-llc/clown/internal/pluginhost"
 	"github.com/amarbel-llc/clown/internal/provider"
 )
@@ -58,7 +58,7 @@ func run(rawArgs []string) int {
 		return 1
 	}
 
-	prompts, err := circus.WalkPrompts(cwd, homeDir, buildcfg.SystemPromptAppendD)
+	prompts, err := promptwalk.WalkPrompts(cwd, homeDir, buildcfg.SystemPromptAppendD)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown: collecting prompts: %v\n", err)
 		return 1
@@ -77,7 +77,7 @@ func run(rawArgs []string) int {
 	}
 }
 
-func runClaude(cliPath string, flags parsedFlags, prompts circus.PromptResult, pluginDirs []string) int {
+func runClaude(cliPath string, flags parsedFlags, prompts promptwalk.PromptResult, pluginDirs []string) int {
 	args, cleanup, err := provider.BuildClaudeArgs(provider.ClaudeArgs{
 		CLIPath:             cliPath,
 		AgentsFile:          buildcfg.AgentsFile,
@@ -247,7 +247,7 @@ func runManaged(
 	return 0
 }
 
-func runCodex(cliPath string, flags parsedFlags, prompts circus.PromptResult) int {
+func runCodex(cliPath string, flags parsedFlags, prompts promptwalk.PromptResult) int {
 	args, cleanup, err := provider.BuildCodexArgs(provider.CodexArgs{
 		CLIPath:          cliPath,
 		SystemPromptFile: prompts.SystemPromptFile,

@@ -1,4 +1,4 @@
-package circus
+package promptwalk
 
 import (
 	"os"
