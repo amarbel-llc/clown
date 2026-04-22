@@ -3,6 +3,7 @@ package pluginhost
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"sync"
 )
@@ -14,8 +15,29 @@ type DiscoveredServer struct {
 	Def        ServerDef
 }
 
+// Name returns the canonical "<plugin>/<server>" identifier used for logs
+// and messages.
+func (d DiscoveredServer) Name() string {
+	return d.PluginName + "/" + d.ServerName
+}
+
+type StartFailure struct {
+	Server DiscoveredServer
+	Err    error
+}
+
+// StartReport is the outcome of Host.StartAll. Started holds the servers
+// that came up healthy (also mirrored into h.Servers). Failed holds one
+// entry per DiscoveredServer that never started, failed the handshake, or
+// failed the healthcheck.
+type StartReport struct {
+	Started []*ManagedServer
+	Failed  []StartFailure
+}
+
 type Host struct {
 	PluginDirs []string
+	Logger     *slog.Logger
 	Servers    []*ManagedServer
 }
 
@@ -47,9 +69,16 @@ func (h *Host) Discover() ([]DiscoveredServer, error) {
 	return found, nil
 }
 
-func (h *Host) StartAll(ctx context.Context, discovered []DiscoveredServer) error {
+// StartAll launches every discovered server concurrently and returns a
+// StartReport describing which came up healthy and which did not. It does
+// not call Shutdown on partial failure: the caller decides whether to
+// continue with the healthy subset, prompt the user, or abort and shut
+// down. Servers that started successfully are also stored on h.Servers so
+// ServerURLs() and Shutdown() keep working.
+func (h *Host) StartAll(ctx context.Context, discovered []DiscoveredServer) StartReport {
 	type startResult struct {
 		server *ManagedServer
+		src    DiscoveredServer
 		err    error
 	}
 
@@ -61,33 +90,29 @@ func (h *Host) StartAll(ctx context.Context, discovered []DiscoveredServer) erro
 		go func(d DiscoveredServer) {
 			defer wg.Done()
 			srv := &ManagedServer{
-				Name:      d.PluginName + "/" + d.ServerName,
+				Name:      d.Name(),
 				Def:       d.Def,
 				PluginDir: d.PluginDir,
+				Logger:    h.Logger,
 			}
 			err := srv.Start(ctx)
-			results <- startResult{server: srv, err: err}
+			results <- startResult{server: srv, src: d, err: err}
 		}(d)
 	}
 
 	wg.Wait()
 	close(results)
 
-	var errs []error
+	var report StartReport
 	for res := range results {
 		if res.err != nil {
-			errs = append(errs, res.err)
+			report.Failed = append(report.Failed, StartFailure{Server: res.src, Err: res.err})
 		} else {
+			report.Started = append(report.Started, res.server)
 			h.Servers = append(h.Servers, res.server)
 		}
 	}
-
-	if len(errs) > 0 {
-		h.Shutdown()
-		return fmt.Errorf("failed to start %d server(s): %v", len(errs), errs)
-	}
-
-	return nil
+	return report
 }
 
 func (h *Host) ServerURLs() map[string]string {

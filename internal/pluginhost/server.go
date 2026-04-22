@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
@@ -18,12 +19,22 @@ type ManagedServer struct {
 	Name      string
 	Def       ServerDef
 	PluginDir string
+	Logger    *slog.Logger
 
 	cmd       *exec.Cmd
 	handshake Handshake
 }
 
+func (s *ManagedServer) logger() *slog.Logger {
+	if s.Logger != nil {
+		return s.Logger.With("server", s.Name)
+	}
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
 func (s *ManagedServer) Start(ctx context.Context) error {
+	log := s.logger()
+
 	cmdPath := s.Def.Command
 	if !strings.HasPrefix(cmdPath, "/") {
 		cmdPath = s.PluginDir + "/" + cmdPath
@@ -47,26 +58,39 @@ func (s *ManagedServer) Start(ctx context.Context) error {
 		return fmt.Errorf("server %s: stderr pipe: %w", s.Name, err)
 	}
 
+	log.Info("starting plugin server", "command", cmdPath, "args", s.Def.Args, "plugin_dir", s.PluginDir)
 	if err := s.cmd.Start(); err != nil {
+		log.Error("plugin server failed to start", "err", err)
 		return fmt.Errorf("server %s: start: %w", s.Name, err)
 	}
+	log.Info("plugin server process started", "pid", s.cmd.Process.Pid)
 
 	go s.forwardStderr(stderr)
 
 	hs, err := s.readHandshake(ctx, stdout)
 	if err != nil {
+		log.Error("handshake failed", "err", err)
 		s.kill()
 		return err
 	}
 	s.handshake = hs
+	log.Info("handshake received",
+		"core_version", hs.CoreVersion,
+		"app_version", hs.AppVersion,
+		"network_type", hs.NetworkType,
+		"address", hs.Address,
+		"protocol", hs.Protocol,
+	)
 
 	healthCtx, cancel := context.WithTimeout(ctx, s.Def.Healthcheck.Timeout.Duration)
 	defer cancel()
 
 	if err := WaitHealthy(healthCtx, hs.Address, s.Def.Healthcheck.Path, s.Def.Healthcheck.Interval.Duration); err != nil {
+		log.Error("healthcheck failed", "err", err)
 		s.kill()
 		return fmt.Errorf("server %s: %w", s.Name, err)
 	}
+	log.Info("plugin server healthy", "url", hs.URL())
 
 	return nil
 }
@@ -79,6 +103,8 @@ func (s *ManagedServer) Stop() {
 	if s.cmd == nil || s.cmd.Process == nil {
 		return
 	}
+	log := s.logger()
+	log.Info("stopping plugin server", "pid", s.cmd.Process.Pid)
 	pgid, err := syscall.Getpgid(s.cmd.Process.Pid)
 	if err == nil {
 		_ = syscall.Kill(-pgid, syscall.SIGTERM)
@@ -94,7 +120,9 @@ func (s *ManagedServer) Stop() {
 
 	select {
 	case <-done:
+		log.Info("plugin server exited cleanly")
 	case <-time.After(stopGracePeriod):
+		log.Warn("plugin server did not exit within grace period; killing", "grace", stopGracePeriod.String())
 		if pgid, err := syscall.Getpgid(s.cmd.Process.Pid); err == nil {
 			_ = syscall.Kill(-pgid, syscall.SIGKILL)
 		} else {
@@ -141,8 +169,11 @@ func (s *ManagedServer) readHandshake(ctx context.Context, r io.Reader) (Handsha
 func (s *ManagedServer) forwardStderr(r io.Reader) {
 	scanner := bufio.NewScanner(r)
 	prefix := "[" + s.Name + "] "
+	log := s.logger()
 	for scanner.Scan() {
-		fmt.Fprintln(os.Stderr, prefix+scanner.Text())
+		line := scanner.Text()
+		fmt.Fprintln(os.Stderr, prefix+line)
+		log.Info("plugin stderr", "line", line)
 	}
 }
 

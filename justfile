@@ -17,6 +17,12 @@ test-go:
 build-mock-server:
     go build -o tests/synthetic-plugin/bin/mock-mcp-server ./internal/pluginhost/testdata/mockserver
 
+# Regenerate gomod2nix.toml after go.mod changes (uses the gomod2nix
+# binary from the devshell so the tool version matches the nix builder).
+[group("go")]
+gomod2nix:
+    gomod2nix generate
+
 # Integration test: launch clown-plugin-host with the synthetic plugin's
 # clown.json and verify the mock HTTP MCP server starts, completes the
 # handshake, passes health checks, and generates valid MCP config.
@@ -52,8 +58,89 @@ test-plugin-host: build build-mock-server
     fi
     echo "OK: plugin-host integration test passed"
 
+# Integration test: launch clown-plugin-host with the real moxy MCP server as
+# a plugin, exercising the clown-plugin-protocol against a production server
+# instead of the synthetic mock. Moxy must already be on $PATH; its plugin
+# dir is derived as <prefix>/share/purse-first/moxy.
+[group("test")]
+test-plugin-host-moxy: build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    moxy_bin=$(command -v moxy) || {
+        echo "FAIL: moxy not found on PATH" >&2
+        exit 1
+    }
+    moxy_prefix=$(dirname "$(dirname "$moxy_bin")")
+    plugin_dir="$moxy_prefix/share/purse-first/moxy"
+    echo "Using moxy at: $moxy_bin"
+    echo "Plugin dir:    $plugin_dir"
+    if [[ ! -f "$plugin_dir/clown.json" ]]; then
+        echo "FAIL: $plugin_dir/clown.json is missing." >&2
+        echo "      Your moxy on PATH is too old; update it to a version that" >&2
+        echo "      ships share/purse-first/moxy/clown.json." >&2
+        exit 1
+    fi
+    echo "Starting clown-plugin-host with moxy as the plugin..."
+    output=$(timeout 60 ./result/bin/clown-plugin-host \
+        --plugin-dir "$plugin_dir" \
+        -- echo DOWNSTREAM_MARKER 2>&1) || {
+        echo "FAIL: clown-plugin-host exited with $?" >&2
+        echo "$output" >&2
+        exit 1
+    }
+    echo "$output"
+    if echo "$output" | grep -q -- '--mcp-config'; then
+        echo "OK: downstream received --mcp-config flag"
+    else
+        echo "FAIL: downstream did not receive --mcp-config" >&2
+        exit 1
+    fi
+    if echo "$output" | grep -q 'DOWNSTREAM_MARKER'; then
+        echo "OK: downstream received its original args"
+    else
+        echo "FAIL: downstream did not receive original args" >&2
+        exit 1
+    fi
+    if echo "$output" | grep -q 'moxy/moxy'; then
+        echo "OK: clown-plugin-host reported the moxy server"
+    else
+        echo "FAIL: no sign of the moxy/moxy managed server in host output" >&2
+        exit 1
+    fi
+    echo "OK: plugin-host-moxy integration test passed"
+
 build-nix:
     nix build --show-trace
+
+# Smoke-test the --skip-failed / CLOWN_SKIP_FAILED_PLUGINS / no-opt-in
+# branches using a pre-built .tmp/bad-plugin that points at a nonexistent
+# binary. Assumes the plugin dir already exists (created by hand for now).
+[group("explore")]
+explore-skip-failed MODE: build
+    #!/usr/bin/env bash
+    set -u
+    plugin_dir="$(pwd)/.tmp/bad-plugin"
+    if [[ ! -f "$plugin_dir/clown.json" ]]; then
+        echo "FAIL: $plugin_dir/clown.json not found. Create the bad-plugin fixture first." >&2
+        exit 2
+    fi
+    env_skip=
+    args=()
+    case "{{MODE}}" in
+        none)        ;;
+        flag)        args+=(--skip-failed) ;;
+        env)         env_skip="CLOWN_SKIP_FAILED_PLUGINS=1" ;;
+        *) echo "MODE must be none|flag|env" >&2 ; exit 2 ;;
+    esac
+    echo ">> mode={{MODE}} args=${args[*]:-(none)} env=${env_skip:-(none)}"
+    set -x
+    env $env_skip ./result/bin/clown-plugin-host \
+        --plugin-dir "$plugin_dir" \
+        "${args[@]}" \
+        -- echo DOWNSTREAM_MARKER
+    exit_code=$?
+    set +x
+    echo ">> exit=$exit_code"
 
 clean:
     rm -rf result

@@ -247,6 +247,7 @@
           # --- Parse and consume clown flags ---
           provider="''${CLOWN_PROVIDER:-claude}"
           clean=false
+          skip_failed_plugins=false
           forwarded_args=()
           while [[ $# -gt 0 ]]; do
             case "$1" in
@@ -272,6 +273,10 @@
                 ;;
               --clean)
                 clean=true
+                shift
+                ;;
+              --skip-failed)
+                skip_failed_plugins=true
                 shift
                 ;;
               *)
@@ -315,6 +320,9 @@
                   extra_args+=(--plugin-dir "$dir")
                   plugin_host_args+=(--plugin-dir "$dir")
                 done < "${pluginMeta}/plugin-dirs"
+              fi
+              if [[ "$skip_failed_plugins" == true ]]; then
+                plugin_host_args+=(--skip-failed)
               fi
 
               if [[ -n "$system_prompt_file" ]]; then
