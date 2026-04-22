@@ -101,23 +101,16 @@ func TestParseArgs(t *testing.T) {
 
 func TestBuildDownstreamArgs(t *testing.T) {
 	cases := []struct {
-		name          string
-		downstream    []string
-		pluginDirs    []string
-		dirMap        map[string]string
-		mcpConfigPath string
-		want          []string
+		name       string
+		downstream []string
+		pluginDirs []string
+		dirMap     map[string]string
+		want       []string
 	}{
 		{
-			name:       "no plugins, no mcp config",
+			name:       "no plugins",
 			downstream: []string{"claude", "--foo"},
 			want:       []string{"claude", "--foo"},
-		},
-		{
-			name:          "mcp config only",
-			downstream:    []string{"claude", "--foo"},
-			mcpConfigPath: "/tmp/mcp.json",
-			want:          []string{"claude", "--mcp-config", "/tmp/mcp.json", "--foo"},
 		},
 		{
 			name:       "plugin dirs pass through (no dirMap)",
@@ -133,17 +126,16 @@ func TestBuildDownstreamArgs(t *testing.T) {
 			want:       []string{"claude", "--plugin-dir", "/stage/a", "--plugin-dir", "/orig/b"},
 		},
 		{
-			name:          "full combination",
-			downstream:    []string{"claude", "chat"},
-			pluginDirs:    []string{"/orig/a"},
-			dirMap:        map[string]string{"/orig/a": "/stage/a"},
-			mcpConfigPath: "/tmp/mcp.json",
-			want:          []string{"claude", "--mcp-config", "/tmp/mcp.json", "--plugin-dir", "/stage/a", "chat"},
+			name:       "full combination",
+			downstream: []string{"claude", "chat"},
+			pluginDirs: []string{"/orig/a"},
+			dirMap:     map[string]string{"/orig/a": "/stage/a"},
+			want:       []string{"claude", "--plugin-dir", "/stage/a", "chat"},
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := buildDownstreamArgs(tc.downstream, tc.pluginDirs, tc.dirMap, tc.mcpConfigPath)
+			got := buildDownstreamArgs(tc.downstream, tc.pluginDirs, tc.dirMap)
 			if !reflect.DeepEqual(got, tc.want) {
 				t.Errorf("buildDownstreamArgs = %#v, want %#v", got, tc.want)
 			}

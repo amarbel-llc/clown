@@ -107,19 +107,10 @@ func PluginName(pluginDir string) (string, error) {
 	return manifest.Name, nil
 }
 
-type MCPConfig struct {
-	MCPServers map[string]MCPServerEntry `json:"mcpServers"`
-}
-
 // MCPServerEntry mirrors one entry in claude-code's mcpServers map. The
 // Type discriminator is required by claude-code's MCP configuration
 // schema; valid values for HTTP-transport servers are "http" and "sse".
 type MCPServerEntry struct {
 	Type string `json:"type"`
 	URL  string `json:"url"`
-}
-
-func GenerateMCPConfig(entries map[string]MCPServerEntry) ([]byte, error) {
-	cfg := MCPConfig{MCPServers: entries}
-	return json.MarshalIndent(cfg, "", "  ")
 }

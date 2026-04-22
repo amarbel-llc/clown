@@ -34,7 +34,8 @@ gomod2nix:
 
 # Integration test: launch clown-plugin-host with the synthetic plugin's
 # clown.json and verify the mock HTTP MCP server starts, completes the
-# handshake, passes health checks, and generates valid MCP config.
+# handshake, passes health checks, and compiles plugin manifests with
+# URL-based MCP entries.
 [group("test")]
 test-plugin-host: build build-mock-server
     #!/usr/bin/env bash
@@ -42,8 +43,7 @@ test-plugin-host: build build-mock-server
     plugin_dir="$(pwd)/tests/synthetic-plugin"
     echo "Starting clown-plugin-host with synthetic plugin..."
     # Run with a dummy downstream that just prints its args and exits.
-    # We use 'echo' as the downstream — clown-plugin-host will pass
-    # --mcp-config <file> to it, so we can inspect the output.
+    # clown-plugin-host will pass compiled --plugin-dir flags.
     output=$(timeout 30 ./result/bin/clown-plugin-host \
         --plugin-dir "$plugin_dir" \
         -- echo DOWNSTREAM_MARKER 2>&1) || {
@@ -52,11 +52,11 @@ test-plugin-host: build build-mock-server
         exit 1
     }
     echo "$output"
-    # Verify the downstream received --mcp-config
-    if echo "$output" | grep -q -- '--mcp-config'; then
-        echo "OK: downstream received --mcp-config flag"
+    # Verify the downstream received a compiled --plugin-dir
+    if echo "$output" | grep -qE -- '--plugin-dir[ =][^ ]*/clown-plugin-compile-'; then
+        echo "OK: downstream received compiled --plugin-dir"
     else
-        echo "FAIL: downstream did not receive --mcp-config" >&2
+        echo "FAIL: downstream did not receive a clown-plugin-compile-* --plugin-dir path" >&2
         exit 1
     fi
     if echo "$output" | grep -q 'DOWNSTREAM_MARKER'; then
@@ -99,12 +99,6 @@ test-plugin-host-moxy: build
         exit 1
     }
     echo "$output"
-    if echo "$output" | grep -q -- '--mcp-config'; then
-        echo "OK: downstream received --mcp-config flag"
-    else
-        echo "FAIL: downstream did not receive --mcp-config" >&2
-        exit 1
-    fi
     if echo "$output" | grep -q 'DOWNSTREAM_MARKER'; then
         echo "OK: downstream received its original args"
     else
@@ -135,7 +129,7 @@ test-plugin-host-moxy: build
 # Like test-plugin-host-moxy but exercises --disable-clown-protocol. The
 # flag is expected to skip discovery, HTTP server launch, and plugin
 # manifest compilation, so the downstream should see the original
-# --plugin-dir path and no --mcp-config flag.
+# --plugin-dir path (uncompiled).
 [group("test")]
 test-plugin-host-moxy-disabled: build
     #!/usr/bin/env bash
@@ -156,11 +150,6 @@ test-plugin-host-moxy-disabled: build
         exit 1
     }
     echo "$output"
-    if echo "$output" | grep -q -- '--mcp-config'; then
-        echo "FAIL: --disable-clown-protocol should NOT emit --mcp-config" >&2
-        exit 1
-    fi
-    echo "OK: no --mcp-config emitted"
     if echo "$output" | grep -q -- "--plugin-dir $plugin_dir"; then
         echo "OK: downstream received original --plugin-dir (pass-through)"
     else
@@ -390,6 +379,35 @@ explore-agents-schema: build
     # Restore clean manifest
     echo "$base}" > "$manifest"
     echo "=== Done ==="
+
+# Verify whether plugin.json mcpServers accepts url-based (HTTP) entries.
+# Creates a throwaway plugin dir with a url-based mcpServers entry and
+# launches claude with --plugin-dir to check /mcp output.
+[group("debug")]
+debug-plugin-url-mcp: build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tmpdir=$(mktemp -d)
+    trap 'rm -rf "$tmpdir"' EXIT
+    mkdir -p "$tmpdir/.claude-plugin"
+    cat > "$tmpdir/.claude-plugin/plugin.json" <<'EOF'
+    {
+      "name": "url-mcp-probe",
+      "version": "0.0.1",
+      "description": "Probe whether plugin.json mcpServers accepts url entries",
+      "mcpServers": {
+        "probe-server": {
+          "type": "http",
+          "url": "http://127.0.0.1:19999/mcp"
+        }
+      }
+    }
+    EOF
+    echo ">> plugin.json:"
+    cat "$tmpdir/.claude-plugin/plugin.json"
+    echo ""
+    echo ">> launching: clown --clean --plugin-dir $tmpdir mcp list"
+    ./result/bin/clown --clean --plugin-dir "$tmpdir" mcp list 2>&1 || true
 
 # Bump all flake inputs and rebuild to verify
 bump: && build

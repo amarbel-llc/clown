@@ -227,9 +227,10 @@ rotate or prune files.
 
 For each plugin directory whose `clown.json` contributed at least one
 `DiscoveredServer`, `clown-plugin-host` **compiles** a replacement plugin
-manifest so claude's native plugin loader does not re-register the same
-MCP servers that `clown-plugin-host` is already serving over HTTP. The
-compilation steps are:
+manifest that replaces the original stdio-based `mcpServers` entries with
+URL-based entries pointing at the running HTTP servers. This preserves
+plugin identity and original server names in Claude Code while switching
+the transport from stdio to HTTP. The compilation steps are:
 
 1. Create a staging directory under the OS temp root (e.g.
    `/tmp/clown-plugin-compile-*`)
@@ -237,11 +238,15 @@ compilation steps are:
    than `.claude-plugin`) into the staging directory
 3. Create a real `.claude-plugin/` directory in the staging dir and
    symlink every file under it other than `plugin.json`
-4. Read the source `.claude-plugin/plugin.json`, remove the `mcpServers`
-   key, and write the result to the staged `plugin.json`
+4. Read the source `.claude-plugin/plugin.json`, replace the `mcpServers`
+   key with URL-based entries for the healthy HTTP servers, and write the
+   result to the staged `plugin.json`. Each injected entry carries a
+   `type` discriminator (`"http"` or `"sse"`) and a `url` pointing at the
+   server's loopback address and port. Server names in the compiled
+   manifest match the original keys from `clown.json`.
 
 Compiled staging directories are tracked by the host and removed during
-shutdown (section 3.8).
+shutdown (section 3.9).
 
 Plugin directories without `clown.json` (or where `clown.json` declares
 no servers) MUST NOT be compiled — they are passed to claude unmodified
@@ -249,27 +254,15 @@ so claude's native MCP registration continues to work.
 
 #### 3.7 MCP Configuration
 
-Once all servers are healthy, the host generates a temporary MCP
-configuration file:
+MCP server entries are injected directly into the compiled `plugin.json`
+(section 3.6) rather than a standalone configuration file. This ensures
+Claude Code sees the HTTP servers as plugin-sourced (`plugin:<name>:<server>`)
+with their original names, preserving hook matching and plugin identity.
 
-```json
-{
-  "mcpServers": {
-    "<plugin-name>/<server-name>": {
-      "type": "http",
-      "url": "http://127.0.0.1:<port>/mcp"
-    }
-  }
-}
-```
-
-- Server names use the format `<plugin-name>/<server-name>`
 - For `streamable-http` servers, the `type` is `"http"` and the URL path is `/mcp`
 - For `sse` servers, the `type` is `"sse"` and the URL path is `/sse`
 - The `type` discriminator is required by Claude Code's MCP configuration
   schema; entries without it are rejected at load time.
-
-The file is passed to the downstream command via `--mcp-config`.
 
 #### 3.8 Downstream Execution
 
@@ -277,8 +270,7 @@ The downstream command (typically `claude`) is started as a child process.
 Its argument list is assembled as:
 
 ```
-<downstream[0]> --mcp-config <temp-file> \
-  --plugin-dir <dir1> --plugin-dir <dir2> ... \
+<downstream[0]> --plugin-dir <dir1> --plugin-dir <dir2> ... \
   <downstream[1:]...>
 ```
 
@@ -299,9 +291,8 @@ When the downstream command exits:
 2. The host waits up to 5 seconds for each server to exit
 3. If a server has not exited after the grace period, `SIGKILL` is sent to
    its process group
-4. The temporary MCP configuration file is removed
-5. Each compiled staging directory (section 3.6) is removed
-6. The host exits with the downstream command's exit code
+4. Each compiled staging directory (section 3.6) is removed
+5. The host exits with the downstream command's exit code
 
 ### 4. Architecture Integration
 
@@ -321,11 +312,9 @@ clown (shell wrapper)
             ├─ read handshake + poll healthz for each
             ├─ collect per-server start report
             ├─ [any failures] → skip / prompt / abort (§3.4)
-            ├─ compile plugin manifests (plugin.json mcpServers stripped)
-            │   into staging dirs
-            ├─ generate temp .mcp.json for healthy servers
-            ├─ run claude as child with --mcp-config and compiled
-            │   --plugin-dir flags
+            ├─ compile plugin manifests (inject url-based mcpServers
+            │   entries for healthy servers) into staging dirs
+            ├─ run claude as child with compiled --plugin-dir flags
             ├─ forward signals
             ├─ wait for claude to exit
             ├─ SIGTERM servers → grace period → SIGKILL
@@ -349,7 +338,6 @@ bypasses the entire clown-plugin-host pipeline:
 - No `clown.json` discovery
 - No HTTP server launch
 - No plugin manifest compilation
-- No `.mcp.json` generation
 - Plugin directories are passed to claude unmodified via
   `--plugin-dir`
 

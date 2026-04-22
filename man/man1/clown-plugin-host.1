@@ -21,10 +21,10 @@
 scans plugin directories for
 .Xr clown-json 5
 manifests declaring HTTP-based MCP servers, launches them as child
-processes, waits for their handshake and health checks, generates a
-temporary MCP configuration file, and passes it to the downstream
-command via
-.Fl -mcp-config .
+processes, waits for their handshake and health checks, compiles
+replacement plugin manifests with URL-based MCP entries for the running
+servers, and passes the compiled plugin directories to the downstream
+command.
 .Pp
 When no
 .Pa clown.json
@@ -66,9 +66,7 @@ environment variable (see
 Bypass the clown-plugin-host pipeline entirely.
 No
 .Pa clown.json
-discovery, no HTTP server launch, no plugin manifest compilation, and no
-.Fl -mcp-config
-generation.
+discovery, no HTTP server launch, and no plugin manifest compilation.
 Plugin directories are passed to the downstream command unmodified via
 .Fl -plugin-dir ,
 so claude's native plugin loader (and its native MCP registration) is
@@ -120,11 +118,9 @@ The first line of the server's stdout is read as a handshake line
 polls the server's health endpoint until it returns HTTP 200 or the
 configured timeout elapses.
 .It
-Once all servers are healthy, a temporary
-.Pa .mcp.json
-file is generated with the server URLs and passed to the downstream
-command via
-.Fl -mcp-config .
+Once all servers are healthy, the plugin manifest is compiled with
+URL-based MCP entries for the running servers (see
+.Sx PLUGIN MANIFEST COMPILATION ) .
 .El
 .Pp
 When the downstream command exits,
@@ -164,10 +160,11 @@ For each plugin directory whose
 contributes at least one HTTP MCP server,
 .Nm
 .Em compiles
-a replacement plugin manifest so Claude Code's native plugin loader does
-not re-register MCP servers that
-.Nm
-is already serving over HTTP.
+a replacement plugin manifest that replaces the original stdio-based
+.Li mcpServers
+entries with URL-based entries pointing at the running HTTP servers.
+This preserves plugin identity and original server names in Claude Code
+while switching the transport from stdio to HTTP.
 .Pp
 Compilation steps for each plugin directory:
 .Bl -enum
@@ -186,17 +183,27 @@ directory in the staging dir and symlink every file under it other than
 .It
 Read the source
 .Pa .claude-plugin/plugin.json ,
-remove the
+replace the
 .Li mcpServers
-key, and write the result to the staged
+key with URL-based entries for the healthy HTTP servers, and write the
+result to the staged
 .Pa plugin.json .
+Each injected entry carries a
+.Li type
+discriminator
+.Pq Li http No or Li sse
+and a
+.Li url
+pointing at the server's loopback address and port.
+Server names match the original keys from
+.Pa clown.json .
 .El
 .Pp
 Claude Code is handed the staged directory via
 .Fl -plugin-dir
 instead of the original, so hooks, skills, commands, agents, and
-sub-agents still load normally but the duplicate MCP registration goes
-away.
+sub-agents still load normally and MCP servers appear as plugin-sourced
+with their original names.
 The original plugin directory is never modified.
 .Pp
 Plugin directories that have no
@@ -212,13 +219,15 @@ shutdown.
 skips compilation entirely; see
 .Sx OPTIONS .
 .Sh MCP CONFIGURATION
-The generated MCP configuration uses server names of the form
-.Ar plugin-name Ns / Ns Ar server-name ,
-where
-.Ar plugin-name
-is read from the plugin's
-.Pa .claude-plugin/plugin.json
-manifest.
+MCP server entries are injected directly into the compiled
+.Pa plugin.json
+.Pq see Sx PLUGIN MANIFEST COMPILATION
+rather than a standalone configuration file.
+Server names in the compiled manifest use the original keys from
+.Pa clown.json ,
+preserving hook matching and Claude Code's
+.Li plugin:<name>:<server>
+identity scheme.
 .Pp
 Each entry carries a
 .Li type

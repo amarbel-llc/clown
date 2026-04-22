@@ -406,11 +406,11 @@
 
           # Route through clown-plugin-host for claude provider. It scans
           # --plugin-dir paths for clown.json, launches HTTP MCP servers,
-          # compiles a replacement plugin.json per plugin (mcpServers
-          # stripped) into a staging dir, and execs claude with
-          # --plugin-dir pointing at the staged dirs plus --mcp-config
-          # pointing at the generated entries. --disable-clown-protocol
-          # bypasses all of this and passes --plugin-dir through unchanged.
+          # compiles a replacement plugin.json per plugin (injecting
+          # url-based mcpServers entries for the running servers) into a
+          # staging dir, and execs claude with --plugin-dir pointing at
+          # the staged dirs. --disable-clown-protocol bypasses all of
+          # this and passes --plugin-dir through unchanged.
           # For codex, invoke directly (no plugin-host support).
           if [[ "$provider" == "claude" ]]; then
             "${clown-plugin-host}/bin/clown-plugin-host" \

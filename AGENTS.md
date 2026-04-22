@@ -52,22 +52,23 @@ The flake produces a `symlinkJoin` of four components:
    Sits between the shell wrapper and Claude Code. Scans `--plugin-dir`
    directories for `clown.json`, launches declared HTTP servers as child
    processes, reads their handshake lines (port negotiation via go-plugin
-   protocol), polls `/healthz`, generates a temporary `.mcp.json` with
-   server URLs, and passes it to Claude via `--mcp-config`. When no
-   `clown.json` is found, exec's directly into claude (zero overhead).
+   protocol), polls `/healthz`, compiles replacement plugin manifests with
+   URL-based MCP entries for the running servers, and passes the compiled
+   plugin directories to Claude via `--plugin-dir`. When no `clown.json`
+   is found, exec's directly into claude (zero overhead).
    See `clown-plugin-host(1)` and `clown-json(5)`.
 
    **Plugin manifest compilation.** When a plugin has both `clown.json`
    (HTTP MCP servers) and `.claude-plugin/plugin.json` (claude-native
-   manifest), its MCP servers would otherwise register twice in claude —
-   once under `<plugin>/<server>` via the generated `.mcp.json` and once
-   under `plugin:<plugin>:<server>` via claude's native plugin loader.
-   To avoid this, `clown-plugin-host` **compiles** each affected plugin
-   dir into a temporary staging directory: top-level entries are symlinked
+   manifest), `clown-plugin-host` **compiles** each affected plugin dir
+   into a temporary staging directory: top-level entries are symlinked
    back to the source, but `.claude-plugin/plugin.json` is rewritten with
-   the `mcpServers` key removed. Claude is handed the staged dir via
-   `--plugin-dir`, so it still loads hooks/skills/commands/agents but no
-   longer registers the duplicated MCP servers. Staged dirs are cleaned
+   the `mcpServers` key replaced by URL-based entries pointing at the
+   running HTTP servers. This preserves plugin identity
+   (`plugin:<name>:<server>`) and original server names in Claude Code,
+   which in turn preserves hook matching. Claude is handed the staged dir
+   via `--plugin-dir`, so it still loads hooks/skills/commands/agents and
+   registers the MCP servers as plugin-sourced. Staged dirs are cleaned
    up on shutdown. The `--disable-clown-protocol` flag (and
    `CLOWN_DISABLE_CLOWN_PROTOCOL=1` env var) bypasses the entire
    clown-plugin-host pipeline — plugin dirs are passed to claude

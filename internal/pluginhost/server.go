@@ -42,7 +42,6 @@ func (s *ManagedServer) Start(ctx context.Context) error {
 	}
 
 	s.cmd = exec.CommandContext(ctx, cmdPath, s.Def.Args...)
-	s.cmd.Dir = s.PluginDir
 	s.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	for k, v := range s.Def.Env {

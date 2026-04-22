@@ -65,7 +65,7 @@ func run(logger *slog.Logger, logPath string) int {
 
 	if disableClown {
 		logger.Info("clown protocol disabled; passing plugin dirs through to downstream unchanged")
-		execDownstream(buildDownstreamArgs(parsed.downstream, parsed.pluginDirs, nil, ""))
+		execDownstream(buildDownstreamArgs(parsed.downstream, parsed.pluginDirs, nil))
 		return 0 // unreachable after exec
 	}
 
@@ -79,19 +79,11 @@ func run(logger *slog.Logger, logPath string) int {
 
 	if len(discovered) == 0 {
 		logger.Info("no plugin servers discovered; passing plugin dirs through to downstream", "downstream", parsed.downstream)
-		execDownstream(buildDownstreamArgs(parsed.downstream, parsed.pluginDirs, nil, ""))
+		execDownstream(buildDownstreamArgs(parsed.downstream, parsed.pluginDirs, nil))
 		return 0 // unreachable after exec
 	}
 
-	dirMap, err := host.CompileForClaude(discovered)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "clown-plugin-host: %v\n", err)
-		logger.Error("compiling plugin manifests failed", "err", err)
-		host.Shutdown()
-		return 1
-	}
-
-	return runManaged(host, discovered, parsed.downstream, parsed.pluginDirs, dirMap, skipFailed, verbose, logger)
+	return runManaged(host, discovered, parsed.downstream, parsed.pluginDirs, skipFailed, verbose, logger)
 }
 
 func runManaged(
@@ -99,7 +91,6 @@ func runManaged(
 	discovered []pluginhost.DiscoveredServer,
 	downstream []string,
 	pluginDirs []string,
-	dirMap map[string]string,
 	skipFailed bool,
 	verbose bool,
 	logger *slog.Logger,
@@ -156,37 +147,20 @@ func runManaged(
 
 	if len(report.Started) == 0 {
 		logger.Info("no plugin servers healthy; falling back to original plugin dirs so claude's native MCP still works")
-		host.Shutdown() // deletes compiled stage dirs synchronously — syscall.Exec won't fire defers
-		execDownstream(buildDownstreamArgs(downstream, pluginDirs, nil, ""))
+		host.Shutdown()
+		execDownstream(buildDownstreamArgs(downstream, pluginDirs, nil))
 		return 0 // unreachable after exec
 	}
 	defer host.Shutdown()
 
-	mcpJSON, err := pluginhost.GenerateMCPConfig(host.ServerEntries())
+	dirMap, err := host.CompileForClaude(discovered)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "clown-plugin-host: generating mcp config: %v\n", err)
-		logger.Error("generating mcp config failed", "err", err)
+		fmt.Fprintf(os.Stderr, "clown-plugin-host: compiling plugin manifests: %v\n", err)
+		logger.Error("compiling plugin manifests failed", "err", err)
 		return 1
 	}
 
-	tmpFile, err := os.CreateTemp("", "clown-mcp-*.json")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "clown-plugin-host: creating temp file: %v\n", err)
-		logger.Error("creating mcp config temp file failed", "err", err)
-		return 1
-	}
-	defer os.Remove(tmpFile.Name())
-
-	if _, err := tmpFile.Write(mcpJSON); err != nil {
-		tmpFile.Close()
-		fmt.Fprintf(os.Stderr, "clown-plugin-host: writing mcp config: %v\n", err)
-		logger.Error("writing mcp config failed", "err", err)
-		return 1
-	}
-	tmpFile.Close()
-	logger.Info("wrote mcp config", "path", tmpFile.Name())
-
-	args := buildDownstreamArgs(downstream, pluginDirs, dirMap, tmpFile.Name())
+	args := buildDownstreamArgs(downstream, pluginDirs, dirMap)
 
 	binary, err := exec.LookPath(args[0])
 	if err != nil {
@@ -225,15 +199,11 @@ func runManaged(
 }
 
 // buildDownstreamArgs assembles the argv that exec's the downstream (claude).
-// It prepends --mcp-config when mcpConfigPath is non-empty, then prepends one
-// --plugin-dir per entry in pluginDirs (substituting the compiled path from
-// dirMap if available). Order: [binary, --mcp-config X, --plugin-dir dir1,
+// It prepends one --plugin-dir per entry in pluginDirs (substituting the
+// compiled path from dirMap if available). Order: [binary, --plugin-dir dir1,
 // --plugin-dir dir2, ..., <original downstream args>].
-func buildDownstreamArgs(downstream []string, pluginDirs []string, dirMap map[string]string, mcpConfigPath string) []string {
+func buildDownstreamArgs(downstream []string, pluginDirs []string, dirMap map[string]string) []string {
 	args := []string{downstream[0]}
-	if mcpConfigPath != "" {
-		args = append(args, "--mcp-config", mcpConfigPath)
-	}
 	for _, dir := range pluginDirs {
 		target := dir
 		if staged, ok := dirMap[dir]; ok {

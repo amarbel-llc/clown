@@ -22,8 +22,8 @@ enable features unavailable over stdio:
 Server-initiated requests via persistent SSE connections
 .El
 .Pp
-The protocol covers seven phases: discovery, handshake, health checking,
-failure handling, plugin manifest compilation, runtime, and shutdown.
+The protocol covers six phases: discovery, handshake, health checking,
+failure handling, plugin manifest compilation, and shutdown.
 It is modeled on the
 .Lk https://github.com/hashicorp/go-plugin "hashicorp/go-plugin"
 handshake protocol.
@@ -143,20 +143,22 @@ Shut down any healthy servers and exit non-zero.
 This is the default and preserves pre-2026-04 behavior.
 .El
 .Pp
-When the host proceeds with a partial set, only the healthy servers
-appear in the generated MCP configuration
-.Pq see Sx MCP CONFIGURATION .
-Failed servers are absent from the configuration but retain their log
-records for later inspection.
+When the host proceeds with a partial set, only the healthy servers'
+entries are injected into the compiled plugin manifest
+.Pq see Sx PLUGIN MANIFEST COMPILATION .
+Failed servers are absent from the compiled manifest but retain their
+log records for later inspection.
 .Sh PLUGIN MANIFEST COMPILATION
 For each plugin directory whose
 .Pa clown.json
 contributed at least one HTTP MCP server,
 .Xr clown-plugin-host 1
 .Em compiles
-a replacement plugin manifest so Claude Code's native plugin loader does
-not re-register the same MCP servers that clown-plugin-host is already
-serving over HTTP.
+a replacement plugin manifest that replaces the original stdio-based
+.Li mcpServers
+entries with URL-based entries pointing at the running HTTP servers.
+This preserves plugin identity and original server names in Claude Code
+while switching the transport from stdio to HTTP.
 .Pp
 Compilation steps:
 .Bl -enum -offset indent
@@ -174,10 +176,21 @@ directory in the staging dir and symlink every file under it other than
 .It
 Read the source
 .Pa .claude-plugin/plugin.json ,
-remove the
+replace the
 .Li mcpServers
-key, and write the result to the staged
+key with URL-based entries for the healthy HTTP servers, and write the
+result to the staged
 .Pa plugin.json .
+Each injected entry carries a
+.Li type
+discriminator
+.Pq Li http No or Li sse
+and a
+.Li url
+pointing at the server's loopback address and port.
+Server names in the compiled manifest match the original keys from
+.Pa clown.json ,
+preserving hook matching and plugin identity.
 .El
 .Pp
 Claude Code is handed the staged directory via
@@ -195,54 +208,26 @@ for the
 .Fl -disable-clown-protocol
 opt-out, which bypasses compilation and passes plugin directories to
 Claude Code unmodified.
-.Sh MCP CONFIGURATION
-Once all servers are healthy, the host generates a temporary MCP
-configuration file:
-.Bd -literal -offset indent
-{
-  "mcpServers": {
-    "<plugin-name>/<server-name>": {
-      "type": "http",
-      "url": "http://127.0.0.1:<port>/mcp"
-    }
-  }
-}
-.Ed
-.Pp
-Server names use the format
-.Ar plugin-name Ns / Ns Ar server-name .
-The
-.Li type
-field is
-.Li http
-for
-.Li streamable-http
-servers (URL path
-.Pa /mcp )
-and
-.Li sse
-for
-.Li sse
-servers (URL path
-.Pa /sse ) .
-Claude Code's MCP configuration schema rejects entries without a
-.Li type
-discriminator.
-.Pp
-The file is passed to the downstream command
-.Pq typically Xr claude-code 1
-via
-.Fl -mcp-config .
-.Pp
+.Sh DOWNSTREAM EXECUTION
 .Xr clown-plugin-host 1
-also prepends one
+prepends one
 .Fl -plugin-dir
 flag per plugin directory, using the compiled staged path when the
-plugin was compiled and the original path otherwise.
+plugin was compiled
+.Pq see Sx PLUGIN MANIFEST COMPILATION
+and the original path otherwise.
 Callers MUST NOT add
 .Fl -plugin-dir
 directly to the downstream args themselves \(em clown-plugin-host owns
 that routing.
+.Pp
+No separate
+.Pa .mcp.json
+file is generated; the HTTP server URLs are embedded directly in the
+compiled
+.Pa plugin.json
+so Claude sees them as plugin-sourced MCP servers with their original
+names.
 .Sh SHUTDOWN
 When the downstream command exits:
 .Bl -enum -offset indent
@@ -255,8 +240,6 @@ The host waits up to 5 seconds for each server to exit gracefully.
 If a server has not exited after the grace period,
 .Dv SIGKILL
 is sent to its process group.
-.It
-The temporary MCP configuration file is removed.
 .It
 Each compiled staging directory (see
 .Sx PLUGIN MANIFEST COMPILATION )
@@ -327,11 +310,9 @@ clown (shell wrapper)
             \(br\(em read handshake + poll healthz
             \(br\(em collect per-server start report
             \(br\(em [any failures] \(-> skip / prompt / abort
-            \(br\(em compile plugin manifests (plugin.json mcpServers stripped)
-            \(br    into staging dirs
-            \(br\(em generate temp .mcp.json for healthy servers
-            \(br\(em run claude as child with --mcp-config and compiled
-            \(br    --plugin-dir flags
+            \(br\(em compile plugin manifests (inject url-based mcpServers
+            \(br    entries for healthy servers) into staging dirs
+            \(br\(em run claude as child with compiled --plugin-dir flags
             \(br\(em forward signals (SIGTERM, SIGINT)
             \(br\(em wait for claude to exit
             \(br\(em SIGTERM servers \(-> grace period \(-> SIGKILL

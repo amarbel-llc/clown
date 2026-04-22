@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
@@ -122,40 +121,6 @@ func TestPluginName(t *testing.T) {
 	}
 	if name != "test-plugin" {
 		t.Errorf("name = %q, want %q", name, "test-plugin")
-	}
-}
-
-func TestGenerateMCPConfig(t *testing.T) {
-	data, err := GenerateMCPConfig(map[string]MCPServerEntry{
-		"moxy/my-server": {Type: "http", URL: "http://127.0.0.1:12345/mcp"},
-		"moxy/sse-srv":   {Type: "sse", URL: "http://127.0.0.1:12346/sse"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var cfg MCPConfig
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		t.Fatal(err)
-	}
-	entry, ok := cfg.MCPServers["moxy/my-server"]
-	if !ok {
-		t.Fatal("missing moxy/my-server")
-	}
-	if entry.Type != "http" {
-		t.Errorf("type = %q, want %q", entry.Type, "http")
-	}
-	if entry.URL != "http://127.0.0.1:12345/mcp" {
-		t.Errorf("url = %q, want %q", entry.URL, "http://127.0.0.1:12345/mcp")
-	}
-
-	// Claude-code's MCP schema requires a type discriminator alongside
-	// the URL for HTTP-transport servers. Check the wire format
-	// explicitly so this doesn't silently drift out of compliance again.
-	if !strings.Contains(string(data), `"type": "http"`) {
-		t.Errorf("generated JSON missing type=http:\n%s", data)
-	}
-	if !strings.Contains(string(data), `"type": "sse"`) {
-		t.Errorf("generated JSON missing type=sse:\n%s", data)
 	}
 }
 

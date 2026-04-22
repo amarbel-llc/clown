@@ -121,25 +121,19 @@ func (h *Host) StartAll(ctx context.Context, discovered []DiscoveredServer) Star
 	return report
 }
 
-// ServerEntries returns the per-server MCP entries ready to be passed to
-// GenerateMCPConfig. The Type field is derived from each server's
-// handshake protocol: "streamable-http" maps to "http", "sse" to "sse".
-// Unrecognized protocols fall back to the handshake value unmodified so
-// the schema error is at least legible.
-func (h *Host) ServerEntries() map[string]MCPServerEntry {
-	entries := make(map[string]MCPServerEntry, len(h.Servers))
-	for _, srv := range h.Servers {
-		hs := srv.Handshake()
-		typ := hs.Protocol
-		if typ == "streamable-http" {
-			typ = "http"
-		}
-		entries[srv.Name] = MCPServerEntry{
-			Type: typ,
-			URL:  hs.URL(),
-		}
+// serverEntryForManaged builds an MCPServerEntry from a running server's
+// handshake. The Type field maps "streamable-http" to "http"; other
+// protocols pass through unmodified so schema errors are legible.
+func serverEntryForManaged(srv *ManagedServer) MCPServerEntry {
+	hs := srv.Handshake()
+	typ := hs.Protocol
+	if typ == "streamable-http" {
+		typ = "http"
 	}
-	return entries
+	return MCPServerEntry{
+		Type: typ,
+		URL:  hs.URL(),
+	}
 }
 
 func (h *Host) Shutdown() {
@@ -162,20 +156,24 @@ func (h *Host) Shutdown() {
 	h.compiledDirs = nil
 }
 
-// CompileForClaude produces a map from each plugin-dir that contributed a
-// DiscoveredServer to a staging directory containing a compiled
-// plugin.json (mcpServers stripped). Call this before launching claude so
-// the --plugin-dir flags handed downstream point at compiled copies.
+// CompileForClaude produces a map from each plugin-dir to a staging
+// directory containing a compiled plugin.json. For plugins with running
+// HTTP servers (via h.Servers), the mcpServers block is replaced with
+// url-based entries using the original server names from clown.json.
+// For plugins without running servers, the mcpServers block is stripped.
 //
+// Call this after StartAll so server URLs are available.
 // Dirs that appear in multiple DiscoveredServer entries are compiled once.
 // Compiled dirs are tracked on the Host and removed by Shutdown.
 func (h *Host) CompileForClaude(discovered []DiscoveredServer) (map[string]string, error) {
+	serversByDir := h.serverEntriesByPluginDir(discovered)
+
 	result := make(map[string]string)
 	for _, d := range discovered {
 		if _, done := result[d.PluginDir]; done {
 			continue
 		}
-		staged, err := CompilePluginDir(d.PluginDir)
+		staged, err := CompilePluginDir(d.PluginDir, serversByDir[d.PluginDir])
 		if err != nil {
 			return nil, fmt.Errorf("compiling %s: %w", d.PluginDir, err)
 		}
@@ -187,4 +185,36 @@ func (h *Host) CompileForClaude(discovered []DiscoveredServer) (map[string]strin
 		}
 	}
 	return result, nil
+}
+
+// serverEntriesByPluginDir builds a map from plugin directory to the
+// MCPServerEntry map that should be injected into that plugin's
+// compiled plugin.json. Keys in the inner map are the original server
+// names from clown.json (not the plugin/server composite).
+func (h *Host) serverEntriesByPluginDir(discovered []DiscoveredServer) map[string]map[string]MCPServerEntry {
+	nameByComposite := make(map[string]serverOrigin, len(discovered))
+	for _, d := range discovered {
+		nameByComposite[d.Name()] = serverOrigin{
+			pluginDir:  d.PluginDir,
+			serverName: d.ServerName,
+		}
+	}
+
+	result := make(map[string]map[string]MCPServerEntry)
+	for _, srv := range h.Servers {
+		origin, ok := nameByComposite[srv.Name]
+		if !ok {
+			continue
+		}
+		if result[origin.pluginDir] == nil {
+			result[origin.pluginDir] = make(map[string]MCPServerEntry)
+		}
+		result[origin.pluginDir][origin.serverName] = serverEntryForManaged(srv)
+	}
+	return result
+}
+
+type serverOrigin struct {
+	pluginDir  string
+	serverName string
 }
