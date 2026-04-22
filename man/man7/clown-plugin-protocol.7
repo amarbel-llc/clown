@@ -232,8 +232,17 @@ names.
 When the downstream command exits:
 .Bl -enum -offset indent
 .It
+For each server, the host checks whether the child process is still
+alive.
+If it has already exited (unexpected death), the host logs an
+.Sy ERROR Ns -level
+record containing the server name, PID, exit code, and terminating
+signal (if any), then skips the graceful-shutdown sequence for that
+server.
+.It
+For servers still alive,
 .Dv SIGTERM
-is sent to each server's process group.
+is sent to the server's process group.
 .It
 The host waits up to 5 seconds for each server to exit gracefully.
 .It
@@ -247,6 +256,13 @@ is removed.
 .It
 The host exits with the downstream command's exit code.
 .El
+.Pp
+A background reaper goroutine calls
+.Xr waitpid 2
+on each server immediately after startup, so unexpected exits are reaped
+promptly and the exit status is available at shutdown time.
+This reaper is purely passive \(em it records the death but does not
+attempt restart or notification.
 .Sh PROCESS ISOLATION
 Each server runs in its own process group
 .Pq via Dv setpgid .
@@ -297,27 +313,27 @@ See
 for the authoritative field list.
 .Sh ARCHITECTURE
 .Bd -literal -offset indent
-clown (shell wrapper)
-  \(da exec clown-plugin-host --plugin-dir A [--skip-failed]
-        [--disable-clown-protocol] -- claude [args]
-       \(br\(em open $XDG_LOG_HOME/clown/clown-plugin-host-*.log
-       \(br\(em [--disable-clown-protocol]
-       \(br    \(-> exec claude with original --plugin-dir (pass-through)
-       \(br\(em [no clown.json found]
-       \(br    \(-> exec claude with original --plugin-dir (pass-through)
-       \(da\(em [clown.json found]
-            \(br\(em launch HTTP server children (parallel)
-            \(br\(em read handshake + poll healthz
-            \(br\(em collect per-server start report
-            \(br\(em [any failures] \(-> skip / prompt / abort
-            \(br\(em compile plugin manifests (inject url-based mcpServers
-            \(br    entries for healthy servers) into staging dirs
-            \(br\(em run claude as child with compiled --plugin-dir flags
-            \(br\(em forward signals (SIGTERM, SIGINT)
-            \(br\(em wait for claude to exit
-            \(br\(em SIGTERM servers \(-> grace period \(-> SIGKILL
-            \(br\(em remove compiled staging dirs
-            \(da\(em exit with claude's exit code
+clown (Go binary, manages plugin lifecycle directly)
+  \(br\(em open $XDG_LOG_HOME/clown/clown-plugin-host-*.log
+  \(br\(em [--disable-clown-protocol]
+  \(br    \(-> exec claude with original --plugin-dir (pass-through)
+  \(br\(em [no clown.json found]
+  \(br    \(-> exec claude with original --plugin-dir (pass-through)
+  \(da\(em [clown.json found]
+       \(br\(em launch HTTP server children (parallel)
+       \(br\(em read handshake + poll healthz
+       \(br\(em start background reaper goroutine per server
+       \(br\(em collect per-server start report
+       \(br\(em [any failures] \(-> skip / prompt / abort
+       \(br\(em compile plugin manifests (inject url-based mcpServers
+       \(br    entries for healthy servers) into staging dirs
+       \(br\(em run claude as child with compiled --plugin-dir flags
+       \(br\(em forward signals (SIGTERM, SIGINT)
+       \(br\(em wait for claude to exit
+       \(br\(em check reaper: unexpected death \(-> ERROR log
+       \(br\(em live servers: SIGTERM \(-> grace period \(-> SIGKILL
+       \(br\(em remove compiled staging dirs
+       \(da\(em exit with claude's exit code
 .Ed
 .Sh COMPATIBILITY
 This protocol is additive.

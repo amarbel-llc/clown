@@ -13,6 +13,15 @@ import (
 	"time"
 )
 
+func exitSignal(state *os.ProcessState) string {
+	if status, ok := state.Sys().(syscall.WaitStatus); ok {
+		if status.Signaled() {
+			return status.Signal().String()
+		}
+	}
+	return ""
+}
+
 const stopGracePeriod = 5 * time.Second
 
 type ManagedServer struct {
@@ -24,6 +33,8 @@ type ManagedServer struct {
 
 	cmd       *exec.Cmd
 	handshake Handshake
+	done      chan struct{}
+	waitState *os.ProcessState
 }
 
 func (s *ManagedServer) logger() *slog.Logger {
@@ -92,6 +103,9 @@ func (s *ManagedServer) Start(ctx context.Context) error {
 	}
 	log.Info("plugin server healthy", "url", hs.URL())
 
+	s.done = make(chan struct{})
+	go s.reap()
+
 	return nil
 }
 
@@ -104,32 +118,57 @@ func (s *ManagedServer) Stop() {
 		return
 	}
 	log := s.logger()
-	log.Info("stopping plugin server", "pid", s.cmd.Process.Pid)
-	pgid, err := syscall.Getpgid(s.cmd.Process.Pid)
+	pid := s.cmd.Process.Pid
+
+	select {
+	case <-s.done:
+		s.logUnexpectedExit(log, pid)
+		return
+	default:
+	}
+
+	log.Info("stopping plugin server", "pid", pid)
+	pgid, err := syscall.Getpgid(pid)
 	if err == nil {
 		_ = syscall.Kill(-pgid, syscall.SIGTERM)
 	} else {
 		_ = s.cmd.Process.Signal(syscall.SIGTERM)
 	}
 
-	done := make(chan struct{})
-	go func() {
-		_ = s.cmd.Wait()
-		close(done)
-	}()
-
 	select {
-	case <-done:
-		log.Info("plugin server exited cleanly")
+	case <-s.done:
+		log.Info("plugin server exited cleanly", "pid", pid)
 	case <-time.After(stopGracePeriod):
-		log.Warn("plugin server did not exit within grace period; killing", "grace", stopGracePeriod.String())
-		if pgid, err := syscall.Getpgid(s.cmd.Process.Pid); err == nil {
+		log.Warn("plugin server did not exit within grace period; killing",
+			"pid", pid, "grace", stopGracePeriod.String())
+		if pgid, err := syscall.Getpgid(pid); err == nil {
 			_ = syscall.Kill(-pgid, syscall.SIGKILL)
 		} else {
 			_ = s.cmd.Process.Kill()
 		}
-		<-done
+		<-s.done
 	}
+}
+
+func (s *ManagedServer) Done() <-chan struct{} {
+	return s.done
+}
+
+func (s *ManagedServer) reap() {
+	_ = s.cmd.Wait()
+	s.waitState = s.cmd.ProcessState
+	close(s.done)
+}
+
+func (s *ManagedServer) logUnexpectedExit(log *slog.Logger, pid int) {
+	attrs := []any{"pid", pid}
+	if s.waitState != nil {
+		attrs = append(attrs, "exit_code", s.waitState.ExitCode())
+		if sig := exitSignal(s.waitState); sig != "" {
+			attrs = append(attrs, "signal", sig)
+		}
+	}
+	log.Error("plugin server died unexpectedly", attrs...)
 }
 
 func (s *ManagedServer) readHandshake(ctx context.Context, r io.Reader) (Handshake, error) {
@@ -186,6 +225,10 @@ func (s *ManagedServer) kill() {
 		} else {
 			_ = s.cmd.Process.Kill()
 		}
-		_ = s.cmd.Wait()
+		if s.done != nil {
+			<-s.done
+		} else {
+			_ = s.cmd.Wait()
+		}
 	}
 }
