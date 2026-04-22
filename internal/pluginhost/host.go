@@ -117,12 +117,25 @@ func (h *Host) StartAll(ctx context.Context, discovered []DiscoveredServer) Star
 	return report
 }
 
-func (h *Host) ServerURLs() map[string]string {
-	urls := make(map[string]string, len(h.Servers))
+// ServerEntries returns the per-server MCP entries ready to be passed to
+// GenerateMCPConfig. The Type field is derived from each server's
+// handshake protocol: "streamable-http" maps to "http", "sse" to "sse".
+// Unrecognized protocols fall back to the handshake value unmodified so
+// the schema error is at least legible.
+func (h *Host) ServerEntries() map[string]MCPServerEntry {
+	entries := make(map[string]MCPServerEntry, len(h.Servers))
 	for _, srv := range h.Servers {
-		urls[srv.Name] = srv.Handshake().URL()
+		hs := srv.Handshake()
+		typ := hs.Protocol
+		if typ == "streamable-http" {
+			typ = "http"
+		}
+		entries[srv.Name] = MCPServerEntry{
+			Type: typ,
+			URL:  hs.URL(),
+		}
 	}
-	return urls
+	return entries
 }
 
 func (h *Host) Shutdown() {

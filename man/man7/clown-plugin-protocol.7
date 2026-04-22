@@ -155,6 +155,7 @@ configuration file:
 {
   "mcpServers": {
     "<plugin-name>/<server-name>": {
+      "type": "http",
       "url": "http://127.0.0.1:<port>/mcp"
     }
   }
@@ -163,15 +164,23 @@ configuration file:
 .Pp
 Server names use the format
 .Ar plugin-name Ns / Ns Ar server-name .
-The URL path is
-.Pa /mcp
+The
+.Li type
+field is
+.Li http
 for
 .Li streamable-http
-servers and
-.Pa /sse
+servers (URL path
+.Pa /mcp )
+and
+.Li sse
 for
 .Li sse
-servers.
+servers (URL path
+.Pa /sse ) .
+Claude Code's MCP configuration schema rejects entries without a
+.Li type
+discriminator.
 .Pp
 The file is passed to the downstream command
 .Pq typically Xr claude-code 1

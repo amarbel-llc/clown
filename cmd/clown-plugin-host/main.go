@@ -136,7 +136,7 @@ func runManaged(host *pluginhost.Host, discovered []pluginhost.DiscoveredServer,
 	}
 	defer host.Shutdown()
 
-	mcpJSON, err := pluginhost.GenerateMCPConfig(host.ServerURLs())
+	mcpJSON, err := pluginhost.GenerateMCPConfig(host.ServerEntries())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown-plugin-host: generating mcp config: %v\n", err)
 		logger.Error("generating mcp config failed", "err", err)

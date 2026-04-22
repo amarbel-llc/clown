@@ -111,14 +111,15 @@ type MCPConfig struct {
 	MCPServers map[string]MCPServerEntry `json:"mcpServers"`
 }
 
+// MCPServerEntry mirrors one entry in claude-code's mcpServers map. The
+// Type discriminator is required by claude-code's MCP configuration
+// schema; valid values for HTTP-transport servers are "http" and "sse".
 type MCPServerEntry struct {
-	URL string `json:"url"`
+	Type string `json:"type"`
+	URL  string `json:"url"`
 }
 
-func GenerateMCPConfig(servers map[string]string) ([]byte, error) {
-	cfg := MCPConfig{MCPServers: make(map[string]MCPServerEntry, len(servers))}
-	for name, url := range servers {
-		cfg.MCPServers[name] = MCPServerEntry{URL: url}
-	}
+func GenerateMCPConfig(entries map[string]MCPServerEntry) ([]byte, error) {
+	cfg := MCPConfig{MCPServers: entries}
 	return json.MarshalIndent(cfg, "", "  ")
 }

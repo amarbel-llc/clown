@@ -153,6 +153,41 @@ lint-man: build-man
         exit $failed
     ' _ "${pages[@]}"
 
+# Feed a hand-crafted .mcp.json into claude to see whether its schema
+# validator accepts it. MODE is one of: bare (just "url"), typed-http
+# ("type":"http","url"), typed-sse. Useful for reproducing the
+# mcpServers schema error seen when clown-plugin-host ships the config.
+[group("explore")]
+explore-mcp-config MODE:
+    #!/usr/bin/env bash
+    set -u
+    cfg=$(mktemp /tmp/clown-repro-mcp-XXXXXX.json)
+    trap 'rm -f "$cfg"' EXIT
+    case "{{MODE}}" in
+        bare)
+            cat > "$cfg" <<'EOF'
+    {"mcpServers":{"moxy/moxy":{"url":"http://127.0.0.1:42323/mcp"}}}
+    EOF
+            ;;
+        typed-http)
+            cat > "$cfg" <<'EOF'
+    {"mcpServers":{"moxy/moxy":{"type":"http","url":"http://127.0.0.1:42323/mcp"}}}
+    EOF
+            ;;
+        typed-sse)
+            cat > "$cfg" <<'EOF'
+    {"mcpServers":{"moxy/moxy":{"type":"sse","url":"http://127.0.0.1:42323/sse"}}}
+    EOF
+            ;;
+        *) echo "MODE must be bare|typed-http|typed-sse" >&2 ; exit 2 ;;
+    esac
+    echo ">> wrote $cfg:"
+    cat "$cfg"
+    echo
+    echo ">> claude --mcp-config $cfg mcp list (exit code reported)"
+    claude --mcp-config "$cfg" mcp list 2>&1 | head -40 || true
+    echo ">> exit=$?"
+
 # Smoke-test the --skip-failed / CLOWN_SKIP_FAILED_PLUGINS / no-opt-in
 # branches using a pre-built .tmp/bad-plugin that points at a nonexistent
 # binary. MODE is one of: none | flag | env. Append "+v" to turn on

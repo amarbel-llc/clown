@@ -232,6 +232,7 @@ configuration file:
 {
   "mcpServers": {
     "<plugin-name>/<server-name>": {
+      "type": "http",
       "url": "http://127.0.0.1:<port>/mcp"
     }
   }
@@ -239,8 +240,10 @@ configuration file:
 ```
 
 - Server names use the format `<plugin-name>/<server-name>`
-- For `streamable-http` servers, the URL path is `/mcp`
-- For `sse` servers, the URL path is `/sse`
+- For `streamable-http` servers, the `type` is `"http"` and the URL path is `/mcp`
+- For `sse` servers, the `type` is `"sse"` and the URL path is `/sse`
+- The `type` discriminator is required by Claude Code's MCP configuration
+  schema; entries without it are rejected at load time.
 
 The file is passed to the downstream command via `--mcp-config`.
 

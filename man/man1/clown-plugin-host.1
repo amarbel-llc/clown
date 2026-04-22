@@ -149,14 +149,20 @@ is read from the plugin's
 .Pa .claude-plugin/plugin.json
 manifest.
 .Pp
-For
+Each entry carries a
+.Li type
+discriminator required by Claude Code's MCP configuration schema:
+.Li http
+for
 .Li streamable-http
-servers, the URL path is
-.Pa /mcp .
-For
+servers (URL path
+.Pa /mcp )
+and
 .Li sse
-servers, the URL path is
-.Pa /sse .
+for
+.Li sse
+servers (URL path
+.Pa /sse ) .
 .Sh FAILURE HANDLING
 Plugin servers that fail to start, fail the handshake, or fail the
 healthcheck are reported individually: each failure is written to stderr
