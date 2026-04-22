@@ -86,6 +86,9 @@ func startDaemon(pidPath, portPath string) (int, error) {
 
 	binary := os.Getenv("CIRCUS_LLAMA_SERVER")
 	if binary == "" {
+		binary = buildcfg.LlamaServerPath
+	}
+	if binary == "" {
 		binary = "llama-server"
 	}
 

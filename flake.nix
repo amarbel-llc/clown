@@ -177,6 +177,7 @@
           ldflags = [
             "-s" "-w"
             "-X github.com/amarbel-llc/clown/internal/buildcfg.DefaultModelPath=${gemma3-270m-model}"
+            "-X github.com/amarbel-llc/clown/internal/buildcfg.LlamaServerPath=${llamaServerPath}"
           ];
         };
 
@@ -262,6 +263,7 @@
 
         claudeCliPath = "${patchedClaudeCode}/bin/claude";
         codexCliPath = "${pkgs-codex.codex}/bin/codex";
+        llamaServerPath = "${pkgs.llama-cpp}/bin/llama-server";
 
         # Thin wrapper: sets CLOWN_PLUGIN_META (varies per mkCircus) then
         # execs the Go binary. All flag parsing, provider routing, and

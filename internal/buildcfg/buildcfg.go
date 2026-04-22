@@ -14,4 +14,5 @@ var (
 	CodexVersion        string
 	CodexRev            string
 	DefaultModelPath    string
+	LlamaServerPath     string
 )
