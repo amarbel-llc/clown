@@ -112,19 +112,36 @@ test-plugin-host-moxy: build
 build-nix:
     nix build --show-trace
 
-# Render a single manpage as utf8 through mandoc to preview how it looks.
+# Build the stamped clown-manpages store path (with @MDOCDATE@
+# substituted for the flake's lastModifiedDate) and echo where it
+# landed. Useful as a prerequisite for docs recipes.
+[group("docs")]
+build-man:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    nix build --show-trace .#clown-manpages --out-link result-man
+    echo "built: $(readlink -f result-man)"
+
+# Render a single manpage as utf8 through mandoc to preview how it
+# looks. Accepts either a source path (man/man1/clown-plugin-host.1)
+# or a built path (result-man/share/man/man1/clown-plugin-host.1).
 [group("docs")]
 render-man PAGE:
     nix shell nixpkgs#mandoc -c mandoc -Tutf8 {{PAGE}}
 
-# Lint all mdoc(7) manpages with mandoc -Tlint. Exits nonzero on any
-# warning or error; quiet on a clean tree. Uses `nix shell` to pull
-# mandoc since it is not in the default devshell.
+# Lint all mdoc(7) manpages with mandoc -Tlint. Operates on the built
+# pages so @MDOCDATE@ has already been substituted, meaning we lint
+# what actually ships.
 [group("docs")]
-lint-man:
+lint-man: build-man
     #!/usr/bin/env bash
     set -euo pipefail
-    pages=(man/man1/*.1 man/man5/*.5 man/man7/*.7)
+    out=$(readlink -f result-man)
+    pages=(
+        "$out"/share/man/man1/*.1
+        "$out"/share/man/man5/*.5
+        "$out"/share/man/man7/*.7
+    )
     nix shell nixpkgs#mandoc -c bash -c '
         failed=0
         for page in "$@"; do

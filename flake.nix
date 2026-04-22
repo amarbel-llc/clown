@@ -78,6 +78,24 @@
         codexVersion = pkgs-codex.codex.version;
         codexRev = nixpkgs-codex.rev or "dirty";
 
+        # Whole-tree date harvested from flake metadata. Dirty trees also
+        # yield a value (current time), so pilot builds of uncommitted
+        # edits stamp with today rather than leaving the sentinel literal.
+        # Format: YYYYMMDDhhmmss. Converted to mdoc's "Month D, YYYY"
+        # convention below, substituted into @MDOCDATE@ at manpage build
+        # time.
+        flakeDate = self.lastModifiedDate or "19700101000000";
+        flakeYear = builtins.substring 0 4 flakeDate;
+        flakeMonth = builtins.substring 4 2 flakeDate;
+        flakeDay = builtins.substring 6 2 flakeDate;
+        monthNames = {
+          "01" = "January";   "02" = "February"; "03" = "March";
+          "04" = "April";     "05" = "May";      "06" = "June";
+          "07" = "July";      "08" = "August";   "09" = "September";
+          "10" = "October";   "11" = "November"; "12" = "December";
+        };
+        mdocDate = "${monthNames.${flakeMonth}} ${toString (lib.toInt flakeDay)}, ${flakeYear}";
+
         buildGoApplication = gomod2nix.legacyPackages.${system}.buildGoApplication;
 
         clown-plugin-host = buildGoApplication {
@@ -391,13 +409,30 @@
           cp ${./completions/clown.fish} $out/share/fish/vendor_completions.d/clown.fish
         '';
 
-        clown-manpages = pkgs.runCommand "clown-manpages" { } ''
+        # Clown-owned pages use the @MDOCDATE@ sentinel in .Dd; we stamp
+        # them with mdocDate (derived from self.lastModifiedDate) at
+        # build time. Codex vendored pages keep their upstream dates.
+        clown-manpages = pkgs.runCommand "clown-manpages" {
+          inherit mdocDate;
+        } ''
           for section in 1 5 7; do
             mkdir -p $out/share/man/man$section
           done
           cp ${./man/man1}/*.1 $out/share/man/man1/
           cp ${./man/man5}/*.5 $out/share/man/man5/
           cp ${./man/man7}/*.7 $out/share/man/man7/
+          chmod -R u+w $out/share/man
+          for page in \
+              $out/share/man/man1/clown.1 \
+              $out/share/man/man1/clown-plugin-host.1 \
+              $out/share/man/man5/clown-json.5 \
+              $out/share/man/man7/clown-plugin-protocol.7; do
+              sed -i "s/@MDOCDATE@/$mdocDate/g" "$page"
+              if grep -q '@MDOCDATE@' "$page"; then
+                  echo "clown-manpages: @MDOCDATE@ left unsubstituted in $page" >&2
+                  exit 1
+              fi
+          done
         '';
 
         # The installCheckPhase on patchedClaudeCode (above) verifies at the
@@ -517,6 +552,7 @@
       in
       {
         packages.default = mkClownPkg emptyPluginMeta;
+        packages.clown-manpages = clown-manpages;
 
         checks = {
           managedSettingsRead = managedSettingsReadTest;
