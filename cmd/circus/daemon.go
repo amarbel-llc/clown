@@ -7,7 +7,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -264,6 +266,24 @@ func statusDaemon() error {
 	logPath, _ := logfilePath()
 	fmt.Printf("running  pid=%d  url=http://127.0.0.1:%d  log=%s\n", pid, port, logPath)
 	return nil
+}
+
+func listModels(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".gguf") {
+			names = append(names, strings.TrimSuffix(e.Name(), ".gguf"))
+		}
+	}
+	sort.Strings(names)
+	return names, nil
 }
 
 func waitHealthy(ctx context.Context, addr string) error {

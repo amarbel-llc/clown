@@ -13,7 +13,7 @@ func main() {
 
 func run(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: circus <start|stop|status> [--model <path>]")
+		fmt.Fprintln(os.Stderr, "usage: circus <start|stop|status|models> [--model <name-or-path>]")
 		return 1
 	}
 
@@ -32,10 +32,24 @@ func run(args []string) int {
 			return 1
 		}
 		return 0
+	case "models":
+		return cmdModels()
 	default:
 		fmt.Fprintf(os.Stderr, "circus: unknown command %q\n", args[0])
 		return 1
 	}
+}
+
+func cmdModels() int {
+	names, err := listModels(modelsDir())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "circus: %v\n", err)
+		return 1
+	}
+	for _, name := range names {
+		fmt.Println(name)
+	}
+	return 0
 }
 
 func cmdStart(args []string) int {
