@@ -1,9 +1,13 @@
 package main
 
 import (
+	"crypto/sha256"
 	_ "embed"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
+	"os"
 )
 
 //go:embed registry.json
@@ -32,4 +36,21 @@ func findInRegistry(name string, entries []registryEntry) (registryEntry, bool) 
 		}
 	}
 	return registryEntry{}, false
+}
+
+func verifySHA256(path, expected string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", path, err)
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return fmt.Errorf("read %s: %w", path, err)
+	}
+	got := hex.EncodeToString(h.Sum(nil))
+	if got != expected {
+		return fmt.Errorf("sha256 mismatch: got %s, want %s", got, expected)
+	}
+	return nil
 }

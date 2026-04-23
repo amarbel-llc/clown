@@ -1,6 +1,11 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -47,5 +52,34 @@ func TestLoadRegistry_ContainsExpectedModels(t *testing.T) {
 		if !names[want] {
 			t.Errorf("expected model %q in registry", want)
 		}
+	}
+}
+
+func TestVerifySHA256_Match(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.bin")
+	content := []byte("hello circus")
+	if err := os.WriteFile(path, content, 0644); err != nil {
+		t.Fatal(err)
+	}
+	h := sha256.Sum256(content)
+	digest := hex.EncodeToString(h[:])
+	if err := verifySHA256(path, digest); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestVerifySHA256_Mismatch(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.bin")
+	if err := os.WriteFile(path, []byte("hello circus"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	err := verifySHA256(path, "0000000000000000000000000000000000000000000000000000000000000000")
+	if err == nil {
+		t.Fatal("expected error for mismatch")
+	}
+	if !strings.Contains(err.Error(), "sha256 mismatch") {
+		t.Errorf("expected mismatch error, got: %v", err)
 	}
 }
