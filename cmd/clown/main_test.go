@@ -228,6 +228,34 @@ func TestParseFlags_ProfileFromEnv(t *testing.T) {
 	}
 }
 
+func TestReadCircusPortfile_Present(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	stateDir := filepath.Join(dir, ".local", "state", "circus")
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "portfile"), []byte("127.0.0.1:8080\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	addr, err := readCircusPortfile()
+	if err != nil {
+		t.Fatalf("readCircusPortfile: %v", err)
+	}
+	if addr != "127.0.0.1:8080" {
+		t.Errorf("addr = %q, want %q", addr, "127.0.0.1:8080")
+	}
+}
+
+func TestReadCircusPortfile_Missing(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	_, err := readCircusPortfile()
+	if err == nil {
+		t.Fatal("expected error when portfile is missing")
+	}
+}
+
 func TestPrependPluginDirs(t *testing.T) {
 	cases := []struct {
 		name       string

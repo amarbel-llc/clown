@@ -60,7 +60,7 @@ func TestReadOpencodeLocalConfig_MissingURL(t *testing.T) {
 
 func TestWriteOpencodeConfig_CreatesFile(t *testing.T) {
 	dir := t.TempDir()
-	err := writeOpencodeConfig(dir, "https://example.com/v1", "test-token")
+	err := writeOpencodeConfig(dir, "https://example.com/v1", "test-token", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -77,5 +77,44 @@ func TestWriteOpencodeConfig_CreatesFile(t *testing.T) {
 	}
 	if !strings.Contains(content, "gpt-4o") {
 		t.Errorf("config does not contain model: %s", content)
+	}
+}
+
+func TestWriteOpencodeConfig_WithProfile(t *testing.T) {
+	dir := t.TempDir()
+	err := writeOpencodeConfig(dir, "https://gw.example.com/v1", "tok-xyz", "gpt-4o")
+	if err != nil {
+		t.Fatalf("writeOpencodeConfig: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "opencode", "opencode.json"))
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "gpt-4o") {
+		t.Errorf("config missing model: %s", content)
+	}
+	if !strings.Contains(content, "gw.example.com") {
+		t.Errorf("config missing url: %s", content)
+	}
+}
+
+func TestWriteOpencodeConfig_ModelOverride(t *testing.T) {
+	dir := t.TempDir()
+	err := writeOpencodeConfig(dir, "https://gw.example.com/v1", "tok-xyz", "my-custom-model")
+	if err != nil {
+		t.Fatalf("writeOpencodeConfig: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "opencode", "opencode.json"))
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "my-custom-model") {
+		t.Errorf("config missing custom model: %s", content)
+	}
+	// default model should NOT appear when overridden
+	if strings.Contains(content, "\"gpt-4o\"") && !strings.Contains(content, "my-custom-model") {
+		t.Errorf("config has wrong model: %s", content)
 	}
 }

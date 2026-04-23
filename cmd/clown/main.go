@@ -143,7 +143,7 @@ func run(rawArgs []string) int {
 	case "circus":
 		return runCircus(cliPath, flags, prompts, pluginDirs)
 	case "opencode":
-		return runOpencode(cliPath, flags.forwarded)
+		return runOpencode(cliPath, flags.forwarded, selectedProfile)
 	default:
 		fmt.Fprintf(os.Stderr, "clown: unknown provider %q\n", flags.provider)
 		return 1

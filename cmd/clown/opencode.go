@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/amarbel-llc/clown/internal/profile"
 )
 
 type opencodeLocalConfig struct {
@@ -59,7 +61,10 @@ func readOpencodeLocalConfig() (opencodeLocalConfig, error) {
 	return cfg, nil
 }
 
-func writeOpencodeConfig(configDir, url, token string) error {
+func writeOpencodeConfig(configDir, url, token, model string) error {
+	if model == "" {
+		model = "gpt-4o"
+	}
 	type modelLimit struct {
 		Context int `json:"context"`
 		Output  int `json:"output"`
@@ -95,14 +100,14 @@ func writeOpencodeConfig(configDir, url, token string) error {
 					APIKey:  token,
 				},
 				Models: map[string]modelEntry{
-					"gpt-4o": {
-						Name:  "GPT-4o",
+					model: {
+						Name:  model,
 						Limit: modelLimit{Context: 128000, Output: 16384},
 					},
 				},
 			},
 		},
-		Model: "custom/gpt-4o",
+		Model: "custom/" + model,
 	}
 
 	dir := filepath.Join(configDir, "opencode")
@@ -116,16 +121,51 @@ func writeOpencodeConfig(configDir, url, token string) error {
 	return os.WriteFile(filepath.Join(dir, "opencode.json"), data, 0o600)
 }
 
-func runOpencode(opencodePath string, args []string) int {
+func readCircusPortfile() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("home dir: %w", err)
+	}
+	path := filepath.Join(home, ".local", "state", "circus", "portfile")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("circus not running (no portfile at %s): %w", path, err)
+	}
+	addr := strings.TrimSpace(string(data))
+	if addr == "" {
+		return "", fmt.Errorf("circus portfile is empty")
+	}
+	return addr, nil
+}
+
+func runOpencode(opencodePath string, args []string, prof *profile.Profile) int {
 	if opencodePath == "" {
 		fmt.Fprintln(os.Stderr, "clown: opencode binary path not configured (build misconfiguration)")
 		return 1
 	}
 
-	localCfg, err := readOpencodeLocalConfig()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "clown: opencode config: %v\n", err)
-		return 1
+	var url, token, model string
+	if prof != nil && prof.Backend == "gateway" {
+		url, token, model = prof.URL, prof.Token, prof.Model
+	} else if prof != nil && prof.Backend == "local" {
+		addr, err := readCircusPortfile()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "clown: opencode local backend: %v\n", err)
+			return 1
+		}
+		url = "http://" + addr + "/v1"
+		token = "local"
+		model = prof.Model
+	} else {
+		localCfg, err := readOpencodeLocalConfig()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "clown: opencode config: %v\n", err)
+			return 1
+		}
+		url, token = localCfg.URL, localCfg.Token
+		if prof != nil {
+			model = prof.Model
+		}
 	}
 
 	tmpDir, err := os.MkdirTemp("", "clown-opencode-*")
@@ -135,7 +175,7 @@ func runOpencode(opencodePath string, args []string) int {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	if err := writeOpencodeConfig(tmpDir, localCfg.URL, localCfg.Token); err != nil {
+	if err := writeOpencodeConfig(tmpDir, url, token, model); err != nil {
 		fmt.Fprintf(os.Stderr, "clown: write opencode config: %v\n", err)
 		return 1
 	}
