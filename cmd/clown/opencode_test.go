@@ -113,8 +113,7 @@ func TestWriteOpencodeConfig_ModelOverride(t *testing.T) {
 	if !strings.Contains(content, "my-custom-model") {
 		t.Errorf("config missing custom model: %s", content)
 	}
-	// default model should NOT appear when overridden
-	if strings.Contains(content, "\"gpt-4o\"") && !strings.Contains(content, "my-custom-model") {
-		t.Errorf("config has wrong model: %s", content)
+	if strings.Contains(content, "\"gpt-4o\"") {
+		t.Errorf("default model gpt-4o should not appear when overridden: %s", content)
 	}
 }
