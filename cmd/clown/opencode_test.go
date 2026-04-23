@@ -75,7 +75,7 @@ func TestWriteOpencodeConfig_CreatesFile(t *testing.T) {
 	if !strings.Contains(content, "https://example.com/v1") {
 		t.Errorf("config does not contain url: %s", content)
 	}
-	if !strings.Contains(content, "claude-sonnet-4-6") {
+	if !strings.Contains(content, "gpt-4o") {
 		t.Errorf("config does not contain model: %s", content)
 	}
 }

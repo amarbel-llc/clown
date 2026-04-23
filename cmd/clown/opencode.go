@@ -95,14 +95,14 @@ func writeOpencodeConfig(configDir, url, token string) error {
 					APIKey:  token,
 				},
 				Models: map[string]modelEntry{
-					"claude-sonnet-4-6": {
-						Name:  "Claude Sonnet 4.6",
-						Limit: modelLimit{Context: 200000, Output: 64000},
+					"gpt-4o": {
+						Name:  "GPT-4o",
+						Limit: modelLimit{Context: 128000, Output: 16384},
 					},
 				},
 			},
 		},
-		Model: "custom/claude-sonnet-4-6",
+		Model: "custom/gpt-4o",
 	}
 
 	dir := filepath.Join(configDir, "opencode")
