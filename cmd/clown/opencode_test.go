@@ -7,23 +7,73 @@ import (
 	"testing"
 )
 
-func TestWriteOpencodeConfig_CreatesFile(t *testing.T) {
+func TestReadOpencodeLocalConfig_ParsesURLAndToken(t *testing.T) {
 	dir := t.TempDir()
-	err := writeOpencodeConfig(dir, "test-token-value")
+	cfgPath := filepath.Join(dir, "opencode.toml")
+	content := "url = \"https://example.com/v1\"\ntoken = \"secret\"\n"
+	if err := os.WriteFile(cfgPath, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", dir)
+	if err := os.MkdirAll(filepath.Join(dir, ".config", "circus"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".config", "circus", "opencode.toml"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := readOpencodeLocalConfig()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	path := filepath.Join(dir, "opencode", "opencode.json")
-	data, err := os.ReadFile(path)
+	if cfg.URL != "https://example.com/v1" {
+		t.Errorf("url: got %q", cfg.URL)
+	}
+	if cfg.Token != "secret" {
+		t.Errorf("token: got %q", cfg.Token)
+	}
+}
+
+func TestReadOpencodeLocalConfig_MissingFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	_, err := readOpencodeLocalConfig()
+	if err == nil {
+		t.Fatal("expected error for missing file")
+	}
+}
+
+func TestReadOpencodeLocalConfig_MissingURL(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	if err := os.MkdirAll(filepath.Join(dir, ".config", "circus"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	content := "token = \"secret\"\n"
+	if err := os.WriteFile(filepath.Join(dir, ".config", "circus", "opencode.toml"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := readOpencodeLocalConfig()
+	if err == nil || !strings.Contains(err.Error(), "url is required") {
+		t.Errorf("expected url required error, got: %v", err)
+	}
+}
+
+func TestWriteOpencodeConfig_CreatesFile(t *testing.T) {
+	dir := t.TempDir()
+	err := writeOpencodeConfig(dir, "https://example.com/v1", "test-token")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "opencode", "opencode.json"))
 	if err != nil {
 		t.Fatalf("config file not created: %v", err)
 	}
 	content := string(data)
-	if !strings.Contains(content, "test-token-value") {
+	if !strings.Contains(content, "test-token") {
 		t.Errorf("config does not contain token: %s", content)
 	}
-	if !strings.Contains(content, "models.ag.genai-dev.gke.etsycloud.com") {
-		t.Errorf("config does not contain gateway URL: %s", content)
+	if !strings.Contains(content, "https://example.com/v1") {
+		t.Errorf("config does not contain url: %s", content)
 	}
 	if !strings.Contains(content, "claude-sonnet-4-6") {
 		t.Errorf("config does not contain model: %s", content)

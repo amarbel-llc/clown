@@ -44,6 +44,10 @@ func run(rawArgs []string) int {
 	}
 
 	if flags.naked {
+		if flags.provider == "opencode" {
+			fmt.Fprintln(os.Stderr, "clown: --naked is not supported with --provider opencode (config injection required)")
+			return 1
+		}
 		execProcess(cliPath, flags.forwarded)
 		return 0 // unreachable
 	}
@@ -74,6 +78,8 @@ func run(rawArgs []string) int {
 		return runCodex(cliPath, flags, prompts)
 	case "circus":
 		return runCircus(cliPath, flags, prompts, pluginDirs)
+	case "opencode":
+		return runOpencode(cliPath, flags.forwarded)
 	default:
 		fmt.Fprintf(os.Stderr, "clown: unknown provider %q\n", flags.provider)
 		return 1
@@ -424,6 +430,8 @@ func resolveProvider(name string) (string, error) {
 		return buildcfg.CodexCliPath, nil
 	case "circus":
 		return buildcfg.CircusCliPath, nil
+	case "opencode":
+		return buildcfg.OpencodeCliPath, nil
 	default:
 		return "", fmt.Errorf("unknown provider %q", name)
 	}
