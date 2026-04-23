@@ -52,14 +52,18 @@ and loaded plugins) and exit.
 Select the provider CLI.
 Valid values are
 .Cm claude
-(default) and
-.Cm codex .
+(default),
+.Cm codex ,
+and
+.Cm opencode .
 Can also be set via the
 .Ev CLOWN_PROVIDER
 environment variable.
 .It Fl -naked
 Bypass all clown wrapping (prompt injection, plugin loading, tool
 restrictions) and exec the provider CLI directly.
+Not supported with
+.Cm --provider opencode .
 .It Fl -skip-failed
 When any discovered HTTP MCP plugin server fails to start,
 .Nm
@@ -275,7 +279,8 @@ Overridden by
 Valid values:
 .Cm claude
 (default),
-.Cm codex .
+.Cm codex ,
+.Cm opencode .
 .It Ev CLOWN_SKIP_FAILED_PLUGINS
 When set to
 .Li 1 ,
