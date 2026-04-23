@@ -61,8 +61,10 @@ func verifySHA256(path, expected string) error {
 	return nil
 }
 
-type progressMsg float64
-type doneMsg struct{ err error }
+type (
+	progressMsg float64
+	doneMsg     struct{ err error }
+)
 
 type progressModel struct {
 	bar      progress.Model
@@ -135,7 +137,7 @@ func cmdDownload(args []string) int {
 		fmt.Fprintf(os.Stderr, "circus: model %q already installed at %s\n", name, dest)
 		return 1
 	}
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		fmt.Fprintf(os.Stderr, "circus: mkdir: %v\n", err)
 		return 1
 	}
@@ -179,6 +181,10 @@ func cmdDownload(args []string) int {
 	go func() {
 		_, copyErr := io.Copy(tmp, reader)
 		tmp.Close()
+		if copyErr == nil {
+			p.Send(progressMsg(1.0))
+			time.Sleep(400 * time.Millisecond)
+		}
 		p.Send(doneMsg{err: copyErr})
 	}()
 
