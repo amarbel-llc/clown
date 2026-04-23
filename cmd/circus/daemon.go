@@ -123,12 +123,19 @@ func startDaemon(pidPath, portPath string) (int, error) {
 		"--port", strconv.Itoa(port),
 		"--host", "127.0.0.1",
 	}
-	model := os.Getenv("CIRCUS_MODEL")
-	if model == "" {
-		model = buildcfg.DefaultModelPath
+	modelName := os.Getenv("CIRCUS_MODEL")
+	if modelName == "" {
+		modelName = buildcfg.DefaultModelPath
 	}
-	if model != "" {
-		args = append(args, "--model", model)
+	if modelName != "" {
+		if !filepath.IsAbs(modelName) {
+			resolved, err := resolveModel(modelName, modelsDir())
+			if err != nil {
+				return 0, err
+			}
+			modelName = resolved
+		}
+		args = append(args, "--model", modelName)
 	}
 
 	logPath, err := logfilePath()
