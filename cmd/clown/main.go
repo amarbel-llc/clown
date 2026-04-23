@@ -72,6 +72,35 @@ func run(rawArgs []string) int {
 		return 0
 	}
 
+	profiles, err := loadProfiles("")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clown: loading profiles: %v\n", err)
+		return 1
+	}
+
+	var selectedProfile *profile.Profile
+	if flags.profile != "" {
+		for i, p := range profiles {
+			if p.Name == flags.profile {
+				selectedProfile = &profiles[i]
+				break
+			}
+		}
+		if selectedProfile == nil {
+			fmt.Fprintf(os.Stderr, "clown: unknown profile %q\n", flags.profile)
+			fmt.Fprintln(os.Stderr, "available profiles:")
+			for _, p := range profiles {
+				fmt.Fprintf(os.Stderr, "  %-20s %s\n", p.Name, p.Display)
+			}
+			return 1
+		}
+		if err := profile.Validate(*selectedProfile); err != nil {
+			fmt.Fprintf(os.Stderr, "clown: invalid profile: %v\n", err)
+			return 1
+		}
+		flags.provider = selectedProfile.Provider
+	}
+
 	cliPath, err := resolveProvider(flags.provider)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
@@ -560,6 +589,7 @@ func execProcess(binary string, args []string) {
 
 type parsedFlags struct {
 	provider             string
+	profile              string
 	naked                bool
 	skipFailed           bool
 	disableClownProtocol bool
@@ -575,6 +605,7 @@ func parseFlags(args []string) (parsedFlags, error) {
 	if p.provider == "" {
 		p.provider = "claude"
 	}
+	p.profile = os.Getenv("CLOWN_PROFILE")
 
 	for i := 0; i < len(args); i++ {
 		switch {
@@ -589,6 +620,14 @@ func parseFlags(args []string) (parsedFlags, error) {
 			i++
 		case strings.HasPrefix(args[i], "--provider="):
 			p.provider = strings.TrimPrefix(args[i], "--provider=")
+		case args[i] == "--profile":
+			if i+1 >= len(args) {
+				return p, fmt.Errorf("--profile requires an argument")
+			}
+			p.profile = args[i+1]
+			i++
+		case strings.HasPrefix(args[i], "--profile="):
+			p.profile = strings.TrimPrefix(args[i], "--profile=")
 		case args[i] == "--naked":
 			p.naked = true
 		case args[i] == "--skip-failed":

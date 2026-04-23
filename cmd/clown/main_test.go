@@ -198,6 +198,36 @@ model    = "qwen3-coder"
 	}
 }
 
+func TestParseFlags_Profile(t *testing.T) {
+	cases := []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--profile", "local-qwen"}, "local-qwen"},
+		{[]string{"--profile=gateway-gpt4o"}, "gateway-gpt4o"},
+	}
+	for _, c := range cases {
+		got, err := parseFlags(c.args)
+		if err != nil {
+			t.Fatalf("parseFlags(%v): %v", c.args, err)
+		}
+		if got.profile != c.want {
+			t.Errorf("parseFlags(%v).profile = %q, want %q", c.args, got.profile, c.want)
+		}
+	}
+}
+
+func TestParseFlags_ProfileFromEnv(t *testing.T) {
+	t.Setenv("CLOWN_PROFILE", "my-profile")
+	got, err := parseFlags(nil)
+	if err != nil {
+		t.Fatalf("parseFlags: %v", err)
+	}
+	if got.profile != "my-profile" {
+		t.Errorf("got profile %q, want %q", got.profile, "my-profile")
+	}
+}
+
 func TestPrependPluginDirs(t *testing.T) {
 	cases := []struct {
 		name       string
