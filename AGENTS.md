@@ -94,12 +94,20 @@ The flake produces a `symlinkJoin` of five components:
    (`1|1|tcp|<addr>|streamable-http`) and blocks until stdin closes. Clown
    reads the handshake, sets `ANTHROPIC_BASE_URL` to the local server address,
    and sets `ANTHROPIC_CUSTOM_MODEL_OPTION` to bypass Claude Code's model
-   validation. `--model <nix-store-path>` selects the GGUF model for both the
-   daemon and Claude Code. The default model and llama-server binary path are
-   burned in at build time via `internal/buildcfg` ldflags. A separate
-   `nixpkgs-llama` flake input (pinned to nixpkgs master) provides a
-   llama-cpp build with Anthropic Messages API support (`/v1/messages`), which
-   predates the nixos-25.11 stable pin.
+   validation. `--model <name-or-path>` selects the GGUF model: absolute paths
+   pass through; bare names are resolved from `~/.local/share/circus/models/<name>.gguf`.
+   The default model and llama-server binary path are burned in at build time
+   via `internal/buildcfg` ldflags. A separate `nixpkgs-llama` flake input
+   (pinned to nixpkgs master) provides a llama-cpp build with Anthropic Messages
+   API support (`/v1/messages`), which predates the nixos-25.11 stable pin.
+
+   **Model management.** `circus models` lists installed models (from
+   `~/.local/share/circus/models/`). `circus download <name>` fetches a model
+   from the baked-in registry (`cmd/circus/registry.json`, embedded via
+   `go:embed`), validates SHA256, and installs it atomically via temp-file +
+   rename. A charmbracelet/bubbles progress bar renders during download. The
+   registry ships with Qwen3 and Gemma3 variants; SHA256 digests in the current
+   registry are 64-zero placeholders pending real values from HuggingFace.
 
 ## Nix Conventions
 
