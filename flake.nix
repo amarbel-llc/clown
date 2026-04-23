@@ -396,6 +396,7 @@
             paths = [
               (mkClownBin pluginMeta)
               clown-plugin-host
+              circus-go
               clown-sessions
               clown-completions
               clown-manpages
@@ -433,7 +434,6 @@
       {
         packages.default = mkClownPkg emptyPluginMeta;
         packages.clown-manpages = clown-manpages;
-        packages.circus = circus-go;
 
         checks = {
           managedSettingsRead = managedSettingsReadTest;
