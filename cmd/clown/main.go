@@ -17,6 +17,8 @@ import (
 	"syscall"
 
 	"github.com/BurntSushi/toml"
+	"github.com/charmbracelet/bubbles/list"
+	tea "github.com/charmbracelet/bubbletea"
 	"golang.org/x/term"
 
 	"github.com/amarbel-llc/clown/internal/buildcfg"
@@ -54,6 +56,65 @@ func loadProfiles(additionalPath string) ([]profile.Profile, error) {
 		return nil, fmt.Errorf("additional profiles: %w", err)
 	}
 	return profile.Merge(builtin, additional), nil
+}
+
+type profileItem struct{ p profile.Profile }
+
+func (i profileItem) Title() string       { return i.p.Display }
+func (i profileItem) Description() string { return i.p.Provider + " / " + i.p.Backend }
+func (i profileItem) FilterValue() string { return i.p.Name + " " + i.p.Display }
+
+type pickerModel struct {
+	list   list.Model
+	chosen *profile.Profile
+	quit   bool
+}
+
+func (m pickerModel) Init() tea.Cmd { return nil }
+
+func (m pickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "enter":
+			if i, ok := m.list.SelectedItem().(profileItem); ok {
+				p := i.p
+				m.chosen = &p
+			}
+			return m, tea.Quit
+		case "q", "ctrl+c", "esc":
+			m.quit = true
+			return m, tea.Quit
+		}
+	case tea.WindowSizeMsg:
+		m.list.SetWidth(msg.Width)
+		m.list.SetHeight(msg.Height - 2)
+	}
+	var cmd tea.Cmd
+	m.list, cmd = m.list.Update(msg)
+	return m, cmd
+}
+
+func (m pickerModel) View() string { return m.list.View() }
+
+func pickProfile(profiles []profile.Profile) (*profile.Profile, error) {
+	items := make([]list.Item, len(profiles))
+	for i, p := range profiles {
+		items[i] = profileItem{p}
+	}
+	l := list.New(items, list.NewDefaultDelegate(), 40, 14)
+	l.Title = "Select a profile"
+	l.SetShowStatusBar(false)
+	l.SetFilteringEnabled(true)
+	m, err := tea.NewProgram(pickerModel{list: l}, tea.WithAltScreen()).Run()
+	if err != nil {
+		return nil, err
+	}
+	pm := m.(pickerModel)
+	if pm.quit {
+		return nil, nil
+	}
+	return pm.chosen, nil
 }
 
 func main() {
@@ -98,6 +159,19 @@ func run(rawArgs []string) int {
 			fmt.Fprintf(os.Stderr, "clown: invalid profile: %v\n", err)
 			return 1
 		}
+		flags.provider = selectedProfile.Provider
+	}
+
+	if selectedProfile == nil && !flags.version && !flags.naked && term.IsTerminal(int(os.Stdin.Fd())) {
+		chosen, err := pickProfile(profiles)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "clown: profile picker: %v\n", err)
+			return 1
+		}
+		if chosen == nil {
+			return 0
+		}
+		selectedProfile = chosen
 		flags.provider = selectedProfile.Provider
 	}
 

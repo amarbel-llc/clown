@@ -17,6 +17,8 @@ github.com/charmbracelet/bubbles/cursor
 github.com/charmbracelet/bubbles/filepicker
 github.com/charmbracelet/bubbles/help
 github.com/charmbracelet/bubbles/key
+github.com/charmbracelet/bubbles/list
+github.com/charmbracelet/bubbles/paginator
 github.com/charmbracelet/bubbles/progress
 github.com/charmbracelet/bubbles/runeutil
 github.com/charmbracelet/bubbles/spinner
@@ -89,6 +91,9 @@ github.com/muesli/termenv
 # github.com/rivo/uniseg v0.4.7
 ## explicit; go 1.18
 github.com/rivo/uniseg
+# github.com/sahilm/fuzzy v0.1.1
+## explicit
+github.com/sahilm/fuzzy
 # github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e
 ## explicit; go 1.19
 github.com/xo/terminfo
