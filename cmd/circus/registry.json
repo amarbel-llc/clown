@@ -1,0 +1,37 @@
+[
+  {
+    "name": "qwen3-0.6b",
+    "url": "https://huggingface.co/bartowski/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf",
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "size": 0,
+    "description": "Qwen3 0.6B Q8_0 — fastest, minimal RAM (~700MB)"
+  },
+  {
+    "name": "qwen3-1.7b",
+    "url": "https://huggingface.co/bartowski/Qwen3-1.7B-GGUF/resolve/main/Qwen3-1.7B-Q4_K_M.gguf",
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "size": 0,
+    "description": "Qwen3 1.7B Q4_K_M (~1.1GB)"
+  },
+  {
+    "name": "qwen3-4b",
+    "url": "https://huggingface.co/bartowski/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf",
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "size": 0,
+    "description": "Qwen3 4B Q4_K_M (~2.6GB)"
+  },
+  {
+    "name": "gemma3-1b",
+    "url": "https://huggingface.co/bartowski/gemma-3-1b-it-GGUF/resolve/main/gemma-3-1b-it-Q8_0.gguf",
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "size": 0,
+    "description": "Gemma3 1B Q8_0 (~1.1GB)"
+  },
+  {
+    "name": "gemma3-4b",
+    "url": "https://huggingface.co/bartowski/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q4_K_M.gguf",
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "size": 0,
+    "description": "Gemma3 4B Q4_K_M (~2.5GB)"
+  }
+]
