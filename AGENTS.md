@@ -5,13 +5,13 @@ including Codex and Claude Code.
 
 ## Overview
 
-Clown is a Nix-packaged wrapper around coding agents (Claude Code, Codex, and
-local models via `circus`) that injects custom system prompts, applies
-per-provider safety defaults, and provides fish shell completions and session
-management. A single `clown` binary dispatches to the selected provider via
-`--provider <claude|codex|circus>` (default: `claude`; override with
-`CLOWN_PROVIDER` env var). Built entirely with Nix flakes; no standalone test
-suite (pre-merge validation via `just build`).
+Clown is a Nix-packaged wrapper around coding agents (Claude Code, Codex,
+local models via `circus`, and OpenAI-compatible providers via `opencode`) that
+injects custom system prompts, applies per-provider safety defaults, and
+provides fish shell completions and session management. A single `clown` binary
+dispatches to the selected provider via `--provider <claude|codex|circus|opencode>`
+(default: `claude`; override with `CLOWN_PROVIDER` env var). Built entirely with
+Nix flakes; no standalone test suite (pre-merge validation via `just build`).
 
 ## Build Commands
 
@@ -108,6 +108,22 @@ The flake produces a `symlinkJoin` of five components:
    rename. A charmbracelet/bubbles progress bar renders during download. The
    registry ships with Qwen3 and Gemma3 variants; SHA256 digests in the current
    registry are 64-zero placeholders pending real values from HuggingFace.
+
+   **Opencode provider.** `--provider opencode` runs the `opencode` TUI against
+   any OpenAI-compatible backend. Configuration is read from
+   `~/.config/circus/opencode.toml` (fields: `url`, `token`), which is user-local
+   and never committed to the repo. Clown writes a temporary `opencode.json`
+   config (in a `mkdtemp` dir) and passes it to opencode via `XDG_CONFIG_HOME`,
+   using the `@ai-sdk/openai-compatible` custom provider. The default model is
+   `gpt-4o`; model limits are hardcoded in `cmd/clown/opencode.go`. The opencode
+   binary path is burned in at build time via `internal/buildcfg.OpencodeCliPath`.
+
+   **Profile system (planned).** A future `--profile <name>` flag (and
+   `CLOWN_PROFILE` env var) will select named (provider, backend, model) tuples
+   from `profiles/builtin.toml` (open, burned in) and
+   `~/.config/circus/profiles.toml` (user-local, may contain URLs/tokens). The
+   design doc is at `docs/plans/2026-04-23-profiles-design.md` and the
+   implementation plan at `docs/plans/2026-04-23-profiles.md`.
 
 ## Nix Conventions
 
