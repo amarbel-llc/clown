@@ -4,6 +4,7 @@ var (
 	ClaudeCliPath       string
 	CodexCliPath        string
 	CircusCliPath       string
+	OpencodeCliPath     string
 	AgentsFile          string
 	DisallowedToolsFile string
 	SystemPromptAppendD string
