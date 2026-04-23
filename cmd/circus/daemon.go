@@ -22,6 +22,25 @@ const (
 	stopGracePeriod = 5 * time.Second
 )
 
+func modelsDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".local", "share", "circus", "models")
+}
+
+func resolveModel(name, dir string) (string, error) {
+	if filepath.IsAbs(name) {
+		return name, nil
+	}
+	path := filepath.Join(dir, name+".gguf")
+	if _, err := os.Stat(path); err == nil {
+		return path, nil
+	}
+	return "", fmt.Errorf("model %q not found in %s (looked for %s)", name, dir, path)
+}
+
 func stateDir() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
