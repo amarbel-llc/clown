@@ -69,6 +69,7 @@ type (
 type progressModel struct {
 	bar      progress.Model
 	total    int64
+	done     bool
 	finalErr error // set when doneMsg arrives
 }
 
@@ -80,10 +81,17 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.bar.SetPercent(float64(msg))
 	case doneMsg:
 		m.finalErr = msg.err
-		return m, tea.Quit
+		if msg.err != nil {
+			return m, tea.Quit
+		}
+		m.done = true
+		return m, m.bar.SetPercent(1.0)
 	case progress.FrameMsg:
 		updated, cmd := m.bar.Update(msg)
 		m.bar = updated.(progress.Model)
+		if m.done && m.bar.Percent() >= 0.999 {
+			return m, tea.Quit
+		}
 		return m, cmd
 	}
 	return m, nil
@@ -181,10 +189,6 @@ func cmdDownload(args []string) int {
 	go func() {
 		_, copyErr := io.Copy(tmp, reader)
 		tmp.Close()
-		if copyErr == nil {
-			p.Send(progressMsg(1.0))
-			time.Sleep(400 * time.Millisecond)
-		}
 		p.Send(doneMsg{err: copyErr})
 	}()
 
