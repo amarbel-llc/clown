@@ -13,7 +13,7 @@ func main() {
 
 func run(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: circus <start|stop|status|models> [--model <name-or-path>]")
+		fmt.Fprintln(os.Stderr, "usage: circus <start|stop|status|models|download> [args]")
 		return 1
 	}
 
@@ -34,6 +34,8 @@ func run(args []string) int {
 		return 0
 	case "models":
 		return cmdModels()
+	case "download":
+		return cmdDownload(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "circus: unknown command %q\n", args[0])
 		return 1
