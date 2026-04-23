@@ -76,6 +76,10 @@ func cmdStart(args []string) int {
 		return 1
 	}
 
+	if !spawned && model != "" {
+		fmt.Fprintf(os.Stderr, "circus: warning: --model ignored; llama-server already running (stop it first to switch models)\n")
+	}
+
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
 
 	// If stdout is not a terminal, we were launched by clown: emit handshake
