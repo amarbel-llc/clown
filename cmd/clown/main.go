@@ -3,23 +3,58 @@ package main
 import (
 	"bufio"
 	"context"
+	_ "embed"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"sort"
 	"strings"
 	"syscall"
 
+	"github.com/BurntSushi/toml"
 	"golang.org/x/term"
 
 	"github.com/amarbel-llc/clown/internal/buildcfg"
 	"github.com/amarbel-llc/clown/internal/pluginhost"
+	"github.com/amarbel-llc/clown/internal/profile"
 	"github.com/amarbel-llc/clown/internal/promptwalk"
 	"github.com/amarbel-llc/clown/internal/provider"
 )
+
+//go:embed profiles/builtin.toml
+var builtinProfilesTOML []byte
+
+func loadProfiles(additionalPath string) ([]profile.Profile, error) {
+	var f struct {
+		Profile []profile.Profile `toml:"profile"`
+	}
+	if _, err := toml.Decode(string(builtinProfilesTOML), &f); err != nil {
+		return nil, fmt.Errorf("builtin profiles: %w", err)
+	}
+	builtin := f.Profile
+
+	if additionalPath == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return builtin, nil
+		}
+		additionalPath = filepath.Join(home, ".config", "circus", "profiles.toml")
+	}
+
+	additional, err := profile.Load(additionalPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return builtin, nil
+		}
+		return nil, fmt.Errorf("additional profiles: %w", err)
+	}
+	return profile.Merge(builtin, additional), nil
+}
 
 func main() {
 	os.Exit(run(os.Args[1:]))

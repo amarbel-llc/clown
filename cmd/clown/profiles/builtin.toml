@@ -1,0 +1,27 @@
+[[profile]]
+name     = "claude-anthropic"
+display  = "Claude (Anthropic)"
+provider = "claude"
+backend  = "anthropic"
+model    = "claude-sonnet-4-6"
+
+[[profile]]
+name     = "claude-local"
+display  = "Claude (Local)"
+provider = "claude"
+backend  = "local"
+model    = "qwen3-coder"
+
+[[profile]]
+name     = "opencode-anthropic"
+display  = "OpenCode (Anthropic)"
+provider = "opencode"
+backend  = "anthropic"
+model    = "claude-sonnet-4-6"
+
+[[profile]]
+name     = "opencode-local"
+display  = "OpenCode (Local)"
+provider = "opencode"
+backend  = "local"
+model    = "qwen3-coder"

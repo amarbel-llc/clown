@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -146,6 +148,53 @@ func TestParseFlagsProviderFlagOverridesEnv(t *testing.T) {
 	}
 	if got.provider != "claude" {
 		t.Errorf("provider = %q, want claude", got.provider)
+	}
+}
+
+func TestLoadProfiles_BuiltinNotEmpty(t *testing.T) {
+	profiles, err := loadProfiles(filepath.Join(t.TempDir(), "nonexistent.toml"))
+	if err != nil {
+		t.Fatalf("loadProfiles: %v", err)
+	}
+	if len(profiles) == 0 {
+		t.Fatal("expected at least one builtin profile")
+	}
+}
+
+func TestLoadProfiles_AdditionalMerged(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "profiles.toml")
+	if err := os.WriteFile(f, []byte(`
+[[profile]]
+name     = "extra"
+display  = "Extra"
+provider = "opencode"
+backend  = "local"
+model    = "qwen3-coder"
+`), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	profiles, err := loadProfiles(f)
+	if err != nil {
+		t.Fatalf("loadProfiles: %v", err)
+	}
+	var found bool
+	for _, p := range profiles {
+		if p.Name == "extra" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("additional profile not merged")
+	}
+	var builtinFound bool
+	for _, p := range profiles {
+		if p.Name == "claude-anthropic" {
+			builtinFound = true
+		}
+	}
+	if !builtinFound {
+		t.Error("builtin profile claude-anthropic missing after merge")
 	}
 }
 
