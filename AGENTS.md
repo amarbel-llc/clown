@@ -5,12 +5,13 @@ including Codex and Claude Code.
 
 ## Overview
 
-Clown is a Nix-packaged wrapper around coding agents (Claude Code and Codex)
-that injects custom system prompts, applies per-provider safety defaults, and
-provides fish shell completions and session management. A single `clown` binary
-dispatches to the selected provider via `--provider <claude|codex>` (default:
-`claude`; override with `CLOWN_PROVIDER` env var). Built entirely with Nix
-flakes; no standalone test suite (pre-merge validation via `just build`).
+Clown is a Nix-packaged wrapper around coding agents (Claude Code, Codex, and
+local models via `circus`) that injects custom system prompts, applies
+per-provider safety defaults, and provides fish shell completions and session
+management. A single `clown` binary dispatches to the selected provider via
+`--provider <claude|codex|circus>` (default: `claude`; override with
+`CLOWN_PROVIDER` env var). Built entirely with Nix flakes; no standalone test
+suite (pre-merge validation via `just build`).
 
 ## Build Commands
 
@@ -85,11 +86,28 @@ The flake produces a `symlinkJoin` of five components:
    completions. Detects `--provider` on the command line (or `CLOWN_PROVIDER`
    env var) and offers Claude or Codex flags/subcommands accordingly.
 
+   **Circus provider.** `--provider circus` runs Claude Code against a local
+   `llama-server` daemon instead of Anthropic's API. `cmd/circus` manages the
+   daemon lifecycle (pidfile/portfile at `~/.local/state/circus/`, log at
+   `~/.local/state/circus/llama-server.log`). On start, if stdout is a pipe
+   (i.e., clown launched it), circus emits a clown-protocol handshake
+   (`1|1|tcp|<addr>|streamable-http`) and blocks until stdin closes. Clown
+   reads the handshake, sets `ANTHROPIC_BASE_URL` to the local server address,
+   and sets `ANTHROPIC_CUSTOM_MODEL_OPTION` to bypass Claude Code's model
+   validation. `--model <nix-store-path>` selects the GGUF model for both the
+   daemon and Claude Code. The default model and llama-server binary path are
+   burned in at build time via `internal/buildcfg` ldflags. A separate
+   `nixpkgs-llama` flake input (pinned to nixpkgs master) provides a
+   llama-cpp build with Anthropic Messages API support (`/v1/messages`), which
+   predates the nixos-25.11 stable pin.
+
 ## Nix Conventions
 
 Follows the monorepo's stable-first pattern:
 - `nixpkgs` -> stable (`nixos-25.11`)
 - `nixpkgs-master` -> pinned SHA
+- `nixpkgs-llama` -> pinned to nixpkgs master SHA for llama-cpp with
+  `/v1/messages` support (PR #17570, merged 2025-11-28; not in nixos-25.11)
 - Claude Code is fetched via inline `fetchTarball` (not a flake input) with
   `allowUnfree` — pinned to a specific nixpkgs SHA for version stability.
 
