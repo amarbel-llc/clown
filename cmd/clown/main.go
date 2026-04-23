@@ -302,15 +302,6 @@ func runCircus(circusPath string, flags parsedFlags, prompts promptwalk.PromptRe
 
 	baseURL := "http://" + hs.Address
 
-	forwarded := flags.forwarded
-	if !hasFlag(forwarded, "--model") {
-		modelName := buildcfg.CircusModelName
-		if modelName == "" {
-			modelName = "claude-opus-4-7"
-		}
-		forwarded = append([]string{"--model", modelName}, forwarded...)
-	}
-
 	claudePath := buildcfg.ClaudeCliPath
 	args, cleanup, err := provider.BuildClaudeArgs(provider.ClaudeArgs{
 		CLIPath:             claudePath,
@@ -318,7 +309,7 @@ func runCircus(circusPath string, flags parsedFlags, prompts promptwalk.PromptRe
 		DisallowedToolsFile: buildcfg.DisallowedToolsFile,
 		SystemPromptFile:    prompts.SystemPromptFile,
 		AppendFragments:     prompts.AppendFragments,
-	}, forwarded)
+	}, flags.forwarded)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown: building claude args: %v\n", err)
 		return 1
@@ -337,7 +328,14 @@ func runCircus(circusPath string, flags parsedFlags, prompts promptwalk.PromptRe
 	claudeCmd.Stdin = os.Stdin
 	claudeCmd.Stdout = os.Stdout
 	claudeCmd.Stderr = os.Stderr
-	claudeCmd.Env = append(os.Environ(), "ANTHROPIC_BASE_URL="+baseURL)
+	circusEnv := []string{"ANTHROPIC_BASE_URL=" + baseURL}
+	if buildcfg.CircusModelName != "" {
+		circusEnv = append(circusEnv,
+			"ANTHROPIC_CUSTOM_MODEL_OPTION="+buildcfg.CircusModelName,
+			"ANTHROPIC_MODEL="+buildcfg.CircusModelName,
+		)
+	}
+	claudeCmd.Env = append(os.Environ(), circusEnv...)
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
@@ -383,15 +381,6 @@ func prependPluginDirs(args []string, pluginDirs []string, dirMap map[string]str
 		result = append(result, "--plugin-dir", target)
 	}
 	return append(result, args...)
-}
-
-func hasFlag(args []string, flag string) bool {
-	for _, a := range args {
-		if a == flag {
-			return true
-		}
-	}
-	return false
 }
 
 func resolveProvider(name string) (string, error) {
