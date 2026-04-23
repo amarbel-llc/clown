@@ -481,6 +481,34 @@ tag version message:
 #
 # Use `just tag <version> <message>` directly if you want full
 # control over the tag message.
+# Probe a running llama-server for /v1/models and a test /v1/messages call.
+# Restarts circus so the freshly built llama-server binary is used.
+# model defaults to "auto" which reads the advertised model ID from /v1/models.
+# Usage: just debug-circus-api
+[group("debug")]
+debug-circus-api:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    nix build --show-trace .#circus -o result-circus
+    echo "restarting circus to pick up new llama-server binary..." >&2
+    ./result-circus/bin/circus stop 2>/dev/null || true
+    ./result-circus/bin/circus start </dev/tty >/dev/tty
+    port_file="$HOME/.local/state/circus/llama-server.port"
+    port=$(cat "$port_file")
+    base="http://127.0.0.1:$port"
+    echo "=== GET $base/v1/models ==="
+    models_json=$(curl -sf "$base/v1/models")
+    echo "$models_json" | jq .
+    # Use the first advertised model ID (the nix store path).
+    model=$(echo "$models_json" | jq -r '.data[0].id // .models[0].model // empty')
+    echo ""
+    echo "=== POST $base/v1/messages model=$model ==="
+    curl -f "$base/v1/messages" \
+        -H "Content-Type: application/json" \
+        -H "x-api-key: dummy" \
+        -d "{\"model\":\"$model\",\"max_tokens\":10,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}" \
+        | jq .
+
 [group("maint")]
 release version:
     #!/usr/bin/env bash

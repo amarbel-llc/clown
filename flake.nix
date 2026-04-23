@@ -7,6 +7,9 @@
     utils.url = "https://flakehub.com/f/numtide/flake-utils/0.1.102";
     nixpkgs-claude-code.url = "github:NixOS/nixpkgs/b2b9662ffe1e9a5702e7bfbd983595dd56147dbf";
     nixpkgs-codex.url = "github:NixOS/nixpkgs/e2dde111aea2c0699531dc616112a96cd55ab8b5";
+    # llama-cpp with Anthropic Messages API (/v1/messages) support — requires
+    # PR #17570 (merged 2025-11-28). Build 6981 in nixos-25.11 predates it.
+    nixpkgs-llama.url = "github:NixOS/nixpkgs/3b5a614454bd054dd960f1ff7a888dc5dfaf7bb4";
     gomod2nix.url = "github:amarbel-llc/gomod2nix";
     gomod2nix.inputs.nixpkgs.follows = "nixpkgs";
   };
@@ -18,6 +21,7 @@
       nixpkgs-master,
       nixpkgs-claude-code,
       nixpkgs-codex,
+      nixpkgs-llama,
       gomod2nix,
       utils,
     }:
@@ -37,6 +41,7 @@
           inherit system;
           config.allowUnfree = true;
         };
+        pkgs-llama = import nixpkgs-llama { inherit system; };
       in
       let
         lib = pkgs.lib;
@@ -177,7 +182,7 @@
           ldflags = [
             "-s" "-w"
             "-X github.com/amarbel-llc/clown/internal/buildcfg.DefaultModelPath=${gemma3-270m-model}"
-            "-X github.com/amarbel-llc/clown/internal/buildcfg.CircusModelName=gemma-3-270m-it"
+            "-X github.com/amarbel-llc/clown/internal/buildcfg.CircusModelName=${gemma3-270m-model}"
             "-X github.com/amarbel-llc/clown/internal/buildcfg.LlamaServerPath=${llamaServerPath}"
           ];
         };
@@ -264,7 +269,7 @@
 
         claudeCliPath = "${patchedClaudeCode}/bin/claude";
         codexCliPath = "${pkgs-codex.codex}/bin/codex";
-        llamaServerPath = "${pkgs.llama-cpp}/bin/llama-server";
+        llamaServerPath = "${pkgs-llama.llama-cpp}/bin/llama-server";
 
         # Thin wrapper: sets CLOWN_PLUGIN_META (varies per mkCircus) then
         # execs the Go binary. All flag parsing, provider routing, and

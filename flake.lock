@@ -87,6 +87,22 @@
         "type": "github"
       }
     },
+    "nixpkgs-llama": {
+      "locked": {
+        "lastModified": 1776749433,
+        "narHash": "sha256-OxRw5/l27G3PDYNapH4PTDEAf8PH2IWd+3or8+DuOww=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "3b5a614454bd054dd960f1ff7a888dc5dfaf7bb4",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "3b5a614454bd054dd960f1ff7a888dc5dfaf7bb4",
+        "type": "github"
+      }
+    },
     "nixpkgs-master": {
       "locked": {
         "lastModified": 1776358656,
@@ -109,6 +125,7 @@
         "nixpkgs": "nixpkgs",
         "nixpkgs-claude-code": "nixpkgs-claude-code",
         "nixpkgs-codex": "nixpkgs-codex",
+        "nixpkgs-llama": "nixpkgs-llama",
         "nixpkgs-master": "nixpkgs-master",
         "utils": "utils"
       }
