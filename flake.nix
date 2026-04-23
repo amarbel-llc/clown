@@ -177,6 +177,7 @@
           ldflags = [
             "-s" "-w"
             "-X github.com/amarbel-llc/clown/internal/buildcfg.DefaultModelPath=${gemma3-270m-model}"
+            "-X github.com/amarbel-llc/clown/internal/buildcfg.CircusModelName=gemma-3-270m-it"
             "-X github.com/amarbel-llc/clown/internal/buildcfg.LlamaServerPath=${llamaServerPath}"
           ];
         };

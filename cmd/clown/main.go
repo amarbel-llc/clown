@@ -304,7 +304,11 @@ func runCircus(circusPath string, flags parsedFlags, prompts promptwalk.PromptRe
 
 	forwarded := flags.forwarded
 	if !hasFlag(forwarded, "--model") {
-		forwarded = append([]string{"--model", "claude-opus-4-7"}, forwarded...)
+		modelName := buildcfg.CircusModelName
+		if modelName == "" {
+			modelName = "claude-opus-4-7"
+		}
+		forwarded = append([]string{"--model", modelName}, forwarded...)
 	}
 
 	claudePath := buildcfg.ClaudeCliPath

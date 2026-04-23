@@ -14,5 +14,6 @@ var (
 	CodexVersion        string
 	CodexRev            string
 	DefaultModelPath    string
+	CircusModelName     string
 	LlamaServerPath     string
 )
