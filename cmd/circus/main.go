@@ -13,13 +13,13 @@ func main() {
 
 func run(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: circus <start|stop|status>")
+		fmt.Fprintln(os.Stderr, "usage: circus <start|stop|status> [--model <path>]")
 		return 1
 	}
 
 	switch args[0] {
 	case "start":
-		return cmdStart()
+		return cmdStart(args[1:])
 	case "stop":
 		if err := stopDaemon(); err != nil {
 			fmt.Fprintf(os.Stderr, "circus: %v\n", err)
@@ -38,7 +38,24 @@ func run(args []string) int {
 	}
 }
 
-func cmdStart() int {
+func cmdStart(args []string) int {
+	var model string
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--model" && i+1 < len(args):
+			model = args[i+1]
+			i++
+		case len(args[i]) > 8 && args[i][:8] == "--model=":
+			model = args[i][8:]
+		default:
+			fmt.Fprintf(os.Stderr, "circus: unknown flag %q\n", args[i])
+			return 1
+		}
+	}
+	if model != "" {
+		os.Setenv("CIRCUS_MODEL", model)
+	}
+
 	port, spawned, err := attachOrStart()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "circus: %v\n", err)

@@ -270,7 +270,22 @@ func runCircus(circusPath string, flags parsedFlags, prompts promptwalk.PromptRe
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, circusPath, "start")
+	// Resolve the model: --model from CLI takes priority, then the build default.
+	forwarded := flags.forwarded
+	modelName := flagValue(forwarded, "--model")
+	if modelName == "" {
+		modelName = buildcfg.CircusModelName
+	}
+	if modelName != "" && !hasFlag(forwarded, "--model") {
+		forwarded = append([]string{"--model", modelName}, forwarded...)
+	}
+
+	// Start circus with the selected model.
+	circusArgs := []string{"start"}
+	if modelName != "" {
+		circusArgs = append(circusArgs, "--model", modelName)
+	}
+	cmd := exec.CommandContext(ctx, circusPath, circusArgs...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Stderr = os.Stderr
 
@@ -302,14 +317,6 @@ func runCircus(circusPath string, flags parsedFlags, prompts promptwalk.PromptRe
 
 	baseURL := "http://" + hs.Address
 
-	// Prepend --model so it overrides any saved user setting. The model name
-	// also matches ANTHROPIC_CUSTOM_MODEL_OPTION which tells Claude Code to
-	// skip validation for that specific ID.
-	forwarded := flags.forwarded
-	if buildcfg.CircusModelName != "" && !hasFlag(forwarded, "--model") {
-		forwarded = append([]string{"--model", buildcfg.CircusModelName}, forwarded...)
-	}
-
 	claudePath := buildcfg.ClaudeCliPath
 	args, cleanup, err := provider.BuildClaudeArgs(provider.ClaudeArgs{
 		CLIPath:             claudePath,
@@ -337,8 +344,8 @@ func runCircus(circusPath string, flags parsedFlags, prompts promptwalk.PromptRe
 	claudeCmd.Stdout = os.Stdout
 	claudeCmd.Stderr = os.Stderr
 	circusEnv := []string{"ANTHROPIC_BASE_URL=" + baseURL}
-	if buildcfg.CircusModelName != "" {
-		circusEnv = append(circusEnv, "ANTHROPIC_CUSTOM_MODEL_OPTION="+buildcfg.CircusModelName)
+	if modelName != "" {
+		circusEnv = append(circusEnv, "ANTHROPIC_CUSTOM_MODEL_OPTION="+modelName)
 	}
 	claudeCmd.Env = append(os.Environ(), circusEnv...)
 
@@ -395,6 +402,18 @@ func hasFlag(args []string, flag string) bool {
 		}
 	}
 	return false
+}
+
+func flagValue(args []string, flag string) string {
+	for i, a := range args {
+		if a == flag && i+1 < len(args) {
+			return args[i+1]
+		}
+		if strings.HasPrefix(a, flag+"=") {
+			return strings.TrimPrefix(a, flag+"=")
+		}
+	}
+	return ""
 }
 
 func resolveProvider(name string) (string, error) {
