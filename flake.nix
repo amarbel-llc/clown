@@ -170,6 +170,7 @@
             "-X github.com/amarbel-llc/clown/internal/buildcfg.ClaudeCodeRev=${claudeCodeRev}"
             "-X github.com/amarbel-llc/clown/internal/buildcfg.CodexVersion=${codexVersion}"
             "-X github.com/amarbel-llc/clown/internal/buildcfg.CodexRev=${codexRev}"
+            "-X github.com/amarbel-llc/clown/internal/buildcfg.OpencodeCliPath=${pkgs.opencode}/bin/opencode"
           ];
         };
 
@@ -423,6 +424,7 @@
                 pkgs.fish
                 pkgs-claude-code.claude-code
                 pkgs-codex.codex
+                pkgs.opencode
                 gomod2nix.packages.${system}.default
               ];
             };
@@ -446,6 +448,7 @@
             pkgs.go
             pkgs-claude-code.claude-code
             pkgs-codex.codex
+            pkgs.opencode
             gomod2nix.packages.${system}.default
           ];
         };
