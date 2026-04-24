@@ -1,0 +1,40 @@
+{
+  "nodes": {
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1777042677,
+        "narHash": "sha256-PkHa8cSqjNVD/ug5VNyC0ebwAVRJxvw92FFLWinbdQs=",
+        "owner": "amarbel-llc",
+        "repo": "nixpkgs",
+        "rev": "9bad1e489bd4c713da002618bd825372d35430af",
+        "type": "github"
+      },
+      "original": {
+        "owner": "amarbel-llc",
+        "repo": "nixpkgs",
+        "rev": "9bad1e489bd4c713da002618bd825372d35430af",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "nixpkgs": "nixpkgs",
+        "workspace": "workspace"
+      }
+    },
+    "workspace": {
+      "flake": false,
+      "locked": {
+        "path": "../..",
+        "type": "path"
+      },
+      "original": {
+        "path": "../..",
+        "type": "path"
+      },
+      "parent": []
+    }
+  },
+  "root": "root",
+  "version": 7
+}
