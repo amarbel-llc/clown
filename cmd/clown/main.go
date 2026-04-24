@@ -133,6 +133,11 @@ func run(rawArgs []string) int {
 		return 0
 	}
 
+	if flags.help {
+		printHelp()
+		return 0
+	}
+
 	profiles, err := loadProfiles("")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown: loading profiles: %v\n", err)
@@ -162,7 +167,7 @@ func run(rawArgs []string) int {
 		flags.provider = selectedProfile.Provider
 	}
 
-	if selectedProfile == nil && !flags.version && !flags.naked && term.IsTerminal(int(os.Stdin.Fd())) {
+	if selectedProfile == nil && !flags.version && !flags.naked && !flags.providerExplicit && term.IsTerminal(int(os.Stdin.Fd())) {
 		chosen, err := pickProfile(profiles)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "clown: profile picker: %v\n", err)
@@ -598,6 +603,23 @@ func readPluginDirs() []string {
 	return dirs
 }
 
+func printHelp() {
+	fmt.Print(`Usage: clown [clown-flags] -- [provider-args]
+
+Clown flags (must appear before --):
+  --provider <name>          Provider to use: claude, codex, circus, opencode (default: claude)
+  --profile <name>           Profile name; implies --provider from profile config
+  --naked                    Pass through to provider without clown wrapping
+  --skip-failed              Continue if plugin servers fail to start
+  --disable-clown-protocol   Disable clown plugin-host protocol
+  --verbose, -v              Enable verbose output
+  --help, -h                 Show this help text
+  version                    Print version information (first argument only)
+
+All arguments after -- are forwarded verbatim to the provider.
+`)
+}
+
 func printVersion() {
 	type row struct {
 		component string
@@ -663,37 +685,50 @@ func execProcess(binary string, args []string) {
 
 type parsedFlags struct {
 	provider             string
+	providerExplicit     bool
 	profile              string
 	naked                bool
 	skipFailed           bool
 	disableClownProtocol bool
 	verbose              bool
 	version              bool
+	help                 bool
 	forwarded            []string
 }
 
 func parseFlags(args []string) (parsedFlags, error) {
-	p := parsedFlags{
-		provider: os.Getenv("CLOWN_PROVIDER"),
-	}
-	if p.provider == "" {
+	p := parsedFlags{}
+	if env := os.Getenv("CLOWN_PROVIDER"); env != "" {
+		p.provider = env
+		p.providerExplicit = true
+	} else {
 		p.provider = "claude"
 	}
 	p.profile = os.Getenv("CLOWN_PROFILE")
 
 	for i := 0; i < len(args); i++ {
 		switch {
+		case args[i] == "--":
+			if i+1 < len(args) {
+				p.forwarded = args[i+1:]
+			}
+			return p, nil
 		case args[i] == "version" && i == 0:
 			p.version = true
+			return p, nil
+		case args[i] == "--help" || args[i] == "-h":
+			p.help = true
 			return p, nil
 		case args[i] == "--provider":
 			if i+1 >= len(args) {
 				return p, fmt.Errorf("--provider requires an argument")
 			}
 			p.provider = args[i+1]
+			p.providerExplicit = true
 			i++
 		case strings.HasPrefix(args[i], "--provider="):
 			p.provider = strings.TrimPrefix(args[i], "--provider=")
+			p.providerExplicit = true
 		case args[i] == "--profile":
 			if i+1 >= len(args) {
 				return p, fmt.Errorf("--profile requires an argument")
@@ -711,8 +746,7 @@ func parseFlags(args []string) (parsedFlags, error) {
 		case args[i] == "--verbose" || args[i] == "-v":
 			p.verbose = true
 		default:
-			p.forwarded = append(p.forwarded, args[i:]...)
-			return p, nil
+			return p, fmt.Errorf("unknown flag %q (use -- to pass arguments to the provider)", args[i])
 		}
 	}
 	return p, nil

@@ -26,12 +26,12 @@ func TestParseFlags(t *testing.T) {
 		{
 			name: "provider flag",
 			in:   []string{"--provider", "codex"},
-			want: parsedFlags{provider: "codex"},
+			want: parsedFlags{provider: "codex", providerExplicit: true},
 		},
 		{
 			name: "provider= syntax",
 			in:   []string{"--provider=codex"},
-			want: parsedFlags{provider: "codex"},
+			want: parsedFlags{provider: "codex", providerExplicit: true},
 		},
 		{
 			name: "naked flag",
@@ -59,13 +59,18 @@ func TestParseFlags(t *testing.T) {
 			want: parsedFlags{provider: "claude", verbose: true},
 		},
 		{
-			name: "unknown args forwarded",
-			in:   []string{"chat", "--model", "sonnet"},
+			name: "double-dash forwards everything after",
+			in:   []string{"--", "chat", "--model", "sonnet"},
 			want: parsedFlags{provider: "claude", forwarded: []string{"chat", "--model", "sonnet"}},
 		},
 		{
-			name: "clown flags before forwarded args",
-			in:   []string{"--skip-failed", "--verbose", "chat", "--resume"},
+			name: "double-dash with no forwarded args",
+			in:   []string{"--verbose", "--"},
+			want: parsedFlags{provider: "claude", verbose: true},
+		},
+		{
+			name: "clown flags then double-dash then forwarded args",
+			in:   []string{"--skip-failed", "--verbose", "--", "chat", "--resume"},
 			want: parsedFlags{
 				provider:   "claude",
 				skipFailed: true,
@@ -74,16 +79,18 @@ func TestParseFlags(t *testing.T) {
 			},
 		},
 		{
-			name: "all flags combined",
+			name: "all clown flags then double-dash",
 			in: []string{
 				"--provider", "claude",
 				"--skip-failed",
 				"--disable-clown-protocol",
 				"--verbose",
+				"--",
 				"chat",
 			},
 			want: parsedFlags{
 				provider:             "claude",
+				providerExplicit:     true,
 				skipFailed:           true,
 				disableClownProtocol: true,
 				verbose:              true,
@@ -91,13 +98,24 @@ func TestParseFlags(t *testing.T) {
 			},
 		},
 		{
-			name: "version only matches as first arg",
-			in:   []string{"--verbose", "version"},
-			want: parsedFlags{
-				provider:  "claude",
-				verbose:   true,
-				forwarded: []string{"version"},
-			},
+			name: "help long flag",
+			in:   []string{"--help"},
+			want: parsedFlags{provider: "claude", help: true},
+		},
+		{
+			name: "help short flag",
+			in:   []string{"-h"},
+			want: parsedFlags{provider: "claude", help: true},
+		},
+		{
+			name: "provider flag sets providerExplicit",
+			in:   []string{"--provider", "codex"},
+			want: parsedFlags{provider: "codex", providerExplicit: true},
+		},
+		{
+			name: "provider= syntax sets providerExplicit",
+			in:   []string{"--provider=codex"},
+			want: parsedFlags{provider: "codex", providerExplicit: true},
 		},
 	}
 	for _, tc := range cases {
@@ -119,6 +137,9 @@ func TestParseFlagsErrors(t *testing.T) {
 		in   []string
 	}{
 		{"provider missing arg", []string{"--provider"}},
+		{"unknown flag before double-dash", []string{"--unknown-flag"}},
+		{"unknown short flag before double-dash", []string{"-x"}},
+		{"positional arg before double-dash", []string{"chat"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -148,6 +169,9 @@ func TestParseFlagsProviderFlagOverridesEnv(t *testing.T) {
 	}
 	if got.provider != "claude" {
 		t.Errorf("provider = %q, want claude", got.provider)
+	}
+	if !got.providerExplicit {
+		t.Error("providerExplicit should be true when --provider flag is used")
 	}
 }
 
