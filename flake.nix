@@ -425,6 +425,8 @@
                 pkgs-claude-code.claude-code
                 pkgs-codex.codex
                 pkgs.opencode
+                pkgs.bun
+                pkgs.mitmproxy
                 gomod2nix.packages.${system}.default
               ];
             };
@@ -449,6 +451,8 @@
             pkgs-claude-code.claude-code
             pkgs-codex.codex
             pkgs.opencode
+            pkgs.bun
+            pkgs.mitmproxy
             gomod2nix.packages.${system}.default
           ];
         };

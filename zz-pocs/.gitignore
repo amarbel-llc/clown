@@ -1,0 +1,5 @@
+# POC build and scratch artifacts — never committed.
+result
+result-*
+__pycache__/
+*.pyc

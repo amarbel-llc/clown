@@ -1,0 +1,8 @@
+{
+  "allow_hosts": ["httpbun.com"],
+  "deny_all_others": true,
+  "deny_response": {
+    "status": 403,
+    "body": "denied by clown-broker-poc"
+  }
+}
