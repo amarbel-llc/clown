@@ -307,14 +307,23 @@
         llamaServerPath = "${pkgs-llama.llama-cpp}/bin/llama-server";
 
         # clownbox: a fork of numtide/claudebox patched to forward args
-        # after `--` to the inner claude invocation. Upstream hardcodes
-        # `exec claude --dangerously-skip-permissions` with no passthrough,
-        # which prevents clown's BuildClaudeArgs flags from reaching claude.
+        # after `--` to the inner claude invocation, and to bake the
+        # absolute path of the inner claude binary into the bwrap'd shell
+        # script. Upstream hardcodes `exec claude --dangerously-skip-
+        # permissions` and relies on the host's $PATH being inherited
+        # into the sandbox (claudebox.js captures process.env.PATH and
+        # forwards via --setenv PATH), which silently fails when
+        # claudebox is launched from a shell that doesn't have `claude`
+        # on PATH. The substituted absolute path removes that dependency.
         # See nix/patches/claudebox-arg-passthrough.patch for the diff.
         patchedClownboxSrc = pkgs.applyPatches {
           name = "clownbox-src";
           src = claudebox-src;
           patches = [ ./nix/patches/claudebox-arg-passthrough.patch ];
+          postPatch = ''
+            substituteInPlace src/claudebox.js \
+              --replace-fail '@CLOWNBOX_CLAUDE_BINARY@' '${patchedClaudeCodeSandboxed}/bin/claude'
+          '';
         };
 
         clownbox = import "${claudebox-src}/package.nix" {

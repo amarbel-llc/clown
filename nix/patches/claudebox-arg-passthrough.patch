@@ -1,15 +1,27 @@
 From: Clown <https://github.com/amarbel-llc/clown>
-Subject: [PATCH] Forward args after `--` to the inner claude invocation
+Subject: [PATCH] Forward args after `--` and bake the inner claude path
 
-claudebox today hardcodes `exec claude --dangerously-skip-permissions` with
-no way to thread arguments through. Clown's BuildClaudeArgs() needs to pass
-flags like --system-prompt-file, --agents, --disallowed-tools to the inner
-claude. Accept `claudebox -- <args>` and append <args> to the exec line.
+Three changes to the inner-claude exec line:
 
-Also pass --allow-dangerously-skip-permissions alongside its required pair
-flag. claude-code(1) requires both flags for permission bypass to take
-effect; passing only --dangerously-skip-permissions just triggers the
-confirmation prompt, which is not useful inside an autostarted sandbox.
+1. Forward args after `--` to the inner claude invocation. claudebox today
+   hardcodes `exec claude --dangerously-skip-permissions` with no way to
+   thread arguments through. Clown's BuildClaudeArgs() needs to pass flags
+   like --system-prompt-file, --agents, --disallowed-tools. Accept
+   `claudebox -- <args>` and append <args> to the exec line.
+
+2. Pass --allow-dangerously-skip-permissions alongside its required pair
+   flag. claude-code(1) requires both flags for permission bypass to take
+   effect; passing only --dangerously-skip-permissions just triggers the
+   confirmation prompt, which is not useful inside an autostarted sandbox.
+
+3. Replace the bare `claude` command name with a build-time placeholder
+   (@CLOWNBOX_CLAUDE_BINARY@). flake.nix substitutes this for the absolute
+   nix store path of the patched claude-code. Upstream relies on the
+   host's $PATH being inherited into the bwrap sandbox (claudebox.js
+   captures process.env.PATH and forwards via --setenv PATH), which
+   silently fails when claudebox is launched from a shell that does not
+   have `claude` on PATH. The substituted absolute path removes that
+   dependency on caller PATH state.
 ---
  src/claudebox.js | 13 ++++++++++++-
  1 file changed, 12 insertions(+), 1 deletion(-)
@@ -57,5 +69,5 @@ diff --git a/src/claudebox.js b/src/claudebox.js
  	const script = `
  cd '${projectDir}'
 -exec claude --dangerously-skip-permissions
-+exec claude --dangerously-skip-permissions --allow-dangerously-skip-permissions ${passthroughShell}
++exec '@CLOWNBOX_CLAUDE_BINARY@' --dangerously-skip-permissions --allow-dangerously-skip-permissions ${passthroughShell}
  `;
