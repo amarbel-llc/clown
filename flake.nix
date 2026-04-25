@@ -12,6 +12,14 @@
     nixpkgs-llama.url = "github:NixOS/nixpkgs/3b5a614454bd054dd960f1ff7a888dc5dfaf7bb4";
     gomod2nix.url = "github:amarbel-llc/gomod2nix";
     gomod2nix.inputs.nixpkgs.follows = "nixpkgs";
+    # numtide/claudebox source — patched in-tree to add `--` arg
+    # passthrough so clown's BuildClaudeArgs flags reach the inner claude.
+    # Pinned by commit SHA (tag v0.2.0) so version-tag retags don't
+    # silently change the build.
+    claudebox-src = {
+      url = "github:numtide/claudebox/33a7705a6232acfe77397e20c8710456221277a1";
+      flake = false;
+    };
   };
 
   outputs =
@@ -24,6 +32,7 @@
       nixpkgs-llama,
       gomod2nix,
       utils,
+      claudebox-src,
     }:
     utils.lib.eachDefaultSystem (
       system:
@@ -171,6 +180,7 @@
             "-X github.com/amarbel-llc/clown/internal/buildcfg.CodexVersion=${codexVersion}"
             "-X github.com/amarbel-llc/clown/internal/buildcfg.CodexRev=${codexRev}"
             "-X github.com/amarbel-llc/clown/internal/buildcfg.OpencodeCliPath=${pkgs.opencode}/bin/opencode"
+            "-X github.com/amarbel-llc/clown/internal/buildcfg.ClownboxCliPath=${clownboxCliPath}"
           ];
         };
 
@@ -192,16 +202,27 @@
         # Lives at the highest precedence tier, so it cannot be overridden by
         # user settings, project settings, or CLI flags. See
         # claude-code-settings(5) for the precedence chain.
-        clownManagedSettings = pkgs.writeText "clown-managed-settings.json" (
+        #
+        # The `allowBypass` flag controls whether bypass-permissions mode
+        # (i.e. `--dangerously-skip-permissions`) is permitted. Naked clown
+        # leaves it disabled (no YOLO mode without an external safety net).
+        # Clownbox enables it because the bubblewrap sandbox is the safety
+        # net — bypassing claude's per-tool prompts is the whole point.
+        mkClownManagedSettings = { allowBypass ? false }: pkgs.writeText "clown-managed-settings.json" (
           builtins.toJSON {
             permissions = {
               # Block auto-mode (no prompts, classifier-gated tool calls).
+              # Orthogonal to sandboxing — kept on for both variants.
               disableAutoMode = "disable";
-              # Block --dangerously-skip-permissions and bypassPermissions mode.
+            } // lib.optionalAttrs (!allowBypass) {
+              # Block --dangerously-skip-permissions and bypassPermissions
+              # mode. Sandboxed clownbox omits this so its inner claude can
+              # actually run in YOLO mode within the sandbox.
               disableBypassPermissionsMode = "disable";
-              # Hard denylist of destructive Bash patterns. Redundant with
-              # clown-bin's --disallowed-tools 'Bash(*)' today, but keeps
-              # guardrails intact if that ever narrows.
+            } // {
+              # Hard denylist of destructive Bash patterns. Belt-and-
+              # suspenders even inside the sandbox: the bind-mount writes
+              # the repo, so `rm -rf *` is still destructive within scope.
               deny = [
                 "Bash(rm -rf *)"
                 "Bash(sudo *)"
@@ -219,6 +240,9 @@
             };
           }
         );
+
+        clownManagedSettings = mkClownManagedSettings { allowBypass = false; };
+        clownManagedSettingsSandboxed = mkClownManagedSettings { allowBypass = true; };
 
         # Patch upstream claude-code to read its managed-settings from a path
         # under its own $out instead of /etc/claude-code, then ship the
@@ -243,14 +267,17 @@
               '';
           });
 
-        patchedClaudeCode =
+        # Apply the shipped managed-settings file to a path-patched
+        # claude-code derivation. Parameterized by which managed-settings
+        # JSON to ship — strict for naked clown, permissive for clownbox.
+        mkPatchedClaudeCode = managedSettings:
           (patchClaudeCodeManagedPath "$out/etc/claude").overrideAttrs
             (old: {
               postInstall =
                 (old.postInstall or "")
                 + ''
                   mkdir -p "$out/etc/claude"
-                  cp ${clownManagedSettings} "$out/etc/claude/managed-settings.json"
+                  cp ${managedSettings} "$out/etc/claude/managed-settings.json"
                 '';
 
               doInstallCheck = true;
@@ -268,9 +295,35 @@
               '';
             });
 
+        patchedClaudeCode = mkPatchedClaudeCode clownManagedSettings;
+        # Sandboxed variant: same patched cli.js, different managed
+        # settings (allowBypass = true). Used only by the clownbox
+        # provider; the bubblewrap sandbox bounds what bypass actually
+        # buys an attacker.
+        patchedClaudeCodeSandboxed = mkPatchedClaudeCode clownManagedSettingsSandboxed;
+
         claudeCliPath = "${patchedClaudeCode}/bin/claude";
         codexCliPath = "${pkgs-codex.codex}/bin/codex";
         llamaServerPath = "${pkgs-llama.llama-cpp}/bin/llama-server";
+
+        # clownbox: a fork of numtide/claudebox patched to forward args
+        # after `--` to the inner claude invocation. Upstream hardcodes
+        # `exec claude --dangerously-skip-permissions` with no passthrough,
+        # which prevents clown's BuildClaudeArgs flags from reaching claude.
+        # See nix/patches/claudebox-arg-passthrough.patch for the diff.
+        patchedClownboxSrc = pkgs.applyPatches {
+          name = "clownbox-src";
+          src = claudebox-src;
+          patches = [ ./nix/patches/claudebox-arg-passthrough.patch ];
+        };
+
+        clownbox = import "${claudebox-src}/package.nix" {
+          inherit pkgs;
+          claude-code = patchedClaudeCodeSandboxed;
+          sourceDir = "${patchedClownboxSrc}/src";
+        };
+
+        clownboxCliPath = "${clownbox}/bin/claudebox";
 
         # Thin wrapper: sets CLOWN_PLUGIN_META (varies per mkCircus) then
         # execs the Go binary. All flag parsing, provider routing, and

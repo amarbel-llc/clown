@@ -48,12 +48,13 @@ func Merge(builtin, additional []Profile) []Profile {
 var validCombos = map[string]map[string]bool{
 	"claude":   {"anthropic": true, "local": true},
 	"opencode": {"anthropic": true, "gateway": true, "local": true},
+	"clownbox": {"anthropic": true, "local": true},
 }
 
 func Validate(p Profile) error {
 	backends, ok := validCombos[p.Provider]
 	if !ok {
-		return fmt.Errorf("profile %q: unknown provider %q (valid: claude, opencode)", p.Name, p.Provider)
+		return fmt.Errorf("profile %q: unknown provider %q (valid: claude, opencode, clownbox)", p.Name, p.Provider)
 	}
 	if !backends[p.Backend] {
 		return fmt.Errorf("profile %q: provider %q does not support backend %q", p.Name, p.Provider, p.Backend)

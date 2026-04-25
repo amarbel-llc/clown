@@ -223,10 +223,43 @@ func run(rawArgs []string) int {
 		return runCircus(cliPath, flags, prompts, pluginDirs)
 	case "opencode":
 		return runOpencode(cliPath, flags.forwarded, selectedProfile)
+	case "clownbox":
+		return runClownbox(cliPath, flags, prompts, pluginDirs)
 	default:
 		fmt.Fprintf(os.Stderr, "clown: unknown provider %q\n", flags.provider)
 		return 1
 	}
+}
+
+// Executor abstracts how a provider receives its argv. The plugin-host
+// pipeline is identical for claude and clownbox; only the final exec
+// differs. claude takes args directly; clownbox prepends `--` so its
+// arg parser stops and forwards the rest verbatim to the inner claude.
+type Executor interface {
+	// Binary resolves the absolute path of the executable to run.
+	Binary() (string, error)
+	// FormatArgs transforms the post-prependPluginDirs argv into the
+	// argv that the executable should actually receive (excluding argv[0]).
+	FormatArgs(fullArgs []string) []string
+}
+
+// directExecutor passes args through unchanged. Used by the claude
+// provider: claude takes --plugin-dir, --system-prompt-file, etc.
+// directly.
+type directExecutor struct{ cliPath string }
+
+func (e *directExecutor) Binary() (string, error)           { return exec.LookPath(e.cliPath) }
+func (e *directExecutor) FormatArgs(args []string) []string { return args }
+
+// passthroughExecutor prepends `--` so a wrapper's arg parser stops
+// and the remaining args reach the wrapped binary verbatim. Used by
+// the clownbox provider: claudebox accepts `claudebox -- <claude-args>`
+// (per nix/patches/claudebox-arg-passthrough.patch).
+type passthroughExecutor struct{ cliPath string }
+
+func (e *passthroughExecutor) Binary() (string, error) { return exec.LookPath(e.cliPath) }
+func (e *passthroughExecutor) FormatArgs(args []string) []string {
+	return append([]string{"--"}, args...)
 }
 
 func runClaude(cliPath string, flags parsedFlags, prompts promptwalk.PromptResult, pluginDirs []string) int {
@@ -243,13 +276,24 @@ func runClaude(cliPath string, flags parsedFlags, prompts promptwalk.PromptResul
 	}
 	defer cleanup()
 
+	return runWithPluginHost(&directExecutor{cliPath: cliPath}, args, pluginDirs, flags)
+}
+
+// runWithPluginHost runs a provider through clown's plugin-host
+// pipeline: discover plugin servers, spawn HTTP MCPs, compile manifests
+// pointing at the running servers, and exec the provider with the
+// staged plugin dirs. Falls back to a direct exec when there are no
+// plugins to manage or when --disable-clown-protocol is set. The
+// Executor parameter is what makes this work for both claude (direct)
+// and clownbox (passthrough); everything else is provider-agnostic.
+func runWithPluginHost(executor Executor, args []string, pluginDirs []string, flags parsedFlags) int {
 	skipFailed := flags.skipFailed || os.Getenv("CLOWN_SKIP_FAILED_PLUGINS") == "1"
 	disableClown := flags.disableClownProtocol || os.Getenv("CLOWN_DISABLE_CLOWN_PROTOCOL") == "1"
 	verbose := flags.verbose
 
 	if disableClown {
 		fullArgs := prependPluginDirs(args, pluginDirs, nil)
-		execProcess(cliPath, fullArgs)
+		execProcessWith(executor, fullArgs)
 		return 0 // unreachable
 	}
 
@@ -281,17 +325,17 @@ func runClaude(cliPath string, flags parsedFlags, prompts promptwalk.PromptResul
 	if len(discovered) == 0 {
 		logger.Info("no plugin servers discovered; passing plugin dirs through")
 		fullArgs := prependPluginDirs(args, pluginDirs, nil)
-		execProcess(cliPath, fullArgs)
+		execProcessWith(executor, fullArgs)
 		return 0 // unreachable
 	}
 
-	return runManaged(host, discovered, cliPath, args, pluginDirs, skipFailed, verbose, logger)
+	return runManaged(host, discovered, executor, args, pluginDirs, skipFailed, verbose, logger)
 }
 
 func runManaged(
 	host *pluginhost.Host,
 	discovered []pluginhost.DiscoveredServer,
-	cliPath string,
+	executor Executor,
 	baseArgs []string,
 	pluginDirs []string,
 	skipFailed bool,
@@ -346,7 +390,7 @@ func runManaged(
 		logger.Info("no plugin servers healthy; falling back to original plugin dirs")
 		host.Shutdown()
 		fullArgs := prependPluginDirs(baseArgs, pluginDirs, nil)
-		execProcess(cliPath, fullArgs)
+		execProcessWith(executor, fullArgs)
 		return 0 // unreachable
 	}
 	defer host.Shutdown()
@@ -360,14 +404,15 @@ func runManaged(
 
 	fullArgs := prependPluginDirs(baseArgs, pluginDirs, dirMap)
 
-	binary, err := exec.LookPath(cliPath)
+	binary, err := executor.Binary()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
-		logger.Error("locating provider binary failed", "binary", cliPath, "err", err)
+		logger.Error("locating provider binary failed", "err", err)
 		return 1
 	}
 
-	cmd := exec.Command(binary, fullArgs...)
+	argv := executor.FormatArgs(fullArgs)
+	cmd := exec.Command(binary, argv...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -382,7 +427,7 @@ func runManaged(
 		}
 	}()
 
-	logger.Info("running downstream", "binary", binary, "args", fullArgs)
+	logger.Info("running downstream", "binary", binary, "args", argv)
 	if err := cmd.Run(); err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			code := exitErr.ExitCode()
@@ -519,6 +564,58 @@ func runCircus(circusPath string, flags parsedFlags, prompts promptwalk.PromptRe
 	return 0
 }
 
+// runClownbox launches claude-code wrapped in the clownbox sandbox (a fork
+// of numtide/claudebox patched for `--` arg passthrough). The sandbox
+// shadows $HOME with an isolated session dir and mounts the repo
+// writable; /tmp inside the sandbox is a fresh tmpfs, so any prompt-
+// fragment temp files written by BuildClaudeArgs must land inside the
+// repo bind-mount. We point TMPDIR at <repoRoot>/.tmp/ for the duration
+// of arg-building.
+//
+// Plugin-host orchestration is handled by runWithPluginHost using the
+// passthroughExecutor — clownbox's bwrap profile uses --share-net, so
+// HTTP MCP servers spawned on the host's localhost are reachable from
+// inside the sandbox without further plumbing.
+func runClownbox(cliPath string, flags parsedFlags, prompts promptwalk.PromptResult, pluginDirs []string) int {
+	repoRoot, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clown: getwd: %v\n", err)
+		return 1
+	}
+	stagingDir := filepath.Join(repoRoot, ".tmp")
+	if err := os.MkdirAll(stagingDir, 0o755); err != nil {
+		fmt.Fprintf(os.Stderr, "clown: creating staging dir %s: %v\n", stagingDir, err)
+		return 1
+	}
+	prevTmp, hadTmp := os.LookupEnv("TMPDIR")
+	if err := os.Setenv("TMPDIR", stagingDir); err != nil {
+		fmt.Fprintf(os.Stderr, "clown: setting TMPDIR: %v\n", err)
+		return 1
+	}
+	defer func() {
+		if hadTmp {
+			os.Setenv("TMPDIR", prevTmp)
+		} else {
+			os.Unsetenv("TMPDIR")
+		}
+	}()
+
+	args, cleanup, err := provider.BuildClaudeArgs(provider.ClaudeArgs{
+		CLIPath:             cliPath,
+		AgentsFile:          buildcfg.AgentsFile,
+		DisallowedToolsFile: buildcfg.DisallowedToolsFile,
+		SystemPromptFile:    prompts.SystemPromptFile,
+		AppendFragments:     prompts.AppendFragments,
+	}, flags.forwarded)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clown: building clownbox args: %v\n", err)
+		return 1
+	}
+	defer cleanup()
+
+	return runWithPluginHost(&passthroughExecutor{cliPath: cliPath}, args, pluginDirs, flags)
+}
+
 func readCircusHandshake(r io.Reader) (pluginhost.Handshake, error) {
 	scanner := bufio.NewScanner(r)
 	if !scanner.Scan() {
@@ -575,6 +672,8 @@ func resolveProvider(name string) (string, error) {
 		return buildcfg.CircusCliPath, nil
 	case "opencode":
 		return buildcfg.OpencodeCliPath, nil
+	case "clownbox":
+		return buildcfg.ClownboxCliPath, nil
 	default:
 		return "", fmt.Errorf("unknown provider %q", name)
 	}
@@ -607,7 +706,7 @@ func printHelp() {
 	fmt.Print(`Usage: clown [clown-flags] -- [provider-args]
 
 Clown flags (must appear before --):
-  --provider <name>          Provider to use: claude, codex, circus, opencode (default: claude)
+  --provider <name>          Provider to use: claude, codex, circus, opencode, clownbox (default: claude)
   --profile <name>           Profile name; implies --provider from profile config
   --naked                    Pass through to provider without clown wrapping
   --skip-failed              Continue if plugin servers fail to start
@@ -678,6 +777,23 @@ func execProcess(binary string, args []string) {
 	}
 	argv := append([]string{resolved}, args...)
 	if err := syscall.Exec(resolved, argv, os.Environ()); err != nil {
+		fmt.Fprintf(os.Stderr, "clown: exec %s: %v\n", binary, err)
+		os.Exit(1)
+	}
+}
+
+// execProcessWith is the Executor-aware variant of execProcess. The
+// provided Executor formats the argv (e.g. clownbox prepends `--`)
+// before the syscall.Exec hand-off.
+func execProcessWith(executor Executor, args []string) {
+	binary, err := executor.Binary()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
+		os.Exit(1)
+	}
+	formatted := executor.FormatArgs(args)
+	argv := append([]string{binary}, formatted...)
+	if err := syscall.Exec(binary, argv, os.Environ()); err != nil {
 		fmt.Fprintf(os.Stderr, "clown: exec %s: %v\n", binary, err)
 		os.Exit(1)
 	}

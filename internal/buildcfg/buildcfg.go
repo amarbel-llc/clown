@@ -5,6 +5,7 @@ var (
 	CodexCliPath        string
 	CircusCliPath       string
 	OpencodeCliPath     string
+	ClownboxCliPath     string
 	AgentsFile          string
 	DisallowedToolsFile string
 	SystemPromptAppendD string

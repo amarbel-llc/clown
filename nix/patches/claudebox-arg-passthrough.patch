@@ -1,0 +1,61 @@
+From: Clown <https://github.com/amarbel-llc/clown>
+Subject: [PATCH] Forward args after `--` to the inner claude invocation
+
+claudebox today hardcodes `exec claude --dangerously-skip-permissions` with
+no way to thread arguments through. Clown's BuildClaudeArgs() needs to pass
+flags like --system-prompt-file, --agents, --disallowed-tools to the inner
+claude. Accept `claudebox -- <args>` and append <args> to the exec line.
+
+Also pass --allow-dangerously-skip-permissions alongside its required pair
+flag. claude-code(1) requires both flags for permission bypass to take
+effect; passing only --dangerously-skip-permissions just triggers the
+confirmation prompt, which is not useful inside an autostarted sandbox.
+---
+ src/claudebox.js | 13 ++++++++++++-
+ 1 file changed, 12 insertions(+), 1 deletion(-)
+
+diff --git a/src/claudebox.js b/src/claudebox.js
+--- a/src/claudebox.js
++++ b/src/claudebox.js
+@@ -389,7 +389,8 @@ function parseArgs(args) {
+ 	const cliOverrides = {
+ 		allowSshAgent: undefined,
+ 		allowGpgAgent: undefined,
+ 		allowXdgRuntime: undefined,
++		passthrough: [],
+ 	};
+ 
+ 	let i = 0;
+@@ -397,6 +398,12 @@ function parseArgs(args) {
+ 		const arg = args[i];
+ 
+ 		switch (arg) {
++			case "--":
++				// Forward everything after `--` to the inner claude invocation.
++				cliOverrides.passthrough = args.slice(i + 1);
++				i = args.length;
++				break;
++
+ 			case "--allow-ssh-agent":
+ 				cliOverrides.allowSshAgent = true;
+ 				i++;
+@@ -439,6 +446,7 @@ function parseArgs(args) {
+ 			cliOverrides.allowXdgRuntime !== undefined
+ 				? cliOverrides.allowXdgRuntime
+ 				: config.allowXdgRuntime,
++		passthrough: cliOverrides.passthrough,
+ 	};
+ 
+ 	return options;
+@@ -561,7 +569,10 @@ function main() {
+ 	}
+ 
+ 	// Build script and launch
++	const passthroughShell = (options.passthrough || [])
++		.map((a) => `'${a.replace(/'/g, "'\\''")}'`)
++		.join(" ");
+ 	const script = `
+ cd '${projectDir}'
+-exec claude --dangerously-skip-permissions
++exec claude --dangerously-skip-permissions --allow-dangerously-skip-permissions ${passthroughShell}
+ `;

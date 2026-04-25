@@ -270,6 +270,18 @@ flags can override them.
 See
 .Xr claude-code-settings 5
 for the precedence chain.
+.Pp
+The
+.Cm clownbox
+provider ships a separate patched claude-code with a permissive variant
+of the managed-settings file that omits
+.Cm disableBypassPermissionsMode .
+The bubblewrap sandbox is the safety net inside clownbox, and the inner
+claude is launched with
+.Fl -dangerously-skip-permissions Fl -allow-dangerously-skip-permissions
+so that no confirmation prompt blocks startup.
+.Cm disableAutoMode
+and the destructive-Bash deny list still apply.
 .Sh ENVIRONMENT
 .Bl -tag -width Ds
 .It Ev CLOWN_PROVIDER
