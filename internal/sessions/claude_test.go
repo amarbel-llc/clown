@@ -162,6 +162,13 @@ func TestFilterByCWD_NoMatchReturnsEmpty(t *testing.T) {
 	}
 }
 
+func TestSession_URI(t *testing.T) {
+	s := Session{Provider: "claude", ID: "abc-123"}
+	if got := s.URI(); got != "clown://claude/abc-123" {
+		t.Errorf("URI = %q, want clown://claude/abc-123", got)
+	}
+}
+
 func TestExtractTitle_PrefersCustomTitleOverAgentName(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "t.jsonl")

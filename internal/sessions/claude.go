@@ -27,6 +27,13 @@ type Session struct {
 	Path      string    // absolute path to the .jsonl transcript
 }
 
+// URI returns the clown-canonical handle for this session, in the form
+// clown://<provider>/<id>. The URI is shown in resume UIs and is the
+// argument shape that `clown resume <uri>` will accept.
+func (s Session) URI() string {
+	return "clown://" + s.Provider + "/" + s.ID
+}
+
 // headScanLines bounds how far we read into a transcript looking for the
 // cwd/gitBranch fields the first user-message entry typically carries.
 const headScanLines = 20

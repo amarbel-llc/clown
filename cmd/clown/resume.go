@@ -127,16 +127,13 @@ func confirmResume(s sessions.Session) (bool, error) {
 		title = "(untitled)"
 	}
 	var desc strings.Builder
-	if s.Provider != "" {
-		fmt.Fprintf(&desc, "  provider:  %s\n", s.Provider)
-	}
-	fmt.Fprintf(&desc, "  id:        %s\n", s.ID)
-	fmt.Fprintf(&desc, "  last:      %s\n", formatRelDate(s.ModTime))
+	fmt.Fprintf(&desc, "  uri:     %s\n", s.URI())
+	fmt.Fprintf(&desc, "  last:    %s\n", formatRelDate(s.ModTime))
 	if s.GitBranch != "" {
-		fmt.Fprintf(&desc, "  branch:    %s\n", s.GitBranch)
+		fmt.Fprintf(&desc, "  branch:  %s\n", s.GitBranch)
 	}
 
-	var ok bool
+	ok := true // default to Resume
 	form := huh.NewConfirm().
 		Title(fmt.Sprintf("Resume %q?", title)).
 		Description(desc.String()).
@@ -211,19 +208,16 @@ func (i sessionItem) Title() string {
 	}
 	return t
 }
+
 func (i sessionItem) Description() string {
-	var parts []string
-	if i.s.Provider != "" {
-		parts = append(parts, i.s.Provider)
-	}
-	parts = append(parts, formatRelDate(i.s.ModTime))
+	parts := []string{formatRelDate(i.s.ModTime)}
 	if i.s.GitBranch != "" {
 		parts = append(parts, "@"+i.s.GitBranch)
 	}
-	parts = append(parts, i.s.ID)
+	parts = append(parts, i.s.URI())
 	return strings.Join(parts, "  ")
 }
-func (i sessionItem) FilterValue() string { return i.s.Title + " " + i.s.ID }
+func (i sessionItem) FilterValue() string { return i.s.Title + " " + i.s.URI() }
 
 type sessionPickerModel struct {
 	list   list.Model
