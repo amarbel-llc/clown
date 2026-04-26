@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
@@ -138,15 +139,24 @@ func confirmResume(s sessions.Session) (bool, error) {
 	}
 
 	ok := true // default to Resume
-	form := huh.NewConfirm().
+	confirm := huh.NewConfirm().
 		Title(fmt.Sprintf("Resume %q?", title)).
 		Description(desc.String()).
 		Affirmative("Resume").
 		Negative("Cancel").
 		Value(&ok)
 
-	// huh returns ErrUserAborted for esc and ctrl-c. Treat both as a
-	// soft cancel — the user dismissed the dialog, no need to error out.
+	// huh's default keymap only binds ctrl+c to Quit; esc does nothing.
+	// Bind esc as well so the user can dismiss the dialog with either
+	// key. Both produce huh.ErrUserAborted, which we treat as a soft
+	// cancel — the user dismissed the dialog, no need to error out.
+	km := huh.NewDefaultKeyMap()
+	km.Quit = key.NewBinding(key.WithKeys("esc", "ctrl+c"))
+
+	form := huh.NewForm(huh.NewGroup(confirm)).
+		WithKeyMap(km).
+		WithShowHelp(false)
+
 	if err := form.Run(); err != nil {
 		if errors.Is(err, huh.ErrUserAborted) {
 			return false, nil
