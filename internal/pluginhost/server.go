@@ -29,7 +29,6 @@ type ManagedServer struct {
 	Def       ServerDef
 	PluginDir string
 	Logger    *slog.Logger
-	Verbose   bool
 
 	cmd       *exec.Cmd
 	handshake Handshake
@@ -207,14 +206,9 @@ func (s *ManagedServer) readHandshake(ctx context.Context, r io.Reader) (Handsha
 
 func (s *ManagedServer) forwardStderr(r io.Reader) {
 	scanner := bufio.NewScanner(r)
-	prefix := "[" + s.Name + "] "
 	log := s.logger()
 	for scanner.Scan() {
-		line := scanner.Text()
-		if s.Verbose {
-			fmt.Fprintln(os.Stderr, prefix+line)
-		}
-		log.Info("plugin stderr", "line", line)
+		log.Info("plugin stderr", "line", scanner.Text())
 	}
 }
 

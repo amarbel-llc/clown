@@ -89,13 +89,13 @@ Without this flag
 .Nm
 runs quietly: only errors, failure summaries, and the interactive
 plugin-failure confirmation prompt are written to stderr.
-Plugin servers' own stderr output is always captured into the log but
-only mirrored to the terminal in verbose mode.
 The startup
 .Dq logging to <path>
 breadcrumb and
 .Dq launching N HTTP MCP server(s)
-progress line are also gated behind this flag.
+progress line are gated behind this flag.
+Plugin servers' own stderr is always captured into the log file and
+is never mirrored to the terminal, regardless of this flag.
 .It Cm --
 Separates
 .Nm
@@ -323,11 +323,6 @@ result, and graceful or forced shutdown.
 .It
 Each line of every managed server's stderr, tagged with the server
 name.
-The same lines continue to be mirrored to
-.Nm Ap s
-stderr with a
-.Li [plugin/server]
-prefix for the current terminal session.
 .It
 Signals received and forwarded to the downstream command, and the
 downstream's exit status.

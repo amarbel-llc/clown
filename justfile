@@ -269,12 +269,10 @@ test-plugin-host-moxy: build
         echo "FAIL: downstream did not receive original args" >&2
         exit 1
     fi
-    if grep -q 'moxy/moxy' <<<"$output"; then
-        echo "OK: clown-plugin-host reported the moxy server"
-    else
-        echo "FAIL: no sign of the moxy/moxy managed server in host output" >&2
-        exit 1
-    fi
+    # No assertion on plugin server stderr here: clown-plugin-host
+    # captures plugin stderr to its log file but does not mirror to the
+    # terminal. The "compiled --plugin-dir" check below independently
+    # confirms that the host discovered and managed the moxy server.
     # Regression guard for the plugin.json compilation path: the downstream
     # --plugin-dir must point at a clown-plugin-compile-* staging dir (the
     # exact parent varies with $TMPDIR), not the source plugin_dir.
@@ -611,6 +609,22 @@ tag version message:
 #
 # Use `just tag <version> <message>` directly if you want full
 # control over the tag message.
+# Throwaway: launch ./result/bin/clown with an ad-hoc plugin dir
+# supplied via the new --plugin-dir flag. The wrapper script in
+# result/bin/clown sets CLOWN_PLUGIN_META at exec time, so the env-var
+# route doesn't survive; the runtime flag is the right knob.
+[group("debug")]
+debug-clown-with-stdio-plugin PLUGIN_DIR=".tmp/chrest-plugin": build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    plugin_dir=$(realpath {{PLUGIN_DIR}})
+    if [[ ! -f "$plugin_dir/clown.json" ]]; then
+        echo "ERROR: $plugin_dir/clown.json not found" >&2
+        exit 1
+    fi
+    echo "Launching ./result/bin/clown --verbose --plugin-dir $plugin_dir"
+    exec ./result/bin/clown --verbose --plugin-dir "$plugin_dir"
+
 # Manually exercise the stdio bridge against a real stdio MCP. Expects
 # a plugin directory at $PLUGIN_DIR (default .tmp/stdio-bridge-plugin)
 # containing clown.json (with stdioServers entries), the standard

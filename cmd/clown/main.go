@@ -230,6 +230,7 @@ func runWithFlags(flags parsedFlags) int {
 	}
 
 	pluginDirs := readPluginDirs()
+	pluginDirs = append(pluginDirs, flags.extraPluginDirs...)
 
 	switch flags.provider {
 	case "claude":
@@ -335,12 +336,14 @@ func runWithPluginHost(executor Executor, args []string, pluginDirs []string, fl
 		"commit", buildcfg.Commit,
 		"pid", os.Getpid(),
 		"log_path", logPath,
+		"plugin_dirs", pluginDirs,
+		"plugin_meta_env", os.Getenv("CLOWN_PLUGIN_META"),
+		"bridge_path", buildcfg.StdioBridgePath,
 	)
 
 	host := &pluginhost.Host{
 		PluginDirs: pluginDirs,
 		Logger:     logger,
-		Verbose:    verbose,
 		BridgePath: buildcfg.StdioBridgePath,
 	}
 	discovered, err := host.Discover()
@@ -842,6 +845,11 @@ type parsedFlags struct {
 	version              bool
 	help                 bool
 	forwarded            []string
+	// extraPluginDirs holds plugin directories supplied at the command
+	// line via --plugin-dir. They are appended to the baked-in set from
+	// CLOWN_PLUGIN_META and let users wire ad-hoc plugins (typically
+	// stdioServers test plugins) without re-baking the build.
+	extraPluginDirs []string
 }
 
 func parseFlags(args []string) (parsedFlags, error) {
@@ -893,6 +901,14 @@ func parseFlags(args []string) (parsedFlags, error) {
 			p.disableClownProtocol = true
 		case args[i] == "--verbose" || args[i] == "-v":
 			p.verbose = true
+		case args[i] == "--plugin-dir":
+			if i+1 >= len(args) {
+				return p, fmt.Errorf("--plugin-dir requires an argument")
+			}
+			p.extraPluginDirs = append(p.extraPluginDirs, args[i+1])
+			i++
+		case strings.HasPrefix(args[i], "--plugin-dir="):
+			p.extraPluginDirs = append(p.extraPluginDirs, strings.TrimPrefix(args[i], "--plugin-dir="))
 		default:
 			return p, fmt.Errorf("unknown flag %q (use -- to pass arguments to the provider)", args[i])
 		}

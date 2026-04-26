@@ -73,7 +73,6 @@ func run(logger *slog.Logger, logPath string) int {
 	host := &pluginhost.Host{
 		PluginDirs: parsed.pluginDirs,
 		Logger:     logger,
-		Verbose:    verbose,
 		BridgePath: buildcfg.StdioBridgePath,
 	}
 	discovered, err := host.Discover()
