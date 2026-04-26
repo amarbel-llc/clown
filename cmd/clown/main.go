@@ -280,29 +280,36 @@ func (e *passthroughExecutor) FormatArgs(args []string) []string {
 }
 
 func runClaude(cliPath string, flags parsedFlags, prompts promptwalk.PromptResult, pluginDirs []string) int {
-	args, cleanup, err := provider.BuildClaudeArgs(provider.ClaudeArgs{
-		CLIPath:             cliPath,
-		AgentsFile:          buildcfg.AgentsFile,
-		DisallowedToolsFile: buildcfg.DisallowedToolsFile,
-		SystemPromptFile:    prompts.SystemPromptFile,
-		AppendFragments:     prompts.AppendFragments,
-	}, flags.forwarded)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "clown: building claude args: %v\n", err)
-		return 1
-	}
-	defer cleanup()
+	return withClaudeResumeHint(flags.forwarded, func(forwarded []string) int {
+		args, cleanup, err := provider.BuildClaudeArgs(provider.ClaudeArgs{
+			CLIPath:             cliPath,
+			AgentsFile:          buildcfg.AgentsFile,
+			DisallowedToolsFile: buildcfg.DisallowedToolsFile,
+			SystemPromptFile:    prompts.SystemPromptFile,
+			AppendFragments:     prompts.AppendFragments,
+		}, forwarded)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "clown: building claude args: %v\n", err)
+			return 1
+		}
+		defer cleanup()
 
-	return runWithPluginHost(&directExecutor{cliPath: cliPath}, args, pluginDirs, flags)
+		return runWithPluginHost(&directExecutor{cliPath: cliPath}, args, pluginDirs, flags)
+	})
 }
 
 // runWithPluginHost runs a provider through clown's plugin-host
 // pipeline: discover plugin servers, spawn HTTP MCPs, compile manifests
-// pointing at the running servers, and exec the provider with the
-// staged plugin dirs. Falls back to a direct exec when there are no
-// plugins to manage or when --disable-clown-protocol is set. The
-// Executor parameter is what makes this work for both claude (direct)
-// and clownbox (passthrough); everything else is provider-agnostic.
+// pointing at the running servers, and run the provider with the
+// staged plugin dirs. Falls back to running the provider directly when
+// there are no plugins to manage or when --disable-clown-protocol is
+// set. The Executor parameter is what makes this work for both claude
+// (direct) and clownbox (passthrough); everything else is
+// provider-agnostic.
+//
+// All paths run the provider as a subprocess (cmd.Run) rather than
+// syscall.Exec, so clown retains control after the provider exits and
+// can run post-exit hooks like the resume hint.
 func runWithPluginHost(executor Executor, args []string, pluginDirs []string, flags parsedFlags) int {
 	skipFailed := flags.skipFailed || os.Getenv("CLOWN_SKIP_FAILED_PLUGINS") == "1"
 	disableClown := flags.disableClownProtocol || os.Getenv("CLOWN_DISABLE_CLOWN_PROTOCOL") == "1"
@@ -310,8 +317,7 @@ func runWithPluginHost(executor Executor, args []string, pluginDirs []string, fl
 
 	if disableClown {
 		fullArgs := prependPluginDirs(args, pluginDirs, nil)
-		execProcessWith(executor, fullArgs)
-		return 0 // unreachable
+		return runProvider(executor, fullArgs, nil)
 	}
 
 	logger, logFile, logPath, err := pluginhost.OpenLog()
@@ -342,11 +348,67 @@ func runWithPluginHost(executor Executor, args []string, pluginDirs []string, fl
 	if len(discovered) == 0 {
 		logger.Info("no plugin servers discovered; passing plugin dirs through")
 		fullArgs := prependPluginDirs(args, pluginDirs, nil)
-		execProcessWith(executor, fullArgs)
-		return 0 // unreachable
+		return runProvider(executor, fullArgs, logger)
 	}
 
 	return runManaged(host, discovered, executor, args, pluginDirs, skipFailed, verbose, logger)
+}
+
+// runProvider executes a provider as a subprocess, forwarding stdio
+// and signals. Returns the provider's exit code (or 1 on a clown-side
+// failure). Used by every non-naked path so clown stays in the
+// process tree and can run post-exit hooks.
+func runProvider(executor Executor, args []string, logger *slog.Logger) int {
+	binary, err := executor.Binary()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
+		if logger != nil {
+			logger.Error("locating provider binary failed", "err", err)
+		}
+		return 1
+	}
+
+	argv := executor.FormatArgs(args)
+	cmd := exec.Command(binary, argv...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	go func() {
+		sig := <-sigCh
+		if logger != nil {
+			logger.Info("signal received; forwarding to downstream", "signal", sig.String())
+		}
+		if cmd.Process != nil {
+			cmd.Process.Signal(sig)
+		}
+	}()
+
+	if logger != nil {
+		logger.Info("running downstream", "binary", binary, "args", argv)
+	}
+	if err := cmd.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			code := exitErr.ExitCode()
+			if logger != nil {
+				logger.Info("downstream exited", "code", code)
+			}
+			resetTerminal()
+			return code
+		}
+		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
+		if logger != nil {
+			logger.Error("downstream run failed", "err", err)
+		}
+		return 1
+	}
+	if logger != nil {
+		logger.Info("downstream exited", "code", 0)
+	}
+	resetTerminal()
+	return 0
 }
 
 func runManaged(
@@ -407,8 +469,7 @@ func runManaged(
 		logger.Info("no plugin servers healthy; falling back to original plugin dirs")
 		host.Shutdown()
 		fullArgs := prependPluginDirs(baseArgs, pluginDirs, nil)
-		execProcessWith(executor, fullArgs)
-		return 0 // unreachable
+		return runProvider(executor, fullArgs, logger)
 	}
 	defer host.Shutdown()
 
@@ -420,45 +481,7 @@ func runManaged(
 	}
 
 	fullArgs := prependPluginDirs(baseArgs, pluginDirs, dirMap)
-
-	binary, err := executor.Binary()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
-		logger.Error("locating provider binary failed", "err", err)
-		return 1
-	}
-
-	argv := executor.FormatArgs(fullArgs)
-	cmd := exec.Command(binary, argv...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
-	go func() {
-		sig := <-sigCh
-		logger.Info("signal received; forwarding to downstream", "signal", sig.String())
-		if cmd.Process != nil {
-			cmd.Process.Signal(sig)
-		}
-	}()
-
-	logger.Info("running downstream", "binary", binary, "args", argv)
-	if err := cmd.Run(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			code := exitErr.ExitCode()
-			logger.Info("downstream exited", "code", code)
-			resetTerminal()
-			return code
-		}
-		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
-		logger.Error("downstream run failed", "err", err)
-		return 1
-	}
-	logger.Info("downstream exited", "code", 0)
-	resetTerminal()
-	return 0
+	return runProvider(executor, fullArgs, logger)
 }
 
 func runCodex(cliPath string, flags parsedFlags, prompts promptwalk.PromptResult) int {
@@ -478,9 +501,6 @@ func runCodex(cliPath string, flags parsedFlags, prompts promptwalk.PromptResult
 }
 
 func runCircus(circusPath string, flags parsedFlags, prompts promptwalk.PromptResult, pluginDirs []string) int {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	// Resolve the model: --model from CLI takes priority, then the build default.
 	forwarded := flags.forwarded
 	modelName := flagValue(forwarded, "--model")
@@ -491,94 +511,99 @@ func runCircus(circusPath string, flags parsedFlags, prompts promptwalk.PromptRe
 		forwarded = append([]string{"--model", modelName}, forwarded...)
 	}
 
-	// Start circus with the selected model.
-	circusArgs := []string{"start"}
-	if modelName != "" {
-		circusArgs = append(circusArgs, "--model", modelName)
-	}
-	cmd := exec.CommandContext(ctx, circusPath, circusArgs...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Stderr = os.Stderr
+	return withClaudeResumeHint(forwarded, func(forwarded []string) int {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
 
-	stdinPipe, err := cmd.StdinPipe()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "clown: circus stdin pipe: %v\n", err)
-		return 1
-	}
-	stdoutPipe, err := cmd.StdoutPipe()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "clown: circus stdout pipe: %v\n", err)
-		return 1
-	}
-
-	if err := cmd.Start(); err != nil {
-		fmt.Fprintf(os.Stderr, "clown: starting circus: %v\n", err)
-		return 1
-	}
-	defer func() {
-		stdinPipe.Close()
-		cmd.Wait()
-	}()
-
-	hs, err := readCircusHandshake(stdoutPipe)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "clown: circus handshake: %v\n", err)
-		return 1
-	}
-
-	baseURL := "http://" + hs.Address
-
-	claudePath := buildcfg.ClaudeCliPath
-	args, cleanup, err := provider.BuildClaudeArgs(provider.ClaudeArgs{
-		CLIPath:             claudePath,
-		AgentsFile:          buildcfg.AgentsFile,
-		DisallowedToolsFile: buildcfg.DisallowedToolsFile,
-		SystemPromptFile:    prompts.SystemPromptFile,
-		AppendFragments:     prompts.AppendFragments,
-	}, forwarded)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "clown: building claude args: %v\n", err)
-		return 1
-	}
-	defer cleanup()
-
-	fullArgs := prependPluginDirs(args, pluginDirs, nil)
-
-	binary, err := exec.LookPath(claudePath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
-		return 1
-	}
-
-	claudeCmd := exec.Command(binary, fullArgs...)
-	claudeCmd.Stdin = os.Stdin
-	claudeCmd.Stdout = os.Stdout
-	claudeCmd.Stderr = os.Stderr
-	circusEnv := []string{"ANTHROPIC_BASE_URL=" + baseURL}
-	if modelName != "" {
-		circusEnv = append(circusEnv, "ANTHROPIC_CUSTOM_MODEL_OPTION="+modelName)
-	}
-	claudeCmd.Env = append(os.Environ(), circusEnv...)
-
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
-	go func() {
-		sig := <-sigCh
-		if claudeCmd.Process != nil {
-			claudeCmd.Process.Signal(sig)
+		// Start circus with the selected model.
+		circusArgs := []string{"start"}
+		if modelName != "" {
+			circusArgs = append(circusArgs, "--model", modelName)
 		}
-	}()
+		cmd := exec.CommandContext(ctx, circusPath, circusArgs...)
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		cmd.Stderr = os.Stderr
 
-	if err := claudeCmd.Run(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			resetTerminal()
-			return exitErr.ExitCode()
+		stdinPipe, err := cmd.StdinPipe()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "clown: circus stdin pipe: %v\n", err)
+			return 1
 		}
-		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
-		return 1
-	}
-	resetTerminal()
-	return 0
+		stdoutPipe, err := cmd.StdoutPipe()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "clown: circus stdout pipe: %v\n", err)
+			return 1
+		}
+
+		if err := cmd.Start(); err != nil {
+			fmt.Fprintf(os.Stderr, "clown: starting circus: %v\n", err)
+			return 1
+		}
+		defer func() {
+			stdinPipe.Close()
+			cmd.Wait()
+		}()
+
+		hs, err := readCircusHandshake(stdoutPipe)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "clown: circus handshake: %v\n", err)
+			return 1
+		}
+
+		baseURL := "http://" + hs.Address
+
+		claudePath := buildcfg.ClaudeCliPath
+		args, cleanup, err := provider.BuildClaudeArgs(provider.ClaudeArgs{
+			CLIPath:             claudePath,
+			AgentsFile:          buildcfg.AgentsFile,
+			DisallowedToolsFile: buildcfg.DisallowedToolsFile,
+			SystemPromptFile:    prompts.SystemPromptFile,
+			AppendFragments:     prompts.AppendFragments,
+		}, forwarded)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "clown: building claude args: %v\n", err)
+			return 1
+		}
+		defer cleanup()
+
+		fullArgs := prependPluginDirs(args, pluginDirs, nil)
+
+		binary, err := exec.LookPath(claudePath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "clown: %v\n", err)
+			return 1
+		}
+
+		claudeCmd := exec.Command(binary, fullArgs...)
+		claudeCmd.Stdin = os.Stdin
+		claudeCmd.Stdout = os.Stdout
+		claudeCmd.Stderr = os.Stderr
+		circusEnv := []string{"ANTHROPIC_BASE_URL=" + baseURL}
+		if modelName != "" {
+			circusEnv = append(circusEnv, "ANTHROPIC_CUSTOM_MODEL_OPTION="+modelName)
+		}
+		claudeCmd.Env = append(os.Environ(), circusEnv...)
+
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+		go func() {
+			sig := <-sigCh
+			if claudeCmd.Process != nil {
+				claudeCmd.Process.Signal(sig)
+			}
+		}()
+
+		if err := claudeCmd.Run(); err != nil {
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				resetTerminal()
+				return exitErr.ExitCode()
+			}
+			fmt.Fprintf(os.Stderr, "clown: %v\n", err)
+			return 1
+		}
+		resetTerminal()
+		return 0
+	})
 }
 
 // runClownbox launches claude-code wrapped in the clownbox sandbox (a fork
@@ -796,23 +821,6 @@ func execProcess(binary string, args []string) {
 	}
 	argv := append([]string{resolved}, args...)
 	if err := syscall.Exec(resolved, argv, os.Environ()); err != nil {
-		fmt.Fprintf(os.Stderr, "clown: exec %s: %v\n", binary, err)
-		os.Exit(1)
-	}
-}
-
-// execProcessWith is the Executor-aware variant of execProcess. The
-// provided Executor formats the argv (e.g. clownbox prepends `--`)
-// before the syscall.Exec hand-off.
-func execProcessWith(executor Executor, args []string) {
-	binary, err := executor.Binary()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
-		os.Exit(1)
-	}
-	formatted := executor.FormatArgs(args)
-	argv := append([]string{binary}, formatted...)
-	if err := syscall.Exec(binary, argv, os.Environ()); err != nil {
 		fmt.Fprintf(os.Stderr, "clown: exec %s: %v\n", binary, err)
 		os.Exit(1)
 	}
