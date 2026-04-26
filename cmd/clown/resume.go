@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -144,7 +145,12 @@ func confirmResume(s sessions.Session) (bool, error) {
 		Negative("Cancel").
 		Value(&ok)
 
+	// huh returns ErrUserAborted for esc and ctrl-c. Treat both as a
+	// soft cancel — the user dismissed the dialog, no need to error out.
 	if err := form.Run(); err != nil {
+		if errors.Is(err, huh.ErrUserAborted) {
+			return false, nil
+		}
 		return false, err
 	}
 	return ok, nil
