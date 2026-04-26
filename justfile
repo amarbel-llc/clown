@@ -118,11 +118,8 @@ test-plugin-host: build build-mock-server
 #
 # Skipped unconditionally: moxy is a downstream consumer of clown
 # (consumers wire it via lib.mkCircus). Validating clown-plugin-host
-# against a downstream artifact is a layering violation. The test also
-# currently fails because clown-plugin-host's --verbose output stream is
-# not captured by `2>&1`, so the moxy/moxy presence assertion never
-# matches. Set CLOWN_RUN_DOWNSTREAM_TESTS=1 to opt back in for local
-# debugging.
+# against a downstream artifact is a layering violation. Set
+# CLOWN_RUN_DOWNSTREAM_TESTS=1 to opt back in for local debugging.
 [group("test")]
 test-plugin-host-moxy: build
     #!/usr/bin/env bash
@@ -156,13 +153,17 @@ test-plugin-host-moxy: build
         exit 1
     }
     echo "$output"
-    if echo "$output" | grep -q 'DOWNSTREAM_MARKER'; then
+    # NB: use heredoc string instead of `echo "$output" | grep -q`. With
+    # `set -o pipefail`, grep -q exits early on first match, echo dies
+    # SIGPIPE, and the pipeline returns 141 — making the if-condition
+    # read as false even though grep matched. Was issue #23.
+    if grep -q 'DOWNSTREAM_MARKER' <<<"$output"; then
         echo "OK: downstream received its original args"
     else
         echo "FAIL: downstream did not receive original args" >&2
         exit 1
     fi
-    if echo "$output" | grep -q 'moxy/moxy'; then
+    if grep -q 'moxy/moxy' <<<"$output"; then
         echo "OK: clown-plugin-host reported the moxy server"
     else
         echo "FAIL: no sign of the moxy/moxy managed server in host output" >&2
@@ -171,13 +172,13 @@ test-plugin-host-moxy: build
     # Regression guard for the plugin.json compilation path: the downstream
     # --plugin-dir must point at a clown-plugin-compile-* staging dir (the
     # exact parent varies with $TMPDIR), not the source plugin_dir.
-    if echo "$output" | grep -qE -- '--plugin-dir[ =][^ ]*/clown-plugin-compile-'; then
+    if grep -qE -- '--plugin-dir[ =][^ ]*/clown-plugin-compile-' <<<"$output"; then
         echo "OK: downstream received compiled --plugin-dir"
     else
         echo "FAIL: downstream did not receive a clown-plugin-compile-* --plugin-dir path; compilation did not run" >&2
         exit 1
     fi
-    if echo "$output" | grep -qE -- "--plugin-dir[ =]$plugin_dir( |$)"; then
+    if grep -qE -- "--plugin-dir[ =]$plugin_dir( |$)" <<<"$output"; then
         echo "FAIL: downstream received ORIGINAL --plugin-dir ($plugin_dir); compilation should have substituted it" >&2
         exit 1
     fi
@@ -216,13 +217,14 @@ test-plugin-host-moxy-disabled: build
         exit 1
     }
     echo "$output"
-    if echo "$output" | grep -q -- "--plugin-dir $plugin_dir"; then
+    # See note in test-plugin-host-moxy on `grep -q` + pipefail (#23).
+    if grep -q -- "--plugin-dir $plugin_dir" <<<"$output"; then
         echo "OK: downstream received original --plugin-dir (pass-through)"
     else
         echo "FAIL: downstream did not receive --plugin-dir $plugin_dir" >&2
         exit 1
     fi
-    if echo "$output" | grep -q 'clown-plugin-compile-'; then
+    if grep -q 'clown-plugin-compile-' <<<"$output"; then
         echo "FAIL: plugin manifest compilation ran despite --disable-clown-protocol" >&2
         exit 1
     fi
@@ -503,6 +505,15 @@ tag version message:
 #
 # Use `just tag <version> <message>` directly if you want full
 # control over the tag message.
+# Run the moxy-dependent integration tests with the opt-in env var pre-set.
+# Useful for verifying fixes to those recipes without typing the long form.
+[group("debug")]
+debug-run-downstream-tests:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    CLOWN_RUN_DOWNSTREAM_TESTS=1 just test-plugin-host-moxy
+    CLOWN_RUN_DOWNSTREAM_TESTS=1 just test-plugin-host-moxy-disabled
+
 # Probe a running llama-server for /v1/models and a test /v1/messages call.
 # Restarts circus with the specified model (defaults to gemma3).
 # Usage: just debug-circus-api [model-store-path]
