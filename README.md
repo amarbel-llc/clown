@@ -39,9 +39,9 @@ Clown wraps the `claude` binary with four additions:
      prompt (`--append-system-prompt-file`). Builtin fragments (in
      `system-prompt-append.d/`) are always prepended before user fragments.
 
-4. **Fish shell completions** — full completions for all Claude Code flags, with
-   dynamic session ID completion for `--resume` via the bundled
-   `clown-sessions` utility.
+4. **Fish shell completions** — full completions for all Claude Code flags,
+   plus `clown resume` URI completion driven by the `clown sessions-complete`
+   subcommand.
 
 All other arguments are passed through to `claude` unchanged.
 

@@ -78,9 +78,13 @@ The flake produces a `symlinkJoin` of five components:
    downstream command. `clown` no longer execs into `clown-plugin-host`.
    See `clown-plugin-host(1)` and `clown-json(5)`.
 
-4. **`clown-sessions`** (`bin/clown-sessions`, Python3): Lists resumable
-   sessions for shell completion. Accepts `--provider codex` to query Codex's
-   SQLite state DB; defaults to scanning Claude's JSONL transcripts.
+4. **`clown sessions-complete`** (built into the `clown` binary): emits one
+   line per resumable session in fish completion format
+   (`<clown://provider/id>\t<reldate>  <title-or-id>`). Pass `--pwd-only` to
+   filter to sessions whose recorded cwd exactly matches `$PWD`. Used by
+   the fish completion script to populate `clown resume` URI suggestions.
+   Codex enumeration was dropped when `bin/clown-sessions` (Python) was
+   removed; restoring it requires a Go SQLite reader (see issue #27).
 
 5. **`clown-completions`** (`completions/clown.fish`): Provider-aware fish
    completions. Detects `--provider` on the command line (or `CLOWN_PROVIDER`

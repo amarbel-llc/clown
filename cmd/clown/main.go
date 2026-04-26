@@ -122,8 +122,13 @@ func main() {
 }
 
 func run(rawArgs []string) int {
-	if len(rawArgs) > 0 && rawArgs[0] == "resume" {
-		return runResume(rawArgs[1:])
+	if len(rawArgs) > 0 {
+		switch rawArgs[0] {
+		case "resume":
+			return runResume(rawArgs[1:])
+		case "sessions-complete":
+			return runSessionsComplete(rawArgs[1:])
+		}
 	}
 
 	flags, err := parseFlags(rawArgs)
@@ -727,6 +732,7 @@ Clown flags (must appear before --):
   --help, -h                 Show this help text
   version                    Print version information (first argument only)
   resume                     Pick a resumable session in $PWD (claude only)
+  sessions-complete          Emit fish-completion lines for sessions
 
 All arguments after -- are forwarded verbatim to the provider.
 `)

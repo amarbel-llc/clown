@@ -342,11 +342,6 @@
           exec "${clown-go}/bin/clown" "$@"
         '';
 
-        clown-sessions = pkgs.writeScriptBin "clown-sessions" ''
-          #!${pkgs.python3}/bin/python3
-          ${builtins.readFile ./bin/clown-sessions}
-        '';
-
         clown-completions = pkgs.runCommand "clown-completions" { } ''
           mkdir -p $out/share/fish/vendor_completions.d
           cp ${./completions/clown.fish} $out/share/fish/vendor_completions.d/clown.fish
@@ -460,7 +455,6 @@
               (mkClownBin pluginMeta)
               clown-plugin-host
               circus-go
-              clown-sessions
               clown-completions
               clown-manpages
             ];

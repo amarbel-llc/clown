@@ -56,7 +56,7 @@ complete -c clown -f -n '__fish_use_subcommand; and __clown_is_claude' -a update
 complete -c clown -f -n '__fish_use_subcommand; and __clown_is_claude' -s v -d 'Output the version number'
 complete -c clown -f -n '__fish_use_subcommand; and __clown_is_claude' -s p -l print -d 'Print response and exit (useful for pipes)'
 complete -c clown -f -n '__fish_use_subcommand; and __clown_is_claude' -s c -l continue -d 'Continue the most recent conversation'
-complete -c clown -x -n '__fish_use_subcommand; and __clown_is_claude' -s r -l resume -a '(clown-sessions 2>/dev/null)' -d 'Resume a conversation by session ID'
+complete -c clown -x -n '__fish_use_subcommand; and __clown_is_claude' -s r -l resume -d 'Resume a conversation by session ID'
 complete -c clown -f -n '__fish_use_subcommand; and __clown_is_claude' -l fork-session -d 'Create a new session ID when resuming'
 complete -c clown -f -n '__fish_use_subcommand; and __clown_is_claude' -s d -l debug -d 'Enable debug mode'
 
@@ -161,12 +161,35 @@ complete -c clown -x -n '__fish_use_subcommand; and __clown_is_codex' -s C -l cd
 complete -c clown -f -n '__fish_use_subcommand; and __clown_is_codex' -l search -d 'Enable live web search'
 complete -c clown -f -n '__fish_use_subcommand; and __clown_is_codex' -l no-alt-screen -d 'Disable alternate screen mode'
 complete -c clown -f -n '__fish_use_subcommand; and __clown_is_codex' -s V -d 'Display version'
-# Codex resume and fork subcommand completions
-complete -c clown -x -n '__fish_seen_subcommand_from resume; and __clown_is_codex' -a '(clown-sessions --provider codex 2>/dev/null)' -d 'Resume a Codex session'
+# Codex resume and fork subcommand flag completions. Value lists for
+# the session id were removed when bin/clown-sessions was deleted; see
+# issue #27 for restoring codex thread-id completion via a Go-native
+# enumerator.
 complete -c clown -f -n '__fish_seen_subcommand_from resume; and __clown_is_codex' -l last -d 'Resume the most recent session'
 complete -c clown -f -n '__fish_seen_subcommand_from resume; and __clown_is_codex' -l all -d 'Show all sessions'
 complete -c clown -f -n '__fish_seen_subcommand_from resume; and __clown_is_codex' -l include-non-interactive -d 'Include non-interactive sessions'
-complete -c clown -x -n '__fish_seen_subcommand_from fork; and __clown_is_codex' -a '(clown-sessions --provider codex 2>/dev/null)' -d 'Fork a Codex session'
 complete -c clown -f -n '__fish_seen_subcommand_from fork; and __clown_is_codex' -l last -d 'Fork the most recent session'
 complete -c clown -f -n '__fish_seen_subcommand_from fork; and __clown_is_codex' -l all -d 'Show all sessions'
 complete -c clown -f -n '__fish_seen_subcommand_from fork; and __clown_is_codex' -l include-non-interactive -d 'Include non-interactive sessions'
+
+# ============================================================
+# Top-level clown subcommands (provider-agnostic)
+# ============================================================
+
+# `resume` and `sessions-complete` are clown's own subcommands, offered
+# regardless of which provider is selected.
+complete -c clown -f -n __fish_use_subcommand -a resume -d 'Resume a session in $PWD (claude only)'
+complete -c clown -f -n __fish_use_subcommand -a sessions-complete -d 'Emit fish completion lines for sessions'
+
+# Predicate for top-level `clown resume <args>` — token 2 is exactly
+# `resume`. Distinct from codex's native `resume` subcommand, which is
+# reached via `clown -- resume` and thus has `--` between tokens.
+function __clown_at_resume
+    set -l tokens (commandline -opc)
+    test (count $tokens) -ge 2; and test "$tokens[2]" = "resume"
+end
+
+complete -c clown -x -n __clown_at_resume -a '(clown sessions-complete --pwd-only 2>/dev/null)' -d 'Resume by URI'
+complete -c clown -x -n __clown_at_resume -l provider -a claude -d 'Provider (claude only in v1)'
+complete -c clown -f -n __clown_at_resume -s y -l yes -d 'Skip confirmation dialog'
+complete -c clown -f -n __clown_at_resume -s h -l help -d 'Show help for clown resume'
