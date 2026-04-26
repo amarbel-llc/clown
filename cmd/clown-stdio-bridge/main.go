@@ -2,10 +2,6 @@
 // over streamable-HTTP, speaking the clown plugin protocol handshake on
 // its own stdout. It is invoked by clown-plugin-host as the synthesized
 // command for any stdioServers entry in clown.json (see FDR 0002).
-//
-// Skeleton implementation (commit 2 of #28): handshake, /healthz, and
-// SIGTERM forwarding work end-to-end. The /mcp endpoint returns 501
-// until the streamable-HTTP MCP translation lands in commit 3.
 package main
 
 import (
@@ -126,7 +122,11 @@ func run(p parsedArgs) int {
 	})
 	mux.HandleFunc("/mcp", handler.handleMCP)
 
-	srv := &http.Server{Handler: mux}
+	// ReadHeaderTimeout guards against Slowloris-style stalls. Other
+	// timeouts are intentionally unset: response bodies may be SSE
+	// streams that last for the full session, and request bodies may
+	// carry sizeable MCP payloads.
+	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	serveErr := make(chan error, 1)
 	go func() {
 		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {

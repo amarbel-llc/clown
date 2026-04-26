@@ -136,9 +136,14 @@ func PluginName(pluginDir string) (string, error) {
 }
 
 // Desugar transforms each StdioServers entry in cfg into a synthesized
-// HTTPServers entry whose command is bridgePath. After Desugar runs,
-// cfg.StdioServers is empty and the rest of clown-plugin-host can treat
-// stdio-declared servers uniformly with native HTTP servers.
+// HTTPServers entry whose command is bridgePath, so the rest of
+// clown-plugin-host can treat stdio-declared servers uniformly with
+// native HTTP servers.
+//
+// Mutates cfg in place: synthesized entries are inserted into
+// cfg.HTTPServers, cfg.StdioServers is cleared to nil, and
+// applyDefaults is called. Callers MUST NOT rely on cfg.StdioServers
+// retaining its prior contents after Desugar returns.
 //
 // bridgePath MUST be the absolute path to the clown-stdio-bridge
 // binary. Returns an error if bridgePath is empty while

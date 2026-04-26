@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -86,13 +88,13 @@ func (h *httpHandler) handlePost(w http.ResponseWriter, r *http.Request) {
 		idKey := string(probe.ID)
 		resp, err := h.t.SendRequest(r.Context(), idKey, body)
 		if err != nil {
-			if err == ErrQueueFull {
+			if errors.Is(err, ErrQueueFull) {
 				writeJSONRPCError(w, http.StatusServiceUnavailable, probe.ID,
 					codeBridgeQueueFull,
 					"clown-stdio-bridge: inbound queue saturated")
 				return
 			}
-			if err == r.Context().Err() {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				// Client disconnected; nothing useful to send.
 				return
 			}
