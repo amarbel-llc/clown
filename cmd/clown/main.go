@@ -122,6 +122,10 @@ func main() {
 }
 
 func run(rawArgs []string) int {
+	if len(rawArgs) > 0 && rawArgs[0] == "resume" {
+		return runResume(rawArgs[1:])
+	}
+
 	flags, err := parseFlags(rawArgs)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
@@ -138,6 +142,14 @@ func run(rawArgs []string) int {
 		return 0
 	}
 
+	return runWithFlags(flags)
+}
+
+// runWithFlags executes the main provider-dispatch pipeline. Split out
+// from run() so subcommands like `resume` can construct a parsedFlags
+// directly and rejoin the standard flow (profile load, prompt walk,
+// plugin host, provider exec) without re-running parseFlags.
+func runWithFlags(flags parsedFlags) int {
 	profiles, err := loadProfiles("")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown: loading profiles: %v\n", err)
@@ -714,6 +726,7 @@ Clown flags (must appear before --):
   --verbose, -v              Enable verbose output
   --help, -h                 Show this help text
   version                    Print version information (first argument only)
+  resume                     Pick a resumable session in $PWD (claude only)
 
 All arguments after -- are forwarded verbatim to the provider.
 `)

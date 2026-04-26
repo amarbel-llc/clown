@@ -1,0 +1,206 @@
+package main
+
+import (
+	"fmt"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/charmbracelet/bubbles/list"
+	tea "github.com/charmbracelet/bubbletea"
+	"golang.org/x/term"
+
+	"github.com/amarbel-llc/clown/internal/sessions"
+)
+
+// runResume implements the `clown resume` subcommand: picks a Claude
+// session whose recorded cwd exactly matches $PWD, then re-enters the
+// main provider pipeline with --resume <id> forwarded to claude.
+func runResume(args []string) int {
+	provider, forwardable, err := parseResumeArgs(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
+		return 1
+	}
+	if provider != "claude" {
+		fmt.Fprintf(os.Stderr, "clown: resume only supports --provider claude in v1 (got %q)\n", provider)
+		return 1
+	}
+
+	if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())) {
+		fmt.Fprintln(os.Stderr, "clown: resume requires an interactive terminal")
+		return 1
+	}
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
+		return 1
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
+		return 1
+	}
+
+	all, err := sessions.ListClaudeSessions(homeDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clown: listing claude sessions: %v\n", err)
+		return 1
+	}
+	matches := sessions.FilterByCWD(all, cwd)
+	if len(matches) == 0 {
+		fmt.Fprintf(os.Stderr, "clown: no resumable claude sessions recorded for %s\n", cwd)
+		return 0
+	}
+
+	chosen, err := pickSession(matches)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clown: session picker: %v\n", err)
+		return 1
+	}
+	if chosen == nil {
+		return 0
+	}
+
+	flags := parsedFlags{
+		provider:         "claude",
+		providerExplicit: true,
+		forwarded:        append(forwardable, "--resume", chosen.ID),
+	}
+	return runWithFlags(flags)
+}
+
+// parseResumeArgs parses the args after `clown resume`. Returns the
+// chosen provider (default "claude") and any args to forward verbatim
+// to the provider after the `--` separator.
+func parseResumeArgs(args []string) (provider string, forwarded []string, err error) {
+	provider = "claude"
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--":
+			if i+1 < len(args) {
+				forwarded = args[i+1:]
+			}
+			return provider, forwarded, nil
+		case args[i] == "--provider":
+			if i+1 >= len(args) {
+				return "", nil, fmt.Errorf("--provider requires an argument")
+			}
+			provider = args[i+1]
+			i++
+		case strings.HasPrefix(args[i], "--provider="):
+			provider = strings.TrimPrefix(args[i], "--provider=")
+		case args[i] == "--help" || args[i] == "-h":
+			printResumeHelp()
+			os.Exit(0)
+		default:
+			return "", nil, fmt.Errorf("unknown resume flag %q", args[i])
+		}
+	}
+	return provider, forwarded, nil
+}
+
+func printResumeHelp() {
+	fmt.Print(`Usage: clown resume [--provider <name>] [-- <provider-args>]
+
+Pick a resumable session whose recorded working directory exactly matches
+$PWD, then launch the chosen provider with the right resume flag.
+
+Flags:
+  --provider <name>   Provider to resume from (default: claude). Only
+                      claude is supported in v1.
+  --help, -h          Show this help text.
+
+Args after -- are forwarded to the provider alongside --resume <id>.
+`)
+}
+
+// sessionItem adapts sessions.Session to the bubbles list.Item interface.
+type sessionItem struct{ s sessions.Session }
+
+func (i sessionItem) Title() string {
+	t := i.s.Title
+	if t == "" {
+		t = "(untitled)"
+	}
+	return t
+}
+func (i sessionItem) Description() string {
+	parts := []string{formatRelDate(i.s.ModTime)}
+	if i.s.GitBranch != "" {
+		parts = append(parts, "@"+i.s.GitBranch)
+	}
+	parts = append(parts, i.s.ID)
+	return strings.Join(parts, "  ")
+}
+func (i sessionItem) FilterValue() string { return i.s.Title + " " + i.s.ID }
+
+type sessionPickerModel struct {
+	list   list.Model
+	chosen *sessions.Session
+	quit   bool
+}
+
+func (m sessionPickerModel) Init() tea.Cmd { return nil }
+
+func (m sessionPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "enter":
+			if i, ok := m.list.SelectedItem().(sessionItem); ok {
+				s := i.s
+				m.chosen = &s
+			}
+			return m, tea.Quit
+		case "q", "ctrl+c", "esc":
+			m.quit = true
+			return m, tea.Quit
+		}
+	case tea.WindowSizeMsg:
+		m.list.SetWidth(msg.Width)
+		m.list.SetHeight(msg.Height - 2)
+	}
+	var cmd tea.Cmd
+	m.list, cmd = m.list.Update(msg)
+	return m, cmd
+}
+
+func (m sessionPickerModel) View() string { return m.list.View() }
+
+func pickSession(ss []sessions.Session) (*sessions.Session, error) {
+	items := make([]list.Item, len(ss))
+	for i, s := range ss {
+		items[i] = sessionItem{s}
+	}
+	l := list.New(items, list.NewDefaultDelegate(), 60, 16)
+	l.Title = "Select a session to resume"
+	l.SetShowStatusBar(false)
+	l.SetFilteringEnabled(true)
+	m, err := tea.NewProgram(sessionPickerModel{list: l}, tea.WithAltScreen()).Run()
+	if err != nil {
+		return nil, err
+	}
+	pm := m.(sessionPickerModel)
+	if pm.quit {
+		return nil, nil
+	}
+	return pm.chosen, nil
+}
+
+func formatRelDate(t time.Time) string {
+	delta := time.Since(t)
+	switch {
+	case delta < time.Minute:
+		return "just now"
+	case delta < time.Hour:
+		return fmt.Sprintf("%dm ago", int(delta.Minutes()))
+	case delta < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(delta.Hours()))
+	case delta < 7*24*time.Hour:
+		return fmt.Sprintf("%dd ago", int(delta.Hours()/24))
+	default:
+		return t.Format("2006-01-02")
+	}
+}
