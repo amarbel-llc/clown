@@ -40,6 +40,11 @@ type Host struct {
 	Logger     *slog.Logger
 	Verbose    bool
 	Servers    []*ManagedServer
+	// BridgePath, when set, is the absolute path to clown-stdio-bridge.
+	// It is required when any discovered clown.json declares stdioServers
+	// entries; Discover passes it to Desugar so those entries are
+	// rewritten as httpServers entries pointing at the bridge.
+	BridgePath string
 
 	// compiledDirs tracks staging directories produced by
 	// CompileForClaude; Shutdown removes them.
@@ -54,6 +59,10 @@ func (h *Host) Discover() ([]DiscoveredServer, error) {
 			continue
 		}
 		if err != nil {
+			return nil, fmt.Errorf("plugin dir %s: %w", dir, err)
+		}
+
+		if err := Desugar(cfg, h.BridgePath); err != nil {
 			return nil, fmt.Errorf("plugin dir %s: %w", dir, err)
 		}
 
