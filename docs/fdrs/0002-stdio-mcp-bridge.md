@@ -1,5 +1,5 @@
 ---
-status: draft
+status: testing
 date: 2026-04-26
 ---
 

@@ -1,0 +1,173 @@
+.\" Copyright (c) 2026 amarbel, LLC
+.\" SPDX-License-Identifier: MIT
+.Dd @MDOCDATE@
+.Dt CLOWN-STDIO-BRIDGE 1
+.Os
+.Sh NAME
+.Nm clown-stdio-bridge
+.Nd bridge a stdio MCP server to streamable-HTTP for clown-plugin-host
+.Sh SYNOPSIS
+.Nm
+.Fl -command Ar cmd
+.Cm --
+.Op Ar args
+.Sh DESCRIPTION
+.Nm
+wraps a JSON-RPC-over-stdio MCP server and exposes it on an ephemeral
+loopback HTTP port speaking the streamable-HTTP MCP transport.
+The wrapped server is spawned as a child process; its stdin and stdout
+are driven by
+.Nm Ap s
+translator goroutines.
+.Pp
+.Nm
+is launched by
+.Xr clown-plugin-host 1
+as the synthesized command for any
+.Li stdioServers
+entry in
+.Xr clown-json 5 .
+Plugin authors do not invoke
+.Nm
+directly; they declare a stdio MCP server in
+.Pa clown.json
+and clown desugars it into a
+.Li httpServers
+entry pointing at this binary.
+The desugaring lets stdio-declared servers and native HTTP servers share
+a single discovery and lifecycle path under
+.Xr clown-plugin-host 1 .
+.Pp
+On launch
+.Nm
+prints the same handshake line as a native clown-plugin server (see
+.Xr clown-plugin-protocol 7 ) ,
+binds
+.Li 127.0.0.1:0 ,
+and serves
+.Li GET /healthz
+and
+.Li {GET,POST,DELETE} /mcp .
+.Sh OPTIONS
+.Bl -tag -width Ds
+.It Fl -command Ar cmd
+The wrapped stdio MCP server binary.
+Resolved against the caller's
+.Ev PATH
+via
+.Xr execvp 3 ;
+absolute paths bypass lookup.
+Required.
+.It Cm --
+Separator between
+.Nm
+flags and the wrapped command's argv.
+Everything after
+.Cm --
+is taken verbatim as the wrapped command's arguments, including any
+literal
+.Cm --
+tokens.
+.El
+.Sh PROTOCOL TRANSLATION
+.Nm
+implements a subset of the streamable-HTTP MCP transport sufficient to
+bridge a stdio MCP server with no client-side awareness:
+.Bl -tag -width Ds
+.It Li POST /mcp Pq JSON-RPC request
+The body is forwarded verbatim, followed by a newline, to the wrapped
+child's stdin.
+.Nm
+blocks the HTTP request until a JSON-RPC response with the matching
+.Li id
+arrives on the child's stdout, then returns it as
+.Li application/json .
+.It Li POST /mcp Pq JSON-RPC notification or response
+The body is forwarded fire-and-forget; the HTTP layer responds with
+.Li 202 Accepted
+immediately.
+.It Li GET /mcp
+Opens a Server-Sent Events stream.
+Server-initiated JSON-RPC messages from the wrapped child
+.Pq i.e., lines on its stdout that have a Li method No field but no matching pending Li id
+are broadcast to every active SSE subscriber as
+.Li data:\& Ns Ar payload
+events.
+.It Li DELETE /mcp
+Returns
+.Li 405 Method Not Allowed .
+Session termination is not supported in v1; the bridge does not assign
+session IDs.
+.El
+.Pp
+The
+.Li Origin
+header is restricted to loopback origins
+.Pq Li 127.0.0.1 , Li ::1 , Li localhost
+or absent, per the streamable-HTTP spec's DNS-rebinding mitigation.
+Other origins receive
+.Li 403 Forbidden .
+.Sh RESOURCE LIMITS
+.Nm
+caps the number of pending JSON-RPC messages in each direction at a
+fixed depth.
+On overflow:
+.Bl -tag -width Ds
+.It Sy Inbound Pq HTTP No -> child stdin
+The offending HTTP request receives a JSON-RPC error response with code
+.Li \-32000
+and message
+.Dq clown-stdio-bridge: inbound queue saturated .
+The wrapped child stays alive.
+.It Sy Outbound Pq child stdout No -> SSE subscriber
+The oldest pending broadcast in the offending subscriber's channel is
+dropped to make room.
+A counter
+.Pq exposed via Sy DroppedOutbound
+records the cumulative drop count.
+.El
+.Pp
+The depth is a tuning parameter and may change between minor versions.
+.Sh CRASH BEHAVIOR
+If the wrapped child exits unexpectedly,
+.Nm
+logs the exit status and itself exits non-zero.
+.Xr clown-plugin-host 1 Ap s
+existing failure path
+.Pq Li StartReport.Failed , Fl -skip-failed
+handles restart-or-abort.
+.Nm
+is a transport adapter, not a supervisor.
+.Sh SHUTDOWN
+On
+.Dv SIGTERM
+or
+.Dv SIGINT ,
+.Nm
+sends
+.Dv SIGTERM
+to the wrapped child's process group, waits up to 5 seconds for clean
+exit, then escalates to
+.Dv SIGKILL .
+The HTTP server is gracefully shut down on the same path.
+.Sh EXIT STATUS
+.Nm
+exits
+.Li 0
+on a clean
+.Dv SIGTERM Ns / Ns Dv SIGINT
+shutdown after spawning the wrapped child successfully.
+Exit status
+.Li 1
+indicates an error reachable before or during the wrapped child's
+lifetime: missing or invalid flags, command lookup failure, network
+listen failure, HTTP serve error, or unexpected child exit.
+.Sh SEE ALSO
+.Xr claude-code 1 ,
+.Xr clown 1 ,
+.Xr clown-plugin-host 1 ,
+.Xr clown-json 5 ,
+.Xr clown-plugin-protocol 7
+.Sh AUTHORS
+.An amarbel, LLC
+.Lk https://github.com/amarbel-llc/clown

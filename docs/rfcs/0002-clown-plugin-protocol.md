@@ -45,6 +45,14 @@ interpreted as described in RFC 2119.
 
 ## Specification
 
+> **Note on stdio servers.** This RFC specifies the lifecycle for HTTP MCP
+> servers declared under `httpServers`. The companion `stdioServers` block
+> (introduced in FDR 0002) is a high-level shorthand: each `stdioServers`
+> entry is desugared at discovery time into a synthesized `httpServers`
+> entry whose command is `clown-stdio-bridge`. From the perspective of
+> everything below — handshake, healthcheck, manifest compilation, lifecycle
+> — stdio-declared servers are indistinguishable from HTTP-declared ones.
+
 ### 1. clown.json Manifest
 
 #### 1.1 Location

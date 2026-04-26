@@ -55,6 +55,18 @@ becomes a managed server.
 The plugin name is read from
 .Pa .claude-plugin/plugin.json
 in the same directory.
+.Pp
+Entries in
+.Fa stdioServers
+are desugared at discovery time into synthesized
+.Fa httpServers
+entries whose command is
+.Xr clown-stdio-bridge 1 .
+The bridge wraps a JSON-RPC-over-stdio MCP server and exposes it on
+loopback HTTP, speaking the same handshake protocol as a native HTTP
+server.
+After desugaring, stdio-declared and HTTP-declared servers share a
+single discovery, lifecycle, and manifest-compilation path.
 .Sh HANDSHAKE PROTOCOL
 Each HTTP MCP server MUST print a single pipe-delimited line to stdout
 before serving requests:
@@ -360,6 +372,7 @@ A plugin MAY ship both
 .Xr claude-code 1 ,
 .Xr clown 1 ,
 .Xr clown-plugin-host 1 ,
+.Xr clown-stdio-bridge 1 ,
 .Xr clown-json 5
 .Sh STANDARDS
 This protocol is specified in full in

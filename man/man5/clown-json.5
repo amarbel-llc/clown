@@ -29,10 +29,25 @@ is a JSON file with the following top-level fields:
 Schema version.
 Must be
 .Li 1 .
-.It Fa httpServers Pq object, required
-A map of server name to server definition.
+.It Fa httpServers Pq object, optional
+A map of server name to HTTP server definition.
 Each key is a short identifier used in MCP server naming
 .Pq combined with the plugin name as Ar plugin Ns / Ns Ar server .
+At least one of
+.Fa httpServers
+or
+.Fa stdioServers
+must be present.
+.It Fa stdioServers Pq object, optional
+A map of server name to stdio server definition.
+Each entry declares a JSON-RPC-over-stdio MCP server that clown bridges
+to streamable-HTTP via
+.Xr clown-stdio-bridge 1
+at discovery time.
+Names MUST be unique across both
+.Fa httpServers
+and
+.Fa stdioServers .
 .El
 .Ss Server Definition
 Each server definition is an object with the following fields:
@@ -73,6 +88,48 @@ This is unrelated to
 .Fa healthcheck.timeout
 .Pq which governs startup readiness, not in-session tool calls .
 .El
+.Ss Stdio Server Definition
+Each stdio server definition is an object with the following fields:
+.Bl -tag -width Ds
+.It Fa command Pq string, required
+Path to the wrapped stdio MCP server binary.
+Resolved against
+.Ev PATH
+when relative.
+.It Fa args Pq array of strings, optional
+Command-line arguments forwarded verbatim to the wrapped command.
+Default:
+.Li [] .
+.It Fa env Pq object, optional
+Environment variables added to the bridge process's inherited
+environment.
+Default:
+.Li {} .
+.It Fa timeout Pq integer, optional
+Per-tool MCP request timeout, in milliseconds.
+Same semantics as
+.Fa httpServers. Ns Ar name Ns .timeout :
+forwarded verbatim into the compiled
+.Pa plugin.json
+as
+.Li mcpServers. Ns Ar name Ns .timeout
+to override Claude Code's default per-tool timeout.
+.El
+.Pp
+At discovery time, clown desugars each
+.Fa stdioServers
+entry into a synthesized
+.Fa httpServers
+entry whose
+.Fa command
+is
+.Xr clown-stdio-bridge 1
+and whose
+.Fa args
+is
+.Li [\(dq--command\(dq, \(dq <Ar command Ns >\(dq, \(dq--\(dq, \(dq <Ar args... Ns >\(dq] .
+The rest of the lifecycle (handshake, healthcheck, manifest
+compilation, shutdown) is identical to a native HTTP server entry.
 .Ss Healthcheck Definition
 .Bl -tag -width Ds
 .It Fa path Pq string, optional
@@ -144,6 +201,19 @@ Full manifest with all fields:
   }
 }
 .Ed
+.Pp
+Manifest with a stdio MCP server bridged to streamable-HTTP:
+.Bd -literal -offset indent
+{
+  "version": 1,
+  "stdioServers": {
+    "kagi": {
+      "command": "kagi-mcp",
+      "args": ["--api-key-env", "KAGI_KEY"]
+    }
+  }
+}
+.Ed
 .Sh SERVER REQUIREMENTS
 Servers declared in
 .Nm
@@ -169,6 +239,7 @@ Shut down gracefully on
 .Sh SEE ALSO
 .Xr clown 1 ,
 .Xr clown-plugin-host 1 ,
+.Xr clown-stdio-bridge 1 ,
 .Xr claude-code-settings 5 ,
 .Xr clown-plugin-protocol 7
 .Sh AUTHORS
