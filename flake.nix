@@ -159,6 +159,19 @@
           ];
         };
 
+        clown-stdio-bridge = buildGoApplication {
+          pname = "clown-stdio-bridge";
+          version = clownVersion;
+          src = goSrc;
+          subPackages = [ "cmd/clown-stdio-bridge" ];
+          modules = ./gomod2nix.toml;
+          ldflags = [
+            "-s" "-w"
+            "-X main.version=${clownVersion}"
+            "-X main.commit=${clownRev}"
+          ];
+        };
+
         clown-go = buildGoApplication {
           pname = "clown";
           version = clownVersion;
@@ -454,6 +467,7 @@
             paths = [
               (mkClownBin pluginMeta)
               clown-plugin-host
+              clown-stdio-bridge
               circus-go
               clown-completions
               clown-manpages

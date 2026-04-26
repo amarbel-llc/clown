@@ -3,7 +3,7 @@ default: build test check
 # Aggregator: run every test recipe (Go unit tests + plugin-host
 # integration tests). Moxy-dependent tests skip cleanly when moxy is not
 # on PATH, so this recipe is safe to run from any environment.
-test: test-go test-plugin-host test-plugin-host-moxy test-plugin-host-moxy-disabled
+test: test-go test-plugin-host test-stdio-bridge test-plugin-host-moxy test-plugin-host-moxy-disabled
 
 # Aggregator: run every check recipe (currently: mandoc lint on
 # clown-authored man pages). Non-test correctness gates belong here.
@@ -31,6 +31,63 @@ build-mock-server:
 [group("go")]
 gomod2nix:
     gomod2nix generate
+
+# Integration test: launch clown-stdio-bridge with `cat` as the wrapped
+# command and verify the skeleton lifecycle. Reads the handshake line,
+# probes /healthz, /mcp, and sends SIGTERM. Does not exercise MCP
+# translation (that arrives in commit 3).
+[group("test")]
+test-stdio-bridge: build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    bin="./result/bin/clown-stdio-bridge"
+    echo "Launching $bin with cat as wrapped command..."
+    # Use a fifo for the handshake line so we can read it without racing.
+    handshake_file=$(mktemp)
+    log_file=$(mktemp)
+    trap 'rm -f "$handshake_file" "$log_file"' EXIT
+    "$bin" --command cat -- >"$handshake_file" 2>"$log_file" &
+    bridge_pid=$!
+    # Wait for handshake line.
+    for _ in $(seq 1 30); do
+        if [[ -s "$handshake_file" ]]; then break; fi
+        sleep 0.1
+    done
+    handshake=$(head -n1 "$handshake_file")
+    if [[ -z "$handshake" ]]; then
+        echo "FAIL: bridge produced no handshake within 3 s" >&2
+        cat "$log_file" >&2
+        kill "$bridge_pid" 2>/dev/null || true
+        exit 1
+    fi
+    echo "handshake: $handshake"
+    if ! grep -qE '^1\|1\|tcp\|127\.0\.0\.1:[0-9]+\|streamable-http$' <<<"$handshake"; then
+        echo "FAIL: handshake does not match expected format" >&2
+        kill "$bridge_pid" 2>/dev/null || true
+        exit 1
+    fi
+    addr=$(awk -F'|' '{print $4}' <<<"$handshake")
+    healthz_status=$(curl -s -o /dev/null -w '%{http_code}' "http://$addr/healthz")
+    if [[ "$healthz_status" != "200" ]]; then
+        echo "FAIL: /healthz returned $healthz_status, want 200" >&2
+        kill "$bridge_pid" 2>/dev/null || true
+        exit 1
+    fi
+    echo "OK: /healthz returned 200"
+    mcp_status=$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://$addr/mcp")
+    if [[ "$mcp_status" != "501" ]]; then
+        echo "FAIL: POST /mcp returned $mcp_status, want 501" >&2
+        kill "$bridge_pid" 2>/dev/null || true
+        exit 1
+    fi
+    echo "OK: POST /mcp returned 501"
+    kill -TERM "$bridge_pid"
+    if ! wait "$bridge_pid"; then
+        # Bridge exits 0 on clean shutdown; non-zero is fine if SIGTERM
+        # was the trigger. Just confirm it stopped.
+        :
+    fi
+    echo "OK: clown-stdio-bridge skeleton integration test passed"
 
 # Integration test: launch clown-plugin-host with the synthetic plugin's
 # clown.json and verify the mock HTTP MCP server starts, completes the
