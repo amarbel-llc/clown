@@ -9,11 +9,10 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
-	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -77,12 +76,8 @@ func run(p parsedArgs) int {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Stderr = os.Stderr
 
-	// stdin and stdout are wired to the MCP translator in commit 3.
-	// For the skeleton: drain stdout so the wrapped child doesn't
-	// backpressure on a full pipe, and leave stdin held open via the
-	// pipe handle (closing it would EOF the child, which kills
-	// well-behaved servers that block on stdin — e.g. `cat`).
-	if _, err := cmd.StdinPipe(); err != nil {
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown-stdio-bridge: stdin pipe: %v\n", err)
 		return 1
 	}
@@ -91,7 +86,6 @@ func run(p parsedArgs) int {
 		fmt.Fprintf(os.Stderr, "clown-stdio-bridge: stdout pipe: %v\n", err)
 		return 1
 	}
-	go drain(stdout)
 
 	if err := cmd.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "clown-stdio-bridge: start %q: %v\n", cmdPath, err)
@@ -112,6 +106,15 @@ func run(p parsedArgs) int {
 	fmt.Printf("1|1|tcp|%s|streamable-http\n", ln.Addr().String())
 	_ = os.Stdout.Sync()
 
+	stdLogger := log.New(os.Stderr, "", 0)
+	tr := newTranslator(stdin, stdout, stdLogger)
+	go func() {
+		if err := tr.Run(ctx); err != nil {
+			stdLogger.Printf("clown-stdio-bridge: translator: %v", err)
+		}
+	}()
+
+	handler := &httpHandler{t: tr, logger: stdLogger}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		select {
@@ -121,9 +124,7 @@ func run(p parsedArgs) int {
 			w.WriteHeader(http.StatusOK)
 		}
 	})
-	mux.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "MCP translation not yet implemented", http.StatusNotImplemented)
-	})
+	mux.HandleFunc("/mcp", handler.handleMCP)
 
 	srv := &http.Server{Handler: mux}
 	serveErr := make(chan error, 1)
@@ -169,15 +170,6 @@ func run(p parsedArgs) int {
 	defer shutdownCancel()
 	_ = srv.Shutdown(shutdownCtx)
 	return exit
-}
-
-// drain reads r line-by-line and discards every line. Replaced by the
-// stdout reader half of the JSON-RPC translator in commit 3.
-func drain(r io.Reader) {
-	scanner := bufio.NewScanner(r)
-	for scanner.Scan() {
-		_ = scanner.Text()
-	}
 }
 
 // terminate sends SIGTERM to the wrapped child's process group and

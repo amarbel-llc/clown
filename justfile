@@ -26,29 +26,35 @@ test-go:
 build-mock-server:
     go build -o tests/synthetic-plugin/bin/mock-mcp-server ./internal/pluginhost/testdata/mockserver
 
+# Build the mock stdio MCP server used by clown-stdio-bridge integration tests.
+[group("go")]
+build-mock-stdio-mcp:
+    go build -o tests/synthetic-plugin/bin/mock-stdio-mcp ./internal/pluginhost/testdata/mockstdiomcp
+
 # Regenerate gomod2nix.toml after go.mod changes (uses the gomod2nix
 # binary from the devshell so the tool version matches the nix builder).
 [group("go")]
 gomod2nix:
     gomod2nix generate
 
-# Integration test: launch clown-stdio-bridge with `cat` as the wrapped
-# command and verify the skeleton lifecycle. Reads the handshake line,
-# probes /healthz, /mcp, and sends SIGTERM. Does not exercise MCP
-# translation (that arrives in commit 3).
+# Integration test: launch clown-stdio-bridge wrapping a mock stdio
+# MCP server. Verifies the handshake/healthcheck path (skeleton-level)
+# AND the streamable-HTTP MCP translation path: client POSTs an
+# `initialize` request and receives a JSON response with the matching
+# id; client triggers a server-initiated notification via a
+# `notify-broadcast` request and observes it on the GET SSE stream.
 [group("test")]
-test-stdio-bridge: build
+test-stdio-bridge: build build-mock-stdio-mcp
     #!/usr/bin/env bash
     set -euo pipefail
     bin="./result/bin/clown-stdio-bridge"
-    echo "Launching $bin with cat as wrapped command..."
-    # Use a fifo for the handshake line so we can read it without racing.
+    mock="$(pwd)/tests/synthetic-plugin/bin/mock-stdio-mcp"
+    echo "Launching $bin --command $mock"
     handshake_file=$(mktemp)
     log_file=$(mktemp)
-    trap 'rm -f "$handshake_file" "$log_file"' EXIT
-    "$bin" --command cat -- >"$handshake_file" 2>"$log_file" &
+    trap 'rm -f "$handshake_file" "$log_file"; kill "$bridge_pid" 2>/dev/null || true' EXIT
+    "$bin" --command "$mock" -- >"$handshake_file" 2>"$log_file" &
     bridge_pid=$!
-    # Wait for handshake line.
     for _ in $(seq 1 30); do
         if [[ -s "$handshake_file" ]]; then break; fi
         sleep 0.1
@@ -57,37 +63,80 @@ test-stdio-bridge: build
     if [[ -z "$handshake" ]]; then
         echo "FAIL: bridge produced no handshake within 3 s" >&2
         cat "$log_file" >&2
-        kill "$bridge_pid" 2>/dev/null || true
         exit 1
     fi
     echo "handshake: $handshake"
     if ! grep -qE '^1\|1\|tcp\|127\.0\.0\.1:[0-9]+\|streamable-http$' <<<"$handshake"; then
         echo "FAIL: handshake does not match expected format" >&2
-        kill "$bridge_pid" 2>/dev/null || true
         exit 1
     fi
     addr=$(awk -F'|' '{print $4}' <<<"$handshake")
-    healthz_status=$(curl -s -o /dev/null -w '%{http_code}' "http://$addr/healthz")
+    base="http://$addr"
+
+    # /healthz baseline.
+    healthz_status=$(curl -s -o /dev/null -w '%{http_code}' "$base/healthz")
     if [[ "$healthz_status" != "200" ]]; then
         echo "FAIL: /healthz returned $healthz_status, want 200" >&2
-        kill "$bridge_pid" 2>/dev/null || true
         exit 1
     fi
     echo "OK: /healthz returned 200"
-    mcp_status=$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://$addr/mcp")
-    if [[ "$mcp_status" != "501" ]]; then
-        echo "FAIL: POST /mcp returned $mcp_status, want 501" >&2
-        kill "$bridge_pid" 2>/dev/null || true
+
+    # Round-trip: POST an initialize request, expect a JSON response
+    # with the same id.
+    init_resp=$(curl -sS -X POST "$base/mcp" \
+        -H 'Content-Type: application/json' \
+        -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}')
+    if ! grep -q '"id":1' <<<"$init_resp"; then
+        echo "FAIL: initialize response missing id=1: $init_resp" >&2
         exit 1
     fi
-    echo "OK: POST /mcp returned 501"
-    kill -TERM "$bridge_pid"
-    if ! wait "$bridge_pid"; then
-        # Bridge exits 0 on clean shutdown; non-zero is fine if SIGTERM
-        # was the trigger. Just confirm it stopped.
-        :
+    if ! grep -q 'mock-stdio-mcp' <<<"$init_resp"; then
+        echo "FAIL: initialize response missing serverInfo.name: $init_resp" >&2
+        exit 1
     fi
-    echo "OK: clown-stdio-bridge skeleton integration test passed"
+    echo "OK: initialize round-trip succeeded"
+
+    # tools/list: one mock tool.
+    tools_resp=$(curl -sS -X POST "$base/mcp" \
+        -H 'Content-Type: application/json' \
+        -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}')
+    if ! grep -q '"name":"echo"' <<<"$tools_resp"; then
+        echo "FAIL: tools/list response missing echo tool: $tools_resp" >&2
+        exit 1
+    fi
+    echo "OK: tools/list round-trip succeeded"
+
+    # SSE broadcast: open a GET SSE stream in the background, trigger
+    # a server-initiated notification via the mock's notify-broadcast
+    # method, observe the notification on the SSE stream.
+    sse_out=$(mktemp)
+    trap 'rm -f "$handshake_file" "$log_file" "$sse_out"; kill "$bridge_pid" 2>/dev/null || true' EXIT
+    curl -sNS "$base/mcp" >"$sse_out" 2>/dev/null &
+    sse_pid=$!
+    sleep 0.2
+    curl -sS -X POST "$base/mcp" \
+        -H 'Content-Type: application/json' \
+        -d '{"jsonrpc":"2.0","id":3,"method":"notify-broadcast"}' >/dev/null
+    deadline=$(($(date +%s) + 3))
+    while [[ $(date +%s) -lt $deadline ]]; do
+        if grep -q 'tools/list_changed' "$sse_out" 2>/dev/null; then break; fi
+        sleep 0.1
+    done
+    kill "$sse_pid" 2>/dev/null || true
+    wait "$sse_pid" 2>/dev/null || true
+    if ! grep -q 'tools/list_changed' "$sse_out"; then
+        echo "FAIL: SSE stream did not receive notifications/tools/list_changed" >&2
+        echo "--- sse_out ---" >&2
+        cat "$sse_out" >&2
+        echo "--- bridge log ---" >&2
+        cat "$log_file" >&2
+        exit 1
+    fi
+    echo "OK: SSE broadcast received server-initiated notification"
+
+    kill -TERM "$bridge_pid"
+    wait "$bridge_pid" 2>/dev/null || true
+    echo "OK: clown-stdio-bridge integration test passed"
 
 # Integration test: launch clown-plugin-host with the synthetic plugin's
 # clown.json and verify the mock HTTP MCP server starts, completes the
