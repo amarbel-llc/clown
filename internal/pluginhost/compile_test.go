@@ -82,6 +82,64 @@ func TestCompilePluginManifest_InjectsServerEntries(t *testing.T) {
 	}
 }
 
+func TestCompilePluginManifest_InjectsTimeout(t *testing.T) {
+	input := []byte(`{
+  "name": "moxy",
+  "mcpServers": {
+    "moxy": {"type": "stdio", "command": "/usr/bin/moxy"}
+  }
+}`)
+
+	entries := map[string]MCPServerEntry{
+		"moxy": {Type: "http", URL: "http://127.0.0.1:12345/mcp", Timeout: 86400000},
+	}
+	out, _, err := CompilePluginManifest(input, entries)
+	if err != nil {
+		t.Fatalf("CompilePluginManifest: %v", err)
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("output is not valid JSON: %v\n%s", err, out)
+	}
+	servers := got["mcpServers"].(map[string]any)
+	entry := servers["moxy"].(map[string]any)
+	timeout, ok := entry["timeout"]
+	if !ok {
+		t.Fatalf("timeout missing from compiled entry: %s", out)
+	}
+	if got, want := timeout.(float64), float64(86400000); got != want {
+		t.Errorf("timeout = %v, want %v", got, want)
+	}
+}
+
+func TestCompilePluginManifest_OmitsTimeoutWhenZero(t *testing.T) {
+	input := []byte(`{
+  "name": "moxy",
+  "mcpServers": {
+    "moxy": {"type": "stdio", "command": "/usr/bin/moxy"}
+  }
+}`)
+
+	entries := map[string]MCPServerEntry{
+		"moxy": {Type: "http", URL: "http://127.0.0.1:12345/mcp"},
+	}
+	out, _, err := CompilePluginManifest(input, entries)
+	if err != nil {
+		t.Fatalf("CompilePluginManifest: %v", err)
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("output is not valid JSON: %v\n%s", err, out)
+	}
+	servers := got["mcpServers"].(map[string]any)
+	entry := servers["moxy"].(map[string]any)
+	if _, present := entry["timeout"]; present {
+		t.Errorf("timeout key present despite zero value: %s", out)
+	}
+}
+
 func TestCompilePluginManifest_PreservesUnknownFields(t *testing.T) {
 	input := []byte(`{
   "name": "alpha",

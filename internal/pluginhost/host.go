@@ -131,8 +131,9 @@ func serverEntryForManaged(srv *ManagedServer) MCPServerEntry {
 		typ = "http"
 	}
 	return MCPServerEntry{
-		Type: typ,
-		URL:  hs.URL(),
+		Type:    typ,
+		URL:     hs.URL(),
+		Timeout: srv.Def.Timeout,
 	}
 }
 

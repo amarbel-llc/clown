@@ -19,6 +19,11 @@ type ServerDef struct {
 	Env         map[string]string `json:"env"`
 	Transport   string            `json:"transport"`
 	Healthcheck HealthcheckDef    `json:"healthcheck"`
+	// Timeout, when non-zero, is forwarded verbatim into the compiled
+	// plugin.json's mcpServers.<name>.timeout key. Claude Code reads
+	// this to override its default 60 s per-tool MCP request timeout.
+	// Units are milliseconds, matching Claude Code's wire format.
+	Timeout int `json:"timeout,omitempty"`
 }
 
 type HealthcheckDef struct {
@@ -110,7 +115,14 @@ func PluginName(pluginDir string) (string, error) {
 // MCPServerEntry mirrors one entry in claude-code's mcpServers map. The
 // Type discriminator is required by claude-code's MCP configuration
 // schema; valid values for HTTP-transport servers are "http" and "sse".
+//
+// Timeout, when non-zero, overrides claude-code's default per-tool
+// MCP request timeout. Units are milliseconds, matching claude-code's
+// wire format. Omitted from the marshalled output when zero so plugins
+// that do not set the field on the input side keep claude-code's
+// default behavior.
 type MCPServerEntry struct {
-	Type string `json:"type"`
-	URL  string `json:"url"`
+	Type    string `json:"type"`
+	URL     string `json:"url"`
+	Timeout int    `json:"timeout,omitempty"`
 }

@@ -188,6 +188,14 @@ discriminator
 and a
 .Li url
 pointing at the server's loopback address and port.
+When the source
+.Pa clown.json
+entry sets a
+.Li timeout
+.Pq integer milliseconds ,
+it is forwarded verbatim onto the compiled entry as
+.Li timeout
+to override Claude Code's default per-tool MCP request timeout.
 Server names in the compiled manifest match the original keys from
 .Pa clown.json ,
 preserving hook matching and plugin identity.

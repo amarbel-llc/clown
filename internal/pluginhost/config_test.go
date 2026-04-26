@@ -84,6 +84,49 @@ func TestLoadClownConfigDefaults(t *testing.T) {
 	}
 }
 
+func TestLoadClownConfigTimeout(t *testing.T) {
+	dir := t.TempDir()
+	writeJSON(t, filepath.Join(dir, "clown.json"), map[string]any{
+		"version": 1,
+		"httpServers": map[string]any{
+			"slow-server": map[string]any{
+				"command": "bin/server",
+				"timeout": 86400000,
+			},
+		},
+	})
+
+	cfg, err := LoadClownConfig(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := cfg.HTTPServers["slow-server"]
+	if srv.Timeout != 86400000 {
+		t.Errorf("timeout = %d, want 86400000", srv.Timeout)
+	}
+}
+
+func TestLoadClownConfigTimeoutDefaultsToZero(t *testing.T) {
+	dir := t.TempDir()
+	writeJSON(t, filepath.Join(dir, "clown.json"), map[string]any{
+		"version": 1,
+		"httpServers": map[string]any{
+			"default-server": map[string]any{
+				"command": "bin/server",
+			},
+		},
+	})
+
+	cfg, err := LoadClownConfig(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := cfg.HTTPServers["default-server"]
+	if srv.Timeout != 0 {
+		t.Errorf("timeout = %d, want 0 (unset)", srv.Timeout)
+	}
+}
+
 func TestLoadClownConfigBadVersion(t *testing.T) {
 	dir := t.TempDir()
 	writeJSON(t, filepath.Join(dir, "clown.json"), map[string]any{

@@ -72,6 +72,7 @@ Each server definition is an object with the following fields:
 | `env` | object | No | `{}` | Additional environment variables (key-value string pairs) |
 | `transport` | string | No | `"streamable-http"` | MCP transport type: `streamable-http` or `sse` |
 | `healthcheck` | object | No | See below | Health check configuration |
+| `timeout` | integer | No | (unset) | Per-tool MCP request timeout in milliseconds. When set, forwarded verbatim into the compiled `plugin.json` as `mcpServers.<name>.timeout` to override Claude Code's default. Unrelated to `healthcheck.timeout`. |
 
 Healthcheck definition:
 
@@ -92,6 +93,7 @@ Healthcheck definition:
       "args": ["--mode", "mcp"],
       "env": { "LOG_LEVEL": "info" },
       "transport": "streamable-http",
+      "timeout": 86400000,
       "healthcheck": {
         "path": "/healthz",
         "interval": "1s",
@@ -242,8 +244,11 @@ the transport from stdio to HTTP. The compilation steps are:
    key with URL-based entries for the healthy HTTP servers, and write the
    result to the staged `plugin.json`. Each injected entry carries a
    `type` discriminator (`"http"` or `"sse"`) and a `url` pointing at the
-   server's loopback address and port. Server names in the compiled
-   manifest match the original keys from `clown.json`.
+   server's loopback address and port. When the source `clown.json`
+   entry sets a `timeout` (integer milliseconds), it is forwarded verbatim
+   onto the compiled entry as `timeout` to override Claude Code's default
+   per-tool MCP request timeout. Server names in the compiled manifest
+   match the original keys from `clown.json`.
 
 Compiled staging directories are tracked by the host and removed during
 shutdown (section 3.9).

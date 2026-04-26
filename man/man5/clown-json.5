@@ -59,6 +59,19 @@ The handshake line from the server is authoritative if it differs
 from this value.
 .It Fa healthcheck Pq object, optional
 Health check configuration.
+.It Fa timeout Pq integer, optional
+Per-tool MCP request timeout, in milliseconds.
+When set, this value is forwarded verbatim into the compiled
+.Pa plugin.json
+as
+.Li mcpServers. Ns Ar server Ns .timeout ,
+overriding Claude Code's default per-tool timeout
+.Pq currently 60 s .
+Omitted from the compiled manifest when unset, in which case Claude
+Code's default applies.
+This is unrelated to
+.Fa healthcheck.timeout
+.Pq which governs startup readiness, not in-session tool calls .
 .El
 .Ss Healthcheck Definition
 .Bl -tag -width Ds
@@ -121,6 +134,7 @@ Full manifest with all fields:
       "args": ["--mode", "mcp"],
       "env": { "LOG_LEVEL": "info" },
       "transport": "streamable-http",
+      "timeout": 86400000,
       "healthcheck": {
         "path": "/healthz",
         "interval": "1s",
