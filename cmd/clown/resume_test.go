@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -101,6 +102,65 @@ func TestParseResumeArgs_RejectsUnknownFlag(t *testing.T) {
 func TestParseResumeArgs_ProviderMissingValue(t *testing.T) {
 	if _, err := parseResumeArgs([]string{"--provider"}); err == nil {
 		t.Error("expected error when --provider has no argument, got nil")
+	}
+}
+
+func TestParseResumeArgs_PositionalURI(t *testing.T) {
+	uri := "clown://claude/abc-123"
+	cases := []struct {
+		name string
+		args []string
+	}{
+		{"alone", []string{uri}},
+		{"before --", []string{uri, "--", "--model", "sonnet"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseResumeArgs(tc.args)
+			if err != nil {
+				t.Fatalf("parseResumeArgs: %v", err)
+			}
+			if got.uri != uri {
+				t.Errorf("uri = %q, want %q", got.uri, uri)
+			}
+		})
+	}
+}
+
+func TestParseResumeArgs_RejectsURIWithProvider(t *testing.T) {
+	cases := [][]string{
+		{"clown://claude/abc", "--provider", "claude"},
+		{"--provider", "claude", "clown://claude/abc"},
+		{"--provider=claude", "clown://claude/abc"},
+	}
+	for i, args := range cases {
+		t.Run(fmt.Sprintf("case-%d", i), func(t *testing.T) {
+			if _, err := parseResumeArgs(args); err == nil {
+				t.Errorf("expected error for URI + --provider, got nil (args=%v)", args)
+			}
+		})
+	}
+}
+
+func TestParseResumeArgs_RejectsURIWithYes(t *testing.T) {
+	cases := [][]string{
+		{"clown://claude/abc", "-y"},
+		{"-y", "clown://claude/abc"},
+		{"--yes", "clown://claude/abc"},
+	}
+	for i, args := range cases {
+		t.Run(fmt.Sprintf("case-%d", i), func(t *testing.T) {
+			if _, err := parseResumeArgs(args); err == nil {
+				t.Errorf("expected error for URI + -y/--yes, got nil (args=%v)", args)
+			}
+		})
+	}
+}
+
+func TestParseResumeArgs_RejectsMultiplePositionals(t *testing.T) {
+	args := []string{"clown://claude/abc", "clown://claude/def"}
+	if _, err := parseResumeArgs(args); err == nil {
+		t.Error("expected error for two positional URIs, got nil")
 	}
 }
 

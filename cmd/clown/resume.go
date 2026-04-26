@@ -18,22 +18,32 @@ import (
 
 // resumeArgs holds the parsed result of `clown resume <args>`.
 type resumeArgs struct {
-	provider  string
-	yes       bool
-	forwarded []string
+	provider         string
+	providerExplicit bool
+	yes              bool
+	uri              string // positional clown://<provider>/<id>; empty for picker mode
+	forwarded        []string
 }
 
-// runResume implements the `clown resume` subcommand: picks a Claude
-// session whose recorded cwd exactly matches $PWD, then re-enters the
-// main provider pipeline with --resume <id> forwarded to claude.
+// runResume implements the `clown resume` subcommand. Dispatches between
+// two flows depending on whether a URI positional was given.
 func runResume(args []string) int {
 	parsed, err := parseResumeArgs(args)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
 		return 1
 	}
-	if parsed.provider != "claude" {
-		fmt.Fprintf(os.Stderr, "clown: resume only supports --provider claude in v1 (got %q)\n", parsed.provider)
+	if parsed.uri != "" {
+		return resumeByURI(parsed)
+	}
+	return resumeByPicker(parsed)
+}
+
+// resumeByPicker is the original flow: enumerate $PWD-matching sessions,
+// pick interactively (or auto-resume on a single match).
+func resumeByPicker(args resumeArgs) int {
+	if args.provider != "claude" {
+		fmt.Fprintf(os.Stderr, "clown: resume only supports --provider claude in v1 (got %q)\n", args.provider)
 		return 1
 	}
 
@@ -60,16 +70,76 @@ func runResume(args []string) int {
 		fmt.Fprintf(os.Stderr, "clown: no resumable claude sessions recorded for %s\n", cwd)
 		return 0
 	case 1:
-		return resumeSingle(matches[0], parsed)
+		return resumeSingle(matches[0], args)
 	default:
-		return resumePick(matches, parsed)
+		return resumePick(matches, args)
 	}
 }
 
-// resumeSingle handles the lucky case: exactly one session matches
-// $PWD. With --yes we skip straight to launch; otherwise we render a
-// huh confirmation dialog so the user sees what's about to be resumed.
-// Without a tty and without --yes we fail rather than silently launch.
+// resumeByURI handles the direct flow: the caller named a specific
+// session, so we look it up by id rather than enumerating $PWD matches.
+// PWD mismatch surfaces a warning confirm dialog (default Cancel) since
+// reattachment from a different directory may not work as expected.
+func resumeByURI(args resumeArgs) int {
+	provider, id, err := sessions.ParseURI(args.uri)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
+		return 1
+	}
+	if provider != "claude" {
+		fmt.Fprintf(os.Stderr, "clown: resume only supports clown://claude/<id> in v1 (got provider %q)\n", provider)
+		return 1
+	}
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
+		return 1
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
+		return 1
+	}
+
+	all, err := sessions.ListClaudeSessions(homeDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clown: listing claude sessions: %v\n", err)
+		return 1
+	}
+	s := sessions.FindByID(all, id)
+	if s == nil {
+		fmt.Fprintf(os.Stderr, "clown: no claude session with id %q\n", id)
+		return 1
+	}
+
+	if s.CWD == cwd {
+		return launchResume(*s, args)
+	}
+
+	if !isInteractiveTerminal() {
+		fmt.Fprintf(os.Stderr,
+			"clown: session was recorded at %q; current directory is %q.\n"+
+				"clown: refusing to launch non-interactively — reattachment may not work.\n",
+			s.CWD, cwd)
+		return 1
+	}
+	ok, err := confirmMismatchedResume(*s, cwd)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clown: confirmation prompt: %v\n", err)
+		return 1
+	}
+	if !ok {
+		return 0
+	}
+	return launchResume(*s, args)
+}
+
+// resumeSingle handles the picker-mode lucky case: exactly one session
+// matches $PWD. With --yes we skip straight to launch; otherwise we
+// render a huh confirmation dialog so the user sees what's about to be
+// resumed. Without a tty and without --yes we fail rather than silently
+// launch.
 func resumeSingle(s sessions.Session, args resumeArgs) int {
 	if !args.yes {
 		if !isInteractiveTerminal() {
@@ -120,36 +190,40 @@ func isInteractiveTerminal() bool {
 	return term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
 }
 
-// confirmResume renders a huh confirmation showing the session's title,
-// id, branch, and last-modified time. Mirrors the pattern used by
-// pluginhost.ConfirmContinueWithFailures.
+// confirmResume renders the standard resume confirmation. Default is
+// Resume — single Enter launches.
 func confirmResume(s sessions.Session) (bool, error) {
-	title := s.Title
-	if title == "" {
-		title = "(untitled)"
-	}
-	var desc strings.Builder
-	if s.Provider != "" {
-		fmt.Fprintf(&desc, "  provider:  %s\n", s.Provider)
-	}
-	fmt.Fprintf(&desc, "  uri:       %s\n", s.URI())
-	fmt.Fprintf(&desc, "  last:      %s\n", formatRelDate(s.ModTime))
-	if s.GitBranch != "" {
-		fmt.Fprintf(&desc, "  branch:    %s\n", s.GitBranch)
-	}
+	return runResumeConfirm(
+		fmt.Sprintf("Resume %q?", sessionTitle(s)),
+		buildResumeDesc(s, "", false),
+		true,
+	)
+}
 
-	ok := true // default to Resume
+// confirmMismatchedResume renders a warning confirmation when the named
+// session's recorded cwd does not match $PWD. Default is Cancel — the
+// user has to actively choose to proceed.
+func confirmMismatchedResume(s sessions.Session, currentPWD string) (bool, error) {
+	return runResumeConfirm(
+		fmt.Sprintf("Resume %q from a different directory?", sessionTitle(s)),
+		buildResumeDesc(s, currentPWD, true),
+		false,
+	)
+}
+
+// runResumeConfirm renders a huh confirm form with esc bound to dismiss
+// (huh's default keymap binds Quit to ctrl+c only). Returns (ok, nil)
+// on a normal answer and (false, nil) when the user dismisses with
+// esc/ctrl-c.
+func runResumeConfirm(title, description string, defaultYes bool) (bool, error) {
+	ok := defaultYes
 	confirm := huh.NewConfirm().
-		Title(fmt.Sprintf("Resume %q?", title)).
-		Description(desc.String()).
+		Title(title).
+		Description(description).
 		Affirmative("Resume").
 		Negative("Cancel").
 		Value(&ok)
 
-	// huh's default keymap only binds ctrl+c to Quit; esc does nothing.
-	// Bind esc as well so the user can dismiss the dialog with either
-	// key. Both produce huh.ErrUserAborted, which we treat as a soft
-	// cancel — the user dismissed the dialog, no need to error out.
 	km := huh.NewDefaultKeyMap()
 	km.Quit = key.NewBinding(key.WithKeys("esc", "ctrl+c"))
 
@@ -166,46 +240,103 @@ func confirmResume(s sessions.Session) (bool, error) {
 	return ok, nil
 }
 
-// parseResumeArgs parses the args after `clown resume`.
+func sessionTitle(s sessions.Session) string {
+	if s.Title == "" {
+		return "(untitled)"
+	}
+	return s.Title
+}
+
+func buildResumeDesc(s sessions.Session, currentPWD string, warnMismatch bool) string {
+	var desc strings.Builder
+	if warnMismatch {
+		fmt.Fprintln(&desc, "Warning: this session may not reattach properly.")
+		fmt.Fprintf(&desc, "  recorded:  %s\n", s.CWD)
+		fmt.Fprintf(&desc, "  current:   %s\n", currentPWD)
+		fmt.Fprintln(&desc)
+	}
+	if s.Provider != "" {
+		fmt.Fprintf(&desc, "  provider:  %s\n", s.Provider)
+	}
+	fmt.Fprintf(&desc, "  uri:       %s\n", s.URI())
+	fmt.Fprintf(&desc, "  last:      %s\n", formatRelDate(s.ModTime))
+	if s.GitBranch != "" {
+		fmt.Fprintf(&desc, "  branch:    %s\n", s.GitBranch)
+	}
+	return desc.String()
+}
+
+// parseResumeArgs parses the args after `clown resume`. Validates flag
+// combos at the end, since the URI positional disallows --provider and
+// -y/--yes regardless of order.
 func parseResumeArgs(args []string) (resumeArgs, error) {
 	out := resumeArgs{provider: "claude"}
 	for i := 0; i < len(args); i++ {
+		arg := args[i]
 		switch {
-		case args[i] == "--":
+		case arg == "--":
 			if i+1 < len(args) {
 				out.forwarded = args[i+1:]
 			}
-			return out, nil
-		case args[i] == "--provider":
+			return validateResumeArgs(out)
+		case arg == "--provider":
 			if i+1 >= len(args) {
 				return resumeArgs{}, fmt.Errorf("--provider requires an argument")
 			}
 			out.provider = args[i+1]
+			out.providerExplicit = true
 			i++
-		case strings.HasPrefix(args[i], "--provider="):
-			out.provider = strings.TrimPrefix(args[i], "--provider=")
-		case args[i] == "--yes" || args[i] == "-y":
+		case strings.HasPrefix(arg, "--provider="):
+			out.provider = strings.TrimPrefix(arg, "--provider=")
+			out.providerExplicit = true
+		case arg == "--yes" || arg == "-y":
 			out.yes = true
-		case args[i] == "--help" || args[i] == "-h":
+		case arg == "--help" || arg == "-h":
 			printResumeHelp()
 			os.Exit(0)
+		case strings.HasPrefix(arg, "-"):
+			return resumeArgs{}, fmt.Errorf("unknown resume flag %q", arg)
 		default:
-			return resumeArgs{}, fmt.Errorf("unknown resume flag %q", args[i])
+			if out.uri != "" {
+				return resumeArgs{}, fmt.Errorf("multiple positional arguments; only one URI is accepted (got %q and %q)", out.uri, arg)
+			}
+			out.uri = arg
 		}
 	}
-	return out, nil
+	return validateResumeArgs(out)
+}
+
+func validateResumeArgs(a resumeArgs) (resumeArgs, error) {
+	if a.uri != "" {
+		if a.providerExplicit {
+			return resumeArgs{}, fmt.Errorf("--provider is incompatible with a positional URI; the URI carries the provider")
+		}
+		if a.yes {
+			return resumeArgs{}, fmt.Errorf("-y/--yes is incompatible with a positional URI; naming the URI is the confirmation")
+		}
+	}
+	return a, nil
 }
 
 func printResumeHelp() {
 	fmt.Print(`Usage: clown resume [--provider <name>] [-y|--yes] [-- <provider-args>]
+       clown resume <uri>                       [-- <provider-args>]
 
-Pick a resumable session whose recorded working directory exactly matches
-$PWD, then launch the chosen provider with the right resume flag.
+Picker mode (no positional):
+  Lists resumable sessions whose recorded working directory exactly
+  matches $PWD. Auto-resumes when exactly one matches, otherwise opens
+  an interactive picker. The single-match case shows a confirmation
+  dialog unless -y/--yes is passed.
 
-When exactly one session matches, a confirmation dialog appears unless
--y/--yes is passed.
+Direct mode (positional URI):
+  Looks up the named session by id and launches it. If the session's
+  recorded cwd does not match $PWD a warning confirmation appears
+  (defaults to Cancel) since reattachment may not work as expected.
+  --provider and -y/--yes are not accepted in this mode — the URI
+  carries the provider, and naming a specific URI is itself the
+  confirmation.
 
-Flags:
+Flags (picker mode):
   --provider <name>   Provider to resume from (default: claude). Only
                       claude is supported in v1.
   -y, --yes           Skip the single-match confirmation dialog and
