@@ -7,9 +7,9 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 
+	"github.com/amarbel-llc/clown/internal/buildcfg"
 	"github.com/amarbel-llc/clown/internal/pluginhost"
 )
 
@@ -70,20 +70,11 @@ func run(logger *slog.Logger, logPath string) int {
 		return 0 // unreachable after exec
 	}
 
-	bridgePath, err := resolveBridgePath()
-	if err != nil {
-		// Non-fatal: clown.json files without stdioServers entries do
-		// not need the bridge. Desugar will surface a clear error if a
-		// plugin actually requires it.
-		logger.Warn("could not resolve clown-stdio-bridge path; stdioServers entries will fail",
-			"err", err)
-	}
-
 	host := &pluginhost.Host{
 		PluginDirs: parsed.pluginDirs,
 		Logger:     logger,
 		Verbose:    verbose,
-		BridgePath: bridgePath,
+		BridgePath: buildcfg.StdioBridgePath,
 	}
 	discovered, err := host.Discover()
 	if err != nil {
@@ -261,21 +252,6 @@ func parseArgs(args []string) (parsedArgs, error) {
 		}
 	}
 	return p, nil
-}
-
-// resolveBridgePath returns the absolute path to the clown-stdio-bridge
-// binary that ships alongside this clown-plugin-host. It is used by
-// pluginhost.Desugar to rewrite stdioServers entries.
-func resolveBridgePath() (string, error) {
-	exe, err := os.Executable()
-	if err != nil {
-		return "", fmt.Errorf("locate clown-plugin-host executable: %w", err)
-	}
-	resolved, err := filepath.EvalSymlinks(exe)
-	if err != nil {
-		return "", fmt.Errorf("resolve clown-plugin-host executable: %w", err)
-	}
-	return filepath.Join(filepath.Dir(resolved), "clown-stdio-bridge"), nil
 }
 
 func execDownstream(args []string) {

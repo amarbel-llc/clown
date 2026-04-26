@@ -168,13 +168,13 @@ func TestHTTP_OriginValidation(t *testing.T) {
 		origin string
 		want   int
 	}{
-		{"", http.StatusOK},                                     // no origin (curl)
-		{"http://127.0.0.1:8080", http.StatusOK},                // loopback
-		{"http://localhost", http.StatusOK},                     // loopback
-		{"https://localhost:8443", http.StatusOK},               // loopback
-		{"http://example.com", http.StatusForbidden},            // remote
-		{"http://attacker.evil", http.StatusForbidden},          // remote
-		{"http://127.0.0.1.evil.com", http.StatusForbidden},     // sneaky
+		{"", http.StatusOK},                                 // no origin (curl)
+		{"http://127.0.0.1:8080", http.StatusOK},            // loopback
+		{"http://localhost", http.StatusOK},                 // loopback
+		{"https://localhost:8443", http.StatusOK},           // loopback
+		{"http://example.com", http.StatusForbidden},        // remote
+		{"http://attacker.evil", http.StatusForbidden},      // remote
+		{"http://127.0.0.1.evil.com", http.StatusForbidden}, // sneaky
 	}
 
 	body := `{"jsonrpc":"2.0","id":1,"method":"ping"}`

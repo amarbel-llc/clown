@@ -186,4 +186,3 @@ func writeJSONRPCError(w http.ResponseWriter, status int, id json.RawMessage, co
 		Error:   jsonRPCErrorObj{Code: code, Message: msg},
 	})
 }
-

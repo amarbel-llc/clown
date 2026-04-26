@@ -337,7 +337,12 @@ func runWithPluginHost(executor Executor, args []string, pluginDirs []string, fl
 		"log_path", logPath,
 	)
 
-	host := &pluginhost.Host{PluginDirs: pluginDirs, Logger: logger, Verbose: verbose}
+	host := &pluginhost.Host{
+		PluginDirs: pluginDirs,
+		Logger:     logger,
+		Verbose:    verbose,
+		BridgePath: buildcfg.StdioBridgePath,
+	}
 	discovered, err := host.Discover()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown: %v\n", err)

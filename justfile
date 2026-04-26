@@ -611,6 +611,26 @@ tag version message:
 #
 # Use `just tag <version> <message>` directly if you want full
 # control over the tag message.
+# Manually exercise the stdio bridge against a real stdio MCP. Expects
+# a plugin directory at $PLUGIN_DIR (default .tmp/stdio-bridge-plugin)
+# containing clown.json (with stdioServers entries), the standard
+# .claude-plugin/plugin.json, and a probe.sh helper that takes
+# --plugin-dir, extracts the wrapped server URL from the compiled
+# manifest, and exercises it.
+[group("debug")]
+debug-stdio-bridge-plugin PLUGIN_DIR=".tmp/stdio-bridge-plugin": build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    plugin_dir="{{PLUGIN_DIR}}"
+    if [[ ! -f "$plugin_dir/clown.json" || ! -x "$plugin_dir/probe.sh" ]]; then
+        echo "ERROR: $plugin_dir is missing clown.json or probe.sh" >&2
+        exit 1
+    fi
+    ./result/bin/clown-plugin-host \
+        --verbose \
+        --plugin-dir "$plugin_dir" \
+        -- "$plugin_dir/probe.sh"
+
 # Run the moxy-dependent integration tests with the opt-in env var pre-set.
 # Useful for verifying fixes to those recipes without typing the long form.
 [group("debug")]

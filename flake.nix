@@ -156,6 +156,7 @@
             "-s" "-w"
             "-X main.version=${clownVersion}"
             "-X main.commit=${clownRev}"
+            "-X github.com/amarbel-llc/clown/internal/buildcfg.StdioBridgePath=${clown-stdio-bridge}/bin/clown-stdio-bridge"
           ];
         };
 
@@ -194,6 +195,7 @@
             "-X github.com/amarbel-llc/clown/internal/buildcfg.CodexRev=${codexRev}"
             "-X github.com/amarbel-llc/clown/internal/buildcfg.OpencodeCliPath=${pkgs.opencode}/bin/opencode"
             "-X github.com/amarbel-llc/clown/internal/buildcfg.ClownboxCliPath=${clownboxCliPath}"
+            "-X github.com/amarbel-llc/clown/internal/buildcfg.StdioBridgePath=${clown-stdio-bridge}/bin/clown-stdio-bridge"
           ];
         };
 
