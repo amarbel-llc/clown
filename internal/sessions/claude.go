@@ -18,6 +18,7 @@ import (
 
 // Session is one resumable provider conversation.
 type Session struct {
+	Provider  string    // origin provider, e.g. "claude"
 	ID        string    // session UUID; the .jsonl file's stem
 	CWD       string    // working directory recorded in the transcript head
 	GitBranch string    // git branch recorded in the transcript head
@@ -71,6 +72,7 @@ func ListClaudeSessions(homeDir string) ([]Session, error) {
 			}
 			cwd, gitBranch := extractHeadMeta(full)
 			s := Session{
+				Provider:  "claude",
 				ID:        stem(t.Name()),
 				CWD:       cwd,
 				GitBranch: gitBranch,

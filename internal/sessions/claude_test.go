@@ -73,6 +73,9 @@ func TestListClaudeSessions_EnumeratesAndSortsByMtimeDesc(t *testing.T) {
 	if got[0].CWD != "/tmp/bar" {
 		t.Errorf("first session cwd = %q, want /tmp/bar", got[0].CWD)
 	}
+	if got[0].Provider != "claude" {
+		t.Errorf("first session provider = %q, want claude", got[0].Provider)
+	}
 	if got[0].Title != "newer session" {
 		t.Errorf("first session title = %q, want newer session", got[0].Title)
 	}
