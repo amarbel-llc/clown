@@ -8,27 +8,30 @@ import (
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/huh"
 	"golang.org/x/term"
 
 	"github.com/amarbel-llc/clown/internal/sessions"
 )
 
+// resumeArgs holds the parsed result of `clown resume <args>`.
+type resumeArgs struct {
+	provider  string
+	yes       bool
+	forwarded []string
+}
+
 // runResume implements the `clown resume` subcommand: picks a Claude
 // session whose recorded cwd exactly matches $PWD, then re-enters the
 // main provider pipeline with --resume <id> forwarded to claude.
 func runResume(args []string) int {
-	provider, forwardable, err := parseResumeArgs(args)
+	parsed, err := parseResumeArgs(args)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
 		return 1
 	}
-	if provider != "claude" {
-		fmt.Fprintf(os.Stderr, "clown: resume only supports --provider claude in v1 (got %q)\n", provider)
-		return 1
-	}
-
-	if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())) {
-		fmt.Fprintln(os.Stderr, "clown: resume requires an interactive terminal")
+	if parsed.provider != "claude" {
+		fmt.Fprintf(os.Stderr, "clown: resume only supports --provider claude in v1 (got %q)\n", parsed.provider)
 		return 1
 	}
 
@@ -49,12 +52,49 @@ func runResume(args []string) int {
 		return 1
 	}
 	matches := sessions.FilterByCWD(all, cwd)
-	if len(matches) == 0 {
+
+	switch len(matches) {
+	case 0:
 		fmt.Fprintf(os.Stderr, "clown: no resumable claude sessions recorded for %s\n", cwd)
 		return 0
+	case 1:
+		return resumeSingle(matches[0], parsed)
+	default:
+		return resumePick(matches, parsed)
 	}
+}
 
-	chosen, err := pickSession(matches)
+// resumeSingle handles the lucky case: exactly one session matches
+// $PWD. With --yes we skip straight to launch; otherwise we render a
+// huh confirmation dialog so the user sees what's about to be resumed.
+// Without a tty and without --yes we fail rather than silently launch.
+func resumeSingle(s sessions.Session, args resumeArgs) int {
+	if !args.yes {
+		if !isInteractiveTerminal() {
+			fmt.Fprintln(os.Stderr, "clown: resume requires an interactive terminal (or pass -y to skip confirmation)")
+			return 1
+		}
+		ok, err := confirmResume(s)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "clown: confirmation prompt: %v\n", err)
+			return 1
+		}
+		if !ok {
+			return 0
+		}
+	}
+	return launchResume(s, args)
+}
+
+// resumePick handles the multi-match case. The picker is interactive,
+// so a non-tty terminal is fatal. --yes does not auto-pick — selection
+// is the user's call when there is more than one candidate.
+func resumePick(ss []sessions.Session, args resumeArgs) int {
+	if !isInteractiveTerminal() {
+		fmt.Fprintln(os.Stderr, "clown: resume requires an interactive terminal")
+		return 1
+	}
+	chosen, err := pickSession(ss)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown: session picker: %v\n", err)
 		return 1
@@ -62,54 +102,96 @@ func runResume(args []string) int {
 	if chosen == nil {
 		return 0
 	}
+	return launchResume(*chosen, args)
+}
 
+func launchResume(s sessions.Session, args resumeArgs) int {
 	flags := parsedFlags{
 		provider:         "claude",
 		providerExplicit: true,
-		forwarded:        append(forwardable, "--resume", chosen.ID),
+		forwarded:        append(args.forwarded, "--resume", s.ID),
 	}
 	return runWithFlags(flags)
 }
 
-// parseResumeArgs parses the args after `clown resume`. Returns the
-// chosen provider (default "claude") and any args to forward verbatim
-// to the provider after the `--` separator.
-func parseResumeArgs(args []string) (provider string, forwarded []string, err error) {
-	provider = "claude"
+func isInteractiveTerminal() bool {
+	return term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
+}
+
+// confirmResume renders a huh confirmation showing the session's title,
+// id, branch, and last-modified time. Mirrors the pattern used by
+// pluginhost.ConfirmContinueWithFailures.
+func confirmResume(s sessions.Session) (bool, error) {
+	title := s.Title
+	if title == "" {
+		title = "(untitled)"
+	}
+	var desc strings.Builder
+	fmt.Fprintf(&desc, "  id:      %s\n", s.ID)
+	fmt.Fprintf(&desc, "  last:    %s\n", formatRelDate(s.ModTime))
+	if s.GitBranch != "" {
+		fmt.Fprintf(&desc, "  branch:  %s\n", s.GitBranch)
+	}
+
+	var ok bool
+	form := huh.NewConfirm().
+		Title(fmt.Sprintf("Resume %q?", title)).
+		Description(desc.String()).
+		Affirmative("Resume").
+		Negative("Cancel").
+		Value(&ok)
+
+	if err := form.Run(); err != nil {
+		return false, err
+	}
+	return ok, nil
+}
+
+// parseResumeArgs parses the args after `clown resume`.
+func parseResumeArgs(args []string) (resumeArgs, error) {
+	out := resumeArgs{provider: "claude"}
 	for i := 0; i < len(args); i++ {
 		switch {
 		case args[i] == "--":
 			if i+1 < len(args) {
-				forwarded = args[i+1:]
+				out.forwarded = args[i+1:]
 			}
-			return provider, forwarded, nil
+			return out, nil
 		case args[i] == "--provider":
 			if i+1 >= len(args) {
-				return "", nil, fmt.Errorf("--provider requires an argument")
+				return resumeArgs{}, fmt.Errorf("--provider requires an argument")
 			}
-			provider = args[i+1]
+			out.provider = args[i+1]
 			i++
 		case strings.HasPrefix(args[i], "--provider="):
-			provider = strings.TrimPrefix(args[i], "--provider=")
+			out.provider = strings.TrimPrefix(args[i], "--provider=")
+		case args[i] == "--yes" || args[i] == "-y":
+			out.yes = true
 		case args[i] == "--help" || args[i] == "-h":
 			printResumeHelp()
 			os.Exit(0)
 		default:
-			return "", nil, fmt.Errorf("unknown resume flag %q", args[i])
+			return resumeArgs{}, fmt.Errorf("unknown resume flag %q", args[i])
 		}
 	}
-	return provider, forwarded, nil
+	return out, nil
 }
 
 func printResumeHelp() {
-	fmt.Print(`Usage: clown resume [--provider <name>] [-- <provider-args>]
+	fmt.Print(`Usage: clown resume [--provider <name>] [-y|--yes] [-- <provider-args>]
 
 Pick a resumable session whose recorded working directory exactly matches
 $PWD, then launch the chosen provider with the right resume flag.
 
+When exactly one session matches, a confirmation dialog appears unless
+-y/--yes is passed.
+
 Flags:
   --provider <name>   Provider to resume from (default: claude). Only
                       claude is supported in v1.
+  -y, --yes           Skip the single-match confirmation dialog and
+                      launch directly. No effect when zero or multiple
+                      sessions match.
   --help, -h          Show this help text.
 
 Args after -- are forwarded to the provider alongside --resume <id>.
