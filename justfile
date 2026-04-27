@@ -382,6 +382,42 @@ check-lint-man: build-man
         exit $failed
     ' _ "${pages[@]}"
 
+# Probe which claude invocation surfaces .mcp.json schema errors. Used
+# while picking the integration form for #14. Findings (claude-code
+# 2.1.111):
+#   - `--mcp-config <a> <b>` (variadic) validates each file. If any
+#     file fails (schema or not-found), claude prints "Error: Invalid
+#     MCP configuration:" plus per-file diagnostics and exits.
+#   - `--mcp-config=FILE mcp list` does NOT surface schema errors —
+#     `mcp list` lists user-scoped servers regardless of file content.
+#     Likely silently drops invalid entries.
+#   - `--strict-mcp-config --mcp-config=FILE mcp list` also does not
+#     surface schema errors (same reason).
+# So the working form: `--mcp-config FILE NONEXISTENT_FILE` — claude
+# emits both errors, the schema marker is the discriminator.
+[group("explore")]
+explore-claude-mcp-config-parsing:
+    #!/usr/bin/env bash
+    set -u
+    cfg=$(mktemp /tmp/clown-probe-mcp-XXXXXX.json)
+    bogus=/tmp/clown-probe-bogus-$$.json
+    trap 'rm -f "$cfg" "$bogus"' EXIT
+    echo ">> bare (schema-invalid)"
+    cat > "$cfg" <<'EOF'
+    {"mcpServers":{"test/server":{"url":"http://127.0.0.1:42323/mcp"}}}
+    EOF
+    timeout 5s claude --mcp-config "$cfg" "$bogus" 2>&1 || true
+    echo ">> typed-http (schema-valid)"
+    cat > "$cfg" <<'EOF'
+    {"mcpServers":{"test/server":{"type":"http","url":"http://127.0.0.1:42323/mcp"}}}
+    EOF
+    timeout 5s claude --mcp-config "$cfg" "$bogus" 2>&1 || true
+    echo ">> typed-sse (schema-valid)"
+    cat > "$cfg" <<'EOF'
+    {"mcpServers":{"test/server":{"type":"sse","url":"http://127.0.0.1:42323/sse"}}}
+    EOF
+    timeout 5s claude --mcp-config "$cfg" "$bogus" 2>&1 || true
+
 # Feed a hand-crafted .mcp.json into claude to see whether its schema
 # validator accepts it. MODE is one of: bare (just "url"), typed-http
 # ("type":"http","url"), typed-sse. Useful for reproducing the
