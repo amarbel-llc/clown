@@ -1,10 +1,14 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"math/rand/v2"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -29,13 +33,42 @@ func (r *recordingLogger) Printf(format string, args ...any) {
 	_ = args
 }
 
+// safeBuffer is a bytes.Buffer guarded by a mutex so the translator's
+// runWriter goroutine can write to it while the test goroutine inspects
+// it via Bytes/Len. Plain bytes.Buffer is not safe for concurrent use
+// and trips the race detector.
+type safeBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (s *safeBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.Write(p)
+}
+
+func (s *safeBuffer) Len() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.Len()
+}
+
+// Bytes returns a copy of the buffered bytes. Returning a copy keeps
+// callers safe from later writes mutating the underlying slice.
+func (s *safeBuffer) Bytes() []byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]byte(nil), s.buf.Bytes()...)
+}
+
 // pipePair gives the test direct, in-memory access to the bytes the
 // bridge would have written to stdin and read from stdout. The caller
 // drives the wrapped child's "behavior" by writing into stdoutWriter
 // (which the translator reads as if from the wrapped child).
-func pipePair() (stdin *bytes.Buffer, stdoutReader io.Reader, stdoutWriter io.Writer) {
+func pipePair() (stdin *safeBuffer, stdoutReader io.Reader, stdoutWriter io.Writer) {
 	r, w := io.Pipe()
-	return &bytes.Buffer{}, r, w
+	return &safeBuffer{}, r, w
 }
 
 func TestTranslator_RequestResponseRoundtrip(t *testing.T) {
@@ -163,6 +196,249 @@ func TestTranslator_ResponseToUnknownIdIsLogged(t *testing.T) {
 	defer rl.mu.Unlock()
 	if len(rl.lines) == 0 {
 		t.Errorf("expected at least one log line for orphan response")
+	}
+}
+
+// TestTranslator_ConcurrentMixedIDRequests fires N concurrent SendRequest
+// calls with distinct ids against a mock child that responds with
+// randomized per-request latency. This forces responses to arrive
+// out-of-order on stdout. The test asserts that each caller receives the
+// response with the matching id and the matching echoed payload — i.e.
+// the translator's id-correlation invariant holds under concurrency.
+//
+// Regression guard for #31.
+func TestTranslator_ConcurrentMixedIDRequests(t *testing.T) {
+	stdinR, stdinW := io.Pipe()
+	stdoutR, stdoutW := io.Pipe()
+	t.Cleanup(func() { stdinW.Close(); stdoutW.Close() })
+
+	tr := newTranslator(stdinW, stdoutR, nullLogger{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = tr.Run(ctx) }()
+
+	// Mock child: read framed request lines off stdin, echo each one back
+	// after a per-request delay. Each response is written from its own
+	// goroutine so they race with each other and arrive out-of-order.
+	// io.PipeWriter.Write is goroutine-safe and gates parallel writes
+	// sequentially, so each response line lands atomically.
+	rng := rand.New(rand.NewPCG(1, 2))
+	var rngMu sync.Mutex
+	go func() {
+		sc := bufio.NewScanner(stdinR)
+		sc.Buffer(make([]byte, 64*1024), 1024*1024)
+		for sc.Scan() {
+			line := append([]byte(nil), sc.Bytes()...)
+			var probe struct {
+				ID     json.RawMessage `json:"id"`
+				Method string          `json:"method"`
+				Params struct {
+					Token string `json:"token"`
+				} `json:"params"`
+			}
+			if err := json.Unmarshal(line, &probe); err != nil {
+				continue
+			}
+			if len(probe.ID) == 0 || string(probe.ID) == "null" {
+				continue // notification — no response expected
+			}
+			rngMu.Lock()
+			delay := time.Duration(rng.IntN(15)+1) * time.Millisecond
+			rngMu.Unlock()
+			id := string(probe.ID)
+			token := probe.Params.Token
+			go func() {
+				time.Sleep(delay)
+				resp := fmt.Sprintf(
+					`{"jsonrpc":"2.0","id":%s,"result":{"echoedToken":%q}}`+"\n",
+					id, token)
+				_, _ = stdoutW.Write([]byte(resp))
+			}()
+		}
+	}()
+
+	const N = 32
+	type result struct {
+		idKey string
+		resp  json.RawMessage
+		err   error
+	}
+	results := make(chan result, N)
+	var wg sync.WaitGroup
+	for i := 0; i < N; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			idKey := strconv.Itoa(i)
+			token := fmt.Sprintf("tok-%d", i)
+			body := []byte(fmt.Sprintf(
+				`{"jsonrpc":"2.0","id":%d,"method":"echo","params":{"token":%q}}`,
+				i, token))
+			reqCtx, reqCancel := context.WithTimeout(ctx, 5*time.Second)
+			defer reqCancel()
+			resp, err := tr.SendRequest(reqCtx, idKey, body)
+			results <- result{idKey: idKey, resp: resp, err: err}
+		}(i)
+	}
+	wg.Wait()
+	close(results)
+
+	seen := map[string]bool{}
+	for r := range results {
+		if r.err != nil {
+			t.Errorf("id %s: SendRequest error: %v", r.idKey, r.err)
+			continue
+		}
+		if seen[r.idKey] {
+			t.Errorf("id %s: result returned twice", r.idKey)
+		}
+		seen[r.idKey] = true
+
+		var got struct {
+			ID     json.RawMessage `json:"id"`
+			Result struct {
+				EchoedToken string `json:"echoedToken"`
+			} `json:"result"`
+		}
+		if err := json.Unmarshal(r.resp, &got); err != nil {
+			t.Errorf("id %s: response not valid JSON: %v\n%s", r.idKey, err, r.resp)
+			continue
+		}
+		if string(got.ID) != r.idKey {
+			t.Errorf("id %s: response id = %s, cross-contamination", r.idKey, got.ID)
+		}
+		wantToken := fmt.Sprintf("tok-%s", r.idKey)
+		if got.Result.EchoedToken != wantToken {
+			t.Errorf("id %s: echoed token = %q, want %q",
+				r.idKey, got.Result.EchoedToken, wantToken)
+		}
+	}
+	if len(seen) != N {
+		t.Errorf("got %d unique results, want %d", len(seen), N)
+	}
+
+	// Pending map should be drained — every request either completed or
+	// timed out (we'd have caught the latter via err != nil above).
+	tr.pendingMu.Lock()
+	defer tr.pendingMu.Unlock()
+	if n := len(tr.pending); n != 0 {
+		t.Errorf("pending map has %d leftover entries after all requests resolved", n)
+	}
+}
+
+// TestTranslator_BroadcastInterleavedWithRequests verifies that
+// server-initiated notifications routed through the broadcast path do
+// not interfere with id-correlated request/response routing when both
+// happen concurrently.
+//
+// Regression guard for the optional half of #31.
+func TestTranslator_BroadcastInterleavedWithRequests(t *testing.T) {
+	stdinR, stdinW := io.Pipe()
+	stdoutR, stdoutW := io.Pipe()
+	t.Cleanup(func() { stdinW.Close(); stdoutW.Close() })
+
+	tr := newTranslator(stdinW, stdoutR, nullLogger{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = tr.Run(ctx) }()
+
+	sub, cancelSub := tr.Subscribe()
+	defer cancelSub()
+
+	// Mock child: respond to each request with a slight delay; also
+	// inject server-initiated notifications between responses.
+	go func() {
+		sc := bufio.NewScanner(stdinR)
+		sc.Buffer(make([]byte, 64*1024), 1024*1024)
+		notifCounter := 0
+		for sc.Scan() {
+			line := append([]byte(nil), sc.Bytes()...)
+			var probe struct {
+				ID json.RawMessage `json:"id"`
+			}
+			_ = json.Unmarshal(line, &probe)
+			if len(probe.ID) == 0 {
+				continue
+			}
+			id := string(probe.ID)
+			notifCounter++
+			notifIdx := notifCounter
+			go func() {
+				time.Sleep(time.Duration(notifIdx%5+1) * time.Millisecond)
+				notif := fmt.Sprintf(
+					`{"jsonrpc":"2.0","method":"notifications/progress","params":{"seq":%d}}`+"\n",
+					notifIdx)
+				_, _ = stdoutW.Write([]byte(notif))
+				resp := fmt.Sprintf(
+					`{"jsonrpc":"2.0","id":%s,"result":{"ok":true}}`+"\n", id)
+				_, _ = stdoutW.Write([]byte(resp))
+			}()
+		}
+	}()
+
+	const N = 16
+	var wg sync.WaitGroup
+	errs := make(chan error, N)
+	for i := 0; i < N; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			idKey := strconv.Itoa(i)
+			body := []byte(fmt.Sprintf(
+				`{"jsonrpc":"2.0","id":%d,"method":"ping"}`, i))
+			reqCtx, reqCancel := context.WithTimeout(ctx, 5*time.Second)
+			defer reqCancel()
+			resp, err := tr.SendRequest(reqCtx, idKey, body)
+			if err != nil {
+				errs <- fmt.Errorf("id %s: %w", idKey, err)
+				return
+			}
+			var got struct {
+				ID json.RawMessage `json:"id"`
+			}
+			if err := json.Unmarshal(resp, &got); err != nil {
+				errs <- fmt.Errorf("id %s: invalid resp: %w", idKey, err)
+				return
+			}
+			if string(got.ID) != idKey {
+				errs <- fmt.Errorf("id %s: cross-contamination got id=%s",
+					idKey, got.ID)
+			}
+		}(i)
+	}
+
+	// Drain at least some broadcast messages while requests are in flight.
+	gotNotifs := 0
+	doneDraining := make(chan struct{})
+	go func() {
+		defer close(doneDraining)
+		deadline := time.NewTimer(3 * time.Second)
+		defer deadline.Stop()
+		for {
+			select {
+			case <-deadline.C:
+				return
+			case msg := <-sub:
+				if !bytes.Contains(msg, []byte(`notifications/progress`)) {
+					t.Errorf("subscriber received non-notification: %s", msg)
+				}
+				gotNotifs++
+				if gotNotifs >= N {
+					return
+				}
+			}
+		}
+	}()
+
+	wg.Wait()
+	close(errs)
+	<-doneDraining
+
+	for err := range errs {
+		t.Error(err)
+	}
+	if gotNotifs == 0 {
+		t.Error("subscriber received zero broadcast notifications")
 	}
 }
 
