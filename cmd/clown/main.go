@@ -223,14 +223,19 @@ func runWithFlags(flags parsedFlags) int {
 		return 1
 	}
 
-	prompts, err := promptwalk.WalkPrompts(cwd, homeDir, buildcfg.SystemPromptAppendD)
+	pluginDirs := readPluginDirs()
+	pluginDirs = append(pluginDirs, flags.extraPluginDirs...)
+
+	// Per FDR 0003, plugin-contributed system-prompt-append.d
+	// fragments are layered between clown's builtin fragments and
+	// the user's .circus/system-prompt.d/ fragments.
+	builtinAppendDirs := append([]string{buildcfg.SystemPromptAppendD}, readPluginFragmentDirs()...)
+
+	prompts, err := promptwalk.WalkPrompts(cwd, homeDir, builtinAppendDirs)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown: collecting prompts: %v\n", err)
 		return 1
 	}
-
-	pluginDirs := readPluginDirs()
-	pluginDirs = append(pluginDirs, flags.extraPluginDirs...)
 
 	switch flags.provider {
 	case "claude":
@@ -730,26 +735,43 @@ func resolveProvider(name string) (string, error) {
 }
 
 func readPluginDirs() []string {
+	return readMetaList("plugin-dirs")
+}
+
+// readPluginFragmentDirs returns the absolute paths to plugin-shipped
+// .clown-plugin/system-prompt-append.d/ directories, in plugin-list
+// order. Per FDR 0003, mkCircus's resolvePlugins step writes these to
+// `$CLOWN_PLUGIN_META/plugin-fragment-dirs`; clown reads them at
+// runtime and layers them between builtin and user fragments.
+func readPluginFragmentDirs() []string {
+	return readMetaList("plugin-fragment-dirs")
+}
+
+// readMetaList reads a newline-delimited list from a file under
+// $CLOWN_PLUGIN_META, skipping blanks. Missing env var or missing file
+// yields nil — both are normal: a clown without plugins has no meta
+// dir, and pre-FDR-0003 builds may not yet emit
+// plugin-fragment-dirs.
+func readMetaList(name string) []string {
 	metaDir := os.Getenv("CLOWN_PLUGIN_META")
 	if metaDir == "" {
 		return nil
 	}
-	path := metaDir + "/plugin-dirs"
-	f, err := os.Open(path)
+	f, err := os.Open(filepath.Join(metaDir, name))
 	if err != nil {
 		return nil
 	}
 	defer f.Close()
 
-	var dirs []string
+	var entries []string
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line != "" {
-			dirs = append(dirs, line)
+			entries = append(entries, line)
 		}
 	}
-	return dirs
+	return entries
 }
 
 func printHelp() {

@@ -115,7 +115,16 @@ system prompt via
 .Fl -append-system-prompt-file .
 Builtin fragments shipped with
 .Nm
-are always prepended before user fragments.
+are prepended before user fragments.
+Plugins MAY contribute fragments by shipping
+.Pa .clown-plugin/system-prompt-append.d/*.md
+files inside their plugin directory; those fragments are layered
+between the builtin and user fragments in plugin-list order, as
+the consumer wrote them in
+.Cm mkCircus .
+Append-mode fragments still flow through even when replace mode is
+active: replace applies to the user-supplied prompt, not to
+plugin-shipped instructions.
 .Sh PLUGINS
 .Nm
 ships with zero default plugins.
@@ -317,6 +326,12 @@ Set automatically by the Nix wrapper; not intended for manual use.
 Replace-mode system prompt file (deepest wins).
 .It Pa .circus/system-prompt.d/*.md
 Append-mode prompt fragments (shallowest first).
+.It Pa <plugin>/.clown-plugin/system-prompt-append.d/*.md
+Plugin-shipped append-mode fragments.
+Picked up at
+.Cm mkCircus
+build time and layered between the builtin fragments and the user's
+.Pa .circus/system-prompt.d/ .
 .El
 .Sh SEE ALSO
 .Xr claude-code 1 ,

@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/amarbel-llc/clown/internal/promptwalk"
 )
 
 func TestParseFlags(t *testing.T) {
@@ -321,6 +323,114 @@ func TestReadPluginDirs_NoMeta(t *testing.T) {
 	t.Setenv("CLOWN_PLUGIN_META", "")
 	if got := readPluginDirs(); got != nil {
 		t.Errorf("readPluginDirs = %v, want nil when CLOWN_PLUGIN_META unset", got)
+	}
+}
+
+func TestReadPluginFragmentDirs_FromMeta(t *testing.T) {
+	metaDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(metaDir, "plugin-fragment-dirs"),
+		[]byte("/store/plugin-a/.clown-plugin/system-prompt-append.d\n/store/plugin-b/.clown-plugin/system-prompt-append.d\n"),
+		0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CLOWN_PLUGIN_META", metaDir)
+
+	got := readPluginFragmentDirs()
+	want := []string{
+		"/store/plugin-a/.clown-plugin/system-prompt-append.d",
+		"/store/plugin-b/.clown-plugin/system-prompt-append.d",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("readPluginFragmentDirs = %v, want %v", got, want)
+	}
+}
+
+func TestReadPluginFragmentDirs_NoMeta(t *testing.T) {
+	t.Setenv("CLOWN_PLUGIN_META", "")
+	if got := readPluginFragmentDirs(); got != nil {
+		t.Errorf("readPluginFragmentDirs = %v, want nil when CLOWN_PLUGIN_META unset", got)
+	}
+}
+
+// TestReadPluginFragmentDirs_FileMissing ensures clown tolerates a
+// CLOWN_PLUGIN_META directory that does not yet contain a
+// plugin-fragment-dirs file. This protects forward compat between an
+// older clown binary (no FDR 0003 output) and a newer reader.
+func TestReadPluginFragmentDirs_FileMissing(t *testing.T) {
+	metaDir := t.TempDir()
+	t.Setenv("CLOWN_PLUGIN_META", metaDir)
+	if got := readPluginFragmentDirs(); got != nil {
+		t.Errorf("readPluginFragmentDirs = %v, want nil when file missing", got)
+	}
+}
+
+// TestPluginFragments_EndToEnd exercises FDR 0003's full pipeline:
+// (1) mkCircus-style CLOWN_PLUGIN_META with a plugin-fragment-dirs
+// file pointing at real fixture directories, (2) cmd/clown's read
+// path, (3) the same builtin-dirs slice runWithFlags assembles,
+// (4) promptwalk.WalkPrompts emits fragments in builtin → plugin →
+// user order. The fixture mimics a plugin layout with
+// .clown-plugin/system-prompt-append.d/ containing a marker file.
+func TestPluginFragments_EndToEnd(t *testing.T) {
+	tmp := t.TempDir()
+
+	clownBuiltin := filepath.Join(tmp, "clown-builtin")
+	if err := os.MkdirAll(clownBuiltin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(clownBuiltin, "00-builtin.md"),
+		[]byte("BUILTIN"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	pluginRoot := filepath.Join(tmp, "plugin-a")
+	pluginFragDir := filepath.Join(pluginRoot, ".clown-plugin", "system-prompt-append.d")
+	if err := os.MkdirAll(pluginFragDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(pluginFragDir, "00-plugin.md"),
+		[]byte("PLUGIN"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	metaDir := filepath.Join(tmp, "meta")
+	if err := os.MkdirAll(metaDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(metaDir, "plugin-fragment-dirs"),
+		[]byte(pluginFragDir+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CLOWN_PLUGIN_META", metaDir)
+
+	startDir := filepath.Join(tmp, "project")
+	if err := os.MkdirAll(startDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	userPromptD := filepath.Join(startDir, ".circus", "system-prompt.d")
+	if err := os.MkdirAll(userPromptD, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(userPromptD, "00-user.md"),
+		[]byte("USER"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Mirror runWithFlags' assembly logic: clown builtin first, then
+	// plugin fragment dirs from the meta file, in order.
+	builtin := append([]string{clownBuiltin}, readPluginFragmentDirs()...)
+
+	result, err := promptwalk.WalkPrompts(startDir, tmp, builtin)
+	if err != nil {
+		t.Fatalf("WalkPrompts: %v", err)
+	}
+	want := "BUILTIN\n\nPLUGIN\n\nUSER\n\n"
+	if result.AppendFragments != want {
+		t.Errorf("AppendFragments = %q, want %q", result.AppendFragments, want)
 	}
 }
 

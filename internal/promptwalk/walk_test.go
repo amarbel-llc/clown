@@ -17,7 +17,7 @@ func TestWalkPrompts_BuiltinAppendOnly(t *testing.T) {
 	startDir := filepath.Join(tmp, "project")
 	os.MkdirAll(startDir, 0o755)
 
-	result, err := WalkPrompts(startDir, tmp, builtinDir)
+	result, err := WalkPrompts(startDir, tmp, []string{builtinDir})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +47,7 @@ func TestWalkPrompts_CircusPromptDFragments(t *testing.T) {
 	os.MkdirAll(projPromptD, 0o755)
 	os.WriteFile(filepath.Join(projPromptD, "project.md"), []byte("project-fragment"), 0o644)
 
-	result, err := WalkPrompts(project, home, "")
+	result, err := WalkPrompts(project, home, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestWalkPrompts_SystemPromptFileDeepestWins(t *testing.T) {
 	os.MkdirAll(filepath.Join(project, ".circus"), 0o755)
 	os.WriteFile(filepath.Join(project, ".circus", "system-prompt"), []byte("project-prompt"), 0o644)
 
-	result, err := WalkPrompts(project, home, "")
+	result, err := WalkPrompts(project, home, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func TestWalkPrompts_SystemPromptFileFromAncestor(t *testing.T) {
 	os.MkdirAll(filepath.Join(home, ".circus"), 0o755)
 	os.WriteFile(filepath.Join(home, ".circus", "system-prompt"), []byte("home-prompt"), 0o644)
 
-	result, err := WalkPrompts(project, home, "")
+	result, err := WalkPrompts(project, home, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestWalkPrompts_EmptyFilesSkipped(t *testing.T) {
 	os.WriteFile(filepath.Join(builtinDir, "00-content.md"), []byte("content"), 0o644)
 	os.WriteFile(filepath.Join(builtinDir, "01-empty.md"), []byte(""), 0o644)
 
-	result, err := WalkPrompts(tmp, tmp, builtinDir)
+	result, err := WalkPrompts(tmp, tmp, []string{builtinDir})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +121,7 @@ func TestWalkPrompts_NoCircusDirs(t *testing.T) {
 	project := filepath.Join(home, "project")
 	os.MkdirAll(project, 0o755)
 
-	result, err := WalkPrompts(project, home, "")
+	result, err := WalkPrompts(project, home, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,12 +143,68 @@ func TestWalkPrompts_BuiltinBeforeUserFragments(t *testing.T) {
 	os.MkdirAll(homePromptD, 0o755)
 	os.WriteFile(filepath.Join(homePromptD, "user.md"), []byte("USER"), 0o644)
 
-	result, err := WalkPrompts(home, home, builtinDir)
+	result, err := WalkPrompts(home, home, []string{builtinDir})
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	want := "BUILTIN\n\nUSER\n\n"
+	if result.AppendFragments != want {
+		t.Errorf("AppendFragments = %q, want %q", result.AppendFragments, want)
+	}
+}
+
+// TestWalkPrompts_MultipleBuiltinDirsInOrder covers FDR 0003: clown's
+// builtin fragments come first, plugin-contributed fragment dirs follow
+// in argument order. Each non-empty .md file appears in its dir's sort
+// order and is followed by two newlines.
+func TestWalkPrompts_MultipleBuiltinDirsInOrder(t *testing.T) {
+	tmp := t.TempDir()
+	clown := filepath.Join(tmp, "clown")
+	pluginA := filepath.Join(tmp, "plugin-a")
+	pluginB := filepath.Join(tmp, "plugin-b")
+	for _, d := range []string{clown, pluginA, pluginB} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	os.WriteFile(filepath.Join(clown, "00-clown.md"), []byte("CLOWN"), 0o644)
+	os.WriteFile(filepath.Join(pluginA, "00-a.md"), []byte("A1"), 0o644)
+	os.WriteFile(filepath.Join(pluginA, "01-a.md"), []byte("A2"), 0o644)
+	os.WriteFile(filepath.Join(pluginB, "00-b.md"), []byte("B"), 0o644)
+
+	startDir := filepath.Join(tmp, "project")
+	os.MkdirAll(startDir, 0o755)
+
+	result, err := WalkPrompts(startDir, tmp, []string{clown, pluginA, pluginB})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "CLOWN\n\nA1\n\nA2\n\nB\n\n"
+	if result.AppendFragments != want {
+		t.Errorf("AppendFragments = %q, want %q", result.AppendFragments, want)
+	}
+}
+
+// TestWalkPrompts_BuiltinDirsSkipsMissingAndEmpty verifies that
+// non-existent directories and empty-string entries in the
+// builtinAppendDirs slice are silently skipped without erroring.
+func TestWalkPrompts_BuiltinDirsSkipsMissingAndEmpty(t *testing.T) {
+	tmp := t.TempDir()
+	real := filepath.Join(tmp, "real")
+	os.MkdirAll(real, 0o755)
+	os.WriteFile(filepath.Join(real, "00.md"), []byte("REAL"), 0o644)
+
+	missing := filepath.Join(tmp, "does-not-exist")
+	startDir := filepath.Join(tmp, "project")
+	os.MkdirAll(startDir, 0o755)
+
+	dirs := []string{"", missing, real, ""}
+	result, err := WalkPrompts(startDir, tmp, dirs)
+	if err != nil {
+		t.Fatalf("WalkPrompts: %v", err)
+	}
+	want := "REAL\n\n"
 	if result.AppendFragments != want {
 		t.Errorf("AppendFragments = %q, want %q", result.AppendFragments, want)
 	}
@@ -161,7 +217,7 @@ func TestWalkPrompts_FragmentsSortedWithinDir(t *testing.T) {
 	os.WriteFile(filepath.Join(promptD, "02-second.md"), []byte("second"), 0o644)
 	os.WriteFile(filepath.Join(promptD, "01-first.md"), []byte("first"), 0o644)
 
-	result, err := WalkPrompts(home, home, "")
+	result, err := WalkPrompts(home, home, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

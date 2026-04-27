@@ -16,18 +16,21 @@ type PromptResult struct {
 // .circus/ prompt fragments for system-prompt append mode and finding
 // the nearest system-prompt file for replace mode.
 //
-// builtinAppendDir, if non-empty, is read first for *.md files that are
-// always included before user fragments (the build-time
-// system-prompt-append.d/ directory).
+// builtinAppendDirs are read first, in order, for *.md files that are
+// always included before user fragments. Empty entries and missing
+// directories are silently skipped. Per FDR 0003, callers pass clown's
+// build-time system-prompt-append.d/ followed by any
+// plugin-contributed `.clown-plugin/system-prompt-append.d/`
+// directories in plugin-list order.
 //
-// Fragment collection order: builtin append dir first, then
+// Fragment collection order: builtin dirs (in argument order), then
 // .circus/system-prompt.d/*.md from shallowest ancestor to deepest
 // (sorted within each directory). Each non-empty fragment is followed
 // by two newlines.
 //
 // The system-prompt file search walks deepest-first and returns the
 // first .circus/system-prompt found.
-func WalkPrompts(startDir, homeDir, builtinAppendDir string) (PromptResult, error) {
+func WalkPrompts(startDir, homeDir string, builtinAppendDirs []string) (PromptResult, error) {
 	ancestors, err := walkAncestors(startDir, homeDir)
 	if err != nil {
 		return PromptResult{}, err
@@ -35,8 +38,11 @@ func WalkPrompts(startDir, homeDir, builtinAppendDir string) (PromptResult, erro
 
 	var b strings.Builder
 
-	if builtinAppendDir != "" {
-		if err := collectFragments(&b, builtinAppendDir); err != nil && !os.IsNotExist(err) {
+	for _, dir := range builtinAppendDirs {
+		if dir == "" {
+			continue
+		}
+		if err := collectFragments(&b, dir); err != nil && !os.IsNotExist(err) {
 			return PromptResult{}, err
 		}
 	}

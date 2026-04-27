@@ -403,6 +403,7 @@
         emptyPluginMeta = pkgs.runCommand "clown-empty-plugin-meta" { } ''
           mkdir -p $out
           touch $out/plugin-dirs
+          touch $out/plugin-fragment-dirs
           touch $out/version-info
         '';
 
@@ -428,6 +429,11 @@
                           pname=$(${pkgs.jq}/bin/jq -r '.name // empty' "$candidate/.claude-plugin/plugin.json")
                           pver=$(${pkgs.jq}/bin/jq -r '.version // "-"' "$candidate/.claude-plugin/plugin.json")
                           printf '%-20s %-12s %s\n' "${flakeName}/$pname" "$pver" "${flakeRev}" >> $out/version-info
+                          # Per FDR 0003: emit plugin-shipped prompt fragment dir if present.
+                          fragdir="$candidate/.clown-plugin/system-prompt-append.d"
+                          if [[ -d "$fragdir" ]]; then
+                            echo "$fragdir" >> $out/plugin-fragment-dirs
+                          fi
                           glob_count=$((glob_count + 1))
                         fi
                       done
@@ -450,6 +456,11 @@
                       pname=$(${pkgs.jq}/bin/jq -r '.name // empty' "${pkg}/${dir}/.claude-plugin/plugin.json")
                       pver=$(${pkgs.jq}/bin/jq -r '.version // "-"' "${pkg}/${dir}/.claude-plugin/plugin.json")
                       printf '%-20s %-12s %s\n' "${flakeName}/$pname" "$pver" "${flakeRev}" >> $out/version-info
+                      # Per FDR 0003: emit plugin-shipped prompt fragment dir if present.
+                      fragdir="${pkg}/${dir}/.clown-plugin/system-prompt-append.d"
+                      if [[ -d "$fragdir" ]]; then
+                        echo "$fragdir" >> $out/plugin-fragment-dirs
+                      fi
                     ''
                 ) plugin.dirs;
               in
@@ -459,6 +470,7 @@
           pkgs.runCommand "clown-plugin-meta" { } ''
             mkdir -p $out
             touch $out/plugin-dirs
+            touch $out/plugin-fragment-dirs
             touch $out/version-info
             ${pluginBlocks}
           '';
