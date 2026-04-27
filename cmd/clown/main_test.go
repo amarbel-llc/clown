@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -117,6 +118,21 @@ func TestParseFlags(t *testing.T) {
 			in:   []string{"--provider=codex"},
 			want: parsedFlags{provider: "codex", providerExplicit: true},
 		},
+		{
+			name: "plugin-dir space form",
+			in:   []string{"--plugin-dir", "foo"},
+			want: parsedFlags{provider: "claude", extraPluginDirs: []string{"foo"}},
+		},
+		{
+			name: "plugin-dir equals form",
+			in:   []string{"--plugin-dir=foo"},
+			want: parsedFlags{provider: "claude", extraPluginDirs: []string{"foo"}},
+		},
+		{
+			name: "plugin-dir multiple flags accumulate in order",
+			in:   []string{"--plugin-dir", "a", "--plugin-dir=b", "--plugin-dir", "c"},
+			want: parsedFlags{provider: "claude", extraPluginDirs: []string{"a", "b", "c"}},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -133,18 +149,24 @@ func TestParseFlags(t *testing.T) {
 
 func TestParseFlagsErrors(t *testing.T) {
 	cases := []struct {
-		name string
-		in   []string
+		name    string
+		in      []string
+		wantMsg string
 	}{
-		{"provider missing arg", []string{"--provider"}},
-		{"unknown flag before double-dash", []string{"--unknown-flag"}},
-		{"unknown short flag before double-dash", []string{"-x"}},
-		{"positional arg before double-dash", []string{"chat"}},
+		{"provider missing arg", []string{"--provider"}, "--provider requires an argument"},
+		{"unknown flag before double-dash", []string{"--unknown-flag"}, ""},
+		{"unknown short flag before double-dash", []string{"-x"}, ""},
+		{"positional arg before double-dash", []string{"chat"}, ""},
+		{"plugin-dir missing arg", []string{"--plugin-dir"}, "--plugin-dir requires an argument"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := parseFlags(tc.in); err == nil {
-				t.Errorf("expected error for %v, got nil", tc.in)
+			_, err := parseFlags(tc.in)
+			if err == nil {
+				t.Fatalf("expected error for %v, got nil", tc.in)
+			}
+			if tc.wantMsg != "" && !strings.Contains(err.Error(), tc.wantMsg) {
+				t.Errorf("err = %q, want substring %q", err.Error(), tc.wantMsg)
 			}
 		})
 	}
@@ -277,6 +299,55 @@ func TestReadCircusPortfile_Missing(t *testing.T) {
 	_, err := readCircusPortfile()
 	if err == nil {
 		t.Fatal("expected error when portfile is missing")
+	}
+}
+
+func TestReadPluginDirs_FromMeta(t *testing.T) {
+	metaDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(metaDir, "plugin-dirs"),
+		[]byte("/baked/a\n/baked/b\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CLOWN_PLUGIN_META", metaDir)
+
+	got := readPluginDirs()
+	want := []string{"/baked/a", "/baked/b"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("readPluginDirs = %v, want %v", got, want)
+	}
+}
+
+func TestReadPluginDirs_NoMeta(t *testing.T) {
+	t.Setenv("CLOWN_PLUGIN_META", "")
+	if got := readPluginDirs(); got != nil {
+		t.Errorf("readPluginDirs = %v, want nil when CLOWN_PLUGIN_META unset", got)
+	}
+}
+
+// TestPluginDirsResolution_FlagsAppendedAfterMeta verifies the
+// runWithFlags-level invariant from #29: command-line --plugin-dir
+// entries are appended after the baked-in dirs read from
+// CLOWN_PLUGIN_META, in the order they were supplied.
+func TestPluginDirsResolution_FlagsAppendedAfterMeta(t *testing.T) {
+	metaDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(metaDir, "plugin-dirs"),
+		[]byte("/baked/a\n/baked/b\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CLOWN_PLUGIN_META", metaDir)
+
+	flags, err := parseFlags([]string{"--plugin-dir", "/cli/x", "--plugin-dir=/cli/y"})
+	if err != nil {
+		t.Fatalf("parseFlags: %v", err)
+	}
+
+	// Mirrors runWithFlags' resolution logic in main.go.
+	pluginDirs := readPluginDirs()
+	pluginDirs = append(pluginDirs, flags.extraPluginDirs...)
+
+	want := []string{"/baked/a", "/baked/b", "/cli/x", "/cli/y"}
+	if !reflect.DeepEqual(pluginDirs, want) {
+		t.Errorf("resolved pluginDirs = %v, want %v", pluginDirs, want)
 	}
 }
 
