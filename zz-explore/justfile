@@ -6,6 +6,269 @@
 # recipes below use absolute paths or `git rev-parse --show-toplevel`
 # so that's harmless.
 
+# Direct invocation of the built clown-hook-allow binary to confirm
+# its output schema. No API spend; just feeds sample stdin and prints
+# the JSON the binary emits.
+allowtools-hook-direct:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    root=$(git rev-parse --show-toplevel)
+    cd "$root"
+
+    clown_real=$(readlink -f ./result/bin/clown)
+    cc=$(nix-store --query --references "$clown_real" | grep '/nix/store/[a-z0-9]\+-clown-0' | head -1)
+    cc=$(nix-store --query --references "$cc" | grep '/nix/store/[a-z0-9]\+-claude-code' | head -1)
+    hook=$(jq -r '.hooks.PreToolUse[0].hooks[0].command' "$cc/etc/claude/managed-settings.json")
+    echo "binary: $hook"
+    echo
+
+    echo "=== Read /nix/store/... → expect allow ==="
+    echo '{"tool_name":"Read","tool_input":{"file_path":"/nix/store/abc/x"}}' | "$hook"
+    echo "=== Read /etc/passwd → expect defer ==="
+    echo '{"tool_name":"Read","tool_input":{"file_path":"/etc/passwd"}}' | "$hook"
+    echo "=== Bash → expect defer ==="
+    echo '{"tool_name":"Bash","tool_input":{"command":"ls"}}' | "$hook"
+
+# Empirical test: which hook output form does claude-code 2.1.111
+# actually honor? Builds throwaway hook scripts (exit-only, bare
+# permissionDecision, nested hookSpecificOutput, defer, deny), runs
+# each via --settings argv with a matcher that DOES fire the hook,
+# and reports whether Read against the named path succeeded.
+#
+# Findings on 2026-04-29 (claude-code 2.1.111):
+#   - For allow on /nix/store: A, B, C all PASS — exit 0 alone is
+#     enough; bare or nested permissionDecision both work.
+#   - For defer/no-opinion on /etc/passwd: ALWAYS allowed in --print
+#     mode, including with no hook at all. Print mode appears to
+#     auto-approve Read by default when no hook explicitly denies.
+#   - The deny control test was inconclusive (API credit ran out).
+#
+# This recipe is kept around as documentation of the variants; not
+# expected to be run routinely.
+allowtools-hook-output-forms:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    root=$(git rev-parse --show-toplevel)
+    cd "$root"
+
+    target=$(readlink -f ./result/share/fish/vendor_completions.d/clown.fish)
+    work=$(mktemp -d)
+    trap 'rm -rf "$work"' EXIT
+
+    # Variant A: exit 0, no output.
+    cat > "$work/hook-a.sh" <<'EOF'
+    #!/usr/bin/env bash
+    cat >/dev/null
+    exit 0
+    EOF
+    chmod +x "$work/hook-a.sh"
+
+    # Variant B: bare {"permissionDecision":"allow"}.
+    cat > "$work/hook-b.sh" <<'EOF'
+    #!/usr/bin/env bash
+    cat >/dev/null
+    printf '{"permissionDecision":"allow","reason":"variant B"}\n'
+    exit 0
+    EOF
+    chmod +x "$work/hook-b.sh"
+
+    # Variant C: nested hookSpecificOutput.
+    cat > "$work/hook-c.sh" <<'EOF'
+    #!/usr/bin/env bash
+    cat >/dev/null
+    printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"variant C"}}\n'
+    exit 0
+    EOF
+    chmod +x "$work/hook-c.sh"
+
+    run_variant() {
+        local label="$1" hook="$2"
+        local settings transcript
+        settings=$(jq -nc --arg cmd "$hook" '{
+          hooks: { PreToolUse: [
+            { matcher: "Read", hooks: [{type:"command", command:$cmd}] }
+          ] }
+        }')
+        transcript=$(mktemp)
+        ./result/bin/clown -- --settings "$settings" -p --output-format stream-json --verbose \
+            "Use Read DIRECTLY (no Agent dispatch) on $target — output only the first line." \
+            > "$transcript" 2>/dev/null || true
+        verdict=$(jq -r '
+          [inputs]
+          | map(select(.type == "user")
+                | .message.content[]?
+                | select(.type == "tool_result"))
+          | (.[0] // {}).is_error // false
+          | if . then "FAIL (denied)" else "PASS" end
+        ' "$transcript")
+        printf "  %-35s %s\n" "$label" "$verdict"
+        rm -f "$transcript"
+    }
+
+    # Variant D: bare {"permissionDecision":"defer"} — does defer
+    # actually fall through to default permission flow, or does the
+    # exit-0 dominate and auto-allow?
+    cat > "$work/hook-d-defer.sh" <<'EOF'
+    #!/usr/bin/env bash
+    cat >/dev/null
+    printf '{"permissionDecision":"defer"}\n'
+    exit 0
+    EOF
+    chmod +x "$work/hook-d-defer.sh"
+
+    # Variant E: nested hookSpecificOutput defer.
+    cat > "$work/hook-e-defer.sh" <<'EOF'
+    #!/usr/bin/env bash
+    cat >/dev/null
+    printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"defer"}}\n'
+    exit 0
+    EOF
+    chmod +x "$work/hook-e-defer.sh"
+
+    # For the defer cases, we need a target that would normally be
+    # DENIED to distinguish "defer fell through to denial" from "defer
+    # silently auto-allowed". /etc/passwd is the canonical "should
+    # require explicit grant" target.
+    run_variant_path() {
+        local label="$1" hook="$2" path="$3"
+        local settings transcript
+        settings=$(jq -nc --arg cmd "$hook" '{
+          hooks: { PreToolUse: [
+            { matcher: "Read", hooks: [{type:"command", command:$cmd}] }
+          ] }
+        }')
+        transcript=$(mktemp)
+        ./result/bin/clown -- --settings "$settings" -p --output-format stream-json --verbose \
+            "Use Read DIRECTLY (no Agent dispatch) on $path — output only the first line." \
+            > "$transcript" 2>/dev/null || true
+        verdict=$(jq -r '
+          [inputs]
+          | map(select(.type == "user")
+                | .message.content[]?
+                | select(.type == "tool_result"))
+          | (.[0] // {}).is_error // false
+          | if . then "DENIED" else "ALLOWED" end
+        ' "$transcript")
+        printf "  %-40s on %-15s -> %s\n" "$label" "$path" "$verdict"
+        rm -f "$transcript"
+    }
+
+    echo "=== hook-output forms on /nix/store (already authorized intent) ==="
+    run_variant_path "A: exit 0, no stdout"            "$work/hook-a.sh"          "$target"
+    run_variant_path "B: bare permissionDecision=allow" "$work/hook-b.sh"          "$target"
+    run_variant_path "C: nested perm.Decision=allow"   "$work/hook-c.sh"          "$target"
+
+    echo
+    echo "=== defer behavior on /etc/passwd (would normally be DENIED) ==="
+    echo "--- baseline: NO hook, /etc/passwd ---"
+    settings='{}'
+    transcript=$(mktemp)
+    ./result/bin/clown -- --settings "$settings" -p --output-format stream-json --verbose \
+        "Use Read DIRECTLY (no Agent dispatch) on /etc/passwd — output only the first line." \
+        > "$transcript" 2>/dev/null || true
+    baseline=$(jq -r '[inputs]|map(select(.type=="user")|.message.content[]?|select(.type=="tool_result"))|(.[0]//{}).is_error//false|if . then "DENIED" else "ALLOWED" end' "$transcript")
+    printf "  %-40s on %-15s -> %s\n" "no hook" "/etc/passwd" "$baseline"
+    rm -f "$transcript"
+
+    run_variant_path "D: bare permissionDecision=defer"   "$work/hook-d-defer.sh"  "/etc/passwd"
+    run_variant_path "E: nested permissionDecision=defer" "$work/hook-e-defer.sh"  "/etc/passwd"
+    run_variant_path "A: exit 0 no stdout (no opinion)"   "$work/hook-a.sh"        "/etc/passwd"
+
+    # Variant F: explicit deny — control test. If this denies, then
+    # defer != deny and print mode is genuinely auto-approving when
+    # no hook says "deny".
+    cat > "$work/hook-f-deny.sh" <<'EOF'
+    #!/usr/bin/env bash
+    cat >/dev/null
+    printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"variant F"}}\n'
+    exit 0
+    EOF
+    chmod +x "$work/hook-f-deny.sh"
+
+    echo
+    echo "=== control: explicit deny on /etc/passwd (with full transcript) ==="
+    settings=$(jq -nc --arg cmd "$work/hook-f-deny.sh" '{
+      hooks: { PreToolUse: [
+        { matcher: "Read", hooks: [{type:"command", command:$cmd}] }
+      ] }
+    }')
+    transcript_f=$(mktemp)
+    ./result/bin/clown -- --settings "$settings" -p --output-format stream-json --verbose \
+        "Use Read DIRECTLY (no Agent dispatch) on /etc/passwd — output only the first line." \
+        > "$transcript_f" 2>/dev/null || true
+    echo "--- tool_result entries ---"
+    jq -c 'select(.type=="user")|.message.content[]?|select(.type=="tool_result")' "$transcript_f"
+    echo "--- assistant text ---"
+    jq -r 'select(.type=="assistant")|.message.content[]?|select(.type=="text")|.text' "$transcript_f"
+    echo "--- final result ---"
+    jq -r 'select(.type=="result")|.result' "$transcript_f"
+    rm -f "$transcript_f"
+
+# Smoke test for the /nix/store auto-allow PreToolUse hook (cmd/clown-hook-allow).
+# Spawns claude via the built clown in --print mode and asks it to
+# exercise Read, Glob, and Grep directly (no Agent dispatch) against
+# /nix/store paths. The recipe captures the stream-json transcript
+# and reports pass/fail per tool by inspecting tool_result entries
+# for is_error. Requires `just build` to have produced ./result/bin/clown.
+allowtools-nix-store-smoke:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    root=$(git rev-parse --show-toplevel)
+    cd "$root"
+
+    target=$(readlink -f ./result/share/fish/vendor_completions.d/clown.fish)
+    if [[ ! -f "$target" ]]; then
+        echo "FAIL: read target not found: $target" >&2
+        exit 2
+    fi
+    target_dir=$(dirname "$(dirname "$(dirname "$(dirname "$target")")")")
+
+    prompt="Use the Read tool DIRECTLY (no Agent / Task / Discover dispatch) on $target. Output only the first line verbatim, nothing else."
+
+    transcript=$(mktemp)
+    debug_log=$(mktemp)
+    trap 'rm -f "$transcript" "$debug_log"' EXIT
+
+    echo "=== smoke-test target: $target ==="
+    echo "=== expected first line ==="
+    head -1 "$target"
+    echo
+    echo "=== clown -p (capturing stream-json to $transcript, hook debug log to $debug_log) ==="
+    CLOWN_HOOK_DEBUG_LOG="$debug_log" ./result/bin/clown -- -p --output-format stream-json --verbose "$prompt" \
+        | tee "$transcript"
+
+    echo
+    echo "=== hook debug log ==="
+    if [[ -s "$debug_log" ]]; then
+        cat "$debug_log"
+    else
+        echo "  (empty — hook was never invoked)"
+    fi
+
+    echo
+    echo "=== per-tool verdict (parsed from transcript) ==="
+    # Build {tool_use_id: tool_name} map from assistant tool_use entries,
+    # then for each tool_result print the tool name, is_error verdict,
+    # and a short content snippet.
+    jq -r '
+      [inputs]
+      | (map(select(.type == "assistant")
+             | .message.content[]?
+             | select(.type == "tool_use")
+             | {key: .id, value: .name})
+         | from_entries) as $names
+      | map(select(.type == "user")
+            | .message.content[]?
+            | select(.type == "tool_result")
+            | {
+                name: ($names[.tool_use_id] // "<unknown>"),
+                err:  (.is_error // false),
+                snippet: ((.content | tostring)[0:200])
+              })
+      | .[]
+      | "  \(.name)\t\(if .err then "FAIL (denied)" else "PASS" end)\t\(.snippet)"
+    ' "$transcript"
+
 # Repro for issue #35 (closed as misdiagnosed 2026-04-29): verify whether
 # mkCircus preserves plugin store paths in the closure of
 # circus.packages.default. Builds a synthetic fake-flake plugin (a

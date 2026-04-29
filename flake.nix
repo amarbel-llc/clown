@@ -173,6 +173,18 @@
           ];
         };
 
+        # PreToolUse hook that auto-allows Read/Glob/Grep against
+        # /nix/store paths. Wired into mkClownManagedSettings below so
+        # every clown-launched claude session inherits the allow.
+        clown-hook-allow = buildGoApplication {
+          pname = "clown-hook-allow";
+          version = clownVersion;
+          src = goSrc;
+          subPackages = [ "cmd/clown-hook-allow" ];
+          modules = ./gomod2nix.toml;
+          ldflags = [ "-s" "-w" ];
+        };
+
         clown-go = buildGoApplication {
           pname = "clown";
           version = clownVersion;
@@ -252,6 +264,34 @@
             attribution = {
               commit = "Co-Authored-By: Clown <https://github.com/amarbel-llc/clown>";
               pr = "🤡 Generated with [Clown](https://github.com/amarbel-llc/clown)";
+            };
+            # Auto-allow Read/Glob/Grep against /nix/store paths. The
+            # CLI-level --allowed-tools "Read(/nix/store/**)" form is not
+            # honored by claude-code 2.1 for the Read tool (verified
+            # empirically in 2026-04), so we use a PreToolUse hook
+            # instead. The hook returns "allow" only when the relevant
+            # path argument is rooted in /nix/store/, and "defer"
+            # otherwise — leaving every other permission decision
+            # untouched.
+            #
+            # Schema: each PreToolUse entry must wrap its handlers in a
+            # { matcher, hooks } object. The matcher is a regex over the
+            # tool name; without it the entry is silently dropped and
+            # the hook never fires. The claude-code-hooks(5) example
+            # showing a flat [{type, command}] array omits the matcher
+            # wrapper and does NOT work in 2.1.
+            hooks = {
+              PreToolUse = [
+                {
+                  matcher = "Read|Glob|Grep";
+                  hooks = [
+                    {
+                      type = "command";
+                      command = "${clown-hook-allow}/bin/clown-hook-allow";
+                    }
+                  ];
+                }
+              ];
             };
           }
         );
