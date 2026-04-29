@@ -106,6 +106,12 @@ Fields: `command` (required), `args` (optional), `env` (optional),
 `transport` field — always stdio. No `healthcheck` — the bridge
 synthesizes startup readiness on the wrapped child's behalf.
 
+Plugins SHOULD use an absolute path for `command`. As a convenience,
+the host absolutizes relative paths against the plugin directory at
+desugar time so the bridge's `--command` arg points at the right
+binary regardless of the bridge's runtime CWD; relying on this is
+discouraged for the same reason as RFC 0002 §1.2.
+
 ### 2. Internal desugaring
 
 At parse time, each `stdioServers.<name>` entry is transformed into a

@@ -160,7 +160,7 @@ func TestDesugarStdioServers(t *testing.T) {
 		},
 	}
 
-	if err := Desugar(cfg, "/usr/bin/clown-stdio-bridge"); err != nil {
+	if err := Desugar(cfg, "/usr/bin/clown-stdio-bridge", ""); err != nil {
 		t.Fatalf("Desugar: %v", err)
 	}
 
@@ -201,7 +201,7 @@ func TestDesugarNoArgs(t *testing.T) {
 		},
 	}
 
-	if err := Desugar(cfg, "/bridge"); err != nil {
+	if err := Desugar(cfg, "/bridge", ""); err != nil {
 		t.Fatalf("Desugar: %v", err)
 	}
 
@@ -223,7 +223,7 @@ func TestDesugarNameCollision(t *testing.T) {
 		},
 	}
 
-	err := Desugar(cfg, "/bridge")
+	err := Desugar(cfg, "/bridge", "")
 	if err == nil {
 		t.Fatal("expected error for name collision, got nil")
 	}
@@ -237,7 +237,7 @@ func TestDesugarMissingBridgePath(t *testing.T) {
 		},
 	}
 
-	err := Desugar(cfg, "")
+	err := Desugar(cfg, "", "")
 	if err == nil {
 		t.Fatal("expected error for empty bridge path, got nil")
 	}
@@ -251,11 +251,55 @@ func TestDesugarEmptyStdioServersIsNoop(t *testing.T) {
 		},
 	}
 
-	if err := Desugar(cfg, ""); err != nil {
+	if err := Desugar(cfg, "", ""); err != nil {
 		t.Fatalf("Desugar with no stdioServers should be a no-op even with empty bridge path: %v", err)
 	}
 	if _, ok := cfg.HTTPServers["keep"]; !ok {
 		t.Errorf("existing httpServers entry was disturbed by Desugar")
+	}
+}
+
+// Regression: a stdio.Command that's plugin-relative (no leading `/`)
+// must be absolutized against the plugin dir before going into the
+// bridge's --command arg, so the bridge's exec.LookPath finds the
+// binary regardless of its runtime CWD. See clown#36.
+func TestDesugarAbsolutizesRelativeStdioCommand(t *testing.T) {
+	cfg := &ClownConfig{
+		Version: 1,
+		StdioServers: map[string]StdioServerDef{
+			"caldav": {Command: "bin/caldav", Args: []string{"--port", "0"}},
+		},
+	}
+
+	if err := Desugar(cfg, "/bridge", "/plugins/caldav"); err != nil {
+		t.Fatalf("Desugar: %v", err)
+	}
+
+	srv := cfg.HTTPServers["caldav"]
+	wantArgs := []string{"--command", "/plugins/caldav/bin/caldav", "--", "--port", "0"}
+	if !slicesEqual(srv.Args, wantArgs) {
+		t.Errorf("args = %v, want %v", srv.Args, wantArgs)
+	}
+}
+
+// Absolute stdio.Command values pass through unchanged regardless of
+// pluginDir.
+func TestDesugarLeavesAbsoluteStdioCommandAlone(t *testing.T) {
+	cfg := &ClownConfig{
+		Version: 1,
+		StdioServers: map[string]StdioServerDef{
+			"caldav": {Command: "/nix/store/abc-caldav/bin/caldav"},
+		},
+	}
+
+	if err := Desugar(cfg, "/bridge", "/plugins/caldav"); err != nil {
+		t.Fatalf("Desugar: %v", err)
+	}
+
+	srv := cfg.HTTPServers["caldav"]
+	wantArgs := []string{"--command", "/nix/store/abc-caldav/bin/caldav", "--"}
+	if !slicesEqual(srv.Args, wantArgs) {
+		t.Errorf("args = %v, want %v", srv.Args, wantArgs)
 	}
 }
 

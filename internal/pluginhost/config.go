@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -150,8 +151,15 @@ func PluginName(pluginDir string) (string, error) {
 // cfg.StdioServers is non-empty, or if a name in cfg.StdioServers
 // collides with a name already in cfg.HTTPServers.
 //
+// pluginDir is the absolute plugin directory. When stdio.Command is
+// relative (does not start with `/`), Desugar prepends pluginDir so
+// the bridge's `--command` arg points at the plugin-shipped binary
+// regardless of the bridge's runtime CWD. This mirrors the
+// absolutization that ManagedServer.Start applies to ServerDef.Command
+// for the bridge binary itself, but reaches the wrapped command too.
+//
 // Idempotent on cfg.StdioServers == nil / empty.
-func Desugar(cfg *ClownConfig, bridgePath string) error {
+func Desugar(cfg *ClownConfig, bridgePath, pluginDir string) error {
 	if len(cfg.StdioServers) == 0 {
 		return nil
 	}
@@ -165,7 +173,11 @@ func Desugar(cfg *ClownConfig, bridgePath string) error {
 		if _, conflict := cfg.HTTPServers[name]; conflict {
 			return fmt.Errorf("server name %q is declared in both httpServers and stdioServers", name)
 		}
-		args := []string{"--command", stdio.Command, "--"}
+		cmdArg := stdio.Command
+		if cmdArg != "" && !strings.HasPrefix(cmdArg, "/") && pluginDir != "" {
+			cmdArg = pluginDir + "/" + cmdArg
+		}
+		args := []string{"--command", cmdArg, "--"}
 		args = append(args, stdio.Args...)
 		cfg.HTTPServers[name] = ServerDef{
 			Command:   bridgePath,

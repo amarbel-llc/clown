@@ -54,7 +54,9 @@ Each server definition is an object with the following fields:
 .Bl -tag -width Ds
 .It Fa command Pq string, required
 Path to the server binary.
-Relative paths are resolved against the plugin directory.
+Plugins SHOULD use an absolute path.
+As a convenience, the host resolves relative paths against the plugin
+directory; relying on this is discouraged.
 .It Fa args Pq array of strings, optional
 Command-line arguments.
 Default:
@@ -93,9 +95,12 @@ Each stdio server definition is an object with the following fields:
 .Bl -tag -width Ds
 .It Fa command Pq string, required
 Path to the wrapped stdio MCP server binary.
-Resolved against
-.Ev PATH
-when relative.
+Plugins SHOULD use an absolute path.
+As a convenience, the host resolves relative paths against the plugin
+directory at desugar time so the bridge's
+.Fl -command
+arg resolves regardless of the bridge's runtime CWD; relying on this
+is discouraged.
 .It Fa args Pq array of strings, optional
 Command-line arguments forwarded verbatim to the wrapped command.
 Default:

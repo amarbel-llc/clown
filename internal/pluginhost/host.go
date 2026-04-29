@@ -61,7 +61,7 @@ func (h *Host) Discover() ([]DiscoveredServer, error) {
 			return nil, fmt.Errorf("plugin dir %s: %w", dir, err)
 		}
 
-		if err := Desugar(cfg, h.BridgePath); err != nil {
+		if err := Desugar(cfg, h.BridgePath, dir); err != nil {
 			return nil, fmt.Errorf("plugin dir %s: %w", dir, err)
 		}
 

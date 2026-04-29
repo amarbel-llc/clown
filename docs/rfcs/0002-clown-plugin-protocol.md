@@ -75,7 +75,7 @@ Each server definition is an object with the following fields:
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `command` | string | Yes | — | Path to the server binary. Relative paths are resolved against the plugin directory. |
+| `command` | string | Yes | — | Path to the server binary. Plugins SHOULD use an absolute path. As a convenience, the host resolves relative paths against the plugin directory; relying on this is discouraged because the host's CWD when it absolutizes is not part of the plugin protocol contract. |
 | `args` | array of strings | No | `[]` | Command-line arguments |
 | `env` | object | No | `{}` | Additional environment variables (key-value string pairs) |
 | `transport` | string | No | `"streamable-http"` | MCP transport type: `streamable-http` or `sse` |
