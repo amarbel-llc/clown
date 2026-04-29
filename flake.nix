@@ -146,6 +146,20 @@
           ];
         };
 
+        # Source fileset for the synthetic-plugin derivation. Explicit
+        # allowlist excludes the source-tree bin/ (which historically
+        # accumulated stale Go build outputs) so the derivation hash
+        # stays stable across worktree state.
+        syntheticPluginSrc = lib.fileset.toSource {
+          root = ./tests/synthetic-plugin;
+          fileset = lib.fileset.unions [
+            ./tests/synthetic-plugin/clown.json
+            ./tests/synthetic-plugin/.claude-plugin
+            ./tests/synthetic-plugin/.clown-plugin
+            ./tests/synthetic-plugin/agents
+          ];
+        };
+
         clown-plugin-host = buildGoApplication {
           pname = "clown-plugin-host";
           version = clownVersion;
@@ -191,6 +205,38 @@
         mock-stdio-mcp = pkgs.runCommand "mock-stdio-mcp" { } ''
           mkdir -p $out/bin
           cp ${mock-stdio-mcp-go}/bin/mockstdiomcp $out/bin/mock-stdio-mcp
+        '';
+
+        # Compiled binary that the synthetic-plugin derivation embeds.
+        # Not exposed as a top-level package — consumers should use
+        # synthetic-plugin instead, which lays out the full plugin dir.
+        mock-mcp-server-go = buildGoApplication {
+          pname = "mock-mcp-server";
+          version = clownVersion;
+          src = goSrc;
+          subPackages = [ "internal/pluginhost/testdata/mockserver" ];
+          modules = ./gomod2nix.toml;
+          ldflags = [ "-s" "-w" ];
+        };
+
+        # Synthetic plugin used by the test-plugin-host integration test.
+        # Combines the static fixture (clown.json, agents, plugin
+        # metadata) with a compiled mock-mcp-server binary. The plugin
+        # host receives this store path as --plugin-dir.
+        #
+        # The source clown.json declares the mock server's command as
+        # the relative path "bin/mock-mcp-server"; substituteInPlace
+        # rewrites that to the absolute store path at build time so the
+        # manifest is CWD-independent. --replace-fail errors if the
+        # pattern is missing, catching drift in source clown.json edits.
+        synthetic-plugin = pkgs.runCommand "synthetic-plugin" { } ''
+          mkdir -p $out
+          cp -r ${syntheticPluginSrc}/. $out/
+          chmod -R u+w $out
+          mkdir -p $out/bin
+          cp ${mock-mcp-server-go}/bin/mockserver $out/bin/mock-mcp-server
+          substituteInPlace $out/clown.json \
+            --replace-fail 'bin/mock-mcp-server' "$out/bin/mock-mcp-server"
         '';
 
         # PreToolUse hook that auto-allows Read/Glob/Grep against
@@ -584,6 +630,7 @@
         packages.default = mkClownPkg emptyPluginMeta;
         packages.clown-manpages = clown-manpages;
         packages.mock-stdio-mcp = mock-stdio-mcp;
+        packages.synthetic-plugin = synthetic-plugin;
 
         checks = {
           managedSettingsRead = managedSettingsReadTest;
