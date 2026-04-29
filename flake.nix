@@ -173,6 +173,26 @@
           ];
         };
 
+        # Mock stdio MCP server used by the test-stdio-bridge integration
+        # test. Built as a derivation so the test recipe consumes a store
+        # path instead of dropping a binary into the worktree. The
+        # buildGoApplication output is wrapped in runCommand to preserve
+        # the historical "mock-stdio-mcp" binary name (Go's default
+        # would be "mockstdiomcp" — the leaf of the subPackage path).
+        mock-stdio-mcp-go = buildGoApplication {
+          pname = "mock-stdio-mcp";
+          version = clownVersion;
+          src = goSrc;
+          subPackages = [ "internal/pluginhost/testdata/mockstdiomcp" ];
+          modules = ./gomod2nix.toml;
+          ldflags = [ "-s" "-w" ];
+        };
+
+        mock-stdio-mcp = pkgs.runCommand "mock-stdio-mcp" { } ''
+          mkdir -p $out/bin
+          cp ${mock-stdio-mcp-go}/bin/mockstdiomcp $out/bin/mock-stdio-mcp
+        '';
+
         # PreToolUse hook that auto-allows Read/Glob/Grep against
         # /nix/store paths. Wired into mkClownManagedSettings below so
         # every clown-launched claude session inherits the allow.
@@ -563,6 +583,7 @@
       {
         packages.default = mkClownPkg emptyPluginMeta;
         packages.clown-manpages = clown-manpages;
+        packages.mock-stdio-mcp = mock-stdio-mcp;
 
         checks = {
           managedSettingsRead = managedSettingsReadTest;
