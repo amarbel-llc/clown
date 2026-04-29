@@ -87,8 +87,8 @@ func TestMerge_AdditionalAdds(t *testing.T) {
 
 func TestValidate_ValidCombos(t *testing.T) {
 	cases := []profile.Profile{
-		{Name: "a", Provider: "claude",   Backend: "anthropic"},
-		{Name: "b", Provider: "claude",   Backend: "local"},
+		{Name: "a", Provider: "claude", Backend: "anthropic"},
+		{Name: "b", Provider: "claude", Backend: "local"},
 		{Name: "c", Provider: "opencode", Backend: "anthropic"},
 		{Name: "d", Provider: "opencode", Backend: "gateway", URL: "http://x", Token: "t"},
 		{Name: "e", Provider: "opencode", Backend: "local"},
