@@ -122,11 +122,7 @@ func run(p parsedArgs) int {
 	})
 	mux.HandleFunc("/mcp", handler.handleMCP)
 
-	// ReadHeaderTimeout guards against Slowloris-style stalls. Other
-	// timeouts are intentionally unset: response bodies may be SSE
-	// streams that last for the full session, and request bodies may
-	// carry sizeable MCP payloads.
-	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{Handler: mux}
 	serveErr := make(chan error, 1)
 	go func() {
 		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
