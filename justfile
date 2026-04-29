@@ -26,16 +26,6 @@ build-go:
 test-go:
     go test ./...
 
-# Build the mock MCP server used by integration tests
-[group("go")]
-build-mock-server:
-    go build -o tests/synthetic-plugin/bin/mock-mcp-server ./internal/pluginhost/testdata/mockserver
-
-# Build the mock stdio MCP server used by clown-stdio-bridge integration tests.
-[group("go")]
-build-mock-stdio-mcp:
-    go build -o tests/synthetic-plugin/bin/mock-stdio-mcp ./internal/pluginhost/testdata/mockstdiomcp
-
 # Regenerate gomod2nix.toml after go.mod changes (uses the gomod2nix
 # binary from the devshell so the tool version matches the nix builder).
 [group("go")]
@@ -49,11 +39,11 @@ gomod2nix:
 # id; client triggers a server-initiated notification via a
 # `notify-broadcast` request and observes it on the GET SSE stream.
 [group("test")]
-test-stdio-bridge: build build-mock-stdio-mcp
+test-stdio-bridge: build
     #!/usr/bin/env bash
     set -euo pipefail
     bin="./result/bin/clown-stdio-bridge"
-    mock="$(pwd)/tests/synthetic-plugin/bin/mock-stdio-mcp"
+    mock=$(nix build .#mock-stdio-mcp --no-link --print-out-paths)/bin/mock-stdio-mcp
     echo "Launching $bin --command $mock"
     handshake_file=$(mktemp)
     log_file=$(mktemp)
@@ -148,10 +138,10 @@ test-stdio-bridge: build build-mock-stdio-mcp
 # handshake, passes health checks, compiles plugin manifests with
 # URL-based MCP entries, and preserves original server names.
 [group("test")]
-test-plugin-host: build build-mock-server
+test-plugin-host: build
     #!/usr/bin/env bash
     set -euo pipefail
-    plugin_dir="$(pwd)/tests/synthetic-plugin"
+    plugin_dir=$(nix build .#synthetic-plugin --no-link --print-out-paths)
     echo "Starting clown-plugin-host with synthetic plugin..."
     # The inspect-compiled helper extracts the compiled plugin.json
     # before clown-plugin-host cleans up the staging dir on shutdown.
