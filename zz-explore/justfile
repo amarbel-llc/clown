@@ -1,0 +1,79 @@
+# Throwaway investigation recipes. Live here, not the root justfile, to
+# keep top-level `just --list` legible. Invoked as
+# `just explore <recipe>` (e.g. `just explore issue-35-mkcircus-plugin-closure`).
+#
+# Submodule recipes run with CWD set to this directory by default; the
+# recipes below use absolute paths or `git rev-parse --show-toplevel`
+# so that's harmless.
+
+# Repro for issue #35 (closed as misdiagnosed 2026-04-29): verify whether
+# mkCircus preserves plugin store paths in the closure of
+# circus.packages.default. Builds a synthetic fake-flake plugin (a
+# runCommand creating share/purse-first/issue35-test-plugin/), wires it
+# into mkCircus, then dumps the recursive closure and reports whether
+# the plugin's store path appears.
+#
+# Theory (confirmed by the repro): Nix reference scanning of
+# clown-plugin-meta picks up the literal /nix/store paths interpolated
+# into plugin-dirs, so the plugin is a transitive runtime dep and
+# survives GC as long as circus.packages.default is rooted.
+issue-35-mkcircus-plugin-closure:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    root=$(git rev-parse --show-toplevel)
+    out_link=$(mktemp -d /tmp/clown-issue-35-XXXXXX)/result
+    trap 'rm -rf "$(dirname "$out_link")"' EXIT
+
+    echo ">> building circus.packages.default with synthetic plugin"
+    nix build --show-trace --impure --out-link "$out_link" --expr "
+      let
+        clown = builtins.getFlake \"path:$root\";
+        system = builtins.currentSystem;
+        pkgs = import clown.inputs.nixpkgs { inherit system; };
+        testPlugin = pkgs.runCommand \"issue-35-test-plugin\" { } ''
+          mkdir -p \$out/share/purse-first/issue35-test-plugin/.claude-plugin
+          cat > \$out/share/purse-first/issue35-test-plugin/.claude-plugin/plugin.json <<EOF
+          {\"name\":\"issue35-test-plugin\",\"version\":\"0.0.1\",\"description\":\"issue 35 repro\"}
+          EOF
+        '';
+        testPluginFlake = {
+          packages.\${system}.default = testPlugin;
+          rev = \"issue35-test\";
+        };
+        circus = clown.lib.\${system}.mkCircus {
+          plugins = [
+            { flake = testPluginFlake; dirs = [ \"share/purse-first/issue35-test-plugin\" ]; }
+          ];
+        };
+      in circus.packages.default
+    "
+
+    echo
+    echo ">> result store path:"
+    result_path=$(readlink -f "$out_link")
+    echo "   $result_path"
+
+    echo
+    echo ">> recursive closure (filtered to issue-35-test-plugin entries):"
+    if nix-store --query --requisites "$result_path" | grep issue-35-test-plugin; then
+        echo
+        echo "VERDICT: plugin store path IS in the closure of circus.packages.default."
+        echo "         The bug as filed (#35) is misdiagnosed — Nix reference scanning"
+        echo "         already keeps the plugin alive across GC."
+    else
+        echo
+        echo "VERDICT: plugin store path is NOT in the closure."
+        echo "         Bug #35 is real: a consumer rooting only circus.packages.default"
+        echo "         would let the plugin be garbage-collected."
+        exit 1
+    fi
+
+    echo
+    echo ">> contents of clown-plugin-meta/plugin-dirs (for reference):"
+    plugin_meta=$(nix-store --query --requisites "$result_path" | grep clown-plugin-meta | head -1)
+    if [[ -n "$plugin_meta" ]]; then
+        echo "   meta: $plugin_meta"
+        cat "$plugin_meta/plugin-dirs"
+    else
+        echo "   (no clown-plugin-meta found in closure — unexpected)"
+    fi

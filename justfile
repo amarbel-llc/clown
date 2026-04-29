@@ -1,5 +1,10 @@
 default: build test check
 
+# Throwaway investigation recipes live in zz-explore/justfile. Invoke as
+# `just explore <recipe>`. Optional so the file can be deleted without
+# breaking the parent justfile.
+mod? explore 'zz-explore/justfile'
+
 # Aggregator: run every test recipe (Go unit tests + plugin-host
 # integration tests). Moxy-dependent tests skip cleanly when moxy is not
 # on PATH, so this recipe is safe to run from any environment.
