@@ -157,7 +157,7 @@ test-plugin-host: build build-mock-server
     # before clown-plugin-host cleans up the staging dir on shutdown.
     output=$(timeout 30 ./result/bin/clown-plugin-host \
         --plugin-dir "$plugin_dir" \
-        -- "$plugin_dir/bin/inspect-compiled" 2>&1) || {
+        -- "$(pwd)/tests/scripts/inspect-compiled" 2>&1) || {
         echo "FAIL: clown-plugin-host exited with $?" >&2
         echo "$output" >&2
         exit 1
