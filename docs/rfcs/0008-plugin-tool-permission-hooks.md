@@ -48,10 +48,30 @@ through the plugin-host pipeline into Claude Code.
 | `delegate-to-client` (default) | Let the MCP client decide. |
 | `always-allow` | Skip the permission prompt. |
 | `each-use` | Force user confirmation every time. |
-| `dynamic` | Run a per-call hook script that returns `allow`, `ask`, `deny`, or fall-through. |
+| `dynamic` | Run a per-call hook script that returns `allow`, `ask`, or `deny`. |
 
-For `dynamic`, the hook script's exit code maps to the decision:
-0=allow, 1=ask, 2=deny, anything else=fall-through.
+`dynamic` is paired with a `[dynamic-perms]` block on the tool that
+declares the hook `command` (and optional args/timeout). Before each
+tool call, moxy invokes the hook with the same arg-order and
+stdin-param routing the main tool would receive — the hook sees the
+actual arguments of the pending call. The hook's exit code maps to the
+decision:
+
+| Exit code | Decision | Notes |
+|-----------|----------|-------|
+| `0` | `allow` | |
+| `1` | `ask` | Prompt the user. |
+| `2` | `deny` | |
+| any other | `ask` | The unmapped-code message is surfaced. |
+| timeout (default 2s) | `ask` | |
+| spawn failure | `ask` | E.g. binary missing, permission denied. |
+
+The hook's stdout (truncated) is captured as the human-readable reason
+surfaced to the user when `ask` or `deny` is rendered.
+
+The `""` (fall-through) decision exists in the moxy code for the case
+where no `[dynamic-perms]` spec is configured at all; it is never
+returned from a successful exit-code mapping.
 
 ## Design space (open)
 
