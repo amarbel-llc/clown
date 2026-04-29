@@ -132,7 +132,7 @@
           "07" = "July";      "08" = "August";   "09" = "September";
           "10" = "October";   "11" = "November"; "12" = "December";
         };
-        mdocDate = "${monthNames.${flakeMonth}} ${toString (lib.toInt flakeDay)}, ${flakeYear}";
+        mdocDate = "${monthNames.${flakeMonth}} ${toString (lib.toIntBase10 flakeDay)}, ${flakeYear}";
 
         buildGoApplication = gomod2nix.legacyPackages.${system}.buildGoApplication;
 
