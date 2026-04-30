@@ -17,57 +17,17 @@
         "type": "github"
       }
     },
-    "flake-utils": {
-      "inputs": {
-        "systems": "systems"
-      },
-      "locked": {
-        "lastModified": 1731533236,
-        "narHash": "sha256-l0KFg5HjrsfsO/JpG+r7fRrqm12kzFHyUHqHCVpMMbI=",
-        "owner": "numtide",
-        "repo": "flake-utils",
-        "rev": "11707dc2f618dd54ca8739b309ec4fc024de578b",
-        "type": "github"
-      },
-      "original": {
-        "owner": "numtide",
-        "repo": "flake-utils",
-        "type": "github"
-      }
-    },
-    "gomod2nix": {
-      "inputs": {
-        "flake-utils": "flake-utils",
-        "nixpkgs": [
-          "nixpkgs"
-        ]
-      },
-      "locked": {
-        "lastModified": 1775655738,
-        "narHash": "sha256-fK9KNU9oNugFyGu8uqv1OM4anYFVcIeYVntuaUFx4Y0=",
-        "owner": "amarbel-llc",
-        "repo": "gomod2nix",
-        "rev": "c721288259a04d29966f38d5baa3d3b30bf8fe08",
-        "type": "github"
-      },
-      "original": {
-        "owner": "amarbel-llc",
-        "repo": "gomod2nix",
-        "type": "github"
-      }
-    },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1776434932,
-        "narHash": "sha256-gyqXNMgk3sh+ogY5svd2eNLJ6oEwzbAeaoBrrxD0lKk=",
-        "owner": "NixOS",
+        "lastModified": 1777042677,
+        "narHash": "sha256-PkHa8cSqjNVD/ug5VNyC0ebwAVRJxvw92FFLWinbdQs=",
+        "owner": "amarbel-llc",
         "repo": "nixpkgs",
-        "rev": "c7f47036d3df2add644c46d712d14262b7d86c0c",
+        "rev": "9bad1e489bd4c713da002618bd825372d35430af",
         "type": "github"
       },
       "original": {
-        "owner": "NixOS",
-        "ref": "nixos-25.11",
+        "owner": "amarbel-llc",
         "repo": "nixpkgs",
         "type": "github"
       }
@@ -76,13 +36,13 @@
       "locked": {
         "lastModified": 1776358155,
         "narHash": "sha256-ruPV/Nk84idlHqrJH4JTWlqspw627PgcwLaYH6MiumQ=",
-        "owner": "NixOS",
+        "owner": "amarbel-llc",
         "repo": "nixpkgs",
         "rev": "b2b9662ffe1e9a5702e7bfbd983595dd56147dbf",
         "type": "github"
       },
       "original": {
-        "owner": "NixOS",
+        "owner": "amarbel-llc",
         "repo": "nixpkgs",
         "rev": "b2b9662ffe1e9a5702e7bfbd983595dd56147dbf",
         "type": "github"
@@ -92,13 +52,13 @@
       "locked": {
         "lastModified": 1774366223,
         "narHash": "sha256-EkNxFNHtu8q9oUcmcaQk/fsNrErrAMUMx4uMN5qjDIM=",
-        "owner": "NixOS",
+        "owner": "amarbel-llc",
         "repo": "nixpkgs",
         "rev": "e2dde111aea2c0699531dc616112a96cd55ab8b5",
         "type": "github"
       },
       "original": {
-        "owner": "NixOS",
+        "owner": "amarbel-llc",
         "repo": "nixpkgs",
         "rev": "e2dde111aea2c0699531dc616112a96cd55ab8b5",
         "type": "github"
@@ -108,13 +68,13 @@
       "locked": {
         "lastModified": 1776749433,
         "narHash": "sha256-OxRw5/l27G3PDYNapH4PTDEAf8PH2IWd+3or8+DuOww=",
-        "owner": "NixOS",
+        "owner": "amarbel-llc",
         "repo": "nixpkgs",
         "rev": "3b5a614454bd054dd960f1ff7a888dc5dfaf7bb4",
         "type": "github"
       },
       "original": {
-        "owner": "NixOS",
+        "owner": "amarbel-llc",
         "repo": "nixpkgs",
         "rev": "3b5a614454bd054dd960f1ff7a888dc5dfaf7bb4",
         "type": "github"
@@ -124,13 +84,13 @@
       "locked": {
         "lastModified": 1776358656,
         "narHash": "sha256-lWsd2G9dxHZ4oBKhlnJwUV+zRxRxZRDM7LR7z+hU51M=",
-        "owner": "NixOS",
+        "owner": "amarbel-llc",
         "repo": "nixpkgs",
         "rev": "9b53530a5f6887b6903cffeb8a418f3079d6698d",
         "type": "github"
       },
       "original": {
-        "owner": "NixOS",
+        "owner": "amarbel-llc",
         "repo": "nixpkgs",
         "rev": "9b53530a5f6887b6903cffeb8a418f3079d6698d",
         "type": "github"
@@ -139,7 +99,6 @@
     "root": {
       "inputs": {
         "claudebox-src": "claudebox-src",
-        "gomod2nix": "gomod2nix",
         "nixpkgs": "nixpkgs",
         "nixpkgs-claude-code": "nixpkgs-claude-code",
         "nixpkgs-codex": "nixpkgs-codex",
@@ -163,24 +122,9 @@
         "type": "github"
       }
     },
-    "systems_2": {
-      "locked": {
-        "lastModified": 1681028828,
-        "narHash": "sha256-Vy1rq5AaRuLzOxct8nz4T6wlgyUR7zLU309k9mBC768=",
-        "owner": "nix-systems",
-        "repo": "default",
-        "rev": "da67096a3b9bf56a91d16901293e51ba5b49a27e",
-        "type": "github"
-      },
-      "original": {
-        "owner": "nix-systems",
-        "repo": "default",
-        "type": "github"
-      }
-    },
     "utils": {
       "inputs": {
-        "systems": "systems_2"
+        "systems": "systems"
       },
       "locked": {
         "lastModified": 1731533236,

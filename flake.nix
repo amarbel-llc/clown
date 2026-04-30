@@ -2,16 +2,23 @@
   description = "clown — coding-agent wrapper";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
-    nixpkgs-master.url = "github:NixOS/nixpkgs/9b53530a5f6887b6903cffeb8a418f3079d6698d";
+    # Main nixpkgs is the amarbel-llc fork at master. The fork's
+    # overlays.default contributes buildGoApplication, mkGoEnv,
+    # gomod2nix (CLI), fetchGgufModel, and other amarbel-packages
+    # additions to pkgs. See overlays/amarbel-packages.nix in the fork.
+    nixpkgs.url = "github:amarbel-llc/nixpkgs";
+    # Secondary pinned views — same SHAs we used against upstream, just
+    # served by the fork. Each fork commit upstream's master, so these
+    # SHAs are reachable. The overlay is *not* applied to these because
+    # they're narrow-purpose (claude-code, codex, llama-cpp at specific
+    # versions) and don't need the fork's package additions.
+    nixpkgs-master.url = "github:amarbel-llc/nixpkgs/9b53530a5f6887b6903cffeb8a418f3079d6698d";
     utils.url = "https://flakehub.com/f/numtide/flake-utils/0.1.102";
-    nixpkgs-claude-code.url = "github:NixOS/nixpkgs/b2b9662ffe1e9a5702e7bfbd983595dd56147dbf";
-    nixpkgs-codex.url = "github:NixOS/nixpkgs/e2dde111aea2c0699531dc616112a96cd55ab8b5";
+    nixpkgs-claude-code.url = "github:amarbel-llc/nixpkgs/b2b9662ffe1e9a5702e7bfbd983595dd56147dbf";
+    nixpkgs-codex.url = "github:amarbel-llc/nixpkgs/e2dde111aea2c0699531dc616112a96cd55ab8b5";
     # llama-cpp with Anthropic Messages API (/v1/messages) support — requires
     # PR #17570 (merged 2025-11-28). Build 6981 in nixos-25.11 predates it.
-    nixpkgs-llama.url = "github:NixOS/nixpkgs/3b5a614454bd054dd960f1ff7a888dc5dfaf7bb4";
-    gomod2nix.url = "github:amarbel-llc/gomod2nix";
-    gomod2nix.inputs.nixpkgs.follows = "nixpkgs";
+    nixpkgs-llama.url = "github:amarbel-llc/nixpkgs/3b5a614454bd054dd960f1ff7a888dc5dfaf7bb4";
     # numtide/claudebox source — patched in-tree to add `--` arg
     # passthrough so clown's BuildClaudeArgs flags reach the inner claude.
     # Pinned by commit SHA (tag v0.2.0) so version-tag retags don't
@@ -30,14 +37,21 @@
       nixpkgs-claude-code,
       nixpkgs-codex,
       nixpkgs-llama,
-      gomod2nix,
       utils,
       claudebox-src,
     }:
     utils.lib.eachDefaultSystem (
       system:
       let
-        pkgs = import nixpkgs { inherit system; };
+        # Apply the fork's overlay so pkgs gets buildGoApplication,
+        # mkGoEnv, gomod2nix (CLI), fetchGgufModel, etc. The overlay
+        # also pins claude-code at the package level — we route
+        # claude-code through pkgs-claude-code (separate input, no
+        # overlay) so that pin doesn't override our chosen version.
+        pkgs = import nixpkgs {
+          inherit system;
+          overlays = [ nixpkgs.overlays.default ];
+        };
         pkgs-master = import nixpkgs-master {
           inherit system;
           config.allowUnfree = true;
@@ -134,7 +148,7 @@
         };
         mdocDate = "${monthNames.${flakeMonth}} ${toString (lib.toIntBase10 flakeDay)}, ${flakeYear}";
 
-        buildGoApplication = gomod2nix.legacyPackages.${system}.buildGoApplication;
+        buildGoApplication = pkgs.buildGoApplication;
 
         goSrc = lib.fileset.toSource {
           root = ./.;
@@ -618,7 +632,7 @@
                 pkgs.opencode
                 pkgs.bun
                 pkgs.mitmproxy
-                gomod2nix.packages.${system}.default
+                pkgs.gomod2nix
               ];
             };
             checks = {
@@ -646,7 +660,7 @@
             pkgs.opencode
             pkgs.bun
             pkgs.mitmproxy
-            gomod2nix.packages.${system}.default
+            pkgs.gomod2nix
           ];
         };
 
