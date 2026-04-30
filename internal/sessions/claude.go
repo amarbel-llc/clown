@@ -97,17 +97,48 @@ func ListClaudeSessions(homeDir string) ([]Session, error) {
 	return out, nil
 }
 
-// FilterByCWD returns the sessions whose CWD exactly matches pwd.
-// No prefix matching, no symlink resolution — Claude itself does not
-// recognize worktrees, so neither do we.
+// FilterByCWD returns the sessions whose CWD refers to the same
+// directory as pwd. Exact-string match wins fast; otherwise both sides
+// are run through filepath.EvalSymlinks so a session recorded at the
+// real path matches a caller standing in a symlinked path (and vice
+// versa). Sessions with an unresolvable CWD are skipped, and an
+// unresolvable pwd falls back to exact-match only.
 func FilterByCWD(all []Session, pwd string) []Session {
+	pwdResolved, _ := filepath.EvalSymlinks(pwd)
+
 	var out []Session
 	for _, s := range all {
-		if s.CWD == pwd {
+		if s.CWD == "" {
+			continue
+		}
+		if SameDir(s.CWD, pwd, pwdResolved) {
 			out = append(out, s)
 		}
 	}
 	return out
+}
+
+// SameDir reports whether a and b refer to the same directory on disk,
+// resolving symlinks if a syntactic compare misses. Pass bResolved as
+// a precomputed filepath.EvalSymlinks(b) when calling in a loop to
+// avoid resolving b on every iteration; pass "" to let SameDir resolve
+// it on demand.
+func SameDir(a, b, bResolved string) bool {
+	if a == b {
+		return true
+	}
+	if bResolved == "" {
+		var err error
+		bResolved, err = filepath.EvalSymlinks(b)
+		if err != nil {
+			return false
+		}
+	}
+	aResolved, err := filepath.EvalSymlinks(a)
+	if err != nil {
+		return false
+	}
+	return aResolved == bResolved
 }
 
 // extractHeadMeta scans the first headScanLines of a transcript looking

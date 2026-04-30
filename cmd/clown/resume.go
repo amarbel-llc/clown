@@ -113,7 +113,7 @@ func resumeByURI(args resumeArgs) int {
 		return 1
 	}
 
-	if s.CWD == cwd {
+	if sessions.SameDir(s.CWD, cwd, "") {
 		return launchResume(*s, args)
 	}
 

@@ -162,6 +162,40 @@ func TestFilterByCWD_NoMatchReturnsEmpty(t *testing.T) {
 	}
 }
 
+// TestFilterByCWD_MatchesThroughSymlink covers the case where the
+// recorded session cwd and the caller's pwd point at the same directory
+// but via different paths — one resolves through a symlink. See issue
+// #43: spinclass-managed worktrees and macOS /tmp -> /private/tmp can
+// cause the recorded and current paths to differ syntactically while
+// referring to the same directory on disk.
+func TestFilterByCWD_MatchesThroughSymlink(t *testing.T) {
+	tmp := t.TempDir()
+	real := filepath.Join(tmp, "real")
+	if err := os.Mkdir(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(tmp, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+
+	// session was recorded under the real path; caller is sitting in
+	// the symlinked path.
+	all := []Session{{ID: "a", CWD: real}}
+	got := FilterByCWD(all, link)
+	if len(got) != 1 {
+		t.Fatalf("symlinked pwd: got %d, want 1", len(got))
+	}
+
+	// reverse: session recorded under the symlinked path; caller in
+	// the real path.
+	all = []Session{{ID: "b", CWD: link}}
+	got = FilterByCWD(all, real)
+	if len(got) != 1 {
+		t.Fatalf("symlinked recorded cwd: got %d, want 1", len(got))
+	}
+}
+
 func TestSession_URI(t *testing.T) {
 	s := Session{Provider: "claude", ID: "abc-123"}
 	if got := s.URI(); got != "clown://claude/abc-123" {
