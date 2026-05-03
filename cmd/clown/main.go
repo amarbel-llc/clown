@@ -775,11 +775,19 @@ func readMetaList(name string) []string {
 }
 
 func printHelp() {
-	fmt.Print(`Usage: clown [clown-flags] -- [provider-args]
+	defaultProvider := buildcfg.DefaultProvider
+	if defaultProvider == "" {
+		defaultProvider = "claude"
+	}
+	defaultProfileSuffix := ""
+	if buildcfg.DefaultProfile != "" {
+		defaultProfileSuffix = fmt.Sprintf(" (default: %s)", buildcfg.DefaultProfile)
+	}
+	fmt.Printf(`Usage: clown [clown-flags] -- [provider-args]
 
 Clown flags (must appear before --):
-  --provider <name>          Provider to use: claude, codex, circus, opencode, clownbox (default: claude)
-  --profile <name>           Profile name; implies --provider from profile config
+  --provider <name>          Provider to use: claude, codex, circus, opencode, clownbox (default: %s)
+  --profile <name>           Profile name; implies --provider from profile config%s
   --naked                    Pass through to provider without clown wrapping
   --skip-failed              Continue if plugin servers fail to start
   --disable-clown-protocol   Disable clown plugin-host protocol
@@ -790,7 +798,7 @@ Clown flags (must appear before --):
   sessions-complete          Emit fish-completion lines for sessions
 
 All arguments after -- are forwarded verbatim to the provider.
-`)
+`, defaultProvider, defaultProfileSuffix)
 }
 
 func printVersion() {
@@ -879,6 +887,8 @@ func parseFlags(args []string) (parsedFlags, error) {
 	if env := os.Getenv("CLOWN_PROVIDER"); env != "" {
 		p.provider = env
 		p.providerExplicit = true
+	} else if buildcfg.DefaultProvider != "" {
+		p.provider = buildcfg.DefaultProvider
 	} else {
 		p.provider = "claude"
 	}
@@ -934,6 +944,12 @@ func parseFlags(args []string) (parsedFlags, error) {
 		default:
 			return p, fmt.Errorf("unknown flag %q (use -- to pass arguments to the provider)", args[i])
 		}
+	}
+	// Apply the build-time default profile only when the caller did
+	// not pin a profile (flag/env) or pin an explicit provider — an
+	// explicit --provider opts out of the profile-driven flow.
+	if p.profile == "" && !p.providerExplicit && buildcfg.DefaultProfile != "" {
+		p.profile = buildcfg.DefaultProfile
 	}
 	return p, nil
 }

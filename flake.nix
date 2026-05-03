@@ -265,7 +265,17 @@
           ldflags = [ "-s" "-w" ];
         };
 
-        clown-go = buildGoApplication {
+        # Build-time defaults baked into the standalone packages.default
+        # and into mkClownPkg / mkCircus when no override is given. Match
+        # the historical hardcoded "claude" provider and the builtin
+        # claude-anthropic profile (provider=claude, backend=anthropic).
+        defaultDefaultProvider = "claude";
+        defaultDefaultProfile = "claude-anthropic";
+
+        mkClownGo =
+          { defaultProvider ? defaultDefaultProvider
+          , defaultProfile ? defaultDefaultProfile
+          }: buildGoApplication {
           pname = "clown";
           version = clownVersion;
           src = goSrc;
@@ -288,6 +298,8 @@
             "-X github.com/amarbel-llc/clown/internal/buildcfg.OpencodeCliPath=${pkgs.opencode}/bin/opencode"
             "-X github.com/amarbel-llc/clown/internal/buildcfg.ClownboxCliPath=${clownboxCliPath}"
             "-X github.com/amarbel-llc/clown/internal/buildcfg.StdioBridgePath=${clown-stdio-bridge}/bin/clown-stdio-bridge"
+            "-X github.com/amarbel-llc/clown/internal/buildcfg.DefaultProvider=${defaultProvider}"
+            "-X github.com/amarbel-llc/clown/internal/buildcfg.DefaultProfile=${defaultProfile}"
           ];
         };
 
@@ -471,11 +483,17 @@
 
         # Thin wrapper: sets CLOWN_PLUGIN_META (varies per mkCircus) then
         # execs the Go binary. All flag parsing, provider routing, and
-        # plugin-host orchestration live in cmd/clown.
-        mkClownBin = pluginMeta: pkgs.writeShellScriptBin "clown" ''
-          export CLOWN_PLUGIN_META="${pluginMeta}"
-          exec "${clown-go}/bin/clown" "$@"
-        '';
+        # plugin-host orchestration live in cmd/clown. The wrapped Go
+        # binary varies by (defaultProvider, defaultProfile) — those
+        # flags are linker-baked, so each combination is its own
+        # derivation.
+        mkClownBin =
+          { pluginMeta
+          , clownGoBin
+          }: pkgs.writeShellScriptBin "clown" ''
+            export CLOWN_PLUGIN_META="${pluginMeta}"
+            exec "${clownGoBin}/bin/clown" "$@"
+          '';
 
         clown-completions = pkgs.runCommand "clown-completions" { } ''
           mkdir -p $out/share/fish/vendor_completions.d
@@ -596,11 +614,17 @@
           '';
 
         mkClownPkg =
-          pluginMeta:
+          { pluginMeta
+          , defaultProvider ? defaultDefaultProvider
+          , defaultProfile ? defaultDefaultProfile
+          }:
+          let
+            clownGoBin = mkClownGo { inherit defaultProvider defaultProfile; };
+          in
           (pkgs.symlinkJoin {
             name = "clown";
             paths = [
-              (mkClownBin pluginMeta)
+              (mkClownBin { inherit pluginMeta clownGoBin; })
               clown-plugin-host
               clown-stdio-bridge
               circus-go
@@ -616,13 +640,18 @@
           });
 
         mkCircus =
-          { plugins ? [ ] }:
+          { plugins ? [ ]
+          , defaultProvider ? defaultDefaultProvider
+          , defaultProfile ? defaultDefaultProfile
+          }:
           let
             pluginMeta =
               if plugins == [ ] then emptyPluginMeta else resolvePlugins plugins;
           in
           {
-            packages.default = mkClownPkg pluginMeta;
+            packages.default = mkClownPkg {
+              inherit pluginMeta defaultProvider defaultProfile;
+            };
             devShells.default = pkgs.mkShell {
               packages = [
                 pkgs-master.just
@@ -641,7 +670,7 @@
           };
       in
       {
-        packages.default = mkClownPkg emptyPluginMeta;
+        packages.default = mkClownPkg { pluginMeta = emptyPluginMeta; };
         packages.clown-manpages = clown-manpages;
         packages.mock-stdio-mcp = mock-stdio-mcp;
         packages.synthetic-plugin = synthetic-plugin;

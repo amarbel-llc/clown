@@ -28,4 +28,14 @@ var (
 	// layout. Empty in dev builds (go build, go run); stdioServers
 	// requires the Nix-built artifact.
 	StdioBridgePath string
+	// DefaultProvider is the provider name used when neither
+	// --provider nor CLOWN_PROVIDER is set. Empty falls back to
+	// the historical "claude" default in main.go.
+	DefaultProvider string
+	// DefaultProfile is the profile name used when neither
+	// --profile nor CLOWN_PROFILE is set and no explicit provider
+	// is given. An unknown name produces the same error as an
+	// explicit --profile would. Empty disables the build-time
+	// default and restores the picker / hardcoded-provider flow.
+	DefaultProfile string
 )

@@ -7,8 +7,28 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/amarbel-llc/clown/internal/buildcfg"
 	"github.com/amarbel-llc/clown/internal/promptwalk"
 )
+
+func withBuildcfgString(t *testing.T, target *string, value string) {
+	t.Helper()
+	prev := *target
+	*target = value
+	t.Cleanup(func() { *target = prev })
+}
+
+// TestMain clears the build-time defaults so the rest of the suite
+// runs against the historical hardcoded fallback. nix's
+// buildGoApplication forwards the package's -ldflags into the test
+// binary, which would otherwise leak DefaultProvider / DefaultProfile
+// into table tests that assert empty values. Tests that exercise
+// the build-time defaults re-set them via withBuildcfgString.
+func TestMain(m *testing.M) {
+	buildcfg.DefaultProvider = ""
+	buildcfg.DefaultProfile = ""
+	os.Exit(m.Run())
+}
 
 func TestParseFlags(t *testing.T) {
 	cases := []struct {
@@ -273,6 +293,83 @@ func TestParseFlags_ProfileFromEnv(t *testing.T) {
 	}
 	if got.profile != "my-profile" {
 		t.Errorf("got profile %q, want %q", got.profile, "my-profile")
+	}
+}
+
+func TestParseFlags_DefaultProviderFromBuildcfg(t *testing.T) {
+	withBuildcfgString(t, &buildcfg.DefaultProvider, "codex")
+	got, err := parseFlags(nil)
+	if err != nil {
+		t.Fatalf("parseFlags: %v", err)
+	}
+	if got.provider != "codex" {
+		t.Errorf("provider = %q, want codex", got.provider)
+	}
+	if got.providerExplicit {
+		t.Error("providerExplicit should be false when only build-time default applies")
+	}
+}
+
+func TestParseFlags_DefaultProviderEnvOverridesBuildcfg(t *testing.T) {
+	withBuildcfgString(t, &buildcfg.DefaultProvider, "codex")
+	t.Setenv("CLOWN_PROVIDER", "opencode")
+	got, err := parseFlags(nil)
+	if err != nil {
+		t.Fatalf("parseFlags: %v", err)
+	}
+	if got.provider != "opencode" {
+		t.Errorf("provider = %q, want opencode", got.provider)
+	}
+	if !got.providerExplicit {
+		t.Error("providerExplicit should be true with CLOWN_PROVIDER set")
+	}
+}
+
+func TestParseFlags_DefaultProfileFromBuildcfg(t *testing.T) {
+	withBuildcfgString(t, &buildcfg.DefaultProfile, "claude-anthropic")
+	got, err := parseFlags(nil)
+	if err != nil {
+		t.Fatalf("parseFlags: %v", err)
+	}
+	if got.profile != "claude-anthropic" {
+		t.Errorf("profile = %q, want claude-anthropic", got.profile)
+	}
+}
+
+func TestParseFlags_DefaultProfileSuppressedByExplicitProvider(t *testing.T) {
+	withBuildcfgString(t, &buildcfg.DefaultProfile, "claude-anthropic")
+	got, err := parseFlags([]string{"--provider", "codex"})
+	if err != nil {
+		t.Fatalf("parseFlags: %v", err)
+	}
+	if got.profile != "" {
+		t.Errorf("profile = %q, want empty (explicit --provider should suppress build-time default profile)", got.profile)
+	}
+	if got.provider != "codex" {
+		t.Errorf("provider = %q, want codex", got.provider)
+	}
+}
+
+func TestParseFlags_DefaultProfileSuppressedByExplicitProfile(t *testing.T) {
+	withBuildcfgString(t, &buildcfg.DefaultProfile, "claude-anthropic")
+	got, err := parseFlags([]string{"--profile", "claude-local"})
+	if err != nil {
+		t.Fatalf("parseFlags: %v", err)
+	}
+	if got.profile != "claude-local" {
+		t.Errorf("profile = %q, want claude-local", got.profile)
+	}
+}
+
+func TestParseFlags_DefaultProfileSuppressedByEnvProfile(t *testing.T) {
+	withBuildcfgString(t, &buildcfg.DefaultProfile, "claude-anthropic")
+	t.Setenv("CLOWN_PROFILE", "claude-local")
+	got, err := parseFlags(nil)
+	if err != nil {
+		t.Fatalf("parseFlags: %v", err)
+	}
+	if got.profile != "claude-local" {
+		t.Errorf("profile = %q, want claude-local", got.profile)
 	}
 }
 
