@@ -7,9 +7,25 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"sync"
 	"sync/atomic"
+	"time"
 )
+
+// traceEnvVar gates the full passthrough log of every JSON-RPC line in
+// either direction between bridge and wrapped child. Set to a truthy
+// value ("1", "true", "yes") to enable. Heavy; intended for upstream
+// bug reports, not normal operation.
+const traceEnvVar = "CLOWN_BRIDGE_TRACE"
+
+func tracingEnabled() bool {
+	switch os.Getenv(traceEnvVar) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
+}
 
 // queueDepth is the bounded queue size for stdin writes and per-subscriber
 // SSE broadcasts. Per FDR 0002 §"Resource limits". Tunable; future
@@ -42,11 +58,17 @@ type translator struct {
 
 	pendingMu sync.Mutex
 	pending   map[string]chan json.RawMessage
+	// seenAt records when each id was first registered via SendRequest.
+	// Survives SendRequest cleanup so demux can compute elapsed-time
+	// for late responses (the "response for unknown id" path). Cleared
+	// by demux on either response delivery or unknown-id observation.
+	seenAt map[string]time.Time
 
 	subsMu      sync.Mutex
 	subscribers map[*subscriber]struct{}
 
 	logger logger
+	trace  bool
 
 	droppedOutbound atomic.Int64
 }
@@ -69,8 +91,10 @@ func newTranslator(stdin io.Writer, stdout io.Reader, log logger) *translator {
 		stdout:      stdout,
 		writeQueue:  make(chan []byte, queueDepth),
 		pending:     make(map[string]chan json.RawMessage),
+		seenAt:      make(map[string]time.Time),
 		subscribers: make(map[*subscriber]struct{}),
 		logger:      log,
+		trace:       tracingEnabled(),
 	}
 }
 
@@ -105,6 +129,9 @@ func (t *translator) runWriter(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case msg := <-t.writeQueue:
+			if t.trace {
+				t.logger.Printf("clown-stdio-bridge: trace stdin %s", tracePreview(msg))
+			}
 			if _, err := t.stdin.Write(msg); err != nil {
 				t.logger.Printf("clown-stdio-bridge: write to child stdin failed: %v", err)
 				return
@@ -123,12 +150,26 @@ func (t *translator) runReader() error {
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 	for scanner.Scan() {
 		line := append([]byte(nil), scanner.Bytes()...)
+		if t.trace {
+			t.logger.Printf("clown-stdio-bridge: trace stdout %s", tracePreview(line))
+		}
 		t.demux(line)
 	}
 	if err := scanner.Err(); err != nil && !errors.Is(err, io.EOF) {
 		return fmt.Errorf("read child stdout: %w", err)
 	}
 	return nil
+}
+
+// tracePreview formats a JSON-RPC line for trace logging: keeps it on one
+// line, caps length, and surfaces id/method when available.
+func tracePreview(line []byte) string {
+	const maxBody = 256
+	body := line
+	if len(body) > maxBody {
+		body = append(append([]byte{}, body[:maxBody]...), []byte("…")...)
+	}
+	return fmt.Sprintf("length=%d body=%s", len(line), body)
 }
 
 // demux routes a single line of child stdout to either the matching
@@ -156,9 +197,15 @@ func (t *translator) demux(line []byte) {
 		if ok {
 			delete(t.pending, idKey)
 		}
+		seen, hadSeen := t.seenAt[idKey]
+		delete(t.seenAt, idKey)
 		t.pendingMu.Unlock()
 		if !ok {
-			t.logger.Printf("clown-stdio-bridge: response for unknown id %s", idKey)
+			elapsed := "unknown"
+			if hadSeen {
+				elapsed = fmt.Sprintf("%dms", time.Since(seen).Milliseconds())
+			}
+			t.logger.Printf("clown-stdio-bridge: response for unknown id %s elapsed=%s", idKey, elapsed)
 			return
 		}
 		// Buffered channel of size 1 — never blocks.
@@ -225,11 +272,15 @@ func (t *translator) SendRequest(ctx context.Context, idKey string, msg []byte) 
 		return nil, fmt.Errorf("duplicate JSON-RPC id %s in flight", idKey)
 	}
 	t.pending[idKey] = respCh
+	t.seenAt[idKey] = time.Now()
 	t.pendingMu.Unlock()
 
 	defer func() {
 		t.pendingMu.Lock()
 		delete(t.pending, idKey)
+		// seenAt intentionally retained — demux clears it when a late
+		// response arrives so we can log elapsed-time on the
+		// "response for unknown id" path.
 		t.pendingMu.Unlock()
 	}()
 

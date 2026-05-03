@@ -9,6 +9,7 @@ import (
 	"io"
 	"math/rand/v2"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -440,6 +441,164 @@ func TestTranslator_BroadcastInterleavedWithRequests(t *testing.T) {
 	if gotNotifs == 0 {
 		t.Error("subscriber received zero broadcast notifications")
 	}
+}
+
+// TestTranslator_LateResponseAfterIDReuseCrossesIntoNewRequest probes the
+// trace observed in dodder/calm-magnolia: the HTTP client (Claude Code)
+// canceled a slow request after ~60 s, the bridge cleaned up pending[id],
+// and the wrapped child's late response surfaced as "response for unknown
+// id N". The subtle bug being probed: if the next in-flight request reuses
+// the same JSON-RPC id, the late response from the *previous* call could be
+// delivered to the *new* caller, since the bridge has no record of which
+// physical call a response belongs to — only the id.
+func TestTranslator_LateResponseAfterIDReuseCrossesIntoNewRequest(t *testing.T) {
+	t.Skip("known broken: tracked in https://github.com/amarbel-llc/clown/issues/50")
+	stdinR, stdinW := io.Pipe()
+	stdoutR, stdoutW := io.Pipe()
+	t.Cleanup(func() { stdinW.Close(); stdoutW.Close() })
+
+	tr := newTranslator(stdinW, stdoutR, nullLogger{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = tr.Run(ctx) }()
+
+	// Drain stdin into a channel so the test can synchronize on
+	// "request reached the wire".
+	stdinLines := make(chan []byte, 8)
+	go func() {
+		sc := bufio.NewScanner(stdinR)
+		sc.Buffer(make([]byte, 64*1024), 1024*1024)
+		for sc.Scan() {
+			stdinLines <- append([]byte(nil), sc.Bytes()...)
+		}
+	}()
+
+	// First call: ctx will be canceled before any response is emitted.
+	req1Ctx, req1Cancel := context.WithCancel(ctx)
+	req1Err := make(chan error, 1)
+	go func() {
+		body1 := []byte(`{"jsonrpc":"2.0","id":2,"method":"slow","params":{"which":"first"}}`)
+		_, err := tr.SendRequest(req1Ctx, "2", body1)
+		req1Err <- err
+	}()
+
+	select {
+	case <-stdinLines:
+	case <-time.After(time.Second):
+		t.Fatal("first request did not reach stdin")
+	}
+
+	req1Cancel()
+	if err := <-req1Err; err != context.Canceled {
+		t.Fatalf("first SendRequest err = %v, want context.Canceled", err)
+	}
+
+	// Second call reuses id "2" — legal from the bridge's view because
+	// the first call has been cleaned up.
+	req2Ctx, req2Cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer req2Cancel()
+
+	type req2Result struct {
+		resp json.RawMessage
+		err  error
+	}
+	req2Done := make(chan req2Result, 1)
+	go func() {
+		body2 := []byte(`{"jsonrpc":"2.0","id":2,"method":"normal","params":{"which":"second"}}`)
+		resp, err := tr.SendRequest(req2Ctx, "2", body2)
+		req2Done <- req2Result{resp: resp, err: err}
+	}()
+
+	select {
+	case <-stdinLines:
+	case <-time.After(time.Second):
+		t.Fatal("second request did not reach stdin")
+	}
+
+	// Now the late response to the FIRST call arrives, followed by the
+	// response to the SECOND call. The second caller MUST receive the
+	// second response — not the first.
+	lateFirst := []byte(`{"jsonrpc":"2.0","id":2,"result":{"which":"first-response"}}` + "\n")
+	if _, err := stdoutW.Write(lateFirst); err != nil {
+		t.Fatalf("write late first response: %v", err)
+	}
+	secondResp := []byte(`{"jsonrpc":"2.0","id":2,"result":{"which":"second-response"}}` + "\n")
+	if _, err := stdoutW.Write(secondResp); err != nil {
+		t.Fatalf("write second response: %v", err)
+	}
+
+	select {
+	case r := <-req2Done:
+		if r.err != nil {
+			t.Fatalf("second SendRequest err: %v", r.err)
+		}
+		if !bytes.Contains(r.resp, []byte("second-response")) {
+			t.Errorf("second caller received cross-contaminated response: %s", r.resp)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("second SendRequest did not return")
+	}
+}
+
+// TestTranslator_LateResponseAfterCancelLogsElapsed locks in the
+// observability addition: when a SendRequest is canceled and the wrapped
+// child eventually responds, the "response for unknown id" log line
+// includes an elapsed= measurement so operators can distinguish a
+// response that arrived just-after-cancel from one that arrived much
+// later.
+func TestTranslator_LateResponseAfterCancelLogsElapsed(t *testing.T) {
+	stdinR, stdinW := io.Pipe()
+	stdoutR, stdoutW := io.Pipe()
+	t.Cleanup(func() { stdinW.Close(); stdoutW.Close() })
+
+	rl := &recordingLogger{}
+	tr := newTranslator(stdinW, stdoutR, rl)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = tr.Run(ctx) }()
+
+	// Drain stdin so SendRequest unblocks the writer goroutine.
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			if _, err := stdinR.Read(buf); err != nil {
+				return
+			}
+		}
+	}()
+
+	reqCtx, reqCancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		reqCancel()
+	}()
+	_, err := tr.SendRequest(reqCtx, "9",
+		[]byte(`{"jsonrpc":"2.0","id":9,"method":"slow"}`))
+	if err != context.Canceled {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+
+	// Wrapped child eventually responds.
+	late := []byte(`{"jsonrpc":"2.0","id":9,"result":{"finally":true}}` + "\n")
+	_, _ = stdoutW.Write(late)
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		rl.mu.Lock()
+		var foundElapsed bool
+		for _, line := range rl.lines {
+			if strings.Contains(line, "response for unknown id %s elapsed=%s") {
+				foundElapsed = true
+				break
+			}
+		}
+		rl.mu.Unlock()
+		if foundElapsed {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Errorf("did not see expected unknown-id-with-elapsed log; got: %v", rl.lines)
 }
 
 func TestTranslator_RequestContextCancelDropsPending(t *testing.T) {
