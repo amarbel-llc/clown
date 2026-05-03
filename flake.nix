@@ -69,14 +69,20 @@
       let
         lib = pkgs.lib;
 
-        gemma3-270m-model = pkgs.fetchurl {
+        # GGUF model fetches via the fork's `fetchGgufModel` wrapper.
+        # Same content as `pkgs.fetchurl`, but takes hex sha256
+        # directly (matching what HuggingFace surfaces) and names
+        # the output `<name>.gguf` so the store path is intelligible.
+        gemma3-270m-model = pkgs.fetchGgufModel {
+          name = "gemma-3-270m-it-Q8_0";
           url = "https://huggingface.co/ggml-org/gemma-3-270m-it-GGUF/resolve/main/gemma-3-270m-it-Q8_0.gguf";
-          hash = "sha256-DvV9LIOEWKGVJmQmDcujjlvdo3SU869zLwbkrdJAaOM=";
+          sha256 = "sha256-DvV9LIOEWKGVJmQmDcujjlvdo3SU869zLwbkrdJAaOM=";
         };
 
-        qwen3-06b-model = pkgs.fetchurl {
+        qwen3-06b-model = pkgs.fetchGgufModel {
+          name = "Qwen3-0.6B-Q8_0";
           url = "https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf";
-          hash = "sha256-lGXmOiKt1TVNm7S5npARcEPHEkAHZkkHJZvRbQQ7sDE=";
+          sha256 = "sha256-lGXmOiKt1TVNm7S5npARcEPHEkAHZkkHJZvRbQQ7sDE=";
         };
 
         # Subagent definitions use TOML frontmatter (+++ delimiters) so Nix
@@ -639,6 +645,112 @@
             };
           });
 
+        # Bats integration lane via the fork's pkgs.testers.batsLane.
+        # Stages tests/bats/ into the build sandbox, exports binaries
+        # under stable env-var names, and runs `bats --jobs N
+        # [--filter-tags <filter>] *.bats`. The base derivation is the
+        # default mkClownPkg purely for naming — the lane consumes the
+        # individual subpackages by store path so it doesn't rebuild
+        # Go on filter changes.
+        # The inspect-compiled helper uses `#!/usr/bin/env bash` for
+        # devshell portability, but the nix build sandbox has no
+        # /usr/bin/env. Stage a shebang-patched copy via patchShebangs
+        # so clown-plugin-host can exec it directly inside the lane.
+        inspectCompiledPatched = pkgs.runCommand "inspect-compiled" { } ''
+          cp ${./tests/scripts/inspect-compiled} $out
+          chmod +x $out
+          patchShebangs $out
+        '';
+
+        # Race-detector variant of clown-go. Built via the fork's
+        # buildGoRace helper — overrides clown-go with CGO_ENABLED=1
+        # and `go build -race`, plus a `-race` checkPhase. Surfaced
+        # as packages.clown-race; not a release artifact (race-
+        # instrumented binaries are slower).
+        clown-go-race = pkgs.buildGoRace {
+          base = mkClownGo {
+            defaultProvider = defaultDefaultProvider;
+            defaultProfile = defaultDefaultProfile;
+          };
+        };
+
+        # Naming anchor for the lane derivation — only consulted for
+        # `${base.pname}-bats-${suffix}`. Use the underlying
+        # buildGoApplication (which has `pname = "clown"`) rather
+        # than the symlinkJoin'd mkClownPkg, which has only `name`.
+        # The actual binaries the tests invoke are exported via the
+        # `binaries` attrset below.
+        clownBatsBase =
+          mkClownGo {
+            defaultProvider = defaultDefaultProvider;
+            defaultProfile = defaultDefaultProfile;
+          };
+
+        mkClownBatsLane =
+          { filter ? "" }:
+          pkgs.testers.batsLane {
+            inherit filter;
+            base = clownBatsBase;
+            batsSrc = ./tests/bats;
+            binaries = {
+              CLOWN_STDIO_BRIDGE_BIN = {
+                base = clown-stdio-bridge;
+                name = "clown-stdio-bridge";
+              };
+              CLOWN_PLUGIN_HOST_BIN = {
+                base = clown-plugin-host;
+                name = "clown-plugin-host";
+              };
+              MOCK_STDIO_MCP_BIN = {
+                base = mock-stdio-mcp;
+                name = "mock-stdio-mcp";
+              };
+            };
+            extraEnv = {
+              SYNTHETIC_PLUGIN_DIR = "${synthetic-plugin}";
+            };
+            # plugin_host.bats invokes the inspect-compiled helper as
+            # a downstream of clown-plugin-host. Stage it next to the
+            # *.bats files so $BATS_TEST_DIRNAME/inspect-compiled
+            # resolves it inside the sandbox.
+            extraStagedFiles = [
+              {
+                src = inspectCompiledPatched;
+                dest = "zz-tests_bats/inspect-compiled";
+              }
+            ];
+            nativeBuildInputs = with pkgs; [ curl jq coreutils ];
+          };
+
+        # Auto-discover `# bats file_tags=...` directives across
+        # tests/bats/*.bats and produce one lane per unique tag plus
+        # an unfiltered `bats-default` lane. Lifted from
+        # amarbel-llc/madder/go/default.nix.
+        batsLaneOutputs =
+          let
+            batsFiles = builtins.filter
+              (f: lib.hasSuffix ".bats" f)
+              (builtins.attrNames (builtins.readDir ./tests/bats));
+            extractFileTags = file:
+              let
+                content = builtins.readFile (./tests/bats + "/${file}");
+                tagLines = builtins.filter
+                  (l: lib.hasPrefix "# bats file_tags=" l)
+                  (lib.splitString "\n" content);
+              in
+                if tagLines == [ ] then [ ]
+                else lib.splitString ","
+                  (lib.removePrefix "# bats file_tags="
+                    (builtins.head tagLines));
+            allFileTags = lib.unique (lib.concatMap extractFileTags batsFiles);
+          in
+            lib.listToAttrs (map
+              (tag: lib.nameValuePair "bats-${tag}"
+                (mkClownBatsLane { filter = tag; }))
+              allFileTags) // {
+              bats-default = mkClownBatsLane { };
+            };
+
         mkCircus =
           { plugins ? [ ]
           , defaultProvider ? defaultDefaultProvider
@@ -654,6 +766,7 @@
             };
             devShells.default = pkgs.mkShell {
               packages = [
+                (pkgs.mkGoEnv { pwd = ./.; })
                 pkgs-master.just
                 pkgs.fish
                 pkgs-claude-code.claude-code
@@ -670,20 +783,35 @@
           };
       in
       {
-        packages.default = mkClownPkg { pluginMeta = emptyPluginMeta; };
-        packages.clown-manpages = clown-manpages;
-        packages.mock-stdio-mcp = mock-stdio-mcp;
-        packages.synthetic-plugin = synthetic-plugin;
+        packages = {
+          default = mkClownPkg { pluginMeta = emptyPluginMeta; };
+          clown-manpages = clown-manpages;
+          clown-race = clown-go-race;
+          mock-stdio-mcp = mock-stdio-mcp;
+          synthetic-plugin = synthetic-plugin;
+        } // batsLaneOutputs;
 
         checks = {
           managedSettingsRead = managedSettingsReadTest;
+          # bats-default runs every *.bats whose file_tags do NOT
+          # exclude it (filter is empty → no exclusion). If a test
+          # needs network/loopback the sandbox doesn't grant, tag it
+          # with `# bats file_tags=net_cap` and run via
+          # `nix build .#bats-net_cap` from a less-restricted env.
+          bats-default = batsLaneOutputs.bats-default;
         };
 
         devShells.default = pkgs.mkShell {
           packages = [
+            # mkGoEnv from the fork's overlay supersedes a bare
+            # `pkgs.go`: it materializes the module dependency tree
+            # from gomod2nix.toml so `go test ./...` from the
+            # devshell resolves modules through the same nix-built
+            # vendor closure as buildGoApplication does, instead of
+            # reaching out to GOPROXY for every fresh checkout.
+            (pkgs.mkGoEnv { pwd = ./.; })
             pkgs-master.just
             pkgs.fish
-            pkgs.go
             pkgs-claude-code.claude-code
             pkgs-codex.codex
             pkgs.opencode

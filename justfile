@@ -33,184 +33,23 @@ gomod2nix:
     gomod2nix generate
 
 # Integration test: launch clown-stdio-bridge wrapping a mock stdio
-# MCP server. Verifies the handshake/healthcheck path (skeleton-level)
-# AND the streamable-HTTP MCP translation path: client POSTs an
-# `initialize` request and receives a JSON response with the matching
-# id; client triggers a server-initiated notification via a
-# `notify-broadcast` request and observes it on the GET SSE stream.
+# MCP server. Verifies handshake/healthcheck and the streamable-HTTP
+# MCP translation path. Runs the bats suite via the nix sandbox lane
+# pkgs.testers.batsLane → tests/bats/stdio_bridge.bats. The bats
+# files are tagged `net_cap` because the bridge binds 127.0.0.1; the
+# `bats-net_cap` lane runs all such files.
 [group("test")]
-test-stdio-bridge: build
-    #!/usr/bin/env bash
-    set -euo pipefail
-    bin="./result/bin/clown-stdio-bridge"
-    mock=$(nix build .#mock-stdio-mcp --no-link --print-out-paths)/bin/mock-stdio-mcp
-    echo "Launching $bin --command $mock"
-    handshake_file=$(mktemp)
-    log_file=$(mktemp)
-    trap 'rm -f "$handshake_file" "$log_file"; kill "$bridge_pid" 2>/dev/null || true' EXIT
-    "$bin" --command "$mock" -- >"$handshake_file" 2>"$log_file" &
-    bridge_pid=$!
-    for _ in $(seq 1 30); do
-        if [[ -s "$handshake_file" ]]; then break; fi
-        sleep 0.1
-    done
-    handshake=$(head -n1 "$handshake_file")
-    if [[ -z "$handshake" ]]; then
-        echo "FAIL: bridge produced no handshake within 3 s" >&2
-        cat "$log_file" >&2
-        exit 1
-    fi
-    echo "handshake: $handshake"
-    if ! grep -qE '^1\|1\|tcp\|127\.0\.0\.1:[0-9]+\|streamable-http$' <<<"$handshake"; then
-        echo "FAIL: handshake does not match expected format" >&2
-        exit 1
-    fi
-    addr=$(awk -F'|' '{print $4}' <<<"$handshake")
-    base="http://$addr"
-
-    # /healthz baseline.
-    healthz_status=$(curl -s -o /dev/null -w '%{http_code}' "$base/healthz")
-    if [[ "$healthz_status" != "200" ]]; then
-        echo "FAIL: /healthz returned $healthz_status, want 200" >&2
-        exit 1
-    fi
-    echo "OK: /healthz returned 200"
-
-    # Round-trip: POST an initialize request, expect a JSON response
-    # with the same id.
-    init_resp=$(curl -sS -X POST "$base/mcp" \
-        -H 'Content-Type: application/json' \
-        -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}')
-    if ! grep -q '"id":1' <<<"$init_resp"; then
-        echo "FAIL: initialize response missing id=1: $init_resp" >&2
-        exit 1
-    fi
-    if ! grep -q 'mock-stdio-mcp' <<<"$init_resp"; then
-        echo "FAIL: initialize response missing serverInfo.name: $init_resp" >&2
-        exit 1
-    fi
-    echo "OK: initialize round-trip succeeded"
-
-    # tools/list: one mock tool.
-    tools_resp=$(curl -sS -X POST "$base/mcp" \
-        -H 'Content-Type: application/json' \
-        -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}')
-    if ! grep -q '"name":"echo"' <<<"$tools_resp"; then
-        echo "FAIL: tools/list response missing echo tool: $tools_resp" >&2
-        exit 1
-    fi
-    echo "OK: tools/list round-trip succeeded"
-
-    # SSE broadcast: open a GET SSE stream in the background, trigger
-    # a server-initiated notification via the mock's notify-broadcast
-    # method, observe the notification on the SSE stream.
-    sse_out=$(mktemp)
-    trap 'rm -f "$handshake_file" "$log_file" "$sse_out"; kill "$bridge_pid" 2>/dev/null || true' EXIT
-    curl -sNS "$base/mcp" >"$sse_out" 2>/dev/null &
-    sse_pid=$!
-    sleep 0.2
-    curl -sS -X POST "$base/mcp" \
-        -H 'Content-Type: application/json' \
-        -d '{"jsonrpc":"2.0","id":3,"method":"notify-broadcast"}' >/dev/null
-    deadline=$(($(date +%s) + 3))
-    while [[ $(date +%s) -lt $deadline ]]; do
-        if grep -q 'tools/list_changed' "$sse_out" 2>/dev/null; then break; fi
-        sleep 0.1
-    done
-    kill "$sse_pid" 2>/dev/null || true
-    wait "$sse_pid" 2>/dev/null || true
-    if ! grep -q 'tools/list_changed' "$sse_out"; then
-        echo "FAIL: SSE stream did not receive notifications/tools/list_changed" >&2
-        echo "--- sse_out ---" >&2
-        cat "$sse_out" >&2
-        echo "--- bridge log ---" >&2
-        cat "$log_file" >&2
-        exit 1
-    fi
-    echo "OK: SSE broadcast received server-initiated notification"
-
-    kill -TERM "$bridge_pid"
-    wait "$bridge_pid" 2>/dev/null || true
-    echo "OK: clown-stdio-bridge integration test passed"
+test-stdio-bridge:
+    nix build .#bats-net_cap --no-link --print-build-logs
 
 # Integration test: launch clown-plugin-host with the synthetic plugin's
-# clown.json and verify the mock HTTP MCP server starts, completes the
-# handshake, passes health checks, compiles plugin manifests with
-# URL-based MCP entries, and preserves original server names.
+# clown.json and verify URL-based MCP compilation, name preservation,
+# and agents field passthrough. Runs the bats suite via the nix sandbox
+# lane → tests/bats/plugin_host.bats. Same `bats-net_cap` lane as
+# test-stdio-bridge (both files share the net_cap tag).
 [group("test")]
-test-plugin-host: build
-    #!/usr/bin/env bash
-    set -euo pipefail
-    plugin_dir=$(nix build .#synthetic-plugin --no-link --print-out-paths)
-    echo "Starting clown-plugin-host with synthetic plugin..."
-    # The inspect-compiled helper extracts the compiled plugin.json
-    # before clown-plugin-host cleans up the staging dir on shutdown.
-    output=$(timeout 30 ./result/bin/clown-plugin-host \
-        --plugin-dir "$plugin_dir" \
-        -- "$(pwd)/tests/scripts/inspect-compiled" 2>&1) || {
-        echo "FAIL: clown-plugin-host exited with $?" >&2
-        echo "$output" >&2
-        exit 1
-    }
-    echo "$output"
-    # Verify the downstream received a compiled --plugin-dir
-    if echo "$output" | grep -qE 'COMPILED_PLUGIN_DIR=.*/clown-plugin-compile-'; then
-        echo "OK: downstream received compiled --plugin-dir"
-    else
-        echo "FAIL: downstream did not receive a clown-plugin-compile-* --plugin-dir path" >&2
-        exit 1
-    fi
-    # Extract the compiled plugin.json and verify injected mcpServers
-    compiled_json=$(echo "$output" | sed -n '/COMPILED_PLUGIN_JSON_START/,/COMPILED_PLUGIN_JSON_END/p' \
-        | grep -v 'COMPILED_PLUGIN_JSON_')
-    if [[ -z "$compiled_json" ]]; then
-        echo "FAIL: could not extract compiled plugin.json from output" >&2
-        exit 1
-    fi
-    echo "Compiled plugin.json:"
-    echo "$compiled_json"
-    # Server name must be "mock-mcp" (original clown.json key), not renamed
-    if echo "$compiled_json" | jq -e '.mcpServers["mock-mcp"]' >/dev/null 2>&1; then
-        echo "OK: mcpServers contains 'mock-mcp' (original server name preserved)"
-    else
-        echo "FAIL: mcpServers does not contain 'mock-mcp' key" >&2
-        exit 1
-    fi
-    # Entry must be url-based (type + url), not command-based
-    entry_type=$(echo "$compiled_json" | jq -r '.mcpServers["mock-mcp"].type')
-    entry_url=$(echo "$compiled_json" | jq -r '.mcpServers["mock-mcp"].url')
-    if [[ "$entry_type" == "http" ]]; then
-        echo "OK: type is 'http'"
-    else
-        echo "FAIL: type = '$entry_type', want 'http'" >&2
-        exit 1
-    fi
-    if [[ "$entry_url" =~ ^http://127\.0\.0\.1:[0-9]+/mcp$ ]]; then
-        echo "OK: url matches http://127.0.0.1:<port>/mcp pattern"
-    else
-        echo "FAIL: url = '$entry_url', want http://127.0.0.1:<port>/mcp" >&2
-        exit 1
-    fi
-    # Original command-based entry must be gone
-    if echo "$compiled_json" | jq -e '.mcpServers["mock-mcp"].command' >/dev/null 2>&1; then
-        echo "FAIL: command field still present in compiled entry" >&2
-        exit 1
-    fi
-    echo "OK: no command field in compiled entry"
-    # Other fields (name, agents) must survive compilation
-    if echo "$compiled_json" | jq -e '.name == "synthetic-test"' >/dev/null 2>&1; then
-        echo "OK: name field preserved"
-    else
-        echo "FAIL: name field lost or changed" >&2
-        exit 1
-    fi
-    if echo "$compiled_json" | jq -e '.agents | length > 0' >/dev/null 2>&1; then
-        echo "OK: agents field preserved"
-    else
-        echo "FAIL: agents field lost" >&2
-        exit 1
-    fi
-    echo "OK: plugin-host integration test passed"
+test-plugin-host:
+    nix build .#bats-net_cap --no-link --print-build-logs
 
 # Integration test: launch clown-plugin-host with the real moxy MCP server as
 # a plugin, exercising the clown-plugin-protocol against a production server
