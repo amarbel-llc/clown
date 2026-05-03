@@ -74,6 +74,7 @@ func runTranslator(t *testing.T) (*translator, func()) {
 }
 
 func TestHTTP_PostRequestReturnsResponse(t *testing.T) {
+	t.Setenv(heartbeatEnvVar, "0") // exercise the legacy synchronous JSON path
 	tr, cleanup := runTranslator(t)
 	defer cleanup()
 
@@ -90,6 +91,9 @@ func TestHTTP_PostRequestReturnsResponse(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
+	if got := resp.Header.Get("Content-Type"); got != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", got)
+	}
 	got, _ := io.ReadAll(resp.Body)
 	var out map[string]any
 	if err := json.Unmarshal(got, &out); err != nil {
@@ -97,6 +101,165 @@ func TestHTTP_PostRequestReturnsResponse(t *testing.T) {
 	}
 	if id, _ := out["id"].(float64); id != 1 {
 		t.Errorf("response id = %v, want 1", out["id"])
+	}
+}
+
+func TestHTTP_PostRequestReturnsSSEByDefault(t *testing.T) {
+	// Heartbeat env var unset → default cadence → SSE response.
+	tr, cleanup := runTranslator(t)
+	defer cleanup()
+
+	h := &httpHandler{t: tr, logger: nullLogger{}}
+	srv := httptest.NewServer(http.HandlerFunc(h.handleMCP))
+	defer srv.Close()
+
+	body := `{"jsonrpc":"2.0","id":1,"method":"ping"}`
+	resp, err := http.Post(srv.URL, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Content-Type"); got != "text/event-stream" {
+		t.Errorf("Content-Type = %q, want text/event-stream", got)
+	}
+	got, _ := io.ReadAll(resp.Body)
+	if !bytes.Contains(got, []byte("data:")) {
+		t.Errorf("SSE body missing data: prefix; got %q", got)
+	}
+	if !bytes.Contains(got, []byte(`"id":1`)) {
+		t.Errorf("SSE body missing response id; got %q", got)
+	}
+}
+
+// TestHTTP_PostStreamingHeartbeatProgressToken verifies that when the
+// request includes a progressToken, slow responses are kept alive by
+// notifications/progress events referencing that token. This is the
+// resetTimeoutOnProgress hook path.
+func TestHTTP_PostStreamingHeartbeatProgressToken(t *testing.T) {
+	t.Setenv(heartbeatEnvVar, "20ms")
+
+	stdinR, stdinW := io.Pipe()
+	stdoutR, stdoutW := io.Pipe()
+	tr := newTranslator(stdinW, stdoutR, nullLogger{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = tr.Run(ctx) }()
+	defer func() {
+		_ = stdinR.Close()
+		_ = stdinW.Close()
+		_ = stdoutR.Close()
+		_ = stdoutW.Close()
+	}()
+
+	// Slow wrapped child: read request, wait 80 ms (≥4 heartbeat
+	// intervals), then echo response.
+	go func() {
+		buf := make([]byte, 4096)
+		n, err := stdinR.Read(buf)
+		if err != nil {
+			return
+		}
+		var msg map[string]any
+		if jerr := json.Unmarshal(bytes.TrimSpace(buf[:n]), &msg); jerr != nil {
+			return
+		}
+		time.Sleep(80 * time.Millisecond)
+		resp := map[string]any{
+			"jsonrpc": "2.0",
+			"id":      msg["id"],
+			"result":  map[string]any{"slow": true},
+		}
+		out, _ := json.Marshal(resp)
+		_, _ = stdoutW.Write(append(out, '\n'))
+	}()
+
+	h := &httpHandler{t: tr, logger: nullLogger{}}
+	srv := httptest.NewServer(http.HandlerFunc(h.handleMCP))
+	defer srv.Close()
+
+	body := `{"jsonrpc":"2.0","id":7,"method":"slow","params":{"_meta":{"progressToken":"tok-7"}}}`
+	resp, err := http.Post(srv.URL, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+	if got := resp.Header.Get("Content-Type"); got != "text/event-stream" {
+		t.Fatalf("Content-Type = %q, want text/event-stream", got)
+	}
+	got, _ := io.ReadAll(resp.Body)
+	if !bytes.Contains(got, []byte(`"method":"notifications/progress"`)) {
+		t.Errorf("expected at least one notifications/progress event; got %q", got)
+	}
+	if !bytes.Contains(got, []byte(`"progressToken":"tok-7"`)) {
+		t.Errorf("expected progressToken \"tok-7\" echoed in heartbeat; got %q", got)
+	}
+	if !bytes.Contains(got, []byte(`"id":7`)) {
+		t.Errorf("expected final response id=7 on the SSE stream; got %q", got)
+	}
+}
+
+// TestHTTP_PostStreamingHeartbeatNoProgressToken verifies the fallback
+// path: requests without a progressToken still get keep-alive activity,
+// but as SSE comments rather than notifications/progress (per spec —
+// progress notifications MUST reference a token from the request).
+func TestHTTP_PostStreamingHeartbeatNoProgressToken(t *testing.T) {
+	t.Setenv(heartbeatEnvVar, "20ms")
+
+	stdinR, stdinW := io.Pipe()
+	stdoutR, stdoutW := io.Pipe()
+	tr := newTranslator(stdinW, stdoutR, nullLogger{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = tr.Run(ctx) }()
+	defer func() {
+		_ = stdinR.Close()
+		_ = stdinW.Close()
+		_ = stdoutR.Close()
+		_ = stdoutW.Close()
+	}()
+
+	go func() {
+		buf := make([]byte, 4096)
+		n, err := stdinR.Read(buf)
+		if err != nil {
+			return
+		}
+		var msg map[string]any
+		if jerr := json.Unmarshal(bytes.TrimSpace(buf[:n]), &msg); jerr != nil {
+			return
+		}
+		time.Sleep(80 * time.Millisecond)
+		resp := map[string]any{
+			"jsonrpc": "2.0",
+			"id":      msg["id"],
+			"result":  map[string]any{"slow": true},
+		}
+		out, _ := json.Marshal(resp)
+		_, _ = stdoutW.Write(append(out, '\n'))
+	}()
+
+	h := &httpHandler{t: tr, logger: nullLogger{}}
+	srv := httptest.NewServer(http.HandlerFunc(h.handleMCP))
+	defer srv.Close()
+
+	body := `{"jsonrpc":"2.0","id":8,"method":"slow"}`
+	resp, err := http.Post(srv.URL, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+	got, _ := io.ReadAll(resp.Body)
+	if bytes.Contains(got, []byte(`"method":"notifications/progress"`)) {
+		t.Errorf("did not expect notifications/progress without a token; got %q", got)
+	}
+	if !bytes.Contains(got, []byte(": heartbeat")) {
+		t.Errorf("expected SSE comment heartbeat; got %q", got)
+	}
+	if !bytes.Contains(got, []byte(`"id":8`)) {
+		t.Errorf("expected final response id=8; got %q", got)
 	}
 }
 
