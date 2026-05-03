@@ -1,4 +1,4 @@
 # vim: set ft=toml
 
 [hooks]
-pre-merge = "sleep 60 && just"
+pre-merge = "just"
