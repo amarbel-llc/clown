@@ -254,6 +254,13 @@ func runWithFlags(flags parsedFlags) int {
 	}
 }
 
+// clownboxDisabledMessage is returned by resolveProvider when the
+// clownbox provider is requested in a build that omits its closure.
+// The build-time ldflag leaves ClownboxCliPath as the empty string when
+// clownbox is disabled; revive it by restoring the Nix derivation chain
+// and the ldflag (see flake.nix).
+const clownboxDisabledMessage = "clownbox provider is disabled in this build"
+
 // Executor abstracts how a provider receives its argv. The plugin-host
 // pipeline is identical for claude and clownbox; only the final exec
 // differs. claude takes args directly; clownbox prepends `--` so its
@@ -728,6 +735,9 @@ func resolveProvider(name string) (string, error) {
 	case "opencode":
 		return buildcfg.OpencodeCliPath, nil
 	case "clownbox":
+		if buildcfg.ClownboxCliPath == "" {
+			return "", fmt.Errorf("%s", clownboxDisabledMessage)
+		}
 		return buildcfg.ClownboxCliPath, nil
 	default:
 		return "", fmt.Errorf("unknown provider %q", name)
@@ -786,7 +796,7 @@ func printHelp() {
 	fmt.Printf(`Usage: clown [clown-flags] -- [provider-args]
 
 Clown flags (must appear before --):
-  --provider <name>          Provider to use: claude, codex, circus, opencode, clownbox (default: %s)
+  --provider <name>          Provider to use: claude, codex, circus, opencode (default: %s)
   --profile <name>           Profile name; implies --provider from profile config%s
   --naked                    Pass through to provider without clown wrapping
   --skip-failed              Continue if plugin servers fail to start

@@ -22,11 +22,12 @@ Clown wraps the `claude` binary with four additions:
 1. **Bash disabled by default** — passes `--disallowed-tools 'Bash(*)'` to
    every invocation.
 
-2. **Auto-mode disabled permanently** — the `claude-code` bundle is patched
-   to read its managed-settings from clown's own store path, which ships
-   with `permissions.disableAutoMode: "disable"`. Managed settings sit at
-   the highest precedence tier, so neither user settings nor CLI flags can
-   re-enable auto-mode through clown.
+2. **Auto-mode and auto-memory disabled permanently** — the `claude-code`
+   bundle is patched to read its managed-settings from clown's own store
+   path, which ships with `permissions.disableAutoMode: "disable"` and
+   `autoMemoryEnabled: false`. Managed settings sit at the highest
+   precedence tier, so neither user settings nor CLI flags can re-enable
+   either feature through clown.
 
 3. **Hierarchical system prompt injection** — walks from `$PWD` up to `$HOME`,
    collecting `.circus/` directories along the way:

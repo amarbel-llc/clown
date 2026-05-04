@@ -53,8 +53,9 @@ The flake produces a `symlinkJoin` of five components:
    - The `claude-code` derivation is patched to redirect its managed-settings
      path from `/etc/claude-code` to `$out/etc/claude`, and a managed
      `managed-settings.json` is shipped with `permissions.disableAutoMode:
-     "disable"`. Auto-mode is therefore permanently unavailable through
-     clown regardless of user settings, project settings, or CLI flags.
+     "disable"` and `autoMemoryEnabled: false`. Auto-mode and auto-memory
+     are therefore permanently unavailable through clown regardless of
+     user settings, project settings, or CLI flags.
 
    **Plugin manifest compilation.** When a plugin has both `clown.json`
    (HTTP MCP servers) and `.claude-plugin/plugin.json` (claude-native

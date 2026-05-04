@@ -19,14 +19,6 @@
     # llama-cpp with Anthropic Messages API (/v1/messages) support — requires
     # PR #17570 (merged 2025-11-28). Build 6981 in nixos-25.11 predates it.
     nixpkgs-llama.url = "github:amarbel-llc/nixpkgs/3b5a614454bd054dd960f1ff7a888dc5dfaf7bb4";
-    # numtide/claudebox source — patched in-tree to add `--` arg
-    # passthrough so clown's BuildClaudeArgs flags reach the inner claude.
-    # Pinned by commit SHA (tag v0.2.0) so version-tag retags don't
-    # silently change the build.
-    claudebox-src = {
-      url = "github:numtide/claudebox/33a7705a6232acfe77397e20c8710456221277a1";
-      flake = false;
-    };
   };
 
   outputs =
@@ -38,7 +30,6 @@
       nixpkgs-codex,
       nixpkgs-llama,
       utils,
-      claudebox-src,
     }:
     utils.lib.eachDefaultSystem (
       system:
@@ -355,6 +346,13 @@
                 "Bash(wget * | sh)"
               ];
             };
+            # Disable auto-memory. The feature persists cross-session
+            # learnings under ~/.claude/projects/<project>/memory/ and
+            # auto-loads MEMORY.md into every session's context. Managed-
+            # tier setting; per docs, cannot be overridden by user, project,
+            # local, or CLI scopes. Applies to both naked and sandboxed
+            # variants — orthogonal to bypass-permissions posture.
+            autoMemoryEnabled = false;
             # Replace Claude's stock commit/PR attribution with clown's. The
             # system-prompt append (00-identity.md) still tells the model to
             # sign off in chat and non-git contexts; these keys enforce the
@@ -395,7 +393,6 @@
         );
 
         clownManagedSettings = mkClownManagedSettings { allowBypass = false; };
-        clownManagedSettingsSandboxed = mkClownManagedSettings { allowBypass = true; };
 
         # Patch upstream claude-code to read its managed-settings from a path
         # under its own $out instead of /etc/claude-code, then ship the
@@ -449,43 +446,19 @@
             });
 
         patchedClaudeCode = mkPatchedClaudeCode clownManagedSettings;
-        # Sandboxed variant: same patched cli.js, different managed
-        # settings (allowBypass = true). Used only by the clownbox
-        # provider; the bubblewrap sandbox bounds what bypass actually
-        # buys an attacker.
-        patchedClaudeCodeSandboxed = mkPatchedClaudeCode clownManagedSettingsSandboxed;
 
         claudeCliPath = "${patchedClaudeCode}/bin/claude";
         codexCliPath = "${pkgs-codex.codex}/bin/codex";
         llamaServerPath = "${pkgs-llama.llama-cpp}/bin/llama-server";
 
-        # clownbox: a fork of numtide/claudebox patched to forward args
-        # after `--` to the inner claude invocation, and to bake the
-        # absolute path of the inner claude binary into the bwrap'd shell
-        # script. Upstream hardcodes `exec claude --dangerously-skip-
-        # permissions` and relies on the host's $PATH being inherited
-        # into the sandbox (claudebox.js captures process.env.PATH and
-        # forwards via --setenv PATH), which silently fails when
-        # claudebox is launched from a shell that doesn't have `claude`
-        # on PATH. The substituted absolute path removes that dependency.
-        # See nix/patches/claudebox-arg-passthrough.patch for the diff.
-        patchedClownboxSrc = pkgs.applyPatches {
-          name = "clownbox-src";
-          src = claudebox-src;
-          patches = [ ./nix/patches/claudebox-arg-passthrough.patch ];
-          postPatch = ''
-            substituteInPlace src/claudebox.js \
-              --replace-fail '@CLOWNBOX_CLAUDE_BINARY@' '${patchedClaudeCodeSandboxed}/bin/claude'
-          '';
-        };
-
-        clownbox = import "${claudebox-src}/package.nix" {
-          inherit pkgs;
-          claude-code = patchedClaudeCodeSandboxed;
-          sourceDir = "${patchedClownboxSrc}/src";
-        };
-
-        clownboxCliPath = "${clownbox}/bin/claudebox";
+        # clownbox provider is currently disabled at the build level to
+        # avoid pulling in the extra patched-claude-code closure plus the
+        # numtide/claudebox source. The Go runtime treats an empty
+        # ClownboxCliPath as "provider unavailable" and errors at dispatch.
+        # To re-enable, restore the claudebox-src flake input,
+        # patchedClownboxSrc / clownbox / clownboxCliPath derivations, the
+        # sandboxed managed-settings variant, and the ldflag below.
+        clownboxCliPath = "";
 
         # Thin wrapper: sets CLOWN_PLUGIN_META (varies per mkCircus) then
         # execs the Go binary. All flag parsing, provider routing, and

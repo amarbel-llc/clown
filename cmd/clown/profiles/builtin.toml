@@ -25,10 +25,3 @@ display = "OpenCode (Local)"
 provider = "opencode"
 backend = "local"
 model = "qwen3-coder"
-
-[[profile]]
-name = "clownbox-anthropic"
-display = "Claude (Sandboxed)"
-provider = "clownbox"
-backend = "anthropic"
-model = "claude-sonnet-4-6"

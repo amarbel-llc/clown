@@ -1,22 +1,5 @@
 {
   "nodes": {
-    "claudebox-src": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1769290057,
-        "narHash": "sha256-4C+e9K0Mq+OfBIH9u/EdzrtXLXVqWBfndAC2BHU+JhE=",
-        "owner": "numtide",
-        "repo": "claudebox",
-        "rev": "33a7705a6232acfe77397e20c8710456221277a1",
-        "type": "github"
-      },
-      "original": {
-        "owner": "numtide",
-        "repo": "claudebox",
-        "rev": "33a7705a6232acfe77397e20c8710456221277a1",
-        "type": "github"
-      }
-    },
     "nixpkgs": {
       "inputs": {
         "nixpkgs": "nixpkgs_2"
@@ -117,7 +100,6 @@
     },
     "root": {
       "inputs": {
-        "claudebox-src": "claudebox-src",
         "nixpkgs": "nixpkgs",
         "nixpkgs-claude-code": "nixpkgs-claude-code",
         "nixpkgs-codex": "nixpkgs-codex",
