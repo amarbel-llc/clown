@@ -67,6 +67,21 @@ loopback HTTP, speaking the same handshake protocol as a native HTTP
 server.
 After desugaring, stdio-declared and HTTP-declared servers share a
 single discovery, lifecycle, and manifest-compilation path.
+.Pp
+A
+.Pa clown.json
+MAY also declare a
+.Fa monitors
+array.
+Monitor declarations are recorded keyed by plugin directory at
+discovery time and flow through manifest compilation
+.Pq see Sx PLUGIN MANIFEST COMPILATION ;
+they require no child process under clown's supervision because Claude
+Code itself spawns and manages each monitor.
+A plugin whose
+.Pa clown.json
+declares only monitors (no servers) still has its manifest compiled so
+the array reaches Claude Code.
 .Sh HANDSHAKE PROTOCOL
 Each HTTP MCP server MUST print a single pipe-delimited line to stdout
 before serving requests:
@@ -163,12 +178,19 @@ log records for later inspection.
 .Sh PLUGIN MANIFEST COMPILATION
 For each plugin directory whose
 .Pa clown.json
-contributed at least one HTTP MCP server,
+contributed at least one HTTP MCP server
+.Em or
+declared a non-empty
+.Fa monitors
+array,
 .Xr clown-plugin-host 1
 .Em compiles
 a replacement plugin manifest that replaces the original stdio-based
 .Li mcpServers
-entries with URL-based entries pointing at the running HTTP servers.
+entries with URL-based entries pointing at the running HTTP servers
+and injects the
+.Fa monitors
+array as a top-level key.
 This preserves plugin identity and original server names in Claude Code
 while switching the transport from stdio to HTTP.
 .Pp
@@ -211,6 +233,24 @@ to override Claude Code's default per-tool MCP request timeout.
 Server names in the compiled manifest match the original keys from
 .Pa clown.json ,
 preserving hook matching and plugin identity.
+.It
+If
+.Pa clown.json
+declared a non-empty
+.Fa monitors
+array, inject it as a top-level
+.Li monitors
+key in the staged
+.Pa plugin.json .
+It is an error for the source
+.Pa .claude-plugin/plugin.json
+to also declare a
+.Li monitors
+key; the host refuses compilation rather than silently dropping either
+source.
+Monitors are passed through verbatim
+.Pq no Li ${...} No expansion, no validation of skill names referenced by Li when ;
+Claude Code performs all expansion at session time.
 .El
 .Pp
 Claude Code is handed the staged directory via

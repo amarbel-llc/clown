@@ -147,6 +147,38 @@ print a handshake line to stdout (`1|1|tcp|<addr>|streamable-http`), and
 respond to health checks. See [RFC 0002](docs/rfcs/0002-clown-plugin-protocol.md)
 for the full specification.
 
+### Background monitors (`clown.json`)
+
+A plugin can also declare background-shell monitors in `clown.json`. Each entry
+mirrors Anthropic's plugin monitor schema and is injected verbatim into the
+compiled `.claude-plugin/plugin.json` so Claude Code (≥ v2.1.105) handles
+spawning, `${...}` substitution, and lifecycle. Each stdout line from the
+monitor command surfaces in the chat as a notification.
+
+```json
+{
+  "version": 1,
+  "monitors": [
+    {
+      "name": "error-log",
+      "command": "tail -F ${CLAUDE_PLUGIN_ROOT}/logs/error.log",
+      "description": "Application error log"
+    },
+    {
+      "name": "deploy-status",
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/poll-deploy.sh",
+      "description": "Deployment status changes",
+      "when": "on-skill-invoke:debug"
+    }
+  ]
+}
+```
+
+Clown does not spawn or supervise monitors — Claude Code does. It is an error
+for both `clown.json` and the same plugin's `.claude-plugin/plugin.json` to
+declare a `monitors` key; pick one source. See `clown-json(5)` for the full
+schema and validation rules.
+
 ## .circus directory
 
 Place prompt fragments anywhere in your directory hierarchy:
