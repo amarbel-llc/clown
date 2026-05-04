@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -357,6 +358,128 @@ func TestPluginName(t *testing.T) {
 	}
 	if name != "test-plugin" {
 		t.Errorf("name = %q, want %q", name, "test-plugin")
+	}
+}
+
+func TestLoadClownConfig_Monitors(t *testing.T) {
+	dir := t.TempDir()
+	writeJSON(t, filepath.Join(dir, "clown.json"), map[string]any{
+		"version":     1,
+		"httpServers": map[string]any{},
+		"monitors": []any{
+			map[string]any{
+				"name":        "deploy-status",
+				"command":     "${CLAUDE_PLUGIN_ROOT}/scripts/poll-deploy.sh",
+				"description": "Deployment status changes",
+			},
+			map[string]any{
+				"name":        "error-log",
+				"command":     "tail -F ./logs/error.log",
+				"description": "Application error log",
+				"when":        "on-skill-invoke:debug",
+			},
+		},
+	})
+
+	cfg, err := LoadClownConfig(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Monitors) != 2 {
+		t.Fatalf("monitors = %d, want 2", len(cfg.Monitors))
+	}
+	if cfg.Monitors[0].Name != "deploy-status" {
+		t.Errorf("monitors[0].name = %q", cfg.Monitors[0].Name)
+	}
+	if cfg.Monitors[0].When != "" {
+		t.Errorf("monitors[0].when = %q, want empty", cfg.Monitors[0].When)
+	}
+	if cfg.Monitors[1].When != "on-skill-invoke:debug" {
+		t.Errorf("monitors[1].when = %q", cfg.Monitors[1].When)
+	}
+}
+
+func TestLoadClownConfig_MonitorsOmitEmpty(t *testing.T) {
+	dir := t.TempDir()
+	writeJSON(t, filepath.Join(dir, "clown.json"), map[string]any{
+		"version":     1,
+		"httpServers": map[string]any{},
+	})
+
+	cfg, err := LoadClownConfig(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Monitors != nil {
+		t.Errorf("monitors = %v, want nil", cfg.Monitors)
+	}
+}
+
+func TestLoadClownConfig_MonitorsValidation(t *testing.T) {
+	cases := []struct {
+		name     string
+		monitor  map[string]any
+		wantSubs string
+	}{
+		{
+			name:     "missing-name",
+			monitor:  map[string]any{"command": "echo x", "description": "d"},
+			wantSubs: "name is required",
+		},
+		{
+			name:     "missing-command",
+			monitor:  map[string]any{"name": "m", "description": "d"},
+			wantSubs: "command is required",
+		},
+		{
+			name:     "missing-description",
+			monitor:  map[string]any{"name": "m", "command": "echo x"},
+			wantSubs: "description is required",
+		},
+		{
+			name:     "bad-when",
+			monitor:  map[string]any{"name": "m", "command": "echo x", "description": "d", "when": "sometimes"},
+			wantSubs: `when="sometimes"`,
+		},
+		{
+			name:     "bad-skill-form",
+			monitor:  map[string]any{"name": "m", "command": "echo x", "description": "d", "when": "on-skill-invoke:"},
+			wantSubs: `when="on-skill-invoke:"`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeJSON(t, filepath.Join(dir, "clown.json"), map[string]any{
+				"version":  1,
+				"monitors": []any{tc.monitor},
+			})
+			_, err := LoadClownConfig(dir)
+			if err == nil {
+				t.Fatalf("expected error matching %q, got nil", tc.wantSubs)
+			}
+			if !strings.Contains(err.Error(), tc.wantSubs) {
+				t.Errorf("err = %q, want substring %q", err.Error(), tc.wantSubs)
+			}
+		})
+	}
+}
+
+func TestLoadClownConfig_MonitorsDuplicateName(t *testing.T) {
+	dir := t.TempDir()
+	writeJSON(t, filepath.Join(dir, "clown.json"), map[string]any{
+		"version": 1,
+		"monitors": []any{
+			map[string]any{"name": "dup", "command": "echo a", "description": "first"},
+			map[string]any{"name": "dup", "command": "echo b", "description": "second"},
+		},
+	})
+	_, err := LoadClownConfig(dir)
+	if err == nil {
+		t.Fatal("expected duplicate-name error")
+	}
+	if !strings.Contains(err.Error(), `duplicate name "dup"`) {
+		t.Errorf("err = %q, want duplicate-name message", err.Error())
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -23,6 +24,14 @@ type ClownConfig struct {
 	// (discovery, lifecycle, manifest compilation) treats them
 	// uniformly with native HTTP servers. See FDR 0002.
 	StdioServers map[string]StdioServerDef `json:"stdioServers,omitempty"`
+	// Monitors declares background shell commands whose stdout lines
+	// Claude Code streams into the chat as notifications. clown does
+	// not spawn or supervise monitors; the compile step injects this
+	// array verbatim into the produced .claude-plugin/plugin.json so
+	// Claude Code (>= 2.1.105) handles spawning, ${...} substitution,
+	// and lifecycle. See man clown-json(5) and Anthropic's plugin
+	// monitors reference.
+	Monitors []MonitorDef `json:"monitors,omitempty"`
 }
 
 type ServerDef struct {
@@ -48,6 +57,22 @@ type StdioServerDef struct {
 	// Timeout has the same semantics as ServerDef.Timeout: when
 	// non-zero, propagates to the compiled plugin.json entry.
 	Timeout int `json:"timeout,omitempty"`
+}
+
+// MonitorDef mirrors Anthropic's plugin monitor schema exactly. Fields
+// are passed through to the compiled .claude-plugin/plugin.json
+// verbatim; clown does no ${...} substitution, no spawning, and no
+// supervision. Claude Code owns the runtime.
+type MonitorDef struct {
+	Name        string `json:"name"`
+	Command     string `json:"command"`
+	Description string `json:"description"`
+	// When controls activation. Empty (default) and "always" both mean
+	// the monitor starts at session start and on plugin reload.
+	// "on-skill-invoke:<skill-name>" defers the start until the named
+	// skill is dispatched. clown validates the prefix form but does
+	// not look up the skill name.
+	When string `json:"when,omitempty"`
 }
 
 type HealthcheckDef struct {
@@ -90,8 +115,41 @@ func LoadClownConfig(pluginDir string) (*ClownConfig, error) {
 	if cfg.Version != 1 {
 		return nil, fmt.Errorf("%s: unsupported version %d (expected 1)", path, cfg.Version)
 	}
+	if err := validateMonitors(cfg.Monitors); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
 	applyDefaults(&cfg)
 	return &cfg, nil
+}
+
+// monitorWhenSkillRE matches the on-skill-invoke:<skill-name> form
+// permitted in MonitorDef.When. Skill names allow ASCII alphanumerics,
+// underscores, and hyphens, which is the widest character set
+// Anthropic's plugin namespacing has used; tighten if upstream
+// narrows it.
+var monitorWhenSkillRE = regexp.MustCompile(`^on-skill-invoke:[A-Za-z0-9_-]+$`)
+
+func validateMonitors(monitors []MonitorDef) error {
+	seen := make(map[string]struct{}, len(monitors))
+	for i, m := range monitors {
+		if m.Name == "" {
+			return fmt.Errorf("monitors[%d]: name is required", i)
+		}
+		if _, dup := seen[m.Name]; dup {
+			return fmt.Errorf("monitors[%d]: duplicate name %q", i, m.Name)
+		}
+		seen[m.Name] = struct{}{}
+		if m.Command == "" {
+			return fmt.Errorf("monitors[%d] (%s): command is required", i, m.Name)
+		}
+		if m.Description == "" {
+			return fmt.Errorf("monitors[%d] (%s): description is required", i, m.Name)
+		}
+		if m.When != "" && m.When != "always" && !monitorWhenSkillRE.MatchString(m.When) {
+			return fmt.Errorf(`monitors[%d] (%s): when=%q is not "always" or "on-skill-invoke:<skill>"`, i, m.Name, m.When)
+		}
+	}
+	return nil
 }
 
 func applyDefaults(cfg *ClownConfig) {

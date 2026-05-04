@@ -69,7 +69,9 @@ The manifest is a JSON file with the following top-level fields:
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `version` | integer | Yes | Schema version. MUST be `1`. |
-| `httpServers` | object | Yes | Map of server name to server definition |
+| `httpServers` | object | No | Map of server name to server definition. At least one of `httpServers`, `stdioServers`, or `monitors` SHOULD be present. |
+| `stdioServers` | object | No | Map of server name to stdio server definition. clown desugars these into `httpServers` entries via `clown-stdio-bridge`. See FDR 0002. |
+| `monitors` | array | No | Background-shell monitor declarations. clown injects this array verbatim into the compiled `.claude-plugin/plugin.json` so Claude Code (≥ v2.1.105) spawns and supervises each monitor. See § 1.2.1. |
 
 Each server definition is an object with the following fields:
 
@@ -89,6 +91,19 @@ Healthcheck definition:
 | `path` | string | No | `"/healthz"` | HTTP path to poll |
 | `interval` | string | No | `"1s"` | Polling interval (Go `time.ParseDuration` format) |
 | `timeout` | string | No | `"30s"` | Maximum time to wait for healthy |
+
+##### 1.2.1 Monitor Definition
+
+Each entry in `monitors` mirrors Anthropic's plugin monitor schema exactly. clown does no `${...}` substitution, no spawning, and no supervision; the array is passed through verbatim to the compiled `.claude-plugin/plugin.json` so Claude Code owns the runtime.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | Yes | Identifier unique within the plugin's `monitors` array. clown rejects duplicates at parse time. |
+| `command` | string | Yes | Shell command Claude Code spawns as a persistent background process. May reference `${CLAUDE_PLUGIN_ROOT}`, `${CLAUDE_PLUGIN_DATA}`, `${user_config.*}`, or any `${ENV_VAR}`; clown does not expand these. |
+| `description` | string | Yes | Short summary shown in Claude Code's task panel and notification summaries. |
+| `when` | string | No | Activation condition. Either `"always"` (the default) or `"on-skill-invoke:<skill-name>"`. clown validates the prefix form but does not look up the skill name. |
+
+It is an error for both `clown.json` and the same plugin's `.claude-plugin/plugin.json` to declare a `monitors` key. clown rejects this conflict at compile time. A sibling `monitors/monitors.json` file is not currently detected as a conflict source and SHOULD NOT coexist with `clown.json` monitors.
 
 #### 1.3 Example
 
@@ -160,6 +175,7 @@ For each directory, it:
 2. Parses `clown.json` and validates the version field
 3. Reads the plugin name from `.claude-plugin/plugin.json`
 4. Records a `DiscoveredServer` for each entry in `httpServers`
+5. Records the `monitors` array (if any) keyed by plugin directory, so monitor-only plugins still flow through manifest compilation (§ 3.6)
 
 If no `clown.json` files are found in any plugin directory,
 `clown-plugin-host` MUST exec directly into the downstream command with
@@ -236,9 +252,11 @@ rotate or prune files.
 #### 3.6 Plugin Manifest Compilation
 
 For each plugin directory whose `clown.json` contributed at least one
-`DiscoveredServer`, `clown-plugin-host` **compiles** a replacement plugin
-manifest that replaces the original stdio-based `mcpServers` entries with
-URL-based entries pointing at the running HTTP servers. This preserves
+`DiscoveredServer` *or* declared a non-empty `monitors` array,
+`clown-plugin-host` **compiles** a replacement plugin manifest. The
+compilation replaces the original stdio-based `mcpServers` entries with
+URL-based entries pointing at the running HTTP servers, and injects
+the clown-declared `monitors` array as a top-level key. This preserves
 plugin identity and original server names in Claude Code while switching
 the transport from stdio to HTTP. The compilation steps are:
 
@@ -257,13 +275,18 @@ the transport from stdio to HTTP. The compilation steps are:
    onto the compiled entry as `timeout` to override Claude Code's default
    per-tool MCP request timeout. Server names in the compiled manifest
    match the original keys from `clown.json`.
+5. If `clown.json` declared a non-empty `monitors` array, inject it as
+   a top-level `monitors` key in the staged `plugin.json`. It is an
+   error for the source `.claude-plugin/plugin.json` to also declare a
+   `monitors` key; the host MUST refuse compilation in that case rather
+   than silently dropping either source.
 
 Compiled staging directories are tracked by the host and removed during
 shutdown (section 3.9).
 
 Plugin directories without `clown.json` (or where `clown.json` declares
-no servers) MUST NOT be compiled — they are passed to claude unmodified
-so claude's native MCP registration continues to work.
+neither servers nor monitors) MUST NOT be compiled — they are passed to
+claude unmodified so claude's native MCP registration continues to work.
 
 #### 3.7 MCP Configuration
 

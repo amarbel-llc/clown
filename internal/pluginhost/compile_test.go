@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -15,7 +16,7 @@ func TestCompilePluginManifest_StripsMcpServers(t *testing.T) {
   }
 }`)
 
-	out, had, err := CompilePluginManifest(input, nil)
+	out, had, err := CompilePluginManifest(input, CompileInputs{})
 	if err != nil {
 		t.Fatalf("CompilePluginManifest: %v", err)
 	}
@@ -46,7 +47,7 @@ func TestCompilePluginManifest_InjectsServerEntries(t *testing.T) {
 	entries := map[string]MCPServerEntry{
 		"moxy": {Type: "http", URL: "http://127.0.0.1:12345/mcp"},
 	}
-	out, had, err := CompilePluginManifest(input, entries)
+	out, had, err := CompilePluginManifest(input, CompileInputs{Servers: entries})
 	if err != nil {
 		t.Fatalf("CompilePluginManifest: %v", err)
 	}
@@ -93,7 +94,7 @@ func TestCompilePluginManifest_InjectsTimeout(t *testing.T) {
 	entries := map[string]MCPServerEntry{
 		"moxy": {Type: "http", URL: "http://127.0.0.1:12345/mcp", Timeout: 86400000},
 	}
-	out, _, err := CompilePluginManifest(input, entries)
+	out, _, err := CompilePluginManifest(input, CompileInputs{Servers: entries})
 	if err != nil {
 		t.Fatalf("CompilePluginManifest: %v", err)
 	}
@@ -124,7 +125,7 @@ func TestCompilePluginManifest_OmitsTimeoutWhenZero(t *testing.T) {
 	entries := map[string]MCPServerEntry{
 		"moxy": {Type: "http", URL: "http://127.0.0.1:12345/mcp"},
 	}
-	out, _, err := CompilePluginManifest(input, entries)
+	out, _, err := CompilePluginManifest(input, CompileInputs{Servers: entries})
 	if err != nil {
 		t.Fatalf("CompilePluginManifest: %v", err)
 	}
@@ -149,7 +150,7 @@ func TestCompilePluginManifest_PreservesUnknownFields(t *testing.T) {
   "someFutureKey": {"nested": [1, 2, 3]}
 }`)
 
-	out, _, err := CompilePluginManifest(input, nil)
+	out, _, err := CompilePluginManifest(input, CompileInputs{})
 	if err != nil {
 		t.Fatalf("CompilePluginManifest: %v", err)
 	}
@@ -171,7 +172,7 @@ func TestCompilePluginManifest_PreservesUnknownFields(t *testing.T) {
 func TestCompilePluginManifest_NoOpWhenAbsent(t *testing.T) {
 	input := []byte(`{"name": "bare", "skills": []}`)
 
-	out, had, err := CompilePluginManifest(input, nil)
+	out, had, err := CompilePluginManifest(input, CompileInputs{})
 	if err != nil {
 		t.Fatalf("CompilePluginManifest: %v", err)
 	}
@@ -189,7 +190,7 @@ func TestCompilePluginManifest_NoOpWhenAbsent(t *testing.T) {
 }
 
 func TestCompilePluginManifest_InvalidJSON(t *testing.T) {
-	_, _, err := CompilePluginManifest([]byte("not json"), nil)
+	_, _, err := CompilePluginManifest([]byte("not json"), CompileInputs{})
 	if err == nil {
 		t.Fatal("expected error for invalid JSON, got nil")
 	}
@@ -211,7 +212,7 @@ func TestCompilePluginDir_SymlinksAndRewrites(t *testing.T) {
 	mustWrite(t, filepath.Join(source, ".claude-plugin", "marketplace.json"),
 		`{"displayName":"demo"}`)
 
-	staged, err := CompilePluginDir(source, nil)
+	staged, err := CompilePluginDir(source, CompileInputs{})
 	if err != nil {
 		t.Fatalf("CompilePluginDir: %v", err)
 	}
@@ -284,7 +285,7 @@ func TestCompilePluginDir_InjectsServerEntries(t *testing.T) {
 	entries := map[string]MCPServerEntry{
 		"srv": {Type: "http", URL: "http://127.0.0.1:9999/mcp"},
 	}
-	staged, err := CompilePluginDir(source, entries)
+	staged, err := CompilePluginDir(source, CompileInputs{Servers: entries})
 	if err != nil {
 		t.Fatalf("CompilePluginDir: %v", err)
 	}
@@ -321,7 +322,7 @@ func TestCompilePluginDir_MissingPluginJSON(t *testing.T) {
 	mustMkdir(t, filepath.Join(source, ".claude-plugin"))
 	// no plugin.json
 
-	_, err := CompilePluginDir(source, nil)
+	_, err := CompilePluginDir(source, CompileInputs{})
 	if err == nil {
 		t.Fatal("expected error when plugin.json is missing, got nil")
 	}
@@ -331,9 +332,117 @@ func TestCompilePluginDir_MissingClaudePluginDir(t *testing.T) {
 	source := t.TempDir()
 	mustWrite(t, filepath.Join(source, "clown.json"), `{}`)
 
-	_, err := CompilePluginDir(source, nil)
+	_, err := CompilePluginDir(source, CompileInputs{})
 	if err == nil {
 		t.Fatal("expected error when .claude-plugin is missing, got nil")
+	}
+}
+
+func TestCompilePluginManifest_InjectsMonitors(t *testing.T) {
+	input := []byte(`{"name":"demo"}`)
+
+	monitors := []MonitorDef{
+		{Name: "errlog", Command: "tail -F /tmp/x", Description: "errors"},
+		{Name: "deploy", Command: "${CLAUDE_PLUGIN_ROOT}/poll.sh", Description: "deploy", When: "on-skill-invoke:debug"},
+	}
+	out, _, err := CompilePluginManifest(input, CompileInputs{Monitors: monitors})
+	if err != nil {
+		t.Fatalf("CompilePluginManifest: %v", err)
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("output is not valid JSON: %v\n%s", err, out)
+	}
+	raw, present := got["monitors"]
+	if !present {
+		t.Fatalf("monitors missing after injection: %s", out)
+	}
+	arr, ok := raw.([]any)
+	if !ok {
+		t.Fatalf("monitors is not an array: %T", raw)
+	}
+	if len(arr) != 2 {
+		t.Fatalf("monitors len = %d, want 2", len(arr))
+	}
+	first := arr[0].(map[string]any)
+	if first["name"] != "errlog" {
+		t.Errorf("monitors[0].name = %v", first["name"])
+	}
+	if _, hasWhen := first["when"]; hasWhen {
+		t.Errorf("monitors[0].when present despite empty value: %v", first["when"])
+	}
+	second := arr[1].(map[string]any)
+	if second["when"] != "on-skill-invoke:debug" {
+		t.Errorf("monitors[1].when = %v", second["when"])
+	}
+}
+
+func TestCompilePluginManifest_RejectsMonitorsConflict(t *testing.T) {
+	input := []byte(`{"name":"demo","monitors":[{"name":"x","command":"echo x","description":"d"}]}`)
+
+	monitors := []MonitorDef{{Name: "y", Command: "echo y", Description: "d"}}
+	_, _, err := CompilePluginManifest(input, CompileInputs{Monitors: monitors})
+	if err == nil {
+		t.Fatal("expected conflict error when both clown.json and plugin.json declare monitors")
+	}
+	if !strings.Contains(err.Error(), "monitors declared in both") {
+		t.Errorf("err = %q, want conflict message", err.Error())
+	}
+}
+
+func TestCompilePluginManifest_PreservesPluginJSONMonitors(t *testing.T) {
+	input := []byte(`{"name":"demo","monitors":[{"name":"x","command":"echo x","description":"d"}]}`)
+
+	out, _, err := CompilePluginManifest(input, CompileInputs{})
+	if err != nil {
+		t.Fatalf("CompilePluginManifest: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("output is not valid JSON: %v\n%s", err, out)
+	}
+	arr, ok := got["monitors"].([]any)
+	if !ok || len(arr) != 1 {
+		t.Fatalf("monitors not preserved: %s", out)
+	}
+	if arr[0].(map[string]any)["name"] != "x" {
+		t.Errorf("monitors[0].name = %v, want x", arr[0])
+	}
+}
+
+func TestCompilePluginDir_InjectsMonitors(t *testing.T) {
+	source := t.TempDir()
+
+	mustMkdir(t, filepath.Join(source, ".claude-plugin"))
+	mustWrite(t, filepath.Join(source, ".claude-plugin", "plugin.json"),
+		`{"name":"demo"}`)
+
+	in := CompileInputs{
+		Monitors: []MonitorDef{
+			{Name: "errlog", Command: "tail -F /tmp/x", Description: "errors"},
+		},
+	}
+	staged, err := CompilePluginDir(source, in)
+	if err != nil {
+		t.Fatalf("CompilePluginDir: %v", err)
+	}
+	defer os.RemoveAll(staged)
+
+	pjData, err := os.ReadFile(filepath.Join(staged, ".claude-plugin", "plugin.json"))
+	if err != nil {
+		t.Fatalf("reading staged plugin.json: %v", err)
+	}
+	var pj map[string]any
+	if err := json.Unmarshal(pjData, &pj); err != nil {
+		t.Fatalf("compiled plugin.json is not valid JSON: %v\n%s", err, pjData)
+	}
+	arr, ok := pj["monitors"].([]any)
+	if !ok || len(arr) != 1 {
+		t.Fatalf("monitors not injected into staged plugin.json: %s", pjData)
+	}
+	if arr[0].(map[string]any)["name"] != "errlog" {
+		t.Errorf("monitors[0].name = %v, want errlog", arr[0])
 	}
 }
 

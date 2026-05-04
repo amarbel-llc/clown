@@ -48,6 +48,29 @@ Names MUST be unique across both
 .Fa httpServers
 and
 .Fa stdioServers .
+.It Fa monitors Pq array, optional
+Background-shell monitor declarations.
+Each entry is passed through verbatim into the compiled
+.Pa .claude-plugin/plugin.json
+as a top-level
+.Fa monitors
+array; Claude Code
+.Pq v2.1.105 or later
+spawns each command, supervises it, and streams every stdout line into
+the chat as a notification.
+clown does not spawn, supervise, or expand
+.Li ${...}
+references in
+.Fa command \(em
+all expansion is performed by Claude Code at session time.
+It is an error for the same plugin's
+.Pa .claude-plugin/plugin.json
+to also declare a
+.Fa monitors
+key; consolidate into one source of truth.
+A sibling
+.Pa monitors/monitors.json
+file is not currently detected as a conflict.
 .El
 .Ss Server Definition
 Each server definition is an object with the following fields:
@@ -135,6 +158,38 @@ is
 .Li [\(dq--command\(dq, \(dq <Ar command Ns >\(dq, \(dq--\(dq, \(dq <Ar args... Ns >\(dq] .
 The rest of the lifecycle (handshake, healthcheck, manifest
 compilation, shutdown) is identical to a native HTTP server entry.
+.Ss Monitor Definition
+Each monitor entry mirrors Anthropic's plugin monitor schema exactly.
+.Bl -tag -width Ds
+.It Fa name Pq string, required
+Identifier unique within the plugin's
+.Fa monitors
+array.
+Used by Claude Code to dedupe monitor processes across plugin reloads
+and to label notifications.
+.It Fa command Pq string, required
+Shell command run as a persistent background process by Claude Code.
+May reference
+.Li ${CLAUDE_PLUGIN_ROOT} ,
+.Li ${CLAUDE_PLUGIN_DATA} ,
+.Li ${user_config.*} ,
+or any
+.Li ${ENV_VAR} ;
+clown does not expand these.
+.It Fa description Pq string, required
+Short summary of what is being watched.
+Shown in Claude Code's task panel and in notification summaries.
+.It Fa when Pq string, optional
+Activation condition.
+Either
+.Li always
+.Pq the default; monitor starts at session start and on plugin reload
+or
+.Li on-skill-invoke: Ns Ar skill-name ,
+which defers the start until the named skill in this plugin is first
+dispatched.
+clown validates the prefix form but does not look up the skill name.
+.El
 .Ss Healthcheck Definition
 .Bl -tag -width Ds
 .It Fa path Pq string, optional
@@ -217,6 +272,29 @@ Manifest with a stdio MCP server bridged to streamable-HTTP:
       "args": ["--api-key-env", "KAGI_KEY"]
     }
   }
+}
+.Ed
+.Pp
+Manifest with a background monitor:
+.Bd -literal -offset indent
+{
+  "version": 1,
+  "httpServers": {
+    "my-server": { "command": "bin/my-server" }
+  },
+  "monitors": [
+    {
+      "name": "error-log",
+      "command": "tail -F ${CLAUDE_PLUGIN_ROOT}/logs/error.log",
+      "description": "Application error log"
+    },
+    {
+      "name": "deploy-status",
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/poll-deploy.sh",
+      "description": "Deployment status changes",
+      "when": "on-skill-invoke:debug"
+    }
+  ]
 }
 .Ed
 .Sh SERVER REQUIREMENTS

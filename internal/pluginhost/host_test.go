@@ -2,6 +2,8 @@ package pluginhost
 
 import (
 	"context"
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -59,6 +61,69 @@ func TestDiscoveredServerName(t *testing.T) {
 	if got := d.Name(); got != "alpha/beta" {
 		t.Errorf("Name() = %q, want %q", got, "alpha/beta")
 	}
+}
+
+// TestCompileForClaude_MonitorsOnlyPlugin covers the case where a plugin
+// declares monitors but no MCP servers. Such a plugin produces no
+// DiscoveredServer entries, so the union logic in CompileForClaude must
+// pick it up via Host.monitorsByDir; otherwise its monitors would be
+// silently dropped from the staged plugin.json.
+func TestCompileForClaude_MonitorsOnlyPlugin(t *testing.T) {
+	dir := t.TempDir()
+
+	mustWrite(t, filepath.Join(dir, "clown.json"), `{
+"version": 1,
+"monitors": [
+  {"name": "errlog", "command": "tail -F /tmp/x", "description": "errors"}
+]
+}`)
+	mustMkdir(t, filepath.Join(dir, ".claude-plugin"))
+	mustWrite(t, filepath.Join(dir, ".claude-plugin", "plugin.json"),
+		`{"name": "monitors-only-demo"}`)
+
+	host := &Host{PluginDirs: []string{dir}}
+	defer host.Shutdown()
+
+	discovered, err := host.Discover()
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if len(discovered) != 0 {
+		t.Errorf("expected zero DiscoveredServer entries for monitors-only plugin, got %d", len(discovered))
+	}
+
+	dirMap, err := host.CompileForClaude(discovered)
+	if err != nil {
+		t.Fatalf("CompileForClaude: %v", err)
+	}
+	staged, ok := dirMap[dir]
+	if !ok {
+		t.Fatalf("monitors-only plugin not staged; dirMap keys = %v", keysOf(dirMap))
+	}
+
+	pjData, err := os.ReadFile(filepath.Join(staged, ".claude-plugin", "plugin.json"))
+	if err != nil {
+		t.Fatalf("reading staged plugin.json: %v", err)
+	}
+	var pj map[string]any
+	if err := json.Unmarshal(pjData, &pj); err != nil {
+		t.Fatalf("staged plugin.json is not valid JSON: %v\n%s", err, pjData)
+	}
+	arr, ok := pj["monitors"].([]any)
+	if !ok || len(arr) != 1 {
+		t.Fatalf("monitors not injected into monitors-only plugin: %s", pjData)
+	}
+	if arr[0].(map[string]any)["name"] != "errlog" {
+		t.Errorf("monitors[0].name = %v, want errlog", arr[0])
+	}
+}
+
+func keysOf(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }
 
 // Sanity check: the discover → report roundtrip still works for a plugin

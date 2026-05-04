@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sort"
 	"sync"
 )
 
@@ -48,9 +49,16 @@ type Host struct {
 	// compiledDirs tracks staging directories produced by
 	// CompileForClaude; Shutdown removes them.
 	compiledDirs []string
+
+	// monitorsByDir holds each discovered plugin's monitor declarations
+	// keyed by plugin dir. Populated by Discover even when the plugin
+	// has no MCP servers, so monitors-only plugins still flow through
+	// CompileForClaude.
+	monitorsByDir map[string][]MonitorDef
 }
 
 func (h *Host) Discover() ([]DiscoveredServer, error) {
+	h.monitorsByDir = make(map[string][]MonitorDef)
 	var found []DiscoveredServer
 	for _, dir := range h.PluginDirs {
 		cfg, err := LoadClownConfig(dir)
@@ -68,6 +76,10 @@ func (h *Host) Discover() ([]DiscoveredServer, error) {
 		pluginName, err := PluginName(dir)
 		if err != nil {
 			return nil, fmt.Errorf("plugin dir %s: %w", dir, err)
+		}
+
+		if len(cfg.Monitors) > 0 {
+			h.monitorsByDir[dir] = cfg.Monitors
 		}
 
 		for serverName, def := range cfg.HTTPServers {
@@ -169,6 +181,9 @@ func (h *Host) Shutdown() {
 // HTTP servers (via h.Servers), the mcpServers block is replaced with
 // url-based entries using the original server names from clown.json.
 // For plugins without running servers, the mcpServers block is stripped.
+// Plugins whose clown.json declares monitors are also compiled, even
+// when they have no MCP servers, so the monitors array is injected
+// into the staged plugin.json.
 //
 // Call this after StartAll so server URLs are available.
 // Dirs that appear in multiple DiscoveredServer entries are compiled once.
@@ -176,23 +191,61 @@ func (h *Host) Shutdown() {
 func (h *Host) CompileForClaude(discovered []DiscoveredServer) (map[string]string, error) {
 	serversByDir := h.serverEntriesByPluginDir(discovered)
 
-	result := make(map[string]string)
-	for _, d := range discovered {
-		if _, done := result[d.PluginDir]; done {
+	dirOrder, dirSet := pluginDirOrder(discovered, h.monitorsByDir)
+
+	result := make(map[string]string, len(dirOrder))
+	for _, dir := range dirOrder {
+		if _, done := result[dir]; done {
 			continue
 		}
-		staged, err := CompilePluginDir(d.PluginDir, serversByDir[d.PluginDir])
+		if !dirSet[dir] {
+			continue
+		}
+		staged, err := CompilePluginDir(dir, CompileInputs{
+			Servers:  serversByDir[dir],
+			Monitors: h.monitorsByDir[dir],
+		})
 		if err != nil {
-			return nil, fmt.Errorf("compiling %s: %w", d.PluginDir, err)
+			return nil, fmt.Errorf("compiling %s: %w", dir, err)
 		}
 		h.compiledDirs = append(h.compiledDirs, staged)
-		result[d.PluginDir] = staged
+		result[dir] = staged
 		if h.Logger != nil {
 			h.Logger.Info("compiled plugin manifest",
-				"source", d.PluginDir, "staged", staged)
+				"source", dir, "staged", staged)
 		}
 	}
 	return result, nil
+}
+
+// pluginDirOrder returns the deduplicated set of plugin dirs that need
+// staging — every dir that appears in discovered, plus every dir that
+// owns monitors. Order: discovered first (preserving discovered's
+// order), then any monitor-only dirs in alphabetical order so the
+// staging sequence is deterministic.
+func pluginDirOrder(discovered []DiscoveredServer, monitorsByDir map[string][]MonitorDef) ([]string, map[string]bool) {
+	seen := make(map[string]bool, len(discovered)+len(monitorsByDir))
+	order := make([]string, 0, len(discovered)+len(monitorsByDir))
+	for _, d := range discovered {
+		if seen[d.PluginDir] {
+			continue
+		}
+		seen[d.PluginDir] = true
+		order = append(order, d.PluginDir)
+	}
+	var extra []string
+	for dir := range monitorsByDir {
+		if seen[dir] {
+			continue
+		}
+		extra = append(extra, dir)
+	}
+	sort.Strings(extra)
+	for _, dir := range extra {
+		seen[dir] = true
+		order = append(order, dir)
+	}
+	return order, seen
 }
 
 // serverEntriesByPluginDir builds a map from plugin directory to the
