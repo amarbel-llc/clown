@@ -57,12 +57,16 @@ type translator struct {
 	writeQueue chan []byte
 
 	pendingMu sync.Mutex
-	pending   map[string]chan json.RawMessage
-	// seenAt records when each id was first registered via SendRequest.
-	// Survives SendRequest cleanup so demux can compute elapsed-time
-	// for late responses (the "response for unknown id" path). Cleared
-	// by demux on either response delivery or unknown-id observation.
-	seenAt map[string]time.Time
+	// pending is keyed by JSON-RPC id. An entry's respCh is non-nil while
+	// a SendRequest is actively waiting; it transitions to nil ("abandoned"
+	// state) when SendRequest exits without delivery (typically ctx
+	// cancel). The entry survives in either state so:
+	//   - new SendRequests for the same id reject with duplicate-id rather
+	//     than receiving the abandoned call's late response (the #50
+	//     cross-contamination bug)
+	//   - demux can log elapsed-time on the late-response path and
+	//     distinguish "abandoned" from "true orphan" (id never seen)
+	pending map[string]pendingEntry
 
 	subsMu      sync.Mutex
 	subscribers map[*subscriber]struct{}
@@ -71,6 +75,13 @@ type translator struct {
 	trace  bool
 
 	droppedOutbound atomic.Int64
+}
+
+// pendingEntry tracks one in-flight or abandoned request. respCh is nil
+// for abandoned entries.
+type pendingEntry struct {
+	respCh chan json.RawMessage
+	seenAt time.Time
 }
 
 type subscriber struct {
@@ -90,8 +101,7 @@ func newTranslator(stdin io.Writer, stdout io.Reader, log logger) *translator {
 		stdin:       stdin,
 		stdout:      stdout,
 		writeQueue:  make(chan []byte, queueDepth),
-		pending:     make(map[string]chan json.RawMessage),
-		seenAt:      make(map[string]time.Time),
+		pending:     make(map[string]pendingEntry),
 		subscribers: make(map[*subscriber]struct{}),
 		logger:      log,
 		trace:       tracingEnabled(),
@@ -190,26 +200,29 @@ func (t *translator) demux(line []byte) {
 
 	switch {
 	case hasID && !hasMethod:
-		// Response — route to pending request.
+		// Response — route to pending request, or log+drop if the
+		// addressed call has already been abandoned (#50).
 		idKey := string(probe.ID)
 		t.pendingMu.Lock()
-		ch, ok := t.pending[idKey]
+		entry, ok := t.pending[idKey]
 		if ok {
 			delete(t.pending, idKey)
 		}
-		seen, hadSeen := t.seenAt[idKey]
-		delete(t.seenAt, idKey)
 		t.pendingMu.Unlock()
-		if !ok {
-			elapsed := "unknown"
-			if hadSeen {
-				elapsed = fmt.Sprintf("%dms", time.Since(seen).Milliseconds())
-			}
-			t.logger.Printf("clown-stdio-bridge: response for unknown id %s elapsed=%s", idKey, elapsed)
+		switch {
+		case !ok:
+			t.logger.Printf("clown-stdio-bridge: response for unknown id %s elapsed=unknown", idKey)
+			return
+		case entry.respCh == nil:
+			// Late response from a SendRequest that already returned
+			// (ctx cancel). Drop it — delivering would cross-contaminate
+			// any future SendRequest that reuses this id.
+			t.logger.Printf("clown-stdio-bridge: response for abandoned id %s elapsed=%dms",
+				idKey, time.Since(entry.seenAt).Milliseconds())
 			return
 		}
 		// Buffered channel of size 1 — never blocks.
-		ch <- line
+		entry.respCh <- line
 	case hasMethod:
 		// Request or notification — broadcast.
 		t.broadcast(line)
@@ -267,20 +280,28 @@ func (t *translator) Subscribe() (<-chan json.RawMessage, func()) {
 func (t *translator) SendRequest(ctx context.Context, idKey string, msg []byte) (json.RawMessage, error) {
 	respCh := make(chan json.RawMessage, 1)
 	t.pendingMu.Lock()
-	if _, exists := t.pending[idKey]; exists {
+	if existing, exists := t.pending[idKey]; exists {
 		t.pendingMu.Unlock()
+		if existing.respCh == nil {
+			return nil, fmt.Errorf(
+				"abandoned JSON-RPC id %s still in flight (prior call canceled, response not yet delivered)",
+				idKey)
+		}
 		return nil, fmt.Errorf("duplicate JSON-RPC id %s in flight", idKey)
 	}
-	t.pending[idKey] = respCh
-	t.seenAt[idKey] = time.Now()
+	t.pending[idKey] = pendingEntry{respCh: respCh, seenAt: time.Now()}
 	t.pendingMu.Unlock()
 
 	defer func() {
 		t.pendingMu.Lock()
-		delete(t.pending, idKey)
-		// seenAt intentionally retained — demux clears it when a late
-		// response arrives so we can log elapsed-time on the
-		// "response for unknown id" path.
+		// If demux already delivered, the entry is gone — done. If our
+		// entry is still there, transition it to abandoned (respCh=nil)
+		// so any late response from the wrapped child is logged and
+		// dropped rather than cross-contaminating a future SendRequest
+		// that reuses this id.
+		if entry, ok := t.pending[idKey]; ok && entry.respCh == respCh {
+			t.pending[idKey] = pendingEntry{respCh: nil, seenAt: entry.seenAt}
+		}
 		t.pendingMu.Unlock()
 	}()
 

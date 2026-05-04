@@ -443,27 +443,24 @@ func TestTranslator_BroadcastInterleavedWithRequests(t *testing.T) {
 	}
 }
 
-// TestTranslator_LateResponseAfterIDReuseCrossesIntoNewRequest probes the
-// trace observed in dodder/calm-magnolia: the HTTP client (Claude Code)
-// canceled a slow request after ~60 s, the bridge cleaned up pending[id],
-// and the wrapped child's late response surfaced as "response for unknown
-// id N". The subtle bug being probed: if the next in-flight request reuses
-// the same JSON-RPC id, the late response from the *previous* call could be
-// delivered to the *new* caller, since the bridge has no record of which
-// physical call a response belongs to — only the id.
-func TestTranslator_LateResponseAfterIDReuseCrossesIntoNewRequest(t *testing.T) {
-	t.Skip("known broken: tracked in https://github.com/amarbel-llc/clown/issues/50")
+// TestTranslator_IDReuseRejectedWhilePriorAbandoned regression-tests #50.
+// After a SendRequest is canceled, the bridge holds the id in the
+// "abandoned" state until the wrapped child's late response (if any)
+// arrives. A second SendRequest reusing that id MUST be rejected with a
+// duplicate-id-style error rather than receiving the prior call's late
+// response (cross-contamination). Once the late response arrives and is
+// dropped, the id becomes reusable again.
+func TestTranslator_IDReuseRejectedWhilePriorAbandoned(t *testing.T) {
 	stdinR, stdinW := io.Pipe()
 	stdoutR, stdoutW := io.Pipe()
 	t.Cleanup(func() { stdinW.Close(); stdoutW.Close() })
 
-	tr := newTranslator(stdinW, stdoutR, nullLogger{})
+	rl := &recordingLogger{}
+	tr := newTranslator(stdinW, stdoutR, rl)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() { _ = tr.Run(ctx) }()
 
-	// Drain stdin into a channel so the test can synchronize on
-	// "request reached the wire".
 	stdinLines := make(chan []byte, 8)
 	go func() {
 		sc := bufio.NewScanner(stdinR)
@@ -473,12 +470,12 @@ func TestTranslator_LateResponseAfterIDReuseCrossesIntoNewRequest(t *testing.T) 
 		}
 	}()
 
-	// First call: ctx will be canceled before any response is emitted.
+	// First call: ctx canceled before any response is emitted.
 	req1Ctx, req1Cancel := context.WithCancel(ctx)
 	req1Err := make(chan error, 1)
 	go func() {
-		body1 := []byte(`{"jsonrpc":"2.0","id":2,"method":"slow","params":{"which":"first"}}`)
-		_, err := tr.SendRequest(req1Ctx, "2", body1)
+		_, err := tr.SendRequest(req1Ctx, "2",
+			[]byte(`{"jsonrpc":"2.0","id":2,"method":"slow","params":{"which":"first"}}`))
 		req1Err <- err
 	}()
 
@@ -487,65 +484,75 @@ func TestTranslator_LateResponseAfterIDReuseCrossesIntoNewRequest(t *testing.T) 
 	case <-time.After(time.Second):
 		t.Fatal("first request did not reach stdin")
 	}
-
 	req1Cancel()
 	if err := <-req1Err; err != context.Canceled {
 		t.Fatalf("first SendRequest err = %v, want context.Canceled", err)
 	}
 
-	// Second call reuses id "2" — legal from the bridge's view because
-	// the first call has been cleaned up.
-	req2Ctx, req2Cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer req2Cancel()
-
-	type req2Result struct {
-		resp json.RawMessage
-		err  error
+	// Second call reuses id "2" while the prior call is still abandoned.
+	// Must reject — not register a new pending entry, not send to wire.
+	_, err := tr.SendRequest(ctx, "2",
+		[]byte(`{"jsonrpc":"2.0","id":2,"method":"normal","params":{"which":"second"}}`))
+	if err == nil {
+		t.Fatal("second SendRequest must reject id reuse against abandoned entry")
 	}
-	req2Done := make(chan req2Result, 1)
-	go func() {
-		body2 := []byte(`{"jsonrpc":"2.0","id":2,"method":"normal","params":{"which":"second"}}`)
-		resp, err := tr.SendRequest(req2Ctx, "2", body2)
-		req2Done <- req2Result{resp: resp, err: err}
-	}()
-
+	if !strings.Contains(err.Error(), "abandoned") {
+		t.Errorf("error = %q, want substring \"abandoned\"", err)
+	}
 	select {
-	case <-stdinLines:
-	case <-time.After(time.Second):
-		t.Fatal("second request did not reach stdin")
+	case line := <-stdinLines:
+		t.Errorf("rejected request must not reach the wire; got %s", line)
+	case <-time.After(50 * time.Millisecond):
 	}
 
-	// Now the late response to the FIRST call arrives, followed by the
-	// response to the SECOND call. The second caller MUST receive the
-	// second response — not the first.
-	lateFirst := []byte(`{"jsonrpc":"2.0","id":2,"result":{"which":"first-response"}}` + "\n")
-	if _, err := stdoutW.Write(lateFirst); err != nil {
-		t.Fatalf("write late first response: %v", err)
-	}
-	secondResp := []byte(`{"jsonrpc":"2.0","id":2,"result":{"which":"second-response"}}` + "\n")
-	if _, err := stdoutW.Write(secondResp); err != nil {
-		t.Fatalf("write second response: %v", err)
+	// Late response to the original call arrives — bridge logs+drops it
+	// and clears the abandoned slot.
+	late := []byte(`{"jsonrpc":"2.0","id":2,"result":{"which":"first-late"}}` + "\n")
+	if _, err := stdoutW.Write(late); err != nil {
+		t.Fatalf("write late response: %v", err)
 	}
 
-	select {
-	case r := <-req2Done:
-		if r.err != nil {
-			t.Fatalf("second SendRequest err: %v", r.err)
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		rl.mu.Lock()
+		var sawAbandoned bool
+		for _, line := range rl.lines {
+			if strings.Contains(line, "response for abandoned id %s") {
+				sawAbandoned = true
+				break
+			}
 		}
-		if !bytes.Contains(r.resp, []byte("second-response")) {
-			t.Errorf("second caller received cross-contaminated response: %s", r.resp)
+		rl.mu.Unlock()
+		if sawAbandoned {
+			break
 		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("second SendRequest did not return")
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	// After the late response is consumed, id "2" becomes reusable.
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		tr.pendingMu.Lock()
+		_, stillThere := tr.pending["2"]
+		tr.pendingMu.Unlock()
+		if !stillThere {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	tr.pendingMu.Lock()
+	_, stillThere := tr.pending["2"]
+	tr.pendingMu.Unlock()
+	if stillThere {
+		t.Errorf("pending[\"2\"] should be cleared after late response was dropped")
 	}
 }
 
 // TestTranslator_LateResponseAfterCancelLogsElapsed locks in the
 // observability addition: when a SendRequest is canceled and the wrapped
-// child eventually responds, the "response for unknown id" log line
-// includes an elapsed= measurement so operators can distinguish a
-// response that arrived just-after-cancel from one that arrived much
-// later.
+// child eventually responds, the bridge logs an "abandoned id" line with
+// an elapsed= measurement so operators can distinguish a response that
+// arrived just-after-cancel from one that arrived much later.
 func TestTranslator_LateResponseAfterCancelLogsElapsed(t *testing.T) {
 	stdinR, stdinW := io.Pipe()
 	stdoutR, stdoutW := io.Pipe()
@@ -587,7 +594,7 @@ func TestTranslator_LateResponseAfterCancelLogsElapsed(t *testing.T) {
 		rl.mu.Lock()
 		var foundElapsed bool
 		for _, line := range rl.lines {
-			if strings.Contains(line, "response for unknown id %s elapsed=%s") {
+			if strings.Contains(line, "response for abandoned id %s elapsed=%dms") {
 				foundElapsed = true
 				break
 			}
@@ -598,10 +605,15 @@ func TestTranslator_LateResponseAfterCancelLogsElapsed(t *testing.T) {
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	t.Errorf("did not see expected unknown-id-with-elapsed log; got: %v", rl.lines)
+	t.Errorf("did not see expected abandoned-id-with-elapsed log; got: %v", rl.lines)
 }
 
-func TestTranslator_RequestContextCancelDropsPending(t *testing.T) {
+// TestTranslator_RequestContextCancelMarksAbandoned verifies that ctx
+// cancel transitions the pending entry to abandoned (respCh=nil) rather
+// than deleting it. The abandoned entry is what blocks id reuse from
+// cross-contaminating (#50) and is cleared by demux when the late
+// response arrives.
+func TestTranslator_RequestContextCancelMarksAbandoned(t *testing.T) {
 	stdin, stdoutR, _ := pipePair()
 	tr := newTranslator(stdin, stdoutR, nullLogger{})
 	runCtx, runCancel := context.WithCancel(context.Background())
@@ -622,10 +634,16 @@ func TestTranslator_RequestContextCancelDropsPending(t *testing.T) {
 	if err != context.Canceled {
 		t.Errorf("err = %v, want context.Canceled", err)
 	}
-	// pending should be cleaned up.
 	tr.pendingMu.Lock()
 	defer tr.pendingMu.Unlock()
-	if _, ok := tr.pending["7"]; ok {
-		t.Errorf("pending map still contains id 7 after ctx cancel")
+	entry, ok := tr.pending["7"]
+	if !ok {
+		t.Fatal("pending[\"7\"] should be retained as abandoned, not deleted")
+	}
+	if entry.respCh != nil {
+		t.Errorf("pending[\"7\"].respCh = %v, want nil (abandoned)", entry.respCh)
+	}
+	if entry.seenAt.IsZero() {
+		t.Errorf("pending[\"7\"].seenAt is zero, want a real time")
 	}
 }
