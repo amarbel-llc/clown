@@ -208,6 +208,13 @@ func (h *httpHandler) handlePostStreaming(
 	}
 	results := make(chan sendResult, 1)
 	go func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				h.logger.Printf("clown-stdio-bridge: post end id=%s outcome=panic elapsed_ms=%d panic=%v",
+					idKey, time.Since(started).Milliseconds(), rec)
+				results <- sendResult{err: fmt.Errorf("clown-stdio-bridge: SendRequest panicked: %v", rec)}
+			}
+		}()
 		resp, err := h.t.SendRequest(r.Context(), idKey, body)
 		results <- sendResult{resp: resp, err: err}
 	}()

@@ -177,6 +177,12 @@ func (s *ManagedServer) readHandshake(ctx context.Context, r io.Reader) (Handsha
 	}
 	ch := make(chan result, 1)
 	go func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				s.logger().Error("handshake reader panicked", "panic", fmt.Sprintf("%v", rec))
+				ch <- result{err: fmt.Errorf("server %s: handshake reader panicked: %v", s.Name, rec)}
+			}
+		}()
 		scanner := bufio.NewScanner(r)
 		if scanner.Scan() {
 			ch <- result{line: scanner.Text()}
@@ -209,6 +215,11 @@ func (s *ManagedServer) forwardStderr(r io.Reader) {
 	log := s.logger()
 	for scanner.Scan() {
 		log.Info("plugin stderr", "line", scanner.Text())
+	}
+	if err := scanner.Err(); err != nil {
+		log.Warn("plugin stderr reader exited with error", "err", err)
+	} else {
+		log.Info("plugin stderr reader exited")
 	}
 }
 

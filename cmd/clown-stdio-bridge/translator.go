@@ -32,6 +32,32 @@ func tracingEnabled() bool {
 // implementing RFC may surface this as a flag.
 const queueDepth = 256
 
+// writerLivenessEnvVar selects the cadence at which runWriter emits a
+// liveness log line proving the goroutine is still scheduled. Empty/unset
+// uses writerLivenessDefault. "0" or "off" disables. Other values are
+// parsed by time.ParseDuration. The signal exists so a deadlocked
+// stdin.Write (child not draining stdin) is observable in real time
+// rather than only via a downstream HTTP timeout hours later.
+const writerLivenessEnvVar = "CLOWN_BRIDGE_WRITER_LIVENESS_INTERVAL"
+
+const writerLivenessDefault = 30 * time.Second
+
+func writerLivenessInterval() time.Duration {
+	v, set := os.LookupEnv(writerLivenessEnvVar)
+	if !set {
+		return writerLivenessDefault
+	}
+	switch v {
+	case "0", "off", "":
+		return 0
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d < 0 {
+		return writerLivenessDefault
+	}
+	return d
+}
+
 // translator routes JSON-RPC messages between the wrapped stdio MCP
 // server's stdin/stdout and the bridge's HTTP layer.
 //
@@ -134,24 +160,58 @@ func (t *translator) Run(ctx context.Context) error {
 }
 
 func (t *translator) runWriter(ctx context.Context) {
+	livenessInterval := writerLivenessInterval()
+	var livenessC <-chan time.Time
+	if livenessInterval > 0 {
+		ticker := time.NewTicker(livenessInterval)
+		defer ticker.Stop()
+		livenessC = ticker.C
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-livenessC:
+			t.logger.Printf("clown-stdio-bridge: writer alive queue_depth=%d pending=%d",
+				len(t.writeQueue), t.pendingActiveCount())
 		case msg := <-t.writeQueue:
 			if t.trace {
 				t.logger.Printf("clown-stdio-bridge: trace stdin %s", tracePreview(msg))
 			}
 			if _, err := t.stdin.Write(msg); err != nil {
-				t.logger.Printf("clown-stdio-bridge: write to child stdin failed: %v", err)
+				t.logExitOrphans("write to child stdin failed", err)
 				return
 			}
 			if _, err := t.stdin.Write([]byte{'\n'}); err != nil {
-				t.logger.Printf("clown-stdio-bridge: write newline to child stdin failed: %v", err)
+				t.logExitOrphans("write newline to child stdin failed", err)
 				return
 			}
 		}
 	}
+}
+
+// pendingActiveCount returns the number of pending entries with a live
+// respCh (i.e. an HTTP handler is currently blocked waiting on the
+// child's response). Excludes abandoned entries.
+func (t *translator) pendingActiveCount() int {
+	t.pendingMu.Lock()
+	defer t.pendingMu.Unlock()
+	n := 0
+	for _, entry := range t.pending {
+		if entry.respCh != nil {
+			n++
+		}
+	}
+	return n
+}
+
+// logExitOrphans is the runWriter exit logger. It surfaces both the
+// underlying error and the count of in-flight requests that will now
+// hang on respCh because the writer is gone — the failure mode that
+// makes long-running calls invisible after the fact.
+func (t *translator) logExitOrphans(reason string, err error) {
+	t.logger.Printf("clown-stdio-bridge: %s: %v; writer exiting; pending_orphaned=%d",
+		reason, err, t.pendingActiveCount())
 }
 
 func (t *translator) runReader() error {
