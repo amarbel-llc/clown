@@ -219,21 +219,33 @@ func writeOpencodeConfig(configDir, url, token, model string) error {
 	return os.WriteFile(filepath.Join(dir, "opencode.json"), data, 0o600)
 }
 
+// readCircusPortfile reads the bare port number circus writes to
+// ~/.local/state/circus/llama-server.port and returns it as a
+// host:port address (127.0.0.1:<port>) suitable for prepending
+// "http://" + appending "/v1". circus writes the bound port only;
+// the daemon always binds 127.0.0.1 (cmd/circus/daemon.go).
+//
+// For backward compatibility, if the file contains a value that
+// already looks like a host:port pair (contains a colon), it's
+// returned as-is — older daemon builds wrote "127.0.0.1:<port>".
 func readCircusPortfile() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("home dir: %w", err)
 	}
-	path := filepath.Join(home, ".local", "state", "circus", "portfile")
+	path := filepath.Join(home, ".local", "state", "circus", "llama-server.port")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", fmt.Errorf("circus not running (no portfile at %s): %w", path, err)
 	}
-	addr := strings.TrimSpace(string(data))
-	if addr == "" {
+	val := strings.TrimSpace(string(data))
+	if val == "" {
 		return "", fmt.Errorf("circus portfile is empty")
 	}
-	return addr, nil
+	if strings.Contains(val, ":") {
+		return val, nil
+	}
+	return "127.0.0.1:" + val, nil
 }
 
 func runOpencode(opencodePath string, args []string, prof *profile.Profile) int {

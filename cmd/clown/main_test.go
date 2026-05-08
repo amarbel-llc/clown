@@ -373,14 +373,15 @@ func TestParseFlags_DefaultProfileSuppressedByEnvProfile(t *testing.T) {
 	}
 }
 
-func TestReadCircusPortfile_Present(t *testing.T) {
+func TestReadCircusPortfile_BarePort(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	stateDir := filepath.Join(dir, ".local", "state", "circus")
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(stateDir, "portfile"), []byte("127.0.0.1:8080\n"), 0o600); err != nil {
+	// Current circus daemon writes just the port number.
+	if err := os.WriteFile(filepath.Join(stateDir, "llama-server.port"), []byte("8080\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	addr, err := readCircusPortfile()
@@ -389,6 +390,27 @@ func TestReadCircusPortfile_Present(t *testing.T) {
 	}
 	if addr != "127.0.0.1:8080" {
 		t.Errorf("addr = %q, want %q", addr, "127.0.0.1:8080")
+	}
+}
+
+func TestReadCircusPortfile_HostPortBackcompat(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	stateDir := filepath.Join(dir, ".local", "state", "circus")
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// Older circus builds wrote a full host:port pair. Verify we still
+	// accept that form unchanged.
+	if err := os.WriteFile(filepath.Join(stateDir, "llama-server.port"), []byte("127.0.0.1:9090\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	addr, err := readCircusPortfile()
+	if err != nil {
+		t.Fatalf("readCircusPortfile: %v", err)
+	}
+	if addr != "127.0.0.1:9090" {
+		t.Errorf("addr = %q, want %q", addr, "127.0.0.1:9090")
 	}
 }
 

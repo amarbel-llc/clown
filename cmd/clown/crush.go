@@ -6,6 +6,8 @@ package main
 // Like opencode, clown launches it with a generated config that pins one
 // custom provider, and overrides the search path via $CRUSH_GLOBAL_CONFIG
 // so the call is hermetic w.r.t. the user's own ~/.config/crush/crush.json.
+// Crush's CRUSH_GLOBAL_CONFIG names a *directory*; crush appends
+// "crush.json" itself.
 //
 // Three backends are supported, mirroring opencode:
 //
@@ -16,9 +18,10 @@ package main
 //   - gateway: OpenAI-compatible endpoint configured by the user in
 //     ~/.config/circus/crush.toml (parsed identically to opencode.toml).
 //     Clown writes a "custom" provider with type=openai-compat.
-//   - local: the circus-managed llama-server. The portfile from
-//     ~/.local/state/circus/portfile gives us the URL; same openai-compat
-//     shape as gateway, with a placeholder token.
+//   - local: the circus-managed llama-server. The portfile at
+//     ~/.local/state/circus/llama-server.port gives us the bound port;
+//     readCircusPortfile() prefixes 127.0.0.1 to produce the host:port
+//     pair this code uses to build the openai-compat base_url.
 //
 // Safety defaults: crush already prompts for tool permissions by default.
 // Its only escape hatches are permissions.allowed_tools (allowlist) and
@@ -366,7 +369,10 @@ func runCrush(crushPath string, args []string, prof *profile.Profile) int {
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	cmd.Env = append(os.Environ(), "CRUSH_GLOBAL_CONFIG="+filepath.Join(tmpDir, "crush.json"))
+	// CRUSH_GLOBAL_CONFIG points at the *directory* — crush appends
+	// "crush.json" itself (see charmbracelet/crush internal/config/load.go's
+	// GlobalConfig function).
+	cmd.Env = append(os.Environ(), "CRUSH_GLOBAL_CONFIG="+tmpDir)
 
 	if err := cmd.Run(); err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
