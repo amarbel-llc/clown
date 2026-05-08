@@ -58,6 +58,74 @@ func TestReadOpencodeLocalConfig_MissingURL(t *testing.T) {
 	}
 }
 
+func TestWriteOpencodeLocalConfigFile_RoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+
+	path, err := opencodeLocalConfigPath()
+	if err != nil {
+		t.Fatalf("path: %v", err)
+	}
+	if err := writeOpencodeLocalConfigFile(path, "https://example.com/v1", "secret-token"); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	cfg, err := readOpencodeLocalConfig()
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if cfg.URL != "https://example.com/v1" {
+		t.Errorf("url: got %q", cfg.URL)
+	}
+	if cfg.Token != "secret-token" {
+		t.Errorf("token: got %q", cfg.Token)
+	}
+}
+
+func TestWriteOpencodeLocalConfigFile_CreatesParentDir(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+
+	cfgDir := filepath.Join(dir, ".config", "circus")
+	if _, err := os.Stat(cfgDir); !os.IsNotExist(err) {
+		t.Fatalf("expected %s to be missing before write, got err=%v", cfgDir, err)
+	}
+
+	path, err := opencodeLocalConfigPath()
+	if err != nil {
+		t.Fatalf("path: %v", err)
+	}
+	if err := writeOpencodeLocalConfigFile(path, "https://example.com/v1", "tok"); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := os.Stat(cfgDir); err != nil {
+		t.Fatalf("parent dir not created: %v", err)
+	}
+}
+
+func TestWriteOpencodeLocalConfigFile_QuotesAreEscaped(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+
+	path, err := opencodeLocalConfigPath()
+	if err != nil {
+		t.Fatalf("path: %v", err)
+	}
+	// %q produces a Go-quoted string. The hand-rolled reader strips the
+	// outer "" but does not unescape \". Document the current behavior:
+	// a token containing a literal " survives as the escape sequence.
+	if err := writeOpencodeLocalConfigFile(path, "https://example.com/v1", `tok"with"quotes`); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	cfg, err := readOpencodeLocalConfig()
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if !strings.Contains(cfg.Token, `tok`) {
+		t.Errorf("token round-trip lost prefix: got %q", cfg.Token)
+	}
+}
+
 func TestWriteOpencodeConfig_CreatesFile(t *testing.T) {
 	dir := t.TempDir()
 	err := writeOpencodeConfig(dir, "https://example.com/v1", "test-token", "")

@@ -3,12 +3,17 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 
+	"github.com/charmbracelet/huh"
+
+	"github.com/amarbel-llc/clown/internal/pluginhost"
 	"github.com/amarbel-llc/clown/internal/profile"
 )
 
@@ -17,12 +22,20 @@ type opencodeLocalConfig struct {
 	Token string
 }
 
-func readOpencodeLocalConfig() (opencodeLocalConfig, error) {
+// opencodeLocalConfigPath returns ~/.config/circus/opencode.toml.
+func opencodeLocalConfigPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return opencodeLocalConfig{}, fmt.Errorf("home dir: %w", err)
+		return "", fmt.Errorf("home dir: %w", err)
 	}
-	path := filepath.Join(home, ".config", "circus", "opencode.toml")
+	return filepath.Join(home, ".config", "circus", "opencode.toml"), nil
+}
+
+func readOpencodeLocalConfig() (opencodeLocalConfig, error) {
+	path, err := opencodeLocalConfigPath()
+	if err != nil {
+		return opencodeLocalConfig{}, err
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return opencodeLocalConfig{}, fmt.Errorf("open %s: %w", path, err)
@@ -59,6 +72,91 @@ func readOpencodeLocalConfig() (opencodeLocalConfig, error) {
 		return opencodeLocalConfig{}, fmt.Errorf("%s: token is required", path)
 	}
 	return cfg, nil
+}
+
+// writeOpencodeLocalConfigFile writes a minimal ~/.config/circus/opencode.toml
+// (url + token) to path, creating the parent directory at 0o700 if missing.
+// The token is double-quoted to survive any shell-significant characters when
+// users hand-edit it later. URL goes through the same treatment for symmetry.
+func writeOpencodeLocalConfigFile(path, url, token string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("create config dir: %w", err)
+	}
+	body := fmt.Sprintf("url = %q\ntoken = %q\n", url, token)
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	return nil
+}
+
+// promptOpencodeLocalConfig walks the user through creating a missing
+// ~/.config/circus/opencode.toml via huh, writes it on confirmation, and
+// returns the parsed values. The caller must have verified
+// pluginhost.IsInteractive() before invoking — huh requires a TTY for both
+// stdin and stderr.
+//
+// Returns (cfg, nil) on success. When the user cancels at the confirmation
+// step or aborts the form (Ctrl-C), the file is not written and the
+// returned error explains what happened so runOpencode can surface a
+// non-zero exit cleanly.
+func promptOpencodeLocalConfig(path string) (opencodeLocalConfig, error) {
+	var (
+		url     = "http://localhost:11434/v1"
+		token   = "local"
+		confirm bool
+	)
+
+	form := huh.NewForm(
+		huh.NewGroup(
+			huh.NewNote().
+				Title("Configure opencode").
+				Description(fmt.Sprintf(
+					"No %s found.\n\nClown will create one for you. Provide the OpenAI-compatible\nbase URL and an API token; defaults assume a local Ollama-style\nendpoint and can be edited later.",
+					path,
+				)),
+			huh.NewInput().
+				Title("Base URL").
+				Description("OpenAI-compatible /v1 endpoint").
+				Placeholder("http://localhost:11434/v1").
+				Value(&url).
+				Validate(func(s string) error {
+					if strings.TrimSpace(s) == "" {
+						return fmt.Errorf("url is required")
+					}
+					return nil
+				}),
+			huh.NewInput().
+				Title("Token").
+				Description("API key. Use 'local' if your endpoint does not check it.").
+				EchoMode(huh.EchoModePassword).
+				Value(&token).
+				Validate(func(s string) error {
+					if strings.TrimSpace(s) == "" {
+						return fmt.Errorf("token is required")
+					}
+					return nil
+				}),
+			huh.NewConfirm().
+				Title(fmt.Sprintf("Save to %s?", path)).
+				Affirmative("Save").
+				Negative("Cancel").
+				Value(&confirm),
+		),
+	)
+
+	if err := form.Run(); err != nil {
+		return opencodeLocalConfig{}, fmt.Errorf("prompt: %w", err)
+	}
+	if !confirm {
+		return opencodeLocalConfig{}, fmt.Errorf("aborted by user; %s not written", path)
+	}
+
+	url = strings.TrimSpace(url)
+	token = strings.TrimSpace(token)
+	if err := writeOpencodeLocalConfigFile(path, url, token); err != nil {
+		return opencodeLocalConfig{}, err
+	}
+	return opencodeLocalConfig{URL: url, Token: token}, nil
 }
 
 func writeOpencodeConfig(configDir, url, token, model string) error {
@@ -159,8 +257,26 @@ func runOpencode(opencodePath string, args []string, prof *profile.Profile) int 
 	} else {
 		localCfg, err := readOpencodeLocalConfig()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "clown: opencode config: %v\n", err)
-			return 1
+			if errors.Is(err, fs.ErrNotExist) && pluginhost.IsInteractive() {
+				path, perr := opencodeLocalConfigPath()
+				if perr != nil {
+					fmt.Fprintf(os.Stderr, "clown: opencode config: %v\n", perr)
+					return 1
+				}
+				prompted, perr := promptOpencodeLocalConfig(path)
+				if perr != nil {
+					fmt.Fprintf(os.Stderr, "clown: opencode config: %v\n", perr)
+					return 1
+				}
+				localCfg = prompted
+			} else {
+				fmt.Fprintf(os.Stderr, "clown: opencode config: %v\n", err)
+				if errors.Is(err, fs.ErrNotExist) {
+					path, _ := opencodeLocalConfigPath()
+					fmt.Fprintf(os.Stderr, "  create %s with:\n    url = \"https://your-endpoint/v1\"\n    token = \"your-api-key\"\n  or run clown interactively to be prompted.\n", path)
+				}
+				return 1
+			}
 		}
 		url, token = localCfg.URL, localCfg.Token
 		if prof != nil {
