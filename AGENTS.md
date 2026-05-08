@@ -13,6 +13,18 @@ dispatches to the selected provider via `--provider <claude|codex|circus|opencod
 (default: `claude`; override with `CLOWN_PROVIDER` env var). Built entirely with
 Nix flakes; no standalone test suite (pre-merge validation via `just build`).
 
+## Agent gotchas specific to this repo
+
+- **Skills vs `.circus/` are different things — don't confuse them.** Skills
+  (`/eng:fdr`, `/eng:rfc`, `/init`, etc.) are listed in the session's
+  available-skills system reminder and invoked via the `Skill` tool. Don't
+  go hunting for them on the filesystem under `.circus/skills/` — that path
+  doesn't exist. `.circus/` is exclusively for clown's system-prompt
+  injection: `.circus/system-prompt` (replace) and
+  `.circus/system-prompt.d/*.md` (append fragments). When asked to
+  "create an FDR / ADR / RFC", invoke the matching skill rather than
+  reverse-engineering the conventions by copying an existing doc.
+
 ## Build Commands
 
 ```sh
