@@ -5,6 +5,7 @@ var (
 	CodexCliPath        string
 	CircusCliPath       string
 	OpencodeCliPath     string
+	CrushCliPath        string
 	ClownboxCliPath     string
 	AgentsFile          string
 	DisallowedToolsFile string

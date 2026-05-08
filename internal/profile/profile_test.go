@@ -92,6 +92,9 @@ func TestValidate_ValidCombos(t *testing.T) {
 		{Name: "c", Provider: "opencode", Backend: "anthropic"},
 		{Name: "d", Provider: "opencode", Backend: "gateway", URL: "http://x", Token: "t"},
 		{Name: "e", Provider: "opencode", Backend: "local"},
+		{Name: "f", Provider: "crush", Backend: "anthropic"},
+		{Name: "g", Provider: "crush", Backend: "gateway", URL: "http://x", Token: "t"},
+		{Name: "h", Provider: "crush", Backend: "local"},
 	}
 	for _, p := range cases {
 		if err := profile.Validate(p); err != nil {
@@ -120,6 +123,25 @@ func TestValidate_InvalidCombos(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "url") && !strings.Contains(err.Error(), "token") {
 			t.Errorf("Validate(bad2): error %q does not mention url or token", err.Error())
+		}
+	})
+
+	t.Run("crush+gateway missing url/token", func(t *testing.T) {
+		p := profile.Profile{Name: "bad3", Provider: "crush", Backend: "gateway"}
+		err := profile.Validate(p)
+		if err == nil {
+			t.Fatal("Validate(bad3): expected error, got nil")
+		}
+		if !strings.Contains(err.Error(), "url") && !strings.Contains(err.Error(), "token") {
+			t.Errorf("Validate(bad3): error %q does not mention url or token", err.Error())
+		}
+	})
+
+	t.Run("crush+nonsense backend", func(t *testing.T) {
+		p := profile.Profile{Name: "bad4", Provider: "crush", Backend: "nope"}
+		err := profile.Validate(p)
+		if err == nil {
+			t.Fatal("Validate(bad4): expected error, got nil")
 		}
 	})
 }

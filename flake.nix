@@ -19,6 +19,11 @@
     # llama-cpp with Anthropic Messages API (/v1/messages) support — requires
     # PR #17570 (merged 2025-11-28). Build 6981 in nixos-25.11 predates it.
     nixpkgs-llama.url = "github:amarbel-llc/nixpkgs/3b5a614454bd054dd960f1ff7a888dc5dfaf7bb4";
+    # numtide/llm-agents.nix is the upstream Nix packaging for charmbracelet's
+    # crush (and other AI coding agents). We pin it as a flake input so the
+    # crush binary path can be burned into clown via `-X buildcfg.CrushCliPath`.
+    llm-agents.url = "github:numtide/llm-agents.nix";
+    llm-agents.inputs.nixpkgs.follows = "nixpkgs";
   };
 
   outputs =
@@ -29,6 +34,7 @@
       nixpkgs-claude-code,
       nixpkgs-codex,
       nixpkgs-llama,
+      llm-agents,
       utils,
     }:
     utils.lib.eachDefaultSystem (
@@ -56,6 +62,11 @@
           config.allowUnfree = true;
         };
         pkgs-llama = import nixpkgs-llama { inherit system; };
+        # llm-agents.nix exposes per-system package outputs; we use its
+        # crush package for the crush provider's CLI. Inputs.nixpkgs
+        # follows our main `nixpkgs` so we don't pull in a duplicate
+        # nixpkgs evaluation.
+        pkgs-llm-agents = llm-agents.packages.${system};
       in
       let
         lib = pkgs.lib;
@@ -293,6 +304,7 @@
             "-X github.com/amarbel-llc/clown/internal/buildcfg.CodexVersion=${codexVersion}"
             "-X github.com/amarbel-llc/clown/internal/buildcfg.CodexRev=${codexRev}"
             "-X github.com/amarbel-llc/clown/internal/buildcfg.OpencodeCliPath=${pkgs.opencode}/bin/opencode"
+            "-X github.com/amarbel-llc/clown/internal/buildcfg.CrushCliPath=${pkgs-llm-agents.crush}/bin/crush"
             "-X github.com/amarbel-llc/clown/internal/buildcfg.ClownboxCliPath=${clownboxCliPath}"
             "-X github.com/amarbel-llc/clown/internal/buildcfg.StdioBridgePath=${clown-stdio-bridge}/bin/clown-stdio-bridge"
             "-X github.com/amarbel-llc/clown/internal/buildcfg.DefaultProvider=${defaultProvider}"
@@ -745,6 +757,7 @@
                 pkgs-claude-code.claude-code
                 pkgs-codex.codex
                 pkgs.opencode
+                pkgs-llm-agents.crush
                 pkgs.bun
                 pkgs.mitmproxy
                 pkgs.gomod2nix
@@ -788,6 +801,7 @@
             pkgs-claude-code.claude-code
             pkgs-codex.codex
             pkgs.opencode
+            pkgs-llm-agents.crush
             pkgs.bun
             pkgs.mitmproxy
             pkgs.gomod2nix

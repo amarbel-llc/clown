@@ -6,12 +6,13 @@ including Codex and Claude Code.
 ## Overview
 
 Clown is a Nix-packaged wrapper around coding agents (Claude Code, Codex,
-local models via `circus`, and OpenAI-compatible providers via `opencode`) that
-injects custom system prompts, applies per-provider safety defaults, and
-provides fish shell completions and session management. A single `clown` binary
-dispatches to the selected provider via `--provider <claude|codex|circus|opencode>`
-(default: `claude`; override with `CLOWN_PROVIDER` env var). Built entirely with
-Nix flakes; no standalone test suite (pre-merge validation via `just build`).
+local models via `circus`, OpenAI-compatible providers via `opencode`, and
+charmbracelet's crush) that injects custom system prompts, applies per-provider
+safety defaults, and provides fish shell completions and session management.
+A single `clown` binary dispatches to the selected provider via
+`--provider <claude|codex|circus|opencode|crush>` (default: `claude`; override
+with `CLOWN_PROVIDER` env var). Built entirely with Nix flakes; no standalone
+test suite (pre-merge validation via `just build`).
 
 ## Agent gotchas specific to this repo
 
@@ -135,6 +136,22 @@ The flake produces a `symlinkJoin` of five components:
    `gpt-4o`; model limits are hardcoded in `cmd/clown/opencode.go`. The opencode
    binary path is burned in at build time via `internal/buildcfg.OpencodeCliPath`.
 
+   **Crush provider.** `--provider crush` runs charmbracelet's crush against
+   one of three backends (parallel to opencode's split): the Anthropic API
+   passthrough (uses crush's builtin Anthropic provider, authenticates via
+   `ANTHROPIC_API_KEY`), an OpenAI-compatible gateway configured via
+   `~/.config/circus/crush.toml` (`url`, `token` — same TOML format as
+   `opencode.toml`), or the local circus llama-server discovered through
+   `~/.local/state/circus/portfile`. Clown writes a temporary `crush.json`
+   to a `mkdtemp` dir and points crush at it via `CRUSH_GLOBAL_CONFIG`
+   (the documented override env var). The config disables crush's Catwalk
+   provider auto-update so launches are reproducible. The crush binary is
+   pinned via the `numtide/llm-agents.nix` flake input and burned in via
+   `internal/buildcfg.CrushCliPath`. Model defaults: `claude-sonnet-4-5`
+   for the anthropic backend, `gpt-4o` for openai-compat. Profile names:
+   `crush-anthropic`, `crush-local` (builtin); `crush-gateway` is
+   user-defined because it requires URL/token. See `cmd/clown/crush.go`.
+
    **Profile system (planned).** A future `--profile <name>` flag (and
    `CLOWN_PROFILE` env var) will select named (provider, backend, model) tuples
    from `profiles/builtin.toml` (open, burned in) and
@@ -149,6 +166,9 @@ Follows the monorepo's stable-first pattern:
 - `nixpkgs-master` -> pinned SHA
 - `nixpkgs-llama` -> pinned to nixpkgs master SHA for llama-cpp with
   `/v1/messages` support (PR #17570, merged 2025-11-28; not in nixos-25.11)
+- `llm-agents` -> `numtide/llm-agents.nix`, source of the `crush` package
+  (and many other AI coding agents). Its `inputs.nixpkgs` follows our main
+  `nixpkgs` so we don't pull in a duplicate evaluation.
 - Claude Code is fetched via inline `fetchTarball` (not a flake input) with
   `allowUnfree` — pinned to a specific nixpkgs SHA for version stability.
 

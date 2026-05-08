@@ -204,8 +204,8 @@ func runWithFlags(flags parsedFlags) int {
 	}
 
 	if flags.naked {
-		if flags.provider == "opencode" {
-			fmt.Fprintln(os.Stderr, "clown: --naked is not supported with --provider opencode (config injection required)")
+		if flags.provider == "opencode" || flags.provider == "crush" {
+			fmt.Fprintf(os.Stderr, "clown: --naked is not supported with --provider %s (config injection required)\n", flags.provider)
 			return 1
 		}
 		execProcess(cliPath, flags.forwarded)
@@ -246,6 +246,8 @@ func runWithFlags(flags parsedFlags) int {
 		return runCircus(cliPath, flags, prompts, pluginDirs)
 	case "opencode":
 		return runOpencode(cliPath, flags.forwarded, selectedProfile)
+	case "crush":
+		return runCrush(cliPath, flags.forwarded, selectedProfile)
 	case "clownbox":
 		return runClownbox(cliPath, flags, prompts, pluginDirs)
 	default:
@@ -734,6 +736,8 @@ func resolveProvider(name string) (string, error) {
 		return buildcfg.CircusCliPath, nil
 	case "opencode":
 		return buildcfg.OpencodeCliPath, nil
+	case "crush":
+		return buildcfg.CrushCliPath, nil
 	case "clownbox":
 		if buildcfg.ClownboxCliPath == "" {
 			return "", fmt.Errorf("%s", clownboxDisabledMessage)

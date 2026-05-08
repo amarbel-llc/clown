@@ -48,17 +48,18 @@ func Merge(builtin, additional []Profile) []Profile {
 var validCombos = map[string]map[string]bool{
 	"claude":   {"anthropic": true, "local": true},
 	"opencode": {"anthropic": true, "gateway": true, "local": true},
+	"crush":    {"anthropic": true, "gateway": true, "local": true},
 }
 
 func Validate(p Profile) error {
 	backends, ok := validCombos[p.Provider]
 	if !ok {
-		return fmt.Errorf("profile %q: unknown provider %q (valid: claude, opencode)", p.Name, p.Provider)
+		return fmt.Errorf("profile %q: unknown provider %q (valid: claude, opencode, crush)", p.Name, p.Provider)
 	}
 	if !backends[p.Backend] {
 		return fmt.Errorf("profile %q: provider %q does not support backend %q", p.Name, p.Provider, p.Backend)
 	}
-	if p.Provider == "opencode" && p.Backend == "gateway" {
+	if (p.Provider == "opencode" || p.Provider == "crush") && p.Backend == "gateway" {
 		if p.URL == "" {
 			return fmt.Errorf("profile %q: backend gateway requires url", p.Name)
 		}
