@@ -1,6 +1,64 @@
 # Throwaway investigation recipes. Live here, not the root justfile, to
 # keep top-level `just --list` legible. Invoked as
 # `just explore <recipe>` (e.g. `just explore issue-35-mkcircus-plugin-closure`).
+
+# Smoke-test the new crush provider against the local circus llama-server.
+# Starts circus (idempotent — attaches to existing daemon), waits for the
+# portfile, then execs `clown --profile crush-local`. Requires
+# `just build` to have produced ./result/bin/{clown,circus}. Exits if
+# circus fails to bring up llama-server (no model? port conflict?).
+crush-local-smoke MODEL='':
+    #!/usr/bin/env bash
+    set -euo pipefail
+    root=$(git rev-parse --show-toplevel)
+    cd "$root"
+
+    if [[ ! -x ./result/bin/circus || ! -x ./result/bin/clown ]]; then
+        echo "FAIL: ./result/bin/{circus,clown} missing — run 'just build' first" >&2
+        exit 2
+    fi
+
+    portfile="$HOME/.local/state/circus/llama-server.port"
+
+    # When MODEL is given, stop any running daemon first — circus
+    # silently ignores --model when attaching to an already-running
+    # llama-server (cmd/circus/daemon.go:attachOrStart).
+    if [[ -n "{{MODEL}}" ]]; then
+        echo ">> circus stop (to honor --model {{MODEL}})"
+        ./result/bin/circus stop || true
+        echo ">> circus start --model {{MODEL}}"
+        ./result/bin/circus start --model "{{MODEL}}"
+    else
+        echo ">> circus start"
+        ./result/bin/circus start
+    fi
+
+    echo ">> waiting for portfile $portfile"
+    for i in $(seq 1 60); do
+        if [[ -s "$portfile" ]]; then
+            break
+        fi
+        sleep 1
+    done
+    if [[ ! -s "$portfile" ]]; then
+        echo "FAIL: portfile never appeared at $portfile" >&2
+        ./result/bin/circus status >&2 || true
+        exit 1
+    fi
+    echo "   port: $(cat "$portfile")"
+
+    echo
+    echo ">> launching clown --profile crush-local"
+    echo "   (Ctrl-C to exit; 'just explore crush-local-stop' to kill the daemon)"
+    echo
+    exec ./result/bin/clown --profile crush-local
+
+# Stop the circus daemon started by crush-local-smoke.
+crush-local-stop:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "$(git rev-parse --show-toplevel)"
+    ./result/bin/circus stop || echo "circus already stopped"
 #
 # Submodule recipes run with CWD set to this directory by default; the
 # recipes below use absolute paths or `git rev-parse --show-toplevel`
