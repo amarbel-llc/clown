@@ -6,6 +6,113 @@
 # recipes below use absolute paths or `git rev-parse --show-toplevel`
 # so that's harmless.
 
+# Dump the managed-settings.json from the currently-built ./result/bin/clown.
+# Confirms what's burned into the patched claude-code derivation. No API
+# spend; pure filesystem inspection.
+managed-settings-dump:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    root=$(git rev-parse --show-toplevel)
+    cd "$root"
+
+    clown_real=$(readlink -f ./result/bin/clown)
+    cc=$(nix-store --query --references "$clown_real" | grep '/nix/store/[a-z0-9]\+-clown-0' | head -1)
+    cc=$(nix-store --query --references "$cc" | grep '/nix/store/[a-z0-9]\+-claude-code' | head -1)
+    path="$cc/etc/claude/managed-settings.json"
+    echo "path: $path"
+    echo
+    jq . "$path"
+
+# Empirical test: does a managed-settings `permissions.allow` rule
+# short-circuit a PreToolUse hook that returns `deny`, or does the
+# hook deny still win? Tests the question:
+#
+#   "If Read is in managed allow, can a PreToolUse hook still block
+#   a Read call?"
+#
+# Setup:
+#   - Built clown has Read/Write/Edit in managed permissions.allow.
+#   - --settings argv injects a PreToolUse Read hook that returns deny.
+#   - Read is invoked on a neutral target (the fish-completions file
+#     used by the existing smoke recipe).
+#
+# Verdict:
+#   PASS (Read succeeded)  → managed allow short-circuits hook deny.
+#                            Bad for hook-based per-call control.
+#   FAIL (Read denied)     → hook deny wins despite managed allow.
+#                            Hooks can still gate individual calls.
+managed-allow-vs-hook-deny:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    root=$(git rev-parse --show-toplevel)
+    cd "$root"
+
+    target=$(readlink -f ./result/share/fish/vendor_completions.d/clown.fish)
+    if [[ ! -f "$target" ]]; then
+        echo "FAIL: read target not found: $target" >&2
+        exit 2
+    fi
+
+    work=$(mktemp -d)
+    trap 'rm -rf "$work"' EXIT
+
+    cat > "$work/hook-deny.sh" <<'EOF'
+    #!/usr/bin/env bash
+    cat >/dev/null
+    printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"managed-allow-vs-hook-deny test"}}\n'
+    exit 0
+    EOF
+    chmod +x "$work/hook-deny.sh"
+
+    settings=$(jq -nc --arg cmd "$work/hook-deny.sh" '{
+      hooks: { PreToolUse: [
+        { matcher: "Read", hooks: [{type:"command", command:$cmd}] }
+      ] }
+    }')
+
+    transcript=$(mktemp)
+    trap 'rm -f "$transcript"; rm -rf "$work"' EXIT
+
+    echo "=== managed-settings.json permissions.allow ==="
+    clown_real=$(readlink -f ./result/bin/clown)
+    cc=$(nix-store --query --references "$clown_real" | grep '/nix/store/[a-z0-9]\+-clown-0' | head -1)
+    cc=$(nix-store --query --references "$cc" | grep '/nix/store/[a-z0-9]\+-claude-code' | head -1)
+    jq '.permissions.allow' "$cc/etc/claude/managed-settings.json"
+    echo
+
+    echo "=== invoking clown -p with deny hook on Read ==="
+    ./result/bin/clown -- --settings "$settings" -p --output-format stream-json --verbose \
+        "Use Read DIRECTLY (no Agent dispatch) on $target — output only the first line." \
+        > "$transcript" 2>/dev/null || true
+
+    echo "--- tool_result entries ---"
+    jq -c 'select(.type=="user")|.message.content[]?|select(.type=="tool_result")' "$transcript"
+    echo "--- assistant text ---"
+    jq -r 'select(.type=="assistant")|.message.content[]?|select(.type=="text")|.text' "$transcript"
+    echo "--- final result ---"
+    jq -r 'select(.type=="result")|.result // empty' "$transcript"
+    echo
+    echo "--- verdict ---"
+    verdict=$(jq -r '
+      [inputs]
+      | (map(select(.type == "assistant")
+             | .message.content[]?
+             | select(.type == "tool_use")
+             | {key: .id, value: .name})
+         | from_entries) as $names
+      | map(select(.type == "user")
+            | .message.content[]?
+            | select(.type == "tool_result")
+            | select($names[.tool_use_id] == "Read")
+            | (.is_error // false))
+      | (.[0] // null)
+      | if . == null then "INCONCLUSIVE (no Read tool_result)"
+        elif . then "FAIL — Read was denied. Hook deny WINS over managed allow."
+        else "PASS — Read succeeded. Managed allow SHORT-CIRCUITS hook deny."
+        end
+    ' "$transcript")
+    echo "  $verdict"
+
 # Direct invocation of the built clown-hook-allow binary to confirm
 # its output schema. No API spend; just feeds sample stdin and prints
 # the JSON the binary emits.
