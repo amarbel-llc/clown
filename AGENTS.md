@@ -114,10 +114,15 @@ The flake produces a `symlinkJoin` of five components:
    and sets `ANTHROPIC_CUSTOM_MODEL_OPTION` to bypass Claude Code's model
    validation. `--model <name-or-path>` selects the GGUF model: absolute paths
    pass through; bare names are resolved from `~/.local/share/circus/models/<name>.gguf`.
-   The default model and llama-server binary path are burned in at build time
-   via `internal/buildcfg` ldflags. A separate `nixpkgs-llama` flake input
-   (pinned to nixpkgs master) provides a llama-cpp build with Anthropic Messages
-   API support (`/v1/messages`), which predates the nixos-25.11 stable pin.
+   When `--model` is omitted (and `CIRCUS_MODEL` is unset), `cmd/clown/circus.go
+   pickCircusModel` lists the models directory and either auto-picks (1 model),
+   shows a `huh.NewSelect` picker (2+ models on a TTY), refuses with a hint to
+   run `circus download` (0 models), or refuses non-interactively (2+ models, no
+   TTY). The llama-server binary path is the only model-related ldflag burned
+   in (`internal/buildcfg.LlamaServerPath`). A separate `nixpkgs-llama` flake
+   input (pinned to nixpkgs master) provides a llama-cpp build with Anthropic
+   Messages API support (`/v1/messages`), which predates the nixos-25.11 stable
+   pin.
 
    **Model management.** `circus models` lists installed models (from
    `~/.local/share/circus/models/`). `circus download <name>` fetches a model
