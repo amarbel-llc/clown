@@ -20,18 +20,12 @@
   clown-plugin-host,
   mock-stdio-mcp,
   synthetic-plugin,
+  # Shebang-patched copy of the inspect-compiled helper, lifted to
+  # flake.nix so clown-cover's coverIntegrationCommand can stage the
+  # same artifact this lane stages.
+  inspectCompiledPatched,
 }:
 let
-  # The inspect-compiled helper uses `#!/usr/bin/env bash` for
-  # devshell portability, but the nix build sandbox has no
-  # /usr/bin/env. Stage a shebang-patched copy via patchShebangs
-  # so clown-plugin-host can exec it directly inside the lane.
-  inspectCompiledPatched = pkgs.runCommand "inspect-compiled" { } ''
-    cp ${./tests/scripts/inspect-compiled} $out
-    chmod +x $out
-    patchShebangs $out
-  '';
-
   # Naming anchor for the lane derivation — only consulted for
   # `${base.pname}-bats-${suffix}`. Use the underlying
   # buildGoApplication (which has `pname = "clown"`) rather

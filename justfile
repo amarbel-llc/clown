@@ -54,6 +54,29 @@ test-stdio-bridge:
 test-plugin-host:
     nix build .#bats-default --no-link --print-build-logs
 
+# Build clown-cover and emit the bats-suite coverage profile to
+# result/coverage.out. Distinct from `go test -cover` (unit
+# reachability) — this measures what tests/bats/* exercises through
+# the real CLI against -cover-instrumented binaries.
+[group("test")]
+cover-bats:
+    nix build .#clown-cover --no-link --print-build-logs
+
+# Build clown-cover and open the HTML coverage report. Falls back
+# to printing the path if no $BROWSER is available.
+[group("test")]
+cover-bats-html:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    nix build .#clown-cover
+    profile=$(readlink -f result)/coverage.out
+    if [[ -n "${BROWSER:-}" ]]; then
+        go tool cover -html="$profile"
+    else
+        echo "coverage profile: $profile"
+        echo "open with: go tool cover -html=$profile"
+    fi
+
 # Integration test: launch clown-plugin-host with the real moxy MCP server as
 # a plugin, exercising the clown-plugin-protocol against a production server
 # instead of the synthetic mock. Moxy must already be on $PATH; its plugin

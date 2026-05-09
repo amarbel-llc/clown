@@ -231,6 +231,93 @@
           cp ${mock-stdio-mcp-go}/bin/mockstdiomcp $out/bin/mock-stdio-mcp
         '';
 
+        # Shebang-patched copy of the inspect-compiled helper. The
+        # devshell script uses `#!/usr/bin/env bash` for portability,
+        # but the nix sandbox has no /usr/bin/env. Lifted from
+        # bats.nix so both the bats lane and clown-cover's
+        # coverIntegrationCommand reference the same staged helper.
+        inspectCompiledPatched = pkgs.runCommand "inspect-compiled" { } ''
+          cp ${./tests/scripts/inspect-compiled} $out
+          chmod +x $out
+          patchShebangs $out
+        '';
+
+        # Unified buildGoApplication holding the three binaries the
+        # bats integration suite invokes (clown-plugin-host,
+        # clown-stdio-bridge, mock-stdio-mcp). Used as the `base` of
+        # buildGoCover — pkgs.buildGoCover rebuilds this with `-cover`
+        # and runs coverIntegrationCommand against the instrumented
+        # output. The rename in postInstall mirrors what the standalone
+        # `mock-stdio-mcp` runCommand does (Go's leaf-name policy
+        # produces `mockstdiomcp`; the test contract expects
+        # `mock-stdio-mcp`).
+        #
+        # No buildcfg.StdioBridgePath ldflag here: the bats suite never
+        # exercises the code path that consumes it (neither test makes
+        # plugin-host spawn a stdio-bridge), so an empty value is fine.
+        clown-bats-bins = buildGoApplication {
+          pname = "clown-bats-bins";
+          version = clownVersion;
+          src = goSrc;
+          subPackages = [
+            "cmd/clown-plugin-host"
+            "cmd/clown-stdio-bridge"
+            "internal/pluginhost/testdata/mockstdiomcp"
+          ];
+          modules = ./gomod2nix.toml;
+          ldflags = [
+            "-s"
+            "-w"
+            "-X main.version=${clownVersion}"
+            "-X main.commit=${clownRev}"
+          ];
+          postInstall = ''
+            mv $out/bin/mockstdiomcp $out/bin/mock-stdio-mcp
+          '';
+        };
+
+        # clown-cover: bats-suite coverage of clown-bats-bins.
+        # buildGoCover rebuilds clown-bats-bins with `go build -cover`,
+        # runs coverIntegrationCommand under a fresh $GOCOVERDIR, and
+        # persists the textfmt profile to $out/coverage.out (plus
+        # binary covdata fragments under $out/covdata/).
+        #
+        # View the report with `go tool cover -html=result/coverage.out`
+        # or `just cover-bats-html`. Distinct from `go test -cover`,
+        # which only measures unit-test reachability — this lane shows
+        # what code paths the bats integration suite exercises through
+        # the real CLI.
+        #
+        # No corresponding `clown-go-cover` (unit) lane today; merging
+        # the two via `go tool covdata merge` is a future addition.
+        clownCoverIntegrationCommand = ''
+          mkdir -p stage/zz-tests_bats
+          cp -r ${./tests/bats}/* stage/zz-tests_bats/
+          cp ${inspectCompiledPatched} stage/zz-tests_bats/inspect-compiled
+          chmod -R u+w stage
+
+          export CLOWN_PLUGIN_HOST_BIN="$out/bin/clown-plugin-host"
+          export CLOWN_STDIO_BRIDGE_BIN="$out/bin/clown-stdio-bridge"
+          export MOCK_STDIO_MCP_BIN="$out/bin/mock-stdio-mcp"
+          export SYNTHETIC_PLUGIN_DIR="${synthetic-plugin}"
+
+          cd stage/zz-tests_bats
+          ${pkgs.bats}/bin/bats \
+            --jobs $NIX_BUILD_CORES \
+            *.bats
+          cd "$NIX_BUILD_TOP"
+        '';
+
+        clown-cover = pkgs.buildGoCover {
+          base = clown-bats-bins;
+          extraNativeInstallCheckInputs = with pkgs; [
+            curl
+            jq
+            coreutils
+          ];
+          coverIntegrationCommand = clownCoverIntegrationCommand;
+        };
+
         # Compiled binary that the synthetic-plugin derivation embeds.
         # Not exposed as a top-level package — consumers should use
         # synthetic-plugin instead, which lays out the full plugin dir.
@@ -672,6 +759,7 @@
             clown-plugin-host
             mock-stdio-mcp
             synthetic-plugin
+            inspectCompiledPatched
             ;
         };
 
@@ -712,6 +800,7 @@
           default = mkClownPkg { pluginMeta = emptyPluginMeta; };
           clown-manpages = clown-manpages;
           clown-race = clown-go-race;
+          clown-cover = clown-cover;
           mock-stdio-mcp = mock-stdio-mcp;
           synthetic-plugin = synthetic-plugin;
         }
