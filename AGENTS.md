@@ -35,7 +35,7 @@ just test-go     # Run Go unit tests
 just clean       # rm -rf result
 ```
 
-Format nix: `lux fmt flake.nix`
+Format: `nix fmt` (treefmt; config in `treefmt.nix`)
 
 ## Architecture
 
