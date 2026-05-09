@@ -43,14 +43,16 @@
     utils.lib.eachDefaultSystem (
       system:
       let
-        # Apply the fork's overlay so pkgs gets buildGoApplication,
-        # mkGoEnv, gomod2nix (CLI), fetchGgufModel, etc. The overlay
-        # also pins claude-code at the package level — we route
-        # claude-code through pkgs-claude-code (separate input, no
-        # overlay) so that pin doesn't override our chosen version.
+        # The fork's default.nix shim auto-applies its overlay on
+        # `import nixpkgs { ... }`, so pkgs gets buildGoApplication,
+        # mkGoEnv, gomod2nix (CLI), fetchGgufModel, etc. without an
+        # explicit overlays pass. The overlay also pins claude-code
+        # at the package level — we route claude-code through
+        # pkgs-claude-code (separate input pinned to a pre-shim SHA,
+        # so no auto-apply) to keep that pin from overriding our
+        # chosen version.
         pkgs = import nixpkgs {
           inherit system;
-          overlays = [ nixpkgs.overlays.default ];
         };
         pkgs-master = import nixpkgs-master {
           inherit system;
