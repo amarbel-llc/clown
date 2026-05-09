@@ -14,6 +14,8 @@ import (
 
 	"github.com/charmbracelet/bubbles/progress"
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/amarbel-llc/clown/internal/circusmodels"
 )
 
 //go:embed registry.json
@@ -139,7 +141,7 @@ func cmdDownload(args []string) int {
 		return 1
 	}
 
-	dir := modelsDir()
+	dir := circusmodels.Dir()
 	dest := filepath.Join(dir, name+".gguf")
 	if _, err := os.Stat(dest); err == nil {
 		fmt.Fprintf(os.Stderr, "circus: model %q already installed at %s\n", name, dest)

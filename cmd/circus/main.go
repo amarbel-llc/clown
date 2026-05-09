@@ -5,6 +5,8 @@ import (
 	"os"
 
 	"golang.org/x/term"
+
+	"github.com/amarbel-llc/clown/internal/circusmodels"
 )
 
 func main() {
@@ -43,7 +45,7 @@ func run(args []string) int {
 }
 
 func cmdModels() int {
-	names, err := listModels(modelsDir())
+	names, err := circusmodels.List(circusmodels.Dir())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "circus: %v\n", err)
 		return 1

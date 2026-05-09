@@ -7,13 +7,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
 	"github.com/amarbel-llc/clown/internal/buildcfg"
+	"github.com/amarbel-llc/clown/internal/circusmodels"
 	"github.com/amarbel-llc/clown/internal/daemon"
 )
 
@@ -23,14 +22,6 @@ const (
 	healthInterval  = 500 * time.Millisecond
 	stopGracePeriod = 5 * time.Second
 )
-
-func modelsDir() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(home, ".local", "share", "circus", "models")
-}
 
 func resolveModel(name, dir string) (string, error) {
 	if filepath.IsAbs(name) {
@@ -128,7 +119,7 @@ func startDaemon(pidPath, portPath string) (int, error) {
 	modelName := os.Getenv("CIRCUS_MODEL")
 	if modelName != "" {
 		if !filepath.IsAbs(modelName) {
-			resolved, err := resolveModel(modelName, modelsDir())
+			resolved, err := resolveModel(modelName, circusmodels.Dir())
 			if err != nil {
 				return 0, err
 			}
@@ -263,24 +254,6 @@ func statusDaemon() error {
 	logPath, _ := logfilePath()
 	fmt.Printf("running  pid=%d  url=http://127.0.0.1:%d  log=%s\n", pid, port, logPath)
 	return nil
-}
-
-func listModels(dir string) ([]string, error) {
-	entries, err := os.ReadDir(dir)
-	if os.IsNotExist(err) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	var names []string
-	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), ".gguf") {
-			names = append(names, strings.TrimSuffix(e.Name(), ".gguf"))
-		}
-	}
-	sort.Strings(names)
-	return names, nil
 }
 
 func waitHealthy(ctx context.Context, addr string) error {
