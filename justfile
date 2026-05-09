@@ -466,7 +466,7 @@ tag version message:
         gum log --level info "Previous: $prev"
         git log --oneline "$prev"..HEAD
     fi
-    git tag -s -m "{{message}}" "$tag"
+    git tag -s -m {{quote(message)}} "$tag"
     gum log --level info "Created tag: $tag"
     git push origin "$tag"
     gum log --level info "Pushed $tag"
