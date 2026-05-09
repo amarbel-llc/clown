@@ -357,6 +357,15 @@
                 "Bash(curl * | sh)"
                 "Bash(wget * | sh)"
               ];
+              # Hard-allow the file-mutation tools at the managed tier.
+              # Managed allows are concatenated across scopes and sit at
+              # the top of the precedence chain, so this guarantees these
+              # tools never prompt regardless of user/project settings.
+              allow = [
+                "Read"
+                "Write"
+                "Edit"
+              ];
             };
             # Disable auto-memory. The feature persists cross-session
             # learnings under ~/.claude/projects/<project>/memory/ and
