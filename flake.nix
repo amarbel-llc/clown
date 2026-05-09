@@ -76,22 +76,6 @@
       let
         lib = pkgs.lib;
 
-        # GGUF model fetches via the fork's `fetchGgufModel` wrapper.
-        # Same content as `pkgs.fetchurl`, but takes hex sha256
-        # directly (matching what HuggingFace surfaces) and names
-        # the output `<name>.gguf` so the store path is intelligible.
-        gemma3-270m-model = pkgs.fetchGgufModel {
-          name = "gemma-3-270m-it-Q8_0";
-          url = "https://huggingface.co/ggml-org/gemma-3-270m-it-GGUF/resolve/main/gemma-3-270m-it-Q8_0.gguf";
-          sha256 = "sha256-DvV9LIOEWKGVJmQmDcujjlvdo3SU869zLwbkrdJAaOM=";
-        };
-
-        qwen3-06b-model = pkgs.fetchGgufModel {
-          name = "Qwen3-0.6B-Q8_0";
-          url = "https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf";
-          sha256 = "sha256-lGXmOiKt1TVNm7S5npARcEPHEkAHZkkHJZvRbQQ7sDE=";
-        };
-
         # Subagent definitions use TOML frontmatter (+++ delimiters) so Nix
         # can parse config natively via builtins.fromTOML. The markdown body
         # after the closing +++ becomes the agent's system prompt.
@@ -346,8 +330,6 @@
           ldflags = [
             "-s"
             "-w"
-            "-X github.com/amarbel-llc/clown/internal/buildcfg.DefaultModelPath=${gemma3-270m-model}"
-            "-X github.com/amarbel-llc/clown/internal/buildcfg.CircusModelName=${gemma3-270m-model}"
             "-X github.com/amarbel-llc/clown/internal/buildcfg.LlamaServerPath=${llamaServerPath}"
           ];
         };

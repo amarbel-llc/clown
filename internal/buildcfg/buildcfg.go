@@ -16,8 +16,6 @@ var (
 	ClaudeCodeRev       string
 	CodexVersion        string
 	CodexRev            string
-	DefaultModelPath    string
-	CircusModelName     string
 	LlamaServerPath     string
 	// StdioBridgePath is the absolute path to the clown-stdio-bridge
 	// binary in its own Nix store output, baked at build time. Used by

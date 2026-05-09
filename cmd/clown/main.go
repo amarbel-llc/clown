@@ -523,15 +523,10 @@ func runCodex(cliPath string, flags parsedFlags, prompts promptwalk.PromptResult
 }
 
 func runCircus(circusPath string, flags parsedFlags, prompts promptwalk.PromptResult, pluginDirs []string) int {
-	// Resolve the model: --model from CLI takes priority, then the build default.
+	// Model selection is the user's responsibility: pass `--model` or set
+	// CIRCUS_MODEL. Use `circus download <name>` to populate the models dir.
 	forwarded := flags.forwarded
 	modelName := flagValue(forwarded, "--model")
-	if modelName == "" {
-		modelName = buildcfg.CircusModelName
-	}
-	if modelName != "" && !hasFlag(forwarded, "--model") {
-		forwarded = append([]string{"--model", modelName}, forwarded...)
-	}
 
 	return withClaudeResumeHint(forwarded, func(forwarded []string) int {
 		ctx, cancel := context.WithCancel(context.Background())

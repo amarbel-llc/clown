@@ -126,9 +126,6 @@ func startDaemon(pidPath, portPath string) (int, error) {
 		"--host", "127.0.0.1",
 	}
 	modelName := os.Getenv("CIRCUS_MODEL")
-	if modelName == "" {
-		modelName = buildcfg.DefaultModelPath
-	}
 	if modelName != "" {
 		if !filepath.IsAbs(modelName) {
 			resolved, err := resolveModel(modelName, modelsDir())
