@@ -41,7 +41,9 @@ let
   };
 
   mkClownBatsLane =
-    { filter ? "" }:
+    {
+      filter ? "",
+    }:
     pkgs.testers.batsLane {
       inherit filter;
       base = clownBatsBase;
@@ -73,7 +75,11 @@ let
           dest = "zz-tests_bats/inspect-compiled";
         }
       ];
-      nativeBuildInputs = with pkgs; [ curl jq coreutils ];
+      nativeBuildInputs = with pkgs; [
+        curl
+        jq
+        coreutils
+      ];
     };
 
   # Auto-discover `# bats file_tags=...` directives across
@@ -87,9 +93,7 @@ let
     file:
     let
       content = builtins.readFile (./tests/bats + "/${file}");
-      tagLines = builtins.filter (l: lib.hasPrefix "# bats file_tags=" l) (
-        lib.splitString "\n" content
-      );
+      tagLines = builtins.filter (l: lib.hasPrefix "# bats file_tags=" l) (lib.splitString "\n" content);
     in
     if tagLines == [ ] then
       [ ]
@@ -98,7 +102,12 @@ let
   allFileTags = lib.unique (lib.concatMap extractFileTags batsFiles);
 in
 lib.listToAttrs (
-  map (tag: lib.nameValuePair "bats-${tag}" (mkClownBatsLane { filter = tag; })) allFileTags
+  map (
+    tag:
+    lib.nameValuePair "bats-${tag}" (mkClownBatsLane {
+      filter = tag;
+    })
+  ) allFileTags
 )
 // {
   bats-default = mkClownBatsLane { };

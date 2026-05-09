@@ -8,7 +8,12 @@
   outputs =
     { self, nixpkgs, ... }:
     let
-      systems = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
+        "x86_64-darwin"
+        "aarch64-darwin"
+      ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
     in
     {
@@ -34,10 +39,15 @@
             # Pull host env through nix-eval (needs --impure) and bake them
             # into the builder as derivation attrs. impureEnvVars didn't
             # propagate reliably on the darwin dev host, so we do it this way.
-            CLOWN_PROBE_LOOPBACK_PORT   = builtins.getEnv "CLOWN_PROBE_LOOPBACK_PORT";
+            CLOWN_PROBE_LOOPBACK_PORT = builtins.getEnv "CLOWN_PROBE_LOOPBACK_PORT";
             CLOWN_PROBE_LOOPBACK_BANNER = builtins.getEnv "CLOWN_PROBE_LOOPBACK_BANNER";
 
-            nativeBuildInputs = [ pkgs.coreutils pkgs.bash pkgs.curl pkgs.netcat ];
+            nativeBuildInputs = [
+              pkgs.coreutils
+              pkgs.bash
+              pkgs.curl
+              pkgs.netcat
+            ];
 
             dontUnpack = true;
 

@@ -24,9 +24,19 @@
   };
 
   outputs =
-    { self, nixpkgs, workspace, ... }:
+    {
+      self,
+      nixpkgs,
+      workspace,
+      ...
+    }:
     let
-      systems = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
+        "x86_64-darwin"
+        "aarch64-darwin"
+      ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
     in
     {
@@ -52,7 +62,10 @@
             # Blocked on amarbel-llc/eng#41 (daemon config for
             # impure-derivations + allowed-impure-host-deps).
 
-            nativeBuildInputs = [ pkgs.coreutils pkgs.bash ];
+            nativeBuildInputs = [
+              pkgs.coreutils
+              pkgs.bash
+            ];
 
             dontUnpack = true;
 

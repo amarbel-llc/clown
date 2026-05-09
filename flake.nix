@@ -114,9 +114,7 @@
 
         agentFiles = builtins.attrNames (builtins.readDir ./subagents);
         agents = builtins.listToAttrs (
-          map (f: parseAgent (./subagents + "/${f}")) (
-            builtins.filter (f: lib.hasSuffix ".md" f) agentFiles
-          )
+          map (f: parseAgent (./subagents + "/${f}")) (builtins.filter (f: lib.hasSuffix ".md" f) agentFiles)
         );
         agents-json = builtins.toJSON agents;
         agents-file = pkgs.writeText "clown-agents.json" agents-json;
@@ -154,10 +152,18 @@
         flakeMonth = builtins.substring 4 2 flakeDate;
         flakeDay = builtins.substring 6 2 flakeDate;
         monthNames = {
-          "01" = "January";   "02" = "February"; "03" = "March";
-          "04" = "April";     "05" = "May";      "06" = "June";
-          "07" = "July";      "08" = "August";   "09" = "September";
-          "10" = "October";   "11" = "November"; "12" = "December";
+          "01" = "January";
+          "02" = "February";
+          "03" = "March";
+          "04" = "April";
+          "05" = "May";
+          "06" = "June";
+          "07" = "July";
+          "08" = "August";
+          "09" = "September";
+          "10" = "October";
+          "11" = "November";
+          "12" = "December";
         };
         mdocDate = "${monthNames.${flakeMonth}} ${toString (lib.toIntBase10 flakeDay)}, ${flakeYear}";
 
@@ -194,7 +200,8 @@
           subPackages = [ "cmd/clown-plugin-host" ];
           modules = ./gomod2nix.toml;
           ldflags = [
-            "-s" "-w"
+            "-s"
+            "-w"
             "-X main.version=${clownVersion}"
             "-X main.commit=${clownRev}"
             "-X github.com/amarbel-llc/clown/internal/buildcfg.StdioBridgePath=${clown-stdio-bridge}/bin/clown-stdio-bridge"
@@ -208,7 +215,8 @@
           subPackages = [ "cmd/clown-stdio-bridge" ];
           modules = ./gomod2nix.toml;
           ldflags = [
-            "-s" "-w"
+            "-s"
+            "-w"
             "-X main.version=${clownVersion}"
             "-X main.commit=${clownRev}"
           ];
@@ -226,7 +234,10 @@
           src = goSrc;
           subPackages = [ "internal/pluginhost/testdata/mockstdiomcp" ];
           modules = ./gomod2nix.toml;
-          ldflags = [ "-s" "-w" ];
+          ldflags = [
+            "-s"
+            "-w"
+          ];
         };
 
         mock-stdio-mcp = pkgs.runCommand "mock-stdio-mcp" { } ''
@@ -243,7 +254,10 @@
           src = goSrc;
           subPackages = [ "internal/pluginhost/testdata/mockserver" ];
           modules = ./gomod2nix.toml;
-          ldflags = [ "-s" "-w" ];
+          ldflags = [
+            "-s"
+            "-w"
+          ];
         };
 
         # Synthetic plugin used by the test-plugin-host integration test.
@@ -275,7 +289,10 @@
           src = goSrc;
           subPackages = [ "cmd/clown-hook-allow" ];
           modules = ./gomod2nix.toml;
-          ldflags = [ "-s" "-w" ];
+          ldflags = [
+            "-s"
+            "-w"
+          ];
         };
 
         # Build-time defaults baked into the standalone packages.default
@@ -286,36 +303,39 @@
         defaultDefaultProfile = "claude-anthropic";
 
         mkClownGo =
-          { defaultProvider ? defaultDefaultProvider
-          , defaultProfile ? defaultDefaultProfile
-          }: buildGoApplication {
-          pname = "clown";
-          version = clownVersion;
-          src = goSrc;
-          subPackages = [ "cmd/clown" ];
-          modules = ./gomod2nix.toml;
-          ldflags = [
-            "-s" "-w"
-            "-X github.com/amarbel-llc/clown/internal/buildcfg.ClaudeCliPath=${claudeCliPath}"
-            "-X github.com/amarbel-llc/clown/internal/buildcfg.CodexCliPath=${codexCliPath}"
-            "-X github.com/amarbel-llc/clown/internal/buildcfg.CircusCliPath=${circus-go}/bin/circus"
-            "-X github.com/amarbel-llc/clown/internal/buildcfg.AgentsFile=${agents-file}"
-            "-X github.com/amarbel-llc/clown/internal/buildcfg.DisallowedToolsFile=${disallowed-tools-file}"
-            "-X github.com/amarbel-llc/clown/internal/buildcfg.SystemPromptAppendD=${./system-prompt-append.d}"
-            "-X github.com/amarbel-llc/clown/internal/buildcfg.Version=${clownVersion}"
-            "-X github.com/amarbel-llc/clown/internal/buildcfg.Commit=${clownRev}"
-            "-X github.com/amarbel-llc/clown/internal/buildcfg.ClaudeCodeVersion=${claudeCodeVersion}"
-            "-X github.com/amarbel-llc/clown/internal/buildcfg.ClaudeCodeRev=${claudeCodeRev}"
-            "-X github.com/amarbel-llc/clown/internal/buildcfg.CodexVersion=${codexVersion}"
-            "-X github.com/amarbel-llc/clown/internal/buildcfg.CodexRev=${codexRev}"
-            "-X github.com/amarbel-llc/clown/internal/buildcfg.OpencodeCliPath=${pkgs.opencode}/bin/opencode"
-            "-X github.com/amarbel-llc/clown/internal/buildcfg.CrushCliPath=${pkgs-llm-agents.crush}/bin/crush"
-            "-X github.com/amarbel-llc/clown/internal/buildcfg.ClownboxCliPath=${clownboxCliPath}"
-            "-X github.com/amarbel-llc/clown/internal/buildcfg.StdioBridgePath=${clown-stdio-bridge}/bin/clown-stdio-bridge"
-            "-X github.com/amarbel-llc/clown/internal/buildcfg.DefaultProvider=${defaultProvider}"
-            "-X github.com/amarbel-llc/clown/internal/buildcfg.DefaultProfile=${defaultProfile}"
-          ];
-        };
+          {
+            defaultProvider ? defaultDefaultProvider,
+            defaultProfile ? defaultDefaultProfile,
+          }:
+          buildGoApplication {
+            pname = "clown";
+            version = clownVersion;
+            src = goSrc;
+            subPackages = [ "cmd/clown" ];
+            modules = ./gomod2nix.toml;
+            ldflags = [
+              "-s"
+              "-w"
+              "-X github.com/amarbel-llc/clown/internal/buildcfg.ClaudeCliPath=${claudeCliPath}"
+              "-X github.com/amarbel-llc/clown/internal/buildcfg.CodexCliPath=${codexCliPath}"
+              "-X github.com/amarbel-llc/clown/internal/buildcfg.CircusCliPath=${circus-go}/bin/circus"
+              "-X github.com/amarbel-llc/clown/internal/buildcfg.AgentsFile=${agents-file}"
+              "-X github.com/amarbel-llc/clown/internal/buildcfg.DisallowedToolsFile=${disallowed-tools-file}"
+              "-X github.com/amarbel-llc/clown/internal/buildcfg.SystemPromptAppendD=${./system-prompt-append.d}"
+              "-X github.com/amarbel-llc/clown/internal/buildcfg.Version=${clownVersion}"
+              "-X github.com/amarbel-llc/clown/internal/buildcfg.Commit=${clownRev}"
+              "-X github.com/amarbel-llc/clown/internal/buildcfg.ClaudeCodeVersion=${claudeCodeVersion}"
+              "-X github.com/amarbel-llc/clown/internal/buildcfg.ClaudeCodeRev=${claudeCodeRev}"
+              "-X github.com/amarbel-llc/clown/internal/buildcfg.CodexVersion=${codexVersion}"
+              "-X github.com/amarbel-llc/clown/internal/buildcfg.CodexRev=${codexRev}"
+              "-X github.com/amarbel-llc/clown/internal/buildcfg.OpencodeCliPath=${pkgs.opencode}/bin/opencode"
+              "-X github.com/amarbel-llc/clown/internal/buildcfg.CrushCliPath=${pkgs-llm-agents.crush}/bin/crush"
+              "-X github.com/amarbel-llc/clown/internal/buildcfg.ClownboxCliPath=${clownboxCliPath}"
+              "-X github.com/amarbel-llc/clown/internal/buildcfg.StdioBridgePath=${clown-stdio-bridge}/bin/clown-stdio-bridge"
+              "-X github.com/amarbel-llc/clown/internal/buildcfg.DefaultProvider=${defaultProvider}"
+              "-X github.com/amarbel-llc/clown/internal/buildcfg.DefaultProfile=${defaultProfile}"
+            ];
+          };
 
         circus-go = buildGoApplication {
           pname = "circus";
@@ -324,7 +344,8 @@
           subPackages = [ "cmd/circus" ];
           modules = ./gomod2nix.toml;
           ldflags = [
-            "-s" "-w"
+            "-s"
+            "-w"
             "-X github.com/amarbel-llc/clown/internal/buildcfg.DefaultModelPath=${gemma3-270m-model}"
             "-X github.com/amarbel-llc/clown/internal/buildcfg.CircusModelName=${gemma3-270m-model}"
             "-X github.com/amarbel-llc/clown/internal/buildcfg.LlamaServerPath=${llamaServerPath}"
@@ -341,73 +362,79 @@
         # leaves it disabled (no YOLO mode without an external safety net).
         # Clownbox enables it because the bubblewrap sandbox is the safety
         # net — bypassing claude's per-tool prompts is the whole point.
-        mkClownManagedSettings = { allowBypass ? false }: pkgs.writeText "clown-managed-settings.json" (
-          builtins.toJSON {
-            permissions = {
-              # Block auto-mode (no prompts, classifier-gated tool calls).
-              # Orthogonal to sandboxing — kept on for both variants.
-              disableAutoMode = "disable";
-            } // lib.optionalAttrs (!allowBypass) {
-              # Block --dangerously-skip-permissions and bypassPermissions
-              # mode. Sandboxed clownbox omits this so its inner claude can
-              # actually run in YOLO mode within the sandbox.
-              disableBypassPermissionsMode = "disable";
-            } // {
-              # Hard denylist of destructive Bash patterns. Belt-and-
-              # suspenders even inside the sandbox: the bind-mount writes
-              # the repo, so `rm -rf *` is still destructive within scope.
-              deny = [
-                "Bash(rm -rf *)"
-                "Bash(sudo *)"
-                "Bash(curl * | sh)"
-                "Bash(wget * | sh)"
-              ];
-            };
-            # Disable auto-memory. The feature persists cross-session
-            # learnings under ~/.claude/projects/<project>/memory/ and
-            # auto-loads MEMORY.md into every session's context. Managed-
-            # tier setting; per docs, cannot be overridden by user, project,
-            # local, or CLI scopes. Applies to both naked and sandboxed
-            # variants — orthogonal to bypass-permissions posture.
-            autoMemoryEnabled = false;
-            # Replace Claude's stock commit/PR attribution with clown's. The
-            # system-prompt append (00-identity.md) still tells the model to
-            # sign off in chat and non-git contexts; these keys enforce the
-            # footer at the CLI level where the prompt can't reach.
-            attribution = {
-              commit = "Co-Authored-By: Clown <https://github.com/amarbel-llc/clown>";
-              pr = "🤡 Generated with [Clown](https://github.com/amarbel-llc/clown)";
-            };
-            # Auto-allow Read/Glob/Grep against /nix/store paths. The
-            # CLI-level --allowed-tools "Read(/nix/store/**)" form is not
-            # honored by claude-code 2.1 for the Read tool (verified
-            # empirically in 2026-04), so we use a PreToolUse hook
-            # instead. The hook returns "allow" only when the relevant
-            # path argument is rooted in /nix/store/, and "defer"
-            # otherwise — leaving every other permission decision
-            # untouched.
-            #
-            # Schema: each PreToolUse entry must wrap its handlers in a
-            # { matcher, hooks } object. The matcher is a regex over the
-            # tool name; without it the entry is silently dropped and
-            # the hook never fires. The claude-code-hooks(5) example
-            # showing a flat [{type, command}] array omits the matcher
-            # wrapper and does NOT work in 2.1.
-            hooks = {
-              PreToolUse = [
-                {
-                  matcher = "Read|Glob|Grep";
-                  hooks = [
-                    {
-                      type = "command";
-                      command = "${clown-hook-allow}/bin/clown-hook-allow";
-                    }
-                  ];
-                }
-              ];
-            };
-          }
-        );
+        mkClownManagedSettings =
+          {
+            allowBypass ? false,
+          }:
+          pkgs.writeText "clown-managed-settings.json" (
+            builtins.toJSON {
+              permissions = {
+                # Block auto-mode (no prompts, classifier-gated tool calls).
+                # Orthogonal to sandboxing — kept on for both variants.
+                disableAutoMode = "disable";
+              }
+              // lib.optionalAttrs (!allowBypass) {
+                # Block --dangerously-skip-permissions and bypassPermissions
+                # mode. Sandboxed clownbox omits this so its inner claude can
+                # actually run in YOLO mode within the sandbox.
+                disableBypassPermissionsMode = "disable";
+              }
+              // {
+                # Hard denylist of destructive Bash patterns. Belt-and-
+                # suspenders even inside the sandbox: the bind-mount writes
+                # the repo, so `rm -rf *` is still destructive within scope.
+                deny = [
+                  "Bash(rm -rf *)"
+                  "Bash(sudo *)"
+                  "Bash(curl * | sh)"
+                  "Bash(wget * | sh)"
+                ];
+              };
+              # Disable auto-memory. The feature persists cross-session
+              # learnings under ~/.claude/projects/<project>/memory/ and
+              # auto-loads MEMORY.md into every session's context. Managed-
+              # tier setting; per docs, cannot be overridden by user, project,
+              # local, or CLI scopes. Applies to both naked and sandboxed
+              # variants — orthogonal to bypass-permissions posture.
+              autoMemoryEnabled = false;
+              # Replace Claude's stock commit/PR attribution with clown's. The
+              # system-prompt append (00-identity.md) still tells the model to
+              # sign off in chat and non-git contexts; these keys enforce the
+              # footer at the CLI level where the prompt can't reach.
+              attribution = {
+                commit = "Co-Authored-By: Clown <https://github.com/amarbel-llc/clown>";
+                pr = "🤡 Generated with [Clown](https://github.com/amarbel-llc/clown)";
+              };
+              # Auto-allow Read/Glob/Grep against /nix/store paths. The
+              # CLI-level --allowed-tools "Read(/nix/store/**)" form is not
+              # honored by claude-code 2.1 for the Read tool (verified
+              # empirically in 2026-04), so we use a PreToolUse hook
+              # instead. The hook returns "allow" only when the relevant
+              # path argument is rooted in /nix/store/, and "defer"
+              # otherwise — leaving every other permission decision
+              # untouched.
+              #
+              # Schema: each PreToolUse entry must wrap its handlers in a
+              # { matcher, hooks } object. The matcher is a regex over the
+              # tool name; without it the entry is silently dropped and
+              # the hook never fires. The claude-code-hooks(5) example
+              # showing a flat [{type, command}] array omits the matcher
+              # wrapper and does NOT work in 2.1.
+              hooks = {
+                PreToolUse = [
+                  {
+                    matcher = "Read|Glob|Grep";
+                    hooks = [
+                      {
+                        type = "command";
+                        command = "${clown-hook-allow}/bin/clown-hook-allow";
+                      }
+                    ];
+                  }
+                ];
+              };
+            }
+          );
 
         clownManagedSettings = mkClownManagedSettings { allowBypass = false; };
 
@@ -426,41 +453,37 @@
             # After install, it lands under lib/node_modules/@anthropic-ai/
             # claude-code/cli.js, but patchPhase sees the source layout.
             # Double-quote the replacement so $out expands in bash.
-            postPatch =
-              (old.postPatch or "")
-              + ''
-                substituteInPlace cli.js \
-                  --replace-fail '/etc/claude-code' "${replacement}"
-              '';
+            postPatch = (old.postPatch or "") + ''
+              substituteInPlace cli.js \
+                --replace-fail '/etc/claude-code' "${replacement}"
+            '';
           });
 
         # Apply the shipped managed-settings file to a path-patched
         # claude-code derivation. Parameterized by which managed-settings
         # JSON to ship — strict for naked clown, permissive for clownbox.
-        mkPatchedClaudeCode = managedSettings:
-          (patchClaudeCodeManagedPath "$out/etc/claude").overrideAttrs
-            (old: {
-              postInstall =
-                (old.postInstall or "")
-                + ''
-                  mkdir -p "$out/etc/claude"
-                  cp ${managedSettings} "$out/etc/claude/managed-settings.json"
-                '';
+        mkPatchedClaudeCode =
+          managedSettings:
+          (patchClaudeCodeManagedPath "$out/etc/claude").overrideAttrs (old: {
+            postInstall = (old.postInstall or "") + ''
+              mkdir -p "$out/etc/claude"
+              cp ${managedSettings} "$out/etc/claude/managed-settings.json"
+            '';
 
-              doInstallCheck = true;
-              installCheckPhase = ''
-                cli=$out/lib/node_modules/@anthropic-ai/claude-code/cli.js
-                if grep -q '/etc/claude-code' "$cli"; then
-                  echo "FAIL: /etc/claude-code still present after patch" >&2
-                  exit 1
-                fi
-                if ! grep -q "$out/etc/claude" "$cli"; then
-                  echo "FAIL: patched path $out/etc/claude missing from cli.js" >&2
-                  exit 1
-                fi
-                test -f "$out/etc/claude/managed-settings.json"
-              '';
-            });
+            doInstallCheck = true;
+            installCheckPhase = ''
+              cli=$out/lib/node_modules/@anthropic-ai/claude-code/cli.js
+              if grep -q '/etc/claude-code' "$cli"; then
+                echo "FAIL: /etc/claude-code still present after patch" >&2
+                exit 1
+              fi
+              if ! grep -q "$out/etc/claude" "$cli"; then
+                echo "FAIL: patched path $out/etc/claude missing from cli.js" >&2
+                exit 1
+              fi
+              test -f "$out/etc/claude/managed-settings.json"
+            '';
+          });
 
         patchedClaudeCode = mkPatchedClaudeCode clownManagedSettings;
 
@@ -484,9 +507,11 @@
         # flags are linker-baked, so each combination is its own
         # derivation.
         mkClownBin =
-          { pluginMeta
-          , clownGoBin
-          }: pkgs.writeShellScriptBin "clown" ''
+          {
+            pluginMeta,
+            clownGoBin,
+          }:
+          pkgs.writeShellScriptBin "clown" ''
             export CLOWN_PLUGIN_META="${pluginMeta}"
             exec "${clownGoBin}/bin/clown" "$@"
           '';
@@ -499,29 +524,32 @@
         # Clown-owned pages use the @MDOCDATE@ sentinel in .Dd; we stamp
         # them with mdocDate (derived from self.lastModifiedDate) at
         # build time. Codex vendored pages keep their upstream dates.
-        clown-manpages = pkgs.runCommand "clown-manpages" {
-          inherit mdocDate;
-        } ''
-          for section in 1 5 7; do
-            mkdir -p $out/share/man/man$section
-          done
-          cp ${./man/man1}/*.1 $out/share/man/man1/
-          cp ${./man/man5}/*.5 $out/share/man/man5/
-          cp ${./man/man7}/*.7 $out/share/man/man7/
-          chmod -R u+w $out/share/man
-          for page in \
-              $out/share/man/man1/clown.1 \
-              $out/share/man/man1/clown-plugin-host.1 \
-              $out/share/man/man1/clown-stdio-bridge.1 \
-              $out/share/man/man5/clown-json.5 \
-              $out/share/man/man7/clown-plugin-protocol.7; do
-              sed -i "s/@MDOCDATE@/$mdocDate/g" "$page"
-              if grep -q '@MDOCDATE@' "$page"; then
-                  echo "clown-manpages: @MDOCDATE@ left unsubstituted in $page" >&2
-                  exit 1
-              fi
-          done
-        '';
+        clown-manpages =
+          pkgs.runCommand "clown-manpages"
+            {
+              inherit mdocDate;
+            }
+            ''
+              for section in 1 5 7; do
+                mkdir -p $out/share/man/man$section
+              done
+              cp ${./man/man1}/*.1 $out/share/man/man1/
+              cp ${./man/man5}/*.5 $out/share/man/man5/
+              cp ${./man/man7}/*.7 $out/share/man/man7/
+              chmod -R u+w $out/share/man
+              for page in \
+                  $out/share/man/man1/clown.1 \
+                  $out/share/man/man1/clown-plugin-host.1 \
+                  $out/share/man/man1/clown-stdio-bridge.1 \
+                  $out/share/man/man5/clown-json.5 \
+                  $out/share/man/man7/clown-plugin-protocol.7; do
+                  sed -i "s/@MDOCDATE@/$mdocDate/g" "$page"
+                  if grep -q '@MDOCDATE@' "$page"; then
+                      echo "clown-manpages: @MDOCDATE@ left unsubstituted in $page" >&2
+                      exit 1
+                  fi
+              done
+            '';
 
         # The installCheckPhase on patchedClaudeCode (above) verifies at the
         # string level that cli.js no longer contains /etc/claude-code and
@@ -610,9 +638,10 @@
           '';
 
         mkClownPkg =
-          { pluginMeta
-          , defaultProvider ? defaultDefaultProvider
-          , defaultProfile ? defaultDefaultProfile
+          {
+            pluginMeta,
+            defaultProvider ? defaultDefaultProvider,
+            defaultProfile ? defaultDefaultProfile,
           }:
           let
             clownGoBin = mkClownGo { inherit defaultProvider defaultProfile; };
@@ -627,13 +656,14 @@
               clown-completions
               clown-manpages
             ];
-          }).overrideAttrs (old: {
-            passthru = (old.passthru or { }) // {
-              tests = {
-                managedSettingsRead = managedSettingsReadTest;
+          }).overrideAttrs
+            (old: {
+              passthru = (old.passthru or { }) // {
+                tests = {
+                  managedSettingsRead = managedSettingsReadTest;
+                };
               };
-            };
-          });
+            });
 
         # Race-detector variant of clown-go. Built via the fork's
         # buildGoRace helper — overrides clown-go with CGO_ENABLED=1
@@ -662,13 +692,13 @@
         };
 
         mkCircus =
-          { plugins ? [ ]
-          , defaultProvider ? defaultDefaultProvider
-          , defaultProfile ? defaultDefaultProfile
+          {
+            plugins ? [ ],
+            defaultProvider ? defaultDefaultProvider,
+            defaultProfile ? defaultDefaultProfile,
           }:
           let
-            pluginMeta =
-              if plugins == [ ] then emptyPluginMeta else resolvePlugins plugins;
+            pluginMeta = if plugins == [ ] then emptyPluginMeta else resolvePlugins plugins;
           in
           {
             packages.default = mkClownPkg {
@@ -700,7 +730,8 @@
           clown-race = clown-go-race;
           mock-stdio-mcp = mock-stdio-mcp;
           synthetic-plugin = synthetic-plugin;
-        } // batsLaneOutputs;
+        }
+        // batsLaneOutputs;
 
         checks = {
           managedSettingsRead = managedSettingsReadTest;

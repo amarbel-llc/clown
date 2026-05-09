@@ -8,7 +8,12 @@
   outputs =
     { self, nixpkgs, ... }:
     let
-      systems = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
+      systems = [
+        "x86_64-linux"
+        "aarch64-linux"
+        "x86_64-darwin"
+        "aarch64-darwin"
+      ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
     in
     {
@@ -20,8 +25,8 @@
 
           # Pull broker connection info from the host via nix-eval env.
           # Requires --impure at `nix build` time.
-          brokerHost   = builtins.getEnv "CLOWN_BROKER_HOST";
-          brokerPort   = builtins.getEnv "CLOWN_BROKER_PORT";
+          brokerHost = builtins.getEnv "CLOWN_BROKER_HOST";
+          brokerPort = builtins.getEnv "CLOWN_BROKER_PORT";
           brokerCaHost = builtins.getEnv "CLOWN_BROKER_CA_PEM";
 
           # The Nix builder sandbox denies reads outside /nix/store, so we
@@ -42,15 +47,15 @@
             # 127.0.0.1. Matches the design ADR-0005 locks in.
             __impure = true;
 
-            CLOWN_BROKER_HOST   = brokerHost;
-            CLOWN_BROKER_PORT   = brokerPort;
+            CLOWN_BROKER_HOST = brokerHost;
+            CLOWN_BROKER_PORT = brokerPort;
             CLOWN_BROKER_CA_PEM = if brokerCa != null then brokerCa else "";
 
             nativeBuildInputs = [
               pkgs.coreutils
               pkgs.bash
               pkgs.curl
-              pkgs.cacert  # keeps a system CA bundle available; we override via env
+              pkgs.cacert # keeps a system CA bundle available; we override via env
             ];
 
             dontUnpack = true;
