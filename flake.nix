@@ -719,11 +719,12 @@
 
         checks = {
           managedSettingsRead = managedSettingsReadTest;
-          # bats-default runs every *.bats whose file_tags do NOT
-          # exclude it (filter is empty → no exclusion). If a test
-          # needs network/loopback the sandbox doesn't grant, tag it
-          # with `# bats file_tags=net_cap` and run via
-          # `nix build .#bats-net_cap` from a less-restricted env.
+          # bats-default runs every *.bats. There's no per-file tag
+          # filter today; tests that bind 127.0.0.1 work in the
+          # standard nix sandbox and every other Linux sandbox we
+          # use. See ADR docs/decisions/0001-net-cap-tag.md for the
+          # tag history and the conditions that would warrant
+          # reintroducing one.
           bats-default = batsLaneOutputs.bats-default;
         };
 

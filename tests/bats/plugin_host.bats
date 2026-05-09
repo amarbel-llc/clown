@@ -1,12 +1,11 @@
-# bats file_tags=net_cap
-#
 # Integration test: launch clown-plugin-host with the synthetic plugin's
 # clown.json and verify the mock HTTP MCP server starts, completes the
 # handshake, passes health checks, compiles plugin manifests with
 # URL-based MCP entries, and preserves original server names.
 #
-# Tagged net_cap because the synthetic plugin's MCP server binds
-# 127.0.0.1 — opt-in via `nix build .#bats-net_cap`.
+# Binds 127.0.0.1 (synthetic plugin's MCP server). Works in the standard
+# nix sandbox and other Linux sandboxes we use; see ADR
+# docs/decisions/0001-net-cap-tag.md.
 
 load 'lib/common.bash'
 

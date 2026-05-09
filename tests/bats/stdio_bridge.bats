@@ -1,5 +1,3 @@
-# bats file_tags=net_cap
-#
 # Integration test: launch clown-stdio-bridge wrapping a mock stdio MCP
 # server. Verifies the handshake/healthcheck path AND the streamable-HTTP
 # MCP translation path: client POSTs an `initialize` request and receives
@@ -7,9 +5,9 @@
 # notification via a `notify-broadcast` request and observes it on the
 # GET SSE stream.
 #
-# Tagged net_cap because the bridge binds 127.0.0.1 — the nix sandbox
-# does not always grant loopback, so this lane is opt-in via
-# `nix build .#bats-net_cap`.
+# Binds 127.0.0.1. This works in the standard nix sandbox (`sandbox = true`)
+# and any other Linux sandbox we currently use, all of which bring up `lo`
+# inside their network namespace. See ADR docs/decisions/0001-net-cap-tag.md.
 
 load 'lib/common.bash'
 

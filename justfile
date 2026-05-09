@@ -39,22 +39,20 @@ gomod2nix:
 
 # Integration test: launch clown-stdio-bridge wrapping a mock stdio
 # MCP server. Verifies handshake/healthcheck and the streamable-HTTP
-# MCP translation path. Runs the bats suite via the nix sandbox lane
-# pkgs.testers.batsLane → tests/bats/stdio_bridge.bats. The bats
-# files are tagged `net_cap` because the bridge binds 127.0.0.1; the
-# `bats-net_cap` lane runs all such files.
+# MCP translation path. Runs the full bats suite via the nix sandbox
+# lane (pkgs.testers.batsLane); stdio_bridge.bats is one of the files
+# it executes.
 [group("test")]
 test-stdio-bridge:
-    nix build .#bats-net_cap --no-link --print-build-logs
+    nix build .#bats-default --no-link --print-build-logs
 
 # Integration test: launch clown-plugin-host with the synthetic plugin's
 # clown.json and verify URL-based MCP compilation, name preservation,
-# and agents field passthrough. Runs the bats suite via the nix sandbox
-# lane → tests/bats/plugin_host.bats. Same `bats-net_cap` lane as
-# test-stdio-bridge (both files share the net_cap tag).
+# and agents field passthrough. Runs the full bats suite via the nix
+# sandbox lane; plugin_host.bats is one of the files it executes.
 [group("test")]
 test-plugin-host:
-    nix build .#bats-net_cap --no-link --print-build-logs
+    nix build .#bats-default --no-link --print-build-logs
 
 # Integration test: launch clown-plugin-host with the real moxy MCP server as
 # a plugin, exercising the clown-plugin-protocol against a production server
