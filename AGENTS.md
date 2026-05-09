@@ -166,16 +166,30 @@ The flake produces a `symlinkJoin` of five components:
 
 ## Nix Conventions
 
-Follows the monorepo's stable-first pattern:
-- `nixpkgs` -> stable (`nixos-25.11`)
-- `nixpkgs-master` -> pinned SHA
-- `nixpkgs-llama` -> pinned to nixpkgs master SHA for llama-cpp with
-  `/v1/messages` support (PR #17570, merged 2025-11-28; not in nixos-25.11)
-- `llm-agents` -> `numtide/llm-agents.nix`, source of the `crush` package
-  (and many other AI coding agents). Its `inputs.nixpkgs` follows our main
-  `nixpkgs` so we don't pull in a duplicate evaluation.
-- Claude Code is fetched via inline `fetchTarball` (not a flake input) with
-  `allowUnfree` — pinned to a specific nixpkgs SHA for version stability.
+The `amarbel-llc/nixpkgs` fork migrated to a thin overlay flake on
+2026-05-01 (`6e349594`); a `default.nix` shim auto-applies the overlay
+on `import nixpkgs { ... }` (`ba254c0`). Our primary `nixpkgs` input
+tracks fork master and consumes that shim. The four secondary nixpkgs
+inputs are still pinned to **pre-migration** (full-fork) SHAs — that's
+where their packages live as conventional `pkgs/by-name/` definitions.
+Bumps are conservative: pick a newer pre-migration SHA, not the
+thin-wrapper master tip.
+
+- `nixpkgs` -> fork master (thin-wrapper era; overlay auto-applied)
+- `nixpkgs-master` -> pinned pre-migration SHA, used for
+  `pkgs-master.just`
+- `nixpkgs-claude-code` -> pinned pre-migration SHA, used for
+  `pkgs-claude-code.claude-code` (which we then `overrideAttrs` to
+  patch the managed-settings path; see `flake.nix:522`)
+- `nixpkgs-codex` -> pinned pre-migration SHA, used for
+  `pkgs-codex.codex`
+- `nixpkgs-llama` -> pinned pre-migration SHA for llama-cpp with
+  `/v1/messages` support (PR #17570, merged 2025-11-28; not in
+  nixos-25.11)
+- `llm-agents` -> `numtide/llm-agents.nix`, source of the `crush`
+  package (and many other AI coding agents). Its `inputs.nixpkgs`
+  follows our main `nixpkgs` so we don't pull in a duplicate
+  evaluation.
 
 ## Spinclass Integration
 

@@ -12,13 +12,27 @@
     # SHAs are reachable. The overlay is *not* applied to these because
     # they're narrow-purpose (claude-code, codex, llama-cpp at specific
     # versions) and don't need the fork's package additions.
-    nixpkgs-master.url = "github:amarbel-llc/nixpkgs/9b53530a5f6887b6903cffeb8a418f3079d6698d";
+    # nixpkgs-master sources the devshell's `just`. Pinned to upstream
+    # NixOS/nixpkgs (not the fork) since this input is generic-purpose
+    # and doesn't need the fork's overlay. Held at a pre-just-1.50.0
+    # SHA while the cargo-vendor failure on `windows-sys-0.60.2.tar.gz`
+    # gets resolved upstream (we tested `97b5957e`, 2026-04-20, the
+    # 1.49.0 → 1.50.0 bump commit, and it errors out with `tar exit 2`
+    # during the vendor build).
+    nixpkgs-master.url = "github:NixOS/nixpkgs/9b53530a5f6887b6903cffeb8a418f3079d6698d";
     utils.url = "https://flakehub.com/f/numtide/flake-utils/0.1.102";
+    # Claude Code is held at 2.1.111 (npm-source layout) because the
+    # mkPatchedClaudeCode patchPhase substitutes inside
+    # `lib/node_modules/@anthropic-ai/claude-code/cli.js` to redirect
+    # /etc/claude-code to the managed-settings store path. Upstream
+    # restructured to a native binary distribution at 2026-04-18, after
+    # which `cli.js` no longer exists. Bumping past 2.1.111 needs the
+    # patch logic ported to binary-string substitution.
     nixpkgs-claude-code.url = "github:amarbel-llc/nixpkgs/b2b9662ffe1e9a5702e7bfbd983595dd56147dbf";
-    nixpkgs-codex.url = "github:amarbel-llc/nixpkgs/e2dde111aea2c0699531dc616112a96cd55ab8b5";
+    nixpkgs-codex.url = "github:amarbel-llc/nixpkgs/0de8465d2b54ddd962422706d932c3354b4237ec";
     # llama-cpp with Anthropic Messages API (/v1/messages) support — requires
     # PR #17570 (merged 2025-11-28). Build 6981 in nixos-25.11 predates it.
-    nixpkgs-llama.url = "github:amarbel-llc/nixpkgs/3b5a614454bd054dd960f1ff7a888dc5dfaf7bb4";
+    nixpkgs-llama.url = "github:amarbel-llc/nixpkgs/c0df0d088ab33122b402ea31cb5f7e1df7536036";
     # numtide/llm-agents.nix is the upstream Nix packaging for charmbracelet's
     # crush (and other AI coding agents). We pin it as a flake input so the
     # crush binary path can be burned into clown via `-X buildcfg.CrushCliPath`.
