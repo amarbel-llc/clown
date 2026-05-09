@@ -181,7 +181,7 @@ func promptCrushLocalConfig(path string) (crushLocalConfig, error) {
 type crushBackend string
 
 const (
-	crushBackendAnthropic   crushBackend = "anthropic"
+	crushBackendAnthropic    crushBackend = "anthropic"
 	crushBackendOpenAICompat crushBackend = "openai-compat"
 )
 
@@ -208,10 +208,10 @@ func writeCrushConfig(configDir string, backend crushBackend, baseURL, apiKey, m
 	}
 
 	type modelEntry struct {
-		ID                 string `json:"id"`
-		Name               string `json:"name"`
-		ContextWindow      int    `json:"context_window"`
-		DefaultMaxTokens   int    `json:"default_max_tokens"`
+		ID               string `json:"id"`
+		Name             string `json:"name"`
+		ContextWindow    int    `json:"context_window"`
+		DefaultMaxTokens int    `json:"default_max_tokens"`
 	}
 	type providerEntry struct {
 		ID      string       `json:"id"`
@@ -243,9 +243,9 @@ func writeCrushConfig(configDir string, backend crushBackend, baseURL, apiKey, m
 	case crushBackendAnthropic:
 		cfg.Providers = map[string]providerEntry{
 			"anthropic": {
-				ID:   "anthropic",
-				Name: "Anthropic",
-				Type: "anthropic",
+				ID:     "anthropic",
+				Name:   "Anthropic",
+				Type:   "anthropic",
 				APIKey: "$ANTHROPIC_API_KEY",
 				Models: []modelEntry{{
 					ID:               model,
