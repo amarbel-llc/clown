@@ -14,6 +14,11 @@ test: test-go test-plugin-host test-stdio-bridge test-plugin-host-moxy test-plug
 # clown-authored man pages). Non-test correctness gates belong here.
 check: check-lint-man
 
+# Format the tree via treefmt (config: treefmt.nix). Forwards args, e.g.
+# `just fmt --ci` to fail if anything would change.
+fmt *ARGS:
+    nix fmt -- {{ARGS}}
+
 build: build-nix
 
 # Build Go binaries
