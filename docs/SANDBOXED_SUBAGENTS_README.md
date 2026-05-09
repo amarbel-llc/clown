@@ -6,7 +6,7 @@ This directory contains the design documentation for clown's Nix-derivation-sand
 
 Start here:
 
-1. `fdrs/0001-sandboxed-subagents.md` — the main feature design record. Motivation, background, design overview, worked example, security model, non-goals, and open questions (tagged by POC/v1/v2).
+1. `features/0001-sandboxed-subagents.md` — the main feature design record. Motivation, background, design overview, worked example, security model, non-goals, and open questions (tagged by POC/v1/v2).
 
 Then the three specifications:
 
@@ -27,7 +27,7 @@ Clown currently has:
 - `docs/rfcs/0001-parameterized-plugin-loading.md`
 - `docs/rfcs/0002-clown-plugin-protocol.md`
 
-This set continues the RFC sequence at 0003–0005 and introduces a new `fdrs/` subdirectory at 0001 and a new `adrs/` subdirectory at 0001, 0003, 0005. (ADR-0002 and ADR-0004 were dropped after design review — their subjects are no longer load-bearing. ADR-0005 was rewritten after `zz-pocs/0001` disproved the original "sandcastle inside Nix builder" composition.)
+This set continues the RFC sequence at 0003–0005 and introduces a new `features/` entry at 0001 (FDR — feature design record) and a new `adrs/` subdirectory at 0001, 0003, 0005. (ADR-0002 and ADR-0004 were dropped after design review — their subjects are no longer load-bearing. ADR-0005 was rewritten after `zz-pocs/0001` disproved the original "sandcastle inside Nix builder" composition.)
 
 ## POCs
 

@@ -3,7 +3,7 @@
 Date: 2026-04-22
 Status: approved
 Issue: https://github.com/amarbel-llc/clown/issues/16
-FDR: docs/features/0001-local-model-provider.md
+FDR-0008: docs/features/0008-local-model-provider.md
 
 ## Taxonomy
 
