@@ -6,8 +6,8 @@
 # GET SSE stream.
 #
 # Binds 127.0.0.1. This works in the standard nix sandbox (`sandbox = true`)
-# and any other Linux sandbox we currently use, all of which bring up `lo`
-# inside their network namespace. See ADR docs/decisions/0001-net-cap-tag.md.
+# and every other Linux sandbox we currently use — all bring up `lo` inside
+# their network namespace. See ADR docs/adrs/0007-drop-net-cap-bats-file-tag.md.
 
 load 'lib/common.bash'
 

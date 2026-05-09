@@ -4,8 +4,8 @@
 # URL-based MCP entries, and preserves original server names.
 #
 # Binds 127.0.0.1 (synthetic plugin's MCP server). Works in the standard
-# nix sandbox and other Linux sandboxes we use; see ADR
-# docs/decisions/0001-net-cap-tag.md.
+# nix sandbox and every other Linux sandbox we use; see ADR
+# docs/adrs/0007-drop-net-cap-bats-file-tag.md.
 
 load 'lib/common.bash'
 

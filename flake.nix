@@ -722,9 +722,9 @@
           # bats-default runs every *.bats. There's no per-file tag
           # filter today; tests that bind 127.0.0.1 work in the
           # standard nix sandbox and every other Linux sandbox we
-          # use. See ADR docs/decisions/0001-net-cap-tag.md for the
-          # tag history and the conditions that would warrant
-          # reintroducing one.
+          # use. See ADR docs/adrs/0007-drop-net-cap-bats-file-tag.md
+          # for the tag history and the conditions that would
+          # warrant reintroducing one.
           bats-default = batsLaneOutputs.bats-default;
         };
 

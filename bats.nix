@@ -7,8 +7,9 @@
 #
 # Returns an attrset with one lane per unique `# bats file_tags=...`
 # directive plus an unfiltered `bats-default` lane. No tags are in
-# use today (see ADR docs/decisions/0001-net-cap-tag.md), so the
-# tag-derived lanes are empty and `bats-default` runs every file.
+# use today (see ADR docs/adrs/0007-drop-net-cap-bats-file-tag.md),
+# so the tag-derived lanes are empty and `bats-default` runs every
+# file.
 {
   pkgs,
   lib,
