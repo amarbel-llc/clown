@@ -389,6 +389,53 @@
         defaultDefaultProvider = "claude";
         defaultDefaultProfile = "claude-anthropic";
 
+        # tent: podman-wrapped provider container. FDR-0007.
+        # Tracer-bullet scope: claude only, opt-in via --tent.
+        # podman is currently linux-only in this build; on darwin
+        # podman requires a VM and is out of scope for v1, so we
+        # leave tentPodmanPath empty there and the runtime emits a
+        # clear "not wired in" error if --tent is used.
+        tentEnabled = pkgs.stdenv.isLinux;
+        tentImage =
+          if tentEnabled then
+            pkgs.dockerTools.buildLayeredImage {
+              name = "clown-tent";
+              tag = clownVersion;
+              # The image deliberately does not bake claude in —
+              # /nix/store is bind-mounted read-only at runtime and
+              # the claude binary is referenced by its store path.
+              # The image only needs the tiny set of utilities that
+              # podman expects to find inside (and CA certs for
+              # HTTPS to api.anthropic.com).
+              contents = [
+                pkgs.bashInteractive
+                pkgs.coreutils
+                pkgs.cacert
+                pkgs.iana-etc
+              ];
+              config = {
+                Env = [
+                  "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
+                  "NIX_SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
+                  # Pin the in-container locale to C.UTF-8 (built into
+                  # glibc 2.35+, no locale archive needed). Avoids the
+                  # `setlocale: cannot change locale (en_US.UTF-8)`
+                  # warnings every subshell prints when the host's
+                  # LC_ALL/LANG leak in but no locale archive is
+                  # reachable inside the namespace. The tent.go
+                  # DefaultEnvPassthrough deliberately omits LC_ALL
+                  # and LANG so these defaults win.
+                  "LC_ALL=C.UTF-8"
+                  "LANG=C.UTF-8"
+                ];
+              };
+            }
+          else
+            null;
+        tentImageRef = if tentEnabled then "clown-tent:${clownVersion}" else "";
+        tentImageTarball = if tentEnabled then "${tentImage}" else "";
+        tentPodmanPath = if tentEnabled then "${pkgs.podman}/bin/podman" else "";
+
         mkClownGo =
           {
             defaultProvider ? defaultDefaultProvider,
@@ -421,6 +468,9 @@
               "-X github.com/amarbel-llc/clown/internal/buildcfg.StdioBridgePath=${clown-stdio-bridge}/bin/clown-stdio-bridge"
               "-X github.com/amarbel-llc/clown/internal/buildcfg.DefaultProvider=${defaultProvider}"
               "-X github.com/amarbel-llc/clown/internal/buildcfg.DefaultProfile=${defaultProfile}"
+              "-X github.com/amarbel-llc/clown/internal/buildcfg.PodmanPath=${tentPodmanPath}"
+              "-X github.com/amarbel-llc/clown/internal/buildcfg.TentImageRef=${tentImageRef}"
+              "-X github.com/amarbel-llc/clown/internal/buildcfg.TentImageTarball=${tentImageTarball}"
             ];
           };
 

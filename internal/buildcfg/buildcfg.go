@@ -37,4 +37,19 @@ var (
 	// explicit --profile would. Empty disables the build-time
 	// default and restores the picker / hardcoded-provider flow.
 	DefaultProfile string
+	// PodmanPath is the absolute path to the podman binary, baked
+	// at build time. Consumed by the --tent codepath to wrap the
+	// provider in a container. Empty in dev builds; --tent fails
+	// fast with a clear error when empty. See FDR-0007.
+	PodmanPath string
+	// TentImageRef is the podman image reference (e.g.
+	// "clown-tent:1.2.3") that --tent runs the provider inside.
+	// Loaded on demand from TentImageTarball when not already
+	// present in the local podman image store. Empty in dev builds.
+	TentImageRef string
+	// TentImageTarball is the absolute path to a docker-format
+	// image tarball produced by dockerTools.buildImage. clown runs
+	// `podman load -i <tarball>` on first --tent invocation if the
+	// image is not already in the local store. Empty in dev builds.
+	TentImageTarball string
 )

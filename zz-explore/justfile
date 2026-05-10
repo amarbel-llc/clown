@@ -398,3 +398,46 @@ issue-35-mkcircus-plugin-closure:
     else
         echo "   (no clown-plugin-meta found in closure — unexpected)"
     fi
+
+# Tent-relevant: confirm that podman --volume precedence honors the
+# more-specific (child) bind even when its parent is also bind-mounted
+# writable. Tent mounts $TMPDIR writable AND staged plugin dirs (which
+# live under $TMPDIR via os.MkdirTemp) read-only — if podman didn't
+# honor the inner mount we'd have a silent write-through hole. Uses
+# docker.io/library/busybox (small, ~5 MiB pull on first run).
+#
+# Pass criteria:
+#   - PARENT_WRITE_OK             (writable bind works as advertised)
+#   - CHILD_WRITE_BLOCKED         (inner :ro bind shadows parent)
+tent-mount-precedence:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    work=$(mktemp -d)
+    trap 'rm -rf "$work"' EXIT
+
+    mkdir -p "$work/parent/child"
+    echo preexisting > "$work/parent/file.txt"
+    echo preexisting > "$work/parent/child/file.txt"
+
+    echo "=== running busybox with parent writable, parent/child :ro ==="
+    /usr/bin/podman run --rm \
+      --volume "$work/parent:$work/parent" \
+      --volume "$work/parent/child:$work/parent/child:ro" \
+      docker.io/library/busybox:latest \
+      sh -c "
+        set +e
+        echo '-- parent write attempt (expect OK) --'
+        touch '$work/parent/wrote_parent' && echo PARENT_WRITE_OK || echo PARENT_WRITE_FAIL
+        echo '-- parent/child write attempt (expect blocked) --'
+        touch '$work/parent/child/wrote_child' 2>&1 | head -1
+        if [ -f '$work/parent/child/wrote_child' ]; then
+            echo CHILD_WRITE_OK_UNEXPECTED
+        else
+            echo CHILD_WRITE_BLOCKED
+        fi
+        echo '-- /proc/mounts entries for test paths --'
+        grep -F \"$work/parent\" /proc/mounts || true
+      "
+    echo
+    echo "=== host-side post-state ==="
+    ls -la "$work/parent" "$work/parent/child"

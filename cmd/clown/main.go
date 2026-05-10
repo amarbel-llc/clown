@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -26,6 +27,7 @@ import (
 	"github.com/amarbel-llc/clown/internal/profile"
 	"github.com/amarbel-llc/clown/internal/promptwalk"
 	"github.com/amarbel-llc/clown/internal/provider"
+	"github.com/amarbel-llc/clown/internal/tent"
 )
 
 //go:embed profiles/builtin.toml
@@ -155,6 +157,11 @@ func run(rawArgs []string) int {
 // directly and rejoin the standard flow (profile load, prompt walk,
 // plugin host, provider exec) without re-running parseFlags.
 func runWithFlags(flags parsedFlags) int {
+	if flags.tent && flags.naked {
+		fmt.Fprintln(os.Stderr, "clown: --tent and --naked are mutually exclusive (naked bypasses clown wrapping, tent is clown wrapping)")
+		return 1
+	}
+
 	profiles, err := loadProfiles("")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown: loading profiles: %v\n", err)
@@ -294,6 +301,26 @@ func (e *passthroughExecutor) FormatArgs(args []string) []string {
 	return append([]string{"--"}, args...)
 }
 
+// tentExecutor wraps the inner provider binary in a podman container.
+// Binary() resolves the podman binary; FormatArgs() rewrites the
+// claude argv into a `podman run ... <image> <claude> <args>` argv.
+// FDR-0007 is the design record.
+type tentExecutor struct {
+	innerCliPath string
+	opts         tent.Options
+}
+
+func (e *tentExecutor) Binary() (string, error) {
+	if buildcfg.PodmanPath == "" {
+		return "", fmt.Errorf("--tent requires a build with podman wired in; this build has buildcfg.PodmanPath empty (try `nix build`)")
+	}
+	return exec.LookPath(buildcfg.PodmanPath)
+}
+
+func (e *tentExecutor) FormatArgs(args []string) []string {
+	return tent.BuildArgs(e.innerCliPath, args, e.opts)
+}
+
 func runClaude(cliPath string, flags parsedFlags, prompts promptwalk.PromptResult, pluginDirs []string) int {
 	return withClaudeResumeHint(flags.forwarded, func(forwarded []string) int {
 		args, cleanup, err := provider.BuildClaudeArgs(provider.ClaudeArgs{
@@ -309,8 +336,147 @@ func runClaude(cliPath string, flags parsedFlags, prompts promptwalk.PromptResul
 		}
 		defer cleanup()
 
-		return runWithPluginHost(&directExecutor{cliPath: cliPath}, args, pluginDirs, flags)
+		var executor Executor = &directExecutor{cliPath: cliPath}
+		if flags.tent {
+			tentExec, err := newTentExecutor(cliPath, pluginDirs)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "clown: %v\n", err)
+				return 1
+			}
+			executor = tentExec
+		}
+
+		return runWithPluginHost(executor, args, pluginDirs, flags)
 	})
+}
+
+// newTentExecutor constructs a tentExecutor wrapping the inner claude
+// binary, ensuring the tent container image is loaded in the local
+// podman store. The image-load step runs at most once per fresh image
+// reference: subsequent invocations find it cached and skip straight
+// to `podman run`.
+func newTentExecutor(innerCliPath string, pluginDirs []string) (*tentExecutor, error) {
+	if buildcfg.PodmanPath == "" {
+		return nil, fmt.Errorf("--tent requires a build with podman wired in; this build has buildcfg.PodmanPath empty (try `nix build`)")
+	}
+	if buildcfg.TentImageRef == "" {
+		return nil, fmt.Errorf("--tent requires a build with the tent image wired in; this build has buildcfg.TentImageRef empty")
+	}
+	if err := preflightUserNs(); err != nil {
+		return nil, err
+	}
+	if err := ensureClaudeJSON(); err != nil {
+		return nil, err
+	}
+	if err := ensureTentImage(buildcfg.PodmanPath, buildcfg.TentImageRef, buildcfg.TentImageTarball); err != nil {
+		return nil, err
+	}
+	opts, err := tent.OptionsFromEnv(buildcfg.TentImageRef, pluginDirs)
+	if err != nil {
+		return nil, err
+	}
+	return &tentExecutor{innerCliPath: innerCliPath, opts: opts}, nil
+}
+
+// preflightUserNs verifies the rootless-podman prerequisites that
+// --userns=keep-id depends on: the newuidmap helper must exist on
+// PATH (provided by the uidmap / shadow-utils package), and
+// /etc/subuid must contain a range for the current user. Missing
+// prerequisites otherwise surface as confusing podman errors
+// ("exec: newuidmap: ...", "command required for rootless mode with
+// multiple IDs") that don't point at the fix.
+func preflightUserNs() error {
+	if _, err := exec.LookPath("newuidmap"); err != nil {
+		return fmt.Errorf("--tent: newuidmap not found on PATH (rootless podman requires the uidmap setuid helpers). Install with `sudo apt install -y uidmap` on Debian/Ubuntu, or the equivalent shadow-utils package on your distro")
+	}
+	name, uid := currentUserKeys()
+	missing, err := userHasSubuid(name, uid)
+	if err != nil {
+		return fmt.Errorf("--tent: reading /etc/subuid: %w", err)
+	}
+	if missing {
+		return fmt.Errorf("--tent: /etc/subuid has no range for user %q (uid %s); rootless podman cannot map user namespaces without one. Add a line like `%s:100000:65536` to /etc/subuid (and /etc/subgid)", name, uid, name)
+	}
+	return nil
+}
+
+func currentUserKeys() (name, uid string) {
+	name = os.Getenv("USER")
+	if name == "" {
+		name = os.Getenv("LOGNAME")
+	}
+	uid = strconv.Itoa(os.Getuid())
+	return name, uid
+}
+
+// ensureClaudeJSON guarantees that ~/.claude.json exists as a regular
+// file on the host before tent bind-mounts it into the container.
+// Podman's default behavior for a missing volume source is to create
+// it as a *directory*, which would silently corrupt the user's home
+// (subsequent non-tent claude runs would refuse to start). When the
+// file is missing we initialize it with `{}` so claude-code sees a
+// valid empty JSON object and can populate from there.
+func ensureClaudeJSON() error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("--tent: locating home dir: %w", err)
+	}
+	path := filepath.Join(home, ".claude.json")
+	info, err := os.Stat(path)
+	if err == nil {
+		if info.IsDir() {
+			return fmt.Errorf("--tent: %s is a directory, expected a regular file (a previous tent run may have created it via an unmounted bind); remove it manually if you have no other use for it", path)
+		}
+		return nil
+	}
+	if !os.IsNotExist(err) {
+		return fmt.Errorf("--tent: stat %s: %w", path, err)
+	}
+	if err := os.WriteFile(path, []byte("{}\n"), 0o600); err != nil {
+		return fmt.Errorf("--tent: initializing %s: %w", path, err)
+	}
+	return nil
+}
+
+// userHasSubuid returns missing=true when /etc/subuid contains no
+// entry whose first colon-separated field matches the user's name or
+// numeric uid. Lines look like "name:start:count" or "uid:start:count".
+func userHasSubuid(name, uid string) (missing bool, err error) {
+	data, err := os.ReadFile("/etc/subuid")
+	if err != nil {
+		if os.IsNotExist(err) {
+			return true, nil
+		}
+		return false, err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		field, _, _ := strings.Cut(line, ":")
+		if (name != "" && field == name) || field == uid {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// ensureTentImage runs `podman image exists <ref>` and, when the
+// image is absent, `podman load -i <tarball>` to populate the local
+// image store. Idempotent — second-and-onward runs short-circuit on
+// the existence check. On a TTY, the load step renders via the
+// bubbletea spinner + log-tail UI (see tent_loader.go); otherwise
+// it streams raw podman output to stderr.
+func ensureTentImage(podmanPath, ref, tarball string) error {
+	check := exec.Command(podmanPath, "image", "exists", ref)
+	if check.Run() == nil {
+		return nil
+	}
+	if tarball == "" {
+		return fmt.Errorf("tent image %s not present locally and no tarball is wired in", ref)
+	}
+	return runTentImageLoad(podmanPath, tarball)
 }
 
 // runWithPluginHost runs a provider through clown's plugin-host
@@ -812,6 +978,7 @@ Clown flags (must appear before --):
   --naked                    Pass through to provider without clown wrapping
   --skip-failed              Continue if plugin servers fail to start
   --disable-clown-protocol   Disable clown plugin-host protocol
+  --tent                     Run the provider inside a podman container (claude only; FDR-0007)
   --verbose, -v              Enable verbose output
   --help, -h                 Show this help text
   version                    Print version information (first argument only)
@@ -892,6 +1059,7 @@ type parsedFlags struct {
 	naked                bool
 	skipFailed           bool
 	disableClownProtocol bool
+	tent                 bool
 	verbose              bool
 	version              bool
 	help                 bool
@@ -914,6 +1082,9 @@ func parseFlags(args []string) (parsedFlags, error) {
 		p.provider = "claude"
 	}
 	p.profile = os.Getenv("CLOWN_PROFILE")
+	if os.Getenv("CLOWN_TENT") == "1" {
+		p.tent = true
+	}
 
 	for i := 0; i < len(args); i++ {
 		switch {
@@ -952,6 +1123,8 @@ func parseFlags(args []string) (parsedFlags, error) {
 			p.skipFailed = true
 		case args[i] == "--disable-clown-protocol":
 			p.disableClownProtocol = true
+		case args[i] == "--tent":
+			p.tent = true
 		case args[i] == "--verbose" || args[i] == "-v":
 			p.verbose = true
 		case args[i] == "--plugin-dir":

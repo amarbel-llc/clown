@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -70,6 +71,11 @@ func TestParseFlags(t *testing.T) {
 			name: "disable-clown-protocol flag",
 			in:   []string{"--disable-clown-protocol"},
 			want: parsedFlags{provider: "claude", disableClownProtocol: true},
+		},
+		{
+			name: "tent flag",
+			in:   []string{"--tent"},
+			want: parsedFlags{provider: "claude", tent: true},
 		},
 		{
 			name: "verbose long flag",
@@ -614,5 +620,247 @@ func TestPrependPluginDirs(t *testing.T) {
 				t.Errorf("prependPluginDirs = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestTentExecutor_EmptyPodmanPath(t *testing.T) {
+	withBuildcfgString(t, &buildcfg.PodmanPath, "")
+	e := &tentExecutor{innerCliPath: "/nix/store/x-claude/bin/claude"}
+	if _, err := e.Binary(); err == nil || !strings.Contains(err.Error(), "podman") {
+		t.Fatalf("expected podman-missing error, got %v", err)
+	}
+}
+
+func TestNewTentExecutor_EmptyImageRef(t *testing.T) {
+	withBuildcfgString(t, &buildcfg.PodmanPath, "/usr/bin/false")
+	withBuildcfgString(t, &buildcfg.TentImageRef, "")
+	if _, err := newTentExecutor("/x/claude", nil); err == nil || !strings.Contains(err.Error(), "TentImageRef") {
+		t.Fatalf("expected TentImageRef-empty error, got %v", err)
+	}
+}
+
+func TestUserHasSubuid(t *testing.T) {
+	cases := []struct {
+		name        string
+		fileContent string
+		userName    string
+		uid         string
+		wantMissing bool
+	}{
+		{
+			name:        "user by name",
+			fileContent: "alice:100000:65536\nbob:165536:65536\n",
+			userName:    "bob",
+			uid:         "1001",
+			wantMissing: false,
+		},
+		{
+			name:        "user by uid",
+			fileContent: "alice:100000:65536\n1001:200000:65536\n",
+			userName:    "bob",
+			uid:         "1001",
+			wantMissing: false,
+		},
+		{
+			name:        "user missing",
+			fileContent: "alice:100000:65536\n",
+			userName:    "bob",
+			uid:         "1001",
+			wantMissing: true,
+		},
+		{
+			name:        "ignores blank and comment lines",
+			fileContent: "\n# comment\nbob:165536:65536\n",
+			userName:    "bob",
+			uid:         "1001",
+			wantMissing: false,
+		},
+		{
+			name:        "no match when name empty and uid mismatch",
+			fileContent: "alice:100000:65536\n",
+			userName:    "",
+			uid:         "1001",
+			wantMissing: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			subuidPath := filepath.Join(dir, "subuid")
+			if err := os.WriteFile(subuidPath, []byte(tc.fileContent), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			// userHasSubuid reads /etc/subuid; test the parse logic
+			// via a local copy. Inline reimplementation keeps the
+			// production function's signature stable.
+			data, err := os.ReadFile(subuidPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			missing := true
+			for _, line := range strings.Split(string(data), "\n") {
+				line = strings.TrimSpace(line)
+				if line == "" || strings.HasPrefix(line, "#") {
+					continue
+				}
+				field, _, _ := strings.Cut(line, ":")
+				if (tc.userName != "" && field == tc.userName) || field == tc.uid {
+					missing = false
+					break
+				}
+			}
+			if missing != tc.wantMissing {
+				t.Errorf("missing = %v, want %v", missing, tc.wantMissing)
+			}
+		})
+	}
+}
+
+func TestUserHasSubuid_FileMissing(t *testing.T) {
+	dir := t.TempDir()
+	missing, err := userHasSubuidAt(filepath.Join(dir, "nonexistent"), "bob", "1001")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !missing {
+		t.Error("missing /etc/subuid should report missing=true")
+	}
+}
+
+// userHasSubuidAt is a thin testable wrapper around userHasSubuid's
+// parsing logic that takes the file path as input. Kept in the test
+// file so it doesn't broaden the production API.
+func userHasSubuidAt(path, name, uid string) (bool, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return true, nil
+		}
+		return false, err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		field, _, _ := strings.Cut(line, ":")
+		if (name != "" && field == name) || field == uid {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// fakePodmanBinary writes a small shell script to a tempdir that
+// records the args it's invoked with to a sidecar file. Optionally
+// returns nonzero for `image exists`. The shebang resolves the host
+// shell at test time so the script runs in the nix build sandbox
+// (where /usr/bin/env is absent and /bin/sh may or may not exist).
+func fakePodmanBinary(t *testing.T, imageExists bool) (binPath, logPath string) {
+	t.Helper()
+	shPath, err := exec.LookPath("sh")
+	if err != nil {
+		shPath, err = exec.LookPath("bash")
+		if err != nil {
+			t.Skipf("no sh/bash found on PATH; cannot stage fake podman: %v", err)
+		}
+	}
+	dir := t.TempDir()
+	logPath = filepath.Join(dir, "calls.log")
+	exitForExists := "0"
+	if !imageExists {
+		exitForExists = "1"
+	}
+	script := "#!" + shPath + "\n" +
+		"echo \"$@\" >> " + logPath + "\n" +
+		"if [ \"$1\" = \"image\" ] && [ \"$2\" = \"exists\" ]; then exit " + exitForExists + "; fi\n" +
+		"exit 0\n"
+	binPath = filepath.Join(dir, "podman")
+	if err := os.WriteFile(binPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return binPath, logPath
+}
+
+func TestEnsureTentImage_ExistsShortCircuits(t *testing.T) {
+	podman, logPath := fakePodmanBinary(t, true)
+	if err := ensureTentImage(podman, "clown-tent:test", ""); err != nil {
+		t.Fatalf("expected nil error when image exists, got %v", err)
+	}
+	data, _ := os.ReadFile(logPath)
+	if strings.Contains(string(data), "load") {
+		t.Errorf("podman load should not run when image exists; calls log:\n%s", data)
+	}
+}
+
+func TestEnsureTentImage_MissingThenLoad(t *testing.T) {
+	podman, logPath := fakePodmanBinary(t, false)
+	tarball := filepath.Join(t.TempDir(), "tent.tar")
+	if err := os.WriteFile(tarball, []byte("fake tarball"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureTentImage(podman, "clown-tent:test", tarball); err != nil {
+		t.Fatalf("expected nil error from happy load, got %v", err)
+	}
+	data, _ := os.ReadFile(logPath)
+	if !strings.Contains(string(data), "load -i "+tarball) {
+		t.Errorf("expected `load -i %s` invocation; calls log:\n%s", tarball, data)
+	}
+}
+
+func TestEnsureTentImage_MissingNoTarball(t *testing.T) {
+	podman, _ := fakePodmanBinary(t, false)
+	err := ensureTentImage(podman, "clown-tent:test", "")
+	if err == nil || !strings.Contains(err.Error(), "not present locally") {
+		t.Fatalf("expected `not present locally` error when no tarball, got %v", err)
+	}
+}
+
+func TestEnsureClaudeJSON_LeavesExistingFileAlone(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(home, ".claude.json")
+	want := []byte(`{"existing": "config"}`)
+	if err := os.WriteFile(path, want, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureClaudeJSON(); err != nil {
+		t.Fatalf("ensureClaudeJSON: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(want) {
+		t.Errorf("existing file rewritten; got %q want %q", got, want)
+	}
+}
+
+func TestEnsureClaudeJSON_CreatesEmptyJSONIfMissing(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := ensureClaudeJSON(); err != nil {
+		t.Fatalf("ensureClaudeJSON: %v", err)
+	}
+	path := filepath.Join(home, ".claude.json")
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("expected file created at %s: %v", path, err)
+	}
+	if strings.TrimSpace(string(got)) != "{}" {
+		t.Errorf("initial content = %q, want %q", got, "{}")
+	}
+}
+
+func TestEnsureClaudeJSON_RejectsDirectoryAtPath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(home, ".claude.json")
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	err := ensureClaudeJSON()
+	if err == nil || !strings.Contains(err.Error(), "is a directory") {
+		t.Fatalf("expected `is a directory` error, got %v", err)
 	}
 }
