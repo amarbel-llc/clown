@@ -634,7 +634,7 @@ func TestTentExecutor_EmptyPodmanPath(t *testing.T) {
 func TestNewTentExecutor_EmptyImageRef(t *testing.T) {
 	withBuildcfgString(t, &buildcfg.PodmanPath, "/usr/bin/false")
 	withBuildcfgString(t, &buildcfg.TentImageRef, "")
-	if _, err := newTentExecutor("/x/claude", nil); err == nil || !strings.Contains(err.Error(), "TentImageRef") {
+	if _, err := newTentExecutor("/x/claude", nil, nil, false); err == nil || !strings.Contains(err.Error(), "TentImageRef") {
 		t.Fatalf("expected TentImageRef-empty error, got %v", err)
 	}
 }

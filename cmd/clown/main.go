@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/charmbracelet/bubbles/list"
@@ -400,10 +401,38 @@ func runClaude(cliPath string, flags parsedFlags, prompts promptwalk.PromptResul
 		defer cleanup()
 
 		var executor Executor = &directExecutor{cliPath: innerCliPath}
+		var tentLogger *slog.Logger
 		if flags.tent {
-			tentExec, err := newTentExecutor(innerCliPath, pluginDirs)
+			// Open the plugin-host log eagerly so tent setup phases
+			// (preflight, image load, etc.) are recorded *before*
+			// runWithPluginHost would otherwise open it. Without this,
+			// a hang in ensureTentImage or preflightUserNs leaves no
+			// trace on disk at all. The same logger is then passed to
+			// runWithPluginHost so a single tent run produces one log
+			// file instead of two.
+			opened, logFile, logPath, err := pluginhost.OpenLog()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "clown: opening tent log: %v\n", err)
+				return 1
+			}
+			defer logFile.Close()
+			tentLogger = opened
+			if flags.verbose {
+				fmt.Fprintf(os.Stderr, "clown: logging to %s\n", logPath)
+			}
+			tentLogger.Info("tent startup begin",
+				"version", buildcfg.Version,
+				"commit", buildcfg.Commit,
+				"pid", os.Getpid(),
+				"log_path", logPath,
+				"image_ref", buildcfg.TentImageRef,
+				"podman_path", buildcfg.PodmanPath,
+			)
+
+			tentExec, err := newTentExecutor(innerCliPath, pluginDirs, tentLogger, flags.verbose)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "clown: %v\n", err)
+				tentLogger.Error("tent setup failed", "err", err)
 				return 1
 			}
 			executor = tentExec
@@ -414,9 +443,10 @@ func runClaude(cliPath string, flags parsedFlags, prompts promptwalk.PromptResul
 			// silence and assumes a hang. claude's TUI paints over this
 			// line once it starts rendering.
 			fmt.Fprintln(os.Stderr, "Starting claude inside tent…")
+			tentLogger.Info("tent setup complete; entering plugin host")
 		}
 
-		return runWithPluginHost(executor, args, pluginDirs, flags)
+		return runWithPluginHost(executor, args, pluginDirs, flags, tentLogger)
 	})
 }
 
@@ -425,30 +455,77 @@ func runClaude(cliPath string, flags parsedFlags, prompts promptwalk.PromptResul
 // podman store. The image-load step runs at most once per fresh image
 // reference: subsequent invocations find it cached and skip straight
 // to `podman run`.
-func newTentExecutor(innerCliPath string, pluginDirs []string) (*tentExecutor, error) {
+//
+// Each setup phase is timed and logged so intermittent startup hangs
+// can be localized. When logger is nil (test callers), logging is
+// skipped; when verbose is true, phase boundaries also print to stderr.
+func newTentExecutor(innerCliPath string, pluginDirs []string, logger *slog.Logger, verbose bool) (*tentExecutor, error) {
 	if buildcfg.PodmanPath == "" {
 		return nil, fmt.Errorf("--tent requires a build with podman wired in; this build has buildcfg.PodmanPath empty (try `nix build`)")
 	}
 	if buildcfg.TentImageRef == "" {
 		return nil, fmt.Errorf("--tent requires a build with the tent image wired in; this build has buildcfg.TentImageRef empty")
 	}
-	if err := preflightUserNs(); err != nil {
+	if err := runTentPhase(logger, verbose, "preflight_userns", preflightUserNs); err != nil {
 		return nil, err
 	}
-	if err := ensureClaudeJSON(); err != nil {
+	if err := runTentPhase(logger, verbose, "ensure_claude_json", ensureClaudeJSON); err != nil {
 		return nil, err
 	}
-	if err := ensureClaudeBindSources(); err != nil {
+	if err := runTentPhase(logger, verbose, "ensure_claude_bind_sources", ensureClaudeBindSources); err != nil {
 		return nil, err
 	}
-	if err := ensureTentImage(buildcfg.PodmanPath, buildcfg.TentImageRef, buildcfg.TentImageTarball); err != nil {
+	if err := runTentPhase(logger, verbose, "ensure_tent_image", func() error {
+		return ensureTentImage(buildcfg.PodmanPath, buildcfg.TentImageRef, buildcfg.TentImageTarball)
+	}); err != nil {
 		return nil, err
 	}
-	opts, err := tent.OptionsFromEnv(buildcfg.TentImageRef, pluginDirs)
-	if err != nil {
+	var opts tent.Options
+	if err := runTentPhase(logger, verbose, "options_from_env", func() error {
+		o, err := tent.OptionsFromEnv(buildcfg.TentImageRef, pluginDirs)
+		if err != nil {
+			return err
+		}
+		opts = o
+		return nil
+	}); err != nil {
 		return nil, err
 	}
 	return &tentExecutor{innerCliPath: innerCliPath, opts: opts}, nil
+}
+
+// runTentPhase wraps a tent setup step with start/end timing logs and
+// optional stderr trace prints. The "tent: <phase> …" stderr line is
+// gated on verbose because non-verbose runs already show the
+// "Starting claude inside tent…" hint and the bubbletea image-load
+// spinner — we don't want a flurry of unrelated phase prints
+// underneath those.
+func runTentPhase(logger *slog.Logger, verbose bool, phase string, fn func() error) error {
+	if verbose {
+		fmt.Fprintf(os.Stderr, "tent: %s …\n", phase)
+	}
+	if logger != nil {
+		logger.Info("tent phase start", "phase", phase)
+	}
+	start := time.Now()
+	err := fn()
+	elapsed := time.Since(start)
+	if err != nil {
+		if logger != nil {
+			logger.Error("tent phase failed", "phase", phase, "elapsed", elapsed.String(), "err", err)
+		}
+		if verbose {
+			fmt.Fprintf(os.Stderr, "tent: %s failed after %s: %v\n", phase, elapsed, err)
+		}
+		return err
+	}
+	if logger != nil {
+		logger.Info("tent phase done", "phase", phase, "elapsed", elapsed.String())
+	}
+	if verbose {
+		fmt.Fprintf(os.Stderr, "tent: %s done in %s\n", phase, elapsed)
+	}
+	return nil
 }
 
 // preflightUserNs verifies the rootless-podman prerequisites that
@@ -616,7 +693,7 @@ func ensureTentImage(podmanPath, ref, tarball string) error {
 // All paths run the provider as a subprocess (cmd.Run) rather than
 // syscall.Exec, so clown retains control after the provider exits and
 // can run post-exit hooks like the resume hint.
-func runWithPluginHost(executor Executor, args []string, pluginDirs []string, flags parsedFlags) int {
+func runWithPluginHost(executor Executor, args []string, pluginDirs []string, flags parsedFlags, preLogger *slog.Logger) int {
 	skipFailed := flags.skipFailed || os.Getenv("CLOWN_SKIP_FAILED_PLUGINS") == "1"
 	disableClown := flags.disableClownProtocol || os.Getenv("CLOWN_DISABLE_CLOWN_PROTOCOL") == "1"
 	verbose := flags.verbose
@@ -626,14 +703,20 @@ func runWithPluginHost(executor Executor, args []string, pluginDirs []string, fl
 		return runProvider(executor, fullArgs, nil)
 	}
 
-	logger, logFile, logPath, err := pluginhost.OpenLog()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "clown: opening log: %v\n", err)
-		return 1
-	}
-	defer logFile.Close()
-	if verbose {
-		fmt.Fprintf(os.Stderr, "clown: logging to %s\n", logPath)
+	logger := preLogger
+	logPath := ""
+	if logger == nil {
+		opened, logFile, openedPath, err := pluginhost.OpenLog()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "clown: opening log: %v\n", err)
+			return 1
+		}
+		defer logFile.Close()
+		logger = opened
+		logPath = openedPath
+		if verbose {
+			fmt.Fprintf(os.Stderr, "clown: logging to %s\n", logPath)
+		}
 	}
 
 	logger.Info("clown starting",
@@ -703,23 +786,45 @@ func runProvider(executor Executor, args []string, logger *slog.Logger) int {
 	if logger != nil {
 		logger.Info("running downstream", "binary", binary, "args", argv)
 	}
-	if err := cmd.Run(); err != nil {
+	// Split Run() into Start() + Wait() so we can log a) the moment
+	// fork-exec returns (kernel has the child PID; binary loaded; any
+	// setuid / userns / argv-too-long errors would already have
+	// surfaced) and b) the elapsed time until the child exits. The
+	// gap between those two events is opaque to clown — it's the
+	// downstream's own runtime — but having both endpoints localizes
+	// hangs to "before fork-exec returned" vs "during child run".
+	preStart := time.Now()
+	if err := cmd.Start(); err != nil {
+		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
+		if logger != nil {
+			logger.Error("downstream start failed", "err", err, "elapsed", time.Since(preStart).String())
+		}
+		return 1
+	}
+	startElapsed := time.Since(preStart)
+	if logger != nil {
+		logger.Info("downstream process started", "pid", cmd.Process.Pid, "start_elapsed", startElapsed.String())
+	}
+	preWait := time.Now()
+	err = cmd.Wait()
+	waitElapsed := time.Since(preWait)
+	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			code := exitErr.ExitCode()
 			if logger != nil {
-				logger.Info("downstream exited", "code", code)
+				logger.Info("downstream exited", "code", code, "wait_elapsed", waitElapsed.String())
 			}
 			resetTerminal()
 			return code
 		}
 		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
 		if logger != nil {
-			logger.Error("downstream run failed", "err", err)
+			logger.Error("downstream wait failed", "err", err, "wait_elapsed", waitElapsed.String())
 		}
 		return 1
 	}
 	if logger != nil {
-		logger.Info("downstream exited", "code", 0)
+		logger.Info("downstream exited", "code", 0, "wait_elapsed", waitElapsed.String())
 	}
 	resetTerminal()
 	return 0
@@ -976,7 +1081,7 @@ func runClownbox(cliPath string, flags parsedFlags, prompts promptwalk.PromptRes
 	}
 	defer cleanup()
 
-	return runWithPluginHost(&passthroughExecutor{cliPath: cliPath}, args, pluginDirs, flags)
+	return runWithPluginHost(&passthroughExecutor{cliPath: cliPath}, args, pluginDirs, flags, nil)
 }
 
 func readCircusHandshake(r io.Reader) (pluginhost.Handshake, error) {
