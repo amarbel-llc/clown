@@ -392,21 +392,36 @@
         # tent: podman-wrapped provider container. FDR-0007.
         # Tracer-bullet scope: claude only, opt-in via --tent.
         #
-        # The container *image* (dockerTools.buildLayeredImage) and the
-        # podman *binary* are linux-only — pkgs.dockerTools cannot build
-        # a layered image on a darwin builder, and the nixpkgs podman
-        # derivation is unsupported on darwin (rootless podman on mac
-        # needs an external podman-machine VM, not the nixpkgs binary).
-        # These are gated on `tentImageEnabled`.
+        # Three pieces of build-time state, each with its own platform
+        # story:
         #
-        # The *unpatched claude-code binary* (from numtide/llm-agents.nix,
-        # a fetchurl + binary install) does build on darwin, so we wire
-        # it in unconditionally — it's safe to bake the path on every
-        # platform, and a darwin host with an external podman-machine
-        # VM (see amarbel-llc/eng zz-pocs/podman-darwin) can then run
-        # `clown --tent`. Gated on `tentClaudeEnabled` for symmetry;
-        # currently always true.
+        # 1. **The container image** (`dockerTools.buildLayeredImage`).
+        #    Builds on every platform, but on darwin produces a manifest
+        #    that *claims* linux-arm64 while wrapping mach-O binaries —
+        #    so it's only useful when the eval system is itself
+        #    aarch64-linux. We expose the image as
+        #    `packages.aarch64-linux.tent-image` (see the `packages`
+        #    block) so darwin hosts can build it via nix-darwin's
+        #    linux-builder, but skip baking `tentImageTarball` on darwin
+        #    so a regular `nix build` doesn't bake a dangling path. The
+        #    POC's `phase4-load-image` recipe does the cross-build and
+        #    `podman load` explicitly.
+        #
+        # 2. **The podman binary** (`pkgs.podman`). Builds and runs on
+        #    both linux and darwin — on darwin the binary is a thin
+        #    client that proxies to a podman-machine VM. We bake it
+        #    unconditionally. `tentPodmanEnabled` is the gate.
+        #
+        # 3. **The unpatched claude-code binary** (`pkgs-llm-agents
+        #    .claude-code`, a fetchurl + binary install). Builds on
+        #    every platform, baked unconditionally. `tentClaudeEnabled`
+        #    is the gate.
+        #
+        # The legacy `tentImageEnabled` (linux-only) stays as the gate
+        # for `tentImageTarball` and the conditionally-exposed
+        # `packages.X.tent-image`.
         tentImageEnabled = pkgs.stdenv.isLinux;
+        tentPodmanEnabled = true;
         tentClaudeEnabled = true;
         tentImage =
           if tentImageEnabled then
@@ -444,9 +459,15 @@
             }
           else
             null;
-        tentImageRef = if tentImageEnabled then "clown-tent:${clownVersion}" else "";
+        # tentImageRef is just a string ("clown-tent:<version>"); bake
+        # it on every platform so the runtime knows what tag to look
+        # up. On darwin where no tarball is wired in, an image-load
+        # miss produces a clear "image not present locally and no
+        # tarball is wired in" error instead of an opaque empty-ref
+        # failure earlier in the chain.
+        tentImageRef = "clown-tent:${clownVersion}";
         tentImageTarball = if tentImageEnabled then "${tentImage}" else "";
-        tentPodmanPath = if tentImageEnabled then "${pkgs.podman}/bin/podman" else "";
+        tentPodmanPath = if tentPodmanEnabled then "${pkgs.podman}/bin/podman" else "";
 
         # tent runs an *unpatched* claude-code from numtide/llm-agents.nix
         # so the inner ring has no managed-settings shim — tent is the
@@ -893,7 +914,17 @@
           mock-stdio-mcp = mock-stdio-mcp;
           synthetic-plugin = synthetic-plugin;
         }
-        // batsLaneOutputs;
+        // batsLaneOutputs
+        # Expose the tent container image as a named package on linux
+        # systems so it can be built directly (e.g. as an
+        # `aarch64-linux` cross-build from darwin via nix-darwin's
+        # linux-builder, then `podman load`-ed into a podman-machine
+        # VM). On darwin systems pkgs.stdenv.isLinux is false and
+        # tentImage evaluates to null, so the package is omitted
+        # rather than surfaced as a broken attribute.
+        // lib.optionalAttrs tentImageEnabled {
+          tent-image = tentImage;
+        };
 
         checks = {
           managedSettingsRead = managedSettingsReadTest;

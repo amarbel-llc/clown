@@ -39,27 +39,37 @@ var (
 	DefaultProfile string
 	// PodmanPath is the absolute path to the podman binary, baked
 	// at build time. Consumed by the --tent codepath to wrap the
-	// provider in a container. Empty in dev builds; --tent fails
-	// fast with a clear error when empty. See FDR-0007.
+	// provider in a container. Wired in on linux and darwin (on
+	// darwin the binary is a thin client that proxies to a
+	// podman-machine VM). Empty in dev builds; --tent fails fast
+	// with a clear error when empty. See FDR-0007.
 	PodmanPath string
 	// TentImageRef is the podman image reference (e.g.
 	// "clown-tent:1.2.3") that --tent runs the provider inside.
 	// Loaded on demand from TentImageTarball when not already
-	// present in the local podman image store. Empty in dev builds.
+	// present in the local podman image store. Baked on every
+	// platform; on darwin where TentImageTarball is empty, an
+	// image-store miss surfaces as "image not present locally and
+	// no tarball is wired in" instead of an opaque earlier failure.
 	TentImageRef string
 	// TentImageTarball is the absolute path to a docker-format
 	// image tarball produced by dockerTools.buildImage. clown runs
 	// `podman load -i <tarball>` on first --tent invocation if the
-	// image is not already in the local store. Empty in dev builds.
+	// image is not already in the local store. Linux-only — the
+	// darwin builder produces an unusable image (manifest claims
+	// linux/arm64, content is mach-O), so on darwin the user is
+	// expected to pre-load via the eng-side POC
+	// (zz-pocs/podman-darwin/justfile, recipe `phase4-load-image`),
+	// which cross-builds via linux-builder and `podman load`s.
+	// Empty in dev builds.
 	TentImageTarball string
 	// ClaudeTentCliPath is the absolute path to the unpatched
 	// claude-code binary used inside tent. Sourced from
 	// numtide/llm-agents.nix (self-contained binary distribution,
 	// latest as of the flake input). Distinct from ClaudeCliPath,
 	// which points at clown's managed-settings-patched claude-code
-	// 2.1.111 used outside tent. Wired in on linux and darwin
-	// (PodmanPath / TentImageRef remain linux-only — darwin tent
-	// runs against an external podman-machine VM); empty in dev
-	// builds, where --tent errors out clearly. See FDR-0007.
+	// 2.1.111 used outside tent. Wired in on linux and darwin;
+	// empty in dev builds, where --tent errors out clearly.
+	// See FDR-0007.
 	ClaudeTentCliPath string
 )
