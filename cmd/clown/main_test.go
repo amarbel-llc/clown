@@ -904,3 +904,74 @@ func TestEnsureClaudeJSON_RejectsDirectoryAtPath(t *testing.T) {
 		t.Fatalf("expected `is a directory` error, got %v", err)
 	}
 }
+
+func TestEnsureClaudeBindSources_CreatesMissingDirs(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := ensureClaudeBindSources(); err != nil {
+		t.Fatalf("ensureClaudeBindSources: %v", err)
+	}
+	for _, rel := range claudeBindDirs {
+		path := filepath.Join(home, rel)
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Errorf("expected directory at %s: %v", path, err)
+			continue
+		}
+		if !info.IsDir() {
+			t.Errorf("%s exists but is not a directory", path)
+		}
+	}
+}
+
+func TestEnsureClaudeBindSources_LeavesExistingDirsAlone(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	// Pre-populate each bind dir with a sentinel file.
+	// ensureClaudeBindSources must not touch the contents — it only
+	// creates the dir when missing.
+	for _, rel := range claudeBindDirs {
+		dir := filepath.Join(home, rel)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "sentinel"), []byte("keep"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := ensureClaudeBindSources(); err != nil {
+		t.Fatalf("ensureClaudeBindSources: %v", err)
+	}
+	for _, rel := range claudeBindDirs {
+		got, err := os.ReadFile(filepath.Join(home, rel, "sentinel"))
+		if err != nil {
+			t.Errorf("sentinel disappeared from %s: %v", rel, err)
+			continue
+		}
+		if string(got) != "keep" {
+			t.Errorf("sentinel in %s rewritten; got %q want %q", rel, got, "keep")
+		}
+	}
+}
+
+func TestEnsureClaudeBindSources_RejectsFileAtDirPath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	// Plant a regular file where the first bind dir should live,
+	// mirroring the corruption pattern ensureClaudeJSON catches for
+	// ~/.claude.json.
+	rel := claudeBindDirs[0]
+	parent := filepath.Dir(filepath.Join(home, rel))
+	if parent != home {
+		if err := os.MkdirAll(parent, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(home, rel), []byte("oops"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := ensureClaudeBindSources()
+	if err == nil || !strings.Contains(err.Error(), "is a regular file") {
+		t.Fatalf("expected `is a regular file` error, got %v", err)
+	}
+}

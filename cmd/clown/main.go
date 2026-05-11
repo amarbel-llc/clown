@@ -411,6 +411,9 @@ func newTentExecutor(innerCliPath string, pluginDirs []string) (*tentExecutor, e
 	if err := ensureClaudeJSON(); err != nil {
 		return nil, err
 	}
+	if err := ensureClaudeBindSources(); err != nil {
+		return nil, err
+	}
 	if err := ensureTentImage(buildcfg.PodmanPath, buildcfg.TentImageRef, buildcfg.TentImageTarball); err != nil {
 		return nil, err
 	}
@@ -485,6 +488,50 @@ func ensureClaudeJSON() error {
 	}
 	if err := os.WriteFile(path, []byte("{}\n"), 0o600); err != nil {
 		return fmt.Errorf("--tent: initializing %s: %w", path, err)
+	}
+	return nil
+}
+
+// claudeBindDirs is the set of $HOME-relative directories that tent's
+// BuildArgs bind-mounts writable into the container. Sibling to
+// ~/.claude.json (which ensureClaudeJSON handles as a regular file).
+// Kept in sync with tent.BuildArgs in internal/tent/tent.go.
+//
+// Mirrored on darwin specifically: a fresh darwin host with claude-code
+// installed has neither directory before its first claude run (claude
+// uses ~/.claude/ only after the first invocation, and ~/.config/claude/
+// is XDG-style and may never exist). Podman, faced with a missing bind
+// source, creates a directory there owned by root, which is both wrong
+// and surprising to the user.
+var claudeBindDirs = []string{".claude", ".config/claude"}
+
+// ensureClaudeBindSources guarantees the directory bind sources tent
+// uses exist as regular directories on the host before the
+// container is launched. Each directory is created with 0o700 when
+// missing; existing directories are left untouched; a non-directory
+// at any of the paths is treated as the same kind of corruption
+// ensureClaudeJSON flags for ~/.claude.json — bail with a clear,
+// actionable error rather than silently nuking user data.
+func ensureClaudeBindSources() error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("--tent: locating home dir: %w", err)
+	}
+	for _, rel := range claudeBindDirs {
+		path := filepath.Join(home, rel)
+		info, err := os.Stat(path)
+		if err == nil {
+			if !info.IsDir() {
+				return fmt.Errorf("--tent: %s is a regular file, expected a directory (a previous tent run may have created it via an unmounted bind); remove it manually if you have no other use for it", path)
+			}
+			continue
+		}
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("--tent: stat %s: %w", path, err)
+		}
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			return fmt.Errorf("--tent: creating %s: %w", path, err)
+		}
 	}
 	return nil
 }
