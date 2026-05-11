@@ -321,12 +321,45 @@ func (e *tentExecutor) FormatArgs(args []string) []string {
 	return tent.BuildArgs(e.innerCliPath, args, e.opts)
 }
 
+// resolveClaudeForRun picks the inner claude binary path and the
+// disallowed-tools file to feed into provider.BuildClaudeArgs based
+// on whether --tent is active.
+//
+// Default (non-tent): uses the build-time ClaudeCliPath (patched
+// claude-code with managed-settings) and the build-time
+// DisallowedToolsFile (clown's safety denylist: Bash(*), Agent(Explore),
+// WebFetch).
+//
+// Tent: uses the build-time ClaudeTentCliPath (unpatched claude-code
+// from numtide/llm-agents) and an empty disallowed-tools file. Tent IS
+// the policy boundary, so the inner claude needs no managed-settings
+// shim and clown's safety denylist is redundant. See FDR-0007.
+//
+// Returns an error when --tent is requested but the build wasn't
+// configured for it (typically a darwin build, where podman is
+// unavailable and ClaudeTentCliPath is empty).
+func resolveClaudeForRun(defaultCliPath string, tent bool) (cliPath, disallowedToolsFile string, err error) {
+	if !tent {
+		return defaultCliPath, buildcfg.DisallowedToolsFile, nil
+	}
+	if buildcfg.ClaudeTentCliPath == "" {
+		return "", "", fmt.Errorf("--tent requires a build with ClaudeTentCliPath wired in (linux-only); this build has it empty")
+	}
+	return buildcfg.ClaudeTentCliPath, "", nil
+}
+
 func runClaude(cliPath string, flags parsedFlags, prompts promptwalk.PromptResult, pluginDirs []string) int {
+	innerCliPath, disallowedToolsFile, err := resolveClaudeForRun(cliPath, flags.tent)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
+		return 1
+	}
+
 	return withClaudeResumeHint(flags.forwarded, func(forwarded []string) int {
 		args, cleanup, err := provider.BuildClaudeArgs(provider.ClaudeArgs{
-			CLIPath:             cliPath,
+			CLIPath:             innerCliPath,
 			AgentsFile:          buildcfg.AgentsFile,
-			DisallowedToolsFile: buildcfg.DisallowedToolsFile,
+			DisallowedToolsFile: disallowedToolsFile,
 			SystemPromptFile:    prompts.SystemPromptFile,
 			AppendFragments:     prompts.AppendFragments,
 		}, forwarded)
@@ -336,9 +369,9 @@ func runClaude(cliPath string, flags parsedFlags, prompts promptwalk.PromptResul
 		}
 		defer cleanup()
 
-		var executor Executor = &directExecutor{cliPath: cliPath}
+		var executor Executor = &directExecutor{cliPath: innerCliPath}
 		if flags.tent {
-			tentExec, err := newTentExecutor(cliPath, pluginDirs)
+			tentExec, err := newTentExecutor(innerCliPath, pluginDirs)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "clown: %v\n", err)
 				return 1

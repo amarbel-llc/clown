@@ -52,4 +52,12 @@ var (
 	// `podman load -i <tarball>` on first --tent invocation if the
 	// image is not already in the local store. Empty in dev builds.
 	TentImageTarball string
+	// ClaudeTentCliPath is the absolute path to the unpatched
+	// claude-code binary used inside tent. Sourced from
+	// numtide/llm-agents.nix (self-contained binary distribution,
+	// latest as of the flake input). Distinct from ClaudeCliPath,
+	// which points at clown's managed-settings-patched claude-code
+	// 2.1.111 used outside tent. Empty on non-linux builds; --tent
+	// errors out clearly when empty. See FDR-0007.
+	ClaudeTentCliPath string
 )

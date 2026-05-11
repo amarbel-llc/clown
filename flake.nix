@@ -436,6 +436,14 @@
         tentImageTarball = if tentEnabled then "${tentImage}" else "";
         tentPodmanPath = if tentEnabled then "${pkgs.podman}/bin/podman" else "";
 
+        # tent runs an *unpatched* claude-code from numtide/llm-agents.nix
+        # so the inner ring has no managed-settings shim — tent is the
+        # boundary. The patched 2.1.111 (npm-source, cli.js-redirected
+        # via mkPatchedClaudeCode) stays the default for un-tented clown;
+        # see flake.nix:600-621 and FDR-0007 for the rationale. To bump
+        # the tent's claude-code, run `nix flake update llm-agents`.
+        tentClaudeCliPath = if tentEnabled then "${pkgs-llm-agents.claude-code}/bin/claude" else "";
+
         mkClownGo =
           {
             defaultProvider ? defaultDefaultProvider,
@@ -471,6 +479,7 @@
               "-X github.com/amarbel-llc/clown/internal/buildcfg.PodmanPath=${tentPodmanPath}"
               "-X github.com/amarbel-llc/clown/internal/buildcfg.TentImageRef=${tentImageRef}"
               "-X github.com/amarbel-llc/clown/internal/buildcfg.TentImageTarball=${tentImageTarball}"
+              "-X github.com/amarbel-llc/clown/internal/buildcfg.ClaudeTentCliPath=${tentClaudeCliPath}"
             ];
           };
 

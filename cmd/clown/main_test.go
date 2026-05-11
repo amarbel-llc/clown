@@ -852,6 +852,46 @@ func TestEnsureClaudeJSON_CreatesEmptyJSONIfMissing(t *testing.T) {
 	}
 }
 
+func TestResolveClaudeForRun_NonTentUsesDefault(t *testing.T) {
+	withBuildcfgString(t, &buildcfg.DisallowedToolsFile, "/fake/disallowed.txt")
+	cli, disallowed, err := resolveClaudeForRun("/nix/store/x-claude/bin/claude", false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cli != "/nix/store/x-claude/bin/claude" {
+		t.Errorf("cli = %q, want default claude path", cli)
+	}
+	if disallowed != "/fake/disallowed.txt" {
+		t.Errorf("disallowed = %q, want default file", disallowed)
+	}
+}
+
+func TestResolveClaudeForRun_TentUsesUnpatchedAndSkipsDisallowed(t *testing.T) {
+	withBuildcfgString(t, &buildcfg.ClaudeTentCliPath, "/nix/store/y-claude-tent/bin/claude")
+	withBuildcfgString(t, &buildcfg.DisallowedToolsFile, "/fake/disallowed.txt")
+	cli, disallowed, err := resolveClaudeForRun("/nix/store/x-claude/bin/claude", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cli != "/nix/store/y-claude-tent/bin/claude" {
+		t.Errorf("cli = %q, want ClaudeTentCliPath", cli)
+	}
+	if disallowed != "" {
+		t.Errorf("disallowed = %q, want empty (tent skips provider defaults)", disallowed)
+	}
+}
+
+func TestResolveClaudeForRun_TentEmptyPathErrors(t *testing.T) {
+	withBuildcfgString(t, &buildcfg.ClaudeTentCliPath, "")
+	_, _, err := resolveClaudeForRun("/x/claude", true)
+	if err == nil {
+		t.Fatal("expected error when ClaudeTentCliPath is empty")
+	}
+	if !strings.Contains(err.Error(), "ClaudeTentCliPath") {
+		t.Errorf("error should mention ClaudeTentCliPath, got %v", err)
+	}
+}
+
 func TestEnsureClaudeJSON_RejectsDirectoryAtPath(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
