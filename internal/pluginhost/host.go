@@ -46,6 +46,24 @@ type Host struct {
 	// rewritten as httpServers entries pointing at the bridge.
 	BridgePath string
 
+	// URLHostRewrite, when non-empty, replaces the host portion of
+	// each MCP server URL written into the compiled plugin manifest
+	// (the URL component sent to claude-code, NOT the address
+	// plugin-host itself dials when starting/healthchecking the
+	// server). The port and path are preserved.
+	//
+	// Use case: when claude-code runs inside a container that
+	// cannot resolve the host-side loopback its plugin-host bound
+	// to. The canonical example is `clown --tent` on darwin: the
+	// plugin servers bind to 127.0.0.1 on the mac, but the
+	// container's 127.0.0.1 is the podman-machine VM's loopback,
+	// not the mac's. Setting URLHostRewrite to
+	// "host.containers.internal" routes claude's requests through
+	// gvproxy back to the mac. See amarbel-llc/clown#70.
+	//
+	// Empty disables rewriting (current default on linux native).
+	URLHostRewrite string
+
 	// compiledDirs tracks staging directories produced by
 	// CompileForClaude; Shutdown removes them.
 	compiledDirs []string
@@ -142,8 +160,10 @@ func (h *Host) StartAll(ctx context.Context, discovered []DiscoveredServer) Star
 
 // serverEntryForManaged builds an MCPServerEntry from a running server's
 // handshake. The Type field maps "streamable-http" to "http"; other
-// protocols pass through unmodified so schema errors are legible.
-func serverEntryForManaged(srv *ManagedServer) MCPServerEntry {
+// protocols pass through unmodified so schema errors are legible. When
+// h.URLHostRewrite is non-empty, the URL's host portion is replaced
+// before the entry is returned (see URLHostRewrite for context).
+func (h *Host) serverEntryForManaged(srv *ManagedServer) MCPServerEntry {
 	hs := srv.Handshake()
 	typ := hs.Protocol
 	if typ == "streamable-http" {
@@ -151,7 +171,7 @@ func serverEntryForManaged(srv *ManagedServer) MCPServerEntry {
 	}
 	return MCPServerEntry{
 		Type:    typ,
-		URL:     hs.URL(),
+		URL:     hs.URLWithHostRewrite(h.URLHostRewrite),
 		Timeout: srv.Def.Timeout,
 	}
 }
@@ -270,7 +290,7 @@ func (h *Host) serverEntriesByPluginDir(discovered []DiscoveredServer) map[strin
 		if result[origin.pluginDir] == nil {
 			result[origin.pluginDir] = make(map[string]MCPServerEntry)
 		}
-		result[origin.pluginDir][origin.serverName] = serverEntryForManaged(srv)
+		result[origin.pluginDir][origin.serverName] = h.serverEntryForManaged(srv)
 	}
 	return result
 }

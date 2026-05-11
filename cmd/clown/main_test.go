@@ -975,3 +975,28 @@ func TestEnsureClaudeBindSources_RejectsFileAtDirPath(t *testing.T) {
 		t.Fatalf("expected `is a regular file` error, got %v", err)
 	}
 }
+
+func TestPluginURLHostForGOOS(t *testing.T) {
+	tests := []struct {
+		name string
+		tent bool
+		goos string
+		want string
+	}{
+		{"non-tent darwin", false, "darwin", ""},
+		{"non-tent linux", false, "linux", ""},
+		{"tent linux", true, "linux", ""},
+		{"tent darwin", true, "darwin", "host.containers.internal"},
+		{"tent freebsd", true, "freebsd", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			flags := parsedFlags{tent: tt.tent}
+			got := pluginURLHostForGOOS(flags, tt.goos)
+			if got != tt.want {
+				t.Errorf("pluginURLHostForGOOS(tent=%v, goos=%q) = %q, want %q",
+					tt.tent, tt.goos, got, tt.want)
+			}
+		})
+	}
+}

@@ -2,6 +2,7 @@ package pluginhost
 
 import (
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
 )
@@ -61,9 +62,31 @@ func ParseHandshake(line string) (Handshake, error) {
 }
 
 func (h Handshake) URL() string {
+	return h.URLWithHostRewrite("")
+}
+
+// URLWithHostRewrite returns the same URL as URL(), but with the host
+// portion of the address replaced when hostOverride is non-empty. The
+// port and path components are preserved. An empty hostOverride is a
+// no-op (equivalent to URL()).
+//
+// Use this when the URL is being written into something an out-of-process
+// consumer will dial — e.g. a compiled plugin manifest that
+// claude-code reads from inside a container that can't resolve the
+// loopback the plugin server bound to. Plugin-host itself should
+// keep using URL() / Address for its own dials (healthchecks and
+// shutdown) because *those* run as the same process / network
+// namespace as the bind.
+func (h Handshake) URLWithHostRewrite(hostOverride string) string {
 	path := "/mcp"
 	if h.Protocol == "sse" {
 		path = "/sse"
 	}
-	return "http://" + h.Address + path
+	addr := h.Address
+	if hostOverride != "" {
+		if _, port, err := net.SplitHostPort(h.Address); err == nil {
+			addr = net.JoinHostPort(hostOverride, port)
+		}
+	}
+	return "http://" + addr + path
 }

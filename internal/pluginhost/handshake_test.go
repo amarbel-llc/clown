@@ -127,3 +127,57 @@ func TestHandshakeURL(t *testing.T) {
 		}
 	}
 }
+
+func TestHandshakeURLWithHostRewrite(t *testing.T) {
+	tests := []struct {
+		name         string
+		proto        string
+		addr         string
+		hostOverride string
+		want         string
+	}{
+		{
+			name:         "empty override keeps host",
+			proto:        "streamable-http",
+			addr:         "127.0.0.1:8080",
+			hostOverride: "",
+			want:         "http://127.0.0.1:8080/mcp",
+		},
+		{
+			name:         "ipv4 host swapped, port preserved",
+			proto:        "streamable-http",
+			addr:         "127.0.0.1:8080",
+			hostOverride: "host.containers.internal",
+			want:         "http://host.containers.internal:8080/mcp",
+		},
+		{
+			name:         "sse path preserved",
+			proto:        "sse",
+			addr:         "127.0.0.1:9090",
+			hostOverride: "host.containers.internal",
+			want:         "http://host.containers.internal:9090/sse",
+		},
+		{
+			name:         "ipv6 host swapped, port preserved",
+			proto:        "streamable-http",
+			addr:         "[::1]:8080",
+			hostOverride: "host.containers.internal",
+			want:         "http://host.containers.internal:8080/mcp",
+		},
+		{
+			name:         "malformed address falls back to original",
+			proto:        "streamable-http",
+			addr:         "no-port-here",
+			hostOverride: "host.containers.internal",
+			want:         "http://no-port-here/mcp",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := Handshake{Protocol: tt.proto, Address: tt.addr}
+			if got := h.URLWithHostRewrite(tt.hostOverride); got != tt.want {
+				t.Errorf("URLWithHostRewrite(%q) = %q, want %q", tt.hostOverride, got, tt.want)
+			}
+		})
+	}
+}

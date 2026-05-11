@@ -336,6 +336,33 @@ func (e *tentExecutor) FormatArgs(args []string) []string {
 // the policy boundary, so the inner claude needs no managed-settings
 // shim and clown's safety denylist is redundant. See FDR-0007.
 //
+// pluginURLHostFor returns the host string that compiled plugin
+// manifest URLs should use, given the active flags. Empty (no
+// rewrite) on the linux native path because the container shares
+// the host's network namespace under --network=host. On darwin
+// under tent, podman-machine puts the container in the VM's
+// network namespace, so 127.0.0.1 inside the container is the
+// VM's loopback, not the mac's — gvproxy injects the special
+// host.containers.internal hostname that tunnels back to the
+// mac. See amarbel-llc/clown#70 and the eng-side POC's
+// `phase4-net-*` probes that verified the reachability matrix.
+func pluginURLHostFor(flags parsedFlags) string {
+	return pluginURLHostForGOOS(flags, runtime.GOOS)
+}
+
+// pluginURLHostForGOOS is the testable form of pluginURLHostFor
+// that takes the target OS explicitly so tests can exercise each
+// branch without spinning up a cross-platform CI lane.
+func pluginURLHostForGOOS(flags parsedFlags, goos string) string {
+	if !flags.tent {
+		return ""
+	}
+	if goos != "darwin" {
+		return ""
+	}
+	return "host.containers.internal"
+}
+
 // Returns an error when --tent is requested but the build wasn't
 // configured for it — i.e. ClaudeTentCliPath is empty. Now that the
 // llm-agents claude-code is baked in on darwin too, a typical case is
@@ -620,9 +647,10 @@ func runWithPluginHost(executor Executor, args []string, pluginDirs []string, fl
 	)
 
 	host := &pluginhost.Host{
-		PluginDirs: pluginDirs,
-		Logger:     logger,
-		BridgePath: buildcfg.StdioBridgePath,
+		PluginDirs:     pluginDirs,
+		Logger:         logger,
+		BridgePath:     buildcfg.StdioBridgePath,
+		URLHostRewrite: pluginURLHostFor(flags),
 	}
 	discovered, err := host.Discover()
 	if err != nil {
