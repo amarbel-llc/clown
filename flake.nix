@@ -476,10 +476,29 @@
         # see flake.nix:600-621 and FDR-0007 for the rationale. To bump
         # the tent's claude-code, run `nix flake update llm-agents`.
         #
-        # Baked on darwin too: the llm-agents claude-code derivation is a
-        # fetchurl + binary install and builds on darwin. With an
-        # external podman-machine VM the path then becomes useful.
-        tentClaudeCliPath = if tentClaudeEnabled then "${pkgs-llm-agents.claude-code}/bin/claude" else "";
+        # The binary baked here runs *inside the linux container*, so it
+        # MUST be the linux variant of claude-code regardless of the
+        # host system that built clown. On a darwin host, sourcing the
+        # path from `llm-agents.packages.<aarch64-darwin>.claude-code`
+        # produces a mach-O wrapper script with a darwin-bash shebang
+        # that the container's exec rejects with `Exec format error`.
+        # Map every system to its linux counterpart and source from
+        # there — on darwin this requires nix-darwin's linux-builder
+        # (see rcm/tag-darwin/config/nix-darwin/modules/system.nix and
+        # the eng-side FDR-0003).
+        tentClaudeSystem =
+          {
+            "aarch64-darwin" = "aarch64-linux";
+            "x86_64-darwin" = "x86_64-linux";
+            "aarch64-linux" = "aarch64-linux";
+            "x86_64-linux" = "x86_64-linux";
+          }
+          .${system};
+        tentClaudeCliPath =
+          if tentClaudeEnabled then
+            "${llm-agents.packages.${tentClaudeSystem}.claude-code}/bin/claude"
+          else
+            "";
 
         mkClownGo =
           {
