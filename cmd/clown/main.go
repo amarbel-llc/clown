@@ -377,6 +377,13 @@ func runClaude(cliPath string, flags parsedFlags, prompts promptwalk.PromptResul
 				return 1
 			}
 			executor = tentExec
+			// Cheap stand-in for a real PTY-proxy spinner (#67). The
+			// interactive claude TUI inside the container takes ~5-30s
+			// to first-paint because of CLAUDE.md auto-discovery, plugin
+			// sync, keychain reads, etc. Without this hint the user sees
+			// silence and assumes a hang. claude's TUI paints over this
+			// line once it starts rendering.
+			fmt.Fprintln(os.Stderr, "Starting claude inside tent…")
 		}
 
 		return runWithPluginHost(executor, args, pluginDirs, flags)
