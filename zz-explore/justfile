@@ -441,3 +441,271 @@ tent-mount-precedence:
     echo
     echo "=== host-side post-state ==="
     ls -la "$work/parent" "$work/parent/child"
+
+# Time `podman run` against the tent image *outside* clown to measure
+# how much of a tent invocation's wall-clock cost is container/claude
+# cold start versus clown's own work. Pairs with the cmd/clown/main.go
+# downstream-process Start/Wait timing logs.
+#
+# Runs three measurements, ITERS times each:
+#   (a) `podman run … /bin/true`     — pure container bringup
+#   (b) `podman run … claude --version` — bringup + claude self-test
+#   (c) `podman run … claude --help`    — bringup + claude full init (TUI-adjacent)
+#
+# Image ref, claude binary path, and podman binary path are extracted
+# from the *built* clown binary via `strings`, so the measurements
+# match what `clown --tent` would actually exec. Run after `just build`.
+#
+# Usage: just zz-explore/tent-cold-start
+#        just zz-explore/tent-cold-start ITERS=5
+tent-cold-start ITERS='3':
+    #!/usr/bin/env bash
+    set -euo pipefail
+    root=$(git rev-parse --show-toplevel)
+    cd "$root"
+
+    if [[ ! -L ./result/bin/clown ]]; then
+        echo "FAIL: ./result/bin/clown missing — run 'just build' first" >&2
+        exit 2
+    fi
+
+    # The result/bin/clown wrapper execs the inner Go binary. Pluck its
+    # absolute path so we can `strings` it for the burned-in build vars.
+    inner=$(awk -F'"' '/^exec / { print $2 }' ./result/bin/clown)
+    if [[ -z "$inner" || ! -x "$inner" ]]; then
+        echo "FAIL: could not resolve inner clown binary (got: '$inner')" >&2
+        exit 2
+    fi
+
+    # awk's "exit on first match" pattern avoids the `strings | grep -m1`
+    # SIGPIPE-under-pipefail trap (grep closes the pipe early, strings
+    # dies with 141 and pipefail surfaces it).
+    syms=$(strings "$inner")
+    image=$(awk '/^clown-tent:/ {print; exit}' <<<"$syms")
+    claude=$(awk '/^\/nix\/store\/.*-claude-code-.*\/bin\/claude$/ {print; exit}' <<<"$syms")
+    podman=$(awk '/^\/nix\/store\/.*-podman-.*\/bin\/podman$/ {print; exit}' <<<"$syms")
+
+    if [[ -z "$image" || -z "$claude" || -z "$podman" ]]; then
+        echo "FAIL: could not extract image/claude/podman path from $inner" >&2
+        echo "  image=$image" >&2
+        echo "  claude=$claude" >&2
+        echo "  podman=$podman" >&2
+        exit 2
+    fi
+
+    echo "image:  $image"
+    echo "claude: $claude"
+    echo "podman: $podman"
+    echo "iters:  {{ITERS}}"
+    echo
+
+    # Make sure the image is loaded before we start timing; otherwise
+    # the first iteration eats the `podman load` cost and skews the
+    # comparison.
+    if ! "$podman" image exists "$image"; then
+        echo "FAIL: tent image '$image' not present locally." >&2
+        echo "      Start clown --tent once to trigger the image load, then re-run." >&2
+        exit 2
+    fi
+
+    # Common volume args mirror tent.BuildArgs in internal/tent/tent.go
+    # well enough for the measurement to mean something. We omit the
+    # ~/.claude / ~/.config/claude binds for (a) and (c) since those
+    # paths aren't read by /bin/true or `claude --help`, but include
+    # them for `claude --version` parity (claude reads ~/.config/claude
+    # eagerly on init).
+    nix_ro="--volume /nix/store:/nix/store:ro"
+    home_binds="--volume $HOME/.claude:$HOME/.claude --volume $HOME/.config/claude:$HOME/.config/claude --volume $HOME/.claude.json:$HOME/.claude.json"
+
+    measure() {
+        local label=$1; shift
+        echo "=== $label ==="
+        for i in $(seq 1 {{ITERS}}); do
+            printf "  iter %d: " "$i"
+            # time -p emits real/user/sys on three lines in POSIX format
+            # ("real X.XX"); we grep the real line so the output stays tidy.
+            { time -p "$@" >/dev/null 2>&1; } 2>&1 | awk '/^real/ { print $2 "s" }'
+        done
+        echo
+    }
+
+    measure "(a) podman run … /bin/true (pure container cold start)" \
+        "$podman" run --rm $nix_ro "$image" /bin/true
+
+    measure "(b) podman run … claude --version (bringup + claude self-test)" \
+        "$podman" run --rm $nix_ro $home_binds "$image" "$claude" --version
+
+    measure "(c) podman run … claude --help (bringup + claude full init)" \
+        "$podman" run --rm $nix_ro $home_binds "$image" "$claude" --help
+
+# Snapshot what a hung `clown --tent` invocation is doing. Run this in
+# a *second* terminal while the first terminal is stuck — this recipe
+# does NOT touch the hung clown, it just looks at the process tree and
+# kernel-level state.
+#
+# By default, finds the most recent log under $XDG_LOG_HOME/clown/ (or
+# ~/.local/log/clown/), reads the `downstream process started pid=N`
+# entry to locate the podman PID, then dumps:
+#
+#   - pstree -ps PID         (ancestors back to init, full names)
+#   - pstree -p PID          (descendants)
+#   - per-descendant /proc state:
+#       - State, Threads, VmRSS from /proc/<pid>/status
+#       - wchan (kernel function currently sleeping in, or "running")
+#       - cmdline
+#   - ss -tnp filtered to descendant pids (open TCP sockets — useful
+#     for spotting hangs on api.anthropic.com or similar)
+#
+# Optionally pass a PID directly when the log isn't where you expect:
+#   just zz-explore/tent-hang-snapshot 12345
+#
+# Optionally pass STRACE=N (seconds) to additionally run an N-second
+# strace sample on the deepest descendant (usually claude inside the
+# container). Defaults to 0 (no strace, snapshot is instant).
+#   just zz-explore/tent-hang-snapshot PID=12345 STRACE=3
+tent-hang-snapshot PID='' STRACE='0':
+    #!/usr/bin/env bash
+    set -uo pipefail   # NOT -e: we want partial info on errors
+    root=$(git rev-parse --show-toplevel)
+    cd "$root"
+
+    log_dir="${XDG_LOG_HOME:-$HOME/.local/log}/clown"
+    pid="{{PID}}"
+
+    if [[ -z "$pid" ]]; then
+        if [[ ! -d "$log_dir" ]]; then
+            echo "FAIL: log dir $log_dir does not exist" >&2
+            exit 2
+        fi
+        # Pick by *filename* timestamp (start time), not mtime. Long-
+        # running clown sessions keep their logs open and append
+        # heartbeat lines every 30s, which makes their mtime newer than
+        # a short tent run that finished hours earlier. Filenames look
+        # like `clown-plugin-host-20260511T201151Z-150479.log`; sort the
+        # ISO-Z portion descending so the freshest *start* wins.
+        latest=""
+        while read -r candidate; do
+            [[ -r "$candidate" ]] || continue
+            # Must be a tent run (new logging) AND have reached the
+            # downstream-started phase. grep -q exits on first match
+            # without buffering issues.
+            if grep -q 'msg="tent startup begin"' "$candidate" 2>/dev/null \
+            && grep -q 'msg="downstream process started"' "$candidate" 2>/dev/null; then
+                latest=$candidate
+                break
+            fi
+        done < <(ls -1 "$log_dir"/clown-plugin-host-*.log 2>/dev/null | sort -t- -k4 -r)
+        if [[ -z "$latest" ]]; then
+            echo "FAIL: no recent tent log with 'downstream process started' found under $log_dir" >&2
+            echo "      Either no tent run has been done since the new logging shipped," >&2
+            echo "      or you're invoking an older clown without the new logging." >&2
+            exit 2
+        fi
+        echo "log:  $latest"
+        # The `downstream process started` line carries the host PID of
+        # the podman process clown handed control to. Take the LAST such
+        # entry (in case this log spans multiple invocations).
+        pid=$(awk -F'pid=' '/downstream process started/ { split($2, a, " "); v=a[1] } END { print v }' "$latest")
+        if [[ -z "$pid" ]]; then
+            echo "FAIL: no 'downstream process started pid=…' entry in $latest" >&2
+            echo "      Either the tent run never reached that point, or you're" >&2
+            echo "      running an older clown without the new logging." >&2
+            exit 2
+        fi
+    fi
+
+    if [[ ! -d "/proc/$pid" ]]; then
+        echo "FAIL: /proc/$pid does not exist — process already exited?" >&2
+        exit 2
+    fi
+
+    echo "pid:  $pid"
+    echo "time: $(date -Iseconds)"
+    echo
+
+    echo "=== /proc/$pid/cmdline ==="
+    tr '\0' ' ' < "/proc/$pid/cmdline"; echo
+    echo
+
+    echo "=== ancestors (pstree -ps $pid) ==="
+    pstree -ps "$pid" 2>/dev/null || echo "(pstree failed)"
+    echo
+
+    echo "=== descendants (pstree -p $pid) ==="
+    pstree -p "$pid" 2>/dev/null || echo "(pstree failed)"
+    echo
+
+    # Collect all descendant pids (including $pid itself) by walking
+    # /proc once. pstree's machine-readable output is messy; the
+    # /proc/<pid>/task/<tid>/children file is the kernel's own answer.
+    declare -a all_pids=()
+    walk() {
+        local p=$1
+        all_pids+=("$p")
+        local tasks_dir="/proc/$p/task"
+        if [[ -d "$tasks_dir" ]]; then
+            for t in "$tasks_dir"/*/children; do
+                [[ -r "$t" ]] || continue
+                for c in $(cat "$t" 2>/dev/null); do
+                    walk "$c"
+                done
+            done
+        fi
+    }
+    walk "$pid"
+
+    echo "=== per-process state (${#all_pids[@]} pids) ==="
+    printf '%-8s %-8s %-6s %-12s %-20s %s\n' "PID" "STATE" "THR" "RSS" "WCHAN" "CMD"
+    for p in "${all_pids[@]}"; do
+        [[ -d "/proc/$p" ]] || continue
+        state=$(awk '/^State:/ { print $2 }' "/proc/$p/status" 2>/dev/null)
+        thr=$(awk '/^Threads:/ { print $2 }' "/proc/$p/status" 2>/dev/null)
+        rss=$(awk '/^VmRSS:/ { print $2 $3 }' "/proc/$p/status" 2>/dev/null)
+        wchan=$(cat "/proc/$p/wchan" 2>/dev/null || echo "?")
+        # cmdline can be huge — clip to 60 chars
+        cmd=$(tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null | cut -c1-60)
+        printf '%-8s %-8s %-6s %-12s %-20s %s\n' "$p" "${state:-?}" "${thr:-?}" "${rss:-?}" "${wchan:-?}" "$cmd"
+    done
+    echo
+
+    # Per-thread breakdown. The per-process row above only shows the
+    # main thread's wchan, but Go runtimes (e.g. podman) fan out into
+    # 10-20 worker threads, and the *actual* blocking thread is rarely
+    # the main one. /proc/<pid>/task/<tid>/wchan exposes each thread's
+    # kernel-side blocking function; comm gives its name (Go assigns
+    # human-readable names to many runtime threads). State letter is
+    # the same single char as /proc/<pid>/status's "State:" field.
+    echo "=== per-thread state ==="
+    printf '%-8s %-8s %-2s %-20s %s\n' "PID" "TID" "S" "WCHAN" "COMM"
+    for p in "${all_pids[@]}"; do
+        [[ -d "/proc/$p/task" ]] || continue
+        for tdir in "/proc/$p/task"/*; do
+            [[ -d "$tdir" ]] || continue
+            tid=${tdir##*/}
+            tstate=$(awk '/^State:/ { print $2 }' "$tdir/status" 2>/dev/null)
+            twchan=$(cat "$tdir/wchan" 2>/dev/null || echo "?")
+            tcomm=$(cat "$tdir/comm" 2>/dev/null || echo "?")
+            printf '%-8s %-8s %-2s %-20s %s\n' "$p" "$tid" "${tstate:-?}" "${twchan:-?}" "${tcomm:-?}"
+        done
+    done
+    echo
+
+    echo "=== open TCP sockets for descendant pids ==="
+    # ss -tnp prints connections with the owning pid in the last column;
+    # filter to our descendants. Requires CAP_NET_ADMIN to see other
+    # users' sockets, but our own podman/claude descendants run as us.
+    pid_filter=$(printf '%s|' "${all_pids[@]}" | sed 's/|$//')
+    ss -tnp 2>/dev/null | awk -v pids="$pid_filter" '
+        NR == 1 { print; next }
+        match($0, /pid=([0-9]+)/, m) {
+            if (m[1] ~ "^(" pids ")$") print
+        }
+    '
+    echo
+
+    if [[ "{{STRACE}}" != "0" ]]; then
+        deepest=${all_pids[-1]}
+        echo "=== strace -f -p $deepest for {{STRACE}}s ==="
+        timeout "{{STRACE}}" strace -f -p "$deepest" 2>&1 | tail -n 40 || true
+        echo
+    fi
