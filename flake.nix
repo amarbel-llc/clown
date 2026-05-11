@@ -391,13 +391,25 @@
 
         # tent: podman-wrapped provider container. FDR-0007.
         # Tracer-bullet scope: claude only, opt-in via --tent.
-        # podman is currently linux-only in this build; on darwin
-        # podman requires a VM and is out of scope for v1, so we
-        # leave tentPodmanPath empty there and the runtime emits a
-        # clear "not wired in" error if --tent is used.
-        tentEnabled = pkgs.stdenv.isLinux;
+        #
+        # The container *image* (dockerTools.buildLayeredImage) and the
+        # podman *binary* are linux-only — pkgs.dockerTools cannot build
+        # a layered image on a darwin builder, and the nixpkgs podman
+        # derivation is unsupported on darwin (rootless podman on mac
+        # needs an external podman-machine VM, not the nixpkgs binary).
+        # These are gated on `tentImageEnabled`.
+        #
+        # The *unpatched claude-code binary* (from numtide/llm-agents.nix,
+        # a fetchurl + binary install) does build on darwin, so we wire
+        # it in unconditionally — it's safe to bake the path on every
+        # platform, and a darwin host with an external podman-machine
+        # VM (see amarbel-llc/eng zz-pocs/podman-darwin) can then run
+        # `clown --tent`. Gated on `tentClaudeEnabled` for symmetry;
+        # currently always true.
+        tentImageEnabled = pkgs.stdenv.isLinux;
+        tentClaudeEnabled = true;
         tentImage =
-          if tentEnabled then
+          if tentImageEnabled then
             pkgs.dockerTools.buildLayeredImage {
               name = "clown-tent";
               tag = clownVersion;
@@ -432,9 +444,9 @@
             }
           else
             null;
-        tentImageRef = if tentEnabled then "clown-tent:${clownVersion}" else "";
-        tentImageTarball = if tentEnabled then "${tentImage}" else "";
-        tentPodmanPath = if tentEnabled then "${pkgs.podman}/bin/podman" else "";
+        tentImageRef = if tentImageEnabled then "clown-tent:${clownVersion}" else "";
+        tentImageTarball = if tentImageEnabled then "${tentImage}" else "";
+        tentPodmanPath = if tentImageEnabled then "${pkgs.podman}/bin/podman" else "";
 
         # tent runs an *unpatched* claude-code from numtide/llm-agents.nix
         # so the inner ring has no managed-settings shim — tent is the
@@ -442,7 +454,11 @@
         # via mkPatchedClaudeCode) stays the default for un-tented clown;
         # see flake.nix:600-621 and FDR-0007 for the rationale. To bump
         # the tent's claude-code, run `nix flake update llm-agents`.
-        tentClaudeCliPath = if tentEnabled then "${pkgs-llm-agents.claude-code}/bin/claude" else "";
+        #
+        # Baked on darwin too: the llm-agents claude-code derivation is a
+        # fetchurl + binary install and builds on darwin. With an
+        # external podman-machine VM the path then becomes useful.
+        tentClaudeCliPath = if tentClaudeEnabled then "${pkgs-llm-agents.claude-code}/bin/claude" else "";
 
         mkClownGo =
           {

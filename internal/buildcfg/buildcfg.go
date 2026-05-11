@@ -57,7 +57,9 @@ var (
 	// numtide/llm-agents.nix (self-contained binary distribution,
 	// latest as of the flake input). Distinct from ClaudeCliPath,
 	// which points at clown's managed-settings-patched claude-code
-	// 2.1.111 used outside tent. Empty on non-linux builds; --tent
-	// errors out clearly when empty. See FDR-0007.
+	// 2.1.111 used outside tent. Wired in on linux and darwin
+	// (PodmanPath / TentImageRef remain linux-only — darwin tent
+	// runs against an external podman-machine VM); empty in dev
+	// builds, where --tent errors out clearly. See FDR-0007.
 	ClaudeTentCliPath string
 )

@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -336,14 +337,16 @@ func (e *tentExecutor) FormatArgs(args []string) []string {
 // shim and clown's safety denylist is redundant. See FDR-0007.
 //
 // Returns an error when --tent is requested but the build wasn't
-// configured for it (typically a darwin build, where podman is
-// unavailable and ClaudeTentCliPath is empty).
+// configured for it — i.e. ClaudeTentCliPath is empty. Now that the
+// llm-agents claude-code is baked in on darwin too, a typical case is
+// a dev build that bypassed the nix flake (`go build`) and didn't
+// pass the ldflags.
 func resolveClaudeForRun(defaultCliPath string, tent bool) (cliPath, disallowedToolsFile string, err error) {
 	if !tent {
 		return defaultCliPath, buildcfg.DisallowedToolsFile, nil
 	}
 	if buildcfg.ClaudeTentCliPath == "" {
-		return "", "", fmt.Errorf("--tent requires a build with ClaudeTentCliPath wired in (linux-only); this build has it empty")
+		return "", "", fmt.Errorf("--tent requires a build with ClaudeTentCliPath wired in; this build has it empty")
 	}
 	return buildcfg.ClaudeTentCliPath, "", nil
 }
@@ -425,7 +428,15 @@ func newTentExecutor(innerCliPath string, pluginDirs []string) (*tentExecutor, e
 // prerequisites otherwise surface as confusing podman errors
 // ("exec: newuidmap: ...", "command required for rootless mode with
 // multiple IDs") that don't point at the fix.
+//
+// Linux-only. On darwin, `podman` runs against an external
+// podman-machine VM that owns the user-namespace mapping; the mac
+// host has neither newuidmap nor /etc/subuid and shouldn't be
+// expected to.
 func preflightUserNs() error {
+	if runtime.GOOS != "linux" {
+		return nil
+	}
 	if _, err := exec.LookPath("newuidmap"); err != nil {
 		return fmt.Errorf("--tent: newuidmap not found on PATH (rootless podman requires the uidmap setuid helpers). Install with `sudo apt install -y uidmap` on Debian/Ubuntu, or the equivalent shadow-utils package on your distro")
 	}
