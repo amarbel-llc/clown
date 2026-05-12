@@ -709,3 +709,331 @@ tent-hang-snapshot PID='' STRACE='0':
         timeout "{{STRACE}}" strace -f -p "$deepest" 2>&1 | tail -n 40 || true
         echo
     fi
+
+# Forensic followup for a hung tent run. Pairs with tent-hang-snapshot:
+# given the PID of the wedged podman process, dump three things that
+# tell us whether it's blocked on a sibling podman / a stale lock /
+# environment-borne nonsense:
+#
+#   1. `pgrep -a podman` — every podman process on the system. If
+#      another one is running concurrently, the rootless lock theory
+#      gets traction.
+#   2. `ls -la $XDG_RUNTIME_DIR/containers/` and $XDG_RUNTIME_DIR/libpod/
+#      — stale lock files / sockets, with fuser to identify holders.
+#   3. /proc/<pid>/environ — sorted, with the comparison-noisy entries
+#      (PATH, TERM, etc.) at the bottom so the spinclass-specific ones
+#      (SPINCLASS_*, ZELLIJ*, TMUX*, XDG_RUNTIME_DIR, TMPDIR) are easy
+#      to spot at the top.
+#
+# Read-only: this does NOT touch the hung process. Safe to run while
+# the user decides whether to keep waiting or SIGINT.
+#
+# Usage: just zz-explore/tent-hang-followup PID
+tent-hang-followup PID:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    pid="{{PID}}"
+
+    if [[ ! -d "/proc/$pid" ]]; then
+        echo "FAIL: /proc/$pid does not exist — process already exited?" >&2
+        exit 2
+    fi
+
+    echo "pid:  $pid"
+    echo "time: $(date -Iseconds)"
+    echo
+
+    echo "=== pgrep -a podman (every podman on the system) ==="
+    pgrep -a podman || echo "(none — but /proc/$pid is a podman; pgrep filter?)"
+    echo
+
+    echo "=== pgrep -a conmon (container supervisors) ==="
+    pgrep -a conmon || echo "(none — confirms no container has been spawned for this run)"
+    echo
+
+    # XDG_RUNTIME_DIR resolution: prefer the hung process's own env
+    # (since spinclass may have overridden it), fall back to ours.
+    xdg=$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null \
+            | awk -F= '/^XDG_RUNTIME_DIR=/ {print $2; exit}')
+    if [[ -z "$xdg" ]]; then
+        xdg="${XDG_RUNTIME_DIR:-/run/user/$UID}"
+        echo "note: hung pid had no XDG_RUNTIME_DIR; using $xdg"
+    else
+        echo "XDG_RUNTIME_DIR (from /proc/$pid/environ): $xdg"
+    fi
+    echo
+
+    echo "=== ls -la $xdg/containers/ ==="
+    ls -la "$xdg/containers/" 2>&1 || echo "(no $xdg/containers/)"
+    echo
+
+    echo "=== ls -la $xdg/libpod/ (newer podman lock path) ==="
+    ls -la "$xdg/libpod/" 2>&1 || echo "(no $xdg/libpod/)"
+    echo
+
+    echo "=== fuser on lock files (who holds them?) ==="
+    shopt -s nullglob
+    for lock in "$xdg/containers/podman/"*lock* "$xdg/libpod/"*lock* "$xdg/containers/podman/"*.lock; do
+        [[ -e "$lock" ]] || continue
+        printf "  %s: " "$lock"
+        fuser "$lock" 2>&1 | tail -1
+    done
+    shopt -u nullglob
+    echo
+
+    echo "=== sorted env from /proc/$pid/environ (spinclass-suspect first) ==="
+    tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null \
+      | awk -F= '
+          BEGIN { suspect = "^(SPINCLASS|ZELLIJ|TMUX|XDG_RUNTIME_DIR|TMPDIR|CLAUDE_CODE_TMPDIR|HOME|USER|PWD|CONTAINERS_|BUILDAH_|STORAGE_|DBUS_SESSION_BUS_ADDRESS|XDG_CONFIG_HOME|XDG_DATA_HOME|XDG_STATE_HOME|XDG_CACHE_HOME|CLOWN_)" }
+          { if ($1 ~ suspect) susp[++nsusp]=$0; else rest[++nrest]=$0 }
+          END {
+              print "  -- suspect set --"
+              for (i=1; i<=nsusp; i++) print "    " susp[i]
+              print ""
+              print "  -- everything else (alphabetical) --"
+              n = asort(rest, sorted)
+              for (i=1; i<=n; i++) print "    " sorted[i]
+          }
+      '
+    echo
+
+# Dive into the container PID namespace from the host side. Given the
+# conmon supervisor PID (find via `pgrep conmon` after tent-hang-followup),
+# walk its children (the container's init + descendants) and dump:
+#
+#   1. conmon's own state (wchan, sockets) — confirms conmon itself is
+#      not the wedged one.
+#   2. The full descendant tree from conmon down, with host PIDs.
+#      Inside a userns-keep-id rootless container the host sees real
+#      PIDs (just under a different uid map).
+#   3. Per-process state row (state letter, threads, RSS, wchan,
+#      cmdline truncated) for every descendant — pinpoints whether
+#      claude is parked on a syscall and which one.
+#   4. Per-thread wchan for the deepest descendants — Node.js fans
+#      out into 10+ worker threads and the main thread's wchan often
+#      lies about where it's actually blocked.
+#   5. Open file descriptors of the deepest descendant — symlinks
+#      to pipes, sockets, and files show what claude is waiting on
+#      without needing strace.
+#   6. Optional N-second strace on the deepest descendant.
+#
+# Read-only: does NOT touch the hung process tree.
+#
+# Usage: just zz-explore/tent-hang-container-dive CONMON_PID [STRACE]
+tent-hang-container-dive CONMON_PID STRACE='0':
+    #!/usr/bin/env bash
+    set -uo pipefail
+    conmon="{{CONMON_PID}}"
+    strace_secs="{{STRACE}}"
+
+    if [[ ! -d "/proc/$conmon" ]]; then
+        echo "FAIL: /proc/$conmon does not exist — conmon already exited?" >&2
+        exit 2
+    fi
+
+    # Sanity-check: this should actually be conmon.
+    conmon_comm=$(cat "/proc/$conmon/comm" 2>/dev/null)
+    if [[ "$conmon_comm" != "conmon" ]]; then
+        echo "WARN: PID $conmon comm is '$conmon_comm', not 'conmon'." >&2
+        echo "      Continuing anyway, but check that you passed the right PID." >&2
+    fi
+
+    echo "conmon pid: $conmon"
+    echo "time:       $(date -Iseconds)"
+    echo
+
+    echo "=== conmon /proc state ==="
+    cstate=$(awk '/^State:/ { print $2 }' "/proc/$conmon/status" 2>/dev/null)
+    cwchan=$(cat "/proc/$conmon/wchan" 2>/dev/null)
+    cthr=$(awk '/^Threads:/ { print $2 }' "/proc/$conmon/status" 2>/dev/null)
+    printf "  state=%s threads=%s wchan=%s\n" "${cstate:-?}" "${cthr:-?}" "${cwchan:-?}"
+    echo
+
+    echo "=== conmon FDs (what is it waiting on?) ==="
+    ls -la "/proc/$conmon/fd/" 2>/dev/null | sed 's/^/  /' || echo "  (cannot read)"
+    echo
+
+    echo "=== descendants of conmon (the container PID tree) ==="
+    pstree -p "$conmon" 2>/dev/null || echo "(pstree failed)"
+    echo
+
+    # Walk children recursively from /proc/<pid>/task/<tid>/children —
+    # this is the authoritative kernel view.
+    declare -a all_pids=()
+    walk() {
+        local p=$1
+        all_pids+=("$p")
+        local tasks_dir="/proc/$p/task"
+        [[ -d "$tasks_dir" ]] || return
+        for t in "$tasks_dir"/*/children; do
+            [[ -r "$t" ]] || continue
+            for c in $(cat "$t" 2>/dev/null); do
+                walk "$c"
+            done
+        done
+    }
+    walk "$conmon"
+
+    echo "=== per-process state (${#all_pids[@]} pids incl. conmon) ==="
+    printf '%-8s %-8s %-6s %-12s %-20s %s\n' "PID" "STATE" "THR" "RSS" "WCHAN" "CMD"
+    for p in "${all_pids[@]}"; do
+        [[ -d "/proc/$p" ]] || continue
+        state=$(awk '/^State:/ { print $2 }' "/proc/$p/status" 2>/dev/null)
+        thr=$(awk '/^Threads:/ { print $2 }' "/proc/$p/status" 2>/dev/null)
+        rss=$(awk '/^VmRSS:/ { print $2 $3 }' "/proc/$p/status" 2>/dev/null)
+        wchan=$(cat "/proc/$p/wchan" 2>/dev/null || echo "?")
+        cmd=$(tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null | cut -c1-80)
+        printf '%-8s %-8s %-6s %-12s %-20s %s\n' "$p" "${state:-?}" "${thr:-?}" "${rss:-?}" "${wchan:-?}" "$cmd"
+    done
+    echo
+
+    # Pick the deepest descendant for per-thread + fd + strace work.
+    # That's typically the actual workload (claude/node) inside the
+    # container.
+    if [[ ${#all_pids[@]} -gt 1 ]]; then
+        deepest=${all_pids[-1]}
+        echo "=== per-thread state for deepest descendant (pid=$deepest) ==="
+        printf '%-8s %-2s %-20s %s\n' "TID" "S" "WCHAN" "COMM"
+        if [[ -d "/proc/$deepest/task" ]]; then
+            for tdir in "/proc/$deepest/task"/*; do
+                [[ -d "$tdir" ]] || continue
+                tid=${tdir##*/}
+                tstate=$(awk '/^State:/ { print $2 }' "$tdir/status" 2>/dev/null)
+                twchan=$(cat "$tdir/wchan" 2>/dev/null || echo "?")
+                tcomm=$(cat "$tdir/comm" 2>/dev/null || echo "?")
+                printf '%-8s %-2s %-20s %s\n' "$tid" "${tstate:-?}" "${twchan:-?}" "${tcomm:-?}"
+            done
+        else
+            echo "  (no task dir)"
+        fi
+        echo
+
+        echo "=== open FDs of deepest descendant (pid=$deepest) ==="
+        ls -la "/proc/$deepest/fd/" 2>/dev/null | sed 's/^/  /' || echo "  (cannot read)"
+        echo
+
+        echo "=== /proc/$deepest/cmdline ==="
+        tr '\0' ' ' < "/proc/$deepest/cmdline"; echo
+        echo
+
+        if [[ "$strace_secs" != "0" ]]; then
+            echo "=== strace -f -p $deepest for ${strace_secs}s ==="
+            timeout "$strace_secs" strace -f -p "$deepest" 2>&1 | tail -n 60 || true
+            echo
+        fi
+    fi
+
+# TTY-state forensics for a tent hang under a nested multiplexer.
+# Given the claude PID inside the container (find via the dive recipe's
+# "deepest descendant" line), dump termios and epoll registration so we
+# can tell whether claude is in raw mode, whether ICANON is on, what
+# fds the main event loop is watching, and whether anything is
+# registered to wake on /dev/pts/0 reads.
+#
+# For each fd of claude that points at a tty/pts, runs
+# `stty -a -F /proc/<pid>/fd/<n>` — this works because opening
+# /proc/<pid>/fd/<n> from another process gives a fresh fd referencing
+# the same kernel pty, and stty's TCGETS ioctl reads termios from any
+# referent regardless of mount namespace.
+#
+# Also dumps `/proc/<pid>/fdinfo/<epoll-fd>` for every eventpoll fd,
+# which on modern kernels lists each registered fd, the event mask
+# (EPOLLIN/OUT/etc.), and the user_data pointer. Cross-reference with
+# the fd list to see whether claude is even watching /dev/pts/0 for
+# input.
+#
+# As a control, also dumps termios for the host-side parent shells
+# (the zmx-managed pty) so we can compare raw/ICANON/echo state across
+# the stacked pty chain.
+#
+# Read-only. Safe to run on a live hung process.
+#
+# Usage: just zz-explore/tent-hang-tty-state CLAUDE_PID
+tent-hang-tty-state CLAUDE_PID:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    pid="{{CLAUDE_PID}}"
+
+    if [[ ! -d "/proc/$pid" ]]; then
+        echo "FAIL: /proc/$pid does not exist." >&2
+        exit 2
+    fi
+
+    echo "claude pid: $pid"
+    echo "time:       $(date -Iseconds)"
+    echo
+
+    # Resolve each fd of claude. We care about: (a) anything that points
+    # at /dev/pts/* or a tty, (b) eventpoll fds (we'll dump their fdinfo
+    # below), (c) the rest in summary.
+    declare -A fd_targets=()
+    pty_fds=()
+    epoll_fds=()
+    if [[ -d "/proc/$pid/fd" ]]; then
+        for fd_entry in "/proc/$pid/fd"/*; do
+            [[ -L "$fd_entry" ]] || continue
+            n=${fd_entry##*/}
+            target=$(readlink "$fd_entry" 2>/dev/null || echo "?")
+            fd_targets[$n]=$target
+            case "$target" in
+                /dev/pts/*|/dev/tty*) pty_fds+=("$n");;
+                anon_inode:\[eventpoll\]) epoll_fds+=("$n");;
+            esac
+        done
+    fi
+
+    echo "=== claude pty fds (${#pty_fds[@]}) ==="
+    if [[ ${#pty_fds[@]} -eq 0 ]]; then
+        echo "  (no pty fds — claude has no terminal!)"
+    else
+        for n in "${pty_fds[@]}"; do
+            printf "  fd %s -> %s\n" "$n" "${fd_targets[$n]}"
+        done
+    fi
+    echo
+
+    echo "=== termios state per pty fd ==="
+    for n in "${pty_fds[@]}"; do
+        echo "-- fd $n (${fd_targets[$n]}) --"
+        stty -a -F "/proc/$pid/fd/$n" 2>&1 | sed 's/^/  /' || echo "  (stty failed)"
+        echo
+    done
+
+    echo "=== eventpoll fds (${#epoll_fds[@]}) ==="
+    for n in "${epoll_fds[@]}"; do
+        info="/proc/$pid/fdinfo/$n"
+        echo "-- fd $n (eventpoll) --"
+        if [[ -r "$info" ]]; then
+            cat "$info" | sed 's/^/  /'
+        else
+            echo "  (no fdinfo)"
+        fi
+        echo
+    done
+
+    echo "=== full fd inventory (for cross-reference with epoll user_data) ==="
+    printf "  %-4s %s\n" "FD" "TARGET"
+    for n in $(printf '%s\n' "${!fd_targets[@]}" | sort -n); do
+        printf "  %-4s %s\n" "$n" "${fd_targets[$n]}"
+    done
+    echo
+
+    # Walk ancestors of claude up to PID 1, dumping termios for any
+    # pty in the chain. The interesting comparison is between claude's
+    # /dev/pts/0 (container) and the host-side pty owned by the shell /
+    # clown / podman parents (zmx-managed in the failing case).
+    echo "=== termios along the ancestor pty chain ==="
+    ancestor="$pid"
+    while [[ -n "$ancestor" && "$ancestor" != "1" ]]; do
+        [[ -d "/proc/$ancestor" ]] || break
+        comm=$(cat "/proc/$ancestor/comm" 2>/dev/null || echo "?")
+        # Column 7 of /proc/<pid>/stat is tty_nr (controlling tty).
+        tty_nr=$(awk '{print $7}' "/proc/$ancestor/stat" 2>/dev/null)
+        fd0=$(readlink "/proc/$ancestor/fd/0" 2>/dev/null || echo "?")
+        printf "  pid=%s comm=%s tty_nr=%s fd0=%s\n" "$ancestor" "$comm" "$tty_nr" "$fd0"
+        if [[ "$fd0" == /dev/pts/* || "$fd0" == /dev/tty* ]]; then
+            stty -a -F "/proc/$ancestor/fd/0" 2>&1 | sed 's/^/    /' || echo "    (stty failed)"
+        fi
+        ancestor=$(awk '{print $4}' "/proc/$ancestor/stat" 2>/dev/null)
+    done
+    echo
