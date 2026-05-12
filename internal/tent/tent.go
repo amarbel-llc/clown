@@ -52,6 +52,14 @@ type Options struct {
 	// terminals; in non-interactive contexts (--print mode, CI
 	// pipelines) -t mangles output and must stay off.
 	Tty bool
+
+	// PathOverride, when non-empty, sets the container's PATH
+	// explicitly via --env PATH=<value>. Use this when the caller
+	// wants a curated PATH (e.g. the host devshell's PATH filtered
+	// to /nix/store entries via FilterPathToNixStore) rather than
+	// the image's default. The tent image bakes no baseline PATH,
+	// so this is a clean replacement rather than a prepend.
+	PathOverride string
 }
 
 // DefaultEnvPassthrough is the env-var allowlist for the tracer
@@ -195,6 +203,9 @@ func BuildArgs(claudeBinary string, claudeArgs []string, opts Options) []string 
 			continue
 		}
 		args = append(args, "--env", name)
+	}
+	if opts.PathOverride != "" {
+		args = append(args, "--env", "PATH="+opts.PathOverride)
 	}
 
 	args = append(args, opts.Image, claudeBinary)

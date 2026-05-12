@@ -78,6 +78,11 @@ func TestParseFlags(t *testing.T) {
 			want: parsedFlags{provider: "claude", tent: true},
 		},
 		{
+			name: "tent-pass-devshell flag",
+			in:   []string{"--tent", "--tent-pass-devshell"},
+			want: parsedFlags{provider: "claude", tent: true, passDevshell: true},
+		},
+		{
 			name: "verbose long flag",
 			in:   []string{"--verbose"},
 			want: parsedFlags{provider: "claude", verbose: true},
@@ -197,6 +202,17 @@ func TestParseFlagsErrors(t *testing.T) {
 				t.Errorf("err = %q, want substring %q", err.Error(), tc.wantMsg)
 			}
 		})
+	}
+}
+
+func TestParseFlagsPassDevshellEnv(t *testing.T) {
+	t.Setenv("CLOWN_TENT_PASS_DEVSHELL", "1")
+	got, err := parseFlags(nil)
+	if err != nil {
+		t.Fatalf("parseFlags: %v", err)
+	}
+	if !got.passDevshell {
+		t.Errorf("passDevshell = false, want true (CLOWN_TENT_PASS_DEVSHELL=1)")
 	}
 }
 
@@ -634,7 +650,7 @@ func TestTentExecutor_EmptyPodmanPath(t *testing.T) {
 func TestNewTentExecutor_EmptyImageRef(t *testing.T) {
 	withBuildcfgString(t, &buildcfg.PodmanPath, "/usr/bin/false")
 	withBuildcfgString(t, &buildcfg.TentImageRef, "")
-	if _, err := newTentExecutor("/x/claude", nil, nil, false); err == nil || !strings.Contains(err.Error(), "TentImageRef") {
+	if _, err := newTentExecutor("/x/claude", nil, nil, false, false); err == nil || !strings.Contains(err.Error(), "TentImageRef") {
 		t.Fatalf("expected TentImageRef-empty error, got %v", err)
 	}
 }

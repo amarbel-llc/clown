@@ -163,6 +163,10 @@ func runWithFlags(flags parsedFlags) int {
 		fmt.Fprintln(os.Stderr, "clown: --tent and --naked are mutually exclusive (naked bypasses clown wrapping, tent is clown wrapping)")
 		return 1
 	}
+	if flags.passDevshell && !flags.tent {
+		fmt.Fprintln(os.Stderr, "clown: --tent-pass-devshell requires --tent")
+		return 1
+	}
 
 	profiles, err := loadProfiles("")
 	if err != nil {
@@ -429,7 +433,7 @@ func runClaude(cliPath string, flags parsedFlags, prompts promptwalk.PromptResul
 				"podman_path", buildcfg.PodmanPath,
 			)
 
-			tentExec, err := newTentExecutor(innerCliPath, pluginDirs, tentLogger, flags.verbose)
+			tentExec, err := newTentExecutor(innerCliPath, pluginDirs, tentLogger, flags.verbose, flags.passDevshell)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "clown: %v\n", err)
 				tentLogger.Error("tent setup failed", "err", err)
@@ -459,7 +463,7 @@ func runClaude(cliPath string, flags parsedFlags, prompts promptwalk.PromptResul
 // Each setup phase is timed and logged so intermittent startup hangs
 // can be localized. When logger is nil (test callers), logging is
 // skipped; when verbose is true, phase boundaries also print to stderr.
-func newTentExecutor(innerCliPath string, pluginDirs []string, logger *slog.Logger, verbose bool) (*tentExecutor, error) {
+func newTentExecutor(innerCliPath string, pluginDirs []string, logger *slog.Logger, verbose, passDevshell bool) (*tentExecutor, error) {
 	if buildcfg.PodmanPath == "" {
 		return nil, fmt.Errorf("--tent requires a build with podman wired in; this build has buildcfg.PodmanPath empty (try `nix build`)")
 	}
@@ -490,6 +494,20 @@ func newTentExecutor(innerCliPath string, pluginDirs []string, logger *slog.Logg
 		return nil
 	}); err != nil {
 		return nil, err
+	}
+	if passDevshell {
+		filtered := tent.FilterPathToNixStore(os.Getenv("PATH"))
+		if filtered == "" {
+			fmt.Fprintln(os.Stderr,
+				"clown: --tent-pass-devshell: no /nix/store entries in $PATH; "+
+					"devshell forwarding skipped (are you inside a nix develop / direnv shell?)")
+		} else {
+			opts.PathOverride = filtered
+			if logger != nil {
+				logger.Info("tent path override applied",
+					"entries", strings.Count(filtered, ":")+1)
+			}
+		}
 	}
 	return &tentExecutor{innerCliPath: innerCliPath, opts: opts}, nil
 }
@@ -1210,6 +1228,8 @@ Clown flags (must appear before --):
   --skip-failed              Continue if plugin servers fail to start
   --disable-clown-protocol   Disable clown plugin-host protocol
   --tent                     Run the provider inside a podman container (claude only; FDR-0007)
+  --tent-pass-devshell       Forward host $PATH (filtered to /nix/store entries) into tent
+                             (interim; will be subsumed by --profile)
   --verbose, -v              Enable verbose output
   --help, -h                 Show this help text
   version                    Print version information (first argument only)
@@ -1291,6 +1311,7 @@ type parsedFlags struct {
 	skipFailed           bool
 	disableClownProtocol bool
 	tent                 bool
+	passDevshell         bool
 	verbose              bool
 	version              bool
 	help                 bool
@@ -1315,6 +1336,9 @@ func parseFlags(args []string) (parsedFlags, error) {
 	p.profile = os.Getenv("CLOWN_PROFILE")
 	if os.Getenv("CLOWN_TENT") == "1" {
 		p.tent = true
+	}
+	if os.Getenv("CLOWN_TENT_PASS_DEVSHELL") == "1" {
+		p.passDevshell = true
 	}
 
 	for i := 0; i < len(args); i++ {
@@ -1356,6 +1380,8 @@ func parseFlags(args []string) (parsedFlags, error) {
 			p.disableClownProtocol = true
 		case args[i] == "--tent":
 			p.tent = true
+		case args[i] == "--tent-pass-devshell":
+			p.passDevshell = true
 		case args[i] == "--verbose" || args[i] == "-v":
 			p.verbose = true
 		case args[i] == "--plugin-dir":

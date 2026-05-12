@@ -141,6 +141,31 @@ func TestBuildArgs_NoBlankEnvOrPluginDirs(t *testing.T) {
 	}
 }
 
+func TestBuildArgs_PathOverrideEmitsEnvPath(t *testing.T) {
+	opts := Options{
+		Image:        "img",
+		Workdir:      "/w",
+		Home:         "/h",
+		PathOverride: "/nix/store/aaa-foo/bin:/nix/store/bbb-bar/bin",
+	}
+	got := BuildArgs("/c", nil, opts)
+
+	if !containsPair(got, "--env", "PATH=/nix/store/aaa-foo/bin:/nix/store/bbb-bar/bin") {
+		t.Errorf("PathOverride did not produce --env PATH=...; got %q", got)
+	}
+}
+
+func TestBuildArgs_NoPathOverrideOmitsEnvPath(t *testing.T) {
+	opts := Options{Image: "img", Workdir: "/w", Home: "/h"}
+	got := BuildArgs("/c", nil, opts)
+
+	for i, a := range got {
+		if a == "--env" && i+1 < len(got) && strings.HasPrefix(got[i+1], "PATH=") {
+			t.Errorf("--env PATH=... emitted without PathOverride: %q", got[i+1])
+		}
+	}
+}
+
 func containsPair(args []string, flag, value string) bool {
 	for i := 0; i < len(args)-1; i++ {
 		if args[i] == flag && args[i+1] == value {
