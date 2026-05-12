@@ -64,6 +64,46 @@ func TestBuildArgs_NoTtyOmitsDashT(t *testing.T) {
 	}
 }
 
+func TestBuildArgs_ExtraBindsMountedWritable(t *testing.T) {
+	opts := Options{
+		Image:      "clown-tent:test",
+		Workdir:    "/w",
+		Home:       "/h",
+		ExtraBinds: []string{"/repo/.git", "/secrets"},
+	}
+	got := BuildArgs("/c", nil, opts)
+
+	if !containsPair(got, "--volume", "/repo/.git:/repo/.git") {
+		t.Errorf("missing writable mount for extra bind /repo/.git; got %q", got)
+	}
+	if !containsPair(got, "--volume", "/secrets:/secrets") {
+		t.Errorf("missing writable mount for extra bind /secrets; got %q", got)
+	}
+	for i, a := range got {
+		if a == "--volume" && i+1 < len(got) {
+			if strings.HasPrefix(got[i+1], "/repo/.git:") && strings.HasSuffix(got[i+1], ":ro") {
+				t.Errorf("extra bind /repo/.git emitted as :ro: %q", got[i+1])
+			}
+		}
+	}
+}
+
+func TestBuildArgs_BlankExtraBindsSkipped(t *testing.T) {
+	opts := Options{
+		Image:      "img",
+		Workdir:    "/w",
+		Home:       "/h",
+		ExtraBinds: []string{"", "/real"},
+	}
+	got := BuildArgs("/c", nil, opts)
+	if containsPair(got, "--volume", ":") {
+		t.Errorf("blank extra bind produced a mount: %q", got)
+	}
+	if !containsPair(got, "--volume", "/real:/real") {
+		t.Errorf("non-blank extra bind /real not mounted: %q", got)
+	}
+}
+
 func TestBuildArgs_PluginDirsMountedReadOnly(t *testing.T) {
 	opts := Options{
 		Image:      "clown-tent:test",

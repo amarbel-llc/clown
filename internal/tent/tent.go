@@ -42,6 +42,14 @@ type Options struct {
 	// is mainly for --plugin-dir paths supplied at the command line.
 	PluginDirs []string
 
+	// ExtraBinds lists additional host paths to bind-mount writable
+	// at the same path inside the container. Used to expose host-side
+	// metadata that lives outside the Workdir bind — most notably the
+	// parent repo's `.git/` directory when Workdir is inside a git
+	// worktree (see DiscoverGitWorktreeBinds). Writable so in-container
+	// git operations (commit, switch) work.
+	ExtraBinds []string
+
 	// EnvPassthrough lists environment variable names whose values
 	// should be forwarded into the container. Anything not in this
 	// list is intentionally invisible to the wrapped provider.
@@ -112,12 +120,17 @@ func OptionsFromEnv(image string, pluginDirs []string) (Options, error) {
 	if err != nil {
 		return Options{}, fmt.Errorf("tent: userhomedir: %w", err)
 	}
+	extras, err := DiscoverGitWorktreeBinds(cwd)
+	if err != nil {
+		return Options{}, fmt.Errorf("tent: discover git binds: %w", err)
+	}
 	return Options{
 		Image:          image,
 		Workdir:        cwd,
 		Home:           home,
 		TmpDir:         os.TempDir(),
 		PluginDirs:     pluginDirs,
+		ExtraBinds:     extras,
 		EnvPassthrough: DefaultEnvPassthrough,
 		Tty:            stdioIsTerminal(),
 	}, nil
@@ -184,6 +197,12 @@ func BuildArgs(claudeBinary string, claudeArgs []string, opts Options) []string 
 			"--volume", fmt.Sprintf("%s:%s", configDir, configDir),
 			"--volume", fmt.Sprintf("%s:%s", claudeJSON, claudeJSON),
 		)
+	}
+	for _, dir := range opts.ExtraBinds {
+		if dir == "" {
+			continue
+		}
+		args = append(args, "--volume", fmt.Sprintf("%s:%s", dir, dir))
 	}
 	if opts.TmpDir != "" {
 		args = append(args, "--volume", fmt.Sprintf("%s:%s", opts.TmpDir, opts.TmpDir))
