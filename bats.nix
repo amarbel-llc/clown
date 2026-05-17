@@ -1,6 +1,7 @@
-# Bats integration lanes via the fork's pkgs.testers.batsLane.
-# Stages tests/bats/ into the build sandbox, exports binaries under
-# stable env-var names, and runs `bats --jobs N [--filter-tags <filter>]
+# Bats integration lanes via amarbel-llc/bats's batsLane builder.
+# Stages zz-tests_bats/ into the build sandbox, exports binaries under
+# stable env-var names, plumbs the bats-libs helper bundle onto
+# BATS_LIB_PATH, and runs `bats --jobs N [--filter-tags <filter>]
 # *.bats`. The base derivation is mkClownGo purely for naming — the lane
 # consumes the individual subpackages by store path so it doesn't rebuild
 # Go on filter changes.
@@ -13,6 +14,8 @@
 {
   pkgs,
   lib,
+  batsLane,
+  bats-libs,
   mkClownGo,
   defaultDefaultProvider,
   defaultDefaultProfile,
@@ -41,10 +44,10 @@ let
     {
       filter ? "",
     }:
-    pkgs.testers.batsLane {
+    batsLane {
       inherit filter;
       base = clownBatsBase;
-      batsSrc = ./tests/bats;
+      batsSrc = ./zz-tests_bats;
       binaries = {
         CLOWN_STDIO_BRIDGE_BIN = {
           base = clown-stdio-bridge;
@@ -59,6 +62,10 @@ let
           name = "mock-stdio-mcp";
         };
       };
+      # bats-libs ships bats-support, bats-assert, bats-emo, bats-island
+      # under share/bats; surfacing batsLibPath here lets common.bash
+      # call `bats_load_library bats-island` etc. from inside the lane.
+      batsLibPath = [ bats-libs.batsLibPath ];
       extraEnv = {
         SYNTHETIC_PLUGIN_DIR = "${synthetic-plugin}";
       };
@@ -76,20 +83,24 @@ let
         curl
         jq
         coreutils
+        # bats-island's setup_test_home shells out to `git config`
+        # while configuring GIT_CONFIG_GLOBAL. The nix builder PATH
+        # doesn't include git by default, so provide it explicitly.
+        git
       ];
     };
 
   # Auto-discover `# bats file_tags=...` directives across
-  # tests/bats/*.bats and produce one lane per unique tag plus
+  # zz-tests_bats/*.bats and produce one lane per unique tag plus
   # an unfiltered `bats-default` lane. Lifted from
   # amarbel-llc/madder/go/default.nix.
   batsFiles = builtins.filter (f: lib.hasSuffix ".bats" f) (
-    builtins.attrNames (builtins.readDir ./tests/bats)
+    builtins.attrNames (builtins.readDir ./zz-tests_bats)
   );
   extractFileTags =
     file:
     let
-      content = builtins.readFile (./tests/bats + "/${file}");
+      content = builtins.readFile (./zz-tests_bats + "/${file}");
       tagLines = builtins.filter (l: lib.hasPrefix "# bats file_tags=" l) (lib.splitString "\n" content);
     in
     if tagLines == [ ] then

@@ -1,5 +1,18 @@
 # Shared bash helpers for clown's bats integration suite.
-# Loaded via `bats_load_library common.bash` from per-file setup().
+# Loaded via `load 'lib/common.bash'` from per-file setup().
+#
+# Pulls in the standard amarbel-llc/bats helper vocabulary:
+#   - bats-support  : internal infra for assert/island
+#   - bats-assert   : assert_success / assert_output / assert_regex / ...
+#   - bats-emo      : require_bin <ENV_VAR> <name> — fail fast if binary
+#                     is not in scope
+#   - bats-island   : setup_test_home — fresh $HOME, XDG dirs,
+#                     GIT_CONFIG_GLOBAL, all rooted at $BATS_TEST_TMPDIR
+
+bats_load_library bats-support
+bats_load_library bats-assert
+bats_load_library bats-emo
+bats_load_library bats-island
 
 # wait_for_file <path> [deadline_seconds]
 # Block until <path> is non-empty or the deadline elapses (default 3 s).

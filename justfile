@@ -40,8 +40,8 @@ gomod2nix:
 # Integration test: launch clown-stdio-bridge wrapping a mock stdio
 # MCP server. Verifies handshake/healthcheck and the streamable-HTTP
 # MCP translation path. Runs the full bats suite via the nix sandbox
-# lane (pkgs.testers.batsLane); stdio_bridge.bats is one of the files
-# it executes.
+# lane (bats.lib.${system}.batsLane from amarbel-llc/bats);
+# stdio_bridge.bats is one of the files it executes.
 [group("test")]
 test-stdio-bridge:
     nix build .#bats-default --no-link --print-build-logs
@@ -56,7 +56,7 @@ test-plugin-host:
 
 # Build clown-cover and emit the bats-suite coverage profile to
 # result/coverage.out. Distinct from `go test -cover` (unit
-# reachability) — this measures what tests/bats/* exercises through
+# reachability) — this measures what zz-tests_bats/* exercises through
 # the real CLI against -cover-instrumented binaries.
 [group("test")]
 cover-bats:

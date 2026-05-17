@@ -19,7 +19,7 @@
     # gets resolved upstream (we tested `97b5957e`, 2026-04-20, the
     # 1.49.0 → 1.50.0 bump commit, and it errors out with `tar exit 2`
     # during the vendor build).
-    nixpkgs-master.url = "github:NixOS/nixpkgs/9b53530a5f6887b6903cffeb8a418f3079d6698d";
+    nixpkgs-master.url = "github:NixOS/nixpkgs/d233902339c02a9c334e7e593de68855ad26c4cb";
     utils.url = "https://flakehub.com/f/numtide/flake-utils/0.1.102";
     # Claude Code is held at 2.1.111 (npm-source layout) because the
     # mkPatchedClaudeCode patchPhase substitutes inside
@@ -40,6 +40,15 @@
     llm-agents.inputs.nixpkgs.follows = "nixpkgs";
     treefmt-nix.url = "github:numtide/treefmt-nix";
     treefmt-nix.inputs.nixpkgs.follows = "nixpkgs";
+    # amarbel-llc/bats provides the batsLane build helper (formerly
+    # pkgs.testers.batsLane in the full-fork era) and the bats-libs
+    # bundle (bats-support, bats-assert, bats-emo, bats-island). The
+    # fork's thin-overlay master no longer ships the testers helper,
+    # so the bats flake is the canonical source.
+    bats.url = "github:amarbel-llc/bats";
+    bats.inputs.nixpkgs.follows = "nixpkgs";
+    bats.inputs.nixpkgs-master.follows = "nixpkgs-master";
+    bats.inputs.utils.follows = "utils";
   };
 
   outputs =
@@ -53,6 +62,7 @@
       llm-agents,
       treefmt-nix,
       utils,
+      bats,
     }:
     utils.lib.eachDefaultSystem (
       system:
@@ -290,6 +300,12 @@
           '';
         };
 
+        # bats-libs bundle (bats-support, bats-assert, bats-emo, bats-island).
+        # Lifted to the outer scope so both bats.nix's lane builder and
+        # clown-cover's coverIntegrationCommand can stage the same helper
+        # set. batsLibPath is `${bats-libs}/share/bats`.
+        batsLibs = bats.packages.${system}.bats-libs;
+
         # clown-cover: bats-suite coverage of clown-bats-bins.
         # buildGoCover rebuilds clown-bats-bins with `go build -cover`,
         # runs coverIntegrationCommand under a fresh $GOCOVERDIR, and
@@ -306,7 +322,7 @@
         # the two via `go tool covdata merge` is a future addition.
         clownCoverIntegrationCommand = ''
           mkdir -p stage/zz-tests_bats
-          cp -r ${./tests/bats}/* stage/zz-tests_bats/
+          cp -r ${./zz-tests_bats}/* stage/zz-tests_bats/
           cp ${inspectCompiledPatched} stage/zz-tests_bats/inspect-compiled
           chmod -R u+w stage
 
@@ -314,6 +330,8 @@
           export CLOWN_STDIO_BRIDGE_BIN="$out/bin/clown-stdio-bridge"
           export MOCK_STDIO_MCP_BIN="$out/bin/mock-stdio-mcp"
           export SYNTHETIC_PLUGIN_DIR="${synthetic-plugin}"
+          # common.bash bats_load_library calls resolve through this path.
+          export BATS_LIB_PATH="${batsLibs.batsLibPath}"
 
           cd stage/zz-tests_bats
           ${pkgs.bats}/bin/bats \
@@ -328,6 +346,9 @@
             curl
             jq
             coreutils
+            # bats-island's setup_test_home invokes `git config`; provide
+            # git on PATH so the lane's per-test isolation hook works.
+            git
           ];
           coverIntegrationCommand = clownCoverIntegrationCommand;
         };
@@ -898,6 +919,8 @@
             synthetic-plugin
             inspectCompiledPatched
             ;
+          batsLane = bats.lib.${system}.batsLane;
+          bats-libs = batsLibs;
         };
 
         mkCircus =

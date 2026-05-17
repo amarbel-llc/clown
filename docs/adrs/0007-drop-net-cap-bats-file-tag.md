@@ -7,7 +7,7 @@ date: 2026-05-09
 
 ## Context
 
-`tests/bats/stdio_bridge.bats` and `tests/bats/plugin_host.bats` carried a
+`zz-tests_bats/stdio_bridge.bats` and `zz-tests_bats/plugin_host.bats` carried a
 `# bats file_tags=net_cap` directive at the top. The auto-discovery in
 `bats.nix` produces one lane per unique tag, so this gave us a separate
 `bats-net_cap` derivation alongside `bats-default`. The original framing

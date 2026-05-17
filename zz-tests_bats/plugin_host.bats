@@ -7,14 +7,17 @@
 # nix sandbox and every other Linux sandbox we use; see ADR
 # docs/adrs/0007-drop-net-cap-bats-file-tag.md.
 
-load 'lib/common.bash'
-
 setup() {
-  # clown-plugin-host's OpenLog wants to mkdir its log dir.
-  # The nix sandbox sets HOME=/homeless-shelter (read-only), so
-  # the default XDG path fails. Point XDG_LOG_HOME at the bats
-  # per-test scratch dir, which is writable and ephemeral.
-  export XDG_LOG_HOME="$BATS_TEST_TMPDIR"
+  load 'lib/common.bash'
+
+  # bats-island isolation: gives us a fresh $HOME, XDG dirs, and
+  # GIT_CONFIG_GLOBAL all under $BATS_TEST_TMPDIR. Among other
+  # things this sets XDG_*_HOME, which clown-plugin-host's OpenLog
+  # consults when it picks a log directory — replacing the old
+  # inline `export XDG_LOG_HOME=...` workaround.
+  setup_test_home
+
+  require_bin CLOWN_PLUGIN_HOST_BIN clown-plugin-host
 
   inspect="$BATS_TEST_DIRNAME/inspect-compiled"
   chmod +x "$inspect"
@@ -41,28 +44,35 @@ setup() {
 }
 
 @test "plugin-host launches and produces compiled --plugin-dir" {
-  [[ "$output" =~ COMPILED_PLUGIN_DIR=.*/clown-plugin-compile- ]]
+  assert_regex "$output" 'COMPILED_PLUGIN_DIR=.*/clown-plugin-compile-'
 }
 
 @test "compiled plugin.json keeps original mcp-server name" {
-  echo "$compiled_json" | jq -e '.mcpServers["mock-mcp"]' >/dev/null
+  run jq -e '.mcpServers["mock-mcp"]' <<<"$compiled_json"
+  assert_success
 }
 
 @test "compiled mcpServer entry is http-typed" {
-  entry_type="$(echo "$compiled_json" | jq -r '.mcpServers["mock-mcp"].type')"
-  [[ "$entry_type" == "http" ]]
+  run jq -r '.mcpServers["mock-mcp"].type' <<<"$compiled_json"
+  assert_success
+  assert_output "http"
 }
 
 @test "compiled mcpServer url matches loopback /mcp pattern" {
-  entry_url="$(echo "$compiled_json" | jq -r '.mcpServers["mock-mcp"].url')"
-  [[ "$entry_url" =~ ^http://127\.0\.0\.1:[0-9]+/mcp$ ]]
+  run jq -r '.mcpServers["mock-mcp"].url' <<<"$compiled_json"
+  assert_success
+  assert_output --regexp '^http://127\.0\.0\.1:[0-9]+/mcp$'
 }
 
 @test "compiled mcpServer entry has no command field (replaced by url)" {
-  ! echo "$compiled_json" | jq -e '.mcpServers["mock-mcp"].command' >/dev/null
+  run jq -e '.mcpServers["mock-mcp"].command' <<<"$compiled_json"
+  assert_failure
 }
 
 @test "compiled plugin.json preserves name and agents fields" {
-  echo "$compiled_json" | jq -e '.name == "synthetic-test"' >/dev/null
-  echo "$compiled_json" | jq -e '.agents | length > 0' >/dev/null
+  run jq -e '.name == "synthetic-test"' <<<"$compiled_json"
+  assert_success
+
+  run jq -e '.agents | length > 0' <<<"$compiled_json"
+  assert_success
 }
