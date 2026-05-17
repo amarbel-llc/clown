@@ -494,17 +494,24 @@
             "x86_64-linux" = "x86_64-linux";
           }
           .${system};
-        tentClaudeCliPath =
-          if tentClaudeEnabled then
-            "${llm-agents.packages.${tentClaudeSystem}.claude-code}/bin/claude"
-          else
-            "";
-
+        # The top-level `tentClaudeEnabled` above is the default; mkClownGo
+        # (and through it, mkClownPkg and mkCircus) takes an
+        # `enableTentClaude` parameter that overrides it per-circus. Callers
+        # that need to avoid the linux claude-code closure on a darwin
+        # builder (e.g. CI without a Linux builder) pass false.
         mkClownGo =
           {
             defaultProvider ? defaultDefaultProvider,
             defaultProfile ? defaultDefaultProfile,
+            enableTentClaude ? tentClaudeEnabled,
           }:
+          let
+            tentClaudeCliPath =
+              if enableTentClaude then
+                "${llm-agents.packages.${tentClaudeSystem}.claude-code}/bin/claude"
+              else
+                "";
+          in
           buildGoApplication {
             pname = "clown";
             version = clownVersion;
@@ -842,9 +849,10 @@
             pluginMeta,
             defaultProvider ? defaultDefaultProvider,
             defaultProfile ? defaultDefaultProfile,
+            enableTentClaude ? tentClaudeEnabled,
           }:
           let
-            clownGoBin = mkClownGo { inherit defaultProvider defaultProfile; };
+            clownGoBin = mkClownGo { inherit defaultProvider defaultProfile enableTentClaude; };
           in
           (pkgs.symlinkJoin {
             name = "clown";
@@ -897,13 +905,14 @@
             plugins ? [ ],
             defaultProvider ? defaultDefaultProvider,
             defaultProfile ? defaultDefaultProfile,
+            enableTentClaude ? tentClaudeEnabled,
           }:
           let
             pluginMeta = if plugins == [ ] then emptyPluginMeta else resolvePlugins plugins;
           in
           {
             packages.default = mkClownPkg {
-              inherit pluginMeta defaultProvider defaultProfile;
+              inherit pluginMeta defaultProvider defaultProfile enableTentClaude;
             };
             devShells.default = pkgs.mkShell {
               packages = [
