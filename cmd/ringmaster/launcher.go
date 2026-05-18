@@ -103,6 +103,7 @@ func (l *llauncher) Start(ctx context.Context, p rm.StartInstanceParams) (rm.Ins
 		ch.waitErr = cmd.Wait()
 		close(ch.exited)
 	}()
+	go l.reapOnExit(p.Alias, ch)
 
 	addr := fmt.Sprintf("%s:%d", bind, port)
 	hctx, cancel := context.WithTimeout(ctx, healthTimeout)
@@ -161,6 +162,28 @@ func (l *llauncher) Stop(ctx context.Context, alias string) error {
 
 	l.reg.Remove(alias)
 	return nil
+}
+
+// reapOnExit watches a child's exited channel and cleans up the
+// registry + children map once the process has exited, but only if
+// Stop hasn't already taken ownership of cleanup.
+//
+// The l.children[alias] == ch guard is the coordination point with
+// Stop: Stop's first act is to delete(l.children, alias) under l.mu,
+// so by the time Stop has run, the lookup here either misses (alias
+// gone) or yields a different *child (a subsequent Start under the
+// same alias). Either way the equality check fails and we no-op,
+// avoiding a double Remove. If Stop hasn't run — i.e. the child died
+// from a crash, OOM kill, or external SIGKILL — the entry is still
+// ch and we own the cleanup.
+func (l *llauncher) reapOnExit(alias string, ch *child) {
+	<-ch.exited
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.children[alias] == ch {
+		delete(l.children, alias)
+		l.reg.Remove(alias)
+	}
 }
 
 func pickFreePort(host string) (int, error) {
