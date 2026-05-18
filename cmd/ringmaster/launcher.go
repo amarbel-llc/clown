@@ -22,6 +22,18 @@ const (
 	stopGrace      = 5 * time.Second
 )
 
+// child wraps a running llama-server process. The OS only permits a
+// single cmd.Wait() call per child, so the launcher owns that call in
+// a single goroutine started at Start time and publishes the result
+// via the exited channel. Stop (and the future reaper in Task 12)
+// both observe completion by reading exited rather than calling Wait
+// themselves.
+type child struct {
+	cmd     *exec.Cmd
+	exited  chan struct{} // closed when cmd.Wait returns
+	waitErr error         // populated before exited is closed
+}
+
 // llauncher is the real Launcher implementation. It runs llama-server
 // children, registers them, and reaps them on Stop. The mu/children
 // map are kept separate from the Registry: the Registry holds the
@@ -32,7 +44,7 @@ type llauncher struct {
 	modelsDir       string
 
 	mu       sync.Mutex
-	children map[string]*exec.Cmd // alias → process handle
+	children map[string]*child // alias → process handle
 }
 
 func newLauncher(binary string, reg *rm.Registry, modelsDir string) *llauncher {
@@ -40,7 +52,7 @@ func newLauncher(binary string, reg *rm.Registry, modelsDir string) *llauncher {
 		llamaServerPath: binary,
 		reg:             reg,
 		modelsDir:       modelsDir,
-		children:        make(map[string]*exec.Cmd),
+		children:        make(map[string]*child),
 	}
 }
 
@@ -60,9 +72,12 @@ func (l *llauncher) Start(ctx context.Context, p rm.StartInstanceParams) (rm.Ins
 		return rm.Instance{}, fmt.Errorf("pick port: %w", err)
 	}
 
-	modelPath := p.Model
-	if !filepath.IsAbs(modelPath) {
-		modelPath = filepath.Join(l.modelsDir, p.Model+".gguf")
+	var modelPath string
+	if p.Model != "" {
+		modelPath = p.Model
+		if !filepath.IsAbs(modelPath) {
+			modelPath = filepath.Join(l.modelsDir, p.Model+".gguf")
+		}
 	}
 
 	args := []string{
@@ -83,11 +98,18 @@ func (l *llauncher) Start(ctx context.Context, p rm.StartInstanceParams) (rm.Ins
 		return rm.Instance{}, fmt.Errorf("start llama-server: %w", err)
 	}
 
+	ch := &child{cmd: cmd, exited: make(chan struct{})}
+	go func() {
+		ch.waitErr = cmd.Wait()
+		close(ch.exited)
+	}()
+
 	addr := fmt.Sprintf("%s:%d", bind, port)
 	hctx, cancel := context.WithTimeout(ctx, healthTimeout)
 	defer cancel()
 	if err := waitHealthy(hctx, addr); err != nil {
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		<-ch.exited
 		return rm.Instance{}, fmt.Errorf("waitHealthy: %w", err)
 	}
 
@@ -101,40 +123,40 @@ func (l *llauncher) Start(ctx context.Context, p rm.StartInstanceParams) (rm.Ins
 	}
 	if err := l.reg.Add(in); err != nil {
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		<-ch.exited
 		return rm.Instance{}, fmt.Errorf("register: %w", err)
 	}
 
 	l.mu.Lock()
-	l.children[p.Alias] = cmd
+	l.children[p.Alias] = ch
 	l.mu.Unlock()
 	return in, nil
 }
 
 // Stop signals the child for alias to terminate. SIGTERM first, then
 // SIGKILL after a grace period if it didn't exit. Removes from the
-// registry on success.
+// registry on success. Wait() is owned by the goroutine launched in
+// Start; Stop observes process exit via ch.exited rather than calling
+// Wait directly.
 func (l *llauncher) Stop(ctx context.Context, alias string) error {
 	l.mu.Lock()
-	cmd, ok := l.children[alias]
+	ch, ok := l.children[alias]
 	delete(l.children, alias)
 	l.mu.Unlock()
 	if !ok {
 		return fmt.Errorf("alias %q not running", alias)
 	}
 
-	pgid := -cmd.Process.Pid // process group
+	pgid := -ch.cmd.Process.Pid // process group
 	if err := syscall.Kill(pgid, syscall.SIGTERM); err != nil {
 		return fmt.Errorf("SIGTERM %d: %w", pgid, err)
 	}
 
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-
 	select {
-	case <-done:
+	case <-ch.exited:
 	case <-time.After(stopGrace):
 		_ = syscall.Kill(pgid, syscall.SIGKILL)
-		<-done // drain Wait
+		<-ch.exited
 	}
 
 	l.reg.Remove(alias)
