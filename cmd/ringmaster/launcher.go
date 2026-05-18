@@ -122,15 +122,24 @@ func (l *llauncher) Start(ctx context.Context, p rm.StartInstanceParams) (rm.Ins
 		Bind:      bind,
 		StartedAt: time.Now().UTC(),
 	}
+
+	// Insert into children BEFORE reg.Add so reapOnExit's identity
+	// guard (l.children[alias] == ch) sees the entry if the child
+	// dies between reg.Add and us finishing Start. Otherwise the
+	// reaper would no-op while the registry holds an orphaned entry.
+	l.mu.Lock()
+	l.children[p.Alias] = ch
+	l.mu.Unlock()
+
 	if err := l.reg.Add(in); err != nil {
+		l.mu.Lock()
+		delete(l.children, p.Alias)
+		l.mu.Unlock()
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		<-ch.exited
 		return rm.Instance{}, fmt.Errorf("register: %w", err)
 	}
 
-	l.mu.Lock()
-	l.children[p.Alias] = ch
-	l.mu.Unlock()
 	return in, nil
 }
 
