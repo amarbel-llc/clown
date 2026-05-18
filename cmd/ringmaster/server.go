@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"time"
 
 	rm "github.com/amarbel-llc/clown/internal/ringmaster"
 )
@@ -43,15 +44,28 @@ func (s *server) Serve(ctx context.Context, ln net.Listener) error {
 		<-ctx.Done()
 		_ = ln.Close()
 	}()
+	var backoff time.Duration
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil
 			}
-			s.log.Error("accept", "err", err)
+			// Backoff on accept errors. Doubles up to a cap.
+			if backoff == 0 {
+				backoff = 10 * time.Millisecond
+			} else if backoff < time.Second {
+				backoff *= 2
+			}
+			s.log.Error("accept", "err", err, "backoff", backoff)
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(backoff):
+			}
 			continue
 		}
+		backoff = 0
 		go s.handle(conn)
 	}
 }
@@ -75,17 +89,20 @@ func (s *server) handle(conn net.Conn) {
 func (s *server) dispatch(req rm.Envelope) rm.Envelope {
 	switch req.Method {
 	case rm.MethodListInstances:
-		out := rm.ListInstancesResult{Instances: s.registry.List()}
-		data, _ := json.Marshal(out)
-		return rm.Envelope{JSONRPC: "2.0", ID: req.ID, Result: data}
+		return rpcResult(req.ID, rm.ListInstancesResult{Instances: s.registry.List()})
 	default:
-		return rm.Envelope{
-			JSONRPC: "2.0",
-			ID:      req.ID,
-			Error: &rm.Error{
-				Code:    -32601,
-				Message: fmt.Sprintf("method not found: %s", req.Method),
-			},
-		}
+		return rpcError(req.ID, -32601, fmt.Sprintf("method not found: %s", req.Method))
 	}
+}
+
+func rpcResult(id json.Number, v any) rm.Envelope {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return rpcError(id, -32603, fmt.Sprintf("marshal result: %v", err))
+	}
+	return rm.Envelope{JSONRPC: "2.0", ID: id, Result: data}
+}
+
+func rpcError(id json.Number, code int, msg string) rm.Envelope {
+	return rm.Envelope{JSONRPC: "2.0", ID: id, Error: &rm.Error{Code: code, Message: msg}}
 }
