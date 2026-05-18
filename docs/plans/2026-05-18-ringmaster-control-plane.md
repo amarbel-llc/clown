@@ -1502,51 +1502,23 @@ git commit -m "feat(ringmaster): reap dead children, remove from registry"
 
 ---
 
-### Task 13: Rewrite `cmd/circus` as a UDS client
+### Task 13: Rewrite `cmd/circus` as a UDS client (staged)
 
-**Promotion criteria:** All existing `circus` subcommands (`start`, `stop`, `status`, `list`, `models`, `download`) work against a running ringmaster. End-to-end test: spawn ringmaster, run `circus start a`, `circus list`, `circus stop a`.
+**Promotion criteria (overall):** All existing `circus` subcommands (`start`, `stop`, `status`, `list`, `models`, `download`) work against a running ringmaster. End-to-end test: spawn ringmaster, run `circus start a`, `circus list`, `circus stop a`. `cmd/circus/daemon.go` is deleted.
 
-**Files:**
-- Modify: `cmd/circus/main.go` — replace each subcommand body with a `ringmaster.Client` call
-- Delete: `cmd/circus/daemon.go` — flat-file logic dies
-- Delete: `cmd/circus/daemon_test.go`
-- Modify: `cmd/circus/download.go` — becomes a client call into `MethodDownloadModel`
-- Modify: `cmd/circus/download_test.go` — adapt
+**Rationale for staging:** The original plan called for one big rewrite commit. During execution we shifted to finer-grained steps so each subcommand migration can be reviewed and simplified in isolation, catching bugs at the boundary between cmd/circus and ringmaster early. The original Task 14 (`dialClient`) is also pulled into the start of this sequence since every subsequent subcommand needs it.
 
-The replacement is mechanical:
+The sub-tasks follow read-only-first → state-mutating → cleanup ordering:
 
-```go
-case "start":
-    return cmdStart(args[1:])
+#### Task 13a: `dialClient` helper + connection-error UX
 
-// becomes:
+(This was originally listed as Task 14; pulled forward because every following subcommand depends on it.)
 
-case "start":
-    cli, err := dialClient()
-    if err != nil { ... }
-    defer cli.Close()
-    return cmdStart(cli, args[1:])
-```
-
-Where `cmdStart` parses `--model`, `--alias`, `--bind`, and any pass-through `--` args, then calls `cli.StartInstance`. Pretty-print the resulting `Instance`.
-
-The `attachOrStart` semantics from the old daemon code go away — circus no longer launches anything itself. If ringmaster isn't running, `dialClient` fails with a clear message pointing at the home-manager option (see Task 14).
-
-**Commit (single big commit, since the rewrite is cohesive):**
-
-```bash
-git add cmd/circus/ internal/
-git commit -m "refactor(circus): rewrite as a ringmaster client; delete flat-file daemon"
-```
-
----
-
-### Task 14: `dialClient` and helpful error when ringmaster isn't running
-
-**Promotion criteria:** When the socket is missing, circus prints a fix-it message naming the home-manager option.
+**Promotion criteria:** When the socket is missing or refused, `circus` prints a fix-it message naming the home-manager option. No subcommands wired yet.
 
 **Files:**
 - Create: `cmd/circus/dial.go`
+- Create: `cmd/circus/dial_test.go`
 
 ```go
 package main
@@ -1555,6 +1527,7 @@ import (
     "errors"
     "fmt"
     "io/fs"
+    "net"
     "os"
 
     rm "github.com/amarbel-llc/clown/internal/ringmaster"
@@ -1579,15 +1552,121 @@ func dialClient() (*rm.Client, error) {
     }
     return nil, err
 }
+
+func isENOENT(err error) bool {
+    var pe *os.PathError
+    if errors.As(err, &pe) {
+        return errors.Is(pe.Err, fs.ErrNotExist)
+    }
+    return false
+}
+
+func isECONNREFUSED(err error) bool {
+    var oe *net.OpError
+    if errors.As(err, &oe) {
+        // "connect: connection refused" comes through as OpError wrapping
+        // a syscall.Errno. Match by string for portability.
+        return oe.Op == "dial" && strings.Contains(oe.Err.Error(), "refused")
+    }
+    return false
+}
 ```
 
-Helpers `isENOENT` and `isECONNREFUSED` use `errors.As` on `*os.PathError` / `*net.OpError`.
+Test: point `RINGMASTER_SOCKET` env at a nonexistent file, call `dialClient`, assert an error is returned and the stderr message names `programs.ringmaster.enable`.
 
-**Commit:**
+**Commit:** `feat(circus): dialClient helper with home-manager hint on missing socket`
 
-```bash
-git commit -m "feat(circus): friendly error when ringmaster socket is missing"
+---
+
+#### Task 13b: Wire `circus list` to ringmaster
+
+**Promotion criteria:** Running `circus list` against a ringmaster with 0 or more instances prints them in a stable columnar format. Pre-existing `daemon.go` is unchanged.
+
+**Files:**
+- Modify: `cmd/circus/main.go` — replace the `case "list"` body with a `cli.ListInstances` call (it'll still be a one-instance world before Task 13d, but the wiring is in place)
+- Modify: `cmd/circus/main.go` — add subcommand handler `cmdList(cli *rm.Client, args []string) int`
+- Create: `cmd/circus/list_test.go` — integration test that spawns ringmaster on a temp socket, runs the `list` codepath via the binary, and asserts output
+
+The existing `status` flat-file logic stays; only `list` migrates here.
+
+**Commit:** `feat(circus): wire 'circus list' to ringmaster`
+
+---
+
+#### Task 13c: Wire `circus status` to ringmaster
+
+**Promotion criteria:** `circus status [alias]` prints either the single-instance status (when alias given) or summary across all instances. Uses `GetInstance` and `ListInstances`.
+
+**Files:**
+- Modify: `cmd/circus/main.go` — replace the `case "status"` body with the new handler
+- Create: `cmd/circus/status_test.go` — integration test
+
+Note: `status` previously could probe llama-server's `/health` for liveness. For v1, "in the ringmaster registry" IS the liveness signal (the reaper removes dead children). If we want a deeper health probe (`/slots`, etc.) it belongs in a later task.
+
+**Commit:** `feat(circus): wire 'circus status' to ringmaster`
+
+---
+
+#### Task 13d: Wire `circus start` and `circus stop` to ringmaster
+
+**Promotion criteria:** `circus start <model> [--alias x] [--bind addr]` and `circus stop <alias>` work end-to-end. After this commit, `attachOrStart`, `startDaemon`, and `stopDaemon` in `daemon.go` are dead code (but still compile because nothing else references them yet).
+
+**Files:**
+- Modify: `cmd/circus/main.go` — replace `start` and `stop` handlers
+- Create: `cmd/circus/start_test.go`, `cmd/circus/stop_test.go` — integration tests using the fake llama-server binary already in `cmd/ringmaster/testdata/`
+
+The replacement is mechanical:
+
+```go
+case "start":
+    cli, err := dialClient()
+    if err != nil { ... }
+    defer cli.Close()
+    return cmdStart(cli, args[1:])
 ```
+
+Where `cmdStart` parses `--model`, `--alias`, `--bind`, and any pass-through `--` args, then calls `cli.StartInstance`. Pretty-print the resulting `Instance`.
+
+**Commit:** `feat(circus): wire 'circus start' and 'circus stop' to ringmaster`
+
+---
+
+#### Task 13e: Wire `circus models` to ringmaster
+
+**Promotion criteria:** `circus models` lists installed GGUFs via `ListAvailableModels`. Stays read-only.
+
+**Files:**
+- Modify: `cmd/circus/main.go` — replace the `case "models"` body with the new handler
+- Create: `cmd/circus/models_test.go`
+
+Note: `circus download` stays unchanged in this commit — per the agreed scope it keeps using `circusmodels.Download` directly (with bubbletea UI). The ringmaster `DownloadModel` RPC exists for clown-side automation but circus CLI doesn't route through it.
+
+**Commit:** `feat(circus): wire 'circus models' to ringmaster`
+
+---
+
+#### Task 13f: Delete `daemon.go` and `daemon_test.go`
+
+**Promotion criteria:** No references to the flat-file pid/port logic remain. Build clean, tests still pass. `cmd/circus` consists of `main.go`, `dial.go`, subcommand handlers, the unchanged `download.go`, and tests.
+
+**Files:**
+- Delete: `cmd/circus/daemon.go`
+- Delete: `cmd/circus/daemon_test.go`
+- Modify: `cmd/circus/main.go` — remove any imports the deletion frees up (the daemon helpers)
+
+Verification: `rg -l 'llama-server\.(pid|port)' cmd/circus` returns nothing. `go vet ./cmd/circus/...` clean. `just test-go` green.
+
+**Commit:** `refactor(circus): delete flat-file daemon, all subcommands on ringmaster`
+
+---
+
+#### Task 13g: Final simplify pass on `cmd/circus`
+
+**Promotion criteria:** After the migration, sweep for: unused imports, unused state-file path constants, redundant helpers shadowed by `internal/ringmaster`, and any code paths that became unreachable. Document why anything that *looks* removable is actually still needed.
+
+**Files:** as needed.
+
+**Commit:** `refactor(circus): drop dead state-file helpers after ringmaster migration` (or skip the commit if nothing surfaces).
 
 ---
 
