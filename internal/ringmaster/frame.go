@@ -41,13 +41,14 @@ func WriteFrame(w io.Writer, env Envelope) error {
 }
 
 // ReadFrame reads one newline-terminated JSON envelope from r.
-// Callers wrap r in a bufio.Reader if they want buffering across calls.
-func ReadFrame(r io.Reader) (Envelope, error) {
-	br, ok := r.(*bufio.Reader)
-	if !ok {
-		br = bufio.NewReader(r)
-	}
-	line, err := br.ReadBytes('\n')
+// r is *bufio.Reader rather than io.Reader because bufio reads ahead
+// in chunks; if we wrapped a raw io.Reader internally per call, the
+// wrapper's lookahead buffer would be discarded and subsequent frames
+// from the same stream would lose their leading bytes. Callers that
+// have only an io.Reader must wrap once with bufio.NewReader and reuse
+// the wrapper across calls.
+func ReadFrame(r *bufio.Reader) (Envelope, error) {
+	line, err := r.ReadBytes('\n')
 	if err != nil {
 		return Envelope{}, fmt.Errorf("read frame: %w", err)
 	}

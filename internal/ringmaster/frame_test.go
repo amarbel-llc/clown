@@ -17,7 +17,7 @@ func TestFrame_RoundTrip(t *testing.T) {
 	if !bytes.HasSuffix(buf.Bytes(), []byte("\n")) {
 		t.Fatalf("frame missing trailing newline: %q", buf.String())
 	}
-	got, err := ReadFrame(&buf)
+	got, err := ReadFrame(bufio.NewReader(&buf))
 	if err != nil {
 		t.Fatal(err)
 	}
