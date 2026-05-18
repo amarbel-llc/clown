@@ -2,12 +2,17 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/amarbel-llc/clown/internal/circusmodels"
 	rm "github.com/amarbel-llc/clown/internal/ringmaster"
 )
 
@@ -98,6 +103,90 @@ func TestServer_ListAvailableModels(t *testing.T) {
 		if m.Path == "" || m.Size == 0 {
 			t.Errorf("model missing path/size: %+v", m)
 		}
+	}
+}
+
+func TestServer_DownloadModel(t *testing.T) {
+	payload := []byte("this is a fake gguf file for testing")
+	sum := sha256.Sum256(payload)
+	expectedSHA := hex.EncodeToString(sum[:])
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/fake.gguf", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(payload)
+	})
+	httpSrv := httptest.NewServer(mux)
+	defer httpSrv.Close()
+
+	modelsDir := shortTempDir(t)
+	models := []circusmodels.RegistryEntry{
+		{
+			Name:   "fake",
+			URL:    httpSrv.URL + "/fake.gguf",
+			SHA256: expectedSHA,
+			Size:   int64(len(payload)),
+		},
+	}
+
+	sock := filepath.Join(shortTempDir(t), "control.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := newServer(rm.NewRegistry(), nil)
+	srv.modelsDir = modelsDir
+	srv.models = models
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	go srv.Serve(ctx, ln)
+
+	cli, err := rm.NewClient(sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cli.Close()
+
+	res, err := cli.DownloadModel(ctx, rm.DownloadModelParams{Name: "fake"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Model.Name != "fake" {
+		t.Errorf("name: %q", res.Model.Name)
+	}
+	if res.Model.Size != int64(len(payload)) {
+		t.Errorf("size: got %d, want %d", res.Model.Size, len(payload))
+	}
+	want := filepath.Join(modelsDir, "fake.gguf")
+	if res.Model.Path != want {
+		t.Errorf("path: got %q, want %q", res.Model.Path, want)
+	}
+	if _, err := os.Stat(res.Model.Path); err != nil {
+		t.Errorf("file not present at %s: %v", res.Model.Path, err)
+	}
+}
+
+func TestServer_DownloadModel_UnknownName(t *testing.T) {
+	modelsDir := shortTempDir(t)
+	sock := filepath.Join(shortTempDir(t), "control.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := newServer(rm.NewRegistry(), nil)
+	srv.modelsDir = modelsDir
+	srv.models = []circusmodels.RegistryEntry{} // explicit empty (non-nil) override
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go srv.Serve(ctx, ln)
+
+	cli, err := rm.NewClient(sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cli.Close()
+
+	if _, err := cli.DownloadModel(ctx, rm.DownloadModelParams{Name: "nope"}); err == nil {
+		t.Fatal("expected error for unknown model")
 	}
 }
 

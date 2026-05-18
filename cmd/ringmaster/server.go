@@ -21,6 +21,11 @@ type server struct {
 	launcher  Launcher // nil-safe; methods check before use
 	log       *slog.Logger
 	modelsDir string // root for ListAvailableModels lookups
+	// models is an optional override for the downloadable-model
+	// registry. Production callers leave this nil and dispatch falls
+	// back to circusmodels.Registry(); tests inject a fixture pointed
+	// at an httptest.Server.
+	models []circusmodels.RegistryEntry
 }
 
 // Launcher abstracts how new llama-server instances are spawned. The
@@ -168,6 +173,38 @@ func (s *server) dispatch(req rm.Envelope) rm.Envelope {
 			return rpcError(req.ID, -32000, fmt.Sprintf("list models: %v", err))
 		}
 		return rpcResult(req.ID, rm.ListAvailableModelsResult{Models: models})
+
+	case rm.MethodDownloadModel:
+		var p rm.DownloadModelParams
+		if err := json.Unmarshal(req.Params, &p); err != nil {
+			return rpcError(req.ID, -32602, fmt.Sprintf("invalid params: %v", err))
+		}
+		entries := s.models
+		if entries == nil {
+			loaded, err := circusmodels.Registry()
+			if err != nil {
+				return rpcError(req.ID, -32000, fmt.Sprintf("load registry: %v", err))
+			}
+			entries = loaded
+		}
+		entry, ok := circusmodels.FindEntry(p.Name, entries)
+		if !ok {
+			return rpcError(req.ID, -32000, fmt.Sprintf("unknown model %q", p.Name))
+		}
+		// TODO: thread a per-connection context through dispatch (see StartInstance).
+		dest, err := circusmodels.Download(context.Background(), entry, s.modelsDir, nil)
+		if err != nil {
+			return rpcError(req.ID, -32000, fmt.Sprintf("download: %v", err))
+		}
+		st, err := os.Stat(dest)
+		if err != nil {
+			return rpcError(req.ID, -32000, fmt.Sprintf("stat: %v", err))
+		}
+		return rpcResult(req.ID, rm.DownloadModelResult{Model: rm.AvailableModel{
+			Name: p.Name,
+			Path: dest,
+			Size: st.Size(),
+		}})
 
 	default:
 		return rpcError(req.ID, -32601, fmt.Sprintf("method not found: %s", req.Method))
