@@ -10,15 +10,17 @@ import (
 	"os"
 	"time"
 
+	"github.com/amarbel-llc/clown/internal/circusmodels"
 	rm "github.com/amarbel-llc/clown/internal/ringmaster"
 )
 
 // server is the ringmaster daemon's RPC dispatcher. It owns the
 // registry and (later) the llama-server launcher.
 type server struct {
-	registry *rm.Registry
-	launcher Launcher // nil-safe; methods check before use
-	log      *slog.Logger
+	registry  *rm.Registry
+	launcher  Launcher // nil-safe; methods check before use
+	log       *slog.Logger
+	modelsDir string // root for ListAvailableModels lookups
 }
 
 // Launcher abstracts how new llama-server instances are spawned. The
@@ -30,9 +32,10 @@ type Launcher interface {
 
 func newServer(reg *rm.Registry, l Launcher) *server {
 	return &server{
-		registry: reg,
-		launcher: l,
-		log:      slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		registry:  reg,
+		launcher:  l,
+		log:       slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		modelsDir: circusmodels.Dir(),
 	}
 }
 
@@ -133,6 +136,38 @@ func (s *server) dispatch(req rm.Envelope) rm.Envelope {
 			return rpcError(req.ID, -32001, fmt.Sprintf("alias %q not found", p.Alias))
 		}
 		return rpcResult(req.ID, rm.GetInstanceResult{Instance: in})
+
+	case rm.MethodStopAll:
+		if s.launcher == nil {
+			return rpcError(req.ID, -32000, "launcher not configured")
+		}
+		// Snapshot the alias list before iterating; Stop mutates the registry.
+		snapshot := s.registry.List()
+		stopped := make([]string, 0, len(snapshot))
+		for _, in := range snapshot {
+			// TODO: thread a per-connection context through dispatch (see StartInstance).
+			if err := s.launcher.Stop(context.Background(), in.Alias); err != nil {
+				// A concurrent StopInstance on another connection may have
+				// drained the launcher's children map between our snapshot and
+				// this call. If the alias is no longer in the registry, it
+				// was stopped — count it. Otherwise the failure is real.
+				if _, stillRunning := s.registry.Get(in.Alias); !stillRunning {
+					stopped = append(stopped, in.Alias)
+					continue
+				}
+				s.log.Error("stopAll", "alias", in.Alias, "err", err)
+				continue
+			}
+			stopped = append(stopped, in.Alias)
+		}
+		return rpcResult(req.ID, rm.StopAllResult{Stopped: stopped})
+
+	case rm.MethodListAvailableModels:
+		models, err := listAvailableModels(s.modelsDir)
+		if err != nil {
+			return rpcError(req.ID, -32000, fmt.Sprintf("list models: %v", err))
+		}
+		return rpcResult(req.ID, rm.ListAvailableModelsResult{Models: models})
 
 	default:
 		return rpcError(req.ID, -32601, fmt.Sprintf("method not found: %s", req.Method))
