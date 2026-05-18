@@ -126,13 +126,14 @@ func TestWriteOpencodeLocalConfigFile_QuotesAreEscaped(t *testing.T) {
 	}
 }
 
-func TestWriteOpencodeConfig_CreatesFile(t *testing.T) {
+func TestWriteOpencodeConfigFile_CreatesFile(t *testing.T) {
 	dir := t.TempDir()
-	err := writeOpencodeConfig(dir, "https://example.com/v1", "test-token", "")
+	path := filepath.Join(dir, "opencode.json")
+	err := writeOpencodeConfigFile(path, "https://example.com/v1", "test-token", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	data, err := os.ReadFile(filepath.Join(dir, "opencode", "opencode.json"))
+	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("config file not created: %v", err)
 	}
@@ -148,13 +149,14 @@ func TestWriteOpencodeConfig_CreatesFile(t *testing.T) {
 	}
 }
 
-func TestWriteOpencodeConfig_WithProfile(t *testing.T) {
+func TestWriteOpencodeConfigFile_WithProfile(t *testing.T) {
 	dir := t.TempDir()
-	err := writeOpencodeConfig(dir, "https://gw.example.com/v1", "tok-xyz", "gpt-4o")
+	path := filepath.Join(dir, "opencode.json")
+	err := writeOpencodeConfigFile(path, "https://gw.example.com/v1", "tok-xyz", "gpt-4o")
 	if err != nil {
-		t.Fatalf("writeOpencodeConfig: %v", err)
+		t.Fatalf("writeOpencodeConfigFile: %v", err)
 	}
-	data, err := os.ReadFile(filepath.Join(dir, "opencode", "opencode.json"))
+	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read config: %v", err)
 	}
@@ -167,13 +169,14 @@ func TestWriteOpencodeConfig_WithProfile(t *testing.T) {
 	}
 }
 
-func TestWriteOpencodeConfig_ModelOverride(t *testing.T) {
+func TestWriteOpencodeConfigFile_ModelOverride(t *testing.T) {
 	dir := t.TempDir()
-	err := writeOpencodeConfig(dir, "https://gw.example.com/v1", "tok-xyz", "my-custom-model")
+	path := filepath.Join(dir, "opencode.json")
+	err := writeOpencodeConfigFile(path, "https://gw.example.com/v1", "tok-xyz", "my-custom-model")
 	if err != nil {
-		t.Fatalf("writeOpencodeConfig: %v", err)
+		t.Fatalf("writeOpencodeConfigFile: %v", err)
 	}
-	data, err := os.ReadFile(filepath.Join(dir, "opencode", "opencode.json"))
+	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read config: %v", err)
 	}

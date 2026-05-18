@@ -159,7 +159,12 @@ func promptOpencodeLocalConfig(path string) (opencodeLocalConfig, error) {
 	return opencodeLocalConfig{URL: url, Token: token}, nil
 }
 
-func writeOpencodeConfig(configDir, url, token, model string) error {
+// writeOpencodeConfigFile writes the synthesized provider config to the
+// given file path. Clown points opencode at it via OPENCODE_CONFIG rather
+// than hijacking XDG_CONFIG_HOME — XDG_CONFIG_HOME also shadows opencode's
+// data-dir derivation, which makes opencode believe each launch is a fresh
+// install and re-run its one-time database migration.
+func writeOpencodeConfigFile(path, url, token, model string) error {
 	if model == "" {
 		model = "gpt-4o"
 	}
@@ -208,15 +213,14 @@ func writeOpencodeConfig(configDir, url, token, model string) error {
 		Model: "custom/" + model,
 	}
 
-	dir := filepath.Join(configDir, "opencode")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("mkdir: %w", err)
 	}
 	data, err := json.Marshal(cfg)
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
 	}
-	return os.WriteFile(filepath.Join(dir, "opencode.json"), data, 0o600)
+	return os.WriteFile(path, data, 0o600)
 }
 
 // readCircusPortfile reads the bare port number circus writes to
@@ -246,6 +250,32 @@ func readCircusPortfile() (string, error) {
 		return val, nil
 	}
 	return "127.0.0.1:" + val, nil
+}
+
+// ensureOpencodeMigrationMarker works around anomalyco/opencode#16885:
+// opencode's startup migration gate checks for ~/.local/share/opencode
+// /opencode.db, but the stable channel uses opencode-stable.db. Without a
+// matching marker the JSON->SQLite migration banner reruns on every launch.
+// We create an idempotent symlink to the channel-specific DB. Best-effort:
+// if anything fails (missing data dir, marker already exists as a regular
+// file the user owns, etc.) we leave it alone — the worst case is the
+// upstream bug stays visible, not a launch failure.
+func ensureOpencodeMigrationMarker() {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	dataDir := filepath.Join(home, ".local", "share", "opencode")
+	target := filepath.Join(dataDir, "opencode-stable.db")
+	marker := filepath.Join(dataDir, "opencode.db")
+
+	if _, err := os.Stat(target); err != nil {
+		return
+	}
+	if _, err := os.Lstat(marker); err == nil {
+		return
+	}
+	_ = os.Symlink(target, marker)
 }
 
 func runOpencode(opencodePath string, args []string, prof *profile.Profile) int {
@@ -303,16 +333,19 @@ func runOpencode(opencodePath string, args []string, prof *profile.Profile) int 
 	}
 	defer os.RemoveAll(tmpDir)
 
-	if err := writeOpencodeConfig(tmpDir, url, token, model); err != nil {
+	cfgPath := filepath.Join(tmpDir, "opencode.json")
+	if err := writeOpencodeConfigFile(cfgPath, url, token, model); err != nil {
 		fmt.Fprintf(os.Stderr, "clown: write opencode config: %v\n", err)
 		return 1
 	}
+
+	ensureOpencodeMigrationMarker()
 
 	cmd := exec.Command(opencodePath, args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	cmd.Env = append(os.Environ(), "XDG_CONFIG_HOME="+tmpDir)
+	cmd.Env = append(os.Environ(), "OPENCODE_CONFIG="+cfgPath)
 
 	if err := cmd.Run(); err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
