@@ -8,6 +8,7 @@ import (
 	"net"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // Client is a thread-safe JSON-RPC 2.0 client over a Unix domain
@@ -32,9 +33,13 @@ func NewClient(socketPath string) (*Client, error) {
 func (c *Client) Close() error { return c.conn.Close() }
 
 func (c *Client) call(ctx context.Context, method string, params, result any) error {
-	_ = ctx
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = c.conn.SetDeadline(deadline)
+		defer c.conn.SetDeadline(time.Time{})
+	}
 
 	id := json.Number(fmt.Sprintf("%d", c.nextID.Add(1)))
 
@@ -59,6 +64,9 @@ func (c *Client) call(ctx context.Context, method string, params, result any) er
 	env, err := ReadFrame(c.br)
 	if err != nil {
 		return err
+	}
+	if string(env.ID) != string(id) {
+		return fmt.Errorf("rpc %s: response id mismatch (sent %s, got %s)", method, id, env.ID)
 	}
 	if env.Error != nil {
 		return fmt.Errorf("rpc %s: %s (code %d)", method, env.Error.Message, env.Error.Code)

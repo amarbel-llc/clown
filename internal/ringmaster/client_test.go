@@ -3,9 +3,11 @@ package ringmaster
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -94,5 +96,38 @@ func TestClient_RPCError(t *testing.T) {
 	// Sanity-check that the message surfaces.
 	if msg := err.Error(); msg == "" {
 		t.Fatalf("error has empty message: %v", err)
+	}
+}
+
+func TestClient_RPCIDMismatch(t *testing.T) {
+	sock := filepath.Join(shortTempDir(t), "control.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	// Fake server: reply with a different ID than the client sent.
+	go func() {
+		conn, _ := ln.Accept()
+		defer conn.Close()
+		req, _ := ReadFrame(bufio.NewReader(conn))
+		_ = req
+		WriteFrame(conn, Envelope{
+			JSONRPC: "2.0",
+			ID:      json.Number("999"),
+			Result:  []byte(`{"instances":[]}`),
+		})
+	}()
+
+	cli, err := NewClient(sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cli.Close()
+
+	_, err = cli.ListInstances(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "id mismatch") {
+		t.Errorf("expected id mismatch error, got: %v", err)
 	}
 }
