@@ -27,6 +27,12 @@
   # flake.nix so clown-cover's coverIntegrationCommand can stage the
   # same artifact this lane stages.
   inspectCompiledPatched,
+  # Ringmaster e2e lane fixtures: the daemon, its CLI client, and a
+  # http stand-in for llama-server. Plumbed into the binaries map
+  # below as RINGMASTER_BIN / CIRCUS_BIN / FAKE_LLAMA_SERVER_BIN.
+  ringmaster,
+  circus,
+  fake-llama-server,
 }:
 let
   # Naming anchor for the lane derivation — only consulted for
@@ -60,6 +66,18 @@ let
         MOCK_STDIO_MCP_BIN = {
           base = mock-stdio-mcp;
           name = "mock-stdio-mcp";
+        };
+        RINGMASTER_BIN = {
+          base = ringmaster;
+          name = "ringmaster";
+        };
+        CIRCUS_BIN = {
+          base = circus;
+          name = "circus";
+        };
+        FAKE_LLAMA_SERVER_BIN = {
+          base = fake-llama-server;
+          name = "fake-llama-server";
         };
       };
       # bats-libs ships bats-support, bats-assert, bats-emo, bats-island

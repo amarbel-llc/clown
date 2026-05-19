@@ -599,6 +599,24 @@
           ];
         };
 
+        # fake-llama-server: a stand-in for llama-server used by the
+        # ringmaster bats e2e lane. Real llama-cpp is too heavy and
+        # too slow to spin up under bats — and we'd never run it
+        # against a real GGUF inside the nix sandbox. This serves
+        # /health (200 OK) and /v1/models, which is all the launcher
+        # waits on. Same source as cmd/ringmaster/testdata/fake-llama-server.
+        fake-llama-server-go = buildGoApplication {
+          pname = "fake-llama-server";
+          version = clownVersion;
+          src = goSrc;
+          subPackages = [ "cmd/ringmaster/testdata/fake-llama-server" ];
+          modules = ./gomod2nix.toml;
+          ldflags = [
+            "-s"
+            "-w"
+          ];
+        };
+
         # Managed settings burned into the patched claude-code derivation.
         # Lives at the highest precedence tier, so it cannot be overridden by
         # user settings, project settings, or CLI flags. See
@@ -944,6 +962,14 @@
             ;
           batsLane = bats.lib.${system}.batsLane;
           bats-libs = batsLibs;
+          # ringmaster e2e lane consumes the daemon, the circus
+          # client, and a Go fake llama-server. The fake is a
+          # tiny http server stand-in compiled from
+          # cmd/ringmaster/testdata/fake-llama-server — same source
+          # the launcher_test.go and server_test.go fixtures use.
+          ringmaster = ringmaster-go;
+          circus = circus-go;
+          fake-llama-server = fake-llama-server-go;
         };
 
         mkCircus =
