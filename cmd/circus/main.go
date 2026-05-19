@@ -23,55 +23,36 @@ func run(args []string) int {
 
 	switch args[0] {
 	case "start":
-		cli, err := dialClient()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "circus: %v\n", err)
-			return 1
-		}
-		defer cli.Close()
-		return cmdStart(cli, args[1:])
+		return withClient(func(cli *rm.Client) int { return cmdStart(cli, args[1:]) })
 	case "stop":
-		cli, err := dialClient()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "circus: %v\n", err)
-			return 1
-		}
-		defer cli.Close()
-		return cmdStop(cli, args[1:])
+		return withClient(func(cli *rm.Client) int { return cmdStop(cli, args[1:]) })
 	case "status":
-		cli, err := dialClient()
-		if err != nil {
-			// dialClient prints its own home-manager hint for the
-			// missing-socket/refused cases; surface any other error
-			// (e.g. SocketPath() failure, OS errors) so the user
-			// isn't left with a bare nonzero exit.
-			fmt.Fprintf(os.Stderr, "circus: %v\n", err)
-			return 1
-		}
-		defer cli.Close()
-		return cmdStatus(cli, args[1:])
+		return withClient(func(cli *rm.Client) int { return cmdStatus(cli, args[1:]) })
 	case "list":
-		cli, err := dialClient()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "circus: %v\n", err)
-			return 1
-		}
-		defer cli.Close()
-		return cmdList(cli)
+		return withClient(func(cli *rm.Client) int { return cmdList(cli) })
 	case "models":
-		cli, err := dialClient()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "circus: %v\n", err)
-			return 1
-		}
-		defer cli.Close()
-		return cmdModels(cli)
+		return withClient(func(cli *rm.Client) int { return cmdModels(cli) })
 	case "download":
 		return cmdDownload(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "circus: unknown command %q\n", args[0])
 		return 1
 	}
+}
+
+// withClient dials ringmaster, runs fn with the connected client, and
+// always closes the client when fn returns. dialClient prints its own
+// home-manager hint for the missing-socket / refused cases; any other
+// error (SocketPath() failure, novel OS errors) is surfaced to stderr
+// here so the user never sees a bare nonzero exit.
+func withClient(fn func(cli *rm.Client) int) int {
+	cli, err := dialClient()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "circus: %v\n", err)
+		return 1
+	}
+	defer cli.Close()
+	return fn(cli)
 }
 
 // cmdModels asks ringmaster for the list of installed GGUFs and prints
@@ -106,19 +87,27 @@ func cmdList(cli *rm.Client) int {
 	if len(res.Instances) == 0 {
 		return 0
 	}
-	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "ALIAS\tMODEL\tBIND\tPORT\tPID\tUPTIME")
-	now := time.Now()
-	for _, in := range res.Instances {
-		uptime := now.Sub(in.StartedAt).Round(time.Second)
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%d\t%s\n",
-			in.Alias, in.Model, in.Bind, in.Port, in.PID, uptime)
-	}
-	if err := tw.Flush(); err != nil {
+	if err := printInstanceTable(res.Instances); err != nil {
 		fmt.Fprintf(os.Stderr, "circus: list: %v\n", err)
 		return 1
 	}
 	return 0
+}
+
+// printInstanceTable writes a 6-column tabwriter table for the given
+// instances to os.Stdout. Used by both `circus list` and the no-alias
+// path of `circus status`, which want identical column layouts but
+// differ on the empty-result rendering (handled by callers).
+func printInstanceTable(instances []rm.Instance) error {
+	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "ALIAS\tMODEL\tBIND\tPORT\tPID\tUPTIME")
+	now := time.Now()
+	for _, in := range instances {
+		uptime := now.Sub(in.StartedAt).Round(time.Second)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%d\t%s\n",
+			in.Alias, in.Model, in.Bind, in.Port, in.PID, uptime)
+	}
+	return tw.Flush()
 }
 
 // cmdStatus dispatches to a per-alias detail dump or the summary list
@@ -145,15 +134,7 @@ func statusList(ctx context.Context, cli *rm.Client) int {
 		fmt.Println("circus: no instances running")
 		return 0
 	}
-	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "ALIAS\tMODEL\tBIND\tPORT\tPID\tUPTIME")
-	now := time.Now()
-	for _, in := range res.Instances {
-		uptime := now.Sub(in.StartedAt).Round(time.Second)
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%d\t%s\n",
-			in.Alias, in.Model, in.Bind, in.Port, in.PID, uptime)
-	}
-	if err := tw.Flush(); err != nil {
+	if err := printInstanceTable(res.Instances); err != nil {
 		fmt.Fprintf(os.Stderr, "circus: status: %v\n", err)
 		return 1
 	}
