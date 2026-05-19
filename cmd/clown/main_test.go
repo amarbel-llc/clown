@@ -83,6 +83,11 @@ func TestParseFlags(t *testing.T) {
 			want: parsedFlags{provider: "claude", tent: true, passDevshell: true},
 		},
 		{
+			name: "no-tent-pass-devshell flag",
+			in:   []string{"--tent", "--no-tent-pass-devshell"},
+			want: parsedFlags{provider: "claude", tent: true, noPassDevshell: true},
+		},
+		{
 			name: "verbose long flag",
 			in:   []string{"--verbose"},
 			want: parsedFlags{provider: "claude", verbose: true},
@@ -652,6 +657,69 @@ func TestNewTentExecutor_EmptyImageRef(t *testing.T) {
 	withBuildcfgString(t, &buildcfg.TentImageRef, "")
 	if _, err := newTentExecutor("/x/claude", nil, nil, false, false); err == nil || !strings.Contains(err.Error(), "TentImageRef") {
 		t.Fatalf("expected TentImageRef-empty error, got %v", err)
+	}
+}
+
+func TestResolvePassDevshell(t *testing.T) {
+	cases := []struct {
+		name        string
+		flags       parsedFlags
+		inNixShell  string // empty = unset, non-empty = set to this value
+		want        bool
+	}{
+		{
+			name: "no flag, no env → off",
+			want: false,
+		},
+		{
+			name:       "no flag, IN_NIX_SHELL=pure → on (auto-detect)",
+			inNixShell: "pure",
+			want:       true,
+		},
+		{
+			name:       "no flag, IN_NIX_SHELL=impure → on (auto-detect)",
+			inNixShell: "impure",
+			want:       true,
+		},
+		{
+			name:  "explicit --tent-pass-devshell, no env → on",
+			flags: parsedFlags{passDevshell: true},
+			want:  true,
+		},
+		{
+			name:       "explicit --tent-pass-devshell, with env → on",
+			flags:      parsedFlags{passDevshell: true},
+			inNixShell: "pure",
+			want:       true,
+		},
+		{
+			name:       "explicit --no-tent-pass-devshell wins over IN_NIX_SHELL auto-on",
+			flags:      parsedFlags{noPassDevshell: true},
+			inNixShell: "pure",
+			want:       false,
+		},
+		{
+			name:  "explicit --no-tent-pass-devshell, no env → off",
+			flags: parsedFlags{noPassDevshell: true},
+			want:  false,
+		},
+		// Both flags set is rejected upstream in runWithFlags; not exercised here.
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.inNixShell == "" {
+				t.Setenv("IN_NIX_SHELL", "")
+				// t.Setenv "" doesn't unset; explicitly unset.
+				os.Unsetenv("IN_NIX_SHELL")
+			} else {
+				t.Setenv("IN_NIX_SHELL", tc.inNixShell)
+			}
+			got := resolvePassDevshell(tc.flags)
+			if got != tc.want {
+				t.Errorf("resolvePassDevshell(%+v, IN_NIX_SHELL=%q) = %v, want %v",
+					tc.flags, tc.inNixShell, got, tc.want)
+			}
+		})
 	}
 }
 

@@ -166,6 +166,14 @@ func runWithFlags(flags parsedFlags) int {
 		fmt.Fprintln(os.Stderr, "clown: --tent-pass-devshell requires --tent")
 		return 1
 	}
+	if flags.noPassDevshell && !flags.tent {
+		fmt.Fprintln(os.Stderr, "clown: --no-tent-pass-devshell requires --tent")
+		return 1
+	}
+	if flags.passDevshell && flags.noPassDevshell {
+		fmt.Fprintln(os.Stderr, "clown: --tent-pass-devshell and --no-tent-pass-devshell are mutually exclusive")
+		return 1
+	}
 
 	profiles, err := loadProfiles("")
 	if err != nil {
@@ -432,7 +440,7 @@ func runClaude(cliPath string, flags parsedFlags, prompts promptwalk.PromptResul
 				"podman_path", buildcfg.PodmanPath,
 			)
 
-			tentExec, err := newTentExecutor(innerCliPath, pluginDirs, tentLogger, flags.verbose, flags.passDevshell)
+			tentExec, err := newTentExecutor(innerCliPath, pluginDirs, tentLogger, flags.verbose, resolvePassDevshell(flags))
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "clown: %v\n", err)
 				tentLogger.Error("tent setup failed", "err", err)
@@ -495,20 +503,54 @@ func newTentExecutor(innerCliPath string, pluginDirs []string, logger *slog.Logg
 		return nil, err
 	}
 	if passDevshell {
-		filtered := tent.FilterPathToNixStore(os.Getenv("PATH"))
-		if filtered == "" {
+		// RewritePathToNixStore (FDR-0007 2026-05-19 Q2) is the relaxed
+		// filter: each host PATH entry is followed through symlinks and
+		// kept iff the resolved target lives under /nix/store. Profile-
+		// link directories like ~/.nix-profile/bin and
+		// /nix/var/nix/profiles/default/bin are accepted (they resolve
+		// into /nix/store) — the old FilterPathToNixStore dropped them.
+		rewritten := tent.RewritePathToNixStore(os.Getenv("PATH"), tent.EvalSymlinks)
+		if rewritten == "" {
 			fmt.Fprintln(os.Stderr,
-				"clown: --tent-pass-devshell: no /nix/store entries in $PATH; "+
+				"clown: tent-pass-devshell: no PATH entries resolve into /nix/store; "+
 					"devshell forwarding skipped (are you inside a nix develop / direnv shell?)")
 		} else {
-			opts.PathOverride = filtered
+			opts.PathOverride = rewritten
 			if logger != nil {
 				logger.Info("tent path override applied",
-					"entries", strings.Count(filtered, ":")+1)
+					"entries", strings.Count(rewritten, ":")+1)
 			}
 		}
 	}
 	return &tentExecutor{innerCliPath: innerCliPath, opts: opts}, nil
+}
+
+// resolvePassDevshell collapses the (explicit-on, explicit-off,
+// auto-detect) tri-state from parsed flags + IN_NIX_SHELL env into the
+// single bool newTentExecutor consumes.
+//
+// Order of precedence (FDR-0007 2026-05-19 update):
+//
+//  1. --no-tent-pass-devshell wins absolutely (explicit opt-out).
+//  2. --tent-pass-devshell forces on regardless of IN_NIX_SHELL
+//     (explicit opt-in for "I have nix-profile tools I want forwarded
+//     even though I'm not in a devshell").
+//  3. Otherwise: on iff IN_NIX_SHELL is set (auto-detect default).
+//
+// The earlier explicit-rejection of IN_NIX_SHELL auto-on (FDR-0007
+// 2026-05-12) is reversed here: with the C+F bind mounts in place the
+// devshell layer is what passDevshell really controls (the home-manager
+// surface comes along through the unconditional ~/.nix-profile bind
+// mount), so auto-on is a much smaller surface change than it was when
+// passDevshell was the only knob.
+func resolvePassDevshell(flags parsedFlags) bool {
+	if flags.noPassDevshell {
+		return false
+	}
+	if flags.passDevshell {
+		return true
+	}
+	return os.Getenv("IN_NIX_SHELL") != ""
 }
 
 // runTentPhase wraps a tent setup step with start/end timing logs and
@@ -1127,8 +1169,12 @@ Clown flags (must appear before --):
   --skip-failed              Continue if plugin servers fail to start
   --disable-clown-protocol   Disable clown plugin-host protocol
   --tent                     Run the provider inside a podman container (claude only; FDR-0007)
-  --tent-pass-devshell       Forward host $PATH (filtered to /nix/store entries) into tent
-                             (interim; will be subsumed by --profile)
+  --tent-pass-devshell       Force host $PATH passthrough into tent (PATH entries
+                             rewritten to their /nix/store canonical form). Default
+                             is on when IN_NIX_SHELL is set; use this to force on
+                             outside a devshell. (Interim; --profile will subsume.)
+  --no-tent-pass-devshell    Suppress the IN_NIX_SHELL auto-on default and leave the
+                             tent's PATH at the image baseline.
   --verbose, -v              Enable verbose output
   --help, -h                 Show this help text
   version                    Print version information (first argument only)
@@ -1210,11 +1256,24 @@ type parsedFlags struct {
 	skipFailed           bool
 	disableClownProtocol bool
 	tent                 bool
-	passDevshell         bool
-	verbose              bool
-	version              bool
-	help                 bool
-	forwarded            []string
+	// passDevshell records an explicit opt-in to devshell-PATH
+	// passthrough (either via the --tent-pass-devshell flag or the
+	// CLOWN_TENT_PASS_DEVSHELL=1 env var). It does NOT capture the
+	// implicit on-when-IN_NIX_SHELL behavior — that decision lives at
+	// the newTentExecutor seam where the env can be consulted alongside
+	// the user's explicit opt-out (noPassDevshell). Keeping the explicit
+	// signal here lets parser tests assert "did the user say so" without
+	// reaching into IN_NIX_SHELL.
+	passDevshell bool
+	// noPassDevshell records --no-tent-pass-devshell (or
+	// CLOWN_TENT_PASS_DEVSHELL=0). Used to suppress the auto-on
+	// behavior triggered by IN_NIX_SHELL — explicit user opt-out wins
+	// over implicit env detection.
+	noPassDevshell bool
+	verbose        bool
+	version        bool
+	help           bool
+	forwarded      []string
 	// extraPluginDirs holds plugin directories supplied at the command
 	// line via --plugin-dir. They are appended to the baked-in set from
 	// CLOWN_PLUGIN_META and let users wire ad-hoc plugins (typically
@@ -1236,8 +1295,11 @@ func parseFlags(args []string) (parsedFlags, error) {
 	if os.Getenv("CLOWN_TENT") == "1" {
 		p.tent = true
 	}
-	if os.Getenv("CLOWN_TENT_PASS_DEVSHELL") == "1" {
+	switch os.Getenv("CLOWN_TENT_PASS_DEVSHELL") {
+	case "1":
 		p.passDevshell = true
+	case "0":
+		p.noPassDevshell = true
 	}
 
 	for i := 0; i < len(args); i++ {
@@ -1281,6 +1343,8 @@ func parseFlags(args []string) (parsedFlags, error) {
 			p.tent = true
 		case args[i] == "--tent-pass-devshell":
 			p.passDevshell = true
+		case args[i] == "--no-tent-pass-devshell":
+			p.noPassDevshell = true
 		case args[i] == "--verbose" || args[i] == "-v":
 			p.verbose = true
 		case args[i] == "--plugin-dir":
