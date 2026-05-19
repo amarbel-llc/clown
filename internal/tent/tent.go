@@ -50,6 +50,24 @@ type Options struct {
 	// git operations (commit, switch) work.
 	ExtraBinds []string
 
+	// ReadOnlyBinds lists additional host paths to bind-mount
+	// read-only at the same path inside the container. Source of the
+	// FDR-0007 C+F allowlist (2026-05-19 update): /nix/var (daemon
+	// socket + profile-link targets), /etc/nix, ~/.nix-profile,
+	// ~/.gitconfig, ~/.config/{git,nix}. DefaultReadOnlyBinds populates
+	// this with the subset of candidates that actually exist on the
+	// host.
+	ReadOnlyBinds []string
+
+	// SSHAuthSock is the host path to the SSH agent socket
+	// (typically $SSH_AUTH_SOCK). When non-empty, the socket is
+	// bind-mounted at the same path inside the container and
+	// SSH_AUTH_SOCK is forwarded via env. This lets the in-tent
+	// agent use the host's ssh-agent (or pivy-agent, which also
+	// signs git commits via the same socket) for git push + commit
+	// signing without any key material entering the tent.
+	SSHAuthSock string
+
 	// EnvPassthrough lists environment variable names whose values
 	// should be forwarded into the container. Anything not in this
 	// list is intentionally invisible to the wrapped provider.
@@ -106,6 +124,21 @@ var DefaultEnvPassthrough = []string{
 	"XDG_DATA_HOME",
 	"XDG_STATE_HOME",
 	"XDG_CACHE_HOME",
+	// SSH_AUTH_SOCK is paired with the SSHAuthSock bind-mount field:
+	// the env var tells in-tent tools where to find the socket, the
+	// bind-mount makes that path resolve. Forwarding the env var
+	// without the mount would leak a dangling path; mounting without
+	// the env var would leave tools looking at the wrong place. The
+	// pair is the unit.
+	"SSH_AUTH_SOCK",
+	// SSH_HOME is a home-manager-driven convention (used in
+	// amarbel-llc/eng): the user's ssh wrapper defaults --user-known-hosts
+	// and -F to $SSH_HOME/{known_hosts,config}, with SSH_HOME pointing
+	// at ~/.config/ssh by convention. Hosts that don't follow this
+	// convention have SSH_HOME unset and the var passthrough is a
+	// no-op; hosts that do need it to be set, and need ~/.config/ssh
+	// bind-mounted (handled by DefaultReadOnlyBindCandidates).
+	"SSH_HOME",
 }
 
 // OptionsFromEnv builds Options from the process environment.
@@ -131,6 +164,8 @@ func OptionsFromEnv(image string, pluginDirs []string) (Options, error) {
 		TmpDir:         os.TempDir(),
 		PluginDirs:     pluginDirs,
 		ExtraBinds:     extras,
+		ReadOnlyBinds:  DefaultReadOnlyBinds(home),
+		SSHAuthSock:    os.Getenv("SSH_AUTH_SOCK"),
 		EnvPassthrough: DefaultEnvPassthrough,
 		Tty:            stdioIsTerminal(),
 	}, nil
@@ -203,6 +238,21 @@ func BuildArgs(claudeBinary string, claudeArgs []string, opts Options) []string 
 			continue
 		}
 		args = append(args, "--volume", fmt.Sprintf("%s:%s", dir, dir))
+	}
+	for _, dir := range opts.ReadOnlyBinds {
+		if dir == "" {
+			continue
+		}
+		args = append(args, "--volume", fmt.Sprintf("%s:%s:ro", dir, dir))
+	}
+	if opts.SSHAuthSock != "" {
+		// Socket is bind-mounted writable (rw) because some SSH agents
+		// expect bidirectional ioctls on the socket; :ro on a unix
+		// socket is ineffective for socket-level ops anyway. The host
+		// agent decides whether to honor any requests — the mount
+		// itself doesn't grant capability beyond what the agent already
+		// exposes.
+		args = append(args, "--volume", fmt.Sprintf("%s:%s", opts.SSHAuthSock, opts.SSHAuthSock))
 	}
 	if opts.TmpDir != "" {
 		args = append(args, "--volume", fmt.Sprintf("%s:%s", opts.TmpDir, opts.TmpDir))

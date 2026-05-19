@@ -206,6 +206,83 @@ func TestBuildArgs_NoPathOverrideOmitsEnvPath(t *testing.T) {
 	}
 }
 
+func TestBuildArgs_ReadOnlyBindsEmittedRO(t *testing.T) {
+	opts := Options{
+		Image:         "img",
+		Workdir:       "/w",
+		Home:          "/h",
+		ReadOnlyBinds: []string{"/nix/var", "/etc/nix", "/h/.nix-profile"},
+	}
+	got := BuildArgs("/c", nil, opts)
+
+	for _, p := range opts.ReadOnlyBinds {
+		want := p + ":" + p + ":ro"
+		if !containsPair(got, "--volume", want) {
+			t.Errorf("missing read-only mount for %q; got %q", p, got)
+		}
+	}
+}
+
+func TestBuildArgs_ReadOnlyBindsBlanksSkipped(t *testing.T) {
+	opts := Options{
+		Image:         "img",
+		Workdir:       "/w",
+		Home:          "/h",
+		ReadOnlyBinds: []string{"", "/etc/nix", ""},
+	}
+	got := BuildArgs("/c", nil, opts)
+
+	if containsPair(got, "--volume", ":") || containsPair(got, "--volume", "::ro") {
+		t.Errorf("blank read-only bind produced a mount: %q", got)
+	}
+	if !containsPair(got, "--volume", "/etc/nix:/etc/nix:ro") {
+		t.Errorf("non-blank read-only bind /etc/nix not mounted: %q", got)
+	}
+}
+
+func TestBuildArgs_SSHAuthSockEmitted(t *testing.T) {
+	opts := Options{
+		Image:       "img",
+		Workdir:     "/w",
+		Home:        "/h",
+		SSHAuthSock: "/run/user/1001/keyring/ssh",
+	}
+	got := BuildArgs("/c", nil, opts)
+
+	want := "/run/user/1001/keyring/ssh:/run/user/1001/keyring/ssh"
+	if !containsPair(got, "--volume", want) {
+		t.Errorf("missing SSH socket bind; got %q", got)
+	}
+	// Bind must be writable (no :ro suffix) — see the BuildArgs comment.
+	for i, a := range got {
+		if a == "--volume" && i+1 < len(got) && got[i+1] == want+":ro" {
+			t.Errorf("SSH socket mount emitted as :ro: %q", got[i+1])
+		}
+	}
+}
+
+func TestBuildArgs_NoSSHAuthSockOmitsBind(t *testing.T) {
+	opts := Options{Image: "img", Workdir: "/w", Home: "/h"}
+	got := BuildArgs("/c", nil, opts)
+
+	for i, a := range got {
+		if a == "--volume" && i+1 < len(got) {
+			v := got[i+1]
+			// No volume value should reference ssh-agent style paths
+			// when SSHAuthSock is empty.
+			if strings.Contains(v, "/keyring/ssh") || strings.Contains(v, "/ssh-agent") {
+				t.Errorf("ssh-related mount emitted with no SSHAuthSock set: %q", v)
+			}
+		}
+	}
+}
+
+func TestDefaultEnvPassthrough_IncludesSSHAuthSock(t *testing.T) {
+	if !slices.Contains(DefaultEnvPassthrough, "SSH_AUTH_SOCK") {
+		t.Errorf("DefaultEnvPassthrough must include SSH_AUTH_SOCK; got %v", DefaultEnvPassthrough)
+	}
+}
+
 func containsPair(args []string, flag, value string) bool {
 	for i := 0; i < len(args)-1; i++ {
 		if args[i] == flag && args[i+1] == value {
