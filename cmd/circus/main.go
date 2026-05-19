@@ -4,10 +4,9 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"text/tabwriter"
 	"time"
-
-	"golang.org/x/term"
 
 	"github.com/amarbel-llc/clown/internal/circusmodels"
 	rm "github.com/amarbel-llc/clown/internal/ringmaster"
@@ -25,13 +24,21 @@ func run(args []string) int {
 
 	switch args[0] {
 	case "start":
-		return cmdStart(args[1:])
-	case "stop":
-		if err := stopDaemon(); err != nil {
+		cli, err := dialClient()
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "circus: %v\n", err)
 			return 1
 		}
-		return 0
+		defer cli.Close()
+		return cmdStart(cli, args[1:])
+	case "stop":
+		cli, err := dialClient()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "circus: %v\n", err)
+			return 1
+		}
+		defer cli.Close()
+		return cmdStop(cli, args[1:])
 	case "status":
 		cli, err := dialClient()
 		if err != nil {
@@ -160,67 +167,95 @@ func statusOne(ctx context.Context, cli *rm.Client, alias string) int {
 	return 0
 }
 
-func cmdStart(args []string) int {
-	var model string
+// cmdStart parses argv for the new ringmaster-backed start command and
+// issues a StartInstance RPC. First positional arg is the model name
+// (required). --alias/--bind support both space and equals forms. Any
+// args after `--` are passed through to llama-server as-is via the
+// StartInstanceParams.Args field. The 90s timeout accommodates the
+// launcher's 60s health check window with headroom.
+func cmdStart(cli *rm.Client, args []string) int {
+	var (
+		model    string
+		alias    string
+		bind     string
+		passArgs []string
+	)
+parse:
 	for i := 0; i < len(args); i++ {
+		a := args[i]
 		switch {
-		case args[i] == "--model" && i+1 < len(args):
-			model = args[i+1]
+		case a == "--":
+			passArgs = append(passArgs, args[i+1:]...)
+			break parse
+		case a == "--alias":
+			if i+1 >= len(args) {
+				fmt.Fprintln(os.Stderr, "circus: --alias requires an argument")
+				return 1
+			}
+			alias = args[i+1]
 			i++
-		case len(args[i]) > 8 && args[i][:8] == "--model=":
-			model = args[i][8:]
-		default:
-			fmt.Fprintf(os.Stderr, "circus: unknown flag %q\n", args[i])
+		case strings.HasPrefix(a, "--alias="):
+			alias = strings.TrimPrefix(a, "--alias=")
+		case a == "--bind":
+			if i+1 >= len(args) {
+				fmt.Fprintln(os.Stderr, "circus: --bind requires an argument")
+				return 1
+			}
+			bind = args[i+1]
+			i++
+		case strings.HasPrefix(a, "--bind="):
+			bind = strings.TrimPrefix(a, "--bind=")
+		case strings.HasPrefix(a, "--"):
+			fmt.Fprintf(os.Stderr, "circus: unknown flag %q\n", a)
 			return 1
+		default:
+			if model != "" {
+				fmt.Fprintf(os.Stderr, "circus: unexpected positional arg %q (model already set to %q)\n", a, model)
+				return 1
+			}
+			model = a
 		}
 	}
-	if model != "" {
-		os.Setenv("CIRCUS_MODEL", model)
-	}
-
-	port, spawned, err := attachOrStart()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "circus: %v\n", err)
+	if model == "" {
+		fmt.Fprintln(os.Stderr, "circus: missing required model argument\nusage: circus start <model> [--alias name] [--bind addr] [-- ...passthrough]")
 		return 1
 	}
-
-	if !spawned && model != "" {
-		fmt.Fprintf(os.Stderr, "circus: warning: --model ignored; llama-server already running (stop it first to switch models)\n")
+	if alias == "" {
+		alias = model
 	}
 
-	addr := fmt.Sprintf("127.0.0.1:%d", port)
-
-	// If stdout is not a terminal, we were launched by clown: emit handshake
-	// and block until stdin closes (clown shutting down).
-	if !term.IsTerminal(int(os.Stdout.Fd())) {
-		// Clown-protocol handshake: 1|1|tcp|<addr>|streamable-http
-		fmt.Printf("1|1|tcp|%s|streamable-http\n", addr)
-		os.Stdout.Sync()
-
-		// Block until clown closes our stdin.
-		buf := make([]byte, 1)
-		for {
-			_, err := os.Stdin.Read(buf)
-			if err != nil {
-				break
-			}
-		}
-
-		if !spawned {
-			// Attached to existing daemon — leave it running.
-			return 0
-		}
-		if err := stopDaemon(); err != nil {
-			fmt.Fprintf(os.Stderr, "circus: stop on exit: %v\n", err)
-		}
-		return 0
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	res, err := cli.StartInstance(ctx, rm.StartInstanceParams{
+		Alias: alias,
+		Model: model,
+		Bind:  bind,
+		Args:  passArgs,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "circus: start: %v\n", err)
+		return 1
 	}
+	in := res.Instance
+	fmt.Printf("circus: started %s at %s:%d (pid %d)\n", in.Alias, in.Bind, in.Port, in.PID)
+	return 0
+}
 
-	// Interactive: just print status.
-	action := "attached to existing"
-	if spawned {
-		action = "started"
+// cmdStop issues a StopInstance RPC for the given alias. The 30s
+// timeout covers the launcher's 5s grace period plus SIGKILL with
+// margin.
+func cmdStop(cli *rm.Client, args []string) int {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "circus: missing alias\nusage: circus stop <alias>")
+		return 1
 	}
-	fmt.Printf("circus: %s llama-server at http://%s\n", action, addr)
+	alias := args[0]
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := cli.StopInstance(ctx, rm.StopInstanceParams{Alias: alias}); err != nil {
+		fmt.Fprintf(os.Stderr, "circus: stop: %v\n", err)
+		return 1
+	}
+	fmt.Printf("circus: stopped %s\n", alias)
 	return 0
 }
