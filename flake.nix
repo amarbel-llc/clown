@@ -64,7 +64,7 @@
       utils,
       bats,
     }:
-    utils.lib.eachDefaultSystem (
+    (utils.lib.eachDefaultSystem (
       system:
       let
         # The fork's default.nix shim auto-applies its overlay on
@@ -580,6 +580,23 @@
           ];
         };
 
+        # ringmaster: control-plane daemon for llama-server instances.
+        # See FDR-0010. circus is its CLI client; clown will be one too
+        # (FDR-0011 / plan 2). Standalone Go binary, no ldflags needed
+        # because the daemon resolves all its paths at runtime via the
+        # internal/ringmaster.SocketPath / LogPath helpers.
+        ringmaster-go = buildGoApplication {
+          pname = "ringmaster";
+          version = clownVersion;
+          src = goSrc;
+          subPackages = [ "cmd/ringmaster" ];
+          modules = ./gomod2nix.toml;
+          ldflags = [
+            "-s"
+            "-w"
+          ];
+        };
+
         # Managed settings burned into the patched claude-code derivation.
         # Lives at the highest precedence tier, so it cannot be overridden by
         # user settings, project settings, or CLI flags. See
@@ -882,6 +899,7 @@
               clown-plugin-host
               clown-stdio-bridge
               circus-go
+              ringmaster-go
               clown-completions
               clown-manpages
             ];
@@ -964,6 +982,11 @@
           clown-cover = clown-cover;
           mock-stdio-mcp = mock-stdio-mcp;
           synthetic-plugin = synthetic-plugin;
+          # ringmaster: standalone build of the control-plane daemon.
+          # The home-manager module at homeManagerModules.ringmaster
+          # consumes this via its `package` option. Also bundled into
+          # the default symlinkJoin so `nix build` ships the binary.
+          ringmaster = ringmaster-go;
         }
         // batsLaneOutputs
         # Expose the tent container image as a named package on linux
@@ -1013,5 +1036,17 @@
 
         formatter = treefmtEval.config.build.wrapper;
       }
-    );
+    ))
+    // {
+      # Cross-system outputs (modules, library) live outside the
+      # eachDefaultSystem block because they're system-independent.
+      #
+      # programs.ringmaster home-manager module — see FDR-0010 and
+      # docs/plans/2026-05-18-ringmaster-control-plane.md § Task 16/17.
+      # Consumes packages.<system>.ringmaster as the daemon binary;
+      # users wire it in their home-manager config via
+      #   programs.ringmaster.enable = true;
+      #   programs.ringmaster.package = clown.packages.${pkgs.system}.ringmaster;
+      homeManagerModules.ringmaster = import ./nix/hm/ringmaster.nix;
+    };
 }
