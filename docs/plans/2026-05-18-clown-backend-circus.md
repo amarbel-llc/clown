@@ -2,6 +2,16 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use eng:subagent-driven-development to implement this plan task-by-task.
 
+> **Status (2026-05-19):** Plan 1 (ringmaster) is merged.
+> **Entry point for phase 2 is the
+> [Phase-1 outcomes that affect phase 2](../features/0011-clown-backend-circus-lifecycle.md#phase-1-outcomes-that-affect-phase-2)
+> section of FDR-0011.** Read that first — it documents the `rm.Client`
+> surface, the stubs to replace, the design choices to preserve, and
+> the footguns the phase-1 work uncovered. The stages below are still
+> the right outline, but specific file paths and line numbers below
+> have drifted; cross-reference against the current source before
+> trusting them.
+
 **Goal:** Add a top-level `--backend` flag to clown, auto-start a circus instance for `--backend=circus`, and prompt on exit to stop it. Drop `*-local` profile variants. Implements FDR-0011.
 
 **Architecture:** Builds on FDR-0010 / plan 1 (ringmaster control plane). Clown uses `internal/ringmaster.Client` directly — it does NOT shell out to the `circus` CLI. The `--backend` flag joins `--provider`, `--profile`, and `--model` in `parsedFlags` and is resolved into an "effective backend" with CLI > env > profile > provider-default precedence. For `effective_backend == "circus"`, clown asks ringmaster for the requested alias; if missing, it prompts (interactive) or fails (non-interactive). On clown exit, if clown was the one that started the instance, it prompts to stop it.
@@ -10,7 +20,10 @@
 
 **Rollback:** Revert merge commit. Pre-redesign profile system is in git history.
 
-**Prerequisite:** Plan 1 (ringmaster + circus client) must be merged. This plan assumes `internal/ringmaster.Client` exists and ringmaster is running.
+**Prerequisite:** Plan 1 (ringmaster + circus client) is merged as of
+commit 1751998. `internal/ringmaster.Client` exists, the home-manager
+module deploys the daemon under both launchd (macOS) and systemd
+(linux), and the bats e2e + real-binary CI lanes are in place.
 
 **Out of scope:**
 - Reference-counted ownership across multiple clown sessions (flagged as future revisit in the interview).
@@ -64,12 +77,25 @@
 
 ### Stage G: End-to-end test
 
-- **bats test** that brings up ringmaster, starts a fake llama-server via `circus`, then runs `clown --provider=opencode --backend=circus --circus-alias=fake` (in `--naked` mode against a fake opencode that just echoes its OPENCODE_CONFIG and exits) and asserts the right URL was wired in.
+- **bats test** under `zz-tests_bats/` that brings up the real
+  ringmaster daemon on a temp socket (mirrors the pattern in
+  `zz-tests_bats/ringmaster.bats` — `RINGMASTER_BIN` / `CIRCUS_BIN` /
+  `FAKE_LLAMA_SERVER_BIN` are already wired through `bats.nix`),
+  starts a fake llama-server via `circus start --alias=fake`, then
+  runs `clown --provider=opencode --backend=circus --circus-alias=fake`
+  (in `--naked` mode against a fake opencode that just echoes its
+  OPENCODE_CONFIG and exits) and asserts the right URL was wired in.
+  Set `BATS_NO_PARALLELIZE_WITHIN_FILE=true` in `setup_file` to
+  serialize tests within the file — the ringmaster.bats e2e already
+  uses this pattern for the same reason.
 
 ### Stage H: Final pass
 
 - Build, run all tests, run bats.
 - Squash-merge via spinclass.
+- Include `Closes #58` in the merge commit (pidfile/portfile
+  replacement; the issue's premise was already obsolete after
+  phase 1, but the explicit close-on-merge is the cleanest signal).
 
 ---
 
