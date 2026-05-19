@@ -582,9 +582,10 @@
 
         # ringmaster: control-plane daemon for llama-server instances.
         # See FDR-0010. circus is its CLI client; clown will be one too
-        # (FDR-0011 / plan 2). Standalone Go binary, no ldflags needed
-        # because the daemon resolves all its paths at runtime via the
-        # internal/ringmaster.SocketPath / LogPath helpers.
+        # (FDR-0011 / plan 2). LlamaServerPath is burned in so the
+        # daemon knows what binary to exec when StartInstance fires —
+        # symmetric to circus-go above. Without this the dispatch
+        # returns "launcher not configured" for any start/stop call.
         ringmaster-go = buildGoApplication {
           pname = "ringmaster";
           version = clownVersion;
@@ -594,6 +595,7 @@
           ldflags = [
             "-s"
             "-w"
+            "-X github.com/amarbel-llc/clown/internal/buildcfg.LlamaServerPath=${llamaServerPath}"
           ];
         };
 
