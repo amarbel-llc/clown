@@ -8,7 +8,6 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/amarbel-llc/clown/internal/circusmodels"
 	rm "github.com/amarbel-llc/clown/internal/ringmaster"
 )
 
@@ -60,7 +59,13 @@ func run(args []string) int {
 		defer cli.Close()
 		return cmdList(cli)
 	case "models":
-		return cmdModels()
+		cli, err := dialClient()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "circus: %v\n", err)
+			return 1
+		}
+		defer cli.Close()
+		return cmdModels(cli)
 	case "download":
 		return cmdDownload(args[1:])
 	default:
@@ -69,14 +74,19 @@ func run(args []string) int {
 	}
 }
 
-func cmdModels() int {
-	names, err := circusmodels.List(circusmodels.Dir())
+// cmdModels asks ringmaster for the list of installed GGUFs and prints
+// each model's bare name, one per line — same shape as the pre-ringmaster
+// circusmodels.List scan, so existing shell pipelines keep working.
+func cmdModels(cli *rm.Client) int {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	res, err := cli.ListAvailableModels(ctx)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "circus: %v\n", err)
+		fmt.Fprintf(os.Stderr, "circus: models: %v\n", err)
 		return 1
 	}
-	for _, name := range names {
-		fmt.Println(name)
+	for _, m := range res.Models {
+		fmt.Println(m.Name)
 	}
 	return 0
 }
