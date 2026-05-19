@@ -1,0 +1,273 @@
+.\" Copyright (c) 2026 amarbel, LLC
+.\" SPDX-License-Identifier: MIT
+.Dd @MDOCDATE@
+.Dt RINGMASTER 7
+.Os
+.Sh NAME
+.Nm ringmaster
+.Nd architecture and JSON-RPC wire format for the llama-server control plane
+.Sh DESCRIPTION
+.Nm
+is the control plane for local
+.Xr llama-server 1
+instances managed by the clown ecosystem.
+It owns a registry of running llama-server children in memory and
+exposes an RPC surface to its clients.
+.Pp
+This page documents the control-plane architecture and the JSON-RPC
+wire format.
+For the daemon's CLI surface see
+.Xr ringmaster 1 ;
+for the CLI client that drives it from a terminal see
+.Xr circus 1 .
+.Sh ARCHITECTURE
+The system is three processes:
+.Bl -tag -width "ringmaster"
+.It Nm ringmaster Pq Xr ringmaster 1
+The daemon.
+Listens on a Unix domain socket
+.Pq see Sx CONTROL SOCKET ,
+maintains a single-host in-memory registry of llama-server children,
+and reaps them on exit.
+Run by
+.Xr launchd 8
+or
+.Xr systemd.user 5
+under the
+.Sq programs.ringmaster
+home-manager module.
+.It Xr circus 1
+The CLI client.
+Thin wrapper around the JSON-RPC client SDK.
+Every subcommand
+.Pq Cm start , stop , status , list , models
+issues exactly one RPC and pretty-prints the result.
+.Pq Cm download No is the exception \(em it still uses the in-process bubbletea progress UI against circusmodels.Download directly, not the RPC.
+.It Xr llama-server 1
+The actual inference engine.
+Started by
+.Nm
+as a child process, identified by its
+.Fl -alias .
+Binds 127.0.0.1:<random-port> by default and serves the OpenAI-/Anthropic-
+compatible HTTP API.
+.El
+.Pp
+Clients
+.Pq Xr circus 1 , Xr clown 1
+talk only to
+.Nm ;
+they never start
+.Xr llama-server 1
+directly.
+This loose-proxy split means clients see exactly one persistent
+endpoint
+.Pq Nm Ap s socket
+while the underlying inference servers can come and go.
+.Sh CONTROL SOCKET
+.Nm
+binds the path resolved from:
+.Bl -enum -compact
+.It
+The
+.Fl -socket
+flag on
+.Cm ringmaster daemon
+when present.
+.It
+The
+.Ev RINGMASTER_SOCKET
+environment variable when set.
+.It
+.Pa $HOME/.local/state/circus/control.sock
+as the default.
+.El
+.Pp
+Clients use
+.Xr os.Stat 3
+on the socket path before dialing, so a missing socket produces a
+deterministic error path that points at the home-manager module rather
+than a confusing
+.Sq connect: invalid argument
+on macOS
+.Pq the kernel rejects nonexistent UNIX socket paths longer than 104 bytes with EINVAL, not ENOENT .
+.Sh WIRE FORMAT
+The control socket speaks newline-delimited JSON-RPC 2.0:
+.Bd -literal -offset indent
+{"jsonrpc":"2.0","id":1,"method":"ListInstances","params":{}}\(rsn
+.Ed
+.Pp
+Each line is one envelope.
+Response envelopes carry the same
+.Sq id
+as their request so a client serializing multiple in-flight requests
+on the same connection can match them up.
+The Go client SDK in
+.Pa internal/ringmaster
+mints sequential numeric IDs.
+.Pp
+Methods:
+.Pp
+.Bl -tag -width "MethodListAvailableModels" -compact
+.It Sy MethodStartInstance
+.It Sy MethodStopInstance
+.It Sy MethodStopAll
+.It Sy MethodListInstances
+.It Sy MethodGetInstance
+.It Sy MethodListAvailableModels
+.It Sy MethodDownloadModel
+.El
+.Pp
+See
+.Xr ringmaster 1
+for the per-method semantics.
+.Sh JSON-RPC ERROR CODES
+Codes follow JSON-RPC 2.0 §5.1.
+.Nm
+uses:
+.Bl -tag -width Ds -offset indent
+.It Sy -32601 Pa Method not found
+The requested
+.Sq method
+is not implemented by the server.
+.It Sy -32602 Pa Invalid params
+The
+.Sq params
+payload could not be unmarshalled into the expected shape.
+.It Sy -32603 Pa Internal error
+Reserved for marshal failures on the server side.
+.It Sy -32000 No through Sy -32099 Pa Server-defined application errors
+.Nm
+uses
+.Sy -32000
+for general application errors
+.Pq launcher not configured, download failure, etc.
+and
+.Sy -32001
+for
+.Cm GetInstance
+alias-not-found.
+.El
+.Sh INSTANCE LIFECYCLE
+On
+.Cm StartInstance :
+.Bl -enum -compact -offset indent
+.It
+Pick a free TCP port via
+.Fn net.Listen :0
++ close.
+.It
+Resolve the
+.Sq model
+parameter to an absolute GGUF path
+.Pq Pa $modelsDir/<name>.gguf No when not absolute .
+.It
+.Xr exec 3
+.Xr llama-server 1
+with
+.Fl -port ,
+.Fl -host ,
+.Fl -alias ,
+.Fl -model
+plus any pass-through args.
+SysProcAttr.Setpgid=true so the daemon can signal the entire
+process group on Stop.
+.It
+Insert
+.Pq under l.mu
+the
+.Sy child
+record into
+.Sq l.children Ns Bq alias .
+.It
+Call
+.Fn reg.Add ;
+on failure, roll back the children entry, SIGKILL the child, drain
+its
+.Sq exited
+channel, return the error.
+.It
+Poll
+.Pa /health
+every 250 ms for up to 60 s.
+On failure, SIGKILL + drain + error.
+.It
+Launch the single Wait-owner goroutine that calls
+.Xr exec.Cmd.Wait 3 ,
+populates
+.Sq ch.waitErr ,
+and closes
+.Sq ch.exited .
+.It
+Launch the reaper goroutine which blocks on
+.Sq ch.exited
+and, under l.mu, removes the alias from both
+.Sq l.children
+and the registry if and only if
+.Sq l.children Ns Bq alias == ch
+.Pq the identity guard ensures Stop is the single owner of the cleanup when both fire concurrently .
+.El
+.Pp
+On
+.Cm StopInstance :
+.Bl -enum -compact -offset indent
+.It
+Under l.mu, look up and delete the
+.Sq l.children
+entry.
+.It
+.Xr kill 2
+.Sy -pid Pq the process group No with Sy SIGTERM .
+.It
+Wait on
+.Sq ch.exited
+or 5 s of grace, whichever first.
+.It
+On timeout, SIGKILL and wait again
+.Pq the Wait owner goroutine is guaranteed to close ch.exited eventually .
+.It
+.Fn reg.Remove
+the alias.
+.El
+.Sh CAVEATS
+.Bl -tag -width Ds
+.It Single-host only
+The control socket is in
+.Ev XDG_STATE_HOME
+or
+.Pa ~/.local/state .
+Two users on the same host run two independent
+.Nm
+daemons; multi-host coordination is out of scope.
+.It No backward compatibility
+The pre-ringmaster
+.Xr circus 1
+used flat pid/port files under
+.Pa ~/.local/state/circus/llama-server.{pid,port}
+to track a single daemon.
+These files are not read by current
+.Nm Ap s
+circus client; deleting them on upgrade is safe.
+.It TOCTOU on free-port selection
+.Nm Ap s
+launcher binds
+.Sq :0 ,
+records the port, closes, then exec's
+.Xr llama-server 1
+with
+.Fl -port .
+A concurrent process can grab the freed port in between; the window
+is narrow and the failure mode is a deterministic
+.Sq listen: address already in use
+from llama-server, which propagates as the
+.Cm StartInstance
+return error.
+.El
+.Sh SEE ALSO
+.Xr ringmaster 1 ,
+.Xr circus 1 ,
+.Xr clown 1 ,
+.Xr llama-server 1 ,
+.Xr clown-plugin-protocol 7
+.Sh AUTHORS
+.An "amarbel, LLC"

@@ -1,0 +1,226 @@
+.\" Copyright (c) 2026 amarbel, LLC
+.\" SPDX-License-Identifier: MIT
+.Dd @MDOCDATE@
+.Dt CIRCUS 1
+.Os
+.Sh NAME
+.Nm circus
+.Nd CLI client for the ringmaster llama-server control plane
+.Sh SYNOPSIS
+.Nm
+.Cm start Ar model
+.Op Fl -alias Ar name
+.Op Fl -bind Ar addr
+.Op Cm -- Ar passthrough\&...
+.Nm
+.Cm stop Ar alias
+.Nm
+.Cm status Op Ar alias
+.Nm
+.Cm list
+.Nm
+.Cm models
+.Nm
+.Cm download Ar name
+.Sh DESCRIPTION
+.Nm
+is a thin CLI client of
+.Xr ringmaster 1 .
+Every subcommand other than
+.Cm download
+issues a single JSON-RPC call over the ringmaster control socket and
+pretty-prints the result.
+.Pp
+A
+.Xr ringmaster 1
+daemon must be running before any
+.Nm
+subcommand other than
+.Cm download
+can complete.
+The
+.Sx programs.ringmaster
+home-manager module starts and supervises it; users without
+home-manager must invoke
+.Cm ringmaster daemon
+themselves.
+.Pp
+If the control socket is missing or refuses connections,
+.Nm
+prints a one-paragraph hint pointing at the home-manager module before
+returning a non-zero exit code.
+.Sh SUBCOMMANDS
+.Bl -tag -width Ds
+.It Cm start Ar model Op Fl -alias Ar name Op Fl -bind Ar addr Op Cm -- Ar passthrough\&...
+Spawn a new llama-server child via ringmaster.
+The required positional
+.Ar model
+is the bare name of a
+.Pa .gguf
+file under
+.Pa ~/.local/share/circus/models
+.Pq or an absolute path .
+.Bl -tag -width Ds
+.It Fl -alias Ar name
+Registry key for the new instance.
+Defaults to
+.Ar model
+when omitted.
+Both
+.Sq Fl -alias Ar name
+and
+.Sq Fl -alias Ns = Ns Ar name
+parse.
+.It Fl -bind Ar addr
+Bind address for the spawned llama-server.
+Defaults to
+.Sq 127.0.0.1 .
+Set to
+.Sq 0.0.0.0
+to bind every interface (e.g. for tailscale-reachable instances) or
+to a specific tailnet IP.
+.It Cm -- Ar passthrough\&...
+Any args after
+.Cm --
+are forwarded to llama-server verbatim via the JSON-RPC
+.Sq Args
+field, e.g.
+.Sq Fl -ctx-size 32768 .
+.El
+On success prints
+.Sq circus: started <alias> at <bind>:<port> (pid <pid>) .
+.It Cm stop Ar alias
+Send SIGTERM to the named instance's process group via ringmaster, wait
+up to five seconds, then SIGKILL.
+Removes the entry from the registry.
+.It Cm status Op Ar alias
+Without
+.Ar alias :
+print a tabwriter table of every registered instance, or
+.Sq circus: no instances running
+when the registry is empty.
+With
+.Ar alias :
+print one-key-per-line detail for the named instance, including
+RFC 3339 start time and a humanized uptime.
+.It Cm list
+Same column set as
+.Cm status ,
+but silent on empty
+.Pq exit code 0, zero bytes of output .
+Use for scripted consumption; use
+.Cm status
+for interactive sessions.
+.It Cm models
+Print the names of every
+.Pa *.gguf
+file under
+.Pa ~/.local/share/circus/models ,
+one per line.
+Backed by ringmaster's
+.Cm ListAvailableModels
+RPC so the same file is seen by both circus and clown.
+.It Cm download Ar name
+Fetch and verify a model from the baked-in registry, with a
+bubbletea progress UI.
+Does NOT go through ringmaster; uses
+.Sy circusmodels.Download
+directly because ringmaster's
+.Cm DownloadModel
+RPC is synchronous (no progress events on the wire) and not the
+right surface for a terminal-attached invocation.
+The downloaded file lands in
+.Pa ~/.local/share/circus/models
+where every other subcommand can see it.
+.El
+.Sh ENVIRONMENT
+.Bl -tag -width Ds
+.It Ev RINGMASTER_SOCKET
+Override the control socket path
+.Pq Pa ~/.local/state/circus/control.sock No by default .
+Read by both
+.Nm
+and
+.Xr ringmaster 1 ,
+so setting it consistently is sufficient.
+.El
+.Sh FILES
+.Bl -tag -width "~/.local/share/circus/models/*.gguf"
+.It Pa ~/.local/state/circus/control.sock
+Ringmaster control socket.
+.It Pa ~/.local/share/circus/models/*.gguf
+GGUF models visible to
+.Cm models ,
+.Cm start ,
+and
+.Cm download .
+.El
+.Sh EXIT STATUS
+.Bl -tag -width Ds
+.It 0
+The RPC completed successfully (or the early-exit validation passed
+for read-only subcommands).
+.It 1
+The RPC failed, an argument was missing or unrecognized, or the
+control socket was unreachable.
+.Nm
+prints a one-line diagnostic to stderr before exiting.
+.El
+.Sh EXAMPLES
+Start a coder model with the default alias, bound to localhost:
+.Bd -literal -offset indent
+$ circus start qwen3-coder
+circus: started qwen3-coder at 127.0.0.1:43219 (pid 91234)
+.Ed
+.Pp
+Start a second instance of the same model with a longer context window
+and a distinguishing alias:
+.Bd -literal -offset indent
+$ circus start qwen3-coder --alias coder-32k -- --ctx-size 32768
+circus: started coder-32k at 127.0.0.1:43221 (pid 91241)
+.Ed
+.Pp
+List what's running:
+.Bd -literal -offset indent
+$ circus list
+ALIAS         MODEL         BIND       PORT   PID    UPTIME
+coder-32k     qwen3-coder   127.0.0.1  43221  91241  12s
+qwen3-coder   qwen3-coder   127.0.0.1  43219  91234  2m
+.Ed
+.Pp
+Inspect a single instance with humanized uptime:
+.Bd -literal -offset indent
+$ circus status qwen3-coder
+alias:      qwen3-coder
+model:      qwen3-coder
+bind:       127.0.0.1
+port:       43219
+pid:        91234
+started:    2026-05-19T12:00:00Z (2m0s ago)
+.Ed
+.Pp
+Stop one:
+.Bd -literal -offset indent
+$ circus stop coder-32k
+circus: stopped coder-32k
+.Ed
+.Sh SEE ALSO
+.Xr ringmaster 1 ,
+.Xr ringmaster 7 ,
+.Xr clown 1 ,
+.Xr llama-server 1
+.Sh CAVEATS
+The
+.Cm download
+subcommand is the only one that does not go through ringmaster.
+This is intentional: ringmaster's
+.Cm DownloadModel
+RPC is synchronous, and the bubbletea progress UI lives in
+.Nm
+because the model registry and HTTP fetch are
+.Xr circusmodels 3
+concerns that predate ringmaster.
+Clown-side automation (planned in FDR-0011 / plan 2) does use the RPC
+since clown is not terminal-attached.
+.Sh AUTHORS
+.An "amarbel, LLC"

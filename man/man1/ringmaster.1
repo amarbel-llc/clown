@@ -1,0 +1,181 @@
+.\" Copyright (c) 2026 amarbel, LLC
+.\" SPDX-License-Identifier: MIT
+.Dd @MDOCDATE@
+.Dt RINGMASTER 1
+.Os
+.Sh NAME
+.Nm ringmaster
+.Nd llama-server control-plane daemon
+.Sh SYNOPSIS
+.Nm
+.Cm daemon
+.Op Fl -socket Ar path
+.Sh DESCRIPTION
+.Nm
+is a long-lived per-user daemon that spawns and supervises
+.Xr llama-server 1
+processes on behalf of clients such as
+.Xr circus 1
+and
+.Xr clown 1 .
+Each
+.Xr llama-server 1
+child is identified by an alias and listed in an in-memory registry;
+ringmaster reaps the child when it exits, with or without a
+.Cm StopInstance
+request.
+.Pp
+Clients talk to
+.Nm
+over a Unix domain socket using newline-delimited JSON-RPC 2.0.
+See
+.Xr ringmaster 7
+for the architecture and
+.Xr clown-plugin-protocol 7
+for unrelated background on the clown plugin protocol.
+.Pp
+.Nm
+is intended to run under
+.Xr launchd 8
+on macOS and
+.Xr systemd.user 5
+on Linux; the
+.Sx programs.ringmaster
+home-manager module configures the appropriate service unit on each
+platform.
+Single-instance only: one
+.Nm
+daemon per user manages every
+.Xr llama-server 1
+child.
+.Sh SUBCOMMANDS
+.Bl -tag -width Ds
+.It Cm daemon Op Fl -socket Ar path
+Run the control-plane daemon.
+Listens on the path resolved from
+.Fl -socket
+when present, the
+.Ev RINGMASTER_SOCKET
+environment variable when set, or
+.Pa $HOME/.local/state/circus/control.sock
+otherwise.
+Accepts connections until SIGTERM/SIGINT, at which point in-flight
+RPCs drain and the listener closes.
+.El
+.Sh ENVIRONMENT
+.Bl -tag -width Ds
+.It Ev RINGMASTER_SOCKET
+Override the control socket path.
+Both
+.Nm
+itself and its clients
+.Pq Xr circus 1 , Xr clown 1
+read this variable, so setting it consistently in the user's
+environment is sufficient.
+.It Ev XDG_LOG_HOME
+Resolves the canonical log directory.
+.Nm
+itself does not write a log file; the home-manager service units
+route stderr to systemd journal (Linux) or to
+.Pa $XDG_LOG_HOME/ringmaster.log
+.Pq Pa ~/.local/log/ringmaster.log
+when the variable is unset (macOS).
+.El
+.Sh FILES
+.Bl -tag -width "~/.local/state/circus/control.sock"
+.It Pa ~/.local/state/circus/control.sock
+Default control socket path.
+.It Pa ~/.local/log/ringmaster.log
+Default log file on macOS when
+.Ev XDG_LOG_HOME
+is unset.
+.It Pa ~/.local/share/circus/models
+Directory scanned for downloadable GGUF files by the
+.Cm ListAvailableModels
+RPC.
+.El
+.Sh RPC SURFACE
+.Nm
+implements seven JSON-RPC 2.0 methods:
+.Bl -tag -width Ds
+.It Cm StartInstance Ar alias Ar model Op Ar bind Op Ar args
+Spawn a new
+.Xr llama-server 1
+child with the given
+.Fl -alias .
+The
+.Fl -model
+argument resolves to
+.Pa ~/.local/share/circus/models/<model>.gguf
+when not absolute.
+.Fl -bind
+defaults to
+.Sq 127.0.0.1 ;
+.Fl -args
+is passed through to llama-server.
+The call blocks until
+.Pa /health
+returns 200 (60-second timeout).
+.It Cm StopInstance Ar alias
+Send SIGTERM to the child's process group, wait up to five seconds,
+then SIGKILL if it didn't exit.
+Removes the entry from the registry.
+.It Cm StopAll
+Best-effort: snapshot the registry, call
+.Cm StopInstance
+for each alias.
+Returns the list of aliases that were stopped.
+.It Cm ListInstances
+Return every alias known to the registry along with its bind/port/PID
+and start time.
+.It Cm GetInstance Ar alias
+Same shape as
+.Cm ListInstances
+but for a single alias.
+Returns
+.Sy -32001
+when the alias is not registered.
+.It Cm ListAvailableModels
+Scan the on-disk models directory and return each
+.Pa *.gguf
+file's name, absolute path, and size.
+.It Cm DownloadModel Ar name
+Fetch a model from the embedded registry, verify its SHA-256, and
+move it atomically into the models directory.
+Synchronous (no progress events on the wire) — use
+.Xr circus 1
+.Cm download
+for the bubbletea progress UI.
+.El
+.Sh SIGNALS
+.Bl -tag -width SIGINT
+.It Dv SIGTERM
+Drain in-flight RPCs and exit cleanly.
+Children are NOT killed; they continue running and will be re-adopted
+by the next
+.Nm
+process if it restarts before they exit.
+.It Dv SIGINT
+Same as
+.Dv SIGTERM .
+.El
+.Sh SEE ALSO
+.Xr circus 1 ,
+.Xr clown 1 ,
+.Xr llama-server 1 ,
+.Xr ringmaster 7
+.Sh CAVEATS
+.Nm
+single-Wait contract: only one goroutine inside the daemon ever calls
+.Xr exec.Cmd.Wait 3
+for each child.
+Both the
+.Cm StopInstance
+path and the unexpected-exit reaper read the same
+.Sq exited
+channel rather than reaping independently.
+If you embed
+.Nm Ap s
+launcher in your own code, preserve this invariant.
+.Sh AUTHORS
+.An "amarbel, LLC"
