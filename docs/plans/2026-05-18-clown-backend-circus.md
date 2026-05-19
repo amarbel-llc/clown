@@ -93,9 +93,12 @@ module deploys the daemon under both launchd (macOS) and systemd
 
 - Build, run all tests, run bats.
 - Squash-merge via spinclass.
-- Include `Closes #58` in the merge commit (pidfile/portfile
-  replacement; the issue's premise was already obsolete after
-  phase 1, but the explicit close-on-merge is the cleanest signal).
+- Include `Closes #58` and `Closes #81` in the merge commit:
+  - #58: pidfile/portfile replacement (premise obsolete after
+    phase 1, but the explicit close is the cleanest signal).
+  - #81: the `*-local` profile regression filed at the end of
+    phase 1 (broken since phase 1 merge; Stage A's profile deletion
+    + Stage C's circus rewiring resolve it).
 
 ---
 
