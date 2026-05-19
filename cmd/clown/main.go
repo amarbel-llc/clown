@@ -6,7 +6,6 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -937,117 +936,28 @@ func runCodex(cliPath string, flags parsedFlags, prompts promptwalk.PromptResult
 	return 0 // unreachable
 }
 
+// runCircus is a stub. The `--provider=circus` path used to launch the
+// circus binary as a managed child and read a clown-protocol handshake
+// over its stdout to discover the llama-server URL. That codepath is
+// gone: circus is now a UDS client of ringmaster and no longer emits a
+// handshake (see Task 13d of docs/plans/2026-05-18-ringmaster-control-plane.md).
+// The replacement — clown talking to ringmaster directly to discover
+// the llama-server URL — lives in plan 2 (FDR-0011, surfaced via
+// `--provider=claude --backend=circus`).
+//
+// Until that lands, fail loudly with a pointer at what to do instead.
+// pickCircusModel and the rest of circus.go stay in the tree; plan 2
+// reuses the model picker.
 func runCircus(circusPath string, flags parsedFlags, prompts promptwalk.PromptResult, pluginDirs []string) int {
-	// Model selection: --model from the CLI takes priority. Without it,
-	// fall back to a huh-driven picker over the locally downloaded models
-	// in ~/.local/share/circus/models. Use `circus download <name>` to
-	// populate that directory.
-	forwarded := flags.forwarded
-	modelName := flagValue(forwarded, "--model")
-	if modelName == "" {
-		picked, code := pickCircusModel()
-		if code != 0 {
-			return code
-		}
-		modelName = picked
-		if !hasFlag(forwarded, "--model") {
-			forwarded = append([]string{"--model", modelName}, forwarded...)
-		}
-	}
-
-	return withClaudeResumeHint(forwarded, func(forwarded []string) int {
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-
-		// Start circus with the selected model.
-		circusArgs := []string{"start"}
-		if modelName != "" {
-			circusArgs = append(circusArgs, "--model", modelName)
-		}
-		cmd := exec.CommandContext(ctx, circusPath, circusArgs...)
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-		cmd.Stderr = os.Stderr
-
-		stdinPipe, err := cmd.StdinPipe()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "clown: circus stdin pipe: %v\n", err)
-			return 1
-		}
-		stdoutPipe, err := cmd.StdoutPipe()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "clown: circus stdout pipe: %v\n", err)
-			return 1
-		}
-
-		if err := cmd.Start(); err != nil {
-			fmt.Fprintf(os.Stderr, "clown: starting circus: %v\n", err)
-			return 1
-		}
-		defer func() {
-			stdinPipe.Close()
-			cmd.Wait()
-		}()
-
-		hs, err := readCircusHandshake(stdoutPipe)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "clown: circus handshake: %v\n", err)
-			return 1
-		}
-
-		baseURL := "http://" + hs.Address
-
-		claudePath := buildcfg.ClaudeCliPath
-		args, cleanup, err := provider.BuildClaudeArgs(provider.ClaudeArgs{
-			CLIPath:             claudePath,
-			AgentsFile:          buildcfg.AgentsFile,
-			DisallowedToolsFile: buildcfg.DisallowedToolsFile,
-			SystemPromptFile:    prompts.SystemPromptFile,
-			AppendFragments:     prompts.AppendFragments,
-		}, forwarded)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "clown: building claude args: %v\n", err)
-			return 1
-		}
-		defer cleanup()
-
-		fullArgs := prependPluginDirs(args, pluginDirs, nil)
-
-		binary, err := exec.LookPath(claudePath)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "clown: %v\n", err)
-			return 1
-		}
-
-		claudeCmd := exec.Command(binary, fullArgs...)
-		claudeCmd.Stdin = os.Stdin
-		claudeCmd.Stdout = os.Stdout
-		claudeCmd.Stderr = os.Stderr
-		circusEnv := []string{"ANTHROPIC_BASE_URL=" + baseURL}
-		if modelName != "" {
-			circusEnv = append(circusEnv, "ANTHROPIC_CUSTOM_MODEL_OPTION="+modelName)
-		}
-		claudeCmd.Env = append(os.Environ(), circusEnv...)
-
-		sigCh := make(chan os.Signal, 1)
-		signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
-		go func() {
-			sig := <-sigCh
-			if claudeCmd.Process != nil {
-				claudeCmd.Process.Signal(sig)
-			}
-		}()
-
-		if err := claudeCmd.Run(); err != nil {
-			if exitErr, ok := err.(*exec.ExitError); ok {
-				resetTerminal()
-				return exitErr.ExitCode()
-			}
-			fmt.Fprintf(os.Stderr, "clown: %v\n", err)
-			return 1
-		}
-		resetTerminal()
-		return 0
-	})
+	_, _, _, _ = circusPath, flags, prompts, pluginDirs
+	fmt.Fprintln(os.Stderr, "clown: --provider=circus is temporarily unavailable while the circus/ringmaster")
+	fmt.Fprintln(os.Stderr, "       migration completes. Enable ringmaster in your home-manager config and")
+	fmt.Fprintln(os.Stderr, "       start an instance manually:")
+	fmt.Fprintln(os.Stderr, "         programs.ringmaster.enable = true;   # then: home-manager switch")
+	fmt.Fprintln(os.Stderr, "         circus start <model>                  # spawn a llama-server instance")
+	fmt.Fprintln(os.Stderr, "       Then point your tools at the address printed by `circus status`. The")
+	fmt.Fprintln(os.Stderr, "       --provider=claude --backend=circus integration is tracked in FDR-0011.")
+	return 1
 }
 
 // runClownbox launches claude-code wrapped in the clownbox sandbox (a fork
@@ -1100,17 +1010,6 @@ func runClownbox(cliPath string, flags parsedFlags, prompts promptwalk.PromptRes
 	defer cleanup()
 
 	return runWithPluginHost(&passthroughExecutor{cliPath: cliPath}, args, pluginDirs, flags, nil)
-}
-
-func readCircusHandshake(r io.Reader) (pluginhost.Handshake, error) {
-	scanner := bufio.NewScanner(r)
-	if !scanner.Scan() {
-		if err := scanner.Err(); err != nil {
-			return pluginhost.Handshake{}, err
-		}
-		return pluginhost.Handshake{}, fmt.Errorf("circus closed stdout before handshake")
-	}
-	return pluginhost.ParseHandshake(scanner.Text())
 }
 
 // prependPluginDirs inserts --plugin-dir flags at the start of args,
