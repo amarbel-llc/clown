@@ -46,6 +46,68 @@ gomod2nix:
 test-stdio-bridge:
     nix build .#bats-default --no-link --print-build-logs
 
+# Host-side smoke tests for the FDR-0007 tent (C+F + B shape, the
+# 2026-05-19 update). Excluded from the standard bats lane because
+# the nix sandbox can't run rootless podman; this recipe is the only
+# path to exercise the wired-up tent image + bind mounts + SSH socket
+# forwarding end-to-end.
+#
+# Side effects:
+#   - Builds .#tent-image and `podman load`s it (idempotent — podman
+#     skips the load if the tag is already present).
+#   - The `ssh -T git@github.com` test makes outbound :22 to GitHub
+#     and uses the host's ssh-agent / pivy-agent. Set
+#     CLOWN_TENT_NO_NETWORK=1 to skip it offline.
+#
+# Linux-only (rootless podman). On darwin, point the recipe at the
+# podman-machine VM by exporting CONTAINER_HOST=ssh://… before invoking.
+[group("test")]
+test-tent-smoke:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    root="$(git rev-parse --show-toplevel)"
+    cd "$root"
+
+    if ! command -v podman >/dev/null 2>&1; then
+        echo "FAIL: podman not on PATH" >&2
+        exit 2
+    fi
+
+    # Ensure the tent image is loaded. nix build prints the tarball
+    # store path; podman load is idempotent against an already-loaded
+    # tag, so re-runs are cheap.
+    echo "tent-smoke: ensuring tent-image is built and loaded..."
+    tarball="$(nix build --no-link --print-out-paths .#tent-image 2>/dev/null)"
+    if [[ -z "$tarball" || ! -e "$tarball" ]]; then
+        echo "FAIL: nix build .#tent-image produced no out-path" >&2
+        exit 2
+    fi
+    podman load -i "$tarball" >/dev/null
+
+    # bats-libs is exposed as a flake output (flake.nix's packages.<system>.bats-libs).
+    # Its share/bats subdir is what BATS_LIB_PATH wants — common.bash's
+    # `bats_load_library` calls resolve through there. Same derivation
+    # the sandboxed batsLane uses, so semantics match.
+    bats_libs_store="$(nix build --no-link --print-out-paths .#bats-libs)"
+    if [[ -z "$bats_libs_store" ]]; then
+        echo "FAIL: nix build .#bats-libs produced no out-path" >&2
+        exit 2
+    fi
+    export BATS_LIB_PATH="$bats_libs_store/share/bats"
+
+    # Pull bats from nixpkgs at the pinned input. The host devshell
+    # doesn't carry bats today (it's normally invoked inside the
+    # sandbox lane); ensuring it here keeps the recipe self-contained.
+    bats_bin="$(nix build --no-link --print-out-paths 'nixpkgs#bats')/bin/bats"
+    if [[ ! -x "$bats_bin" ]]; then
+        echo "FAIL: nix build nixpkgs#bats did not produce a bats binary" >&2
+        exit 2
+    fi
+
+    echo "tent-smoke: running bats against zz-tests_bats/tent_smoke.bats"
+    "$bats_bin" zz-tests_bats/tent_smoke.bats
+
 # Integration test: launch clown-plugin-host with the synthetic plugin's
 # clown.json and verify URL-based MCP compilation, name preservation,
 # and agents field passthrough. Runs the full bats suite via the nix
