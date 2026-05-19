@@ -480,6 +480,88 @@ test-managed-live: build
     echo "OK: clown launched claude, settings loaded without errors"
     echo "(For path-read proof, run: nix build .#checks.x86_64-linux.managedSettingsRead)"
 
+# End-to-end smoke against a real llama-server + a real GGUF.
+# Exercises the full ringmaster -> launcher -> llama-cpp -> circus
+# control path, plus a /v1/messages request to the spawned instance.
+# Refuses to run if a daemon is already up (we don't want to step
+# on the user's home-manager-managed daemon).
+#
+# Usage: just smoke-ringmaster [model-name]
+# Default model: gemma3-1b (smallest GGUF in ~/.local/share/circus/models)
+[group("test")]
+smoke-ringmaster MODEL="gemma3-1b": build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    model="{{MODEL}}"
+    gguf="$HOME/.local/share/circus/models/${model}.gguf"
+    if [[ ! -f "$gguf" ]]; then
+        echo "FAIL: model not found at $gguf" >&2
+        echo "      installed models:" >&2
+        ls "$HOME/.local/share/circus/models/" 2>/dev/null | sed 's/^/        /' >&2
+        exit 1
+    fi
+    sock="$HOME/.local/state/circus/control.sock"
+    if [[ -S "$sock" ]] && ./result/bin/circus list >/dev/null 2>&1; then
+        echo "FAIL: a ringmaster daemon is already running on $sock" >&2
+        echo "      stop it first (launchctl unload / kill) so this smoke" >&2
+        echo "      doesn't step on home-manager state" >&2
+        exit 1
+    fi
+    rm -f "$sock"
+    log=$(mktemp)
+    trap 'set +e; ./result/bin/circus stop "$model" >/dev/null 2>&1 || true; [[ -n "${rm_pid:-}" ]] && kill "$rm_pid" 2>/dev/null; wait 2>/dev/null; rm -f "$log"' EXIT
+    echo ">> launching ringmaster (log: $log)"
+    ./result/bin/ringmaster daemon >"$log" 2>&1 &
+    rm_pid=$!
+    for i in $(seq 1 50); do
+        [[ -S "$sock" ]] && break
+        sleep 0.1
+    done
+    if [[ ! -S "$sock" ]]; then
+        echo "FAIL: ringmaster never bound $sock" >&2
+        cat "$log" >&2
+        exit 1
+    fi
+    echo ">> ringmaster up"
+    echo
+    echo "=== circus models ==="
+    ./result/bin/circus models
+    echo
+    echo "=== circus list (expect empty) ==="
+    ./result/bin/circus list
+    echo
+    echo "=== circus start $model (may take several seconds for llama-cpp to warm up) ==="
+    ./result/bin/circus start "$model"
+    echo
+    echo "=== circus list (expect one row) ==="
+    ./result/bin/circus list
+    echo
+    echo "=== circus status $model ==="
+    ./result/bin/circus status "$model"
+    echo
+    port=$(./result/bin/circus list | awk -v a="$model" '$1==a {print $4}')
+    if [[ -z "$port" ]]; then
+        echo "FAIL: could not parse port from circus list" >&2
+        exit 1
+    fi
+    echo "=== POST /v1/messages on 127.0.0.1:$port ==="
+    resp=$(curl -sS -X POST "http://127.0.0.1:$port/v1/messages" \
+        -H 'Content-Type: application/json' \
+        -d '{"model":"'"$model"'","max_tokens":64,"messages":[{"role":"user","content":"Say only the word READY."}]}')
+    echo "$resp"
+    if ! echo "$resp" | grep -q '"text"'; then
+        echo "FAIL: /v1/messages response missing a content text field" >&2
+        exit 1
+    fi
+    echo
+    echo "=== circus stop $model ==="
+    ./result/bin/circus stop "$model"
+    echo
+    echo "=== circus list (expect empty again) ==="
+    ./result/bin/circus list
+    echo
+    echo "OK: ringmaster + llama-server + circus round-trip succeeded"
+
 # Tag a release. The "v" prefix is added for you, so pass the semver
 # without it. Usage: just tag 0.1.0 "feat: managed settings burnin"
 [group("maint")]
