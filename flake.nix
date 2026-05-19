@@ -810,7 +810,8 @@
                   $out/share/man/man1/ringmaster.1 \
                   $out/share/man/man5/clown-json.5 \
                   $out/share/man/man7/clown-plugin-protocol.7 \
-                  $out/share/man/man7/ringmaster.7; do
+                  $out/share/man/man7/ringmaster.7 \
+                  $out/share/man/man7/ringmaster-testing.7; do
                   sed -i "s/@MDOCDATE@/$mdocDate/g" "$page"
                   if grep -q '@MDOCDATE@' "$page"; then
                       echo "clown-manpages: @MDOCDATE@ left unsubstituted in $page" >&2

@@ -1,0 +1,245 @@
+.\" Copyright (c) 2026 amarbel, LLC
+.\" SPDX-License-Identifier: MIT
+.Dd @MDOCDATE@
+.Dt RINGMASTER-TESTING 7
+.Os
+.Sh NAME
+.Nm ringmaster-testing
+.Nd test pyramid for the ringmaster control plane
+.Sh DESCRIPTION
+This page documents the layered test strategy for
+.Xr ringmaster 7 ,
+.Xr ringmaster 1 ,
+and
+.Xr circus 1 .
+Six layers, ordered from least to most expensive, each catching a
+distinct class of regression.
+Layers 1\(en4 are CI-gated through the pre-merge hook
+.Pq Cm just No is the default verification: nix build + go test + bats ;
+layers 5\(en6 are developer-invoked from the
+.Xr justfile 1 .
+.Sh LAYER 1: UNIT TESTS
+.Bl -tag -width Ds
+.It Pa internal/ringmaster/*_test.go
+Wire format
+.Pq Sy frame_test.go ,
+registry semantics
+.Pq Sy registry_test.go ,
+control socket path resolution
+.Pq Sy paths_test.go ,
+and the Go client SDK
+.Pq Sy client_test.go .
+.El
+.Pp
+Wall time: <1 s. Runs as part of
+.Cm go test ./...
+under any conditions \(em no sandbox or binary requirements.
+.Sh LAYER 2: INTEGRATION AGAINST GO FAKE
+.Bl -tag -width Ds
+.It Pa cmd/ringmaster/launcher_test.go
+Exercises
+.Sy newLauncher
+.Pq spawn, /health poll, reap
+against
+.Pa cmd/ringmaster/testdata/fake-llama-server ,
+a minimal Go HTTP stand-in that serves
+.Pa /health
+and
+.Pa /v1/models .
+The fake is rebuilt per test via
+.Sy buildFakeLlamaServer .
+.It Pa cmd/ringmaster/launcher_reap_test.go
+SIGKILL-mid-test verifies the reaper-on-exit path: the registry
+drains automatically when a child dies outside of
+.Cm StopInstance .
+.It Pa cmd/ringmaster/server_test.go
+Drives the full dispatch surface
+.Pq Sy ListInstances , StartInstance , StopInstance , GetInstance , StopAll , ListAvailableModels , DownloadModel
+across a real Unix socket using the in-process
+.Sy rm.Client
+SDK.
+.El
+.Pp
+Wall time: ~5 s. Catches launcher concurrency bugs, RPC dispatch
+errors, JSON marshal regressions, and identity-guard races.
+.Sh LAYER 3: END-TO-END AGAINST GO FAKE
+.Bl -tag -width Ds
+.It Pa zz-tests_bats/ringmaster.bats
+Boots the production
+.Xr ringmaster 1
+daemon on a temp Unix socket, points its launcher at the same Go
+fake fixture via
+.Fl -llama-server ,
+then drives the surface through the production
+.Xr circus 1
+CLI client
+.Pq list / start / status / stop, with output assertions on the tabwriter columns and key:value status lines .
+All tests share one daemon and serialize via
+.Ev BATS_NO_PARALLELIZE_WITHIN_FILE .
+.El
+.Pp
+Wall time: ~2 s. Catches CLI output drift, table formatting bugs,
+status-not-found error code mapping, and any code path that only
+manifests when ringmaster and circus are separate processes.
+.Sh LAYER 4: REAL-BINARY, NO MODEL
+.Bl -tag -width Ds
+.It Pa cmd/ringmaster/launcher_real_test.go
+Exercises
+.Sy newLauncher
+against the actual
+.Sy buildcfg.LlamaServerPath ,
+the
+.Xr llama-server 1
+binary burned in by the
+.Sy nixpkgs-llama
+flake input.
+.Sy Model: ""
+makes the launcher omit
+.Fl -model ;
+real llama-server enters "router mode" and serves
+.Pa /health
+in ~350 ms without loading any GGUF.
+Stop, reap, and registry drain are all verified.
+.It Pa cmd/ringmaster/launcher_version_test.go
+Independent path-shape smoke that runs
+.Sq llama-server --help
+to confirm the burned-in path is reachable and executable.
+Faster than the
+.Sx LAYER 4
+test
+.Pq no /health poll
+and useful as a first failure signal when a flake bump moves the
+binary.
+.El
+.Pp
+Both layer-4 tests skip when
+.Sy buildcfg.LlamaServerPath
+is empty
+.Pq dev builds via Cm go build No / Cm go run \(em the nix derivation is the only thing that burns this in .
+.Pp
+Wall time: 0.3\(en0.5 s each in the nix sandbox.
+Catches:
+.Bl -bullet -compact -offset indent
+.It
+Dangling
+.Pa /nix/store/.../bin/llama-server
+references after a
+.Sy nixpkgs-llama
+input bump where the derivation moved.
+.It
+Arch mismatches
+.Pq e.g. linux-builder produced aarch64-linux when the host is x86_64-linux .
+.It
+Missing runtime dylib deps that would only surface when the daemon
+tried to start an instance.
+.It
+.Xr llama-server 1
+argparser changes that would reject the
+.Xr ringmaster 1
+launcher's argv.
+.El
+.Pp
+Does NOT catch:
+.Bl -bullet -compact -offset indent
+.It
+Whether
+.Pa /v1/messages
+actually works against a real model.
+That requires a GGUF and is covered by the developer smoke
+.Pq Sx LAYER 5 .
+.El
+.Sh LAYER 5: DEVELOPER SMOKE (REAL MODEL)
+.Bl -tag -width Ds
+.It Cm just smoke-ringmaster Op Ar model-name
+End-to-end against
+.Pa ./result/bin/ringmaster ,
+.Pa ./result/bin/circus ,
+and a real GGUF from
+.Pa ~/.local/share/circus/models/ .
+Starts the daemon, runs every
+.Xr circus 1
+subcommand against a real
+.Xr llama-server 1
+loading a real model, posts to
+.Pa /v1/messages ,
+and asserts a content text field comes back in the response.
+.Pp
+Refuses to run if a daemon is already bound to the default control
+socket
+.Pq so it doesn't step on the user's home-manager-managed daemon .
+Default model:
+.Ar gemma3-1b
+.Pq smallest registry-shipped GGUF .
+.El
+.Pp
+Wall time: ~10 s
+.Pq dominated by llama-cpp warmup + Metal init + a 64-token completion .
+Catches: anything end-to-end that the upstream layers don't already
+exercise.
+The right verification when cutting a release.
+.Pp
+Not CI-suitable: requires a developer-installed GGUF
+.Pq 1\(en2 GB, not in any flake closure
+and a real GPU/CPU stack.
+.Sh LAYER 6: FIELD-BUMP PROBE
+.Bl -tag -width Ds
+.It Cm just debug-probe-real-llama-server
+Empirical probe that measures
+.Xr llama-server 1 No Ap s
+behaviour under
+.Fl -version , Fl -help ,
+and no-model launch.
+Captures wallclock latency for each, the time-to-/health for the
+no-model launch, and the stderr banner.
+.El
+.Pp
+Used to source the evidence behind
+.Sx LAYER 4 .
+Re-run after a
+.Sy nixpkgs-llama
+flake input bump to confirm "router mode" still serves
+.Pa /health
+without a model.
+If a future llama-cpp release removes router mode, the layer-4 test
+would start hanging on the health poll \(em this probe is the
+diagnostic tool for that.
+.Sh WHEN TO REACH FOR EACH LAYER
+.Bl -tag -width Ds
+.It Adding a new RPC method
+Layer 1
+.Pq wire-format roundtrip in
+.Pa internal/ringmaster/rpc_test.go
++ layer 2
+.Pq server dispatch test in
+.Pa cmd/ringmaster/server_test.go .
+Layer 3 only if the new RPC has a circus CLI surface worth asserting on.
+.It Changing launcher semantics
+Layer 2
+.Pq launcher_test.go against the Go fake .
+Add a layer-4 case if the change interacts with
+.Xr llama-server 1 Ap s
+argv handling.
+.It Bumping
+.Sy nixpkgs-llama
+Layer 4 covers the path-shape regressions.
+After bumping, re-run layer 6 to confirm router-mode behaviour is
+unchanged.
+Before cutting a release, run layer 5 against your current GGUF set.
+.It Changing the
+.Xr circus 1
+CLI output format
+Layer 3
+.Pq the bats e2e .
+.It Investigating a "the daemon won't start" report
+Layer 6 first
+.Pq is the binary even runnable on this host? ,
+then layer 5 with the user's exact model
+.Pq is the round-trip working? .
+.El
+.Sh SEE ALSO
+.Xr ringmaster 1 ,
+.Xr ringmaster 7 ,
+.Xr circus 1 ,
+.Xr llama-server 1
+.Sh AUTHORS
+.An "amarbel, LLC"
