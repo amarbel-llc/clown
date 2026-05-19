@@ -1,12 +1,16 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"text/tabwriter"
+	"time"
 
 	"golang.org/x/term"
 
 	"github.com/amarbel-llc/clown/internal/circusmodels"
+	rm "github.com/amarbel-llc/clown/internal/ringmaster"
 )
 
 func main() {
@@ -15,7 +19,7 @@ func main() {
 
 func run(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: circus <start|stop|status|models|download> [args]")
+		fmt.Fprintln(os.Stderr, "usage: circus <start|stop|status|list|models|download> [args]")
 		return 1
 	}
 
@@ -34,6 +38,13 @@ func run(args []string) int {
 			return 1
 		}
 		return 0
+	case "list":
+		cli, err := dialClient()
+		if err != nil {
+			return 1
+		}
+		defer cli.Close()
+		return cmdList(cli)
 	case "models":
 		return cmdModels()
 	case "download":
@@ -52,6 +63,36 @@ func cmdModels() int {
 	}
 	for _, name := range names {
 		fmt.Println(name)
+	}
+	return 0
+}
+
+// cmdList asks ringmaster for the current set of live llama-server
+// instances and prints them as a stable columnar table. The empty
+// result set is rendered as no output (rc=0) rather than just a header
+// row — quieter for scripts.
+func cmdList(cli *rm.Client) int {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	res, err := cli.ListInstances(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "circus: list: %v\n", err)
+		return 1
+	}
+	if len(res.Instances) == 0 {
+		return 0
+	}
+	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "ALIAS\tMODEL\tBIND\tPORT\tPID\tUPTIME")
+	now := time.Now()
+	for _, in := range res.Instances {
+		uptime := now.Sub(in.StartedAt).Round(time.Second)
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%d\t%s\n",
+			in.Alias, in.Model, in.Bind, in.Port, in.PID, uptime)
+	}
+	if err := tw.Flush(); err != nil {
+		fmt.Fprintf(os.Stderr, "circus: list: %v\n", err)
+		return 1
 	}
 	return 0
 }
