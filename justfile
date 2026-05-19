@@ -562,6 +562,87 @@ smoke-ringmaster MODEL="gemma3-1b": build
     echo
     echo "OK: ringmaster + llama-server + circus round-trip succeeded"
 
+# Empirical probe — can we coax real llama-server far enough that
+# ringmaster's /health poll succeeds WITHOUT a GGUF? Times --version
+# exit latency, --help exit latency, and how long /health takes to
+# come up under various model-less invocations. Used as the source
+# of evidence behind cmd/ringmaster/launcher_real_test.go and the
+# decision that option B is feasible. Re-run after nixpkgs-llama
+# bumps to confirm the behaviour still holds.
+#
+# Empirical results last captured 2026-05-19:
+#   * --version exits in <100 ms (after Metal init lines on macOS)
+#   * --help exits the same way
+#   * launch with no --model enters "router mode" and serves /health
+#     in ~350 ms. /v1/messages won't work without a model, but
+#     /health does.
+#
+# Run `just build` first.
+[group("debug")]
+debug-probe-real-llama-server:
+    #!/usr/bin/env bash
+    set -u
+    # Read the burned-in LlamaServerPath out of ./result/bin/ringmaster
+    # — buildcfg.LlamaServerPath is a Go string literal, so it appears
+    # verbatim in the binary's string table.
+    LS=$(strings ./result/bin/ringmaster \
+        | grep -E '^/nix/store/[^/]+-llama-cpp[^/]*/bin/llama-server$' \
+        | head -1)
+    if [[ -z "$LS" || ! -x "$LS" ]]; then
+        echo "FATAL: could not resolve a runnable llama-server path" >&2
+        echo "       extracted: '$LS'" >&2
+        exit 1
+    fi
+    echo "Burned-in llama-server: $LS"
+    echo
+    echo "=== probe 1: --version (wallclock, 30s cap) ==="
+    time timeout 30 "$LS" --version 2>&1 | head -20
+    echo "exit: ${PIPESTATUS[0]}"
+    echo
+    echo "=== probe 2: --help (wallclock, 30s cap) ==="
+    time timeout 30 "$LS" --help 2>&1 | head -5
+    echo "(help text truncated; exit: ${PIPESTATUS[0]})"
+    echo
+    echo "=== probe 3: launch with no model, poll /health up to 15s ==="
+    logf=$(mktemp)
+    trap 'rm -f "$logf"' EXIT
+    "$LS" --port 38201 --host 127.0.0.1 >"$logf" 2>&1 &
+    pid=$!
+    started_at=$(python3 -c 'import time; print(time.time())')
+    ok=
+    for i in $(seq 1 75); do
+        sleep 0.2
+        if curl -sSf -o /dev/null --max-time 1 http://127.0.0.1:38201/health 2>/dev/null; then
+            now=$(python3 -c 'import time; print(time.time())')
+            dt=$(python3 -c "print(f'{$now - $started_at:.2f}')")
+            echo "  /health came up after ${dt}s (poll #$i)"
+            ok=yes
+            break
+        fi
+        if ! kill -0 "$pid" 2>/dev/null; then
+            now=$(python3 -c 'import time; print(time.time())')
+            dt=$(python3 -c "print(f'{$now - $started_at:.2f}')")
+            echo "  process exited after ${dt}s without serving /health"
+            break
+        fi
+    done
+    if [[ "$ok" == "yes" ]]; then
+        kill "$pid" 2>/dev/null
+        wait "$pid" 2>/dev/null
+        echo "  shut down cleanly"
+    elif kill -0 "$pid" 2>/dev/null; then
+        echo "  process still alive after 15s, /health never came up — killing"
+        kill "$pid" 2>/dev/null
+        wait "$pid" 2>/dev/null
+    fi
+    echo
+    echo "=== llama-server stderr (first 30 lines) ==="
+    head -30 "$logf"
+    echo "==="
+    echo
+    echo "Summary:"
+    echo "  /health-without-model: ${ok:-NO}"
+
 # Tag a release. The "v" prefix is added for you, so pass the semver
 # without it. Usage: just tag 0.1.0 "feat: managed settings burnin"
 [group("maint")]
