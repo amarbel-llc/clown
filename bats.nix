@@ -126,6 +126,16 @@ let
     else
       lib.splitString "," (lib.removePrefix "# bats file_tags=" (builtins.head tagLines));
   allFileTags = lib.unique (lib.concatMap extractFileTags batsFiles);
+
+  # Tags whose files require host capabilities (rootless podman,
+  # userns mappings, a loaded clown-tent image) that the nix builder
+  # sandbox doesn't provide. Excluded from `bats-default` via
+  # `bats --filter-tags !<tag>`; still exposed as their own lane
+  # (`bats-tent_smoke`) for tooling that wants to address them
+  # explicitly. The host-side `just test-tent-smoke` recipe runs them
+  # outside any nix lane.
+  hostOnlyTags = [ "tent_smoke" ];
+  defaultExclusionFilter = lib.concatStringsSep "," (map (t: "!${t}") hostOnlyTags);
 in
 lib.listToAttrs (
   map (
@@ -136,5 +146,7 @@ lib.listToAttrs (
   ) allFileTags
 )
 // {
-  bats-default = mkClownBatsLane { };
+  bats-default = mkClownBatsLane {
+    filter = defaultExclusionFilter;
+  };
 }

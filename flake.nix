@@ -1019,6 +1019,14 @@
           # consumes this via its `package` option. Also bundled into
           # the default symlinkJoin so `nix build` ships the binary.
           ringmaster = ringmaster-go;
+          # bats-libs surfaces the amarbel-llc/bats helper bundle
+          # (bats-support, bats-assert, bats-emo, bats-island) under
+          # share/bats. Already used by the sandboxed batsLane via
+          # BATS_LIB_PATH; exposed here so host-side recipes that run
+          # bats outside the nix sandbox (eg. `just test-tent-smoke`)
+          # can resolve `bats_load_library` without going through the
+          # external bats flake (which would re-pin and drift).
+          bats-libs = batsLibs;
         }
         // batsLaneOutputs
         # Expose the tent container image as a named package on linux

@@ -1037,3 +1037,121 @@ tent-hang-tty-state CLAUDE_PID:
         ancestor=$(awk '{print $4}' "/proc/$ancestor/stat" 2>/dev/null)
     done
     echo
+
+# Generic probe loop for FDR-0007 tent design work. Runs an arbitrary
+# bash script inside the tent image using the *same* podman invocation
+# shape clown --tent uses (BuildArgs in internal/tent/tent.go), then
+# prints stdout/stderr.
+#
+# Use this to iterate on:
+#   - what userns mode the tent should use (--userns=keep-id vs auto)
+#   - which mounts surface what (eg. is /nix/var needed for nix? does
+#     the daemon socket reach in?)
+#   - which baseline binaries are present vs missing
+#   - whether a given /nix/store path is accessible from inside under
+#     the user's current /etc/subuid range
+#
+# Knobs:
+#   CMD            (required) bash script to run inside the container.
+#                  Newlines OK; uses bash -lc so functions/here-docs
+#                  work.
+#   USERNS         podman --userns flag value. Defaults to keep-id
+#                  (matches tent.BuildArgs today). Set to "auto" to
+#                  let podman pick a fresh subuid mapping. Set empty
+#                  string to drop the flag entirely.
+#   IMAGE          override the image tag. Defaults to the one in
+#                  version.txt (clown-tent:$(cat version.txt)).
+#   EXTRA_MOUNTS   extra '--volume' args (space-separated). Use to
+#                  test additional binds beyond the tent default
+#                  (eg. EXTRA_MOUNTS='--volume /nix/var:/nix/var:ro').
+#   PASS_DEVSHELL  if "1", forward host PATH filtered to /nix/store
+#                  /bin entries (mirrors --tent-pass-devshell).
+#
+# The recipe does NOT mount $HOME/.claude or $HOME/.claude.json —
+# those are claude-specific and would noise up generic probes. Add
+# them via EXTRA_MOUNTS if testing claude-side behavior.
+#
+# Usage:
+#   just zz-explore/tent-probe CMD='id; ls /nix/store | head -5'
+#   just zz-explore/tent-probe USERNS=auto CMD='cat /proc/self/uid_map'
+#   just zz-explore/tent-probe CMD='which git; which nix; which jq'
+# Dump every clown-tent image currently in the local podman store.
+# Useful before running tent-probe to confirm which tag to target —
+# the user may have an older tent image loaded from a prior build.
+tent-images:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    /usr/bin/podman image ls --filter reference='clown-tent*'
+
+tent-probe CMD USERNS='keep-id' IMAGE='' EXTRA_MOUNTS='' PASS_DEVSHELL='0':
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    image="{{IMAGE}}"
+    if [[ -z "$image" ]]; then
+        root=$(git rev-parse --show-toplevel)
+        ver=$(tr -d '[:space:]' < "$root/version.txt")
+        image="clown-tent:$ver"
+    fi
+
+    if ! /usr/bin/podman image exists "$image"; then
+        echo "FAIL: image '$image' not loaded. Run 'just build' to produce" >&2
+        echo "      the tent tarball, then 'podman load -i \\" >&2
+        echo "      \$(nix path-info .#tent-image)' to load it." >&2
+        exit 2
+    fi
+
+    userns_args=()
+    if [[ -n "{{USERNS}}" ]]; then
+        userns_args+=(--userns="{{USERNS}}")
+    fi
+
+    env_args=()
+    if [[ "{{PASS_DEVSHELL}}" == "1" ]]; then
+        # Replicate internal/tent.FilterPathToNixStore: keep
+        # /nix/store/<hash>-<name>/{bin,sbin} entries, drop the rest.
+        filtered=$(printf '%s' "$PATH" | tr ':' '\n' |
+            awk '/^\/nix\/store\/[^\/]+\/s?bin$/' |
+            paste -sd: -)
+        if [[ -n "$filtered" ]]; then
+            env_args+=(--env "PATH=$filtered")
+            echo "(tent-probe) PATH override active: $(echo "$filtered" | tr ':' '\n' | wc -l) entries"
+        else
+            echo "(tent-probe) PASS_DEVSHELL=1 but no /nix/store entries in host PATH" >&2
+        fi
+    fi
+
+    # Standard tent mount shape (subset of tent.BuildArgs — skip
+    # claude-specific $HOME binds, plugin-host staging, etc.).
+    cwd=$(pwd)
+    mount_args=(
+        --volume /nix/store:/nix/store:ro
+        --volume "$cwd:$cwd"
+        --workdir "$cwd"
+    )
+
+    # Append EXTRA_MOUNTS verbatim (caller is responsible for the
+    # full --volume <src>:<dst>[:opts] forms).
+    extra_arr=()
+    if [[ -n "{{EXTRA_MOUNTS}}" ]]; then
+        # shellcheck disable=SC2206
+        extra_arr=({{EXTRA_MOUNTS}})
+    fi
+
+    echo "=== tent-probe ==="
+    echo "image:   $image"
+    echo "userns:  {{USERNS}}"
+    echo "cwd:     $cwd"
+    if (( ${#extra_arr[@]} )); then
+        echo "extras:  ${extra_arr[*]}"
+    fi
+    echo "===================="
+    echo
+
+    /usr/bin/podman run --rm -i \
+      "${userns_args[@]}" \
+      "${mount_args[@]}" \
+      "${extra_arr[@]}" \
+      "${env_args[@]}" \
+      "$image" \
+      bash -lc {{quote(CMD)}}
