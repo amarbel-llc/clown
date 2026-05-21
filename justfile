@@ -624,6 +624,114 @@ smoke-ringmaster MODEL="gemma3-1b": build
     echo
     echo "OK: ringmaster + llama-server + circus round-trip succeeded"
 
+# Multi-instance live smoke for ringmaster (FDR-0010 criterion 2). Real
+# llama-server children, real circus CLI, real RPC. Two independent
+# aliases load two different GGUFs, both serve /v1/messages
+# concurrently on distinct ports, then both stop cleanly. Complements
+# the fake-llama-server bats coverage in zz-tests_bats/ringmaster.bats
+# by proving the same lifecycle survives a real, slow, multi-GB model
+# load.
+#
+# Usage: just smoke-ringmaster-multi [model-a] [model-b]
+# Defaults: gemma3-1b + qwen3-1.7b (both small, both already on disk).
+[group("test")]
+smoke-ringmaster-multi MODEL_A="gemma3-1b" MODEL_B="qwen3-1.7b": build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    a="{{MODEL_A}}"
+    b="{{MODEL_B}}"
+    for m in "$a" "$b"; do
+        gguf="$HOME/.local/share/circus/models/${m}.gguf"
+        if [[ ! -f "$gguf" ]]; then
+            echo "FAIL: model not found at $gguf" >&2
+            ls "$HOME/.local/share/circus/models/" 2>/dev/null | sed 's/^/        /' >&2
+            exit 1
+        fi
+    done
+    sock="$HOME/.local/state/circus/control.sock"
+    if [[ -S "$sock" ]] && ./result/bin/circus list >/dev/null 2>&1; then
+        echo "FAIL: a ringmaster daemon is already running on $sock" >&2
+        echo "      stop it first so this smoke doesn't step on home-manager state" >&2
+        exit 1
+    fi
+    rm -f "$sock"
+    log=$(mktemp)
+    trap 'set +e; ./result/bin/circus stop "$a" >/dev/null 2>&1 || true; ./result/bin/circus stop "$b" >/dev/null 2>&1 || true; [[ -n "${rm_pid:-}" ]] && kill "$rm_pid" 2>/dev/null; wait 2>/dev/null; rm -f "$log"' EXIT
+    echo ">> launching ringmaster (log: $log)"
+    ./result/bin/ringmaster daemon >"$log" 2>&1 &
+    rm_pid=$!
+    for i in $(seq 1 50); do
+        [[ -S "$sock" ]] && break
+        sleep 0.1
+    done
+    if [[ ! -S "$sock" ]]; then
+        echo "FAIL: ringmaster never bound $sock" >&2
+        cat "$log" >&2
+        exit 1
+    fi
+    echo ">> ringmaster up"
+    echo
+    echo "=== circus start $a ==="
+    ./result/bin/circus start "$a"
+    echo
+    echo "=== circus start $b ==="
+    ./result/bin/circus start "$b"
+    echo
+    echo "=== circus list (expect two rows) ==="
+    ./result/bin/circus list
+    echo
+    port_a=$(./result/bin/circus list | awk -v alias="$a" '$1==alias {print $4}')
+    port_b=$(./result/bin/circus list | awk -v alias="$b" '$1==alias {print $4}')
+    if [[ -z "$port_a" || -z "$port_b" ]]; then
+        echo "FAIL: could not parse both ports from circus list" >&2
+        exit 1
+    fi
+    if [[ "$port_a" == "$port_b" ]]; then
+        echo "FAIL: both instances reported the same port $port_a" >&2
+        exit 1
+    fi
+    echo ">> distinct ports: $a=$port_a $b=$port_b"
+    echo
+    for pair in "$a:$port_a" "$b:$port_b"; do
+        m="${pair%%:*}"
+        p="${pair##*:}"
+        echo "=== POST /v1/messages on 127.0.0.1:$p ($m) ==="
+        # max_tokens=256 to give chain-of-thought / reasoning models
+        # (e.g. qwen3) room to finish a "thinking" block and emit a
+        # final text block. accept either "text" or "thinking"
+        # content as evidence the instance is serving inference.
+        resp=$(curl -sS -X POST "http://127.0.0.1:$p/v1/messages" \
+            -H 'Content-Type: application/json' \
+            -d '{"model":"'"$m"'","max_tokens":256,"messages":[{"role":"user","content":"Say only the word READY."}]}')
+        echo "$resp"
+        if ! echo "$resp" | grep -qE '"text"|"thinking"'; then
+            echo "FAIL: $m: /v1/messages response missing both text and thinking content" >&2
+            exit 1
+        fi
+        echo
+    done
+    echo "=== circus stop $a ==="
+    ./result/bin/circus stop "$a"
+    echo
+    echo "=== circus list (expect one row: $b only) ==="
+    ./result/bin/circus list
+    echo
+    if ./result/bin/circus list | awk '{print $1}' | grep -qx "$a"; then
+        echo "FAIL: $a still in list after stop" >&2
+        exit 1
+    fi
+    if ! ./result/bin/circus list | awk '{print $1}' | grep -qx "$b"; then
+        echo "FAIL: $b disappeared from list (should still be running)" >&2
+        exit 1
+    fi
+    echo "=== circus stop $b ==="
+    ./result/bin/circus stop "$b"
+    echo
+    echo "=== circus list (expect empty) ==="
+    ./result/bin/circus list
+    echo
+    echo "OK: two concurrent ringmaster-managed llama-server instances round-tripped"
+
 # Empirical probe — can we coax real llama-server far enough that
 # ringmaster's /health poll succeeds WITHOUT a GGUF? Times --version
 # exit latency, --help exit latency, and how long /health takes to
