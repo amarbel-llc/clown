@@ -128,3 +128,61 @@ setup() {
   assert_failure
   assert_output --partial 'not running'
 }
+
+# --- Multi-instance lifecycle ---
+#
+# FDR-0010 promotion criterion: "multi-instance start/stop verified."
+# Exercises that ringmaster correctly tracks two concurrent llama-server
+# children through the real circus CLI (not the in-process Go test).
+
+@test "two instances can run concurrently" {
+  run "$CIRCUS_BIN" start --alias multi-a fake-model
+  assert_success
+  assert_line --regexp '^circus: started multi-a at 127\.0\.0\.1:[0-9]+ \(pid [0-9]+\)$'
+
+  run "$CIRCUS_BIN" start --alias multi-b fake-model
+  assert_success
+  assert_line --regexp '^circus: started multi-b at 127\.0\.0\.1:[0-9]+ \(pid [0-9]+\)$'
+
+  run "$CIRCUS_BIN" list
+  assert_success
+  assert_line --regexp '^multi-a '
+  assert_line --regexp '^multi-b '
+}
+
+@test "two instances bind distinct ports" {
+  run "$CIRCUS_BIN" status multi-a
+  assert_success
+  local port_a
+  port_a=$(printf '%s\n' "${lines[@]}" | awk '/^port:/ {print $2}')
+  [[ -n "$port_a" ]]
+
+  run "$CIRCUS_BIN" status multi-b
+  assert_success
+  local port_b
+  port_b=$(printf '%s\n' "${lines[@]}" | awk '/^port:/ {print $2}')
+  [[ -n "$port_b" ]]
+
+  [[ "$port_a" != "$port_b" ]]
+}
+
+@test "stopping one instance leaves the other running" {
+  run "$CIRCUS_BIN" stop multi-a
+  assert_success
+  assert_output --partial 'stopped multi-a'
+
+  run "$CIRCUS_BIN" list
+  assert_success
+  refute_line --regexp '^multi-a '
+  assert_line --regexp '^multi-b '
+}
+
+@test "stopping the last instance returns the registry to empty" {
+  run "$CIRCUS_BIN" stop multi-b
+  assert_success
+  assert_output --partial 'stopped multi-b'
+
+  run "$CIRCUS_BIN" list
+  assert_success
+  assert_output ""
+}
