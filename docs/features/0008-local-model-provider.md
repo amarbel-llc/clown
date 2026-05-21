@@ -1,10 +1,20 @@
 ---
-status: exploring
-date: 2026-04-22
-promotion-criteria: gemma3:12b runs a full Claude Code session on M2 Pro (16GB); qwen3:32b runs a full Claude Code session on Xeon VM (64GB RAM, CPU-only)
+status: superseded by FDR-0011
+date: 2026-05-21
 ---
 
 # Local Model Provider
+
+> **Superseded by [FDR-0010 (ringmaster)](0010-ringmaster-control-plane.md)
+> and [FDR-0011 (`--backend=circus` lifecycle)](0011-clown-backend-circus-lifecycle.md).**
+> The original design proposed a `llama` provider with `clown llama start/stop/status`
+> subcommands. The realized form is different: a separate `circus`
+> daemon (with `ringmaster` as the control plane) hosts the long-lived
+> `llama-server`, and `clown --backend=circus` (per FDR-0011) is how
+> sessions are launched against it. The motivating problem —
+> air-gapped, locally-hosted, Claude-Code-compatible inference — is
+> the same; the interface and process layout diverged. See FDR-0011
+> for the lifecycle this FDR's "long-lived daemon" idea evolved into.
 
 ## Problem Statement
 
