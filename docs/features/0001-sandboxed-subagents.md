@@ -1,9 +1,17 @@
 ---
-status: draft
-date: 2026-04-24
+status: superseded by FDR-0007
+date: 2026-05-21
 ---
 
 # Nix-Derivation-Sandboxed Subagents
+
+> **Superseded by [FDR-0007 (tent)](0007-tent.md).** The per-subagent
+> Nix-builder-sandbox approach proposed here was not pursued. The
+> sandboxing problem it set out to solve — bounding what an agent can
+> touch on the host — is instead addressed at the harness boundary by
+> tent: a container that wraps the whole provider rather than per-
+> subagent derivations. The cross-harness MCP dispatch idea (ringmaster)
+> survived independently; see FDR-0010.
 
 ## Abstract
 

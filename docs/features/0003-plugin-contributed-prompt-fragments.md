@@ -1,6 +1,6 @@
 ---
-status: testing
-date: 2026-04-27
+status: accepted
+date: 2026-05-21
 ---
 
 # Plugin-Contributed System Prompt Fragments

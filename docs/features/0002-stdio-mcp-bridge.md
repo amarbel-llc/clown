@@ -1,6 +1,6 @@
 ---
-status: testing
-date: 2026-04-26
+status: accepted
+date: 2026-05-21
 ---
 
 # Stdio MCP Servers via Host-Side HTTP Bridge
