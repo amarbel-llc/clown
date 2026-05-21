@@ -38,6 +38,7 @@
     # crush binary path can be burned into clown via `-X buildcfg.CrushCliPath`.
     llm-agents.url = "github:numtide/llm-agents.nix";
     llm-agents.inputs.nixpkgs.follows = "nixpkgs";
+    llm-agents.inputs.treefmt-nix.follows = "treefmt-nix";
     treefmt-nix.url = "github:numtide/treefmt-nix";
     treefmt-nix.inputs.nixpkgs.follows = "nixpkgs";
     # amarbel-llc/bats provides the batsLane build helper (formerly
