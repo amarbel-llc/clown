@@ -732,12 +732,31 @@ smoke-ringmaster-multi MODEL_A="gemma3-1b" MODEL_B="qwen3-1.7b": build
     echo
     echo "OK: two concurrent ringmaster-managed llama-server instances round-tripped"
 
-# Compute the tailnet URL for a running circus instance and print it.
-# Assumes ringmaster is up and the instance is bound to 0.0.0.0 (or to
-# this host's tailscale IP). Useful as a sanity check before launching
-# clown against the URL.
+# Compute and probe the tailnet URL for a running circus instance.
+# Resolves the alias to its port via `circus list`, the host to its
+# MagicDNS name via `tailscale status --json`, then POSTs a short
+# /v1/messages request (Anthropic-format — what claude-code talks to).
+# Accepts both "text" and "thinking" content as evidence the instance
+# is serving inference (qwen3-style reasoning models emit thinking
+# blocks first).
+#
+# Validates ringmaster is reachable, the alias is registered, and the
+# instance is bound somewhere tailnet-reachable. Warns (not fatal)
+# when the instance is bound to a non-0.0.0.0 address — a tailnet IP
+# (100.x.y.z) is also fine; loopback is not.
+#
+# Diagnostic only: this hits the Anthropic endpoint. Opencode/crush
+# use the OpenAI endpoint at /v1/chat/completions; if claude-code
+# works against this URL it does not automatically mean opencode does
+# (different model templates handle tool-use differently — see #57
+# for gemma3's known crush incompatibility).
+#
+# Pending FDR-0011 phase 2 (#87); will be replaced by `clown
+# --backend=circus --circus-bind=…` which does this resolution
+# internally.
 #
 # Usage: just smoke-tailnet-url [alias]
+#   alias defaults to gemma3-12b
 [group("test")]
 smoke-tailnet-url ALIAS="gemma3-12b": build
     #!/usr/bin/env bash
@@ -795,17 +814,40 @@ smoke-tailnet-url ALIAS="gemma3-12b": build
     echo "OK: tailnet URL is reachable and serving inference"
     echo "    URL: ${url}"
 
-# Launch clown pointed at a tailnet-exposed circus instance via env
-# vars. Workaround for FDR-0011 phase 2 not being implemented yet:
-# clown has no --backend=circus flag, so we go through the
-# `ANTHROPIC_BASE_URL` env knob that claude-code reads natively.
-# Uses --naked to skip clown's plugin host (the local model is slow
-# enough that a plugin-host warm-up race is worth dodging during
-# smoke).
+# Launch clown pointed at a tailnet-exposed circus instance.
 #
-# Usage: just smoke-clown-against-tailnet [alias] [naked-flag]
-#   naked-flag=1 (default): --naked (no plugins, no system prompt)
-#   naked-flag=0:            full clown pipeline (slow startup)
+# Mechanism: clown has no --backend=circus flag yet (FDR-0011 phase 2,
+# tracked by #87), so this recipe sets the four env vars that
+# claude-code reads natively:
+#
+#   ANTHROPIC_BASE_URL          tailnet URL of the llama-server instance
+#   ANTHROPIC_AUTH_TOKEN=dummy  claude-code needs *some* auth string
+#   ANTHROPIC_API_KEY=dummy     same; llama-server ignores both
+#   ANTHROPIC_CUSTOM_MODEL_OPTION   bypass claude-code's model
+#                                   allow-list (would otherwise reject
+#                                   any non-anthropic model name)
+#
+# Then exec's clown with --model <alias> appended after `--` so it
+# reaches claude-code unmodified.
+#
+# Why --naked by default: per FDR-0009, --naked is the documented
+# escape hatch that bypasses plugin host + system prompt + safety
+# defaults + profile picker. For diagnostic smokes against a local
+# model this is the cleanest reproducer because nothing clown-side
+# can interact with the slow model warm-up. Pass NAKED=0 to exercise
+# the full pipeline.
+#
+# Tool calls: claude-code talks to llama-server's /v1/messages
+# (Anthropic-format). Most open GGUFs are not trained on Anthropic's
+# tool-call format, so tool use will degrade to prose narration. For
+# tool use, prefer smoke-opencode-against-tailnet /
+# smoke-crush-against-tailnet (OpenAI-format) against a tool-trained
+# model like qwen2.5-coder-7b.
+#
+# Usage: just smoke-clown-against-tailnet [alias] [naked]
+#   alias defaults to gemma3-12b
+#   naked=1 (default): --naked
+#   naked=0:           full clown pipeline
 [group("test")]
 smoke-clown-against-tailnet ALIAS="gemma3-12b" NAKED="1": build
     #!/usr/bin/env bash
@@ -851,13 +893,39 @@ smoke-clown-against-tailnet ALIAS="gemma3-12b" NAKED="1": build
         ANTHROPIC_CUSTOM_MODEL_OPTION='{"model":"'"$alias"'","max_tokens":2048}' \
         ./result/bin/clown $naked_flag -- --model "$alias"
 
-# Launch opencode pointed at the tailnet-exposed circus instance.
-# Mechanism: temporarily write the tailnet URL into
-# ~/.config/circus/opencode.toml (backing up any existing file), run
-# clown --provider=opencode (no --profile so the bare-provider path
-# fires), then restore the backup on exit.
+# Launch opencode pointed at a tailnet-exposed circus instance.
+#
+# Why the file dance: clown's runOpencode dispatch is (1) --profile
+# with backend=gateway → use prof.URL/Token, (2) --profile with
+# backend=local → read the (broken since FDR-0010) portfile, (3) no
+# --profile → read ~/.config/circus/opencode.toml for url+token.
+# Path 3 is the only one that works without code changes. Clown
+# transforms that URL into an `@ai-sdk/openai-compatible` provider
+# entry in a temp opencode.json and points opencode at it via
+# OPENCODE_CONFIG, so all opencode↔llama-server traffic goes through
+# /v1/chat/completions (OpenAI format).
+#
+# Lifecycle: backs up any existing ~/.config/circus/opencode.toml to
+# <file>.bak-$$, writes the synthesized one for this run, restores on
+# EXIT via a bash trap (including Ctrl-C / SIGINT). Two concurrent
+# invocations are racy because the backup name is PID-suffixed but
+# only one file slot exists — don't launch two in parallel against
+# the same user.
+#
+# Tool calls: opencode passes tool definitions in OpenAI's
+# tools[].function shape and parses tool_calls[]. A tool-use-trained
+# model (qwen2.5-coder-7b is the smallest one that fits M2 Pro
+# 16GB — `just download-qwen-coder` to fetch) will actually attempt
+# the calls. Generalist instruct models (gemma3-*) will mostly
+# narrate them in prose.
+#
+# Pending FDR-0011 phase 2 (#87) + #86 (flexible registry): will be
+# replaced by `clown --provider=opencode --backend=circus
+# --circus-alias=<x> --circus-bind=…` which sources the URL from
+# ringmaster RPC directly and doesn't touch the user's TOML.
 #
 # Usage: just smoke-opencode-against-tailnet [alias]
+#   alias defaults to gemma3-12b
 [group("test")]
 smoke-opencode-against-tailnet ALIAS="gemma3-12b": build
     #!/usr/bin/env bash
@@ -909,13 +977,30 @@ smoke-opencode-against-tailnet ALIAS="gemma3-12b": build
     echo ">> model alias:          ${alias}"
     echo
     # Bare --provider, no --profile — falls through to readOpencodeLocalConfig.
-    ./result/bin/clown --provider=opencode -- --model "$alias" "$@"
+    ./result/bin/clown --provider=opencode -- --model "$alias"
 
-# Launch crush pointed at the tailnet-exposed circus instance.
-# Same mechanism as smoke-opencode-against-tailnet but for
-# ~/.config/circus/crush.toml.
+# Launch crush pointed at a tailnet-exposed circus instance.
+#
+# Same shape as smoke-opencode-against-tailnet but for crush:
+#
+#   - reads ~/.config/circus/crush.toml (not opencode.toml)
+#   - clown writes a CRUSH_GLOBAL_CONFIG dir with a synthesized
+#     crush.json containing one provider of type=openai-compat
+#     pointed at the tailnet URL
+#   - crush talks OpenAI to /v1/chat/completions, same wire shape as
+#     opencode
+#
+# Same backup-and-restore lifecycle (trap on EXIT). Same model-quality
+# caveat — use a tool-use-trained model (qwen2.5-coder-7b is the
+# smallest tested one) for working tool calls. gemma3 specifically
+# has a known Jinja chat-template incompatibility with crush's
+# message-alternation pattern; see #57.
+#
+# Pending FDR-0011 phase 2 (#87): will be replaced by `clown
+# --provider=crush --backend=circus …`.
 #
 # Usage: just smoke-crush-against-tailnet [alias]
+#   alias defaults to gemma3-12b
 [group("test")]
 smoke-crush-against-tailnet ALIAS="gemma3-12b": build
     #!/usr/bin/env bash
@@ -964,12 +1049,30 @@ smoke-crush-against-tailnet ALIAS="gemma3-12b": build
     echo ">> pointing crush at: ${url}"
     echo ">> model alias:       ${alias}"
     echo
-    ./result/bin/clown --provider=crush -- --model "$alias" "$@"
+    ./result/bin/clown --provider=crush -- --model "$alias"
 
-# Download an ad-hoc model by URL (bypasses registry), then print
-# its SHA-256 so we can add a proper registry entry in a follow-up.
-# Wraps the `circus download --url` path that the registry-pitfall
-# fix in commit a9a288e introduced.
+# Download a model by URL and emit a ready-to-paste registry entry.
+#
+# Uses `circus download <name> --url <url>` (the ad-hoc path added in
+# commit a9a288e). The first fetch runs with no SHA verification —
+# this recipe computes the SHA-256 *after* download and prints the
+# JSON entry that can be appended to
+# internal/circusmodels/registry.json. Promoting an ad-hoc download
+# to a registry entry then needs:
+#
+#   1. Paste the printed JSON into the registry.json array.
+#   2. Fill in the "description" field (the printed value is "TODO").
+#   3. Bump the count in internal/circusmodels/registry_test.go's
+#      TestRegistry_ContainsExpectedModels (current: 6) and add the
+#      new name to its expected-models slice.
+#   4. Rebuild and re-test.
+#
+# This SHA-emit workflow is what issue #85 (xet-bridge URL pitfall)
+# documented as the right way to source SHAs. Issue #86 proposes
+# automating the whole registry-extension flow.
+#
+# Idempotent: if the file is already on disk, prints the SHA + JSON
+# entry from the existing file without re-fetching.
 #
 # Usage: just download-ad-hoc <name> <url>
 [group("test")]
@@ -1014,11 +1117,26 @@ download-ad-hoc NAME URL: build
     echo ">> to add to registry, append this entry to internal/circusmodels/registry.json:"
     printf '  {\n    "name": "%s",\n    "url": "%s",\n    "sha256": "%s",\n    "size": %s,\n    "description": "TODO"\n  }\n' "$name" "$url" "$sha" "$size"
 
-# Convenience: download qwen2.5-coder-7b (tool-use-trained, fits M2 Pro
-# 16GB at ~4.7GB Q4_K_M). After it lands, the recipe prints the registry
-# entry to copy-paste. From there, `circus start qwen2.5-coder-7b --bind
-# 0.0.0.0` + `just smoke-opencode-against-tailnet qwen2.5-coder-7b`
-# exercises tool calls through opencode against the local model.
+# Download Qwen2.5-Coder-7B-Instruct (Q4_K_M, ~4.7GB).
+#
+# Why this specific model: trained on OpenAI's function-call format,
+# fits M2 Pro 16GB unified memory comfortably with headroom for
+# macOS + other apps. It's the smallest model I've tested where tool
+# calls through opencode/crush actually work (rather than degrading
+# to prose narration). Larger options:
+#
+#   qwen2.5-coder-14b   ~8.5GB Q4_K_M — tight on 16GB
+#   qwen3-coder-30b     ~14GB Q3_K_M  — at the memory edge; MoE 3B active
+#
+# After the download lands and you paste the printed JSON into the
+# registry (per download-ad-hoc), the working loop is:
+#
+#   ./result/bin/circus start qwen2.5-coder-7b --bind 0.0.0.0
+#   just smoke-opencode-against-tailnet qwen2.5-coder-7b
+#
+# Tool-call quality at 7B is ~70-85% on simple multi-step tasks.
+# Expect occasional hallucinated tool names and wrong arg shapes —
+# this is the model, not the harness.
 #
 # Usage: just download-qwen-coder
 [group("test")]

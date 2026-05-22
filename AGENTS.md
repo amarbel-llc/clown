@@ -37,6 +37,50 @@ just clean       # rm -rf result
 
 Format: `nix fmt` (treefmt; config in `treefmt.nix`)
 
+## Smoke recipes for local-model workflows
+
+While FDR-0011 phase 2 (`--backend=circus`, tracked by #87) is still
+pending, the `justfile` carries a family of host-side recipes that
+drive circus + ringmaster + the harnesses (claude / opencode / crush)
+against a tailnet-exposed local model. They share a common shape:
+look up the running instance's port via `circus list`, resolve this
+host's MagicDNS name via `tailscale status --json`, then either probe
+the URL with curl or launch a harness pointed at it. Each fails fast
+with friendly errors if ringmaster isn't running, the alias isn't
+registered, or tailscale/jq aren't on PATH.
+
+Read the comment header on each recipe for the full mechanism — they
+spell out which dispatch path inside clown each one is exercising and
+the model-quality caveats. Quick map:
+
+- **`smoke-ringmaster-multi`** — multi-instance lifecycle against
+  real `llama-server` children (FDR-0010 criterion 2). Fake-server
+  parity lives in `zz-tests_bats/ringmaster.bats`.
+- **`smoke-tailnet-url [alias]`** — compute the tailnet URL for a
+  running instance and probe `/v1/messages`. Diagnostic only —
+  exercises the Anthropic endpoint, not the OpenAI one
+  opencode/crush use.
+- **`smoke-clown-against-tailnet [alias] [naked]`** — launch
+  claude-code against the tailnet URL via the four `ANTHROPIC_*` env
+  vars. `--naked` by default; pass `NAKED=0` for the full pipeline.
+- **`smoke-opencode-against-tailnet [alias]`** /
+  **`smoke-crush-against-tailnet [alias]`** — launch opencode/crush
+  via the bare-provider dispatch (no `--profile`). Backs up + writes
+  `~/.config/circus/<provider>.toml`, restores on EXIT via a bash
+  trap. Talks to llama-server's OpenAI endpoint, so tool calls work
+  if the model is OpenAI-function-call-trained.
+- **`download-ad-hoc <name> <url>`** — fetch a GGUF by URL (no SHA
+  required), then print a ready-to-paste `registry.json` entry with
+  the computed SHA-256. Promote-to-registry is a manual JSON edit +
+  test-count bump; issue #86 proposes automating the whole flow.
+- **`download-qwen-coder`** — wraps `download-ad-hoc` to fetch
+  Qwen2.5-Coder-7B-Instruct (Q4_K_M, ~4.7GB). Smallest model where
+  tool calls through opencode/crush actually work.
+
+All these recipes will be replaced (or removed) once FDR-0011 phase 2
+ships `clown --backend=circus --circus-bind=…`. Until then they're
+the supported way to drive local models through clown.
+
 ## Architecture
 
 The flake produces a `symlinkJoin` of five components:
