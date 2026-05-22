@@ -732,6 +732,125 @@ smoke-ringmaster-multi MODEL_A="gemma3-1b" MODEL_B="qwen3-1.7b": build
     echo
     echo "OK: two concurrent ringmaster-managed llama-server instances round-tripped"
 
+# Compute the tailnet URL for a running circus instance and print it.
+# Assumes ringmaster is up and the instance is bound to 0.0.0.0 (or to
+# this host's tailscale IP). Useful as a sanity check before launching
+# clown against the URL.
+#
+# Usage: just smoke-tailnet-url [alias]
+[group("test")]
+smoke-tailnet-url ALIAS="gemma3-12b": build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    alias="{{ALIAS}}"
+    if ! command -v tailscale >/dev/null; then
+        echo "FAIL: tailscale CLI not on PATH" >&2
+        exit 1
+    fi
+    if ! command -v jq >/dev/null; then
+        echo "FAIL: jq not on PATH" >&2
+        exit 1
+    fi
+    sock="${RINGMASTER_SOCKET:-$HOME/.local/state/circus/control.sock}"
+    if [[ ! -S "$sock" ]]; then
+        echo "FAIL: ringmaster socket not found at $sock" >&2
+        echo "      start ringmaster first: ./result/bin/ringmaster daemon &" >&2
+        exit 1
+    fi
+    port=$(./result/bin/circus list | awk -v a="$alias" '$1==a {print $4}')
+    if [[ -z "$port" ]]; then
+        echo "FAIL: alias \"$alias\" not registered with ringmaster" >&2
+        ./result/bin/circus list >&2
+        exit 1
+    fi
+    bind=$(./result/bin/circus list | awk -v a="$alias" '$1==a {print $3}')
+    if [[ "$bind" != "0.0.0.0" ]]; then
+        echo "WARNING: alias \"$alias\" is bound to $bind, not 0.0.0.0 — tailnet reach not guaranteed" >&2
+    fi
+    host=$(tailscale status --self --json | jq -r '.Self.DNSName' | sed 's/\.$//')
+    if [[ -z "$host" ]]; then
+        echo "FAIL: could not resolve this host's tailnet MagicDNS name" >&2
+        exit 1
+    fi
+    url="http://${host}:${port}"
+    echo "TAILNET_URL=${url}"
+    echo
+    echo "=== quick /v1/messages smoke ==="
+    set +e
+    resp=$(curl -sS --max-time 60 -X POST "${url}/v1/messages" \
+        -H 'Content-Type: application/json' \
+        -d '{"model":"'"$alias"'","max_tokens":32,"messages":[{"role":"user","content":"Say only READY."}]}')
+    rc=$?
+    set -e
+    echo "$resp"
+    if [[ $rc -ne 0 ]]; then
+        echo "FAIL: curl rc=$rc (network unreachable? firewall? wrong tailnet name?)" >&2
+        exit 1
+    fi
+    if ! echo "$resp" | grep -qE '"text"|"thinking"'; then
+        echo "FAIL: response missing content text/thinking block" >&2
+        exit 1
+    fi
+    echo
+    echo "OK: tailnet URL is reachable and serving inference"
+    echo "    URL: ${url}"
+
+# Launch clown pointed at a tailnet-exposed circus instance via env
+# vars. Workaround for FDR-0011 phase 2 not being implemented yet:
+# clown has no --backend=circus flag, so we go through the
+# `ANTHROPIC_BASE_URL` env knob that claude-code reads natively.
+# Uses --naked to skip clown's plugin host (the local model is slow
+# enough that a plugin-host warm-up race is worth dodging during
+# smoke).
+#
+# Usage: just smoke-clown-against-tailnet [alias] [naked-flag]
+#   naked-flag=1 (default): --naked (no plugins, no system prompt)
+#   naked-flag=0:            full clown pipeline (slow startup)
+[group("test")]
+smoke-clown-against-tailnet ALIAS="gemma3-12b" NAKED="1": build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    alias="{{ALIAS}}"
+    naked="{{NAKED}}"
+    if ! command -v tailscale >/dev/null; then
+        echo "FAIL: tailscale CLI not on PATH" >&2
+        exit 1
+    fi
+    if ! command -v jq >/dev/null; then
+        echo "FAIL: jq not on PATH" >&2
+        exit 1
+    fi
+    sock="${RINGMASTER_SOCKET:-$HOME/.local/state/circus/control.sock}"
+    if [[ ! -S "$sock" ]]; then
+        echo "FAIL: ringmaster socket not found at $sock" >&2
+        echo "      start ringmaster first: ./result/bin/ringmaster daemon &" >&2
+        exit 1
+    fi
+    port=$(./result/bin/circus list | awk -v a="$alias" '$1==a {print $4}')
+    if [[ -z "$port" ]]; then
+        echo "FAIL: alias \"$alias\" not registered with ringmaster" >&2
+        ./result/bin/circus list >&2
+        exit 1
+    fi
+    host=$(tailscale status --self --json | jq -r '.Self.DNSName' | sed 's/\.$//')
+    url="http://${host}:${port}"
+    echo ">> pointing clown at: ${url}"
+    echo ">> model alias:        ${alias}"
+    naked_flag=""
+    if [[ "$naked" == "1" ]]; then
+        naked_flag="--naked"
+        echo ">> mode:               --naked (no plugins, no system prompt)"
+    else
+        echo ">> mode:               full pipeline"
+    fi
+    echo
+    exec env \
+        ANTHROPIC_BASE_URL="${url}" \
+        ANTHROPIC_AUTH_TOKEN=dummy \
+        ANTHROPIC_API_KEY=dummy \
+        ANTHROPIC_CUSTOM_MODEL_OPTION='{"model":"'"$alias"'","max_tokens":2048}' \
+        ./result/bin/clown $naked_flag -- --model "$alias"
+
 # Empirical probe — can we coax real llama-server far enough that
 # ringmaster's /health poll succeeds WITHOUT a GGUF? Times --version
 # exit latency, --help exit latency, and how long /health takes to
