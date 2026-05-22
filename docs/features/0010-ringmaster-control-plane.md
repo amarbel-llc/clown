@@ -1,10 +1,38 @@
 ---
 status: exploring
-date: 2026-05-18
+date: 2026-05-22
 promotion-criteria: clown's `--backend=circus` flow uses ringmaster RPC end-to-end on macOS and Linux; multi-instance start/stop verified; no flat-file pid/port/model artifacts remain on disk
 ---
 
 # Ringmaster Control Plane
+
+> **Status note (2026-05-22):** Ringmaster phase 1 is fully shipped
+> and exercised. Criterion progress against the three promotion
+> conditions:
+>
+> 1. **`clown --backend=circus` end-to-end on macOS and Linux** —
+>    *blocked on FDR-0011.* `runCircus` in `cmd/clown/main.go` is
+>    intentionally stubbed; no `--backend` flag exists yet. This
+>    criterion lands with FDR-0011 phase 2.
+> 2. **Multi-instance start/stop verified** — *met.* The bats
+>    lane (`zz-tests_bats/ringmaster.bats`) covers the four-test
+>    multi-instance lifecycle against the fake-llama-server fixture,
+>    and `just smoke-ringmaster-multi` exercises the same lifecycle
+>    against real `llama-server` children (gemma3-1b + qwen3-1.7b on
+>    distinct ports, both responding to `/v1/messages`, stop-one
+>    leaves the other running, stop-last empties the registry).
+>    Verified live on darwin 2026-05-21.
+> 3. **No flat-file pid/port/model artifacts on disk** —
+>    *partially blocked on FDR-0011.* The ringmaster daemon writes
+>    no flat files; truth lives in `rm.Registry`. But
+>    `cmd/clown/opencode.go:readCircusPortfile` and `cmd/clown/crush.go`
+>    still read the legacy `~/.local/state/circus/llama-server.port`
+>    path (it just no longer exists, which is why `*-local` profiles
+>    are broken on master — see #81). Phase 2 of FDR-0011 deletes
+>    those reader callsites.
+>
+> 1 and 3 are FDR-0011's job. Promoting this FDR to `accepted`
+> happens when FDR-0011 phase 2 merges.
 
 ## Problem Statement
 
