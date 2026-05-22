@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 
 	"github.com/charmbracelet/bubbles/progress"
 	tea "github.com/charmbracelet/bubbletea"
@@ -52,12 +54,71 @@ func (m progressModel) View() string {
 	return "\n" + m.bar.View() + "\n"
 }
 
+// parseDownloadArgs accepts:
+//
+//	circus download <name>                                    (registry lookup)
+//	circus download <name> --url URL [--sha256 HEX] [--size N]
+//
+// --alias-style flags support both space and equals forms, matching
+// circus start. Returns the parsed name and overrides for url, sha,
+// and size (zero values when not provided).
+func parseDownloadArgs(args []string) (name, url, sha string, size int64, err error) {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--url":
+			if i+1 >= len(args) {
+				return "", "", "", 0, fmt.Errorf("--url requires an argument")
+			}
+			url = args[i+1]
+			i++
+		case strings.HasPrefix(a, "--url="):
+			url = strings.TrimPrefix(a, "--url=")
+		case a == "--sha256":
+			if i+1 >= len(args) {
+				return "", "", "", 0, fmt.Errorf("--sha256 requires an argument")
+			}
+			sha = args[i+1]
+			i++
+		case strings.HasPrefix(a, "--sha256="):
+			sha = strings.TrimPrefix(a, "--sha256=")
+		case a == "--size":
+			if i+1 >= len(args) {
+				return "", "", "", 0, fmt.Errorf("--size requires an argument")
+			}
+			size, err = strconv.ParseInt(args[i+1], 10, 64)
+			if err != nil {
+				return "", "", "", 0, fmt.Errorf("--size: %w", err)
+			}
+			i++
+		case strings.HasPrefix(a, "--size="):
+			size, err = strconv.ParseInt(strings.TrimPrefix(a, "--size="), 10, 64)
+			if err != nil {
+				return "", "", "", 0, fmt.Errorf("--size: %w", err)
+			}
+		case strings.HasPrefix(a, "--"):
+			return "", "", "", 0, fmt.Errorf("unknown flag %q", a)
+		default:
+			if name != "" {
+				return "", "", "", 0, fmt.Errorf("unexpected positional arg %q (name already set to %q)", a, name)
+			}
+			name = a
+		}
+	}
+	return name, url, sha, size, nil
+}
+
 func cmdDownload(args []string) int {
-	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: circus download <name>")
+	name, urlOverride, shaOverride, sizeOverride, err := parseDownloadArgs(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "circus: download: %v\n", err)
+		fmt.Fprintln(os.Stderr, "usage: circus download <name> [--url URL] [--sha256 HEX] [--size BYTES]")
 		return 1
 	}
-	name := args[0]
+	if name == "" {
+		fmt.Fprintln(os.Stderr, "usage: circus download <name> [--url URL] [--sha256 HEX] [--size BYTES]")
+		return 1
+	}
 
 	entries, err := circusmodels.Registry()
 	if err != nil {
@@ -65,13 +126,46 @@ func cmdDownload(args []string) int {
 		return 1
 	}
 	entry, ok := circusmodels.FindEntry(name, entries)
-	if !ok {
+	switch {
+	case !ok && urlOverride == "":
+		// Unknown name with no URL — friendly hint listing available models
+		// and the escape hatch for ad-hoc downloads.
 		var names []string
 		for _, e := range entries {
 			names = append(names, e.Name)
 		}
 		fmt.Fprintf(os.Stderr, "circus: unknown model %q; available: %v\n", name, names)
+		fmt.Fprintf(os.Stderr, "       to fetch from an arbitrary URL: circus download %s --url <url> [--sha256 HEX] [--size BYTES]\n", name)
 		return 1
+	case !ok && urlOverride != "":
+		// Ad-hoc download: synthesize an entry from the user's overrides.
+		entry = circusmodels.RegistryEntry{
+			Name:        name,
+			URL:         urlOverride,
+			SHA256:      shaOverride,
+			Size:        sizeOverride,
+			Description: "ad-hoc download (not in registry)",
+		}
+		if shaOverride == "" {
+			fmt.Fprintf(os.Stderr, "circus: warning: --sha256 not provided; integrity will NOT be verified\n")
+		}
+	case ok && urlOverride != "":
+		// Registry hit but the user is overriding. Apply any provided
+		// fields on top of the registry entry. Useful for, e.g., bumping
+		// to a newer quantization at the same name.
+		fmt.Fprintf(os.Stderr, "circus: --url override for registry entry %q\n", name)
+		entry.URL = urlOverride
+		if shaOverride != "" {
+			entry.SHA256 = shaOverride
+		} else {
+			// Suppress mismatched-SHA failure: when the user changes URL
+			// without supplying a new SHA, we can't keep the old one.
+			entry.SHA256 = ""
+			fmt.Fprintln(os.Stderr, "circus: warning: --sha256 not provided alongside --url; integrity will NOT be verified")
+		}
+		if sizeOverride > 0 {
+			entry.Size = sizeOverride
+		}
 	}
 
 	dir := circusmodels.Dir()

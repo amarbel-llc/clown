@@ -21,7 +21,7 @@
 .Nm
 .Cm models
 .Nm
-.Cm download Ar name
+.Cm download Ar name Op Fl Fl url Ar url Op Fl Fl sha256 Ar hex Op Fl Fl size Ar bytes
 .Sh DESCRIPTION
 .Nm
 is a thin CLI client of
@@ -120,9 +120,25 @@ one per line.
 Backed by ringmaster's
 .Cm ListAvailableModels
 RPC so the same file is seen by both circus and clown.
-.It Cm download Ar name
-Fetch and verify a model from the baked-in registry, with a
-bubbletea progress UI.
+.It Cm download Ar name Op Fl Fl url Ar url Op Fl Fl sha256 Ar hex Op Fl Fl size Ar bytes
+Fetch a model with a bubbletea progress UI.
+When
+.Ar name
+matches an entry in the baked-in registry and
+.Fl Fl url
+is omitted, the URL, expected SHA-256, and size are taken from the
+registry (the common case).
+When
+.Fl Fl url
+is provided, an ad-hoc download is performed from the given URL;
+.Fl Fl sha256
+is recommended but optional (a warning is printed when omitted), and
+.Fl Fl size
+populates the progress-bar denominator (otherwise the bar runs
+indeterminate).
+When both a registry hit and
+.Fl Fl url
+are present, the URL overrides the registry entry.
 Does NOT go through ringmaster; uses
 .Sy circusmodels.Download
 directly because ringmaster's

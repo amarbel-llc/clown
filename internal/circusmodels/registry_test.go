@@ -34,14 +34,14 @@ func TestRegistry_ContainsExpectedModels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Registry: %v", err)
 	}
-	if len(entries) != 5 {
-		t.Fatalf("expected 5 registry entries, got %d", len(entries))
+	if len(entries) != 6 {
+		t.Fatalf("expected 6 registry entries, got %d", len(entries))
 	}
 	names := make(map[string]bool)
 	for _, e := range entries {
 		names[e.Name] = true
 	}
-	for _, want := range []string{"qwen3-0.6b", "qwen3-1.7b", "qwen3-4b", "gemma3-1b", "gemma3-4b"} {
+	for _, want := range []string{"qwen3-0.6b", "qwen3-1.7b", "qwen3-4b", "gemma3-1b", "gemma3-4b", "gemma3-12b"} {
 		if !names[want] {
 			t.Errorf("expected model %q in registry", want)
 		}

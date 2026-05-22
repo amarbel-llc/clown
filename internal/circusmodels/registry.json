@@ -33,5 +33,12 @@
     "sha256": "882e8d2db44dc554fb0ea5077cb7e4bc49e7342a1f0da57901c0802ea21a0863",
     "size": 2489757856,
     "description": "Gemma3 4B Q4_K_M (~2.5GB)"
+  },
+  {
+    "name": "gemma3-12b",
+    "url": "https://huggingface.co/ggml-org/gemma-3-12b-it-qat-GGUF/resolve/main/gemma-3-12b-it-qat-Q4_0.gguf",
+    "sha256": "aa390ccb82bca552fec5970232b34b4801e3af06371921a16cece5df3d8fb4fb",
+    "size": 7985218656,
+    "description": "Gemma3 12B IT-QAT Q4_0 (~7.4GB) — biggest registry entry; fits M2 Pro 16GB with headroom"
   }
 ]
