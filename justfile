@@ -966,6 +966,66 @@ smoke-crush-against-tailnet ALIAS="gemma3-12b": build
     echo
     ./result/bin/clown --provider=crush -- --model "$alias" "$@"
 
+# Download an ad-hoc model by URL (bypasses registry), then print
+# its SHA-256 so we can add a proper registry entry in a follow-up.
+# Wraps the `circus download --url` path that the registry-pitfall
+# fix in commit a9a288e introduced.
+#
+# Usage: just download-ad-hoc <name> <url>
+[group("test")]
+download-ad-hoc NAME URL: build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    name="{{NAME}}"
+    url="{{URL}}"
+    if [[ -z "$name" || -z "$url" ]]; then
+        echo "usage: just download-ad-hoc <name> <url>" >&2
+        exit 1
+    fi
+    dest="$HOME/.local/share/circus/models/${name}.gguf"
+    if [[ -f "$dest" ]]; then
+        echo ">> already installed at $dest"
+        echo ">> sha256:"
+        shasum -a 256 "$dest" | awk '{print "   "$1}'
+        echo
+        echo ">> to add to registry, append this entry to internal/circusmodels/registry.json:"
+        size=$(stat -f %z "$dest" 2>/dev/null || stat -c %s "$dest")
+        sha=$(shasum -a 256 "$dest" | awk '{print $1}')
+        printf '  {\n    "name": "%s",\n    "url": "%s",\n    "sha256": "%s",\n    "size": %s,\n    "description": "TODO"\n  }\n' "$name" "$url" "$sha" "$size"
+        exit 0
+    fi
+    echo ">> downloading $name from $url"
+    echo ">> integrity check will be SKIPPED on first fetch; we'll print the real SHA afterward."
+    echo
+    ./result/bin/circus download "$name" --url "$url"
+    if [[ ! -f "$dest" ]]; then
+        echo "FAIL: download claimed success but $dest does not exist" >&2
+        exit 1
+    fi
+    echo
+    echo ">> downloaded to: $dest"
+    echo ">> computing sha256 (this takes a few seconds on multi-GB files)..."
+    size=$(stat -f %z "$dest" 2>/dev/null || stat -c %s "$dest")
+    sha=$(shasum -a 256 "$dest" | awk '{print $1}')
+    echo
+    echo ">> sha256: $sha"
+    echo ">> size:   $size bytes"
+    echo
+    echo ">> to add to registry, append this entry to internal/circusmodels/registry.json:"
+    printf '  {\n    "name": "%s",\n    "url": "%s",\n    "sha256": "%s",\n    "size": %s,\n    "description": "TODO"\n  }\n' "$name" "$url" "$sha" "$size"
+
+# Convenience: download qwen2.5-coder-7b (tool-use-trained, fits M2 Pro
+# 16GB at ~4.7GB Q4_K_M). After it lands, the recipe prints the registry
+# entry to copy-paste. From there, `circus start qwen2.5-coder-7b --bind
+# 0.0.0.0` + `just smoke-opencode-against-tailnet qwen2.5-coder-7b`
+# exercises tool calls through opencode against the local model.
+#
+# Usage: just download-qwen-coder
+[group("test")]
+download-qwen-coder: build
+    @just download-ad-hoc qwen2.5-coder-7b \
+        https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct-GGUF/resolve/main/qwen2.5-coder-7b-instruct-q4_k_m.gguf
+
 # Empirical probe — can we coax real llama-server far enough that
 # ringmaster's /health poll succeeds WITHOUT a GGUF? Times --version
 # exit latency, --help exit latency, and how long /health takes to
