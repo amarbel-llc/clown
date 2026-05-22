@@ -11,6 +11,27 @@
 > the right outline, but specific file paths and line numbers below
 > have drifted; cross-reference against the current source before
 > trusting them.
+>
+> **Update (2026-05-22):** Ringmaster phase 1 is verified live against
+> real `llama-server` children. Evidence the next session can rely on:
+>
+> - **Bats lane** — `zz-tests_bats/ringmaster.bats` now covers
+>   multi-instance lifecycle (start two, distinct ports, stop one,
+>   stop the other) against the fake-llama-server fixture. Green in
+>   the pre-merge hook.
+> - **Live smoke** — `just smoke-ringmaster-multi` exercises the same
+>   lifecycle against real GGUFs (gemma3-1b + qwen3-1.7b on darwin
+>   2026-05-21, both serving `/v1/messages`, registry empties on
+>   stop-all).
+> - **FDR-0010 status block** at the top of
+>   `docs/features/0010-ringmaster-control-plane.md` records which of
+>   its three promotion criteria are met (criterion 2: ✓) and which
+>   are blocked on this plan (criteria 1 + 3).
+>
+> The two callsites this plan must rewrite (`readCircusPortfile` in
+> `cmd/clown/opencode.go` + `cmd/clown/crush.go`) are exactly the
+> leftover flat-file readers keeping FDR-0010 out of `accepted`.
+> Stage C is the load-bearing one.
 
 **Goal:** Add a top-level `--backend` flag to clown, auto-start a circus instance for `--backend=circus`, and prompt on exit to stop it. Drop `*-local` profile variants. Implements FDR-0011.
 
