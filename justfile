@@ -851,6 +851,121 @@ smoke-clown-against-tailnet ALIAS="gemma3-12b" NAKED="1": build
         ANTHROPIC_CUSTOM_MODEL_OPTION='{"model":"'"$alias"'","max_tokens":2048}' \
         ./result/bin/clown $naked_flag -- --model "$alias"
 
+# Launch opencode pointed at the tailnet-exposed circus instance.
+# Mechanism: temporarily write the tailnet URL into
+# ~/.config/circus/opencode.toml (backing up any existing file), run
+# clown --provider=opencode (no --profile so the bare-provider path
+# fires), then restore the backup on exit.
+#
+# Usage: just smoke-opencode-against-tailnet [alias]
+[group("test")]
+smoke-opencode-against-tailnet ALIAS="gemma3-12b": build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    alias="{{ALIAS}}"
+    if ! command -v tailscale >/dev/null || ! command -v jq >/dev/null; then
+        echo "FAIL: tailscale or jq not on PATH" >&2
+        exit 1
+    fi
+    sock="${RINGMASTER_SOCKET:-$HOME/.local/state/circus/control.sock}"
+    if [[ ! -S "$sock" ]]; then
+        echo "FAIL: ringmaster socket not found at $sock" >&2
+        exit 1
+    fi
+    port=$(./result/bin/circus list | awk -v a="$alias" '$1==a {print $4}')
+    if [[ -z "$port" ]]; then
+        echo "FAIL: alias \"$alias\" not registered with ringmaster" >&2
+        ./result/bin/circus list >&2
+        exit 1
+    fi
+    host=$(tailscale status --self --json | jq -r '.Self.DNSName' | sed 's/\.$//')
+    # llama-server's OpenAI-compatible endpoint is /v1/{chat/completions,models,...}
+    # The TOML field is the base URL; opencode appends path segments itself.
+    url="http://${host}:${port}/v1"
+    cfg="$HOME/.config/circus/opencode.toml"
+    cfg_dir="$(dirname "$cfg")"
+    mkdir -p "$cfg_dir"
+    bak=""
+    if [[ -f "$cfg" ]]; then
+        bak="${cfg}.bak-$$"
+        mv "$cfg" "$bak"
+        echo ">> backed up existing $cfg → $bak"
+    fi
+    trap '
+        set +e
+        rm -f "'"$cfg"'"
+        if [[ -n "'"$bak"'" && -f "'"$bak"'" ]]; then
+            mv "'"$bak"'" "'"$cfg"'"
+            echo ">> restored $cfg" >&2
+        fi
+    ' EXIT
+    {
+        echo "# Synthesized by 'just smoke-opencode-against-tailnet'."
+        echo "# Pointing opencode at the tailnet-exposed circus instance."
+        echo "url = \"${url}\""
+        echo "token = \"local\""
+    } >"$cfg"
+    echo ">> pointing opencode at: ${url}"
+    echo ">> model alias:          ${alias}"
+    echo
+    # Bare --provider, no --profile — falls through to readOpencodeLocalConfig.
+    ./result/bin/clown --provider=opencode -- --model "$alias" "$@"
+
+# Launch crush pointed at the tailnet-exposed circus instance.
+# Same mechanism as smoke-opencode-against-tailnet but for
+# ~/.config/circus/crush.toml.
+#
+# Usage: just smoke-crush-against-tailnet [alias]
+[group("test")]
+smoke-crush-against-tailnet ALIAS="gemma3-12b": build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    alias="{{ALIAS}}"
+    if ! command -v tailscale >/dev/null || ! command -v jq >/dev/null; then
+        echo "FAIL: tailscale or jq not on PATH" >&2
+        exit 1
+    fi
+    sock="${RINGMASTER_SOCKET:-$HOME/.local/state/circus/control.sock}"
+    if [[ ! -S "$sock" ]]; then
+        echo "FAIL: ringmaster socket not found at $sock" >&2
+        exit 1
+    fi
+    port=$(./result/bin/circus list | awk -v a="$alias" '$1==a {print $4}')
+    if [[ -z "$port" ]]; then
+        echo "FAIL: alias \"$alias\" not registered with ringmaster" >&2
+        ./result/bin/circus list >&2
+        exit 1
+    fi
+    host=$(tailscale status --self --json | jq -r '.Self.DNSName' | sed 's/\.$//')
+    url="http://${host}:${port}/v1"
+    cfg="$HOME/.config/circus/crush.toml"
+    cfg_dir="$(dirname "$cfg")"
+    mkdir -p "$cfg_dir"
+    bak=""
+    if [[ -f "$cfg" ]]; then
+        bak="${cfg}.bak-$$"
+        mv "$cfg" "$bak"
+        echo ">> backed up existing $cfg → $bak"
+    fi
+    trap '
+        set +e
+        rm -f "'"$cfg"'"
+        if [[ -n "'"$bak"'" && -f "'"$bak"'" ]]; then
+            mv "'"$bak"'" "'"$cfg"'"
+            echo ">> restored $cfg" >&2
+        fi
+    ' EXIT
+    {
+        echo "# Synthesized by 'just smoke-crush-against-tailnet'."
+        echo "# Pointing crush at the tailnet-exposed circus instance."
+        echo "url = \"${url}\""
+        echo "token = \"local\""
+    } >"$cfg"
+    echo ">> pointing crush at: ${url}"
+    echo ">> model alias:       ${alias}"
+    echo
+    ./result/bin/clown --provider=crush -- --model "$alias" "$@"
+
 # Empirical probe — can we coax real llama-server far enough that
 # ringmaster's /health poll succeeds WITHOUT a GGUF? Times --version
 # exit latency, --help exit latency, and how long /health takes to
