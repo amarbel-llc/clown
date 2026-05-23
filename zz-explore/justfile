@@ -1155,3 +1155,672 @@ tent-probe CMD USERNS='keep-id' IMAGE='' EXTRA_MOUNTS='' PASS_DEVSHELL='0':
       "${env_args[@]}" \
       "$image" \
       bash -lc {{quote(CMD)}}
+
+# Walk a process's ancestor chain and report how deeply zmx is nested
+# in it. Motivating question: "is this session running under nested
+# zmx?" (which is the precondition for issue #83's tent wedge under
+# sc + zmx).
+#
+# Output:
+#   1. `pstree -ps <pid>` so the full ancestor chain is visible.
+#   2. A condensed table of zmx ancestors with PID / PPid / NSpgid /
+#      NSsid / cmdline — so you can see which is the client (still in
+#      caller's session) and which is the setsid()'d pty-leader.
+#   3. A one-line summary: "zmx depth = N".
+#
+# The `.zmx-wrapped` name itself is a nix `wrapProgram` artifact, not
+# a sign of double-wrapping (see issue #83 comment thread). Each
+# `.zmx-wrapped` in the chain is a real fork of zmx, typically one
+# client + one setsid'd pty-leader. Depth > 2 would be surprising.
+#
+# Read-only. Defaults to walking the recipe's own PPID (i.e. the
+# shell that invoked `just`).
+#
+# Usage:
+#   just zz-explore/zmx-depth           # walks $PPID
+#   just zz-explore/zmx-depth PID=12345 # walks an arbitrary pid
+zmx-depth PID='':
+    #!/usr/bin/env bash
+    set -uo pipefail
+    pid="{{PID}}"
+    if [[ -z "$pid" ]]; then
+        pid=$PPID
+    fi
+
+    if [[ ! -d "/proc/$pid" ]]; then
+        echo "FAIL: /proc/$pid does not exist." >&2
+        exit 2
+    fi
+
+    echo "pid:  $pid"
+    echo "time: $(date -Iseconds)"
+    echo
+
+    echo "=== ancestors (pstree -ps $pid) ==="
+    pstree -ps "$pid" 2>/dev/null || echo "(pstree failed)"
+    echo
+
+    # Walk the parent chain ourselves so we can hit /proc fields that
+    # pstree doesn't expose (NSsid, NSpgid, exact cmdline).
+    declare -a zmx_pids=()
+    cur="$pid"
+    while [[ -n "$cur" && "$cur" != "0" && -d "/proc/$cur" ]]; do
+        comm=$(cat "/proc/$cur/comm" 2>/dev/null || echo "?")
+        if [[ "$comm" == ".zmx-wrapped" || "$comm" == "zmx" ]]; then
+            zmx_pids+=("$cur")
+        fi
+        cur=$(awk '{print $4}' "/proc/$cur/stat" 2>/dev/null)
+    done
+
+    echo "=== zmx ancestors (${#zmx_pids[@]}) ==="
+    if [[ ${#zmx_pids[@]} -eq 0 ]]; then
+        echo "  (none — process is not running under zmx)"
+    else
+        printf '  %-8s %-8s %-8s %-8s %s\n' "PID" "PPid" "NSpgid" "NSsid" "CMDLINE"
+        for zp in "${zmx_pids[@]}"; do
+            ppid=$(awk '/^PPid:/ { print $2 }' "/proc/$zp/status" 2>/dev/null)
+            pgid=$(awk '/^NSpgid:/ { print $2 }' "/proc/$zp/status" 2>/dev/null)
+            sid=$(awk '/^NSsid:/ { print $2 }' "/proc/$zp/status" 2>/dev/null)
+            cmd=$(tr '\0' ' ' < "/proc/$zp/cmdline" 2>/dev/null | cut -c1-60)
+            printf '  %-8s %-8s %-8s %-8s %s\n' "$zp" "${ppid:-?}" "${pgid:-?}" "${sid:-?}" "$cmd"
+        done
+    fi
+    echo
+
+    echo "zmx depth = ${#zmx_pids[@]}"
+
+# Forensic probe for a wedged process. Pairs with tent-hang-snapshot:
+# given a hung PID, dump per-thread syscall + kernel stack + open-fd
+# state. The point is to identify *what resource* a thread is blocked
+# on without needing ptrace permissions (so the probe never disturbs
+# the wedged process).
+#
+# Sources (all standard /proc, no strace needed):
+#   - /proc/<pid>/task/<tid>/syscall  -> current syscall # + 6 args +
+#                                       stack pointer + program counter.
+#                                       Syscall # is the kernel's number;
+#                                       cross-reference with `ausyscall
+#                                       <n>` or the kernel headers.
+#   - /proc/<pid>/task/<tid>/stack    -> kernel-side call stack. The
+#                                       function names tell you what
+#                                       subsystem is blocking (e.g.
+#                                       pipe_read, ep_poll, futex_wait,
+#                                       n_tty_read).
+#   - /proc/<pid>/task/<tid>/wchan    -> single-symbol summary.
+#   - /proc/<pid>/fd/                 -> resolves the fd numbers that
+#                                       appear as syscall arg[0].
+#
+# Output is grouped by thread, with arg0-as-fd resolved against the
+# fd table when plausible.
+#
+# Read-only. Safe to run on any wedged process; in particular, also
+# useful on the inner zmx-wrapped, the inner shell, or podman in the
+# #83 hang.
+#
+# Usage: just zz-explore/wedge-syscall-probe PID
+wedge-syscall-probe PID:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    pid="{{PID}}"
+
+    if [[ ! -d "/proc/$pid" ]]; then
+        echo "FAIL: /proc/$pid does not exist." >&2
+        exit 2
+    fi
+
+    echo "pid:  $pid"
+    echo "time: $(date -Iseconds)"
+    echo
+
+    echo "=== /proc/$pid/cmdline ==="
+    tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null; echo
+    echo
+
+    echo "=== /proc/$pid/fd (target table) ==="
+    if [[ -d "/proc/$pid/fd" ]]; then
+        printf '  %-4s %s\n' "FD" "TARGET"
+        for fd_entry in "/proc/$pid/fd"/*; do
+            [[ -L "$fd_entry" ]] || continue
+            n=${fd_entry##*/}
+            target=$(readlink "$fd_entry" 2>/dev/null || echo "?")
+            printf '  %-4s %s\n' "$n" "$target"
+        done
+    else
+        echo "  (no fd directory)"
+    fi
+    echo
+
+    if [[ ! -d "/proc/$pid/task" ]]; then
+        echo "(no task directory — single-threaded or unreadable)"
+        exit 0
+    fi
+
+    for tdir in "/proc/$pid/task"/*; do
+        [[ -d "$tdir" ]] || continue
+        tid=${tdir##*/}
+
+        tstate=$(awk '/^State:/ { print $2 }' "$tdir/status" 2>/dev/null)
+        twchan=$(cat "$tdir/wchan" 2>/dev/null || echo "?")
+        tcomm=$(cat "$tdir/comm" 2>/dev/null || echo "?")
+
+        echo "=== tid=$tid state=$tstate wchan=$twchan comm=$tcomm ==="
+
+        # Syscall file format: "<nr> <a0> <a1> <a2> <a3> <a4> <a5> <sp> <pc>"
+        # or "running" if the thread isn't currently in a syscall.
+        if [[ -r "$tdir/syscall" ]]; then
+            sc=$(cat "$tdir/syscall" 2>/dev/null)
+            echo "  syscall:  $sc"
+            # Try to pull arg[0] in case it's an fd we already enumerated.
+            read -r nr a0 _ <<< "$sc"
+            if [[ "$nr" =~ ^[0-9]+$ && "$a0" =~ ^0x[0-9a-fA-F]+$ ]]; then
+                a0_dec=$((a0))
+                if [[ $a0_dec -ge 0 && $a0_dec -lt 4096 ]]; then
+                    target=$(readlink "/proc/$pid/fd/$a0_dec" 2>/dev/null || echo "")
+                    [[ -n "$target" ]] && echo "  arg0 as fd: $a0_dec -> $target"
+                fi
+            fi
+        else
+            echo "  syscall:  (unreadable)"
+        fi
+
+        if [[ -r "$tdir/stack" ]]; then
+            echo "  kernel stack:"
+            sed 's/^/    /' "$tdir/stack" 2>/dev/null | head -n 20
+        else
+            echo "  kernel stack: (unreadable — kernel.kptr_restrict?)"
+        fi
+        echo
+    done
+
+# Inspect unix-socket queue depths for a wedged process. /proc/net/unix
+# does NOT carry RecvQ/SendQ — only `ss` does. This recipe enumerates
+# the process's socket fds, resolves their inodes, then runs `ss -nxp`
+# once and filters the output to rows matching those inodes. Cross-
+# referenced with /proc/net/unix for connection state and peer.
+#
+# Use to distinguish "producer never wrote" (both queues 0) from
+# "consumer never drained" (one queue non-zero), which is the next
+# falsification step after the SIGWINCH test for issue #83.
+#
+# Read-only. Works on any pid, not just podman.
+#
+# Usage: just zz-explore/socket-queue-probe PID
+socket-queue-probe PID:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    pid="{{PID}}"
+
+    if [[ ! -d "/proc/$pid" ]]; then
+        echo "FAIL: /proc/$pid does not exist." >&2
+        exit 2
+    fi
+
+    echo "pid:  $pid"
+    echo "time: $(date -Iseconds)"
+    echo
+
+    # Walk fds, collect socket-* targets with their inode numbers.
+    declare -A sock_fd=()       # inode -> fd
+    declare -a sock_inodes=()
+    if [[ ! -d "/proc/$pid/fd" ]]; then
+        echo "FAIL: /proc/$pid/fd unreadable." >&2
+        exit 2
+    fi
+    for fd_entry in "/proc/$pid/fd"/*; do
+        [[ -L "$fd_entry" ]] || continue
+        n=${fd_entry##*/}
+        target=$(readlink "$fd_entry" 2>/dev/null || echo "")
+        case "$target" in
+            socket:\[*\])
+                ino=${target#socket:[}
+                ino=${ino%]}
+                sock_fd[$ino]=$n
+                sock_inodes+=("$ino")
+                ;;
+        esac
+    done
+
+    echo "=== socket fds (${#sock_inodes[@]}) ==="
+    if [[ ${#sock_inodes[@]} -eq 0 ]]; then
+        echo "  (no sockets — nothing to probe)"
+        exit 0
+    fi
+    printf '  %-4s %s\n' "FD" "INODE"
+    for ino in "${sock_inodes[@]}"; do
+        printf '  %-4s %s\n' "${sock_fd[$ino]}" "$ino"
+    done
+    echo
+
+    # ss -nxp dumps unix sockets with RecvQ/SendQ + peer + holding pid.
+    # Filter to our inodes. ss's output columns (header on first line):
+    #   Netid State RecvQ SendQ LocalAddr:Port PeerAddr:Port Process
+    # The inode appears at the end of LocalAddr ("ino" field) when
+    # the socket has no bound path, or in the Process column (fd= /
+    # ino=). To match reliably, grep against the literal inode number
+    # — false positives are unlikely for the 7+ digit inodes ss uses.
+    echo "=== ss -nxp filtered to these inodes ==="
+    pattern=$(printf '%s|' "${sock_inodes[@]}" | sed 's/|$//')
+    ss -nxp 2>/dev/null | awk -v pat="$pattern" 'NR==1 || $0 ~ pat'
+    echo
+
+    # Cross-reference with /proc/net/unix. Format:
+    #   Num RefCount Protocol Flags Type State Inode [Path]
+    # Type: 0001=STREAM 0002=DGRAM 0005=SEQPACKET
+    # State: 01=unconnected 02=connecting 03=connected 04=disconnecting 05=listening
+    echo "=== /proc/net/unix rows for these inodes ==="
+    echo "  (cols: Num RefCount Proto Flags Type State Inode [Path])"
+    echo "  (Type: 1=STREAM 2=DGRAM 5=SEQPACKET / State: 1=unconn 3=connected 5=listening)"
+    pattern_pn=$(printf ' %s\\b|' "${sock_inodes[@]}" | sed 's/|$//')
+    awk -v pat="$pattern_pn" 'NR==1 || $0 ~ pat' /proc/net/unix
+    echo
+
+    # TCP sockets too — podman opens these for its REST API.
+    echo "=== ss -tnp filtered to pid $pid ==="
+    ss -tnp 2>/dev/null | awk -v p="pid=$pid," 'NR==1 || $0 ~ p'
+
+# Dump the journald stream conmon recorded for a container. Used to
+# answer "what did the process inside actually write to its pty?"
+# without ptrace.
+#
+# Podman's journald log driver tags each pty byte sent through conmon
+# with CONTAINER_ID_FULL=<64-hex>, CONTAINER_ID=<12-hex>, and
+# CONTAINER_NAME. We filter on CONTAINER_ID_FULL because it's the
+# unambiguous one; the 12-hex CONTAINER_ID can collide across runs.
+#
+# Output is the raw MESSAGE field (no journald prefix noise) followed
+# by a tail of the structured rows for debugging. The MESSAGE field
+# can itself contain escape sequences (cursor queries, color codes);
+# the recipe pipes it through cat -v so the bytes are visible in a
+# normal terminal.
+#
+# Read-only.
+#
+# Usage: just zz-explore/tent-container-journal CID
+#   CID can be the full 64-hex container id or any unique prefix.
+#   Find it via `podman ps -aq` or from conmon's `-c <id>` argument
+#   (visible in `pgrep -a conmon`).
+tent-container-journal CID:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    cid="{{CID}}"
+
+    if [[ -z "$cid" ]]; then
+        echo "FAIL: CID is required." >&2
+        exit 2
+    fi
+
+    # If a short id was passed, expand it. podman storage db has the
+    # full ids as directory names under
+    # ~/.local/share/containers/storage/overlay-containers/.
+    full=""
+    if [[ ${#cid} -ge 60 ]]; then
+        full=$cid
+    else
+        for dir in ~/.local/share/containers/storage/overlay-containers/"$cid"*; do
+            [[ -d "$dir" ]] || continue
+            full=$(basename "$dir")
+            break
+        done
+        if [[ -z "$full" ]]; then
+            echo "FAIL: no container directory found matching prefix '$cid'." >&2
+            exit 2
+        fi
+    fi
+
+    short=${full:0:12}
+    echo "cid:    $full"
+    echo "short:  $short"
+    echo "time:   $(date -Iseconds)"
+    echo
+
+    echo "=== MESSAGE field — system journal (raw bytes via cat -v) ==="
+    journalctl --no-pager -o cat \
+        CONTAINER_ID_FULL="$full" 2>/dev/null | cat -v || \
+        echo "(no rows in system journal)"
+    echo
+    echo
+    echo "=== MESSAGE field — user journal (fallback) ==="
+    journalctl --user --no-pager -o cat \
+        CONTAINER_ID_FULL="$full" 2>/dev/null | cat -v || \
+        echo "(no rows in user journal)"
+    echo
+    echo
+    echo "=== last 20 structured rows from system journal (with metadata) ==="
+    journalctl --no-pager -n 20 \
+        -o short \
+        CONTAINER_ID_FULL="$full" 2>/dev/null \
+        | sed 's/^/  /' || echo "  (no rows)"
+    echo
+    echo "=== any system-journal rows mentioning the short cid ==="
+    journalctl --no-pager -n 20 -g "$short" 2>/dev/null \
+        | sed 's/^/  /' | head -n 60 || echo "  (no rows)"
+
+# Snapshot /proc/<pid>/io for one or more PIDs. Used to detect whether
+# a process has been reading or writing bytes by comparing two
+# snapshots (call twice with the same PIDs, take a delta).
+#
+# Each line of /proc/<pid>/io has the byte counters:
+#   rchar, wchar          — bytes read/written via read()/write() syscalls
+#                           (includes those served from the page cache)
+#   read_bytes, write_bytes — bytes that actually touched a block device
+#   syscr, syscw          — count of read/write syscalls
+#
+# Use rchar / wchar / syscr / syscw to spot tty/pipe activity (block-
+# device counters don't move for pty I/O). If a process is supposed
+# to be forwarding bytes but rchar and syscr both stay constant across
+# two snapshots, it isn't reading anything from anywhere.
+#
+# Read-only. Accepts space-separated PIDs.
+#
+# Usage:
+#   just zz-explore/io-probe "3001701 3001716 3001721 2989810 2989812"
+io-probe PIDS:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    pids="{{PIDS}}"
+    if [[ -z "$pids" ]]; then
+        echo "FAIL: at least one PID required." >&2
+        exit 2
+    fi
+
+    echo "time: $(date -Iseconds)"
+    echo
+    printf '  %-8s %-12s %-12s %-12s %-12s %s\n' "PID" "RCHAR" "WCHAR" "SYSCR" "SYSCW" "COMM"
+    for p in $pids; do
+        if [[ ! -r "/proc/$p/io" ]]; then
+            printf '  %-8s %s\n' "$p" "(unreadable or gone)"
+            continue
+        fi
+        comm=$(cat "/proc/$p/comm" 2>/dev/null || echo "?")
+        rchar=$(awk '/^rchar:/ { print $2 }' "/proc/$p/io" 2>/dev/null)
+        wchar=$(awk '/^wchar:/ { print $2 }' "/proc/$p/io" 2>/dev/null)
+        syscr=$(awk '/^syscr:/ { print $2 }' "/proc/$p/io" 2>/dev/null)
+        syscw=$(awk '/^syscw:/ { print $2 }' "/proc/$p/io" 2>/dev/null)
+        printf '  %-8s %-12s %-12s %-12s %-12s %s\n' \
+            "$p" "${rchar:-?}" "${wchar:-?}" "${syscr:-?}" "${syscw:-?}" "$comm"
+    done
+
+# Run a specific claude-code binary inside the clown-tent image to
+# isolate whether the issue #83 TUI-init wedge is a regression in a
+# particular claude-code version. Bypasses clown's plugin pipeline
+# entirely — vanilla claude, no plugin-dir, no agents, no MCP — so
+# any wedge we observe is purely a function of claude's interaction
+# with the libvterm-emulated terminal exposed by zmx-leader.
+#
+# IMPORTANT: run this from inside the wedge-reproducing sc+zmx
+# session for the result to be diagnostic. From a non-zmx terminal
+# claude will work regardless.
+#
+# CLAUDE_BIN must be an absolute path inside /nix/store (since the
+# tent only bind-mounts /nix/store, not /home or arbitrary paths).
+# Discover candidates with:
+#   ls -d /nix/store/*claude-code*/bin/claude
+#
+# IMAGE defaults to the tent image whose tag matches the worktree's
+# version.txt (mirrors what `clown --tent` would launch). Override
+# to test against a differently-tagged tent.
+#
+# Usage:
+#   just zz-explore/tent-claude-version CLAUDE_BIN=/nix/store/.../claude-code-2.1.111/bin/claude
+#   just zz-explore/tent-claude-version CLAUDE_BIN=/nix/store/.../bin/claude IMAGE=clown-tent:0.3.2
+tent-claude-version CLAUDE_BIN IMAGE='':
+    #!/usr/bin/env bash
+    set -uo pipefail
+
+    claude_bin="{{CLAUDE_BIN}}"
+    image="{{IMAGE}}"
+
+    if [[ -z "$image" ]]; then
+        root=$(git rev-parse --show-toplevel)
+        ver=$(tr -d '[:space:]' < "$root/version.txt")
+        image="clown-tent:$ver"
+    fi
+
+    if [[ ! -x "$claude_bin" ]]; then
+        echo "FAIL: '$claude_bin' is not an executable file." >&2
+        echo "      Candidates on this host:" >&2
+        ls -d /nix/store/*claude-code*/bin/claude 2>/dev/null \
+            | sed 's/^/        /' >&2 \
+            || echo "        (none — try 'nix run nixpkgs#claude-code -- --version' to fetch one)" >&2
+        exit 2
+    fi
+
+    if ! /usr/bin/podman image exists "$image"; then
+        echo "FAIL: image '$image' not loaded. Run 'just build' to" >&2
+        echo "      produce the tent tarball, then 'podman load -i" >&2
+        echo "      \$(nix path-info .#tent-image)' to load it." >&2
+        exit 2
+    fi
+
+    echo "image:  $image"
+    echo "claude: $claude_bin"
+    echo
+    echo ">> launching vanilla claude inside tent (Ctrl-C to exit)"
+    echo "   no plugin-dir, no --agents, no --append-system-prompt-file"
+    echo
+
+    exec /usr/bin/podman run --rm -i -t --userns=keep-id \
+        --volume /nix/store:/nix/store:ro \
+        "$image" \
+        "$claude_bin"
+
+# Probe whether the ~/.claude config paths are writable from inside
+# the clown-tent image under the same volume mounts + userns mapping
+# that `clown --tent` uses. Falsifies / confirms the theory (matching
+# upstream claude-code issues #29162 and #56893) that issue #83's
+# wedge is claude silently looping on EPERM/ENOENT during config
+# writes.
+#
+# Drops `-t` so the recipe can be run non-interactively via `just`.
+# Doesn't run claude — just exercises the same FS surface claude
+# would touch on startup.
+#
+# Usage: just zz-explore/tent-claude-writeability
+tent-claude-writeability:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    /usr/bin/podman run --rm -i --userns=keep-id \
+      --volume /nix/store:/nix/store:ro \
+      --volume /home/sasha/.claude:/home/sasha/.claude \
+      --volume /home/sasha/.claude.json:/home/sasha/.claude.json \
+      clown-tent:0.3.2 \
+      sh -c '
+        echo "id:      $(id)"
+        echo "uid_map: $(cat /proc/self/uid_map)"
+        echo
+        echo "-- stat ~/.claude --"
+        ls -ld /home/sasha/.claude
+        echo "-- stat ~/.claude.json --"
+        ls -l /home/sasha/.claude.json
+        echo
+        echo "-- touch ~/.claude/write-test --"
+        touch /home/sasha/.claude/write-test 2>&1 \
+          && { echo OK; rm -f /home/sasha/.claude/write-test; } \
+          || echo FAIL
+        echo
+        echo "-- touch ~/.claude/debug/write-test --"
+        mkdir -p /home/sasha/.claude/debug 2>&1
+        touch /home/sasha/.claude/debug/write-test 2>&1 \
+          && { echo OK; rm -f /home/sasha/.claude/debug/write-test; } \
+          || echo FAIL
+        echo
+        echo "-- append+restore to ~/.claude.json --"
+        cp /home/sasha/.claude.json /tmp/orig.json
+        printf "\n" >> /home/sasha/.claude.json 2>&1 \
+          && echo OK \
+          || echo FAIL
+        cp /tmp/orig.json /home/sasha/.claude.json 2>/dev/null
+      '
+
+# Run claude --debug inside the clown-tent under the same mounts /
+# userns mapping as `clown --tent`, with a hard timeout, then dump
+# everything it logged (both to stdout/stderr and to its own
+# ~/.claude/debug/ file). The strace-level investigation can't see
+# what claude is doing at the JS level, but --debug should — per
+# upstream issue #29162 the same hang signature was diagnosed only
+# by reading the debug log after the wedge.
+#
+# This recipe drops `-t` (so podman doesn't need a tty), pipes
+# stdout/stderr to a file, gives the container `TIMEOUT_S` seconds
+# to wedge, then kills it and reports.
+#
+# DURATION defaults to 10 (seconds). Pass DURATION=5 for a quick
+# probe or DURATION=30 if you need claude to get further along
+# before we yank it.
+#
+# Read-only with respect to host state except for the captured
+# log files (under .tmp/).
+#
+# Usage:
+#   just zz-explore/tent-claude-with-debug
+#   just zz-explore/tent-claude-with-debug DURATION=20
+tent-claude-with-debug DURATION='10':
+    #!/usr/bin/env bash
+    set -uo pipefail
+    secs="{{DURATION}}"
+
+    out_dir=".tmp/tent-claude-with-debug-$(date +%s)"
+    mkdir -p "$out_dir"
+    stdio_log="$out_dir/stdio.log"
+
+    # Snapshot the debug dir BEFORE the run so we can diff the
+    # listings and identify whatever new file claude creates.
+    before_list="$out_dir/before.list"
+    after_list="$out_dir/after.list"
+    ls -la /home/sasha/.claude/debug/ 2>/dev/null > "$before_list" || true
+
+    echo "out_dir:     $out_dir"
+    echo "stdio_log:   $stdio_log"
+    echo "duration:    ${secs}s"
+    echo
+    echo ">> launching claude --debug inside tent (timeout ${secs}s)"
+
+    # `timeout --signal=KILL` because podman+conmon swallows SIGTERM
+    # and lingers. KILL kills the podman client; conmon and the
+    # container will then clean up via their normal --rm flow.
+    timeout --signal=KILL "${secs}" /usr/bin/podman run --rm -i \
+        --userns=keep-id \
+        --env HOME=/home/sasha \
+        --env USER=sasha \
+        --volume /nix/store:/nix/store:ro \
+        --volume /home/sasha/.claude:/home/sasha/.claude \
+        --volume /home/sasha/.claude.json:/home/sasha/.claude.json \
+        clown-tent:0.3.2 \
+        sh -c 'stty rows 39 cols 141 2>/dev/null; exec /nix/store/dii6cpbdqzjcjqcy18x6n56cql0fmdg9-claude-code-2.1.111/bin/claude --debug' \
+      > "$stdio_log" 2>&1 || true
+
+    echo ">> exited (or was killed by timeout)"
+    echo
+
+    # Give conmon a moment to flush.
+    sleep 1
+    ls -la /home/sasha/.claude/debug/ 2>/dev/null > "$after_list" || true
+
+    echo "=== stdio capture (head 200 lines) ==="
+    head -n 200 "$stdio_log" 2>/dev/null | sed 's/^/  /' \
+        || echo "  (empty)"
+    if [[ $(wc -l < "$stdio_log" 2>/dev/null || echo 0) -gt 200 ]]; then
+        echo "  ... (truncated; full file at $stdio_log)"
+    fi
+    echo
+
+    echo "=== new files in ~/.claude/debug/ (diff before/after) ==="
+    diff "$before_list" "$after_list" \
+        | grep -E '^>' \
+        | sed 's/^> /  /' \
+        || echo "  (no new files)"
+    echo
+
+    # If claude created a fresh debug log, tail it. Symlink target
+    # is the freshest session log; per #29162 this is where the
+    # actual EPERM/ENOENT errors live, hidden from stdout.
+    if [[ -L /home/sasha/.claude/debug/latest ]]; then
+        target=$(readlink /home/sasha/.claude/debug/latest 2>/dev/null)
+        echo "=== ~/.claude/debug/latest -> $target ==="
+        if [[ -r "$target" ]]; then
+            wc -l "$target" 2>/dev/null | sed 's/^/  /'
+            echo "  --- head ---"
+            head -n 100 "$target" 2>/dev/null | sed 's/^/    /'
+            echo "  --- tail ---"
+            tail -n 100 "$target" 2>/dev/null | sed 's/^/    /'
+        else
+            echo "  (target not readable: $target)"
+        fi
+    else
+        echo "=== ~/.claude/debug/latest ==="
+        echo "  (no symlink — claude didn't write a session log)"
+    fi
+
+# Run claude --debug interactively (with `-t`) inside the tent under
+# the same mounts / env mapping as `clown --tent`. Unlike
+# `tent-claude-with-debug` (which drops -t so it can run through
+# `just` without a terminal), this recipe execs podman directly so
+# you get a real pty and claude initializes in TUI mode. Designed
+# for catching the issue #83 wedge: launch this, watch the TUI
+# wedge, hit Ctrl-C, then read the debug log that claude wrote.
+#
+# MUST be invoked from a real interactive shell — not via the
+# just-us-agents MCP tool — because it needs a tty for podman -t.
+#
+# The debug log path is printed before launch. After you Ctrl-C
+# out of the wedge, `cat <path>` to see what claude was doing
+# JS-side.
+#
+# Parameters:
+#   CLAUDE_BIN  Path to the claude binary in /nix/store. Default is
+#               claude-code 2.1.111 (the version that launches cleanly
+#               with the empty arg set). Pass a 2.1.143 path to test
+#               the version-regression hypothesis. Discover candidates:
+#                 ls -d /nix/store/*claude-code*/bin/claude
+#   EXTRA_ARGS  Additional args appended to claude's invocation. Use
+#               to incrementally re-add the clown-tent injection
+#               (--plugin-dir, --agents, --append-system-prompt-file,
+#               --session-id) and find which one triggers the wedge.
+#               Bash word-split as-is — quote externally.
+#
+# Usage (positional — `CLAUDE_BIN=…` style does NOT work in just,
+# despite the docstring convention elsewhere in this file):
+#   just zz-explore/tent-claude-with-debug-tty
+#   just zz-explore/tent-claude-with-debug-tty \
+#     /nix/store/5djd2jhp5kxpirahbi1w7xq85cyh3d08-claude-code-2.1.143/bin/claude
+#   just zz-explore/tent-claude-with-debug-tty \
+#     /nix/store/dii6cpbdqzjcjqcy18x6n56cql0fmdg9-claude-code-2.1.111/bin/claude \
+#     '--plugin-dir /nix/store/m4yalh23h3dfxg95mw7vrymlx6w7mi60-eng-plugin/share/purse-first/eng'
+tent-claude-with-debug-tty CLAUDE_BIN='/nix/store/dii6cpbdqzjcjqcy18x6n56cql0fmdg9-claude-code-2.1.111/bin/claude' EXTRA_ARGS='':
+    #!/usr/bin/env bash
+    set -uo pipefail
+
+    claude_bin="{{CLAUDE_BIN}}"
+    extra_args="{{EXTRA_ARGS}}"
+
+    if [[ ! -x "$claude_bin" ]]; then
+        echo "FAIL: '$claude_bin' is not an executable file." >&2
+        echo "      Candidates on this host:" >&2
+        ls -d /nix/store/*claude-code*/bin/claude 2>/dev/null \
+            | sed 's/^/        /' >&2 \
+            || echo "        (none found in /nix/store)" >&2
+        exit 2
+    fi
+
+    echo "claude:     $claude_bin"
+    echo "extra args: ${extra_args:-(none)}"
+    echo "debug log:  ~/.claude/debug/latest after run"
+    echo "  current target: $(readlink /home/sasha/.claude/debug/latest 2>/dev/null || echo '<none>')"
+    echo
+
+    # Build the inner sh command: stty for winsize, then exec claude
+    # with --debug + EXTRA_ARGS. shell-quote $claude_bin so paths
+    # with shell-meaningful chars survive; trust EXTRA_ARGS verbatim
+    # so the caller controls word-splitting/quoting.
+    inner_cmd="stty rows 39 cols 141 2>/dev/null; exec \"$claude_bin\" --debug $extra_args"
+
+    exec /usr/bin/podman run --rm -i -t \
+        --userns=keep-id \
+        --env HOME=/home/sasha \
+        --env USER=sasha \
+        --env TERM \
+        --volume /nix/store:/nix/store:ro \
+        --volume /home/sasha/.claude:/home/sasha/.claude \
+        --volume /home/sasha/.claude.json:/home/sasha/.claude.json \
+        clown-tent:0.3.2 \
+        sh -c "$inner_cmd"
