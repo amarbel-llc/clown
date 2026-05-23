@@ -705,8 +705,26 @@ tent-hang-snapshot PID='' STRACE='0':
 
     if [[ "{{STRACE}}" != "0" ]]; then
         deepest=${all_pids[-1]}
-        echo "=== strace -f -p $deepest for {{STRACE}}s ==="
-        timeout "{{STRACE}}" strace -f -p "$deepest" 2>&1 | tail -n 40 || true
+        strace_out_dir="${XDG_LOG_HOME:-$HOME/.local/log}/clown/strace"
+        mkdir -p "$strace_out_dir"
+        strace_log="$strace_out_dir/tent-hang-snapshot-${deepest}-$(date +%s).log"
+
+        echo "=== strace -f -p $deepest for {{STRACE}}s (full log) ==="
+        echo "log:  $strace_log"
+        # -o file writes structured strace output without truncation;
+        # previous `| tail -n 40` only gave the steady-state tail and
+        # hid the startup escape sequences we needed during issue #83.
+        timeout "{{STRACE}}" strace -f -p "$deepest" -o "$strace_log" 2>&1 || true
+        if [[ -r "$strace_log" ]]; then
+            lines=$(wc -l < "$strace_log")
+            echo "  ($lines lines captured)"
+            echo "  --- head ---"
+            head -n 20 "$strace_log" 2>/dev/null | sed 's/^/    /'
+            echo "  --- tail ---"
+            tail -n 20 "$strace_log" 2>/dev/null | sed 's/^/    /'
+        else
+            echo "  (no log written)"
+        fi
         echo
     fi
 
@@ -1176,9 +1194,9 @@ tent-probe CMD USERNS='keep-id' IMAGE='' EXTRA_MOUNTS='' PASS_DEVSHELL='0':
 # Read-only. Defaults to walking the recipe's own PPID (i.e. the
 # shell that invoked `just`).
 #
-# Usage:
-#   just zz-explore/zmx-depth           # walks $PPID
-#   just zz-explore/zmx-depth PID=12345 # walks an arbitrary pid
+# Usage (positional — `KEY=value` style does NOT work in just):
+#   just zz-explore/zmx-depth        # walks $PPID
+#   just zz-explore/zmx-depth 12345  # walks an arbitrary pid
 zmx-depth PID='':
     #!/usr/bin/env bash
     set -uo pipefail
@@ -1560,9 +1578,9 @@ io-probe PIDS:
 # version.txt (mirrors what `clown --tent` would launch). Override
 # to test against a differently-tagged tent.
 #
-# Usage:
-#   just zz-explore/tent-claude-version CLAUDE_BIN=/nix/store/.../claude-code-2.1.111/bin/claude
-#   just zz-explore/tent-claude-version CLAUDE_BIN=/nix/store/.../bin/claude IMAGE=clown-tent:0.3.2
+# Usage (positional — `KEY=value` style does NOT work in just):
+#   just zz-explore/tent-claude-version /nix/store/.../claude-code-2.1.111/bin/claude
+#   just zz-explore/tent-claude-version /nix/store/.../bin/claude clown-tent:0.3.2
 tent-claude-version CLAUDE_BIN IMAGE='':
     #!/usr/bin/env bash
     set -uo pipefail
@@ -1671,9 +1689,9 @@ tent-claude-writeability:
 # Read-only with respect to host state except for the captured
 # log files (under .tmp/).
 #
-# Usage:
+# Usage (positional — `KEY=value` style does NOT work in just):
 #   just zz-explore/tent-claude-with-debug
-#   just zz-explore/tent-claude-with-debug DURATION=20
+#   just zz-explore/tent-claude-with-debug 20  # 20-second timeout
 tent-claude-with-debug DURATION='10':
     #!/usr/bin/env bash
     set -uo pipefail
@@ -1683,11 +1701,21 @@ tent-claude-with-debug DURATION='10':
     mkdir -p "$out_dir"
     stdio_log="$out_dir/stdio.log"
 
-    # Snapshot the debug dir BEFORE the run so we can diff the
-    # listings and identify whatever new file claude creates.
+    # Recipe-local overlay for /home/sasha/.claude/debug/ inside the
+    # container. Without this, every recipe run writes to the host's
+    # ~/.claude/debug/ directly and the `latest` symlink gets
+    # clobbered between runs. The overlay lives under out_dir so each
+    # invocation gets its own debug capture, and the host's real
+    # ~/.claude/debug/ is left alone.
+    recipe_debug_dir="$out_dir/debug"
+    mkdir -p "$recipe_debug_dir"
+
+    # Snapshot the (now-empty) overlay's listing BEFORE the run so
+    # we can diff the listings and identify whatever new file
+    # claude creates.
     before_list="$out_dir/before.list"
     after_list="$out_dir/after.list"
-    ls -la /home/sasha/.claude/debug/ 2>/dev/null > "$before_list" || true
+    ls -la "$recipe_debug_dir" 2>/dev/null > "$before_list" || true
 
     echo "out_dir:     $out_dir"
     echo "stdio_log:   $stdio_log"
@@ -1698,12 +1726,18 @@ tent-claude-with-debug DURATION='10':
     # `timeout --signal=KILL` because podman+conmon swallows SIGTERM
     # and lingers. KILL kills the podman client; conmon and the
     # container will then clean up via their normal --rm flow.
+    # The second --volume (recipe_debug_dir → /home/sasha/.claude/debug)
+    # is layered AFTER the parent --volume /home/sasha/.claude mount,
+    # so podman overrides the subdir mapping with our recipe-local
+    # capture dir. Everything else under ~/.claude (config, settings)
+    # still comes from the host.
     timeout --signal=KILL "${secs}" /usr/bin/podman run --rm -i \
         --userns=keep-id \
         --env HOME=/home/sasha \
         --env USER=sasha \
         --volume /nix/store:/nix/store:ro \
         --volume /home/sasha/.claude:/home/sasha/.claude \
+        --volume "$(realpath "$recipe_debug_dir"):/home/sasha/.claude/debug" \
         --volume /home/sasha/.claude.json:/home/sasha/.claude.json \
         clown-tent:0.3.2 \
         sh -c 'stty rows 39 cols 141 2>/dev/null; exec /nix/store/dii6cpbdqzjcjqcy18x6n56cql0fmdg9-claude-code-2.1.111/bin/claude --debug' \
@@ -1714,7 +1748,7 @@ tent-claude-with-debug DURATION='10':
 
     # Give conmon a moment to flush.
     sleep 1
-    ls -la /home/sasha/.claude/debug/ 2>/dev/null > "$after_list" || true
+    ls -la "$recipe_debug_dir" 2>/dev/null > "$after_list" || true
 
     echo "=== stdio capture (head 200 lines) ==="
     head -n 200 "$stdio_log" 2>/dev/null | sed 's/^/  /' \
@@ -1724,30 +1758,34 @@ tent-claude-with-debug DURATION='10':
     fi
     echo
 
-    echo "=== new files in ~/.claude/debug/ (diff before/after) ==="
+    echo "=== new files in $recipe_debug_dir (diff before/after) ==="
     diff "$before_list" "$after_list" \
         | grep -E '^>' \
         | sed 's/^> /  /' \
         || echo "  (no new files)"
     echo
 
-    # If claude created a fresh debug log, tail it. Symlink target
-    # is the freshest session log; per #29162 this is where the
-    # actual EPERM/ENOENT errors live, hidden from stdout.
-    if [[ -L /home/sasha/.claude/debug/latest ]]; then
-        target=$(readlink /home/sasha/.claude/debug/latest 2>/dev/null)
-        echo "=== ~/.claude/debug/latest -> $target ==="
-        if [[ -r "$target" ]]; then
-            wc -l "$target" 2>/dev/null | sed 's/^/  /'
+    # If claude created a fresh debug log, tail it. Per #29162 this
+    # is where the actual EPERM/ENOENT errors live, hidden from
+    # stdout. The `latest` symlink inside the container points at
+    # the freshest session log within our recipe-local overlay.
+    if [[ -L "$recipe_debug_dir/latest" ]]; then
+        # The symlink target is an absolute container path; rewrite
+        # it to the host-side overlay before reading.
+        container_target=$(readlink "$recipe_debug_dir/latest" 2>/dev/null)
+        host_target=$(realpath "$recipe_debug_dir")/$(basename "$container_target")
+        echo "=== latest -> $container_target (host: $host_target) ==="
+        if [[ -r "$host_target" ]]; then
+            wc -l "$host_target" 2>/dev/null | sed 's/^/  /'
             echo "  --- head ---"
-            head -n 100 "$target" 2>/dev/null | sed 's/^/    /'
+            head -n 100 "$host_target" 2>/dev/null | sed 's/^/    /'
             echo "  --- tail ---"
-            tail -n 100 "$target" 2>/dev/null | sed 's/^/    /'
+            tail -n 100 "$host_target" 2>/dev/null | sed 's/^/    /'
         else
-            echo "  (target not readable: $target)"
+            echo "  (target not readable: $host_target)"
         fi
     else
-        echo "=== ~/.claude/debug/latest ==="
+        echo "=== $recipe_debug_dir/latest ==="
         echo "  (no symlink — claude didn't write a session log)"
     fi
 
@@ -1802,10 +1840,17 @@ tent-claude-with-debug-tty CLAUDE_BIN='/nix/store/dii6cpbdqzjcjqcy18x6n56cql0fmd
         exit 2
     fi
 
+    # Recipe-local overlay for /home/sasha/.claude/debug/ — per-run
+    # capture dir so back-to-back invocations don't clobber each
+    # other's debug logs via the shared host `latest` symlink.
+    out_dir=".tmp/tent-claude-with-debug-tty-$(date +%s)"
+    recipe_debug_dir="$out_dir/debug"
+    mkdir -p "$recipe_debug_dir"
+
     echo "claude:     $claude_bin"
     echo "extra args: ${extra_args:-(none)}"
-    echo "debug log:  ~/.claude/debug/latest after run"
-    echo "  current target: $(readlink /home/sasha/.claude/debug/latest 2>/dev/null || echo '<none>')"
+    echo "debug overlay: $recipe_debug_dir"
+    echo "  (after Ctrl-C, read \$recipe_debug_dir/<uuid>.txt for the JS trace)"
     echo
 
     # Build the inner sh command: stty for winsize, then exec claude
@@ -1814,6 +1859,9 @@ tent-claude-with-debug-tty CLAUDE_BIN='/nix/store/dii6cpbdqzjcjqcy18x6n56cql0fmd
     # so the caller controls word-splitting/quoting.
     inner_cmd="stty rows 39 cols 141 2>/dev/null; exec \"$claude_bin\" --debug $extra_args"
 
+    # The second --volume layers the recipe-local debug dir over the
+    # parent ~/.claude mount; everything else under ~/.claude
+    # (settings, plugins, etc.) still comes from the host.
     exec /usr/bin/podman run --rm -i -t \
         --userns=keep-id \
         --env HOME=/home/sasha \
@@ -1821,6 +1869,7 @@ tent-claude-with-debug-tty CLAUDE_BIN='/nix/store/dii6cpbdqzjcjqcy18x6n56cql0fmd
         --env TERM \
         --volume /nix/store:/nix/store:ro \
         --volume /home/sasha/.claude:/home/sasha/.claude \
+        --volume "$(realpath "$recipe_debug_dir"):/home/sasha/.claude/debug" \
         --volume /home/sasha/.claude.json:/home/sasha/.claude.json \
         clown-tent:0.3.2 \
         sh -c "$inner_cmd"
