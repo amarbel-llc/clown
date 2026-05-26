@@ -561,6 +561,14 @@
               "-X github.com/amarbel-llc/clown/internal/buildcfg.PodmanPath=${tentPodmanPath}"
               "-X github.com/amarbel-llc/clown/internal/buildcfg.TentImageRef=${tentImageRef}"
               "-X github.com/amarbel-llc/clown/internal/buildcfg.TentImageTarball=${tentImageTarball}"
+              # ${self} interpolates the source-tree store path captured
+              # by the flake. Used at runtime as the flake-uri for
+              # `nix build <self>#packages.<linux-system>.tent-image`
+              # when the local podman image store doesn't already have
+              # the tag and no tarball was baked in (darwin, or future
+              # profiles). The dependency keeps the source tree alive
+              # in /nix/store as long as the clown derivation is.
+              "-X github.com/amarbel-llc/clown/internal/buildcfg.TentImageFlakeRef=${self}"
               "-X github.com/amarbel-llc/clown/internal/buildcfg.ClaudeTentCliPath=${tentClaudeCliPath}"
             ];
           };
@@ -701,41 +709,34 @@
 
         clownManagedSettings = mkClownManagedSettings { allowBypass = false; };
 
-        # Patch upstream claude-code to read its managed-settings from a path
-        # under its own $out instead of /etc/claude-code, then ship the
-        # settings file alongside. This guarantees auto-mode is disabled for
-        # every clown invocation without requiring writes to /etc.
+        # Was: patch upstream claude-code to read its managed-settings
+        # from a path under its own $out instead of /etc/claude-code,
+        # via perl -0777 in-place binary substitution on the Bun bundle.
+        # Now: no-op. The substitution corrupted the binary on darwin
+        # (Mach-O segment offsets and code signature both invalidated by
+        # length expansion) and patched the wrong code path anyway —
+        # /etc/claude-code is the linux-only default branch in the bun
+        # bundle; darwin uses /Library/Application Support/ClaudeCode,
+        # windows uses C:\Program Files\ClaudeCode. See clown#95 for
+        # the full analysis and the planned proper fix
+        # (length-preserving substitution + ad-hoc re-signing on darwin,
+        # plus a separate patch for the macos path).
         #
-        # The "/etc/claude-code" string is hardcoded in the Bun binary bundle
-        # (.claude-wrapped after wrapProgram runs in postFixup). We patch the
-        # raw binary in postInstall (before wrapProgram renames it) using perl
-        # -0777 for in-place binary-safe substitution. The replacement string
-        # is longer than the original (Bun JS bundle uses variable-length
-        # strings, not fixed-width C buffers), so length expansion is safe.
-        # --replace-fail equivalent: perl exits nonzero if s/// matches 0 times.
-        patchClaudeCodeManagedPath =
-          replacement:
-          pkgs-llm-agents.claude-code.overrideAttrs (old: {
-            nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ pkgs.perl ];
-            # Patch the raw Bun binary before wrapProgram renames it to
-            # .claude-wrapped. perl -0777 slurps the whole file as one string
-            # so the substitution works across any chunk boundaries.
-            postInstall = (old.postInstall or "") + ''
-              # Double-quote the perl script so bash expands $out before perl
-              # sees the replacement string. The Nix ${replacement} interpolation
-              # produces a bash variable reference ($out/etc/claude); single-quoted
-              # perl scripts would suppress that expansion.
-              perl -0777 -i -pe "s|/etc/claude-code|${replacement}|g" "$out/bin/claude"
-              if strings "$out/bin/claude" | grep -qF '/etc/claude-code'; then
-                echo "FAIL: /etc/claude-code still present after binary patch" >&2
-                exit 1
-              fi
-            '';
-          });
+        # Today the unbypassable-settings invariant lives inside --tent
+        # only, per FDR-0007's "tent IS the boundary" framing. Un-tented
+        # clown ships the managed-settings JSON next to the binary but
+        # the binary's load path is unchanged, so on darwin and linux
+        # both, claude reads no managed-settings outside the tent. When
+        # tent goes default (clown#62), this whole mkPatchedClaudeCode
+        # pipeline can be deleted.
+        patchClaudeCodeManagedPath = _replacement: pkgs-llm-agents.claude-code;
 
-        # Apply the shipped managed-settings file to a path-patched
-        # claude-code derivation. Parameterized by which managed-settings
-        # JSON to ship — strict for naked clown, permissive for clownbox.
+        # Ship the managed-settings JSON alongside the (unpatched)
+        # claude-code binary. Today the binary doesn't read this file
+        # outside --tent (see patchClaudeCodeManagedPath above), but
+        # shipping it preserves the on-disk layout that other code and
+        # tests expect, and is the right destination once clown#95 lands
+        # a working binary patch.
         mkPatchedClaudeCode =
           managedSettings:
           (patchClaudeCodeManagedPath "$out/etc/claude").overrideAttrs (old: {
@@ -744,20 +745,11 @@
               cp ${managedSettings} "$out/etc/claude/managed-settings.json"
             '';
 
+            # Without the binary patch in place, only the JSON layout is
+            # worth asserting. The full binary-string check (no
+            # /etc/claude-code, yes $out/etc/claude) is gated on clown#95.
             doInstallCheck = true;
             installCheckPhase = ''
-              # wrapProgram has run by now; check .claude-wrapped (the actual binary)
-              bin=$out/bin/.claude-wrapped
-              [ -f "$bin" ] || bin=$out/bin/claude
-              if strings "$bin" | grep -qF '/etc/claude-code'; then
-                echo "FAIL: /etc/claude-code still present after binary patch" >&2
-                exit 1
-              fi
-              patched_count=$(strings "$bin" | grep -cF "$out/etc/claude" || true)
-              if [ "$patched_count" -eq 0 ]; then
-                echo "FAIL: patched path $out/etc/claude missing from binary" >&2
-                exit 1
-              fi
               test -f "$out/etc/claude/managed-settings.json"
             '';
           });
@@ -832,15 +824,14 @@
               done
             '';
 
-        # The installCheckPhase on patchedClaudeCode (above) verifies at the
-        # string level that the Bun bundle no longer contains /etc/claude-code
-        # and does contain the patched store path. A runtime test that confirms
-        # claude actually *loads* settings from the patched path would be
-        # stronger, but claude-code does not expose managed settings in any
-        # externally observable output (diagnostics, --debug, or subcommand
-        # output). If a future version adds a settings-dump subcommand or
-        # surfaces deny patterns in debug output, a runtime sentinel test
-        # should be added here.
+        # `managedSettingsRead` is wired as a flake check so the bundled
+        # managed-settings JSON ships alongside the (unpatched-for-now)
+        # claude-code binary. The historical string-level assertions
+        # (no /etc/claude-code, yes $out/etc/claude in the bundle) are
+        # currently disabled — see patchClaudeCodeManagedPath above and
+        # clown#95 for the corruption analysis and the planned proper
+        # fix. Once the binary patch is back in place, restore those
+        # assertions in mkPatchedClaudeCode's installCheckPhase.
         managedSettingsReadTest = patchedClaudeCode;
 
         emptyPluginMeta = pkgs.runCommand "clown-empty-plugin-meta" { } ''

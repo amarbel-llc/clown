@@ -487,7 +487,7 @@ func newTentExecutor(innerCliPath string, pluginDirs []string, logger *slog.Logg
 		return nil, err
 	}
 	if err := runTentPhase(logger, verbose, "ensure_tent_image", func() error {
-		return ensureTentImage(buildcfg.PodmanPath, buildcfg.TentImageRef, buildcfg.TentImageTarball)
+		return ensureTentImage(buildcfg.PodmanPath, buildcfg.TentImageRef, buildcfg.TentImageTarball, buildcfg.TentImageFlakeRef)
 	}); err != nil {
 		return nil, err
 	}
@@ -724,20 +724,35 @@ func userHasSubuid(name, uid string) (missing bool, err error) {
 }
 
 // ensureTentImage runs `podman image exists <ref>` and, when the
-// image is absent, `podman load -i <tarball>` to populate the local
-// image store. Idempotent — second-and-onward runs short-circuit on
-// the existence check. On a TTY, the load step renders via the
-// bubbletea spinner + log-tail UI (see tent_loader.go); otherwise
-// it streams raw podman output to stderr.
-func ensureTentImage(podmanPath, ref, tarball string) error {
+// image is absent, materializes it. Order of precedence:
+//
+//   1. A baked tarball (linux clown binaries): `podman load -i <tarball>`.
+//   2. A baked flake ref (darwin clown binaries, and future profile-
+//      driven image variation): `nix build <flakeRef>#packages.<linux-
+//      system>.tent-image` then `podman load -i <result>`.
+//   3. Neither: error out with a clear message.
+//
+// Idempotent — second-and-onward runs short-circuit on the existence
+// check. On a TTY, both the build and load steps render via the
+// bubbletea spinner + log-tail UI (see tent_builder.go,
+// tent_loader.go); otherwise they stream raw progress output to
+// stderr.
+func ensureTentImage(podmanPath, ref, tarball, flakeRef string) error {
 	check := exec.Command(podmanPath, "image", "exists", ref)
 	if check.Run() == nil {
 		return nil
 	}
-	if tarball == "" {
-		return fmt.Errorf("tent image %s not present locally and no tarball is wired in", ref)
+	if tarball != "" {
+		return runTentImageLoad(podmanPath, tarball)
 	}
-	return runTentImageLoad(podmanPath, tarball)
+	if flakeRef == "" {
+		return fmt.Errorf("tent image %s not present locally and this build has no tarball or flake ref wired in (dev build?)", ref)
+	}
+	builtTarball, err := runTentImageBuild(flakeRef)
+	if err != nil {
+		return err
+	}
+	return runTentImageLoad(podmanPath, builtTarball)
 }
 
 // runWithPluginHost runs a provider through clown's plugin-host

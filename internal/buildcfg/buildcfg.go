@@ -57,12 +57,20 @@ var (
 	// `podman load -i <tarball>` on first --tent invocation if the
 	// image is not already in the local store. Linux-only — the
 	// darwin builder produces an unusable image (manifest claims
-	// linux/arm64, content is mach-O), so on darwin the user is
-	// expected to pre-load via the eng-side POC
-	// (zz-pocs/podman-darwin/justfile, recipe `phase4-load-image`),
-	// which cross-builds via linux-builder and `podman load`s.
+	// linux/arm64, content is mach-O). Where empty, --tent falls
+	// back to building the image on demand via TentImageFlakeRef.
 	// Empty in dev builds.
 	TentImageTarball string
+	// TentImageFlakeRef is the nix flake reference whose
+	// `packages.<linux-system>.tent-image` output produces the tent
+	// container image. Baked at build time as a nix store path
+	// captured from `${self}`, so it's available to any clown built
+	// from this flake until that store path is GC'd. Used by --tent
+	// when TentImageTarball is empty (darwin) or when a future
+	// profile selects a non-baked image (planned). Empty in dev
+	// builds (go build, go run) — --tent build-on-miss is
+	// unavailable there, and ensureTentImage surfaces a clear error.
+	TentImageFlakeRef string
 	// ClaudeTentCliPath is the absolute path to the unpatched
 	// claude-code binary used inside tent. Sourced from
 	// numtide/llm-agents.nix (self-contained binary distribution,

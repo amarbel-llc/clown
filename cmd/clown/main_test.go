@@ -868,7 +868,7 @@ func fakePodmanBinary(t *testing.T, imageExists bool) (binPath, logPath string) 
 
 func TestEnsureTentImage_ExistsShortCircuits(t *testing.T) {
 	podman, logPath := fakePodmanBinary(t, true)
-	if err := ensureTentImage(podman, "clown-tent:test", ""); err != nil {
+	if err := ensureTentImage(podman, "clown-tent:test", "", ""); err != nil {
 		t.Fatalf("expected nil error when image exists, got %v", err)
 	}
 	data, _ := os.ReadFile(logPath)
@@ -883,7 +883,7 @@ func TestEnsureTentImage_MissingThenLoad(t *testing.T) {
 	if err := os.WriteFile(tarball, []byte("fake tarball"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := ensureTentImage(podman, "clown-tent:test", tarball); err != nil {
+	if err := ensureTentImage(podman, "clown-tent:test", tarball, ""); err != nil {
 		t.Fatalf("expected nil error from happy load, got %v", err)
 	}
 	data, _ := os.ReadFile(logPath)
@@ -892,11 +892,35 @@ func TestEnsureTentImage_MissingThenLoad(t *testing.T) {
 	}
 }
 
-func TestEnsureTentImage_MissingNoTarball(t *testing.T) {
+func TestEnsureTentImage_MissingNoTarballNoFlakeRef(t *testing.T) {
 	podman, _ := fakePodmanBinary(t, false)
-	err := ensureTentImage(podman, "clown-tent:test", "")
+	err := ensureTentImage(podman, "clown-tent:test", "", "")
 	if err == nil || !strings.Contains(err.Error(), "not present locally") {
-		t.Fatalf("expected `not present locally` error when no tarball, got %v", err)
+		t.Fatalf("expected `not present locally` error when no tarball and no flake ref, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "dev build") {
+		t.Errorf("error should mention `dev build` hint, got %v", err)
+	}
+}
+
+// TestEnsureTentImage_TarballPrecedesFlakeRef verifies the
+// tarball-fast-path: when both are wired in, the tarball wins (no nix
+// invocation). Linux builds will hit this in practice; the test
+// pins the precedence so future refactors don't accidentally flip it.
+func TestEnsureTentImage_TarballPrecedesFlakeRef(t *testing.T) {
+	podman, logPath := fakePodmanBinary(t, false)
+	tarball := filepath.Join(t.TempDir(), "tent.tar")
+	if err := os.WriteFile(tarball, []byte("fake tarball"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// flakeRef is a bogus path; if the build path runs, `nix build`
+	// will error out (or won't even be on PATH in CI).
+	if err := ensureTentImage(podman, "clown-tent:test", tarball, "/nonexistent/flake"); err != nil {
+		t.Fatalf("tarball path should win; got %v", err)
+	}
+	data, _ := os.ReadFile(logPath)
+	if !strings.Contains(string(data), "load -i "+tarball) {
+		t.Errorf("expected load via baked tarball; calls log:\n%s", data)
 	}
 }
 
