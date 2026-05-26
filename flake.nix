@@ -21,13 +21,10 @@
     # during the vendor build).
     nixpkgs-master.url = "github:NixOS/nixpkgs/d233902339c02a9c334e7e593de68855ad26c4cb";
     utils.url = "https://flakehub.com/f/numtide/flake-utils/0.1.102";
-    # Claude Code is held at 2.1.111 (npm-source layout) because the
-    # mkPatchedClaudeCode patchPhase substitutes inside
-    # `lib/node_modules/@anthropic-ai/claude-code/cli.js` to redirect
-    # /etc/claude-code to the managed-settings store path. Upstream
-    # restructured to a native binary distribution at 2026-04-18, after
-    # which `cli.js` no longer exists. Bumping past 2.1.111 needs the
-    # patch logic ported to binary-string substitution.
+    # nixpkgs-claude-code is kept for reference but claude-code is now
+    # sourced from llm-agents (2.1.150+). The old npm-source derivation
+    # (2.1.111) used a JS patchPhase on cli.js; the new binary derivation
+    # uses a postInstall binary string substitution on the Bun bundle.
     nixpkgs-claude-code.url = "github:amarbel-llc/nixpkgs/b2b9662ffe1e9a5702e7bfbd983595dd56147dbf";
     nixpkgs-codex.url = "github:amarbel-llc/nixpkgs/0de8465d2b54ddd962422706d932c3354b4237ec";
     # llama-cpp with Anthropic Messages API (/v1/messages) support — requires
@@ -71,11 +68,7 @@
         # The fork's default.nix shim auto-applies its overlay on
         # `import nixpkgs { ... }`, so pkgs gets buildGoApplication,
         # mkGoEnv, gomod2nix (CLI), fetchGgufModel, etc. without an
-        # explicit overlays pass. The overlay also pins claude-code
-        # at the package level — we route claude-code through
-        # pkgs-claude-code (separate input pinned to a pre-shim SHA,
-        # so no auto-apply) to keep that pin from overriding our
-        # chosen version.
+        # explicit overlays pass.
         pkgs = import nixpkgs {
           inherit system;
         };
@@ -83,6 +76,10 @@
           inherit system;
           config.allowUnfree = true;
         };
+        # pkgs-claude-code is unused since the switch to llm-agents for
+        # claude-code 2.1.150+. The nixpkgs-claude-code input (2.1.111
+        # pre-binary-distribution era) is kept so the flake input stays
+        # reachable; remove both together when the old SHA is no longer needed.
         pkgs-claude-code = import nixpkgs-claude-code {
           inherit system;
           config.allowUnfree = true;
@@ -147,8 +144,8 @@
         clownVersion = lib.trim (builtins.readFile ./version.txt);
         clownRev = self.rev or self.dirtyRev or "dirty";
         clownShortRev = self.shortRev or self.dirtyShortRev or "dirty";
-        claudeCodeVersion = pkgs-claude-code.claude-code.version;
-        claudeCodeRev = nixpkgs-claude-code.rev or "dirty";
+        claudeCodeVersion = pkgs-llm-agents.claude-code.version;
+        claudeCodeRev = llm-agents.rev or "dirty";
         codexVersion = pkgs-codex.codex.version;
         codexRev = nixpkgs-codex.rev or "dirty";
 
@@ -709,19 +706,30 @@
         # settings file alongside. This guarantees auto-mode is disabled for
         # every clown invocation without requiring writes to /etc.
         #
-        # The "/etc/claude-code" string is hardcoded in cli.js — no env var,
-        # no flag. --replace-fail breaks the build if Anthropic ever moves
-        # the string, so we catch upgrade drift loudly.
+        # The "/etc/claude-code" string is hardcoded in the Bun binary bundle
+        # (.claude-wrapped after wrapProgram runs in postFixup). We patch the
+        # raw binary in postInstall (before wrapProgram renames it) using perl
+        # -0777 for in-place binary-safe substitution. The replacement string
+        # is longer than the original (Bun JS bundle uses variable-length
+        # strings, not fixed-width C buffers), so length expansion is safe.
+        # --replace-fail equivalent: perl exits nonzero if s/// matches 0 times.
         patchClaudeCodeManagedPath =
           replacement:
-          pkgs-claude-code.claude-code.overrideAttrs (old: {
-            # The upstream npm tarball places cli.js at the source root.
-            # After install, it lands under lib/node_modules/@anthropic-ai/
-            # claude-code/cli.js, but patchPhase sees the source layout.
-            # Double-quote the replacement so $out expands in bash.
-            postPatch = (old.postPatch or "") + ''
-              substituteInPlace cli.js \
-                --replace-fail '/etc/claude-code' "${replacement}"
+          pkgs-llm-agents.claude-code.overrideAttrs (old: {
+            nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ pkgs.perl ];
+            # Patch the raw Bun binary before wrapProgram renames it to
+            # .claude-wrapped. perl -0777 slurps the whole file as one string
+            # so the substitution works across any chunk boundaries.
+            postInstall = (old.postInstall or "") + ''
+              # Double-quote the perl script so bash expands $out before perl
+              # sees the replacement string. The Nix ${replacement} interpolation
+              # produces a bash variable reference ($out/etc/claude); single-quoted
+              # perl scripts would suppress that expansion.
+              perl -0777 -i -pe "s|/etc/claude-code|${replacement}|g" "$out/bin/claude"
+              if strings "$out/bin/claude" | grep -qF '/etc/claude-code'; then
+                echo "FAIL: /etc/claude-code still present after binary patch" >&2
+                exit 1
+              fi
             '';
           });
 
@@ -738,13 +746,16 @@
 
             doInstallCheck = true;
             installCheckPhase = ''
-              cli=$out/lib/node_modules/@anthropic-ai/claude-code/cli.js
-              if grep -q '/etc/claude-code' "$cli"; then
-                echo "FAIL: /etc/claude-code still present after patch" >&2
+              # wrapProgram has run by now; check .claude-wrapped (the actual binary)
+              bin=$out/bin/.claude-wrapped
+              [ -f "$bin" ] || bin=$out/bin/claude
+              if strings "$bin" | grep -qF '/etc/claude-code'; then
+                echo "FAIL: /etc/claude-code still present after binary patch" >&2
                 exit 1
               fi
-              if ! grep -q "$out/etc/claude" "$cli"; then
-                echo "FAIL: patched path $out/etc/claude missing from cli.js" >&2
+              patched_count=$(strings "$bin" | grep -cF "$out/etc/claude" || true)
+              if [ "$patched_count" -eq 0 ]; then
+                echo "FAIL: patched path $out/etc/claude missing from binary" >&2
                 exit 1
               fi
               test -f "$out/etc/claude/managed-settings.json"
@@ -822,14 +833,14 @@
             '';
 
         # The installCheckPhase on patchedClaudeCode (above) verifies at the
-        # string level that cli.js no longer contains /etc/claude-code and
-        # does contain the patched store path. A runtime test that confirms
+        # string level that the Bun bundle no longer contains /etc/claude-code
+        # and does contain the patched store path. A runtime test that confirms
         # claude actually *loads* settings from the patched path would be
-        # stronger, but claude-code 2.1.111 does not expose managed settings
-        # in any externally observable output (diagnostics, --debug, or
-        # subcommand output). If a future version adds a settings-dump
-        # subcommand or surfaces deny patterns in debug output, a runtime
-        # sentinel test should be added here.
+        # stronger, but claude-code does not expose managed settings in any
+        # externally observable output (diagnostics, --debug, or subcommand
+        # output). If a future version adds a settings-dump subcommand or
+        # surfaces deny patterns in debug output, a runtime sentinel test
+        # should be added here.
         managedSettingsReadTest = patchedClaudeCode;
 
         emptyPluginMeta = pkgs.runCommand "clown-empty-plugin-meta" { } ''
@@ -993,7 +1004,7 @@
                 (pkgs.mkGoEnv { pwd = ./.; })
                 pkgs-master.just
                 pkgs.fish
-                pkgs-claude-code.claude-code
+                pkgs-llm-agents.claude-code
                 pkgs-codex.codex
                 pkgs.opencode
                 pkgs-llm-agents.crush
@@ -1063,7 +1074,7 @@
             (pkgs.mkGoEnv { pwd = ./.; })
             pkgs-master.just
             pkgs.fish
-            pkgs-claude-code.claude-code
+            pkgs-llm-agents.claude-code
             pkgs-codex.codex
             pkgs.opencode
             pkgs-llm-agents.crush
