@@ -1,0 +1,80 @@
+# Lima POC: clown --tent against Lima instead of podman-machine.
+#
+# Goal: validate that Lima's host→container AF_UNIX socket forwarding
+# (ssh.forwardAgent + portForwards) eliminates the need for clown's
+# bespoke `ssh -R` LaunchAgent bridge, AND that Lima's parallel-VM
+# support lets clown-dev coexist with a podman-machine-default
+# without a stop/swap dance.
+#
+# Reference: lima-vm/lima docs/yaml.md
+#
+# Run via the sibling justfile, not directly:
+#   cd zz-pocs/tent-lima && just up
+
+# Use Apple Virtualization Framework (faster than QEMU on Apple Silicon)
+# and virtiofs for mounts (matches what podman-machine uses; known good
+# for /nix/store-ish workloads).
+vmType: vz
+mountType: virtiofs
+
+# Sized to match podman-machine-default's defaults (6 CPU / 4GB / 100GB).
+# Bigger is fine on darwin since vz only commits resources lazily.
+cpus: 6
+memory: 4GiB
+disk: 100GiB
+
+# Base image: Lima default (Ubuntu) is fine for our purposes — we don't
+# care about the host OS inside the VM, only that it has containerd +
+# nerdctl which Lima bundles by default. Skip the per-distro images
+# list; Lima picks a sane aarch64 default.
+images:
+- location: https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-arm64.img
+  arch: aarch64
+
+# Mounts: mirror clown's tent set
+# (/nix/store ro, /nix/var rw, /etc/nix ro, $HOME rw).
+# `writable: true` is rw; default is ro.
+#
+# Lima quirk (gotcha #1): by default Lima creates an in-VM user
+# `<host-user>.guest` with home at `/home/<user>.guest`. If we set
+# mountPoint=$HOME (e.g. /Users/sfriedenberg), Lima auto-rewrites
+# it to /home/<user>.guest and refuses with "the reserved internal
+# home directory" (verified empirically). We omit `mountPoint` and
+# let Lima resolve it itself; the host path is reachable at the
+# Lima-chosen in-VM path, and nerdctl bind-mounts in probe.sh use
+# that resolved path explicitly.
+mounts:
+- location: "/nix/store"
+  mountPoint: "/nix/store"
+  writable: false
+- location: "/nix/var"
+  mountPoint: "/nix/var"
+  writable: true
+- location: "/etc/nix"
+  mountPoint: "/etc/nix"
+  writable: false
+- location: "{{.Home}}"
+  writable: true
+
+# SSH agent forwarding into the VM. Lima sets up the agent socket at
+# /run/host-services/ssh-auth.sock inside the VM (Docker Desktop /
+# OrbStack convention). Containers can bind-mount that path to gain
+# host SSH agent access.
+ssh:
+  forwardAgent: true
+
+# Networking: default Lima network (vmnet via gvisor-tap-vsock) plus
+# `portForwards` for any container sockets we want exposed back to
+# the host. For the spike, no forwards needed — we're connecting
+# host→VM, not VM→host.
+
+# Containerd: keep Lima's bundled containerd. It ships with nerdctl
+# inside the VM, which we use as the container CLI.
+containerd:
+  system: true
+  user: true
+
+# Mount type tuning. virtiofs on vz handles AF_UNIX sockets through
+# `portForwards` (not through the FS itself), so we DON'T expect
+# bind-mounting a host socket file to work — same darwin platform
+# limitation as podman-machine. We use ssh.forwardAgent above instead.
