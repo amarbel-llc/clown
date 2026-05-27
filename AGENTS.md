@@ -178,8 +178,74 @@ Related issues:
 - eng#112 — bind `/nix/var` into the VM (open)
 - clown#95 — proper claude-code binary patch (open)
 - clown#98 — podman command builder refactor (open)
-- (open clown issues tracking Lima/Colima exploration and clown
-  exporting a `homeManagerModules.podmanDarwin` for eng to consume)
+- clown#99 — explore Lima/Colima for parallel VMs (spike landed
+  at `zz-pocs/tent-lima/`; GO recommendation; see below)
+- clown#100 — clown-exported home-manager module (partially landed:
+  `homeManagerModules.tent-backend-lima`)
+
+## Lima home-manager module: alternative to podman-machine
+
+clown exports `homeManagerModules.tent-backend-lima` — a darwin
+LaunchAgent that manages a Lima VM with the mount set and SSH agent
+forwarding configuration `clown --tent` expects. The motivation came
+out of the clown#99 spike (see `zz-pocs/tent-lima/README.md`):
+
+- **Lima supports parallel VMs on darwin**, unlike podman-machine.
+  No stop/swap dance.
+- **`ssh.forwardAgent: true` replaces the bespoke `ssh -R` LaunchAgent
+  bridge** clown currently runs alongside its dev-tent machine.
+- **`nerdctl` is a near-drop-in for `podman run`** for the flag shape
+  clown's tent code uses.
+
+A downstream consumer (notably the eng `home-manager` config)
+imports it via:
+
+```nix
+{ inputs, ... }: {
+  imports = [ inputs.clown.homeManagerModules.tent-backend-lima ];
+  services.tent-backend-lima = {
+    enable = true;
+    # Defaults match clown's tent mount expectations. Override if
+    # needed:
+    # machineName = "clown-tent";  # default
+    # mounts = [ ... ];             # default mirrors the eng
+    #                              # podman-darwin mount set
+    # forwardAgent = true;          # default
+  };
+}
+```
+
+The module:
+
+- Generates a `lima.yaml` from the option values (so the module is
+  single-source-of-truth; no separate yaml to keep in sync).
+- Hashes the rendered yaml and stores a sentinel under
+  `~/.local/state/tent-backend-lima/<name>.hash`. On home-manager
+  activation, if the hash differs (mount-list change, sizing change,
+  etc.), the launcher **destroys and recreates the VM** — drift
+  detection that eng#111 has been tracking on the podman side gets
+  built in here from day one.
+- Installs `pkgs.lima` into `home.packages` so `limactl` is on PATH
+  for the user.
+- Installs a LaunchAgent (`com.amarbel-llc.tent-backend-lima`) that
+  runs the launcher at login: create-if-missing + start-if-not-
+  running. `KeepAlive` only on crash; clean `limactl start` exits
+  are respected.
+- Refuses to activate on linux with a clear assertion message.
+
+Note: this module manages the VM lifecycle only. clown's own tent
+code (`internal/tent/tent.go`) still emits `podman run` argv today;
+the migration to `nerdctl` is tracked as future work in clown#99.
+Until then, the module is useful as either:
+
+1. The backing VM for a future Lima-based clown tent backend
+   (paired with backend-abstraction work in `cmd/clown/`).
+2. A direct replacement for `programs.podman-darwin` on hosts where
+   parallel-VM and built-in SSH agent forwarding outweigh the
+   "clown's tent code still wants podman" coupling.
+
+Cross-references: `zz-pocs/tent-lima/` (the spike), clown#99
+(exploration issue), clown#100 (module-ownership tracking).
 
 ## Architecture
 

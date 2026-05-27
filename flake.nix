@@ -1439,5 +1439,19 @@
       #   programs.ringmaster.enable = true;
       #   programs.ringmaster.package = clown.packages.${pkgs.system}.ringmaster;
       homeManagerModules.ringmaster = import ./nix/hm/ringmaster.nix;
+
+      # services.tent-backend-lima home-manager module — see
+      # nix/hm/tent-backend-lima.nix for the full design. Manages a
+      # darwin Lima VM via a LaunchAgent so clown --tent (and other
+      # consumers) have a containerd-capable VM available at login.
+      # Lima supports parallel VMs on darwin, unlike podman-machine
+      # (clown#99 spike). Downstream consumers (notably eng) can
+      # adopt this alongside or in place of programs.podman-darwin.
+      #   services.tent-backend-lima.enable = true;
+      #   services.tent-backend-lima.machineName = "clown-tent";
+      # Defaults to the mount set and ssh.forwardAgent shape that
+      # clown's tent expects; see the module's option docs for the
+      # full surface.
+      homeManagerModules.tent-backend-lima = import ./nix/hm/tent-backend-lima.nix;
     };
 }
