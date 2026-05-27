@@ -487,13 +487,13 @@ func newTentExecutor(innerCliPath string, pluginDirs []string, logger *slog.Logg
 		return nil, err
 	}
 	if err := runTentPhase(logger, verbose, "ensure_tent_image", func() error {
-		return ensureTentImage(buildcfg.PodmanPath, buildcfg.TentImageRef, buildcfg.TentImageTarball, buildcfg.TentImageFlakeRef)
+		return ensureTentImage(buildcfg.PodmanPath, buildcfg.TentImageRef, buildcfg.TentImageTarball, buildcfg.TentImageFlakeRef, buildcfg.PodmanMachineName)
 	}); err != nil {
 		return nil, err
 	}
 	var opts tent.Options
 	if err := runTentPhase(logger, verbose, "options_from_env", func() error {
-		o, err := tent.OptionsFromEnv(buildcfg.TentImageRef, pluginDirs)
+		o, err := tent.OptionsFromEnv(buildcfg.TentImageRef, buildcfg.PodmanMachineName, pluginDirs)
 		if err != nil {
 			return err
 		}
@@ -737,13 +737,17 @@ func userHasSubuid(name, uid string) (missing bool, err error) {
 // bubbletea spinner + log-tail UI (see tent_builder.go,
 // tent_loader.go); otherwise they stream raw progress output to
 // stderr.
-func ensureTentImage(podmanPath, ref, tarball, flakeRef string) error {
-	check := exec.Command(podmanPath, "image", "exists", ref)
+//
+// `connection` selects the podman connection (= machine on darwin)
+// via `--connection <name>`; empty means use podman's default.
+func ensureTentImage(podmanPath, ref, tarball, flakeRef, connection string) error {
+	checkArgs := append(tent.PodmanConnectionArgs(connection), "image", "exists", ref)
+	check := exec.Command(podmanPath, checkArgs...)
 	if check.Run() == nil {
 		return nil
 	}
 	if tarball != "" {
-		return runTentImageLoad(podmanPath, tarball)
+		return runTentImageLoad(podmanPath, tarball, connection)
 	}
 	if flakeRef == "" {
 		return fmt.Errorf("tent image %s not present locally and this build has no tarball or flake ref wired in (dev build?)", ref)
@@ -752,7 +756,7 @@ func ensureTentImage(podmanPath, ref, tarball, flakeRef string) error {
 	if err != nil {
 		return err
 	}
-	return runTentImageLoad(podmanPath, builtTarball)
+	return runTentImageLoad(podmanPath, builtTarball, connection)
 }
 
 // runWithPluginHost runs a provider through clown's plugin-host

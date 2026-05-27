@@ -1051,6 +1051,82 @@ smoke-crush-against-tailnet ALIAS="gemma3-12b": build
     echo
     ./result/bin/clown --provider=crush -- --model "$alias"
 
+# Swap to the dev-loop podman-machine `clown-dev`. Stops
+# podman-machine-default (the eng-managed VM) to free the VM slot
+# (podman on darwin is single-VM), then initializes / starts
+# clown-dev. The eng default is unavailable until `dev-tent-down`
+# restarts it. See AGENTS.md § Dev loop for tent for the full story.
+[group("test")]
+dev-tent-up:
+    nix run .#dev-tent-machine-up
+
+# Swap back from clown-dev to the eng-managed default. Stops and
+# removes clown-dev, then restarts podman-machine-default. Safe to
+# run when no clown-dev machine exists.
+[group("test")]
+dev-tent-down:
+    nix run .#dev-tent-machine-down
+
+# Print BOTH machines' states (clown-dev and podman-machine-default).
+# Helpful for confirming which one currently owns the VM slot.
+[group("test")]
+dev-tent-status:
+    nix run .#dev-tent-machine-status
+
+# Extract the macOS Keychain `Claude Code-credentials` entry to
+# ~/.claude/.credentials.json so claude inside the tent (Linux, no
+# Keychain access) can authenticate. claude on darwin stores OAuth
+# tokens in the Keychain; on Linux it falls back to the JSON file at
+# this well-known path, which is bind-mounted into the tent via
+# `~/.claude`. Will trigger a Touch ID / password prompt the first
+# time and on every key rotation. Re-run when in-tent claude starts
+# reporting "Not logged in".
+#
+# This recipe is `debug-` prefixed because it's expected to be
+# transient: once the auth story has a proper home (clown#100's
+# home-manager module activation hook, or upstream claude gaining a
+# CLAUDE_CREDENTIALS_FILE env var that points at a host path), this
+# manual step disappears.
+[group("test")]
+debug-extract-claude-credentials:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    out="$HOME/.claude/.credentials.json"
+    mkdir -p "$(dirname "$out")"
+    if ! security find-generic-password -s 'Claude Code-credentials' -w >"$out"; then
+        echo "FAIL: could not read 'Claude Code-credentials' keychain entry" >&2
+        rm -f "$out"
+        exit 1
+    fi
+    chmod 600 "$out"
+    bytes=$(wc -c <"$out" | tr -d ' ')
+    echo ">> extracted $bytes bytes to $out"
+    head -c 200 "$out"
+    echo
+    echo ">> first 200 bytes printed above; if it looks like JSON, you're good"
+
+# End-to-end dev-tent smoke: swap to clown-dev, build .#dev, run
+# `clown --tent -- --version`. Pass DOWN=1 to swap back at the end.
+[group("test")]
+smoke-dev-tent DOWN="0":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo ">> swapping to clown-dev (stops podman-machine-default)"
+    nix run .#dev-tent-machine-up
+    echo
+    echo ">> building .#dev (clown binary targeting clown-dev)"
+    nix build .#dev
+    echo
+    echo ">> running clown --tent -- --version"
+    ./result/bin/clown --tent -- --version
+    echo
+    if [[ "{{DOWN}}" = "1" ]]; then
+        echo ">> swapping back to podman-machine-default"
+        nix run .#dev-tent-machine-down
+    else
+        echo ">> clown-dev left running; swap back with: just dev-tent-down"
+    fi
+
 # Download a model by URL and emit a ready-to-paste registry entry.
 #
 # Uses `circus download <name> --url <url>` (the ad-hoc path added in

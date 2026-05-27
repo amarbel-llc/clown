@@ -488,6 +488,32 @@
         tentImageTarball = if tentImageEnabled then "${tentImage}" else "";
         tentPodmanPath = if tentPodmanEnabled then "${pkgs.podman}/bin/podman" else "";
 
+        # Dev-loop podman-machine bindings. The `dev-tent-machine-{up,
+        # down,status}` flake apps spin up an isolated podman-machine
+        # named devTentMachineName with the volume(s) below. Use
+        # `packages.dev` to build a clown that targets this machine.
+        # See AGENTS.md § Dev loop for tent for the workflow.
+        #
+        # *Why this mount set:* we originally tried a single `/:/:rw`
+        # mount on the theory that container-level `podman run
+        # --volume` would do the actual filtering. applehv silently
+        # **dropped** that mount at start time — the JSON config
+        # accepted it but virtiofsd never honored it, and the VM's
+        # mount table showed no virtiofs entries at all. The eng-side
+        # `programs.podman-darwin` module documents the
+        # known-working set (/nix/store ro, /nix/var rw, /etc/nix ro,
+        # $HOME rw) so we mirror that. The script appends `$HOME`
+        # at machine-init time because nix can't reach into runtime
+        # user state.
+        devTentMachineName = "clown-dev";
+        devTentVolumes = [
+          "/nix/store:/nix/store:ro,security_model=none"
+          "/nix/var:/nix/var:rw,security_model=none"
+          "/etc/nix:/etc/nix:ro,security_model=none"
+          # $HOME is appended in the launch script at runtime; see
+          # devTentMachineUp's volume-assembly block.
+        ];
+
         # tent runs an *unpatched* claude-code from numtide/llm-agents.nix
         # so the inner ring has no managed-settings shim — tent is the
         # boundary. The patched 2.1.111 (npm-source, cli.js-redirected
@@ -523,6 +549,14 @@
             defaultProvider ? defaultDefaultProvider,
             defaultProfile ? defaultDefaultProfile,
             enableTentClaude ? tentClaudeEnabled,
+            # podmanMachineName burns a `--connection <name>` flag into
+            # every podman invocation made by `--tent`. Empty (the
+            # default) means clown defers to podman's own configured
+            # default connection. Set this on per-circus builds that
+            # want to target an isolated dev-loop machine instead of
+            # the user's eng-managed podman-machine-default — see the
+            # `dev-tent-machine-*` flake apps and `packages.dev`.
+            podmanMachineName ? "",
           }:
           let
             tentClaudeCliPath =
@@ -570,6 +604,7 @@
               # in /nix/store as long as the clown derivation is.
               "-X github.com/amarbel-llc/clown/internal/buildcfg.TentImageFlakeRef=${self}"
               "-X github.com/amarbel-llc/clown/internal/buildcfg.ClaudeTentCliPath=${tentClaudeCliPath}"
+              "-X github.com/amarbel-llc/clown/internal/buildcfg.PodmanMachineName=${podmanMachineName}"
             ];
           };
 
@@ -915,9 +950,17 @@
             defaultProvider ? defaultDefaultProvider,
             defaultProfile ? defaultDefaultProfile,
             enableTentClaude ? tentClaudeEnabled,
+            podmanMachineName ? "",
           }:
           let
-            clownGoBin = mkClownGo { inherit defaultProvider defaultProfile enableTentClaude; };
+            clownGoBin = mkClownGo {
+              inherit
+                defaultProvider
+                defaultProfile
+                enableTentClaude
+                podmanMachineName
+                ;
+            };
           in
           (pkgs.symlinkJoin {
             name = "clown";
@@ -982,13 +1025,23 @@
             defaultProvider ? defaultDefaultProvider,
             defaultProfile ? defaultDefaultProfile,
             enableTentClaude ? tentClaudeEnabled,
+            # See mkClownGo for the podmanMachineName contract.
+            # Downstream consumers building their own circus can set
+            # this to target a dev-loop machine.
+            podmanMachineName ? "",
           }:
           let
             pluginMeta = if plugins == [ ] then emptyPluginMeta else resolvePlugins plugins;
           in
           {
             packages.default = mkClownPkg {
-              inherit pluginMeta defaultProvider defaultProfile enableTentClaude;
+              inherit
+                pluginMeta
+                defaultProvider
+                defaultProfile
+                enableTentClaude
+                podmanMachineName
+                ;
             };
             devShells.default = pkgs.mkShell {
               packages = [
@@ -1008,10 +1061,279 @@
               managedSettingsRead = managedSettingsReadTest;
             };
           };
+
+        # Dev-loop podman-machine apps. `nix run .#dev-tent-machine-up`
+        # spins up an isolated machine for testing. Because podman on
+        # darwin enforces a strict one-VM-at-a-time rule (see AGENTS.md
+        # § Dev loop for tent), this is a **stop/swap** workflow:
+        # `up` stops the eng-managed `podman-machine-default` if it's
+        # running, then starts `clown-dev`. `down` reverses (stop
+        # clown-dev, restart default). The eng-managed default is
+        # therefore *temporarily unavailable* while clown-dev is up;
+        # `down` brings it back. This is the same workflow the podman
+        # maintainers themselves recommend for "test machine changes
+        # without nuking my prod machine" — see the clown follow-up
+        # issue tracking Lima/Colima as a parallel-VM alternative.
+        devTentMachineDefault = "podman-machine-default";
+        devTentMachineUp = pkgs.writeShellApplication {
+          name = "dev-tent-machine-up";
+          runtimeInputs = [ pkgs.podman ];
+          text = ''
+            NAME=${devTentMachineName}
+            DEFAULT=${devTentMachineDefault}
+            # 1. Stop the eng-managed default if it's running. podman
+            #    enforces one-VM-at-a-time on darwin; we have to clear
+            #    the slot before starting clown-dev. Quiet on "not
+            #    running" / "doesn't exist"; those are non-errors.
+            if podman machine inspect "$DEFAULT" --format '{{.State}}' 2>/dev/null | grep -qx running; then
+              echo ">> stopping $DEFAULT to free the VM slot" >&2
+              podman machine stop "$DEFAULT" >/dev/null
+            fi
+            # 2. Init clown-dev if absent. Re-init is intentional on
+            #    mount-list changes — `dev-tent-down` removes it.
+            #    $HOME is appended at runtime because nix can't reach
+            #    into per-user state (the same machine-init
+            #    derivation is fine for every user; the VM config
+            #    differs by $HOME but the derivation doesn't).
+            if ! podman machine inspect "$NAME" >/dev/null 2>&1; then
+              HOME_VOLUME="$HOME:$HOME:rw,security_model=none"
+              echo ">> initializing podman machine $NAME" >&2
+              podman machine init "$NAME" \
+                ${lib.concatMapStringsSep " \\\n                " (v: "--volume ${lib.escapeShellArg v}") devTentVolumes} \
+                --volume "$HOME_VOLUME"
+            fi
+            # 3. Start it if not already running. `podman machine start`
+            #    errors out (non-zero) when the machine is already
+            #    running, so guard the call.
+            state="$(podman machine inspect "$NAME" --format '{{.State}}' 2>/dev/null || echo unknown)"
+            if [[ "$state" = "running" ]]; then
+              echo ">> $NAME is already running" >&2
+            else
+              echo ">> starting $NAME" >&2
+              podman machine start "$NAME"
+            fi
+            # 3b. Verify the configured mounts actually surfaced inside
+            #     the VM. applehv has been observed to accept a mount
+            #     at init-config-write time but silently drop it at
+            #     start (e.g. for "/", which virtiofsd refuses). Mount
+            #     drops result in `podman run --volume host:host` later
+            #     failing with `statfs: no such file or directory` —
+            #     better to fail loudly here.
+            for src in /nix/store /nix/var /etc/nix "$HOME"; do
+              if ! podman machine ssh "$NAME" -- test -e "$src" 2>/dev/null; then
+                echo "FAIL: configured mount $src did not surface inside the VM" >&2
+                echo "      (applehv may have dropped it silently at virtiofsd init)" >&2
+                exit 1
+              fi
+            done
+            # 4. Spawn the SSH agent forwarder in the background. Tent
+            #    expects the host's $SSH_AUTH_SOCK to be reachable at
+            #    devTentSSHSockInVM (= /run/host-services/ssh-auth.sock)
+            #    inside the VM. Idempotent: if the previous-run pidfile
+            #    points at a still-alive process, we leave it alone.
+            mkdir -p "$(dirname "${devTentSSHForwardPidFile}")"
+            existing_pid=""
+            if [[ -f "${devTentSSHForwardPidFile}" ]]; then
+              existing_pid="$(cat "${devTentSSHForwardPidFile}" 2>/dev/null || true)"
+              if [[ -n "$existing_pid" ]] && ! kill -0 "$existing_pid" 2>/dev/null; then
+                existing_pid=""  # stale pidfile; clear it
+                rm -f "${devTentSSHForwardPidFile}"
+              fi
+            fi
+            if [[ -n "$existing_pid" ]]; then
+              echo ">> ssh-agent forwarder already running (pid $existing_pid)" >&2
+            elif [[ -n "''${SSH_AUTH_SOCK:-}" && -S "''${SSH_AUTH_SOCK}" ]]; then
+              FWD_LOG=".tmp/podman/$NAME-ssh-forward.log"
+              echo ">> launching ssh-agent forwarder in background (log: $FWD_LOG)" >&2
+              ${devTentSSHForward}/bin/dev-tent-ssh-forward "$NAME" >"$FWD_LOG" 2>&1 &
+              echo $! > "${devTentSSHForwardPidFile}"
+              # Wait for the in-VM socket to appear so subsequent
+              # `podman run --volume` invocations don't race against
+              # the forwarder's setup. Bail out loudly if the
+              # forwarder dies before the socket shows up.
+              for _attempt in 1 2 3 4 5 6 7 8 9 10; do
+                if podman machine ssh "$NAME" -- test -S "${devTentSSHSockInVM}" 2>/dev/null; then
+                  break
+                fi
+                fwd_pid="$(cat "${devTentSSHForwardPidFile}" 2>/dev/null)"
+                if [[ -z "$fwd_pid" ]] || ! kill -0 "$fwd_pid" 2>/dev/null; then
+                  echo "FAIL: ssh-agent forwarder died before publishing the socket" >&2
+                  echo "      see $FWD_LOG for details" >&2
+                  cat "$FWD_LOG" >&2 || true
+                  exit 1
+                fi
+                sleep 0.5
+              done
+              if ! podman machine ssh "$NAME" -- test -S "${devTentSSHSockInVM}" 2>/dev/null; then
+                echo "FAIL: in-VM socket ${devTentSSHSockInVM} did not appear within 5s" >&2
+                echo "      see $FWD_LOG for details" >&2
+                cat "$FWD_LOG" >&2 || true
+                exit 1
+              fi
+              echo ">> ssh-agent forwarder ready" >&2
+            else
+              echo ">> SSH_AUTH_SOCK is empty or missing; skipping forwarder" >&2
+              echo ">>   in-tent git push / signed commits will not work" >&2
+            fi
+            echo ">> $NAME is up. Build clown with: nix build .#dev" >&2
+            echo ">> $DEFAULT is stopped; restart it with: nix run .#dev-tent-machine-down" >&2
+          '';
+        };
+
+        devTentMachineDown = pkgs.writeShellApplication {
+          name = "dev-tent-machine-down";
+          runtimeInputs = [ pkgs.podman ];
+          text = ''
+            NAME=${devTentMachineName}
+            DEFAULT=${devTentMachineDefault}
+            PID_FILE=${devTentSSHForwardPidFile}
+            # 1. Kill the SSH agent forwarder if it's still running.
+            #    Best-effort; the ssh -N process exits on its own when
+            #    the machine stops, but we tear it down explicitly to
+            #    avoid stale pidfile noise.
+            if [[ -f "$PID_FILE" ]]; then
+              pid="$(cat "$PID_FILE")"
+              if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+                echo ">> stopping ssh-agent forwarder (pid $pid)" >&2
+                kill "$pid" 2>/dev/null || true
+              fi
+              rm -f "$PID_FILE"
+            fi
+            # 2. Stop and remove clown-dev. Idempotent.
+            podman machine stop  "$NAME" >/dev/null 2>&1 || true
+            podman machine rm -f "$NAME" >/dev/null 2>&1 || true
+            echo ">> removed $NAME (if it existed)" >&2
+            # 3. Restart the eng-managed default. Only if it exists;
+            #    fresh-clone hosts may not have one yet.
+            if podman machine inspect "$DEFAULT" >/dev/null 2>&1; then
+              echo ">> restarting $DEFAULT" >&2
+              podman machine start "$DEFAULT" 2>/dev/null || true
+            else
+              echo ">> $DEFAULT not present on this host; skipping restart" >&2
+            fi
+          '';
+        };
+
+        devTentMachineStatus = pkgs.writeShellApplication {
+          name = "dev-tent-machine-status";
+          runtimeInputs = [ pkgs.podman ];
+          text = ''
+            NAME=${devTentMachineName}
+            DEFAULT=${devTentMachineDefault}
+            # Show both machines so the user can see which one
+            # currently owns the VM slot.
+            for m in "$NAME" "$DEFAULT"; do
+              if ! podman machine inspect "$m" --format '{{.Name}}: {{.State}}' 2>/dev/null; then
+                echo "$m: not present"
+              fi
+            done
+          '';
+        };
+
+        # The in-VM path the ssh-forwarder publishes the host's SSH
+        # agent at. Mirrors the Docker Desktop / OrbStack / Lima
+        # convention so containers know where to look.
+        devTentSSHSockInVM = "/run/host-services/ssh-auth.sock";
+
+        # `dev-tent-ssh-forward` proxies the host's $SSH_AUTH_SOCK into
+        # the running podman-machine VM via OpenSSH `-R`. This is the
+        # standard workaround for podman-machine on darwin not being
+        # able to bind-mount AF_UNIX sockets through its virtiofs/9p
+        # layer (containers/podman#23245, #23785 — RFE open). The
+        # forwarder re-publishes the socket at devTentSSHSockInVM
+        # inside the VM, where tent's `podman run --volume` can
+        # bind-mount it into the container at the same path.
+        #
+        # *Why we call ssh directly, not `podman machine ssh`:*
+        # `podman machine ssh [args]` passes args as a COMMAND TO
+        # EXECUTE inside the VM (documented at
+        # docs.podman.io/.../podman-machine-ssh.1.html — `[command
+        # [arg ...]]`), not as flags to the local ssh client. So
+        # `-R` ends up as a bash flag inside the VM, which fails
+        # with "bash: -R: invalid option". We extract the VM's SSH
+        # coordinates from `podman machine inspect` and invoke ssh
+        # ourselves with the `-R` flag in the right spot.
+        #
+        # Usage: `nix run .#dev-tent-ssh-forward -- <machine-name>`.
+        # `dev-tent-machine-up` starts this automatically pointing at
+        # clown-dev; production tent runs can target
+        # podman-machine-default the same way. Holds a foreground
+        # `ssh -N` connection — Ctrl-C tears down the forward.
+        devTentSSHForward = pkgs.writeShellApplication {
+          name = "dev-tent-ssh-forward";
+          runtimeInputs = [
+            pkgs.podman
+            pkgs.openssh
+          ];
+          text = ''
+            NAME="''${1:-${devTentMachineName}}"
+            GUEST_SOCK=${devTentSSHSockInVM}
+            HOST_SOCK="''${SSH_AUTH_SOCK:-}"
+            if [[ -z "$HOST_SOCK" ]]; then
+              echo "FAIL: SSH_AUTH_SOCK is empty; nothing to forward" >&2
+              exit 1
+            fi
+            if [[ ! -S "$HOST_SOCK" ]]; then
+              echo "FAIL: $HOST_SOCK is not a socket" >&2
+              exit 1
+            fi
+            if ! podman machine inspect "$NAME" --format '{{.State}}' 2>/dev/null | grep -qx running; then
+              echo "FAIL: podman machine $NAME is not running" >&2
+              exit 1
+            fi
+            # Extract SSH coordinates for the machine. podman publishes
+            # these via `machine inspect`; using them directly lets us
+            # invoke ssh with `-R` correctly placed.
+            SSH_PORT="$(podman machine inspect "$NAME" --format '{{.SSHConfig.Port}}')"
+            SSH_USER="$(podman machine inspect "$NAME" --format '{{.SSHConfig.RemoteUsername}}')"
+            SSH_KEY="$(podman machine inspect "$NAME"  --format '{{.SSHConfig.IdentityPath}}')"
+            # Ensure the parent directory of the guest socket exists.
+            # ssh -R will create the socket file but not its parent
+            # dir; /run/host-services/ is not a default directory
+            # inside the Fedora-CoreOS machine image.
+            podman machine ssh "$NAME" -- \
+              sudo install -d -m 0755 -o "$SSH_USER" "$(dirname "$GUEST_SOCK")"
+            echo ">> forwarding $HOST_SOCK -> $NAME:$GUEST_SOCK" >&2
+            # -R publishes a fresh AF_UNIX endpoint inside the VM that
+            # proxies bytes back to HOST_SOCK over the SSH transport.
+            # -N: no remote command; just hold the forward open.
+            # StreamLocalBindUnlink: pre-clean the in-VM socket path
+            #   so reconnects after an unclean exit don't fail with
+            #   "address already in use".
+            # StrictHostKeyChecking=no: the VM is ephemeral; we don't
+            #   maintain a known_hosts entry for it. -o flags here
+            #   mirror what `podman machine ssh` passes internally.
+            exec ssh \
+              -i "$SSH_KEY" \
+              -p "$SSH_PORT" \
+              -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null \
+              -o StreamLocalBindUnlink=yes \
+              -o ExitOnForwardFailure=yes \
+              -R "$GUEST_SOCK:$HOST_SOCK" \
+              -N \
+              "$SSH_USER@127.0.0.1"
+          '';
+        };
+
+        # PID file for the background forwarder spawned by
+        # dev-tent-machine-up. Per-worktree path under .tmp keeps
+        # multiple worktrees on the same host from stomping each
+        # other's forwarders.
+        devTentSSHForwardPidFile = ".tmp/podman/${devTentMachineName}-ssh-forward.pid";
       in
       {
         packages = {
           default = mkClownPkg { pluginMeta = emptyPluginMeta; };
+          # dev: clown built with podmanMachineName baked in, targeting
+          # the local `clown-dev` podman-machine created by
+          # `nix run .#dev-tent-machine-up`. Use this when iterating on
+          # tent mount logic without touching the user's eng-managed
+          # podman-machine-default. See AGENTS.md § Dev loop for tent.
+          dev = mkClownPkg {
+            pluginMeta = emptyPluginMeta;
+            podmanMachineName = devTentMachineName;
+          };
           clown-manpages = clown-manpages;
           clown-race = clown-go-race;
           clown-cover = clown-cover;
@@ -1076,6 +1398,32 @@
         };
 
         lib.mkCircus = mkCircus;
+
+        # Dev-loop apps. `nix run .#dev-tent-machine-{up,down,status}`
+        # manages the isolated podman-machine that `nix build .#dev`
+        # targets. See devTentMachineName / devTentVolumes above and
+        # AGENTS.md § Dev loop for tent.
+        apps.dev-tent-machine-up = {
+          type = "app";
+          program = "${devTentMachineUp}/bin/dev-tent-machine-up";
+        };
+        apps.dev-tent-machine-down = {
+          type = "app";
+          program = "${devTentMachineDown}/bin/dev-tent-machine-down";
+        };
+        apps.dev-tent-machine-status = {
+          type = "app";
+          program = "${devTentMachineStatus}/bin/dev-tent-machine-status";
+        };
+        # Foreground SSH-agent forwarder. Bypasses dev-tent-machine-up's
+        # background spawn — useful for `nix run .#dev-tent-ssh-forward
+        # podman-machine-default` to attach a forwarder to the eng
+        # default machine, or for debugging when the background
+        # forwarder isn't behaving.
+        apps.dev-tent-ssh-forward = {
+          type = "app";
+          program = "${devTentSSHForward}/bin/dev-tent-ssh-forward";
+        };
 
         formatter = treefmtEval.config.build.wrapper;
       }

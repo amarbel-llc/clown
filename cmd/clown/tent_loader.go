@@ -13,6 +13,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"golang.org/x/term"
+
+	"github.com/amarbel-llc/clown/internal/tent"
 )
 
 // tent_loader.go renders `podman load -i <tarball>` as a bubbletea
@@ -36,19 +38,23 @@ const (
 // output to stderr (matching the prior behavior on CI). The combined
 // stdout+stderr of podman is always captured so a failure can dump
 // the full transcript regardless of UI mode.
-func runTentImageLoad(podmanPath, tarball string) error {
+//
+// `connection`, if non-empty, becomes `--connection <name>` before
+// the load subcommand.
+func runTentImageLoad(podmanPath, tarball, connection string) error {
 	if term.IsTerminal(int(os.Stdout.Fd())) {
-		return loadWithSpinner(context.Background(), podmanPath, tarball)
+		return loadWithSpinner(context.Background(), podmanPath, tarball, connection)
 	}
-	return loadStreaming(context.Background(), podmanPath, tarball)
+	return loadStreaming(context.Background(), podmanPath, tarball, connection)
 }
 
 // loadStreaming is the non-TTY path: forward podman output directly
 // to stderr while it runs. Used by CI, redirected stdout, and other
 // non-interactive environments.
-func loadStreaming(ctx context.Context, podmanPath, tarball string) error {
+func loadStreaming(ctx context.Context, podmanPath, tarball, connection string) error {
 	fmt.Fprintln(os.Stderr, loaderTitle)
-	cmd := exec.CommandContext(ctx, podmanPath, "load", "-i", tarball)
+	args := append(tent.PodmanConnectionArgs(connection), "load", "-i", tarball)
+	cmd := exec.CommandContext(ctx, podmanPath, args...)
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
@@ -62,11 +68,12 @@ func loadStreaming(ctx context.Context, podmanPath, tarball string) error {
 // success the tail collapses to a single "tent image cached" line;
 // on failure the captured transcript is dumped to stderr so the user
 // sees what podman complained about.
-func loadWithSpinner(ctx context.Context, podmanPath, tarball string) error {
+func loadWithSpinner(ctx context.Context, podmanPath, tarball, connection string) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, podmanPath, "load", "-i", tarball)
+	args := append(tent.PodmanConnectionArgs(connection), "load", "-i", tarball)
+	cmd := exec.CommandContext(ctx, podmanPath, args...)
 	pipeR, pipeW := io.Pipe()
 	cmd.Stdout = pipeW
 	cmd.Stderr = pipeW

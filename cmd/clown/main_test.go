@@ -855,8 +855,14 @@ func fakePodmanBinary(t *testing.T, imageExists bool) (binPath, logPath string) 
 	if !imageExists {
 		exitForExists = "1"
 	}
+	// The script peels off an optional `--connection <name>` prefix
+	// (which clown's podman call sites now emit) before matching the
+	// subcommand. Real podman accepts the flag in either position;
+	// here we keep the fake permissive so a real test can pass the
+	// flag without rewiring the matcher.
 	script := "#!" + shPath + "\n" +
 		"echo \"$@\" >> " + logPath + "\n" +
+		"if [ \"$1\" = \"--connection\" ]; then shift 2; fi\n" +
 		"if [ \"$1\" = \"image\" ] && [ \"$2\" = \"exists\" ]; then exit " + exitForExists + "; fi\n" +
 		"exit 0\n"
 	binPath = filepath.Join(dir, "podman")
@@ -868,7 +874,7 @@ func fakePodmanBinary(t *testing.T, imageExists bool) (binPath, logPath string) 
 
 func TestEnsureTentImage_ExistsShortCircuits(t *testing.T) {
 	podman, logPath := fakePodmanBinary(t, true)
-	if err := ensureTentImage(podman, "clown-tent:test", "", ""); err != nil {
+	if err := ensureTentImage(podman, "clown-tent:test", "", "", ""); err != nil {
 		t.Fatalf("expected nil error when image exists, got %v", err)
 	}
 	data, _ := os.ReadFile(logPath)
@@ -883,7 +889,7 @@ func TestEnsureTentImage_MissingThenLoad(t *testing.T) {
 	if err := os.WriteFile(tarball, []byte("fake tarball"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := ensureTentImage(podman, "clown-tent:test", tarball, ""); err != nil {
+	if err := ensureTentImage(podman, "clown-tent:test", tarball, "", ""); err != nil {
 		t.Fatalf("expected nil error from happy load, got %v", err)
 	}
 	data, _ := os.ReadFile(logPath)
@@ -894,7 +900,7 @@ func TestEnsureTentImage_MissingThenLoad(t *testing.T) {
 
 func TestEnsureTentImage_MissingNoTarballNoFlakeRef(t *testing.T) {
 	podman, _ := fakePodmanBinary(t, false)
-	err := ensureTentImage(podman, "clown-tent:test", "", "")
+	err := ensureTentImage(podman, "clown-tent:test", "", "", "")
 	if err == nil || !strings.Contains(err.Error(), "not present locally") {
 		t.Fatalf("expected `not present locally` error when no tarball and no flake ref, got %v", err)
 	}
@@ -915,12 +921,38 @@ func TestEnsureTentImage_TarballPrecedesFlakeRef(t *testing.T) {
 	}
 	// flakeRef is a bogus path; if the build path runs, `nix build`
 	// will error out (or won't even be on PATH in CI).
-	if err := ensureTentImage(podman, "clown-tent:test", tarball, "/nonexistent/flake"); err != nil {
+	if err := ensureTentImage(podman, "clown-tent:test", tarball, "/nonexistent/flake", ""); err != nil {
 		t.Fatalf("tarball path should win; got %v", err)
 	}
 	data, _ := os.ReadFile(logPath)
 	if !strings.Contains(string(data), "load -i "+tarball) {
 		t.Errorf("expected load via baked tarball; calls log:\n%s", data)
+	}
+}
+
+// TestEnsureTentImage_ConnectionFlagPrependsBoth verifies that the
+// `--connection <name>` flag is added to BOTH the existence check
+// and the load invocation, ahead of the subcommand. Pins
+// PodmanConnectionArgs's `flag-before-subcommand` placement at
+// every clown-managed podman call site.
+func TestEnsureTentImage_ConnectionFlagPrependsBoth(t *testing.T) {
+	podman, logPath := fakePodmanBinary(t, false)
+	tarball := filepath.Join(t.TempDir(), "tent.tar")
+	if err := os.WriteFile(tarball, []byte("fake tarball"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureTentImage(podman, "clown-tent:test", tarball, "", "clown-dev"); err != nil {
+		t.Fatalf("expected nil error from happy load, got %v", err)
+	}
+	data, _ := os.ReadFile(logPath)
+	// Both invocations should have the connection flag before the subcommand.
+	wantExists := "--connection clown-dev image exists"
+	wantLoad := "--connection clown-dev load -i " + tarball
+	if !strings.Contains(string(data), wantExists) {
+		t.Errorf("expected %q in log:\n%s", wantExists, data)
+	}
+	if !strings.Contains(string(data), wantLoad) {
+		t.Errorf("expected %q in log:\n%s", wantLoad, data)
 	}
 }
 

@@ -44,6 +44,16 @@ var (
 	// podman-machine VM). Empty in dev builds; --tent fails fast
 	// with a clear error when empty. See FDR-0007.
 	PodmanPath string
+	// PodmanMachineName is the podman connection name (= machine
+	// name) to target via `--connection <name>` on every podman
+	// invocation. Baked at build time by mkCircus / mkClownGo so a
+	// downstream consumer (notably packages.dev, which targets the
+	// local dev-loop machine) can bypass the user's eng-managed
+	// podman-machine-default. Empty (the default) means no
+	// `--connection` flag is added; podman picks its configured
+	// default connection. The flag must come *before* the
+	// subcommand in argv order.
+	PodmanMachineName string
 	// TentImageRef is the podman image reference (e.g.
 	// "clown-tent:1.2.3") that --tent runs the provider inside.
 	// Loaded on demand from TentImageTarball when not already

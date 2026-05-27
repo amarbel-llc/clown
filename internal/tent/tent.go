@@ -12,7 +12,23 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 )
+
+// SSHAuthSockInVM is the well-known in-VM path where podman-machine's
+// SSH-agent forwarder publishes the host's $SSH_AUTH_SOCK. Mirrors
+// the Docker Desktop / OrbStack / Lima convention so containers know
+// where to look on macOS. The forwarder is the
+// `dev-tent-ssh-forward` flake app (see flake.nix). When the forwarder
+// is not running, bind-mounting this path will fail at podman-run
+// time with "not a socket" — recoverable by starting the forwarder.
+//
+// Why we don't bind the host $SSH_AUTH_SOCK directly on darwin:
+// podman-machine's virtiofs/9p layer cannot proxy AF_UNIX sockets,
+// so the host socket inode is visible inside the VM but `statfs`
+// returns "operation not supported" when podman tries to bind-mount
+// it into a container. See containers/podman#23245 / #23785.
+const SSHAuthSockInVM = "/run/host-services/ssh-auth.sock"
 
 // Options describes the container shape tent should construct. Zero
 // values are not meaningful — callers should populate at least Image,
@@ -86,6 +102,28 @@ type Options struct {
 	// the image's default. The tent image bakes no baseline PATH,
 	// so this is a clean replacement rather than a prepend.
 	PathOverride string
+
+	// ConnectionName, when non-empty, becomes `--connection <name>`
+	// in podman's argv *before* the subcommand. Selects a
+	// non-default podman connection (= machine name on darwin).
+	// Burned in from buildcfg.PodmanMachineName by mkClownGo so
+	// downstream consumers like packages.dev can target an
+	// isolated dev-loop machine without touching the user's
+	// eng-managed podman-machine-default.
+	ConnectionName string
+}
+
+// PodmanConnectionArgs returns the argv prefix that selects a
+// non-default podman connection: ["--connection", name] when name
+// is non-empty, nil otherwise. The flag must come *before* the
+// subcommand (podman --connection <name> <subcommand> ...).
+// Centralized here so cmd/clown's three podman call sites
+// (`image exists`, `load`, `run`) all use the same shape.
+func PodmanConnectionArgs(name string) []string {
+	if name == "" {
+		return nil
+	}
+	return []string{"--connection", name}
 }
 
 // DefaultEnvPassthrough is the env-var allowlist for the tracer
@@ -142,9 +180,11 @@ var DefaultEnvPassthrough = []string{
 }
 
 // OptionsFromEnv builds Options from the process environment.
-// `image` is the buildcfg-baked image reference; `pluginDirs` is the
-// post-compilation plugin dir list from the plugin-host pipeline.
-func OptionsFromEnv(image string, pluginDirs []string) (Options, error) {
+// `image` is the buildcfg-baked image reference; `connection` is the
+// buildcfg-baked podman connection name (empty = use podman's
+// default connection); `pluginDirs` is the post-compilation plugin
+// dir list from the plugin-host pipeline.
+func OptionsFromEnv(image, connection string, pluginDirs []string) (Options, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return Options{}, fmt.Errorf("tent: getwd: %w", err)
@@ -165,10 +205,38 @@ func OptionsFromEnv(image string, pluginDirs []string) (Options, error) {
 		PluginDirs:     pluginDirs,
 		ExtraBinds:     extras,
 		ReadOnlyBinds:  DefaultReadOnlyBinds(home),
-		SSHAuthSock:    os.Getenv("SSH_AUTH_SOCK"),
+		SSHAuthSock:    sshAuthSockForRuntime(),
 		EnvPassthrough: DefaultEnvPassthrough,
 		Tty:            stdioIsTerminal(),
+		ConnectionName: connection,
 	}, nil
+}
+
+// sshAuthSockForRuntime picks the path that should be bind-mounted as
+// the in-tent $SSH_AUTH_SOCK. On linux native, $SSH_AUTH_SOCK from
+// the host environment is bound directly (the host and container
+// share an fs namespace through the bind). On darwin, where
+// podman-machine's virtiofs/9p layer cannot proxy AF_UNIX sockets,
+// we instead use the well-known in-VM path published by the
+// `dev-tent-ssh-forward` flake app (see SSHAuthSockInVM). The
+// caller (dev-tent-machine-up, or a separate `nix run
+// .#dev-tent-ssh-forward` invocation) is responsible for spawning
+// the forwarder; clown returns an empty path if the host env var
+// isn't set on darwin so a missing forwarder degrades cleanly to
+// "no agent" rather than "broken bind mount".
+func sshAuthSockForRuntime() string {
+	host := os.Getenv("SSH_AUTH_SOCK")
+	if host == "" {
+		return ""
+	}
+	if runtime.GOOS == "darwin" {
+		// Containers see the forwarded socket at SSHAuthSockInVM.
+		// The bind source IS the in-VM path because podman run's
+		// --volume source is interpreted inside the VM, not on the
+		// host.
+		return SSHAuthSockInVM
+	}
+	return host
 }
 
 // stdioIsTerminal reports whether both stdin and stdout are TTYs.
@@ -195,7 +263,7 @@ func isCharDevice(f *os.File) bool {
 //
 // Shape (mounts elided for brevity):
 //
-//	run --rm -i --network=host --userns=keep-id
+//	run --rm -i --network=host
 //	    --volume /nix/store:/nix/store:ro
 //	    --volume <workdir>:<workdir>
 //	    --volume <home>/.claude:<home>/.claude
@@ -206,17 +274,28 @@ func isCharDevice(f *os.File) bool {
 //	    <image>
 //	    <claudeBinary> <claudeArgs...>
 func BuildArgs(claudeBinary string, claudeArgs []string, opts Options) []string {
-	args := []string{
+	args := append([]string{}, PodmanConnectionArgs(opts.ConnectionName)...)
+	args = append(args,
 		"run",
 		"--rm",
 		"-i",
-	}
+	)
 	if opts.Tty {
 		args = append(args, "-t")
 	}
 	args = append(args,
 		"--network=host",
-		"--userns=keep-id",
+		// `--userns=keep-id` was here originally for linux native
+		// rootless podman: it maps the host user to root inside the
+		// container's user namespace so bind-mounted files retain
+		// the host user's ownership. On darwin under applehv,
+		// however, it causes `claude -p ...` to hang indefinitely
+		// (verified 2026-05-27; isolated by bisecting against a
+		// minimal-repro `podman run`). The bind-mount source files
+		// are already in the VM filesystem with VM-side UIDs, so
+		// keep-id is unnecessary on darwin. Removing entirely for
+		// now; if linux native bind-mount ownership issues resurface
+		// we should re-introduce it gated on `runtime.GOOS == "linux"`.
 		"--volume", "/nix/store:/nix/store:ro",
 	)
 

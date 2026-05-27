@@ -1,6 +1,7 @@
 package tent
 
 import (
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -18,7 +19,7 @@ func TestBuildArgs_DefaultShape(t *testing.T) {
 
 	wantHead := []string{
 		"run", "--rm", "-i",
-		"--network=host", "--userns=keep-id",
+		"--network=host",
 		"--volume", "/nix/store:/nix/store:ro",
 		"--volume", "/home/u/repo:/home/u/repo",
 		"--volume", "/home/u/.claude:/home/u/.claude",
@@ -34,6 +35,55 @@ func TestBuildArgs_DefaultShape(t *testing.T) {
 	}
 	if !slices.Equal(got, wantHead) {
 		t.Fatalf("argv mismatch:\n got: %q\nwant: %q", got, wantHead)
+	}
+}
+
+func TestPodmanConnectionArgs_Empty(t *testing.T) {
+	if got := PodmanConnectionArgs(""); got != nil {
+		t.Errorf("PodmanConnectionArgs(\"\") = %v, want nil", got)
+	}
+}
+
+func TestPodmanConnectionArgs_Set(t *testing.T) {
+	got := PodmanConnectionArgs("clown-dev")
+	want := []string{"--connection", "clown-dev"}
+	if !slices.Equal(got, want) {
+		t.Errorf("PodmanConnectionArgs = %v, want %v", got, want)
+	}
+}
+
+// TestBuildArgs_ConnectionNamePrepends asserts that the --connection
+// flag lands *before* the run subcommand (podman's required order)
+// when Options.ConnectionName is set. The rest of the argv is left
+// to the existing default-shape and per-mount tests — this one only
+// pins the prefix.
+func TestBuildArgs_ConnectionNamePrepends(t *testing.T) {
+	opts := Options{
+		Image:          "img",
+		Workdir:        "/w",
+		Home:           "/h",
+		ConnectionName: "clown-dev",
+	}
+	got := BuildArgs("/c", nil, opts)
+
+	if len(got) < 3 || got[0] != "--connection" || got[1] != "clown-dev" || got[2] != "run" {
+		t.Fatalf("expected argv to start with `--connection clown-dev run`, got %v", got[:min(6, len(got))])
+	}
+}
+
+func TestBuildArgs_NoConnectionByDefault(t *testing.T) {
+	opts := Options{
+		Image:   "img",
+		Workdir: "/w",
+		Home:    "/h",
+	}
+	got := BuildArgs("/c", nil, opts)
+
+	if len(got) == 0 || got[0] != "run" {
+		t.Fatalf("expected argv to start with `run` when ConnectionName is empty, got %v", got[:min(3, len(got))])
+	}
+	if slices.Contains(got, "--connection") {
+		t.Errorf("did not expect --connection in argv: %v", got)
 	}
 }
 
@@ -280,6 +330,35 @@ func TestBuildArgs_NoSSHAuthSockOmitsBind(t *testing.T) {
 func TestDefaultEnvPassthrough_IncludesSSHAuthSock(t *testing.T) {
 	if !slices.Contains(DefaultEnvPassthrough, "SSH_AUTH_SOCK") {
 		t.Errorf("DefaultEnvPassthrough must include SSH_AUTH_SOCK; got %v", DefaultEnvPassthrough)
+	}
+}
+
+func TestSSHAuthSockForRuntime_EmptyWhenUnset(t *testing.T) {
+	t.Setenv("SSH_AUTH_SOCK", "")
+	if got := sshAuthSockForRuntime(); got != "" {
+		t.Errorf("sshAuthSockForRuntime with no SSH_AUTH_SOCK = %q, want empty", got)
+	}
+}
+
+// TestSSHAuthSockForRuntime_PlatformBehavior pins the per-GOOS
+// behavior: linux returns the host path verbatim (the host and
+// container share an fs namespace through the bind); darwin returns
+// the in-VM forwarded path SSHAuthSockInVM (containers/podman#23245
+// — virtiofs cannot proxy AF_UNIX sockets, so the bind source must
+// be a path that's an AF_UNIX socket inside the VM, not on the
+// mac).
+func TestSSHAuthSockForRuntime_PlatformBehavior(t *testing.T) {
+	t.Setenv("SSH_AUTH_SOCK", "/Users/u/.local/state/ssh/mux-agent.sock")
+	got := sshAuthSockForRuntime()
+	switch runtime.GOOS {
+	case "darwin":
+		if got != SSHAuthSockInVM {
+			t.Errorf("darwin: got %q, want %q", got, SSHAuthSockInVM)
+		}
+	default:
+		if got != "/Users/u/.local/state/ssh/mux-agent.sock" {
+			t.Errorf("%s: got %q, want host path", runtime.GOOS, got)
+		}
 	}
 }
 

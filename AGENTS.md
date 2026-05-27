@@ -81,6 +81,106 @@ All these recipes will be replaced (or removed) once FDR-0011 phase 2
 ships `clown --backend=circus --circus-bind=…`. Until then they're
 the supported way to drive local models through clown.
 
+## Dev loop for tent
+
+`clown --tent` on darwin normally targets the eng-managed
+`podman-machine-default` VM provisioned by `programs.podman-darwin`
+(in `amarbel-llc/eng`). Iterating on tent mount logic that way
+requires a full eng round-trip: edit the home-manager module →
+`home-manager switch` → `podman machine rm -f` → `launchctl
+kickstart` → smoke. Several mount-list gaps shipped only after eng
+landed an edit (eng#108 added `$HOME`, eng#112 added `/nix/var`);
+the loop is slow.
+
+This flake exposes a self-contained dev loop with one important
+caveat: **podman on darwin enforces a strict one-VM-at-a-time
+rule**. Verified in upstream source — every darwin provider
+(`applehv`, `libkrun`, `qemu`) returns `RequireExclusiveActive() ==
+true` and there is no provider config that opts out. So the dev loop
+here is a **stop/swap**: `dev-tent-up` stops the eng-managed default
+to free the VM slot, runs the dev machine, and `dev-tent-down`
+reverses it (stops the dev machine, restarts the default). The
+eng-managed VM is **temporarily unavailable** between `up` and
+`down`; `down` brings it back. Lima/Colima support concurrent VMs
+and are tracked as a follow-up — see the open clown issue for
+"explore Lima/Colima as a parallel-VM alternative."
+
+The just recipes are the **paved-path** form (pre-allowlisted; no
+permission prompts); the underlying `nix run` invocations are
+equivalent if you prefer them directly.
+
+```sh
+# End-to-end iteration in one verb: swap to clown-dev → build .#dev
+# → run clown --tent -- --version. Add DOWN=1 to swap back at the
+# end (restart the eng default).
+just smoke-dev-tent             # one-shot e2e; leaves clown-dev up
+just smoke-dev-tent DOWN=1      # one-shot e2e + swap back
+
+# Or step by step:
+just dev-tent-up                # stop default, start clown-dev
+just dev-tent-status            # shows BOTH machines' states
+nix build .#dev && ./result/bin/clown --tent -- --version
+just dev-tent-down              # stop clown-dev, restart default
+
+# Iterate on the mount list (edit `devTentVolumes` in flake.nix):
+just dev-tent-down && just smoke-dev-tent
+```
+
+About the volumes: `devTentVolumes` in `flake.nix` is intentionally
+**broad** — a single `/:/:rw` bind. The container-level
+`--volume` filtering in `tent.BuildArgs` is what actually controls
+what the tent sees, not the VM-level mount. With `/` mounted at the
+VM, iterating on the bind-candidate list no longer requires
+`machine rm && init` cycles. The same principle should be considered
+for the eng-managed VM (eng issue tracked separately).
+
+About authentication: claude on darwin stores OAuth tokens in the
+macOS Keychain (under `Claude Code-credentials`). The Keychain is a
+darwin-only service; it isn't reachable from a linux container.
+Claude on linux falls back to a JSON file at `~/.claude/.credentials.json`,
+which IS bind-mounted into the tent. Run once after `claude /login`
+on the host (and again on token rotation):
+
+```sh
+just debug-extract-claude-credentials
+```
+
+That triggers a Touch ID prompt, then writes the extracted credentials
+to `~/.claude/.credentials.json`. Re-run when in-tent claude reports
+`Not logged in · Please run /login`. clown#100's home-manager module
+will eventually automate this.
+
+About SSH agent forwarding: podman-machine's virtiofs/9p mount
+layer cannot proxy AF_UNIX sockets through the host→VM filesystem
+mount (containers/podman#23245, #23785). To get `$SSH_AUTH_SOCK`
+into the tent, `dev-tent-machine-up` spawns a background
+**ssh-agent forwarder**: it uses `podman machine ssh -- -R …` to
+publish the host's socket at `/run/host-services/ssh-auth.sock`
+inside the VM (the same well-known path used by Docker Desktop,
+OrbStack, and Lima). `tent.BuildArgs` on darwin then bind-mounts
+*that* in-VM path into the container. The forwarder exits when the
+machine stops; `dev-tent-machine-down` kills it explicitly. If the
+forwarder fails to start (e.g. `SSH_AUTH_SOCK` was unset), tent
+degrades cleanly to "no agent" rather than emitting a broken bind.
+You can also attach a forwarder to the eng-managed default machine:
+
+```sh
+nix run .#dev-tent-ssh-forward -- podman-machine-default
+```
+
+(holds a foreground `ssh -N`; Ctrl-C to tear it down).
+
+Related issues:
+- eng#107 — machine-name rename (closed; landed)
+- eng#108 — bind `$HOME` into the VM (closed; landed)
+- eng#110 — home-manager activation hook for managed-settings (open)
+- eng#111 — activation drift detection (open)
+- eng#112 — bind `/nix/var` into the VM (open)
+- clown#95 — proper claude-code binary patch (open)
+- clown#98 — podman command builder refactor (open)
+- (open clown issues tracking Lima/Colima exploration and clown
+  exporting a `homeManagerModules.podmanDarwin` for eng to consume)
+
 ## Architecture
 
 The flake produces a `symlinkJoin` of five components:
