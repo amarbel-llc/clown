@@ -61,23 +61,35 @@ func DefaultReadOnlyBindCandidates(home string) []string {
 }
 
 // DefaultReadOnlyBinds returns the subset of DefaultReadOnlyBindCandidates
-// that actually exist on the host. A missing path would otherwise cause
-// podman to either fail with `statfs ... no such file or directory` or
-// (worse) silently create an empty directory as the bind source — the
-// same trap ensureClaudeBindSources guards against for the
-// claude-specific writable mounts.
+// that actually exist on the host AND have a reachable target. A missing
+// path would otherwise cause podman to either fail with `statfs ... no
+// such file or directory` or (worse) silently create an empty directory
+// as the bind source — the same trap ensureClaudeBindSources guards
+// against for the claude-specific writable mounts.
 //
-// Lstat (not Stat) is used so symlinks like ~/.nix-profile, whose
-// target lives under /nix/var, are kept even when the resolver would
-// follow them to a dir already covered by the /nix/var mount. The
-// in-tent agent expects to see ~/.nix-profile *as* a symlink so PATH
-// entries that point to it resolve correctly.
+// Lstat checks that the path entry itself exists, so symlinks like
+// ~/.nix-profile — whose target lives under /nix/var — are kept and
+// the in-tent agent sees them *as* symlinks for PATH resolution.
+//
+// Stat additionally requires the target to be reachable. Dangling
+// symlinks (e.g. a leftover ~/.nix-profile pointing at a
+// non-existent ~/.local/state/nix/profiles/profile on a nix-darwin
+// install that keeps the user profile at /etc/profiles/per-user/<u>/
+// instead) are dropped — podman's statfs check on the resolved target
+// would fail at run time.
 func DefaultReadOnlyBinds(home string) []string {
 	var out []string
 	for _, p := range DefaultReadOnlyBindCandidates(home) {
-		if _, err := os.Lstat(p); err == nil {
-			out = append(out, p)
+		info, err := os.Lstat(p)
+		if err != nil {
+			continue
 		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			if _, err := os.Stat(p); err != nil {
+				continue
+			}
+		}
+		out = append(out, p)
 	}
 	return out
 }

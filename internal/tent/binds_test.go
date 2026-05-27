@@ -57,13 +57,13 @@ func TestDefaultReadOnlyBinds_FiltersToExisting(t *testing.T) {
 	}
 }
 
-func TestDefaultReadOnlyBinds_KeepsSymlinks(t *testing.T) {
-	// ~/.nix-profile on a real host is a symlink into /nix/var/.../profile.
-	// DefaultReadOnlyBinds must keep it (the in-tent agent expects the
-	// symlink itself, so PATH entries pointing at it resolve correctly).
-	// Verify Lstat-not-Stat semantics by planting a symlink to a
-	// nonexistent target — Stat would return ENOENT and drop it; Lstat
-	// reports the symlink itself.
+func TestDefaultReadOnlyBinds_DropsDanglingSymlinks(t *testing.T) {
+	// On nix-darwin installs where the user profile lives at
+	// /etc/profiles/per-user/<u>/ rather than ~/.local/state/nix/...,
+	// the ~/.nix-profile symlink may exist but point at a nonexistent
+	// target. Podman would fail at run time with `statfs <target>:
+	// no such file or directory` if we bind-mounted a dangling
+	// symlink, so DefaultReadOnlyBinds drops it.
 	home := t.TempDir()
 	link := filepath.Join(home, ".nix-profile")
 	if err := os.Symlink("/does/not/exist/target", link); err != nil {
@@ -72,7 +72,29 @@ func TestDefaultReadOnlyBinds_KeepsSymlinks(t *testing.T) {
 
 	got := DefaultReadOnlyBinds(home)
 
+	if slices.Contains(got, link) {
+		t.Errorf("dangling symlink ~/.nix-profile should be dropped; got %v", got)
+	}
+}
+
+func TestDefaultReadOnlyBinds_KeepsLiveSymlinks(t *testing.T) {
+	// A symlink whose target exists is kept — the in-tent agent
+	// expects to see ~/.nix-profile *as* a symlink so PATH entries
+	// pointing at it resolve correctly on linux (where the target
+	// lives under the /nix/var bind).
+	home := t.TempDir()
+	target := filepath.Join(home, "real-profile")
+	if err := os.MkdirAll(filepath.Join(target, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(home, ".nix-profile")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+
+	got := DefaultReadOnlyBinds(home)
+
 	if !slices.Contains(got, link) {
-		t.Errorf("dangling symlink ~/.nix-profile was dropped; got %v", got)
+		t.Errorf("live symlink ~/.nix-profile was dropped; got %v", got)
 	}
 }
