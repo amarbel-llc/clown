@@ -33,53 +33,53 @@ const (
 	loaderTitle = "Loading tent image (first run)…"
 )
 
-// runTentImageLoad runs `podman load -i tarball`. When stdout is a
-// TTY it uses the bubbletea live-tail UI; otherwise it streams raw
-// output to stderr (matching the prior behavior on CI). The combined
-// stdout+stderr of podman is always captured so a failure can dump
-// the full transcript regardless of UI mode.
-//
-// `connection`, if non-empty, becomes `--connection <name>` before
-// the load subcommand.
-func runTentImageLoad(podmanPath, tarball, connection string) error {
+// runTentImageLoad runs the backend-specific image-load command
+// (`podman load -i <tarball>` or
+// `limactl shell <name> -- sudo nerdctl load -i <tarball>`). When
+// stdout is a TTY it uses the bubbletea live-tail UI; otherwise it
+// streams raw output to stderr (matching the prior behavior on CI).
+// The combined stdout+stderr is captured so a failure can dump the
+// full transcript regardless of UI mode.
+func runTentImageLoad(backend tent.Backend, tarball string) error {
 	if term.IsTerminal(int(os.Stdout.Fd())) {
-		return loadWithSpinner(context.Background(), podmanPath, tarball, connection)
+		return loadWithSpinner(context.Background(), backend, tarball)
 	}
-	return loadStreaming(context.Background(), podmanPath, tarball, connection)
+	return loadStreaming(context.Background(), backend, tarball)
 }
 
-// loadStreaming is the non-TTY path: forward podman output directly
-// to stderr while it runs. Used by CI, redirected stdout, and other
-// non-interactive environments.
-func loadStreaming(ctx context.Context, podmanPath, tarball, connection string) error {
+// loadStreaming is the non-TTY path: forward the backend's output
+// directly to stderr while it runs. Used by CI, redirected stdout,
+// and other non-interactive environments.
+func loadStreaming(ctx context.Context, backend tent.Backend, tarball string) error {
 	fmt.Fprintln(os.Stderr, loaderTitle)
-	args := append(tent.PodmanConnectionArgs(connection), "load", "-i", tarball)
-	cmd := exec.CommandContext(ctx, podmanPath, args...)
+	cmdPath, args := backend.LoadImageArgs(tarball)
+	cmd := exec.CommandContext(ctx, cmdPath, args...)
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("podman load -i %s: %w", tarball, err)
+		return fmt.Errorf("loading tent image %s: %w", tarball, err)
 	}
 	return nil
 }
 
-// loadWithSpinner runs podman load under a bubbletea program that
-// shows a spinner and the last loaderMaxLines lines of output. On
-// success the tail collapses to a single "tent image cached" line;
-// on failure the captured transcript is dumped to stderr so the user
-// sees what podman complained about.
-func loadWithSpinner(ctx context.Context, podmanPath, tarball, connection string) error {
+// loadWithSpinner runs the backend's image-load command under a
+// bubbletea program that shows a spinner and the last
+// loaderMaxLines lines of output. On success the tail collapses to a
+// single "tent image cached" line; on failure the captured transcript
+// is dumped to stderr so the user sees what the backend complained
+// about.
+func loadWithSpinner(ctx context.Context, backend tent.Backend, tarball string) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	args := append(tent.PodmanConnectionArgs(connection), "load", "-i", tarball)
-	cmd := exec.CommandContext(ctx, podmanPath, args...)
+	cmdPath, args := backend.LoadImageArgs(tarball)
+	cmd := exec.CommandContext(ctx, cmdPath, args...)
 	pipeR, pipeW := io.Pipe()
 	cmd.Stdout = pipeW
 	cmd.Stderr = pipeW
 
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("starting podman load: %w", err)
+		return fmt.Errorf("starting tent image load: %w", err)
 	}
 
 	model := newTentLoaderModel(loaderTitle, cancel)
@@ -121,7 +121,7 @@ func loadWithSpinner(ctx context.Context, podmanPath, tarball, connection string
 	cmdErr := <-cmdErrCh
 	if cmdErr != nil {
 		os.Stderr.Write(captured.Bytes())
-		return fmt.Errorf("podman load -i %s: %w", tarball, cmdErr)
+		return fmt.Errorf("loading tent image %s: %w", tarball, cmdErr)
 	}
 	return nil
 }

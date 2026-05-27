@@ -247,6 +247,49 @@ Until then, the module is useful as either:
 Cross-references: `zz-pocs/tent-lima/` (the spike), clown#99
 (exploration issue), clown#100 (module-ownership tracking).
 
+## Tent backend lever (podman ↔ lima)
+
+`clown --tent` picks its container runtime at build time via the
+`tentBackend` parameter on `mkClownGo` / `mkClownPkg` / `mkCircus` in
+`flake.nix`. Two values are recognized:
+
+- `"podman"` (default) — talk to podman directly. Uses
+  `buildcfg.PodmanPath` and `buildcfg.PodmanMachineName` (which is
+  passed as `--connection <name>` before the subcommand).
+- `"lima"` — talk to Lima via `limactl shell <machine> -- sudo
+  nerdctl ...`. Uses `buildcfg.LimactlPath` and reuses
+  `buildcfg.PodmanMachineName` as the Lima instance name. nerdctl has
+  no `--connection` equivalent, so the Lima backend drops it.
+
+The Go side abstracts this via the `tent.Backend` interface
+(`internal/tent/backend.go`) with three operations —
+`ImageExistsArgs`, `LoadImageArgs`, `RunArgs` — and a `Binary()`
+helper. `cmd/clown/main.go`'s `newBackend()` resolves
+`buildcfg.TentBackend` to a concrete impl and threads it through
+`ensureTentImage`, `runTentImageLoad`, and `tentExecutor`. All
+mount-list construction lives in the backend-agnostic
+`tent.BuildArgs`; both backends delegate to it.
+
+Built packages:
+
+- `packages.default` / `packages.dev` — podman backend (status quo).
+- `packages.dev-lima` — lima backend; targets the `clown-tent` Lima
+  instance created by `homeManagerModules.tent-backend-lima` (or by
+  the local `clown-tent-lima` from `zz-pocs/tent-lima/`).
+
+When adding a third backend, implement the `tent.Backend` interface,
+wire its construction in `newBackend()`, add a `tentBackend` value to
+the `lib.assertOneOf` in `flake.nix`, and emit any new ldflags from
+`mkClownGo`'s `ldflagsList`.
+
+**Forward-looking: TOML profile migration.** This build-time lever is
+interim. clown's planned `--profile` work (see
+`docs/plans/2026-04-23-profiles-design.md`) will own per-profile
+`(provider, backend, model, env)` tuples, at which point `tentBackend`
+becomes a profile field and `newBackend()` becomes the profile
+resolution sink. The interface is intentionally minimal so that
+migration is a wiring change, not a Go-API redesign.
+
 ## Architecture
 
 The flake produces a `symlinkJoin` of five components:

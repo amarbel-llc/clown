@@ -557,6 +557,15 @@
             # the user's eng-managed podman-machine-default — see the
             # `dev-tent-machine-*` flake apps and `packages.dev`.
             podmanMachineName ? "",
+            # tentBackend selects the container runtime that drives
+            # --tent. "podman" is the status quo and the default;
+            # "lima" routes everything through `limactl shell
+            # <machine> -- sudo nerdctl ...`. See clown#99 (Lima spike)
+            # and internal/tent/backend.go for the runtime side. A
+            # future TOML profile system will own this selection per-
+            # profile; today's build-time lever mirrors
+            # podmanMachineName's shape so the migration is mechanical.
+            tentBackend ? "podman",
           }:
           let
             tentClaudeCliPath =
@@ -564,6 +573,14 @@
                 "${llm-agents.packages.${tentClaudeSystem}.claude-code}/bin/claude"
               else
                 "";
+            # Assert the backend is one we know about. nix evaluates
+            # this assertion lazily on first use of the binding.
+            _ = lib.assertOneOf "tentBackend" tentBackend [
+              "podman"
+              "lima"
+            ];
+            limactlPath =
+              if tentBackend == "lima" then "${pkgs.lima}/bin/limactl" else "";
           in
           buildGoApplication {
             pname = "clown";
@@ -605,6 +622,8 @@
               "-X github.com/amarbel-llc/clown/internal/buildcfg.TentImageFlakeRef=${self}"
               "-X github.com/amarbel-llc/clown/internal/buildcfg.ClaudeTentCliPath=${tentClaudeCliPath}"
               "-X github.com/amarbel-llc/clown/internal/buildcfg.PodmanMachineName=${podmanMachineName}"
+              "-X github.com/amarbel-llc/clown/internal/buildcfg.TentBackend=${tentBackend}"
+              "-X github.com/amarbel-llc/clown/internal/buildcfg.LimactlPath=${limactlPath}"
             ];
           };
 
@@ -951,6 +970,7 @@
             defaultProfile ? defaultDefaultProfile,
             enableTentClaude ? tentClaudeEnabled,
             podmanMachineName ? "",
+            tentBackend ? "podman",
           }:
           let
             clownGoBin = mkClownGo {
@@ -959,6 +979,7 @@
                 defaultProfile
                 enableTentClaude
                 podmanMachineName
+                tentBackend
                 ;
             };
           in
@@ -1029,6 +1050,9 @@
             # Downstream consumers building their own circus can set
             # this to target a dev-loop machine.
             podmanMachineName ? "",
+            # See mkClownGo for the tentBackend contract. Recognized:
+            # "podman" (default) and "lima".
+            tentBackend ? "podman",
           }:
           let
             pluginMeta = if plugins == [ ] then emptyPluginMeta else resolvePlugins plugins;
@@ -1041,6 +1065,7 @@
                 defaultProfile
                 enableTentClaude
                 podmanMachineName
+                tentBackend
                 ;
             };
             devShells.default = pkgs.mkShell {
@@ -1333,6 +1358,19 @@
           dev = mkClownPkg {
             pluginMeta = emptyPluginMeta;
             podmanMachineName = devTentMachineName;
+          };
+          # dev-lima: clown built with the Lima tent backend, targeting
+          # a Lima instance (default name "clown-tent" matching
+          # services.tent-backend-lima's default). Use this when
+          # iterating against Lima instead of podman-machine. The Lima
+          # spike at zz-pocs/tent-lima/ proved the backend works; this
+          # package puts that backend behind the standard
+          # `clown --tent` UX. See clown#99 and AGENTS.md § Tent
+          # backend lever.
+          dev-lima = mkClownPkg {
+            pluginMeta = emptyPluginMeta;
+            podmanMachineName = "clown-tent";
+            tentBackend = "lima";
           };
           clown-manpages = clown-manpages;
           clown-race = clown-go-race;

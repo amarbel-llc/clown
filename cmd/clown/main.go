@@ -317,21 +317,57 @@ func (e *passthroughExecutor) FormatArgs(args []string) []string {
 // tentExecutor wraps the inner provider binary in a podman container.
 // Binary() resolves the podman binary; FormatArgs() rewrites the
 // claude argv into a `podman run ... <image> <claude> <args>` argv.
-// FDR-0007 is the design record.
+// FDR-0007 is the design record. backend is the runtime adapter
+// (podman or lima); see internal/tent/backend.go.
 type tentExecutor struct {
 	innerCliPath string
 	opts         tent.Options
+	backend      tent.Backend
+}
+
+// newBackend resolves the build-time TentBackend ldflag into a
+// concrete tent.Backend implementation. Default "" / "podman" picks
+// the Podman backend (preserves status-quo behavior); "lima" picks
+// the LimaBackend (drives `limactl shell <name> -- sudo nerdctl ...`).
+// Errors out with a clear message on dev builds where the requisite
+// path ldflag is empty.
+//
+// Future: a TOML profile system will replace this build-time
+// selection with runtime selection. The interface contract (returned
+// tent.Backend) stays the same; only the resolution sink moves.
+func newBackend() (tent.Backend, error) {
+	switch buildcfg.TentBackend {
+	case "", "podman":
+		if buildcfg.PodmanPath == "" {
+			return nil, fmt.Errorf("--tent (podman backend) requires a build with podman wired in; this build has buildcfg.PodmanPath empty (try `nix build`)")
+		}
+		return tent.NewPodman(buildcfg.PodmanPath, buildcfg.PodmanMachineName), nil
+	case "lima":
+		if buildcfg.LimactlPath == "" {
+			return nil, fmt.Errorf("--tent (lima backend) requires a build with limactl wired in; this build has buildcfg.LimactlPath empty (try `nix build .#dev-lima` or set tentBackend=\"lima\" on mkCircus)")
+		}
+		if buildcfg.PodmanMachineName == "" {
+			return nil, fmt.Errorf("--tent (lima backend) requires a machine name; this build has buildcfg.PodmanMachineName empty (set podmanMachineName on mkCircus)")
+		}
+		return tent.NewLima(buildcfg.LimactlPath, buildcfg.PodmanMachineName), nil
+	default:
+		return nil, fmt.Errorf("unknown tent backend %q (recognized: podman, lima)", buildcfg.TentBackend)
+	}
 }
 
 func (e *tentExecutor) Binary() (string, error) {
-	if buildcfg.PodmanPath == "" {
-		return "", fmt.Errorf("--tent requires a build with podman wired in; this build has buildcfg.PodmanPath empty (try `nix build`)")
-	}
-	return exec.LookPath(buildcfg.PodmanPath)
+	return exec.LookPath(e.backend.Binary())
 }
 
 func (e *tentExecutor) FormatArgs(args []string) []string {
-	return tent.BuildArgs(e.innerCliPath, args, e.opts)
+	// RunArgs returns argv INCLUDING the backend binary path as
+	// argv[0]. The Executor contract expects argv[1:] (Binary() owns
+	// argv[0]). Strip the head.
+	full := e.backend.RunArgs(e.innerCliPath, args, e.opts)
+	if len(full) == 0 {
+		return nil
+	}
+	return full[1:]
 }
 
 // resolveClaudeForRun picks the inner claude binary path and the
@@ -471,8 +507,9 @@ func runClaude(cliPath string, flags parsedFlags, prompts promptwalk.PromptResul
 // can be localized. When logger is nil (test callers), logging is
 // skipped; when verbose is true, phase boundaries also print to stderr.
 func newTentExecutor(innerCliPath string, pluginDirs []string, logger *slog.Logger, verbose, passDevshell bool) (*tentExecutor, error) {
-	if buildcfg.PodmanPath == "" {
-		return nil, fmt.Errorf("--tent requires a build with podman wired in; this build has buildcfg.PodmanPath empty (try `nix build`)")
+	backend, err := newBackend()
+	if err != nil {
+		return nil, err
 	}
 	if buildcfg.TentImageRef == "" {
 		return nil, fmt.Errorf("--tent requires a build with the tent image wired in; this build has buildcfg.TentImageRef empty")
@@ -487,7 +524,7 @@ func newTentExecutor(innerCliPath string, pluginDirs []string, logger *slog.Logg
 		return nil, err
 	}
 	if err := runTentPhase(logger, verbose, "ensure_tent_image", func() error {
-		return ensureTentImage(buildcfg.PodmanPath, buildcfg.TentImageRef, buildcfg.TentImageTarball, buildcfg.TentImageFlakeRef, buildcfg.PodmanMachineName)
+		return ensureTentImage(backend, buildcfg.TentImageRef, buildcfg.TentImageTarball, buildcfg.TentImageFlakeRef)
 	}); err != nil {
 		return nil, err
 	}
@@ -522,7 +559,7 @@ func newTentExecutor(innerCliPath string, pluginDirs []string, logger *slog.Logg
 			}
 		}
 	}
-	return &tentExecutor{innerCliPath: innerCliPath, opts: opts}, nil
+	return &tentExecutor{innerCliPath: innerCliPath, opts: opts, backend: backend}, nil
 }
 
 // resolvePassDevshell collapses the (explicit-on, explicit-off,
@@ -738,16 +775,16 @@ func userHasSubuid(name, uid string) (missing bool, err error) {
 // tent_loader.go); otherwise they stream raw progress output to
 // stderr.
 //
-// `connection` selects the podman connection (= machine on darwin)
-// via `--connection <name>`; empty means use podman's default.
-func ensureTentImage(podmanPath, ref, tarball, flakeRef, connection string) error {
-	checkArgs := append(tent.PodmanConnectionArgs(connection), "image", "exists", ref)
-	check := exec.Command(podmanPath, checkArgs...)
+// The backend abstracts which container runtime drives image-exists
+// and image-load (Podman or Lima); see internal/tent/backend.go.
+func ensureTentImage(backend tent.Backend, ref, tarball, flakeRef string) error {
+	cmdPath, checkArgs := backend.ImageExistsArgs(ref)
+	check := exec.Command(cmdPath, checkArgs...)
 	if check.Run() == nil {
 		return nil
 	}
 	if tarball != "" {
-		return runTentImageLoad(podmanPath, tarball, connection)
+		return runTentImageLoad(backend, tarball)
 	}
 	if flakeRef == "" {
 		return fmt.Errorf("tent image %s not present locally and this build has no tarball or flake ref wired in (dev build?)", ref)
@@ -756,7 +793,7 @@ func ensureTentImage(podmanPath, ref, tarball, flakeRef, connection string) erro
 	if err != nil {
 		return err
 	}
-	return runTentImageLoad(podmanPath, builtTarball, connection)
+	return runTentImageLoad(backend, builtTarball)
 }
 
 // runWithPluginHost runs a provider through clown's plugin-host

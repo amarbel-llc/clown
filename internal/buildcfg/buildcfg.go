@@ -53,7 +53,37 @@ var (
 	// `--connection` flag is added; podman picks its configured
 	// default connection. The flag must come *before* the
 	// subcommand in argv order.
+	//
+	// When TentBackend is "lima", this same ldflag is reused as the
+	// Lima instance name (`limactl shell <name> -- ...`). The name
+	// is podman-historical; a future TOML profile migration will
+	// rename it to a backend-agnostic TentMachineName.
 	PodmanMachineName string
+
+	// TentBackend selects the container runtime that drives --tent.
+	// Recognized values:
+	//   - ""       — default; treated as "podman"
+	//   - "podman" — talk to podman directly (PodmanPath +
+	//                PodmanMachineName)
+	//   - "lima"   — talk to Lima via `limactl shell <machine> --
+	//                sudo nerdctl ...` (LimactlPath +
+	//                PodmanMachineName)
+	// Baked at build time by mkCircus / mkClownGo's tentBackend
+	// param.
+	//
+	// A future TOML profile system (clown's planned --profile work,
+	// see docs/plans/2026-04-23-profiles-design.md) will own runtime
+	// backend selection per profile; this build-time ldflag is the
+	// interim mechanism. The Backend interface in internal/tent is
+	// intentionally minimal so that migration is a wiring change
+	// rather than a Go-API redesign.
+	TentBackend string
+
+	// LimactlPath is the absolute path to the limactl binary, baked
+	// at build time when TentBackend is "lima". Empty for podman
+	// builds; --tent fails fast with a clear error if "lima" is
+	// selected but this is empty.
+	LimactlPath string
 	// TentImageRef is the podman image reference (e.g.
 	// "clown-tent:1.2.3") that --tent runs the provider inside.
 	// Loaded on demand from TentImageTarball when not already

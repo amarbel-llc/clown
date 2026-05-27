@@ -10,6 +10,7 @@ import (
 
 	"github.com/amarbel-llc/clown/internal/buildcfg"
 	"github.com/amarbel-llc/clown/internal/promptwalk"
+	"github.com/amarbel-llc/clown/internal/tent"
 )
 
 func withBuildcfgString(t *testing.T, target *string, value string) {
@@ -644,15 +645,51 @@ func TestPrependPluginDirs(t *testing.T) {
 	}
 }
 
-func TestTentExecutor_EmptyPodmanPath(t *testing.T) {
+// TestNewBackend_EmptyPodmanPath confirms that with the default
+// (podman) backend selection, an empty PodmanPath ldflag produces a
+// clear dev-build error. Replaces the old TestTentExecutor_EmptyPodmanPath
+// test (the path-check moved from tentExecutor.Binary into
+// newBackend() with the Backend abstraction).
+func TestNewBackend_EmptyPodmanPath(t *testing.T) {
+	withBuildcfgString(t, &buildcfg.TentBackend, "podman")
 	withBuildcfgString(t, &buildcfg.PodmanPath, "")
-	e := &tentExecutor{innerCliPath: "/nix/store/x-claude/bin/claude"}
-	if _, err := e.Binary(); err == nil || !strings.Contains(err.Error(), "podman") {
+	if _, err := newBackend(); err == nil || !strings.Contains(err.Error(), "podman") {
 		t.Fatalf("expected podman-missing error, got %v", err)
 	}
 }
 
+// TestNewBackend_LimaEmptyLimactlPath pins the lima-backend dev-build
+// error.
+func TestNewBackend_LimaEmptyLimactlPath(t *testing.T) {
+	withBuildcfgString(t, &buildcfg.TentBackend, "lima")
+	withBuildcfgString(t, &buildcfg.LimactlPath, "")
+	withBuildcfgString(t, &buildcfg.PodmanMachineName, "any")
+	if _, err := newBackend(); err == nil || !strings.Contains(err.Error(), "limactl") {
+		t.Fatalf("expected limactl-missing error, got %v", err)
+	}
+}
+
+// TestNewBackend_LimaEmptyMachineName pins the lima-backend
+// missing-machine-name error.
+func TestNewBackend_LimaEmptyMachineName(t *testing.T) {
+	withBuildcfgString(t, &buildcfg.TentBackend, "lima")
+	withBuildcfgString(t, &buildcfg.LimactlPath, "/usr/bin/false")
+	withBuildcfgString(t, &buildcfg.PodmanMachineName, "")
+	if _, err := newBackend(); err == nil || !strings.Contains(err.Error(), "machine name") {
+		t.Fatalf("expected machine-name-empty error, got %v", err)
+	}
+}
+
+// TestNewBackend_UnknownBackend pins the typo-detection behavior.
+func TestNewBackend_UnknownBackend(t *testing.T) {
+	withBuildcfgString(t, &buildcfg.TentBackend, "docker")
+	if _, err := newBackend(); err == nil || !strings.Contains(err.Error(), "unknown tent backend") {
+		t.Fatalf("expected unknown-backend error, got %v", err)
+	}
+}
+
 func TestNewTentExecutor_EmptyImageRef(t *testing.T) {
+	withBuildcfgString(t, &buildcfg.TentBackend, "podman")
 	withBuildcfgString(t, &buildcfg.PodmanPath, "/usr/bin/false")
 	withBuildcfgString(t, &buildcfg.TentImageRef, "")
 	if _, err := newTentExecutor("/x/claude", nil, nil, false, false); err == nil || !strings.Contains(err.Error(), "TentImageRef") {
@@ -874,7 +911,8 @@ func fakePodmanBinary(t *testing.T, imageExists bool) (binPath, logPath string) 
 
 func TestEnsureTentImage_ExistsShortCircuits(t *testing.T) {
 	podman, logPath := fakePodmanBinary(t, true)
-	if err := ensureTentImage(podman, "clown-tent:test", "", "", ""); err != nil {
+	backend := tent.NewPodman(podman, "")
+	if err := ensureTentImage(backend, "clown-tent:test", "", ""); err != nil {
 		t.Fatalf("expected nil error when image exists, got %v", err)
 	}
 	data, _ := os.ReadFile(logPath)
@@ -889,7 +927,8 @@ func TestEnsureTentImage_MissingThenLoad(t *testing.T) {
 	if err := os.WriteFile(tarball, []byte("fake tarball"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := ensureTentImage(podman, "clown-tent:test", tarball, "", ""); err != nil {
+	backend := tent.NewPodman(podman, "")
+	if err := ensureTentImage(backend, "clown-tent:test", tarball, ""); err != nil {
 		t.Fatalf("expected nil error from happy load, got %v", err)
 	}
 	data, _ := os.ReadFile(logPath)
@@ -900,7 +939,8 @@ func TestEnsureTentImage_MissingThenLoad(t *testing.T) {
 
 func TestEnsureTentImage_MissingNoTarballNoFlakeRef(t *testing.T) {
 	podman, _ := fakePodmanBinary(t, false)
-	err := ensureTentImage(podman, "clown-tent:test", "", "", "")
+	backend := tent.NewPodman(podman, "")
+	err := ensureTentImage(backend, "clown-tent:test", "", "")
 	if err == nil || !strings.Contains(err.Error(), "not present locally") {
 		t.Fatalf("expected `not present locally` error when no tarball and no flake ref, got %v", err)
 	}
@@ -919,9 +959,10 @@ func TestEnsureTentImage_TarballPrecedesFlakeRef(t *testing.T) {
 	if err := os.WriteFile(tarball, []byte("fake tarball"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	backend := tent.NewPodman(podman, "")
 	// flakeRef is a bogus path; if the build path runs, `nix build`
 	// will error out (or won't even be on PATH in CI).
-	if err := ensureTentImage(podman, "clown-tent:test", tarball, "/nonexistent/flake", ""); err != nil {
+	if err := ensureTentImage(backend, "clown-tent:test", tarball, "/nonexistent/flake"); err != nil {
 		t.Fatalf("tarball path should win; got %v", err)
 	}
 	data, _ := os.ReadFile(logPath)
@@ -941,7 +982,8 @@ func TestEnsureTentImage_ConnectionFlagPrependsBoth(t *testing.T) {
 	if err := os.WriteFile(tarball, []byte("fake tarball"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := ensureTentImage(podman, "clown-tent:test", tarball, "", "clown-dev"); err != nil {
+	backend := tent.NewPodman(podman, "clown-dev")
+	if err := ensureTentImage(backend, "clown-tent:test", tarball, ""); err != nil {
 		t.Fatalf("expected nil error from happy load, got %v", err)
 	}
 	data, _ := os.ReadFile(logPath)
