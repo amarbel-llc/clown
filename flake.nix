@@ -6,7 +6,7 @@
     # overlays.default contributes buildGoApplication, mkGoEnv,
     # gomod2nix (CLI), fetchGgufModel, and other amarbel-packages
     # additions to pkgs. See overlays/amarbel-packages.nix in the fork.
-    nixpkgs.url = "github:amarbel-llc/nixpkgs";
+    nixpkgs.url = "github:amarbel-llc/igloo";
     # Secondary pinned views — same SHAs we used against upstream, just
     # served by the fork. Each fork commit upstream's master, so these
     # SHAs are reachable. The overlay is *not* applied to these because
