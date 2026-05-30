@@ -213,13 +213,13 @@
       "locked": {
         "lastModified": 1776358155,
         "narHash": "sha256-ruPV/Nk84idlHqrJH4JTWlqspw627PgcwLaYH6MiumQ=",
-        "owner": "amarbel-llc",
+        "owner": "NixOS",
         "repo": "nixpkgs",
         "rev": "b2b9662ffe1e9a5702e7bfbd983595dd56147dbf",
         "type": "github"
       },
       "original": {
-        "owner": "amarbel-llc",
+        "owner": "NixOS",
         "repo": "nixpkgs",
         "rev": "b2b9662ffe1e9a5702e7bfbd983595dd56147dbf",
         "type": "github"
@@ -229,13 +229,13 @@
       "locked": {
         "lastModified": 1777061873,
         "narHash": "sha256-+NL0GnHsDCuMP1AcCeOe97D8O95IhNKrmy3+vk60rFE=",
-        "owner": "amarbel-llc",
+        "owner": "NixOS",
         "repo": "nixpkgs",
         "rev": "0de8465d2b54ddd962422706d932c3354b4237ec",
         "type": "github"
       },
       "original": {
-        "owner": "amarbel-llc",
+        "owner": "NixOS",
         "repo": "nixpkgs",
         "rev": "0de8465d2b54ddd962422706d932c3354b4237ec",
         "type": "github"
@@ -245,13 +245,13 @@
       "locked": {
         "lastModified": 1777542320,
         "narHash": "sha256-YxWL74qPnCqk2byk7QAAmlnAm8+rtOzGZHmRXl1Lpys=",
-        "owner": "amarbel-llc",
+        "owner": "NixOS",
         "repo": "nixpkgs",
         "rev": "c0df0d088ab33122b402ea31cb5f7e1df7536036",
         "type": "github"
       },
       "original": {
-        "owner": "amarbel-llc",
+        "owner": "NixOS",
         "repo": "nixpkgs",
         "rev": "c0df0d088ab33122b402ea31cb5f7e1df7536036",
         "type": "github"

@@ -12,8 +12,11 @@
   # should match.
 
   inputs = {
-    # Pinned to amarbel-llc/nixpkgs for the buildZxScriptFromFile helper.
-    nixpkgs.url = "github:amarbel-llc/nixpkgs/9bad1e489bd4c713da002618bd825372d35430af";
+    # amarbel-llc/igloo for the buildZxScriptFromFile helper (overlay addition,
+    # not in upstream nixpkgs). Was a SHA-pin on the pre-rename fork; igloo's
+    # fresh history doesn't carry that rev, so this tracks igloo HEAD (fine for
+    # a throwaway POC).
+    nixpkgs.url = "github:amarbel-llc/igloo";
 
     # The workspace the sandbox-agent derivation operates on. Defaulted here
     # to the clown worktree root so `nix build .#sandbox-agent` works from

@@ -25,11 +25,11 @@
     # sourced from llm-agents (2.1.150+). The old npm-source derivation
     # (2.1.111) used a JS patchPhase on cli.js; the new binary derivation
     # uses a postInstall binary string substitution on the Bun bundle.
-    nixpkgs-claude-code.url = "github:amarbel-llc/nixpkgs/b2b9662ffe1e9a5702e7bfbd983595dd56147dbf";
-    nixpkgs-codex.url = "github:amarbel-llc/nixpkgs/0de8465d2b54ddd962422706d932c3354b4237ec";
+    nixpkgs-claude-code.url = "github:NixOS/nixpkgs/b2b9662ffe1e9a5702e7bfbd983595dd56147dbf";
+    nixpkgs-codex.url = "github:NixOS/nixpkgs/0de8465d2b54ddd962422706d932c3354b4237ec";
     # llama-cpp with Anthropic Messages API (/v1/messages) support — requires
     # PR #17570 (merged 2025-11-28). Build 6981 in nixos-25.11 predates it.
-    nixpkgs-llama.url = "github:amarbel-llc/nixpkgs/c0df0d088ab33122b402ea31cb5f7e1df7536036";
+    nixpkgs-llama.url = "github:NixOS/nixpkgs/c0df0d088ab33122b402ea31cb5f7e1df7536036";
     # numtide/llm-agents.nix is the upstream Nix packaging for charmbracelet's
     # crush (and other AI coding agents). We pin it as a flake input so the
     # crush binary path can be burned into clown via `-X buildcfg.CrushCliPath`.
