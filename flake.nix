@@ -6,7 +6,7 @@
     # overlays.default contributes buildGoApplication, mkGoEnv,
     # gomod2nix (CLI), fetchGgufModel, and other amarbel-packages
     # additions to pkgs. See overlays/amarbel-packages.nix in the fork.
-    nixpkgs.url = "github:amarbel-llc/igloo";
+    igloo.url = "github:amarbel-llc/igloo";
     # Secondary pinned views — same SHAs we used against upstream, just
     # served by the fork. Each fork commit upstream's master, so these
     # SHAs are reachable. The overlay is *not* applied to these because
@@ -34,17 +34,17 @@
     # crush (and other AI coding agents). We pin it as a flake input so the
     # crush binary path can be burned into clown via `-X buildcfg.CrushCliPath`.
     llm-agents.url = "github:numtide/llm-agents.nix";
-    llm-agents.inputs.nixpkgs.follows = "nixpkgs";
+    llm-agents.inputs.nixpkgs.follows = "igloo";
     llm-agents.inputs.treefmt-nix.follows = "treefmt-nix";
     treefmt-nix.url = "github:numtide/treefmt-nix";
-    treefmt-nix.inputs.nixpkgs.follows = "nixpkgs";
+    treefmt-nix.inputs.nixpkgs.follows = "igloo";
     # amarbel-llc/bats provides the batsLane build helper (formerly
     # pkgs.testers.batsLane in the full-fork era) and the bats-libs
     # bundle (bats-support, bats-assert, bats-emo, bats-island). The
     # fork's thin-overlay master no longer ships the testers helper,
     # so the bats flake is the canonical source.
     bats.url = "github:amarbel-llc/bats";
-    bats.inputs.nixpkgs.follows = "nixpkgs";
+    bats.inputs.igloo.follows = "igloo";
     bats.inputs.nixpkgs-master.follows = "nixpkgs-master";
     bats.inputs.utils.follows = "utils";
   };
@@ -52,7 +52,7 @@
   outputs =
     {
       self,
-      nixpkgs,
+      igloo,
       nixpkgs-master,
       nixpkgs-claude-code,
       nixpkgs-codex,
@@ -69,7 +69,7 @@
         # `import nixpkgs { ... }`, so pkgs gets buildGoApplication,
         # mkGoEnv, gomod2nix (CLI), fetchGgufModel, etc. without an
         # explicit overlays pass.
-        pkgs = import nixpkgs {
+        pkgs = import igloo {
           inherit system;
         };
         pkgs-master = import nixpkgs-master {

@@ -2,8 +2,8 @@
   "nodes": {
     "bats": {
       "inputs": {
-        "nixpkgs": [
-          "nixpkgs"
+        "igloo": [
+          "igloo"
         ],
         "nixpkgs-master": [
           "nixpkgs-master"
@@ -14,11 +14,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1780057695,
-        "narHash": "sha256-GPc/9XgEtR2UdIFyajHgfIsyV+mTVdCauFLgo6qzWXY=",
+        "lastModified": 1780142667,
+        "narHash": "sha256-z6TNOtX2lSqUC3R6bBuTQRUIsWCvxpCFiRE13vMaPhg=",
         "owner": "amarbel-llc",
         "repo": "bats",
-        "rev": "1ba0ab1590544685fba211dff9e3e7ccf60c0fc0",
+        "rev": "de6f6720965cf34fc965f18c55f13e8094334ba4",
         "type": "github"
       },
       "original": {
@@ -55,19 +55,19 @@
     "bun2nix": {
       "inputs": {
         "flake-parts": [
-          "llm-agents",
+          "igloo",
           "flake-parts"
         ],
         "nixpkgs": [
-          "llm-agents",
-          "nixpkgs"
+          "igloo",
+          "nixpkgs-master"
         ],
         "systems": [
-          "llm-agents",
+          "igloo",
           "systems"
         ],
         "treefmt-nix": [
-          "llm-agents",
+          "igloo",
           "treefmt-nix"
         ]
       },
@@ -88,19 +88,19 @@
     "bun2nix_2": {
       "inputs": {
         "flake-parts": [
-          "nixpkgs",
+          "llm-agents",
           "flake-parts"
         ],
         "nixpkgs": [
-          "nixpkgs",
-          "nixpkgs-master"
+          "llm-agents",
+          "nixpkgs"
         ],
         "systems": [
-          "nixpkgs",
+          "llm-agents",
           "systems"
         ],
         "treefmt-nix": [
-          "nixpkgs",
+          "llm-agents",
           "treefmt-nix"
         ]
       },
@@ -121,8 +121,8 @@
     "flake-parts": {
       "inputs": {
         "nixpkgs-lib": [
-          "llm-agents",
-          "nixpkgs"
+          "igloo",
+          "nixpkgs-master"
         ]
       },
       "locked": {
@@ -142,8 +142,8 @@
     "flake-parts_2": {
       "inputs": {
         "nixpkgs-lib": [
-          "nixpkgs",
-          "nixpkgs-master"
+          "llm-agents",
+          "nixpkgs"
         ]
       },
       "locked": {
@@ -160,39 +160,12 @@
         "type": "github"
       }
     },
-    "llm-agents": {
+    "igloo": {
       "inputs": {
-        "blueprint": "blueprint",
         "bun2nix": "bun2nix",
         "flake-parts": "flake-parts",
-        "nixpkgs": [
-          "nixpkgs"
-        ],
-        "systems": "systems",
-        "treefmt-nix": [
-          "treefmt-nix"
-        ]
-      },
-      "locked": {
-        "lastModified": 1780050433,
-        "narHash": "sha256-90mQY7VUvn6WoNh+m4LSqS+XTcofWOBLgYYmSJVyr98=",
-        "owner": "numtide",
-        "repo": "llm-agents.nix",
-        "rev": "0fb42103f93cd5c1152254856d7eccb3e91c8bf6",
-        "type": "github"
-      },
-      "original": {
-        "owner": "numtide",
-        "repo": "llm-agents.nix",
-        "type": "github"
-      }
-    },
-    "nixpkgs": {
-      "inputs": {
-        "bun2nix": "bun2nix_2",
-        "flake-parts": "flake-parts_2",
         "nixpkgs-master": "nixpkgs-master",
-        "systems": "systems_2",
+        "systems": "systems",
         "treefmt-nix": "treefmt-nix_2"
       },
       "locked": {
@@ -206,6 +179,33 @@
       "original": {
         "owner": "amarbel-llc",
         "repo": "igloo",
+        "type": "github"
+      }
+    },
+    "llm-agents": {
+      "inputs": {
+        "blueprint": "blueprint",
+        "bun2nix": "bun2nix_2",
+        "flake-parts": "flake-parts_2",
+        "nixpkgs": [
+          "igloo"
+        ],
+        "systems": "systems_2",
+        "treefmt-nix": [
+          "treefmt-nix"
+        ]
+      },
+      "locked": {
+        "lastModified": 1780119579,
+        "narHash": "sha256-EnWR9fQzTfmIkyWD8ynYdAM573x3wzkOzZuMagrEosQ=",
+        "owner": "numtide",
+        "repo": "llm-agents.nix",
+        "rev": "b8adcd1a8e45e6d84f511c1a3b12998634481204",
+        "type": "github"
+      },
+      "original": {
+        "owner": "numtide",
+        "repo": "llm-agents.nix",
         "type": "github"
       }
     },
@@ -292,8 +292,8 @@
     "root": {
       "inputs": {
         "bats": "bats",
+        "igloo": "igloo",
         "llm-agents": "llm-agents",
-        "nixpkgs": "nixpkgs",
         "nixpkgs-claude-code": "nixpkgs-claude-code",
         "nixpkgs-codex": "nixpkgs-codex",
         "nixpkgs-llama": "nixpkgs-llama",
@@ -351,7 +351,7 @@
       "inputs": {
         "nixpkgs": [
           "bats",
-          "nixpkgs"
+          "igloo"
         ]
       },
       "locked": {
@@ -371,7 +371,7 @@
     "treefmt-nix_2": {
       "inputs": {
         "nixpkgs": [
-          "nixpkgs",
+          "igloo",
           "nixpkgs-master"
         ]
       },
@@ -392,7 +392,7 @@
     "treefmt-nix_3": {
       "inputs": {
         "nixpkgs": [
-          "nixpkgs"
+          "igloo"
         ]
       },
       "locked": {
