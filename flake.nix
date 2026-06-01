@@ -33,8 +33,16 @@
     # numtide/llm-agents.nix is the upstream Nix packaging for charmbracelet's
     # crush (and other AI coding agents). We pin it as a flake input so the
     # crush binary path can be burned into clown via `-X buildcfg.CrushCliPath`.
+    #
+    # We deliberately do NOT override its nixpkgs to follow `igloo`. Doing so
+    # downgrades llm-agents' nixpkgs to igloo's base (NixOS/nixpkgs d233902,
+    # which tops out at electron_41), while upstream pins a newer nixpkgs
+    # (electron_42+). Some llm-agents packages — e.g. vessel-browser — are
+    # written against that newer pin and `callPackage`-fail for the missing
+    # electron_42 when forced onto the older base. Letting llm-agents use its
+    # own locked nixpkgs costs a second nixpkgs evaluation in the closure but
+    # keeps the package set self-consistent.
     llm-agents.url = "github:numtide/llm-agents.nix";
-    llm-agents.inputs.nixpkgs.follows = "igloo";
     llm-agents.inputs.treefmt-nix.follows = "treefmt-nix";
     treefmt-nix.url = "github:numtide/treefmt-nix";
     treefmt-nix.inputs.nixpkgs.follows = "igloo";
@@ -90,9 +98,10 @@
         };
         pkgs-llama = import nixpkgs-llama { inherit system; };
         # llm-agents.nix exposes per-system package outputs; we use its
-        # crush package for the crush provider's CLI. Inputs.nixpkgs
-        # follows our main `nixpkgs` so we don't pull in a duplicate
-        # nixpkgs evaluation.
+        # crush package for the crush provider's CLI. Its nixpkgs is left
+        # un-overridden (see the input note above) so packages built against
+        # its newer pin — e.g. ones needing electron_42 — resolve correctly,
+        # at the cost of a second nixpkgs evaluation.
         pkgs-llm-agents = llm-agents.packages.${system};
         # `nix fmt` entry point. Config lives in ./treefmt.nix.
         treefmtEval = treefmt-nix.lib.evalModule pkgs ./treefmt.nix;
