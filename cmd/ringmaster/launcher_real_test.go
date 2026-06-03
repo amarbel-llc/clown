@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
@@ -39,6 +40,11 @@ import (
 func TestLauncher_RealLlamaServerNoModel(t *testing.T) {
 	if buildcfg.LlamaServerPath == "" {
 		t.Skip("LlamaServerPath empty — dev build; only the nix-built binary burns this in")
+	}
+	// Metal shader compilation hangs for 20s+ in the nix sandbox on pre-M5
+	// hardware. See https://github.com/amarbel-llc/clown/issues/106.
+	if os.Getenv("NIX_BUILD_TOP") != "" {
+		t.Skip("skipping real llama-server test in nix sandbox: Metal init hangs on pre-M5 hardware")
 	}
 
 	reg := rm.NewRegistry()
