@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -260,6 +261,133 @@ func TestHTTP_PostStreamingHeartbeatNoProgressToken(t *testing.T) {
 	}
 	if !bytes.Contains(got, []byte(`"id":8`)) {
 		t.Errorf("expected final response id=8; got %q", got)
+	}
+}
+
+// TestHTTP_PostStreamingForwardOnlySuppressesTimer verifies the
+// forward-only heartbeat mode: SSE streaming stays on (so child
+// notifications and the final response are delivered) but the bridge
+// emits NO heartbeats of its own — even though the configured interval
+// is short enough to fire several times during the slow child call.
+func TestHTTP_PostStreamingForwardOnlySuppressesTimer(t *testing.T) {
+	// 20ms interval would fire ~4 times across the 80ms child wait if the
+	// timer were active; forward-only must suppress it entirely.
+	t.Setenv(heartbeatEnvVar, "20ms")
+	t.Setenv(heartbeatModeEnvVar, "forward-only")
+
+	stdinR, stdinW := io.Pipe()
+	stdoutR, stdoutW := io.Pipe()
+	tr := newTranslator(stdinW, stdoutR, nullLogger{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = tr.Run(ctx) }()
+	defer func() {
+		_ = stdinR.Close()
+		_ = stdinW.Close()
+		_ = stdoutR.Close()
+		_ = stdoutW.Close()
+	}()
+
+	// Slow wrapped child: wait 80 ms (≥4 heartbeat intervals) then echo.
+	go func() {
+		buf := make([]byte, 4096)
+		n, err := stdinR.Read(buf)
+		if err != nil {
+			return
+		}
+		var msg map[string]any
+		if jerr := json.Unmarshal(bytes.TrimSpace(buf[:n]), &msg); jerr != nil {
+			return
+		}
+		time.Sleep(80 * time.Millisecond)
+		resp := map[string]any{
+			"jsonrpc": "2.0",
+			"id":      msg["id"],
+			"result":  map[string]any{"slow": true},
+		}
+		out, _ := json.Marshal(resp)
+		_, _ = stdoutW.Write(append(out, '\n'))
+	}()
+
+	h := &httpHandler{t: tr, logger: nullLogger{}}
+	srv := httptest.NewServer(http.HandlerFunc(h.handleMCP))
+	defer srv.Close()
+
+	// Includes a progressToken: in the default regime this would produce
+	// notifications/progress heartbeats; forward-only must not.
+	body := `{"jsonrpc":"2.0","id":9,"method":"slow","params":{"_meta":{"progressToken":"tok-9"}}}`
+	resp, err := http.Post(srv.URL, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+	if got := resp.Header.Get("Content-Type"); got != "text/event-stream" {
+		t.Fatalf("Content-Type = %q, want text/event-stream (streaming must stay on)", got)
+	}
+	got, _ := io.ReadAll(resp.Body)
+	if bytes.Contains(got, []byte(`"method":"notifications/progress"`)) {
+		t.Errorf("forward-only must not emit bridge progress heartbeats; got %q", got)
+	}
+	if bytes.Contains(got, []byte(": heartbeat")) {
+		t.Errorf("forward-only must not emit SSE comment heartbeats; got %q", got)
+	}
+	if !bytes.Contains(got, []byte(`"id":9`)) {
+		t.Errorf("expected final response id=9 on the SSE stream; got %q", got)
+	}
+}
+
+// setOrUnsetEnv sets (or unsets) an env var for the duration of the test,
+// restoring the original state on cleanup. Unlike t.Setenv it can model an
+// absent variable, which heartbeatMode distinguishes from an empty value.
+func setOrUnsetEnv(t *testing.T, key, val string, set bool) {
+	t.Helper()
+	orig, had := os.LookupEnv(key)
+	t.Cleanup(func() {
+		if had {
+			_ = os.Setenv(key, orig)
+		} else {
+			_ = os.Unsetenv(key)
+		}
+	})
+	if set {
+		_ = os.Setenv(key, val)
+	} else {
+		_ = os.Unsetenv(key)
+	}
+}
+
+func TestHeartbeatMode(t *testing.T) {
+	tests := []struct {
+		name         string
+		mode         string
+		modeSet      bool
+		interval     string
+		intervalSet  bool
+		wantStream   bool
+		wantInterval time.Duration
+	}{
+		{name: "default: stream at default cadence", wantStream: true, wantInterval: heartbeatDefault},
+		{name: "explicit interval", interval: "5s", intervalSet: true, wantStream: true, wantInterval: 5 * time.Second},
+		{name: "interval off disables streaming", interval: "off", intervalSet: true, wantStream: false, wantInterval: 0},
+		{name: "forward-only streams without timer", mode: "forward-only", modeSet: true, wantStream: true, wantInterval: 0},
+		{name: "child alias", mode: "child", modeSet: true, wantStream: true, wantInterval: 0},
+		{name: "forward-only is case/space insensitive", mode: "  Forward-Only  ", modeSet: true, wantStream: true, wantInterval: 0},
+		{name: "forward-only overrides a short interval", mode: "forward-only", modeSet: true, interval: "20ms", intervalSet: true, wantStream: true, wantInterval: 0},
+		{name: "unknown mode falls back to interval", mode: "bogus", modeSet: true, interval: "5s", intervalSet: true, wantStream: true, wantInterval: 5 * time.Second},
+		{name: "unknown mode falls back to default", mode: "bogus", modeSet: true, wantStream: true, wantInterval: heartbeatDefault},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setOrUnsetEnv(t, heartbeatModeEnvVar, tt.mode, tt.modeSet)
+			setOrUnsetEnv(t, heartbeatEnvVar, tt.interval, tt.intervalSet)
+			gotStream, gotInterval := heartbeatMode()
+			if gotStream != tt.wantStream {
+				t.Errorf("streaming = %v, want %v", gotStream, tt.wantStream)
+			}
+			if gotInterval != tt.wantInterval {
+				t.Errorf("interval = %v, want %v", gotInterval, tt.wantInterval)
+			}
+		})
 	}
 }
 

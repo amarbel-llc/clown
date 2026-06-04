@@ -78,10 +78,22 @@ bridge a stdio MCP server with no client-side awareness:
 The body is forwarded verbatim, followed by a newline, to the wrapped
 child's stdin.
 .Nm
-blocks the HTTP request until a JSON-RPC response with the matching
+waits for a JSON-RPC response with the matching
 .Li id
-arrives on the child's stdout, then returns it as
-.Li application/json .
+on the child's stdout.
+By default the response is delivered as a
+.Li text/event-stream
+.Pq SSE
+whose terminal
+.Li data:
+event carries the JSON-RPC response, with periodic keep-alive heartbeats
+emitted while the call is in flight
+.Pq see Sx ENVIRONMENT .
+When streaming is disabled
+.Pq Ev CLOWN_BRIDGE_HEARTBEAT_INTERVAL Ns = Ns Li 0
+the response is instead a synchronous
+.Li application/json
+body.
 .It Li POST /mcp Pq JSON-RPC notification or response
 The body is forwarded fire-and-forget; the HTTP layer responds with
 .Li 202 Accepted
@@ -150,6 +162,47 @@ to the wrapped child's process group, waits up to 5 seconds for clean
 exit, then escalates to
 .Dv SIGKILL .
 The HTTP server is gracefully shut down on the same path.
+.Sh ENVIRONMENT
+.Bl -tag -width Ds
+.It Ev CLOWN_BRIDGE_HEARTBEAT_INTERVAL
+Cadence of the keep-alive heartbeats emitted on streaming
+.Li POST /mcp
+responses while the bridge waits for the wrapped child's reply.
+Parsed by
+.Xr time.ParseDuration 3 .
+Default:
+.Li 30s .
+The values
+.Li 0 ,
+.Li off ,
+and the empty string disable streaming entirely: the response falls back
+to a synchronous
+.Li application/json
+body, and child notifications are not forwarded on that POST.
+A negative or unparseable value is ignored in favor of the default.
+.It Ev CLOWN_BRIDGE_HEARTBEAT
+Named heartbeat mode that overrides the interval-derived policy.
+The recognized value
+.Li forward-only
+.Pq alias Li child
+keeps streaming and child-notification forwarding on but suppresses the
+bridge's own timer, so keep-alive becomes
+.Em activity-driven \(em
+carried solely by the wrapped child's own
+.Li notifications/progress .
+This lets a genuinely silent child time out instead of being held open
+indefinitely by a blind timer.
+Unset or any unrecognized value falls back to the
+.Ev CLOWN_BRIDGE_HEARTBEAT_INTERVAL
+cadence.
+.El
+.Pp
+For how these heartbeats interact with Claude Code's per-tool
+.Fa timeout ,
+see the
+.Dq Request Timeout Regimes
+section of
+.Xr clown-json 5 .
 .Sh EXIT STATUS
 .Nm
 exits

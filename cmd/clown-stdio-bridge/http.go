@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -18,6 +19,14 @@ import (
 // responses (legacy behavior). Any other value is parsed by
 // time.ParseDuration.
 const heartbeatEnvVar = "CLOWN_BRIDGE_HEARTBEAT_INTERVAL"
+
+// heartbeatModeEnvVar selects a named heartbeat mode that overrides the
+// interval-derived policy. The recognized override is "forward-only"
+// (alias "child"): keep SSE streaming on so child notifications/progress
+// and the final response are delivered, but suppress the bridge's own
+// timer so heartbeats are activity-driven by the child alone. Unset or
+// any unrecognized value falls back to the heartbeatEnvVar cadence.
+const heartbeatModeEnvVar = "CLOWN_BRIDGE_HEARTBEAT"
 
 const heartbeatDefault = 30 * time.Second
 
@@ -37,6 +46,25 @@ func heartbeatInterval() time.Duration {
 		return heartbeatDefault
 	}
 	return d
+}
+
+// heartbeatMode resolves the per-POST streaming/timer policy from the two
+// heartbeat env vars. It reports whether the response should stream
+// (text/event-stream) and, if so, the cadence of the bridge's own timer
+// heartbeats. A zero interval with streaming=true means forward-only:
+// stream but emit no timer heartbeats, leaving keep-alive entirely to the
+// child's own notifications/progress. heartbeatModeEnvVar takes
+// precedence; unset or unrecognized values fall back to the
+// heartbeatEnvVar cadence (streaming when that cadence is > 0).
+func heartbeatMode() (streaming bool, interval time.Duration) {
+	if v, set := os.LookupEnv(heartbeatModeEnvVar); set {
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "forward-only", "child":
+			return true, 0
+		}
+	}
+	iv := heartbeatInterval()
+	return iv > 0, iv
 }
 
 // httpHandler exposes the wrapped stdio MCP server over streamable-HTTP
@@ -119,11 +147,11 @@ func (h *httpHandler) handlePost(w http.ResponseWriter, r *http.Request) {
 		h.logger.Printf(
 			"clown-stdio-bridge: post start id=%s method=%q has_progressToken=%t body_size=%d",
 			idKey, probe.Method, hasToken, len(body))
-		if interval := heartbeatInterval(); interval > 0 {
+		if streaming, interval := heartbeatMode(); streaming {
 			h.handlePostStreaming(w, r, idKey, probe.ID, body, interval, started)
 			return
 		}
-		// Synchronous JSON response (heartbeats disabled).
+		// Synchronous JSON response (streaming disabled).
 		resp, err := h.t.SendRequest(r.Context(), idKey, body)
 		if err != nil {
 			if errors.Is(err, ErrQueueFull) {
@@ -177,7 +205,9 @@ func (h *httpHandler) handlePost(w http.ResponseWriter, r *http.Request) {
 // When the request body's params._meta.progressToken is present, each
 // heartbeat is a JSON-RPC notifications/progress referencing that token
 // (the spec's resetTimeoutOnProgress hook). When absent, heartbeats are
-// SSE comment lines that only keep the TCP connection warm.
+// SSE comment lines that only keep the TCP connection warm. When interval
+// is 0 (forward-only mode) no heartbeats are emitted at all: the stream
+// carries only the child's own notifications and the final response.
 func (h *httpHandler) handlePostStreaming(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -219,8 +249,17 @@ func (h *httpHandler) handlePostStreaming(
 		results <- sendResult{resp: resp, err: err}
 	}()
 
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+	// In forward-only mode (interval == 0) the bridge emits no heartbeats
+	// of its own: streaming stays on so the child's own
+	// notifications/progress and the final response are delivered, but a
+	// nil tick channel makes the timer case below unreachable. time.NewTicker
+	// would also panic on a non-positive duration, so it must be skipped.
+	var tickC <-chan time.Time
+	if interval > 0 {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		tickC = ticker.C
+	}
 	var seq int64
 
 	for {
@@ -261,7 +300,7 @@ func (h *httpHandler) handlePostStreaming(
 			fmt.Fprintf(w, "data: %s\n\n", res.resp)
 			flusher.Flush()
 			return
-		case <-ticker.C:
+		case <-tickC:
 			seq++
 			heartbeatKind := "comment"
 			if len(progressToken) > 0 {
