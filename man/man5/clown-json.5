@@ -112,6 +112,10 @@ Code's default applies.
 This is unrelated to
 .Fa healthcheck.timeout
 .Pq which governs startup readiness, not in-session tool calls .
+See
+.Sx Request Timeout Regimes
+for how the presence or absence of this field changes whether keep-alive
+heartbeats can extend a long-running call.
 .El
 .Ss Stdio Server Definition
 Each stdio server definition is an object with the following fields:
@@ -142,6 +146,11 @@ forwarded verbatim into the compiled
 as
 .Li mcpServers. Ns Ar name Ns .timeout
 to override Claude Code's default per-tool timeout.
+The
+.Sx Request Timeout Regimes
+distinction is especially relevant here, since
+.Xr clown-stdio-bridge 1
+is what emits the keep-alive heartbeats.
 .El
 .Pp
 At discovery time, clown desugars each
@@ -158,6 +167,70 @@ is
 .Li [\(dq--command\(dq, \(dq <Ar command Ns >\(dq, \(dq--\(dq, \(dq <Ar args... Ns >\(dq] .
 The rest of the lifecycle (handshake, healthcheck, manifest
 compilation, shutdown) is identical to a native HTTP server entry.
+.Ss Request Timeout Regimes
+Whether a
+.Fa timeout
+is set changes how Claude Code's per-tool deadline interacts with the
+keep-alive
+.Li notifications/progress
+heartbeats emitted by
+.Xr clown-stdio-bridge 1
+.Pq and by any HTTP server that sends progress notifications .
+The two regimes behave differently:
+.Bl -tag -width Ds
+.It Explicit Fa timeout
+When
+.Fa timeout
+is present, Claude Code treats it as a
+.Em hard cap .
+The request is aborted at exactly that deadline regardless of any
+intervening
+.Li notifications/progress ;
+heartbeats keep the transport warm but do
+.Em not
+reset the deadline.
+A tool that legitimately runs past the cap is killed.
+.It Default Pq Fa timeout No omitted
+With no
+.Fa timeout
+key, Claude Code's default per-tool timeout
+.Pq currently 60 s
+acts as an
+.Em idle
+timer that
+.Em is
+reset each time a
+.Li notifications/progress
+notification arrives.
+With the bridge's default 30 s heartbeat cadence, such a call is
+effectively unbounded while heartbeats keep flowing \(em at the cost of
+no automatic kill for a genuinely hung call.
+.El
+.Pp
+Two strategies follow for long-running tools:
+.Bl -enum
+.It
+Set a generous explicit
+.Fa timeout
+hard cap: simple and bounded, but the call is killed if it ever exceeds
+the cap, even when still making progress.
+.It
+Omit
+.Fa timeout
+and rely on bridge heartbeats to reset the default idle timer: unbounded
+while heartbeats flow, but a hung call is never auto-killed.
+.El
+.Pp
+This distinction is empirically confirmed: a call with an explicit
+600 s
+.Fa timeout
+was killed at exactly 600 s despite 22 intervening heartbeats, whereas
+an otherwise-identical default-timeout call survived a 90 s gap purely
+because heartbeats reset its idle timer.
+See
+.Xr clown-stdio-bridge 1
+for the heartbeat cadence control
+.Pq Ev CLOWN_BRIDGE_HEARTBEAT_INTERVAL .
 .Ss Monitor Definition
 Each monitor entry mirrors Anthropic's plugin monitor schema exactly.
 .Bl -tag -width Ds
