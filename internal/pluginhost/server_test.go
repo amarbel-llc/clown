@@ -55,6 +55,30 @@ func newTestServer(t *testing.T, mode string) *ManagedServer {
 	}
 }
 
+func TestMergeEnvKeepsAllEntries(t *testing.T) {
+	base := []string{"A=1"}
+	got := mergeEnv(base, map[string]string{"B": "2", "C": "3"})
+
+	want := map[string]bool{"A=1": true, "B=2": true, "C=3": true}
+	for _, e := range got {
+		delete(want, e)
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing env entries %v; got %v", want, got)
+	}
+	if len(base) != 1 || base[0] != "A=1" {
+		t.Fatalf("mergeEnv mutated base: %v", base)
+	}
+}
+
+func TestMergeEnvEmptyExtraReturnsBase(t *testing.T) {
+	base := []string{"A=1"}
+	got := mergeEnv(base, nil)
+	if len(got) != 1 || got[0] != "A=1" {
+		t.Fatalf("want base unchanged, got %v", got)
+	}
+}
+
 func TestManagedServer_CleanStop(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))

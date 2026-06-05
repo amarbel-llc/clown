@@ -43,6 +43,22 @@ func (s *ManagedServer) logger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
+// mergeEnv returns base with every key=value from extra appended. It copies
+// base so the caller's slice is never mutated. Building the slice once (rather
+// than reassigning inside a range loop) ensures all extra entries survive, not
+// just the last — see clown#111.
+func mergeEnv(base []string, extra map[string]string) []string {
+	if len(extra) == 0 {
+		return base
+	}
+	out := make([]string, len(base), len(base)+len(extra))
+	copy(out, base)
+	for k, v := range extra {
+		out = append(out, k+"="+v)
+	}
+	return out
+}
+
 func (s *ManagedServer) Start(ctx context.Context) error {
 	log := s.logger()
 
@@ -54,8 +70,8 @@ func (s *ManagedServer) Start(ctx context.Context) error {
 	s.cmd = exec.CommandContext(ctx, cmdPath, s.Def.Args...)
 	s.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
-	for k, v := range s.Def.Env {
-		s.cmd.Env = append(os.Environ(), k+"="+v)
+	if len(s.Def.Env) > 0 {
+		s.cmd.Env = mergeEnv(os.Environ(), s.Def.Env)
 	}
 
 	stdout, err := s.cmd.StdoutPipe()
