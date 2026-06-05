@@ -24,6 +24,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/amarbel-llc/clown/internal/buildcfg"
+	"github.com/amarbel-llc/clown/internal/jobwake"
 	"github.com/amarbel-llc/clown/internal/pluginhost"
 	"github.com/amarbel-llc/clown/internal/profile"
 	"github.com/amarbel-llc/clown/internal/promptwalk"
@@ -124,13 +125,35 @@ func main() {
 	os.Exit(run(os.Args[1:]))
 }
 
+// ensureSessionID resolves the job-wakeup channel key once and exports it as
+// CLOWN_SESSION_ID, but only if it is not already set. Exporting it means every
+// child process — plugin MCP servers (which inherit os.Environ()) and the
+// Claude-spawned job-watch monitor — resolves the same channel without further
+// configuration (RFC-0009 §2). When CLOWN_SESSION_ID is already set it is left
+// untouched so an explicit caller-provided key wins.
+func ensureSessionID() {
+	if os.Getenv("CLOWN_SESSION_ID") == "" {
+		_ = os.Setenv("CLOWN_SESSION_ID", jobwake.SessionKey())
+	}
+}
+
 func run(rawArgs []string) int {
+	// Resolve and export the job-wakeup channel key once, before any
+	// subcommand dispatch or plugin-host launch, so every child (plugin
+	// MCP servers via os.Environ(), and the Claude-spawned job-watch
+	// monitor) shares the same channel (RFC-0009 §2).
+	ensureSessionID()
+
 	if len(rawArgs) > 0 {
 		switch rawArgs[0] {
 		case "resume":
 			return runResume(rawArgs[1:])
 		case "sessions-complete":
 			return runSessionsComplete(rawArgs[1:])
+		case "job":
+			return runJob(rawArgs[1:])
+		case "job-watch":
+			return runJobWatch(rawArgs[1:])
 		}
 	}
 
@@ -1236,6 +1259,9 @@ Clown flags (must appear before --):
   version                    Print version information (first argument only)
   resume                     Pick a resumable session in $PWD (claude only)
   sessions-complete          Emit fish-completion lines for sessions
+  job <start|progress|done|read>
+                             Job-wakeup channel producer/read surface (RFC-0009)
+  job-watch                  Run the job-wakeup monitor for this session
 
 All arguments after -- are forwarded verbatim to the provider.
 `, defaultProvider, defaultProfileSuffix)

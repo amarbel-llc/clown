@@ -32,6 +32,24 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+func TestEnsureSessionIDResolvesAndExportsWhenUnset(t *testing.T) {
+	t.Setenv("CLOWN_SESSION_ID", "")
+	t.Setenv("SPINCLASS_SESSION_ID", "repo/branch")
+	ensureSessionID()
+	if got := os.Getenv("CLOWN_SESSION_ID"); got != "repo/branch" {
+		t.Fatalf("CLOWN_SESSION_ID = %q, want resolved spinclass key %q", got, "repo/branch")
+	}
+}
+
+func TestEnsureSessionIDLeavesPresetUntouched(t *testing.T) {
+	t.Setenv("CLOWN_SESSION_ID", "explicit")
+	t.Setenv("SPINCLASS_SESSION_ID", "repo/branch")
+	ensureSessionID()
+	if got := os.Getenv("CLOWN_SESSION_ID"); got != "explicit" {
+		t.Fatalf("CLOWN_SESSION_ID = %q, want preset value left untouched", got)
+	}
+}
+
 func TestParseFlags(t *testing.T) {
 	cases := []struct {
 		name string
