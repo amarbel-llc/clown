@@ -12,6 +12,12 @@ var (
 	SystemPromptAppendD string
 	Version             string
 	Commit              string
+	// ShortSha is the abbreviated git revision (git's short rev, with a
+	// "-dirty" suffix for dirty trees). Displayed alongside Version as the
+	// `<version>+<shortSha>` build identifier the agent stamps into
+	// sign-offs; Commit (the full rev) backs the commit URL. Empty in dev
+	// builds (go build, go run).
+	ShortSha string
 	ClaudeCodeVersion   string
 	ClaudeCodeRev       string
 	CodexVersion        string

@@ -608,6 +608,7 @@
               "-X github.com/amarbel-llc/clown/internal/buildcfg.SystemPromptAppendD=${./system-prompt-append.d}"
               "-X github.com/amarbel-llc/clown/internal/buildcfg.Version=${clownVersion}"
               "-X github.com/amarbel-llc/clown/internal/buildcfg.Commit=${clownRev}"
+              "-X github.com/amarbel-llc/clown/internal/buildcfg.ShortSha=${clownShortRev}"
               "-X github.com/amarbel-llc/clown/internal/buildcfg.ClaudeCodeVersion=${claudeCodeVersion}"
               "-X github.com/amarbel-llc/clown/internal/buildcfg.ClaudeCodeRev=${claudeCodeRev}"
               "-X github.com/amarbel-llc/clown/internal/buildcfg.CodexVersion=${codexVersion}"
