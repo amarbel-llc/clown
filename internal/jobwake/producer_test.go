@@ -52,3 +52,59 @@ func TestStartWritesStartedRecord(t *testing.T) {
 		t.Fatalf("bad record fields: %+v", recs[0])
 	}
 }
+
+func TestProgressAndDoneIncrementSeq(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("CLOWN_SESSION_ID", "k")
+	id, _ := Start(StartOpts{Source: "s"})
+	if err := Progress(id, "halfway"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Done(id, TypeSucceeded, "ok", "ref"); err != nil {
+		t.Fatal(err)
+	}
+	recs := mustReadJob(t, ChannelID("k"), id)
+	if len(recs) != 3 || recs[1].Seq != 1 || recs[2].Seq != 2 {
+		t.Fatalf("want seq 0,1,2; got %+v", recs)
+	}
+	if recs[2].Type != TypeSucceeded || recs[2].ResultRef != "ref" {
+		t.Fatalf("bad terminal record: %+v", recs[2])
+	}
+	if recs[1].Source != "s" || recs[2].Source != "s" {
+		t.Fatalf("source must carry forward, got %+v", recs)
+	}
+}
+
+func TestDoneRejectsSecondTerminal(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("CLOWN_SESSION_ID", "k")
+	id, _ := Start(StartOpts{Source: "s"})
+	if err := Done(id, TypeFailed, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := Done(id, TypeSucceeded, "", ""); err == nil {
+		t.Fatal("second terminal must error")
+	}
+}
+
+func TestDoneRejectsBadState(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("CLOWN_SESSION_ID", "k")
+	id, _ := Start(StartOpts{Source: "s"})
+	if err := Done(id, "wat", "", ""); err == nil {
+		t.Fatal("non-terminal state must error")
+	}
+}
+
+func TestProgressOneLineMessage(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("CLOWN_SESSION_ID", "k")
+	id, _ := Start(StartOpts{Source: "s"})
+	if err := Progress(id, "line1\nline2\rline3"); err != nil {
+		t.Fatal(err)
+	}
+	recs := mustReadJob(t, ChannelID("k"), id)
+	if got := recs[1].Message; strings.ContainsAny(got, "\n\r") {
+		t.Fatalf("message must be single-line, got %q", got)
+	}
+}
