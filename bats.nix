@@ -55,6 +55,15 @@ let
       base = clownBatsBase;
       batsSrc = ./zz-tests_bats;
       binaries = {
+        # The clown Go binary (cmd/clown), the reference producer and
+        # monitor for the job-wakeup channel. job_wakeup.bats invokes it
+        # as `clown job …` / `clown job-watch` via require_bin CLOWN_BIN.
+        # clownBatsBase is mkClownGo, whose pname is "clown", so its
+        # $out/bin/clown is exactly the binary the suite expects.
+        CLOWN_BIN = {
+          base = clownBatsBase;
+          name = "clown";
+        };
         CLOWN_STDIO_BRIDGE_BIN = {
           base = clown-stdio-bridge;
           name = "clown-stdio-bridge";
