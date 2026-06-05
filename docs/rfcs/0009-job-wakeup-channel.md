@@ -250,7 +250,7 @@ monitor; the on-disk and on-wire formats above remain the actual contract.
   — Append the terminal record, `fsync`, then send the nudge. MUST exit non-zero
   without appending if the job already has a terminal record.
 
-- `clown job-read [--job <job-id>] [--since <ts>] [--type <t>]... [--peek]
+- `clown job read [--job <job-id>] [--since <ts>] [--type <t>]... [--peek]
   [--json]`
   — The pull/observability surface and the fallback delivery path when no
   monitor is running. Without `--job` it MUST return waking events for the

@@ -58,10 +58,10 @@ func TestProgressAndDoneIncrementSeq(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("CLOWN_SESSION_ID", "k")
 	id, _ := Start(StartOpts{Source: "s"})
-	if err := Progress(id, "halfway"); err != nil {
+	if err := Progress("", id, "halfway"); err != nil {
 		t.Fatal(err)
 	}
-	if err := Done(id, TypeSucceeded, "ok", "ref"); err != nil {
+	if err := Done("", id, TypeSucceeded, "ok", "ref"); err != nil {
 		t.Fatal(err)
 	}
 	recs := mustReadJob(t, ChannelID("k"), id)
@@ -80,10 +80,10 @@ func TestDoneRejectsSecondTerminal(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("CLOWN_SESSION_ID", "k")
 	id, _ := Start(StartOpts{Source: "s"})
-	if err := Done(id, TypeFailed, "", ""); err != nil {
+	if err := Done("", id, TypeFailed, "", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := Done(id, TypeSucceeded, "", ""); err == nil {
+	if err := Done("", id, TypeSucceeded, "", ""); err == nil {
 		t.Fatal("second terminal must error")
 	}
 }
@@ -92,8 +92,47 @@ func TestDoneRejectsBadState(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("CLOWN_SESSION_ID", "k")
 	id, _ := Start(StartOpts{Source: "s"})
-	if err := Done(id, "wat", "", ""); err == nil {
+	if err := Done("", id, "wat", "", ""); err == nil {
 		t.Fatal("non-terminal state must error")
+	}
+}
+
+// TestDoneTargetWritesToTargetChannel proves the cross-session path: a job
+// started with Target:"other" must have its terminal record written to
+// "other"'s channel when Done is called with that same target, and Done with an
+// empty target (the current session) must NOT find it (RFC-0009 §8). Done sends
+// a nudge (binds an AF_UNIX socket), so this test needs a short XDG_RUNTIME_DIR
+// under /tmp; the deep worktree TempDir would overflow sun_path.
+func TestDoneTargetWritesToTargetChannel(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	rt, err := os.MkdirTemp("/tmp", "clown-jobwake-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(rt) })
+	t.Setenv("XDG_RUNTIME_DIR", rt)
+	t.Setenv("CLOWN_SESSION_ID", "self")
+
+	id, err := Start(StartOpts{Source: "s", Target: "other"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Done("other", id, TypeSucceeded, "ok", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	// The terminal record landed in "other"'s channel.
+	recs, err := ReadJob(ChannelID("other"), id)
+	if err != nil {
+		t.Fatalf("reading other's channel: %v", err)
+	}
+	if len(recs) != 2 || recs[1].Type != TypeSucceeded || recs[1].Session != "other" {
+		t.Fatalf("want started+succeeded in other's channel, got %+v", recs)
+	}
+
+	// The current session ("self") must NOT have the job.
+	if _, err := ReadJob(ChannelID("self"), id); !os.IsNotExist(err) {
+		t.Fatalf("current session must not have the cross-session job; ReadJob err = %v", err)
 	}
 }
 
@@ -101,7 +140,7 @@ func TestProgressOneLineMessage(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("CLOWN_SESSION_ID", "k")
 	id, _ := Start(StartOpts{Source: "s"})
-	if err := Progress(id, "line1\nline2\rline3"); err != nil {
+	if err := Progress("", id, "line1\nline2\rline3"); err != nil {
 		t.Fatal(err)
 	}
 	recs := mustReadJob(t, ChannelID("k"), id)

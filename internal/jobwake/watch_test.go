@@ -58,8 +58,8 @@ func TestWatchReplaysUnackedTerminalOnce(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", shortRuntimeDir(t))
 	t.Setenv("CLOWN_SESSION_ID", "k")
 	id, _ := Start(StartOpts{Source: "s"})
-	_ = Progress(id, "p")
-	_ = Done(id, TypeSucceeded, "ok", "")
+	_ = Progress("", id, "p")
+	_ = Done("", id, TypeSucceeded, "ok", "")
 
 	emitted := drainWatch(t, "k")
 	if len(emitted) != 1 || emitted[0].Type != TypeSucceeded {
@@ -77,8 +77,8 @@ func TestWatchNeverEmitsProgress(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", shortRuntimeDir(t))
 	t.Setenv("CLOWN_SESSION_ID", "k")
 	id, _ := Start(StartOpts{Source: "s"})
-	_ = Progress(id, "halfway")
-	_ = Done(id, TypeFailed, "boom", "ref")
+	_ = Progress("", id, "halfway")
+	_ = Done("", id, TypeFailed, "boom", "ref")
 
 	emitted := drainWatch(t, "k")
 	if len(emitted) != 1 {

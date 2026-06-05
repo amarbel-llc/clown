@@ -165,6 +165,44 @@ func TestJobDoneMissingJobArgExits2(t *testing.T) {
 	}
 }
 
+func TestJobDoneMissingStateExits2(t *testing.T) {
+	jobTestEnv(t)
+	out := captureStdout(t, func() int { return jobStart([]string{"--source", "s"}) })
+	id := trimTrailingNewline(out)
+	// Missing required --state is a usage error (exit 2), not a runtime error.
+	if code := jobDone([]string{id}); code != 2 {
+		t.Fatalf("job done with no --state exit = %d, want 2", code)
+	}
+}
+
+// TestJobDoneTargetWakesTargetSession proves --target threads through done:
+// a job started --target <other> and done --target <other> lands its terminal
+// record in <other>'s channel, while done without --target (the current
+// session) does not find it.
+func TestJobDoneTargetWakesTargetSession(t *testing.T) {
+	jobTestEnv(t) // current session is "repo/branch"
+	out := captureStdout(t, func() int {
+		return jobStart([]string{"--target", "other-session", "--source", "moxy", "--label", "build"})
+	})
+	id := trimTrailingNewline(out)
+
+	if code := jobDone([]string{id, "--target", "other-session", "--state", "succeeded"}); code != 0 {
+		t.Fatalf("cross-session job done exit = %d, want 0", code)
+	}
+
+	recs, err := jobwake.ReadJob(jobwake.ChannelID("other-session"), id)
+	if err != nil {
+		t.Fatalf("reading target channel: %v", err)
+	}
+	if len(recs) != 2 || recs[1].Type != jobwake.TypeSucceeded {
+		t.Fatalf("want started+succeeded in target channel, got %+v", recs)
+	}
+	// The current session must not have the cross-session job.
+	if _, err := jobwake.ReadJob(jobwake.ChannelID("repo/branch"), id); !os.IsNotExist(err) {
+		t.Fatalf("current session must not have the cross-session job; err = %v", err)
+	}
+}
+
 func TestJobProgressIsJournalOnly(t *testing.T) {
 	jobTestEnv(t)
 	out := captureStdout(t, func() int { return jobStart([]string{"--source", "s"}) })

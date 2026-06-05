@@ -46,13 +46,22 @@ func sanitizeLabel(s string) string {
 
 func nowTS() string { return time.Now().UTC().Format(time.RFC3339Nano) }
 
+// resolveSession picks the session key a producer operation writes to: the
+// explicit target when non-empty (so a cross-session producer started with
+// `clown job start --target <key>` keeps writing to that channel through
+// progress/done), else the resolved SessionKey() of the current session
+// (RFC-0009 §2, §8).
+func resolveSession(target string) string {
+	if target != "" {
+		return target
+	}
+	return SessionKey()
+}
+
 // Start allocates a job id, creates the channel journal directory (mode 0700),
 // and appends the seq-0 `started` record (RFC-0009 §8). It returns the job id.
 func Start(o StartOpts) (string, error) {
-	session := o.Target
-	if session == "" {
-		session = SessionKey()
-	}
+	session := resolveSession(o.Target)
 	source := o.Source
 	if source == "" {
 		if v := os.Getenv("CLOWN_JOB_SOURCE"); v != "" {
@@ -125,9 +134,11 @@ func oneLine(s string) string {
 }
 
 // Progress appends a non-waking progress record. It is journal-only and never
-// wakes the agent, so it sends no nudge (RFC-0009 §5, §8).
-func Progress(jobID, message string) error {
-	session := SessionKey()
+// wakes the agent, so it sends no nudge (RFC-0009 §5, §8). target selects the
+// channel: empty resolves the current session, else the cross-session target
+// the job was started with (mirrors Start's StartOpts.Target).
+func Progress(target, jobID, message string) error {
+	session := resolveSession(target)
 	cid := ChannelID(session)
 	rec := Record{V: SchemaVersion, Job: jobID, Session: session, Type: TypeProgress,
 		TS: nowTS(), Message: oneLine(message)}
@@ -142,11 +153,15 @@ func Progress(jobID, message string) error {
 // Done appends the single terminal record (fsynced) and then sends the nudge,
 // guaranteeing the journal is durable before the socket (RFC-0009 §7). It
 // rejects a non-terminal state and a second terminal append (RFC-0009 §5, §8).
-func Done(jobID, state, message, resultRef string) error {
+// target selects the channel: empty resolves the current session, else the
+// cross-session target the job was started with (mirrors Start's
+// StartOpts.Target), so a cross-session producer's done wakes the right
+// session.
+func Done(target, jobID, state, message, resultRef string) error {
 	if !IsTerminal(state) {
 		return fmt.Errorf("invalid terminal state %q", state)
 	}
-	session := SessionKey()
+	session := resolveSession(target)
 	cid := ChannelID(session)
 	rec := Record{V: SchemaVersion, Job: jobID, Session: session, Type: state,
 		TS: nowTS(), Message: oneLine(message), ResultRef: resultRef}

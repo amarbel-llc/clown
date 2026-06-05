@@ -24,29 +24,45 @@ func TestJobMonitorPluginDirSynthesized(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading synthesized manifest: %v", err)
 	}
+	// Assert the TOP-LEVEL monitors array (matching pluginhost.compile.go's
+	// doc["monitors"] and clown-json(5)); Claude Code reads monitors there,
+	// NOT under an "experimental" wrapper.
 	var m struct {
-		Name         string `json:"name"`
-		Version      string `json:"version"`
-		Experimental struct {
-			Monitors []struct {
-				Name        string `json:"name"`
-				Command     string `json:"command"`
-				Description string `json:"description"`
-			} `json:"monitors"`
-		} `json:"experimental"`
+		Name     string `json:"name"`
+		Version  string `json:"version"`
+		Monitors []struct {
+			Name        string `json:"name"`
+			Command     string `json:"command"`
+			Description string `json:"description"`
+		} `json:"monitors"`
 	}
 	if err := json.Unmarshal(b, &m); err != nil {
 		t.Fatalf("manifest is not valid JSON: %v\n%s", err, b)
 	}
-	if len(m.Experimental.Monitors) != 1 {
-		t.Fatalf("want exactly one monitor, got %d", len(m.Experimental.Monitors))
+	// Guard against a regression to the experimental.monitors shape: the raw
+	// JSON must not carry an "experimental" key at all.
+	var rawDoc map[string]json.RawMessage
+	if err := json.Unmarshal(b, &rawDoc); err != nil {
+		t.Fatalf("manifest is not valid JSON: %v\n%s", err, b)
 	}
-	mon := m.Experimental.Monitors[0]
+	if _, present := rawDoc["experimental"]; present {
+		t.Fatalf("manifest must not nest monitors under experimental; got %s", b)
+	}
+	if _, present := rawDoc["monitors"]; !present {
+		t.Fatalf("manifest must declare a top-level monitors array; got %s", b)
+	}
+	if len(m.Monitors) != 1 {
+		t.Fatalf("want exactly one top-level monitor, got %d", len(m.Monitors))
+	}
+	mon := m.Monitors[0]
 	if mon.Name != "clown-job-watch" {
 		t.Fatalf("monitor name = %q, want clown-job-watch", mon.Name)
 	}
 	if mon.Description == "" {
 		t.Fatal("monitor description must be non-empty")
+	}
+	if !filepath.IsAbs(strings.Fields(mon.Command)[0]) {
+		t.Fatalf("monitor command = %q, want an absolute path (os.Executable resolves in go test)", mon.Command)
 	}
 	if !strings.HasSuffix(mon.Command, "job-watch") {
 		t.Fatalf("monitor command = %q, want it to end in job-watch", mon.Command)

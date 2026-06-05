@@ -7,18 +7,18 @@ import (
 )
 
 // jobMonitorPlugin is the synthesized built-in plugin manifest that registers
-// the clown job-watch monitor as a Claude Code experimental monitor. Each
-// stdout line the monitor emits becomes an agent notification (RFC-0009 §9).
+// the clown job-watch monitor as a Claude Code monitor. The monitors array is
+// TOP-LEVEL in plugin.json (matching internal/pluginhost/compile.go, which
+// injects doc["monitors"], and clown-json(5)); Claude Code reads monitors
+// there, not under an "experimental" wrapper. Each stdout line the monitor
+// emits becomes an agent notification (RFC-0009 §9).
 type jobMonitorPlugin struct {
-	Name         string                 `json:"name"`
-	Version      string                 `json:"version"`
-	Experimental jobMonitorExperimental `json:"experimental"`
-}
-
-type jobMonitorExperimental struct {
+	Name     string            `json:"name"`
+	Version  string            `json:"version"`
 	Monitors []jobMonitorEntry `json:"monitors"`
 }
 
+// jobMonitorEntry mirrors pluginhost.MonitorDef's wire fields.
 type jobMonitorEntry struct {
 	Name        string `json:"name"`
 	Command     string `json:"command"`
@@ -73,13 +73,11 @@ func synthJobMonitorPluginDir() (string, error) {
 	manifest := jobMonitorPlugin{
 		Name:    "clown-builtin-jobwake",
 		Version: "1",
-		Experimental: jobMonitorExperimental{
-			Monitors: []jobMonitorEntry{{
-				Name:        "clown-job-watch",
-				Command:     jobWatchCommand(),
-				Description: "clown job-wakeup channel: wakes this session when a background job finishes",
-			}},
-		},
+		Monitors: []jobMonitorEntry{{
+			Name:        "clown-job-watch",
+			Command:     jobWatchCommand(),
+			Description: "clown job-wakeup channel: wakes this session when a background job finishes",
+		}},
 	}
 	b, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {

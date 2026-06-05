@@ -35,11 +35,11 @@ func TestScanWakingReturnsOnlyTerminalSortedByTS(t *testing.T) {
 	cid := ChannelID("k")
 
 	a, _ := Start(StartOpts{Source: "s", Label: "a"})
-	_ = Progress(a, "p")
-	_ = Done(a, TypeSucceeded, "", "")
+	_ = Progress("", a, "p")
+	_ = Done("", a, TypeSucceeded, "", "")
 
 	b, _ := Start(StartOpts{Source: "s", Label: "b"})
-	_ = Done(b, TypeFailed, "", "")
+	_ = Done("", b, TypeFailed, "", "")
 
 	// A job still in flight contributes no waking records.
 	_, _ = Start(StartOpts{Source: "s", Label: "c"})
@@ -68,7 +68,7 @@ func TestScanWakingMatchesDirectScan(t *testing.T) {
 
 	// One terminal job and one still-open job.
 	done, _ := Start(StartOpts{Source: "s", Label: "done"})
-	_ = Done(done, TypeSucceeded, "", "")
+	_ = Done("", done, TypeSucceeded, "", "")
 	_, _ = Start(StartOpts{Source: "s", Label: "open"})
 
 	exported, err := ScanWaking(cid)
@@ -147,7 +147,7 @@ func TestScanWakingSkipsDotfiles(t *testing.T) {
 	t.Setenv("CLOWN_SESSION_ID", "k")
 	cid := ChannelID("k")
 	id, _ := Start(StartOpts{Source: "s"})
-	_ = Done(id, TypeSucceeded, "", "")
+	_ = Done("", id, TypeSucceeded, "", "")
 	// Drop an ack file alongside; scanWaking must not treat .ack.json as a job.
 	if err := saveAck(cid, ack{V: 1, Acked: map[string]int{id: 0}}); err != nil {
 		t.Fatal(err)

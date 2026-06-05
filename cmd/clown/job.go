@@ -76,11 +76,12 @@ func jobProgress(args []string) int {
 		return 2
 	}
 	fs := flag.NewFlagSet("job progress", flag.ContinueOnError)
+	target := fs.String("target", "", "target session key (default: resolved session)")
 	message := fs.String("message", "", "human-readable progress detail")
 	if err := fs.Parse(rest); err != nil {
 		return 2
 	}
-	if err := jobwake.Progress(jobID, *message); err != nil {
+	if err := jobwake.Progress(*target, jobID, *message); err != nil {
 		fmt.Fprintf(os.Stderr, "clown job progress: %v\n", err)
 		return 1
 	}
@@ -94,13 +95,18 @@ func jobDone(args []string) int {
 		return 2
 	}
 	fs := flag.NewFlagSet("job done", flag.ContinueOnError)
+	target := fs.String("target", "", "target session key (default: resolved session)")
 	state := fs.String("state", "", "succeeded|failed|cancelled|interrupted")
 	message := fs.String("message", "", "human-readable detail")
 	resultRef := fs.String("result-ref", "", "opaque result pointer")
 	if err := fs.Parse(rest); err != nil {
 		return 2
 	}
-	if err := jobwake.Done(jobID, *state, *message, *resultRef); err != nil {
+	if *state == "" {
+		fmt.Fprintln(os.Stderr, "clown job done: --state is required")
+		return 2
+	}
+	if err := jobwake.Done(*target, jobID, *state, *message, *resultRef); err != nil {
 		fmt.Fprintf(os.Stderr, "clown job done: %v\n", err)
 		return 1
 	}
