@@ -32,21 +32,31 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func TestEnsureSessionIDResolvesAndExportsWhenUnset(t *testing.T) {
+func TestEnsureJobWakeupEnvResolvesAndExportsWhenUnset(t *testing.T) {
 	t.Setenv("CLOWN_SESSION_ID", "")
 	t.Setenv("SPINCLASS_SESSION_ID", "repo/branch")
-	ensureSessionID()
+	t.Setenv("CLOWN_BIN", "")
+	ensureJobWakeupEnv()
 	if got := os.Getenv("CLOWN_SESSION_ID"); got != "repo/branch" {
 		t.Fatalf("CLOWN_SESSION_ID = %q, want resolved spinclass key %q", got, "repo/branch")
 	}
+	// CLOWN_BIN is set to the running binary's absolute path (os.Executable
+	// resolves under the test binary), so plugin producers can locate clown.
+	if got := os.Getenv("CLOWN_BIN"); got == "" {
+		t.Fatal("CLOWN_BIN = empty, want the resolved absolute clown path")
+	}
 }
 
-func TestEnsureSessionIDLeavesPresetUntouched(t *testing.T) {
+func TestEnsureJobWakeupEnvLeavesPresetUntouched(t *testing.T) {
 	t.Setenv("CLOWN_SESSION_ID", "explicit")
 	t.Setenv("SPINCLASS_SESSION_ID", "repo/branch")
-	ensureSessionID()
+	t.Setenv("CLOWN_BIN", "/custom/clown")
+	ensureJobWakeupEnv()
 	if got := os.Getenv("CLOWN_SESSION_ID"); got != "explicit" {
 		t.Fatalf("CLOWN_SESSION_ID = %q, want preset value left untouched", got)
+	}
+	if got := os.Getenv("CLOWN_BIN"); got != "/custom/clown" {
+		t.Fatalf("CLOWN_BIN = %q, want preset value left untouched", got)
 	}
 }
 

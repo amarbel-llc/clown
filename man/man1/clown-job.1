@@ -230,6 +230,12 @@ exports the resolved value as
 into every plugin MCP server process and into the monitor, so producers
 and the monitor agree on the default channel without further
 configuration.
+It likewise exports
+.Ev CLOWN_BIN
+so those producers can locate
+.Nm clown job
+regardless of
+.Ev PATH .
 The on-disk channel directory and the nudge socket are named by a
 filesystem-safe
 .Em channel id
@@ -307,6 +313,15 @@ Consulted when neither
 nor
 .Ev SPINCLASS_SESSION_ID
 is set.
+.It Ev CLOWN_BIN
+Absolute path to the clown binary, exported by
+.Nm clown
+into every plugin MCP server process so plugin producers can locate
+.Nm clown job
+regardless of
+.Ev PATH .
+Plugin producers should invoke it as
+.Li ${CLOWN_BIN:-clown} .
 .It Ev XDG_STATE_HOME
 Base directory for the durable journal
 .Pq Pa clown/jobs/<channel-id>/ .

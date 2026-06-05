@@ -25,13 +25,24 @@ type jobMonitorEntry struct {
 	Description string `json:"description"`
 }
 
+// clownExePath returns the absolute path to the running clown binary, or ""
+// if it cannot be resolved. It backs both the job-watch monitor command and
+// the CLOWN_BIN env var exported for plugin producers, so the two always name
+// the same binary.
+func clownExePath() string {
+	if exe, err := os.Executable(); err == nil && exe != "" {
+		return exe
+	}
+	return ""
+}
+
 // jobWatchCommand returns the monitor command string Claude Code spawns.
 // Claude Code spawns monitors with the session PATH, on which `clown` may not
-// appear; resolving os.Executable() yields an absolute path so the monitor
-// runs regardless of PATH. When os.Executable() fails we fall back to the bare
-// `clown job-watch`, which still works wherever clown is on PATH.
+// appear; an absolute path from clownExePath() makes the monitor run regardless
+// of PATH. When it cannot be resolved we fall back to the bare `clown
+// job-watch`, which still works wherever clown is on PATH.
 func jobWatchCommand() string {
-	if exe, err := os.Executable(); err == nil && exe != "" {
+	if exe := clownExePath(); exe != "" {
 		return exe + " job-watch"
 	}
 	return "clown job-watch"

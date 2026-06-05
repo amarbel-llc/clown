@@ -122,13 +122,15 @@ Observing progress on demand (pull; never wakes):
 
 ## Limitations
 
-- **No production plugin consumers yet.** The clown-side facility (`clown job`
-  producer/read CLI, the `clown job-watch` monitor, and the durable
+- **No production plugin consumers merged yet.** The clown-side facility
+  (`clown job` producer/read CLI, the `clown job-watch` monitor, and the durable
   journal + nudge) is implemented and conformance-tested (RFC-0009 bats suite
-  green on Linux), but no plugin emits real terminal events on the channel yet —
-  the spinclass/moxy integrations are future work. The end-to-end wakeup path is
-  therefore unproven in real use; this is why the feature is `experimental` and
-  not `testing`.
+  green on Linux). The **first consumer** — moxy's `get-hubbed.ci-watch` tool,
+  which backgrounds a GitHub Actions run and emits a terminal `clown job done`
+  when it finishes — is in progress (it locates clown via the `CLOWN_BIN` clown
+  exports, RFC-0009 §2). Until it lands and is exercised, the end-to-end wakeup
+  path is unproven in real use; this is why the feature is `experimental` and not
+  `testing`.
 - **Terminal-only wakeups in v1.** A backgrounded job that pauses for input does
   not yet have a waking event; `needs-attention` is reserved but unimplemented.
 - **`progress`/`started` are best-effort.** They are journal-only and have no

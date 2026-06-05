@@ -125,24 +125,35 @@ func main() {
 	os.Exit(run(os.Args[1:]))
 }
 
-// ensureSessionID resolves the job-wakeup channel key once and exports it as
-// CLOWN_SESSION_ID, but only if it is not already set. Exporting it means every
+// ensureJobWakeupEnv exports the job-wakeup channel environment once, so every
 // child process — plugin MCP servers (which inherit os.Environ()) and the
-// Claude-spawned job-watch monitor — resolves the same channel without further
-// configuration (RFC-0009 §2). When CLOWN_SESSION_ID is already set it is left
-// untouched so an explicit caller-provided key wins.
-func ensureSessionID() {
+// Claude-spawned job-watch monitor — can produce to and resolve the same
+// channel without further configuration:
+//
+//   - CLOWN_SESSION_ID: the channel key (RFC-0009 §2), so producers and the
+//     monitor agree on which session to wake. Set only if unset, so an explicit
+//     caller-provided key wins.
+//   - CLOWN_BIN: the absolute path to this clown binary, so plugin producers
+//     (e.g. get-hubbed's ci-watch) can locate `clown job` reliably regardless of
+//     PATH via ${CLOWN_BIN:-clown}. Set only if unset and resolvable.
+func ensureJobWakeupEnv() {
 	if os.Getenv("CLOWN_SESSION_ID") == "" {
 		_ = os.Setenv("CLOWN_SESSION_ID", jobwake.SessionKey())
+	}
+	if os.Getenv("CLOWN_BIN") == "" {
+		if exe := clownExePath(); exe != "" {
+			_ = os.Setenv("CLOWN_BIN", exe)
+		}
 	}
 }
 
 func run(rawArgs []string) int {
-	// Resolve and export the job-wakeup channel key once, before any
+	// Resolve and export the job-wakeup channel env once, before any
 	// subcommand dispatch or plugin-host launch, so every child (plugin
 	// MCP servers via os.Environ(), and the Claude-spawned job-watch
-	// monitor) shares the same channel (RFC-0009 §2).
-	ensureSessionID()
+	// monitor) shares the same channel key and can locate clown
+	// (RFC-0009 §2).
+	ensureJobWakeupEnv()
 
 	if len(rawArgs) > 0 {
 		switch rawArgs[0] {

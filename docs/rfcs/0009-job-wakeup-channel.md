@@ -81,6 +81,13 @@ of every plugin MCP server process it launches and into the monitor process, so
 producers and the monitor agree on the default channel without further
 configuration.
 
+clown SHOULD also export `CLOWN_BIN`, the absolute path to the running clown
+binary, into the same environments. Plugin producers that shell out to the CLI
+(§8) SHOULD locate it via `${CLOWN_BIN:-clown}` so they invoke `clown job`
+reliably regardless of `PATH` (a plugin's nix-wrapped `PATH` need not contain
+clown). `CLOWN_BIN` MUST name a binary that accepts the `job` and `job-watch`
+subcommands.
+
 A **channel id** is the filesystem-safe identifier derived from a session key:
 
 ```
