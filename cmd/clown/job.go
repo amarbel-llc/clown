@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 
 	"github.com/amarbel-llc/clown/internal/jobwake"
 )
@@ -158,11 +159,27 @@ func jobRead(args []string) int {
 			return 1
 		}
 	} else {
-		var err error
-		recs, err = readChannelWaking(cid, *since, types)
+		waking, err := jobwake.ScanWaking(cid)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "clown job read: %v\n", err)
 			return 1
+		}
+		// Apply the cursorless --since (exclusive ts lower bound) and
+		// repeatable --type filters to the ts-sorted waking records.
+		typeSet := map[string]struct{}{}
+		for _, t := range types {
+			typeSet[t] = struct{}{}
+		}
+		for _, r := range waking {
+			if *since != "" && r.TS <= *since {
+				continue
+			}
+			if len(typeSet) > 0 {
+				if _, ok := typeSet[r.Type]; !ok {
+					continue
+				}
+			}
+			recs = append(recs, r)
 		}
 	}
 
@@ -183,62 +200,6 @@ func printRecords(recs []jobwake.Record, asJSON bool) int {
 		fmt.Println(notificationLine(r))
 	}
 	return 0
-}
-
-// readChannelWaking enumerates the channel's waking events (cursorless),
-// applying the --since (exclusive ts lower bound) and --type filters. It reads
-// the journal directory and each job file via the jobwake public API rather
-// than reimplementing the monitor's scan logic.
-func readChannelWaking(channelID, since string, types stringList) ([]jobwake.Record, error) {
-	dir := jobwake.JournalDir(channelID)
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	typeSet := map[string]struct{}{}
-	for _, t := range types {
-		typeSet[t] = struct{}{}
-	}
-	var out []jobwake.Record
-	for _, e := range entries {
-		name := e.Name()
-		if e.IsDir() || name[0] == '.' || len(name) < 6 || name[len(name)-6:] != ".jsonl" {
-			continue
-		}
-		jobID := name[:len(name)-6]
-		recs, err := jobwake.ReadJob(channelID, jobID)
-		if err != nil {
-			continue // skip an unreadable job file (RFC-0009 §10)
-		}
-		for _, r := range recs {
-			if !jobwake.IsWaking(r.Type) {
-				continue
-			}
-			if since != "" && r.TS <= since {
-				continue
-			}
-			if len(typeSet) > 0 {
-				if _, ok := typeSet[r.Type]; !ok {
-					continue
-				}
-			}
-			out = append(out, r)
-		}
-	}
-	// Sort oldest-first by ts for a stable, chronological stream.
-	sortRecordsByTS(out)
-	return out, nil
-}
-
-func sortRecordsByTS(recs []jobwake.Record) {
-	for i := 1; i < len(recs); i++ {
-		for j := i; j > 0 && recs[j-1].TS > recs[j].TS; j-- {
-			recs[j-1], recs[j] = recs[j], recs[j-1]
-		}
-	}
 }
 
 // stringList is a repeatable string flag (e.g. --type succeeded --type failed).
@@ -304,14 +265,10 @@ func notificationLine(r jobwake.Record) string {
 	return line
 }
 
+// lineFlattener replaces newline characters with spaces so a record never
+// breaks the one-line-per-event contract (RFC-0009 §9).
+var lineFlattener = strings.NewReplacer("\n", " ", "\r", " ")
+
 func flattenLine(s string) string {
-	out := make([]rune, 0, len(s))
-	for _, r := range s {
-		if r == '\n' || r == '\r' {
-			out = append(out, ' ')
-			continue
-		}
-		out = append(out, r)
-	}
-	return string(out)
+	return lineFlattener.Replace(s)
 }

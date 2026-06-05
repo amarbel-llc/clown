@@ -61,6 +61,41 @@ func TestScanWakingReturnsOnlyTerminalSortedByTS(t *testing.T) {
 	}
 }
 
+func TestScanWakingMatchesDirectScan(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("CLOWN_SESSION_ID", "k")
+	cid := ChannelID("k")
+
+	// One terminal job and one still-open job.
+	done, _ := Start(StartOpts{Source: "s", Label: "done"})
+	_ = Done(done, TypeSucceeded, "", "")
+	_, _ = Start(StartOpts{Source: "s", Label: "open"})
+
+	exported, err := ScanWaking(cid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	direct, err := scanWaking(cid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(exported) != len(direct) {
+		t.Fatalf("ScanWaking returned %d records, scanWaking returned %d", len(exported), len(direct))
+	}
+	// Only the terminal record, ts-sorted (the open job contributes none).
+	if len(exported) != 1 {
+		t.Fatalf("want exactly the one terminal waking record, got %+v", exported)
+	}
+	for i := range exported {
+		if exported[i] != direct[i] {
+			t.Fatalf("ScanWaking[%d]=%+v differs from scanWaking[%d]=%+v", i, exported[i], i, direct[i])
+		}
+		if !IsWaking(exported[i].Type) {
+			t.Fatalf("non-waking record leaked: %+v", exported[i])
+		}
+	}
+}
+
 func TestScanWakingMissingDirIsEmpty(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	waking, err := scanWaking(ChannelID("absent"))

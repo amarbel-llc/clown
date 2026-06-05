@@ -66,6 +66,11 @@ func scanWaking(channelID string) ([]Record, error) {
 	return out, nil
 }
 
+// ScanWaking returns every waking (terminal) record across all jobs in the
+// channel, oldest first by timestamp. It is the read-side counterpart used by
+// `clown job read` and the monitor's replay.
+func ScanWaking(channelID string) ([]Record, error) { return scanWaking(channelID) }
+
 // ack is the monitor's per-channel delivery cursor (RFC-0009 §9): the highest
 // emitted seq per job id.
 type ack struct {

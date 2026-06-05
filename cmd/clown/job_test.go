@@ -11,6 +11,10 @@ import (
 
 // captureStdout runs fn with os.Stdout redirected to a pipe and returns
 // everything fn wrote. It restores os.Stdout before returning.
+//
+// WARNING: this mutates the process-global os.Stdout without synchronization.
+// Tests that call captureStdout MUST NOT call t.Parallel() — concurrent tests
+// would race on os.Stdout and interleave each other's captures.
 func captureStdout(t *testing.T, fn func() int) string {
 	t.Helper()
 	orig := os.Stdout
@@ -240,6 +244,22 @@ func TestJobWatchDisabledExitsZeroImmediately(t *testing.T) {
 	t.Setenv("CLOWN_DISABLE_JOB_WAKEUP", "1")
 	if code := runJobWatch(nil); code != 0 {
 		t.Fatalf("disabled job-watch exit = %d, want 0", code)
+	}
+}
+
+func TestProviderUsesPluginDirs(t *testing.T) {
+	uses := map[string]bool{
+		"claude":   true,
+		"clownbox": true,
+		"codex":    false,
+		"circus":   false,
+		"opencode": false,
+		"crush":    false,
+	}
+	for provider, want := range uses {
+		if got := providerUsesPluginDirs(provider); got != want {
+			t.Errorf("providerUsesPluginDirs(%q) = %v, want %v", provider, got, want)
+		}
 	}
 }
 

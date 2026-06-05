@@ -37,6 +37,21 @@ func jobWatchCommand() string {
 	return "clown job-watch"
 }
 
+// providerUsesPluginDirs reports whether the provider consumes --plugin-dir
+// (and runs as a subprocess so deferred cleanup fires). Only those need the
+// synthesized job-watch monitor dir. claude and clownbox thread pluginDirs
+// into runWithPluginHost (cmd.Run, not syscall.Exec); codex/opencode/crush
+// never receive pluginDirs and codex/naked exec away, so a synthesized dir
+// would leak. circus is a stub that ignores pluginDirs entirely.
+func providerUsesPluginDirs(provider string) bool {
+	switch provider {
+	case "claude", "clownbox":
+		return true
+	default:
+		return false
+	}
+}
+
 // synthJobMonitorPluginDir writes a temporary built-in plugin directory whose
 // .claude-plugin/plugin.json declares the clown job-watch monitor, and returns
 // its path. The caller appends the path to the --plugin-dir set passed to
