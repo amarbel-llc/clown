@@ -82,6 +82,12 @@ func Start(o StartOpts) (string, error) {
 // append after a terminal record, and carry the started record's source
 // forward when the caller leaves it empty. A terminal append fsyncs the file so
 // the journal is durable before any nudge (RFC-0009 §7).
+//
+// appendRecord is NOT safe for concurrent writers to the same job: it derives
+// the next seq from the current record count, so two racing writers would
+// assign the same seq. RFC-0009 §7 requires a job to have a single writer (the
+// clown-job CLI is one process per job operation); this invariant is the
+// caller's responsibility, not enforced here.
 func appendRecord(cid string, partial Record, fsync bool) error {
 	existing, err := ReadJob(cid, partial.Job)
 	if err != nil && !os.IsNotExist(err) {
@@ -118,8 +124,8 @@ func oneLine(s string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(s, "\n", " "), "\r", " ")
 }
 
-// Progress appends a non-waking progress record and sends a best-effort nudge.
-// It is journal-only and never wakes the agent (RFC-0009 §5, §8).
+// Progress appends a non-waking progress record. It is journal-only and never
+// wakes the agent, so it sends no nudge (RFC-0009 §5, §8).
 func Progress(jobID, message string) error {
 	session := SessionKey()
 	cid := ChannelID(session)
@@ -128,7 +134,8 @@ func Progress(jobID, message string) error {
 	if err := appendRecord(cid, rec, false); err != nil {
 		return err
 	}
-	sendNudge(cid, jobID, TypeProgress)
+	// No nudge: progress is journal-only (RFC-0009 §5), never wakes; the monitor's
+	// periodic rescan picks it up for pull (clown job-read) without a nudge.
 	return nil
 }
 

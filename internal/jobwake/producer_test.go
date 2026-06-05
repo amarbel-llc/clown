@@ -20,6 +20,7 @@ func mustReadJob(t *testing.T, channelID, jobID string) []Record {
 	defer f.Close()
 	var out []Record
 	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
 		if line == "" {
