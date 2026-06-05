@@ -269,6 +269,19 @@ func runWithFlags(flags parsedFlags) int {
 	pluginDirs := readPluginDirs()
 	pluginDirs = append(pluginDirs, flags.extraPluginDirs...)
 
+	// Register clown's built-in job-watch monitor by synthesizing a plugin
+	// dir that declares it as a Claude Code experimental monitor (RFC-0009
+	// §8, §9). Gated by CLOWN_DISABLE_JOB_WAKEUP (returns "" when disabled).
+	// The temp dir is removed when runWithFlags returns, mirroring the
+	// other staged-dir cleanup. It is appended last so it cannot shadow a
+	// user- or plugin-supplied dir.
+	if monitorDir, err := synthJobMonitorPluginDir(); err != nil {
+		fmt.Fprintf(os.Stderr, "clown: registering job-watch monitor: %v\n", err)
+	} else if monitorDir != "" {
+		defer os.RemoveAll(monitorDir)
+		pluginDirs = append(pluginDirs, monitorDir)
+	}
+
 	// Per FDR 0003, plugin-contributed system-prompt-append.d
 	// fragments are layered between clown's builtin fragments and
 	// the user's .circus/system-prompt.d/ fragments.
