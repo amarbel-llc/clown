@@ -872,6 +872,7 @@
               chmod -R u+w $out/share/man
               for page in \
                   $out/share/man/man1/clown.1 \
+                  $out/share/man/man1/clown-job.1 \
                   $out/share/man/man1/clown-plugin-host.1 \
                   $out/share/man/man1/clown-stdio-bridge.1 \
                   $out/share/man/man1/circus.1 \

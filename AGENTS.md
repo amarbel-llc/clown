@@ -417,6 +417,25 @@ The flake produces a `symlinkJoin` of five components:
    design doc is at `docs/plans/2026-04-23-profiles-design.md` and the
    implementation plan at `docs/plans/2026-04-23-profiles.md`.
 
+   **Job-wakeup channel (`clown job` / `clown job-watch`).** A
+   clown-provided background-job + agent-wakeup facility (`cmd/clown/job.go`,
+   `cmd/clown/jobmonitor.go`, `internal/jobwake/`): a plugin defers a long task
+   to the background and the originating (or a `--target`-ed) clown session is
+   woken when it hits a terminal state. Two-layer design — a durable on-disk
+   journal (`$XDG_STATE_HOME/clown/jobs/`, the at-least-once source of truth)
+   plus a lossy UDS-datagram nudge for sub-second latency; only terminal events
+   (`succeeded`/`failed`/`cancelled`/`interrupted`) wake, `started`/`progress`
+   are journal-only. The session key resolves `CLOWN_SESSION_ID` →
+   `SPINCLASS_SESSION_ID` → `CLAUDE_SESSION_ID` → generated, and clown exports
+   the resolved value into every plugin MCP server. Plugins consume it via the
+   `clown job start|progress|done|read` producer/pull CLI; clown registers the
+   `clown job-watch` monitor for the session automatically (synthesized
+   `--plugin-dir`). `CLOWN_DISABLE_JOB_WAKEUP=1` is the kill switch. Contract:
+   RFC-0009 (`docs/rfcs/0009-job-wakeup-channel.md`); feature treatment:
+   FDR-0013 (`docs/features/0013-job-wakeup-channel.md`); man page:
+   `clown-job(1)`. Status: clown-side implemented and bats-conformance-tested;
+   no production plugin consumer emits real events yet.
+
 ## Nix Conventions
 
 The `amarbel-llc/nixpkgs` fork migrated to a thin overlay flake on

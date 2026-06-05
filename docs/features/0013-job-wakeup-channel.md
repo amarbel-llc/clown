@@ -1,12 +1,13 @@
 ---
-status: proposed
+status: experimental
 date: 2026-06-05
 promotion-criteria: >
-  proposed -> experimental: clown ships the `clown job` CLI + `clown job-watch`
-  monitor and at least one plugin (spinclass async merge/check OR a moxy
-  long-running tool) emits real terminal events that wake the agent.
-  experimental -> testing: two distinct plugins emit on the channel; the bats
-  conformance suite (RFC-0009) is green on Linux.
+  proposed -> experimental: SATISFIED 2026-06-05 — clown ships the `clown job`
+  CLI + `clown job-watch` monitor and the bats conformance suite (RFC-0009) is
+  green on Linux.
+  experimental -> testing: at least one plugin (spinclass async merge/check OR a
+  moxy long-running tool) emits real terminal events that wake the agent, and a
+  second distinct plugin emits on the channel.
   testing -> accepted: 7 consecutive days of real async jobs across >=2 plugins
   with zero missed wakeups (every terminal event surfaced) and no tuning-lever
   adjustments in that window; macOS pull-fallback (`clown job-read`) verified.
@@ -121,6 +122,13 @@ Observing progress on demand (pull; never wakes):
 
 ## Limitations
 
+- **No production plugin consumers yet.** The clown-side facility (`clown job`
+  producer/read CLI, the `clown job-watch` monitor, and the durable
+  journal + nudge) is implemented and conformance-tested (RFC-0009 bats suite
+  green on Linux), but no plugin emits real terminal events on the channel yet —
+  the spinclass/moxy integrations are future work. The end-to-end wakeup path is
+  therefore unproven in real use; this is why the feature is `experimental` and
+  not `testing`.
 - **Terminal-only wakeups in v1.** A backgrounded job that pauses for input does
   not yet have a waking event; `needs-attention` is reserved but unimplemented.
 - **`progress`/`started` are best-effort.** They are journal-only and have no

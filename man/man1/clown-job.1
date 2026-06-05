@@ -1,0 +1,395 @@
+.\" Copyright (c) 2026 amarbel, LLC
+.\" SPDX-License-Identifier: MIT
+.Dd @MDOCDATE@
+.Dt CLOWN-JOB 1
+.Os
+.Sh NAME
+.Nm clown-job ,
+.Nm clown-job-watch
+.Nd background-job lifecycle and agent-wakeup channel
+.Sh SYNOPSIS
+.Nm clown job start
+.Op Fl -target Ar session-key
+.Op Fl -label Ar label
+.Op Fl -source Ar source
+.Nm clown job progress
+.Ar job-id
+.Op Fl -message Ar message
+.Nm clown job done
+.Ar job-id
+.Fl -state Ar succeeded | failed | cancelled | interrupted
+.Op Fl -message Ar message
+.Op Fl -result-ref Ar ref
+.Nm clown job read
+.Op Fl -job Ar job-id
+.Op Fl -since Ar ts
+.Op Fl -type Ar type
+.Ar ...
+.Op Fl -peek
+.Op Fl -json
+.Nm clown job-watch
+.Sh DESCRIPTION
+The
+.Nm clown job
+subcommands and the
+.Nm clown job-watch
+monitor implement the clown job-wakeup channel: a facility a clown
+plugin uses to defer a long-running task to the background and have the
+originating (or an explicitly targeted) agent woken by a push
+notification when the task reaches a terminal state.
+The full wire and on-disk contract is specified in
+.Xr clown-json 5
+and in
+.Pa docs/rfcs/0009-job-wakeup-channel.md
+within the clown source repository.
+.Pp
+The channel has two layers, separated so that
+.Em correctness
+.Pq never lose a wakeup
+is provided by disk durability while
+.Em liveness
+.Pq sub-second latency
+is provided by a best-effort socket that is always free to drop:
+.Bl -tag -width Ds
+.It Durable journal
+An append-only, on-disk record of each job's lifecycle under
+.Pa $XDG_STATE_HOME/clown/jobs/ .
+It is the at-least-once source of truth: a wakeup survives the monitor
+being down, restarting, or a dropped packet, and is replayed on the
+monitor's next start.
+.It UDS-datagram nudge
+A lossy
+.Dq go read the journal now
+poke over a Unix-domain datagram socket under
+.Pa $XDG_RUNTIME_DIR/clown/jobs/ ,
+sent after a record is durably written.
+Losing it costs latency, never correctness; the receiver always
+re-reads the journal rather than acting on datagram contents.
+.El
+.Pp
+Only
+.Em terminal
+events wake the agent:
+.Li succeeded ,
+.Li failed ,
+.Li cancelled ,
+and
+.Li interrupted .
+The non-terminal
+.Li started
+and
+.Li progress
+events are journal-only \(em visible through
+.Nm clown job read
+but never surfaced as a notification \(em so a chatty job cannot spam the
+agent.
+.Pp
+The push surface is the Claude Code
+.Em monitor
+mechanism.
+.Nm clown
+registers the built-in
+.Nm clown job-watch
+monitor for every applicable session by synthesizing a plugin directory
+that declares it and passing that directory with
+.Fl -plugin-dir ,
+so plugins do not each declare the monitor.
+The monitor prints exactly one stdout line per waking event (see
+.Sx NOTIFICATION LINE ) ,
+which the harness delivers to the agent as a notification.
+.Sh SUBCOMMANDS
+.Bl -tag -width Ds
+.It Nm clown job start Oo Fl -target Ar session-key Oc Oo Fl -label Ar label Oc Oo Fl -source Ar source Oc
+Allocate a job id, create the job's journal file, and append the
+.Li started
+record
+.Pq Li seq No 0 .
+Prints the job id as a single line to stdout and exits
+.Li 0 .
+.Pp
+With
+.Fl -label
+the id is
+.Ar sanitized-label Ns Li - Ns Ar 8-hex ;
+otherwise it is an
+.Ar 8+ hex-digit
+id.
+With
+.Fl -target
+the journal is created for the channel derived from
+.Ar session-key
+rather than the resolved session (see
+.Sx SESSION KEY ) ;
+this is the external-agent-wakeup case, in which one local clown session
+wakes another.
+.Fl -source
+labels the emitting plugin (e.g.
+.Li spinclass ,
+.Li moxy )
+and is carried verbatim in every record and notification line.
+.It Nm clown job progress Ar job-id Oo Fl -message Ar message Oc
+Append a
+.Li progress
+record to the job and optionally send a nudge.
+Journal-only: it is recorded and observable but never wakes the agent.
+.It Nm clown job done Ar job-id Fl -state Ar state Oo Fl -message Ar message Oc Oo Fl -result-ref Ar ref Oc
+Append the job's single terminal record, flush it durably, then send the
+nudge.
+.Ar state
+must be one of
+.Li succeeded ,
+.Li failed ,
+.Li cancelled ,
+or
+.Li interrupted .
+Exits non-zero without appending if the job already has a terminal
+record.
+.Fl -result-ref
+is an opaque pointer the agent may use to fetch full results (e.g. a CLI
+invocation hint or a path); it is data surfaced to the agent as text, not
+a command the monitor auto-executes.
+.It Nm clown job read Oo Fl -job Ar job-id Oc Oo Fl -since Ar ts Oc Oo Fl -type Ar type Oc Ar ... Oo Fl -peek Oc Oo Fl -json Oc
+The pull / observability surface, and the delivery path on hosts where
+the monitor is gated off (see
+.Sx MACOS FALLBACK ) .
+With
+.Fl -job
+it prints that job's full record stream.
+Without
+.Fl -job
+it scans the channel for waking events, optionally filtered by
+.Fl -since
+.Pq an exclusive RFC 3339 lower bound on Li ts
+and by one or more
+.Fl -type
+values
+.Pq repeatable .
+By default each record is printed as a notification line (see
+.Sx NOTIFICATION LINE ) ;
+with
+.Fl -json
+each is printed as one JSON object per line.
+.Pp
+.Sy Current behavior:
+the channel-mode read is the cursorless
+.Fl -since Ns / Ns Fl -type
+filter described above.
+The cursor-advancing read defined by the specification \(em return only
+waking events newer than the caller's persisted read cursor and advance
+that cursor past every event scanned \(em is
+.Em not yet implemented .
+Consequently
+.Fl -peek ,
+which is meant to suppress that cursor advance, is accepted for forward
+compatibility but is presently a
+.Em no-op :
+no cursor is advanced regardless.
+.It Nm clown job-watch
+Run the channel monitor.
+It resolves the session key (see
+.Sx SESSION KEY ) ,
+reads the channel's ack file, replays any unacked waking events from the
+journal (oldest first), binds the nudge socket, then blocks, emitting one
+notification line per waking event as nudges arrive or a periodic re-scan
+finds new terminal records.
+A clean interrupt
+.Pq Dv SIGINT , No or stdin EOF
+causes a graceful exit with status
+.Li 0 .
+This subcommand is normally spawned by
+.Nm clown
+as a registered monitor, not run by hand.
+.El
+.Sh SESSION KEY
+A
+.Em session key
+names the agent session a wakeup is delivered to.
+The active session key is resolved in this order:
+.Bl -enum -offset indent
+.It
+.Ev CLOWN_SESSION_ID ,
+if set and non-empty.
+.It
+otherwise
+.Ev SPINCLASS_SESSION_ID ,
+if set and non-empty (the spinclass
+.Ar repo Ns Li / Ns Ar branch
+key).
+.It
+otherwise
+.Ev CLAUDE_SESSION_ID ,
+if set and non-empty.
+.It
+otherwise a clown-generated random 128-bit value rendered as 32
+lowercase hex digits.
+.El
+.Pp
+.Nm clown
+exports the resolved value as
+.Ev CLOWN_SESSION_ID
+into every plugin MCP server process and into the monitor, so producers
+and the monitor agree on the default channel without further
+configuration.
+The on-disk channel directory and the nudge socket are named by a
+filesystem-safe
+.Em channel id
+derived from the session key \(em the first 16 bytes of its SHA-256
+digest as 32 hex digits \(em while the human-readable key is carried
+verbatim in each journal record's
+.Li session
+field.
+.Sh NOTIFICATION LINE
+Each waking event the monitor emits \(em and each record
+.Nm clown job read
+prints without
+.Fl -json
+\(em is a single line with no embedded newline:
+.Pp
+.Dl [clown-job] <source> <job-id> <type>: <message>
+.Pp
+The trailing
+.Dq Li ": " <message>
+is omitted when the record has no message.
+When
+.Li result_ref
+is present,
+.Dq Li " \(bu " <result_ref>
+is appended.
+Any newline in
+.Li message
+or
+.Li result_ref
+is flattened to a space so the one-line-per-event contract holds.
+.Pp
+The channel guarantees each waking event is surfaced at least once: a
+monitor crash between printing a line and persisting its ack re-emits
+that event on the next monitor start.
+Consumers MUST treat wakeups as idempotent, deduplicating on
+.Pq Li job , Li type .
+.Sh MACOS FALLBACK
+Claude Code arms plugin monitors behind a feature flag that currently
+resolves false on macOS, so on those hosts the
+.Nm clown job-watch
+monitor is a silent no-op.
+The journal is unaffected, so
+.Nm clown job read
+is the documented pull fallback for observing terminal events on those
+hosts \(em the same posture spinclass relies on for cross-session chat.
+.Sh ENVIRONMENT
+.Bl -tag -width Ds
+.It Ev CLOWN_DISABLE_JOB_WAKEUP
+When set to
+.Li 1 ,
+the whole facility is disabled.
+.Nm clown job-watch
+exits
+.Li 0
+immediately without binding a socket, and the emit subcommands
+.Pq Cm start , progress , done
+behave as no-ops that still exit
+.Li 0 ,
+so producers need no conditional logic.
+.Nm clown job read
+still works, since it is a pull rather than an emit.
+.It Ev CLOWN_SESSION_ID
+The highest-priority session-key source; also the variable clown exports
+the resolved key into (see
+.Sx SESSION KEY ) .
+.It Ev SPINCLASS_SESSION_ID
+The spinclass
+.Ar repo Ns Li / Ns Ar branch
+session key, consulted when
+.Ev CLOWN_SESSION_ID
+is unset.
+.It Ev CLAUDE_SESSION_ID
+Consulted when neither
+.Ev CLOWN_SESSION_ID
+nor
+.Ev SPINCLASS_SESSION_ID
+is set.
+.It Ev XDG_STATE_HOME
+Base directory for the durable journal
+.Pq Pa clown/jobs/<channel-id>/ .
+Defaults to
+.Pa $HOME/.local/state
+when unset.
+.It Ev XDG_RUNTIME_DIR
+Base directory for the nudge socket
+.Pq Pa clown/jobs/<channel-id>.sock .
+When unset, the socket falls back to a per-user directory under
+.Ev TMPDIR
+.Pq default Pa /tmp .
+.El
+.Sh FILES
+.Bl -tag -width Ds
+.It Pa $XDG_STATE_HOME/clown/jobs/<channel-id>/<job-id>.jsonl
+Per-job durable journal, one JSON record per line.
+.It Pa $XDG_STATE_HOME/clown/jobs/<channel-id>/.ack.json
+Per-channel monitor ack state.
+.It Pa $XDG_RUNTIME_DIR/clown/jobs/<channel-id>.sock
+Per-channel nudge datagram socket.
+.El
+.Sh EXIT STATUS
+.Bl -tag -width Ds
+.It Li 0
+The subcommand succeeded, or the facility was disabled via
+.Ev CLOWN_DISABLE_JOB_WAKEUP .
+.Nm clown job-watch
+also exits
+.Li 0
+on a clean interrupt or stdin EOF.
+.It Li 1
+A runtime failure (e.g. a journal write error, or
+.Nm clown job done
+on a job that already has a terminal record).
+.It Li 2
+A usage error: missing or unknown subcommand, a missing required
+.Ar job-id ,
+or an invalid flag.
+.El
+.Sh EXAMPLES
+Background a long task and wake the originating session on completion:
+.Bd -literal -offset indent
+job=$(clown job start --source spinclass --label merge)
+# ... run the long pre-merge hook ...
+clown job done "$job" --state succeeded \e
+  --message "merge landed on master" \e
+  --result-ref "spinclass session-job-status"
+.Ed
+.Pp
+The idle agent receives one notification:
+.Bd -literal -offset indent
+[clown-job] spinclass merge-9f3c1a2b succeeded: merge landed on master \(bu spinclass session-job-status
+.Ed
+.Pp
+Emit journal-only progress (never wakes), then a terminal event:
+.Bd -literal -offset indent
+job=$(clown job start --source moxy --label build)
+clown job progress "$job" --message "evaluating flake"
+clown job done "$job" --state succeeded --message "nix build ok"
+.Ed
+.Pp
+Wake a different local clown session:
+.Bd -literal -offset indent
+clown job start --target clown/other-branch --source ci --label deploy
+.Ed
+.Pp
+Observe a job's full record stream on demand (pull; never wakes):
+.Bd -literal -offset indent
+clown job read --job build-3f2ab1c9 --json
+.Ed
+.Sh SEE ALSO
+.Xr clown 1 ,
+.Xr clown-json 5 ,
+.Xr clown-plugin-protocol 7
+.Pp
+The normative wire and on-disk contract \(em journal record schema, nudge
+datagram format, socket and path conventions, session-key resolution, and
+the at-least-once replay semantics \(em is specified in
+.Pa docs/rfcs/0009-job-wakeup-channel.md ,
+with the feature-level treatment in
+.Pa docs/features/0013-job-wakeup-channel.md ,
+both within the clown source repository.
+.Sh AUTHORS
+.An amarbel, LLC
+.Lk https://github.com/amarbel-llc/clown
