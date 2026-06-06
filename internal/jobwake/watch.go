@@ -17,6 +17,9 @@ const rescanInterval = time.Second
 // returns nil on a clean ctx cancel.
 func Watch(ctx context.Context, sessionKey string, emit func(Record) error) error {
 	cid := ChannelID(sessionKey)
+	// One-shot journal GC + ack reaping at monitor start (clown#113).
+	// Best-effort by construction; runs neither on ticks nor in ReplayOnce.
+	sweep(cid, time.Now())
 	if err := serviceChannels(cid, emit); err != nil {
 		return err
 	}
