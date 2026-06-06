@@ -1419,13 +1419,18 @@ func parseFlags(args []string) (parsedFlags, error) {
 		p.noPassDevshell = true
 	}
 
+parse:
 	for i := 0; i < len(args); i++ {
 		switch {
 		case args[i] == "--":
 			if i+1 < len(args) {
 				p.forwarded = args[i+1:]
 			}
-			return p, nil
+			// Stop parsing but fall through to the default-profile
+			// fallback below — an early return here skipped it and
+			// tipped runWithFlags into the interactive provider
+			// selector for `clown -- <args>` (clown#80).
+			break parse
 		case args[i] == "version" && i == 0:
 			p.version = true
 			return p, nil

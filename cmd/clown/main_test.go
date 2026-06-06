@@ -392,6 +392,44 @@ func TestParseFlags_DefaultProfileFromBuildcfg(t *testing.T) {
 	}
 }
 
+// clown#80: a bare `--` end-of-flags early-returned out of parseFlags
+// before the build-time default-profile fallback was applied, so
+// `clown -- --version` tipped runWithFlags into the interactive
+// provider selector instead of forwarding to the default provider.
+func TestParseFlags_DefaultProfileAppliesAfterDoubleDash(t *testing.T) {
+	withBuildcfgString(t, &buildcfg.DefaultProfile, "claude-anthropic")
+	got, err := parseFlags([]string{"--", "--version"})
+	if err != nil {
+		t.Fatalf("parseFlags: %v", err)
+	}
+	if got.profile != "claude-anthropic" {
+		t.Errorf("profile = %q, want default profile applied on the -- path", got.profile)
+	}
+	if !reflect.DeepEqual(got.forwarded, []string{"--version"}) {
+		t.Errorf("forwarded = %v, want [--version]", got.forwarded)
+	}
+	if got.providerExplicit {
+		t.Error("providerExplicit should be false for bare --")
+	}
+}
+
+func TestParseFlags_DefaultProfileAppliesAfterTentDoubleDash(t *testing.T) {
+	withBuildcfgString(t, &buildcfg.DefaultProfile, "claude-anthropic")
+	got, err := parseFlags([]string{"--tent", "--", "--version"})
+	if err != nil {
+		t.Fatalf("parseFlags: %v", err)
+	}
+	if !got.tent {
+		t.Error("tent should be true")
+	}
+	if got.profile != "claude-anthropic" {
+		t.Errorf("profile = %q, want default profile applied on the --tent -- path", got.profile)
+	}
+	if !reflect.DeepEqual(got.forwarded, []string{"--version"}) {
+		t.Errorf("forwarded = %v, want [--version]", got.forwarded)
+	}
+}
+
 func TestParseFlags_DefaultProfileSuppressedByExplicitProvider(t *testing.T) {
 	withBuildcfgString(t, &buildcfg.DefaultProfile, "claude-anthropic")
 	got, err := parseFlags([]string{"--provider", "codex"})
