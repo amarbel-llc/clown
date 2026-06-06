@@ -1,13 +1,15 @@
 ---
 status: experimental
-date: 2026-06-05
+date: 2026-06-06
 promotion-criteria: >
   proposed -> experimental: SATISFIED 2026-06-05 — clown ships the `clown job`
   CLI + `clown job-watch` monitor and the bats conformance suite (RFC-0009) is
   green on Linux.
-  experimental -> testing: at least one plugin (spinclass async merge/check OR a
-  moxy long-running tool) emits real terminal events that wake the agent, and a
-  second distinct plugin emits on the channel.
+  experimental -> testing: (a) SATISFIED 2026-06-06 — moxy's get-hubbed.ci-watch
+  emits real terminal events that wake the agent, proven live end to end
+  (real GH run, failure path, notification delivered in-session); (b) pending —
+  a second distinct plugin emits on the channel (spinclass chat migration in
+  progress).
   testing -> accepted: 7 consecutive days of real async jobs across >=2 plugins
   with zero missed wakeups (every terminal event surfaced) and no tuning-lever
   adjustments in that window; macOS pull-fallback (`clown job-read`) verified.
@@ -122,15 +124,14 @@ Observing progress on demand (pull; never wakes):
 
 ## Limitations
 
-- **No production plugin consumers merged yet.** The clown-side facility
-  (`clown job` producer/read CLI, the `clown job-watch` monitor, and the durable
-  journal + nudge) is implemented and conformance-tested (RFC-0009 bats suite
-  green on Linux). The **first consumer** — moxy's `get-hubbed.ci-watch` tool,
-  which backgrounds a GitHub Actions run and emits a terminal `clown job done`
-  when it finishes — is in progress (it locates clown via the `CLOWN_BIN` clown
-  exports, RFC-0009 §2). Until it lands and is exercised, the end-to-end wakeup
-  path is unproven in real use; this is why the feature is `experimental` and not
-  `testing`.
+- **Single production consumer so far.** The first consumer — moxy's
+  `get-hubbed.ci-watch` (backgrounds a GitHub Actions run, emits a terminal
+  `clown job done`, locates clown via the exported `CLOWN_BIN`) — is merged and
+  **proven live end to end** (2026-06-06: real run, failure path, failed-job
+  enrichment, result-ref, notification delivered into a live session by the
+  `clown job-watch` monitor). The channel remains `experimental` rather than
+  `testing` until a second distinct plugin emits on it; the spinclass chat
+  migration (below) is that second consumer, in progress.
 - **Terminal-only wakeups in v1.** A backgrounded job that pauses for input does
   not yet have a waking event; `needs-attention` is reserved but unimplemented.
 - **`progress`/`started` are best-effort.** They are journal-only and have no

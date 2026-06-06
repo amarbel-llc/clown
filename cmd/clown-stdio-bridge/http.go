@@ -79,6 +79,9 @@ func heartbeatMode() (streaming bool, interval time.Duration) {
 type httpHandler struct {
 	t      *translator
 	logger logger
+	// stats emits per-request duration + outcome metrics to statsd
+	// (stats-me). Nil disables emission (see statsd.go).
+	stats *statsdClient
 }
 
 // jsonRPCError mirrors the JSON-RPC 2.0 error response shape.
@@ -144,11 +147,12 @@ func (h *httpHandler) handlePost(w http.ResponseWriter, r *http.Request) {
 		idKey := string(probe.ID)
 		hasToken := len(extractProgressToken(body)) > 0
 		started := time.Now()
+		label := metricLabel(probe.Method, body)
 		h.logger.Printf(
 			"clown-stdio-bridge: post start id=%s method=%q has_progressToken=%t body_size=%d",
 			idKey, probe.Method, hasToken, len(body))
 		if streaming, interval := heartbeatMode(); streaming {
-			h.handlePostStreaming(w, r, idKey, probe.ID, body, interval, started)
+			h.handlePostStreaming(w, r, idKey, probe.ID, body, interval, started, label)
 			return
 		}
 		// Synchronous JSON response (streaming disabled).
@@ -157,6 +161,7 @@ func (h *httpHandler) handlePost(w http.ResponseWriter, r *http.Request) {
 			if errors.Is(err, ErrQueueFull) {
 				h.logger.Printf("clown-stdio-bridge: post end id=%s outcome=queue_full elapsed_ms=%d",
 					idKey, time.Since(started).Milliseconds())
+				h.stats.emitOutcome(label, started, "failure")
 				writeJSONRPCError(w, http.StatusServiceUnavailable, probe.ID,
 					codeBridgeQueueFull,
 					"clown-stdio-bridge: inbound queue saturated")
@@ -166,10 +171,12 @@ func (h *httpHandler) handlePost(w http.ResponseWriter, r *http.Request) {
 				// Client disconnected; nothing useful to send.
 				h.logger.Printf("clown-stdio-bridge: post end id=%s outcome=ctx_canceled elapsed_ms=%d",
 					idKey, time.Since(started).Milliseconds())
+				h.stats.emitOutcome(label, started, "abandoned")
 				return
 			}
 			h.logger.Printf("clown-stdio-bridge: post end id=%s outcome=error elapsed_ms=%d err=%q",
 				idKey, time.Since(started).Milliseconds(), err.Error())
+			h.stats.emitOutcome(label, started, "failure")
 			writeJSONRPCError(w, http.StatusInternalServerError, probe.ID,
 				codeInvalidRequest,
 				"clown-stdio-bridge: "+err.Error())
@@ -177,6 +184,7 @@ func (h *httpHandler) handlePost(w http.ResponseWriter, r *http.Request) {
 		}
 		h.logger.Printf("clown-stdio-bridge: post end id=%s outcome=response_sent elapsed_ms=%d transport=json",
 			idKey, time.Since(started).Milliseconds())
+		h.stats.emitOutcome(label, started, responseOutcome(resp))
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(resp)
 	case hasMethod && !hasID:
@@ -216,6 +224,7 @@ func (h *httpHandler) handlePostStreaming(
 	body []byte,
 	interval time.Duration,
 	started time.Time,
+	label string,
 ) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -267,12 +276,14 @@ func (h *httpHandler) handlePostStreaming(
 		case <-r.Context().Done():
 			h.logger.Printf("clown-stdio-bridge: post end id=%s outcome=ctx_canceled elapsed_ms=%d transport=sse heartbeats=%d",
 				idKey, time.Since(started).Milliseconds(), seq)
+			h.stats.emitOutcome(label, started, "abandoned")
 			return
 		case res := <-results:
 			if res.err != nil {
 				if errors.Is(res.err, context.Canceled) || errors.Is(res.err, context.DeadlineExceeded) {
 					h.logger.Printf("clown-stdio-bridge: post end id=%s outcome=ctx_canceled elapsed_ms=%d transport=sse heartbeats=%d",
 						idKey, time.Since(started).Milliseconds(), seq)
+					h.stats.emitOutcome(label, started, "abandoned")
 					return
 				}
 				code := codeInvalidRequest
@@ -283,6 +294,7 @@ func (h *httpHandler) handlePostStreaming(
 				}
 				h.logger.Printf("clown-stdio-bridge: post end id=%s outcome=%s elapsed_ms=%d transport=sse heartbeats=%d err=%q",
 					idKey, outcome, time.Since(started).Milliseconds(), seq, res.err.Error())
+				h.stats.emitOutcome(label, started, "failure")
 				errMsg, _ := json.Marshal(jsonRPCError{
 					JSONRPC: "2.0",
 					ID:      id,
@@ -297,6 +309,7 @@ func (h *httpHandler) handlePostStreaming(
 			}
 			h.logger.Printf("clown-stdio-bridge: post end id=%s outcome=response_sent elapsed_ms=%d transport=sse heartbeats=%d",
 				idKey, time.Since(started).Milliseconds(), seq)
+			h.stats.emitOutcome(label, started, responseOutcome(res.resp))
 			fmt.Fprintf(w, "data: %s\n\n", res.resp)
 			flusher.Flush()
 			return

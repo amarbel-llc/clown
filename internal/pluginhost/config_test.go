@@ -189,6 +189,11 @@ func TestDesugarStdioServers(t *testing.T) {
 	if srv.Env["LOG_LEVEL"] != "info" {
 		t.Errorf("env[LOG_LEVEL] = %q, want %q", srv.Env["LOG_LEVEL"], "info")
 	}
+	// The desugaring names the server for the bridge's statsd metric
+	// prefix (clown.bridge.<server>.<tool>.*).
+	if srv.Env["CLOWN_BRIDGE_SERVER_NAME"] != "kagi" {
+		t.Errorf("env[CLOWN_BRIDGE_SERVER_NAME] = %q, want %q", srv.Env["CLOWN_BRIDGE_SERVER_NAME"], "kagi")
+	}
 	if srv.Healthcheck.Path != "/healthz" {
 		t.Errorf("healthcheck.path = %q, want %q", srv.Healthcheck.Path, "/healthz")
 	}

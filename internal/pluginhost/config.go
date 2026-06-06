@@ -237,10 +237,18 @@ func Desugar(cfg *ClownConfig, bridgePath, pluginDir string) error {
 		}
 		args := []string{"--command", cmdArg, "--"}
 		args = append(args, stdio.Args...)
+		// Copy the env so the user's map is never mutated, and name the
+		// server for the bridge's statsd metric prefix
+		// (clown.bridge.<server>.<tool>.*; see clown-json(5)).
+		env := make(map[string]string, len(stdio.Env)+1)
+		for k, v := range stdio.Env {
+			env[k] = v
+		}
+		env["CLOWN_BRIDGE_SERVER_NAME"] = name
 		cfg.HTTPServers[name] = ServerDef{
 			Command:   bridgePath,
 			Args:      args,
-			Env:       stdio.Env,
+			Env:       env,
 			Transport: "streamable-http",
 			Timeout:   stdio.Timeout,
 			Healthcheck: HealthcheckDef{

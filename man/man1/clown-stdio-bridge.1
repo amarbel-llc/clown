@@ -195,6 +195,55 @@ indefinitely by a blind timer.
 Unset or any unrecognized value falls back to the
 .Ev CLOWN_BRIDGE_HEARTBEAT_INTERVAL
 cadence.
+.It Ev STATSD_HOST , Ev STATSD_PORT
+Destination for the bridge's statsd metrics (stats-me), fire-and-forget
+UDP.
+Defaults:
+.Li 127.0.0.1
+and
+.Li 8125 .
+Every bridged JSON-RPC request emits, under
+.Li clown.bridge.<server>.<label>. \(em
+where
+.Li <server>
+comes from
+.Ev CLOWN_BRIDGE_SERVER_NAME
+and
+.Li <label>
+is the tool name for
+.Li tools/call
+.Pq else the JSON-RPC method ,
+both sanitized to
+.Li [A-Za-z0-9_-] \(em
+a
+.Li .duration
+timer
+.Pq Li |ms , No on completed responses
+plus exactly one outcome counter
+.Pq Li |c :
+.Li .success ,
+.Li .failure
+.Pq JSON-RPC error response, bridge error, or queue-full ,
+or
+.Li .abandoned
+.Pq client disconnected before a response .
+Emission never blocks or fails the request path; when nothing listens the
+datagrams are simply dropped.
+.It Ev CLOWN_DISABLE_STATSD
+When set to
+.Li 1 ,
+disables statsd emission entirely.
+.It Ev CLOWN_BRIDGE_SERVER_NAME
+Logical name of the bridged server, used as the statsd metric prefix
+segment.
+Set automatically by
+.Nm clown Ns 's
+.Fa stdioServers
+desugaring
+.Pq see Xr clown-json 5 ;
+defaults to
+.Li unknown
+when unset.
 .El
 .Pp
 For how these heartbeats interact with Claude Code's per-tool
