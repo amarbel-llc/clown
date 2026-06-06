@@ -21,12 +21,12 @@
 #     the journal under XDG_STATE_HOME can stay in the deep bats dir) and
 #     teardown() removes it.
 #
-#  2. job-watch blocks. It runs the unacked-replay scan synchronously
-#     *before* the blocking loop, then exits cleanly (status 0) on SIGINT
-#     or stdin EOF. Every job-watch invocation here redirects stdin from
-#     /dev/null: EOF cancels the loop immediately, but replay has already
-#     emitted the terminal line deterministically. We do NOT rely on
-#     `timeout` SIGTERM — job-watch handles SIGINT/EOF, not SIGTERM.
+#  2. job-watch blocks (until SIGINT/SIGTERM) and deliberately ignores
+#     stdin — Claude Code spawns monitors with an immediately-EOF stdin,
+#     so a stdin-EOF shutdown (an earlier revision) killed the monitor at
+#     session start. Every invocation here uses `job-watch --once`, which
+#     replays unacked waking events deterministically and exits 0 without
+#     binding the socket or blocking.
 
 setup() {
   load 'lib/common.bash'
@@ -127,9 +127,9 @@ teardown() {
   "$CLOWN_BIN" job progress "$id" --message "halfway"
   "$CLOWN_BIN" job done "$id" --state succeeded --message "nix build ok" --result-ref "ref-123"
 
-  # Gotcha 2: drive job-watch with stdin from /dev/null so it replays the
-  # unacked terminal event synchronously, then exits 0 on EOF.
-  run "$CLOWN_BIN" job-watch </dev/null
+  # Gotcha 2: --once replays the unacked waking events deterministically,
+  # then exits 0 without binding or blocking.
+  run "$CLOWN_BIN" job-watch --once
   assert_success
 
   # Terminal event surfaces with the full §9 line: source job type,
@@ -147,7 +147,7 @@ teardown() {
   id="$("$CLOWN_BIN" job start --source moxy --label bare)"
   "$CLOWN_BIN" job done "$id" --state failed
 
-  run "$CLOWN_BIN" job-watch </dev/null
+  run "$CLOWN_BIN" job-watch --once
   assert_success
   assert_line "[clown-job] moxy ${id} failed"
 }
@@ -159,7 +159,7 @@ teardown() {
   id="$("$CLOWN_BIN" job start --source spinclass --label merge)"
   "$CLOWN_BIN" job done "$id" --state succeeded --message "merged"
 
-  run "$CLOWN_BIN" job-watch </dev/null
+  run "$CLOWN_BIN" job-watch --once
   assert_success
   assert_line "[clown-job] spinclass ${id} succeeded: merged"
 }
@@ -170,7 +170,7 @@ teardown() {
   id="$("$CLOWN_BIN" job start --source spinclass --label merge)"
   "$CLOWN_BIN" job done "$id" --state succeeded --message "merged"
 
-  run "$CLOWN_BIN" job-watch </dev/null
+  run "$CLOWN_BIN" job-watch --once
   assert_success
   assert_line "[clown-job] spinclass ${id} succeeded: merged"
 
@@ -178,7 +178,7 @@ teardown() {
   # refute_output (not refute_line): on empty output the $lines array is
   # unset under `set -u`, so refute_line would error "lines: parameter
   # not set"; refute_output operates on the $output scalar.
-  run "$CLOWN_BIN" job-watch </dev/null
+  run "$CLOWN_BIN" job-watch --once
   assert_success
   refute_output --partial "[clown-job]"
 }
@@ -186,7 +186,7 @@ teardown() {
 # §8: CLOWN_DISABLE_JOB_WAKEUP=1 — job-watch exits 0 immediately and the
 # emit subcommands are no-ops that still exit 0.
 @test "CLOWN_DISABLE_JOB_WAKEUP=1 makes job-watch exit 0 immediately" {
-  CLOWN_DISABLE_JOB_WAKEUP=1 run "$CLOWN_BIN" job-watch </dev/null
+  CLOWN_DISABLE_JOB_WAKEUP=1 run "$CLOWN_BIN" job-watch --once
   assert_success
   refute_output --partial "[clown-job]"
 }

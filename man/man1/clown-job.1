@@ -184,7 +184,7 @@ which is meant to suppress that cursor advance, is accepted for forward
 compatibility but is presently a
 .Em no-op :
 no cursor is advanced regardless.
-.It Nm clown job-watch
+.It Nm clown job-watch Op Fl -once
 Run the channel monitor.
 It resolves the session key (see
 .Sx SESSION KEY ) ,
@@ -193,9 +193,18 @@ journal (oldest first), binds the nudge socket, then blocks, emitting one
 notification line per waking event as nudges arrive or a periodic re-scan
 finds new terminal records.
 A clean interrupt
-.Pq Dv SIGINT , No or stdin EOF
+.Pq Dv SIGINT No or Dv SIGTERM
 causes a graceful exit with status
 .Li 0 .
+The monitor deliberately ignores stdin: monitor hosts spawn it with an
+immediately-EOF stdin, so exiting on stdin EOF would kill the monitor at
+session start.
+With
+.Fl -once
+it replays unacked waking events and exits
+.Li 0
+without binding the socket or blocking \(em the deterministic mode used by
+the conformance suite, also usable as a pull-style replay.
 This subcommand is normally spawned by
 .Nm clown
 as a registered monitor, not run by hand.
@@ -352,7 +361,8 @@ The subcommand succeeded, or the facility was disabled via
 .Nm clown job-watch
 also exits
 .Li 0
-on a clean interrupt or stdin EOF.
+on a clean interrupt
+.Pq Dv SIGINT No or Dv SIGTERM .
 .It Li 1
 A runtime failure (e.g. a journal write error, or
 .Nm clown job done

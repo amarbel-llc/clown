@@ -60,6 +60,14 @@ func Watch(ctx context.Context, sessionKey string, emit func(Record) error) erro
 	}
 }
 
+// ReplayOnce emits every unacked waking event for the session's channel once,
+// advancing the ack cursor, and returns without binding the nudge socket or
+// blocking. It backs `clown job-watch --once` (the conformance suite and
+// pull-style replay); the long-running monitor uses Watch.
+func ReplayOnce(sessionKey string, emit func(Record) error) error {
+	return emitUnacked(ChannelID(sessionKey), emit)
+}
+
 // emitUnacked emits every waking record whose seq exceeds the acked seq for its
 // job, oldest first, advancing the persisted ack after each successful emit.
 func emitUnacked(cid string, emit func(Record) error) error {

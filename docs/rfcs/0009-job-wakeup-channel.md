@@ -265,10 +265,15 @@ monitor; the on-disk and on-wire formats above remain the actual contract.
   given, advance that cursor past every event scanned. With `--job` it MUST
   return that job's full record stream and MUST NOT advance the cursor.
 
-- `clown job-watch`
+- `clown job-watch [--once]`
   — The monitor (§9). Resolve the session key (§2), bind the channel socket,
-  replay unacked waking events, then block. A clean interrupt (SIGINT, or stdin
-  EOF) MUST cause a graceful exit with status `0`.
+  replay unacked waking events, then block. SIGINT or SIGTERM MUST cause a
+  graceful exit with status `0`. The monitor MUST NOT treat stdin EOF as a
+  shutdown signal: monitor hosts (Claude Code) spawn monitors with an
+  immediately-EOF stdin, so an EOF-triggered exit kills the monitor at session
+  start. With `--once` it MUST replay unacked waking events and exit `0`
+  without binding the socket or blocking — the deterministic mode used by the
+  conformance suite and as a pull-style replay.
 
 When `CLOWN_DISABLE_JOB_WAKEUP` is set to `1`, `clown job-watch` MUST exit `0`
 immediately without binding a socket, and the emit subcommands (`start`,

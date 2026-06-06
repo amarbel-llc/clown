@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/amarbel-llc/clown/internal/jobwake"
 )
@@ -217,42 +218,51 @@ func (s *stringList) Set(v string) error {
 	return nil
 }
 
-// runJobWatch runs the channel monitor (RFC-0009 §8, §9): it binds the channel
-// socket, replays unacked waking events, then blocks, emitting one
-// notification line per waking event. A clean interrupt (SIGINT or stdin EOF)
-// exits 0. When the facility is disabled it exits 0 immediately without binding.
-func runJobWatch(_ []string) int {
+// runJobWatch runs the channel monitor (RFC-0009 §8, §9). The long-running
+// mode binds the channel socket, replays unacked waking events, then blocks,
+// emitting one notification line per waking event until SIGINT or SIGTERM.
+// With --once it replays unacked waking events and exits without binding —
+// the conformance suite's deterministic mode and a pull-style replay surface.
+// When the facility is disabled it exits 0 immediately without binding.
+//
+// The monitor deliberately ignores stdin: Claude Code spawns plugin monitors
+// with an immediately-EOF stdin, so the earlier stdin-EOF shutdown path made
+// the monitor exit right after replay at session start — the silent-no-wake
+// failure this channel exists to prevent.
+func runJobWatch(args []string) int {
 	if jobWakeupDisabled() {
 		return 0 // RFC-0009 §8
 	}
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer cancel()
-	go watchStdinEOF(cancel)
+	fs := flag.NewFlagSet("job-watch", flag.ContinueOnError)
+	once := fs.Bool("once", false, "replay unacked waking events, then exit")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
 
-	err := jobwake.Watch(ctx, jobwake.SessionKey(), func(r jobwake.Record) error {
+	emit := func(r jobwake.Record) error {
 		_, werr := fmt.Println(notificationLine(r))
 		return werr
-	})
+	}
+
+	if *once {
+		if err := jobwake.ReplayOnce(jobwake.SessionKey(), emit); err != nil {
+			fmt.Fprintf(os.Stderr, "clown job-watch: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	err := jobwake.Watch(ctx, jobwake.SessionKey(), emit)
 	if ctx.Err() != nil {
-		return 0 // clean interrupt / stdin EOF is a normal monitor shutdown
+		return 0 // SIGINT/SIGTERM is a normal monitor shutdown
 	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown job-watch: %v\n", err)
 		return 1
 	}
 	return 0
-}
-
-// watchStdinEOF cancels the watch when stdin closes, so a parent that wires the
-// monitor's stdin to a pipe can stop it by closing that pipe (RFC-0009 §8).
-func watchStdinEOF(cancel context.CancelFunc) {
-	buf := make([]byte, 256)
-	for {
-		if _, err := os.Stdin.Read(buf); err != nil {
-			cancel()
-			return
-		}
-	}
 }
 
 // notificationLine renders a waking record as the agent notification line

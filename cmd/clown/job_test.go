@@ -175,6 +175,35 @@ func TestJobDoneMissingStateExits2(t *testing.T) {
 	}
 }
 
+// TestJobWatchOnceReplaysThenExits covers the --once mode: the first run
+// replays the unacked terminal event and exits 0; the second run (ack now
+// persisted) emits nothing. The long-running mode no longer watches stdin —
+// Claude Code spawns monitors with an immediately-EOF stdin, which previously
+// killed the monitor right after replay at session start.
+func TestJobWatchOnceReplaysThenExits(t *testing.T) {
+	jobTestEnv(t)
+	out := captureStdout(t, func() int { return jobStart([]string{"--source", "moxy", "--label", "build"}) })
+	id := trimTrailingNewline(out)
+	if code := jobDone([]string{id, "--state", "succeeded", "--message", "ok"}); code != 0 {
+		t.Fatalf("job done exit = %d, want 0", code)
+	}
+
+	var code int
+	first := captureStdout(t, func() int { code = runJobWatch([]string{"--once"}); return code })
+	if code != 0 {
+		t.Fatalf("job-watch --once exit = %d, want 0", code)
+	}
+	want := "[clown-job] moxy " + id + " succeeded: ok"
+	if trimTrailingNewline(first) != want {
+		t.Fatalf("job-watch --once output = %q, want %q", first, want)
+	}
+
+	second := captureStdout(t, func() int { return runJobWatch([]string{"--once"}) })
+	if second != "" {
+		t.Fatalf("second --once must emit nothing (acked), got %q", second)
+	}
+}
+
 // TestJobDoneTargetWakesTargetSession proves --target threads through done:
 // a job started --target <other> and done --target <other> lands its terminal
 // record in <other>'s channel, while done without --target (the current

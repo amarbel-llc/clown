@@ -88,3 +88,32 @@ func TestWatchNeverEmitsProgress(t *testing.T) {
 		t.Fatalf("only the terminal record may wake, got %+v", emitted[0])
 	}
 }
+
+func TestReplayOnceEmitsUnackedThenNothing(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("XDG_RUNTIME_DIR", shortRuntimeDir(t))
+	t.Setenv("CLOWN_SESSION_ID", "k")
+	id, err := Start(StartOpts{Source: "s"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Done("", id, TypeSucceeded, "ok", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	var first []Record
+	if err := ReplayOnce("k", func(r Record) error { first = append(first, r); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if len(first) != 1 || first[0].Type != TypeSucceeded {
+		t.Fatalf("first ReplayOnce: want one succeeded emit, got %+v", first)
+	}
+
+	var second []Record
+	if err := ReplayOnce("k", func(r Record) error { second = append(second, r); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if len(second) != 0 {
+		t.Fatalf("second ReplayOnce must emit nothing (acked), got %+v", second)
+	}
+}
