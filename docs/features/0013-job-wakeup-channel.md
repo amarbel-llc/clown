@@ -1,5 +1,5 @@
 ---
-status: experimental
+status: testing
 date: 2026-06-06
 promotion-criteria: >
   proposed -> experimental: SATISFIED 2026-06-05 — clown ships the `clown job`
@@ -7,9 +7,11 @@ promotion-criteria: >
   green on Linux.
   experimental -> testing: (a) SATISFIED 2026-06-06 — moxy's get-hubbed.ci-watch
   emits real terminal events that wake the agent, proven live end to end
-  (real GH run, failure path, notification delivered in-session); (b) pending —
-  a second distinct plugin emits on the channel (spinclass chat migration in
-  progress).
+  (real GH run, failure path, notification delivered in-session); (b) SATISFIED
+  2026-06-06 — spinclass's async merge/check producer (spinclass 80d0fd4)
+  observed live: a real merge-this-session-async emitted start + a terminal
+  failed event and the job-watch monitor woke the agent with the contract line
+  including first-not-ok-line enrichment.
   testing -> accepted: 7 consecutive days of real async jobs across >=2 plugins
   with zero missed wakeups (every terminal event surfaced) and no tuning-lever
   adjustments in that window; macOS pull-fallback (`clown job-read`) verified.
@@ -140,14 +142,15 @@ Observing progress on demand (pull; never wakes):
 
 ## Limitations
 
-- **Single production consumer so far.** The first consumer — moxy's
-  `get-hubbed.ci-watch` (backgrounds a GitHub Actions run, emits a terminal
-  `clown job done`, locates clown via the exported `CLOWN_BIN`) — is merged and
-  **proven live end to end** (2026-06-06: real run, failure path, failed-job
-  enrichment, result-ref, notification delivered into a live session by the
-  `clown job-watch` monitor). The channel remains `experimental` rather than
-  `testing` until a second distinct plugin emits on it; the spinclass chat
-  migration (below) is that second consumer, in progress.
+- **Two production consumers, both live-proven** (2026-06-06): moxy's
+  `get-hubbed.ci-watch` (real GH run, failure path, failed-job enrichment,
+  result-ref, instant and 25-minute-delayed wakes) and spinclass's async
+  merge/check producer (real `merge-this-session-async`, terminal `failed`
+  wake with first-not-ok-line enrichment), plus live cross-session directed
+  and broadcast `message` wakes (condvar first-attach semantics observed in a
+  second session). The spinclass chat migration (dual-write mode flip) and a
+  `succeeded`-path producer wake are pending real-use datapoints inside the
+  `testing` window, not promotion gates.
 - **No needs-attention class yet.** A backgrounded job that pauses for input
   does not yet have a waking event; `needs-attention` is reserved but
   unimplemented (`message` — the other formerly-reserved type — is now
