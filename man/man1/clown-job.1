@@ -20,6 +20,12 @@
 .Fl -state Ar succeeded | failed | cancelled | interrupted
 .Op Fl -message Ar message
 .Op Fl -result-ref Ar ref
+.Nm clown job message
+.Fl -target Ar session-key | '*'
+.Op Fl -from Ar sender-key
+.Op Fl -source Ar source
+.Fl -message Ar body
+.Op Fl -result-ref Ar ref
 .Nm clown job read
 .Op Fl -job Ar job-id
 .Op Fl -since Ar ts
@@ -67,14 +73,17 @@ Losing it costs latency, never correctness; the receiver always
 re-reads the journal rather than acting on datagram contents.
 .El
 .Pp
-Only
+The
+.Em waking
+events \(em those that surface as a notification \(em are the four
 .Em terminal
-events wake the agent:
-.Li succeeded ,
-.Li failed ,
-.Li cancelled ,
-and
-.Li interrupted .
+types
+.Pq Li succeeded , failed , cancelled , interrupted
+plus the non-terminal
+.Li message
+type (see
+.Nm clown job message
+below).
 The non-terminal
 .Li started
 and
@@ -148,6 +157,52 @@ record.
 is an opaque pointer the agent may use to fetch full results (e.g. a CLI
 invocation hint or a path); it is data surfaced to the agent as text, not
 a command the monitor auto-executes.
+.It Nm clown job message Fl -target Ar session-key | '*' Oo Fl -from Ar sender-key Oc Oo Fl -source Ar source Oc Fl -message Ar body Oo Fl -result-ref Ar ref Oc
+Emit a standalone single-record waking
+.Li message
+job: a self-contained job whose only record
+.Pq Li seq No 0 , job id Li msg- Ns Ar 8-hex
+is the non-terminal waking
+.Li message
+event \(em no
+.Li started ,
+no terminal record.
+Prints the job id and exits
+.Li 0 .
+The record is durably flushed before any nudge.
+.Fl -target
+and
+.Fl -message
+are required; a missing
+.Fl -target
+or a missing or empty
+.Fl -message
+is a usage error
+.Pq exit Li 2 .
+.Fl -from
+optionally carries the sender's session key, rendered in the notification
+line (see
+.Sx NOTIFICATION LINE ) .
+.Pp
+.Fl -target Ar '*'
+addresses the reserved
+.Em broadcast
+channel: the record is written once and every session's monitor delivers
+it.
+Broadcast records get
+.Em no
+nudge \(em the monitor's periodic re-scan (about one second) is the delivery
+path.
+The broadcast channel has condvar semantics: each reader keeps its own ack
+watermark in the broadcast channel directory, and a reader's first attach
+initializes that watermark at the current end of the channel \(em like a
+waiter on a condition variable, a session only observes broadcasts sent
+.Em after
+its monitor first attached, and pre-existing broadcasts are never replayed
+to a new session.
+A directed message
+.Pq Fl -target Ar session-key
+nudges the target's socket as usual.
 .It Nm clown job read Oo Fl -job Ar job-id Oc Oo Fl -since Ar ts Oc Oo Fl -type Ar type Oc Ar ... Oo Fl -peek Oc Oo Fl -json Oc
 The pull / observability surface, and the delivery path on hosts where
 the monitor is gated off (see
@@ -262,6 +317,16 @@ prints without
 .Pp
 .Dl [clown-job] <source> <job-id> <type>: <message>
 .Pp
+When the record carries a
+.Li from
+(the sender session key on a
+.Li message
+event), the segment
+.Dq Li " from " <from>
+is inserted before the colon:
+.Pp
+.Dl [clown-job] <source> <job-id> <type> from <from>: <message>
+.Pp
 The trailing
 .Dq Li ": " <message>
 is omitted when the record has no message.
@@ -300,7 +365,7 @@ the whole facility is disabled.
 exits
 .Li 0
 immediately without binding a socket, and the emit subcommands
-.Pq Cm start , progress , done
+.Pq Cm start , progress , done , message
 behave as no-ops that still exit
 .Li 0 ,
 so producers need no conditional logic.
@@ -350,6 +415,9 @@ When unset, the socket falls back to a per-user directory under
 Per-job durable journal, one JSON record per line.
 .It Pa $XDG_STATE_HOME/clown/jobs/<channel-id>/.ack.json
 Per-channel monitor ack state.
+.It Pa $XDG_STATE_HOME/clown/jobs/<channel-id>/.ack-<reader-channel-id>.json
+Per-reader ack state on the broadcast channel, one file per reader
+(growth/GC is tracked as clown issue #113).
 .It Pa $XDG_RUNTIME_DIR/clown/jobs/<channel-id>.sock
 Per-channel nudge datagram socket.
 .El
@@ -397,6 +465,20 @@ clown job done "$job" --state succeeded --message "nix build ok"
 Wake a different local clown session:
 .Bd -literal -offset indent
 clown job start --target clown/other-branch --source ci --label deploy
+.Ed
+.Pp
+Send a directed message to another session, and a broadcast to all
+sessions (the broadcast is only seen by monitors already attached):
+.Bd -literal -offset indent
+clown job message --target clown/other-branch \e
+  --from clown/this-branch --source spinclass --message "merge queue is free"
+clown job message --target '*' \e
+  --from clown/this-branch --source spinclass --message "rebasing master, hold pushes"
+.Ed
+.Pp
+The directed recipient is woken with:
+.Bd -literal -offset indent
+[clown-job] spinclass msg-9f3c1a2b message from clown/this-branch: merge queue is free
 .Ed
 .Pp
 Observe a job's full record stream on demand (pull; never wakes):

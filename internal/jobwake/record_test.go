@@ -2,6 +2,7 @@ package jobwake
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -32,7 +33,39 @@ func TestWakePolicy(t *testing.T) {
 			t.Errorf("%s must not be terminal or waking", ty)
 		}
 	}
+	// message is the non-terminal waking class (RFC-0009 §5).
+	if IsTerminal(TypeMessage) {
+		t.Error("message must not be terminal")
+	}
+	if !IsWaking(TypeMessage) {
+		t.Error("message must wake")
+	}
 	if IsWaking("needs-attention") {
-		t.Error("reserved non-terminal types must not wake in v1")
+		t.Error("reserved types must not wake")
+	}
+}
+
+func TestRecordFromOmittedWhenEmpty(t *testing.T) {
+	b, err := json.Marshal(Record{V: 1, Job: "j", Session: "k", Source: "s",
+		Type: TypeSucceeded, TS: "t"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), `"from"`) {
+		t.Fatalf("empty from must be omitted, got %s", b)
+	}
+
+	r := Record{V: 1, Job: "j", Session: "k", Source: "s", From: "other/sender",
+		Type: TypeMessage, TS: "t", Message: "hi"}
+	b, err = json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back Record
+	if err := json.Unmarshal(b, &back); err != nil {
+		t.Fatal(err)
+	}
+	if back != r {
+		t.Fatalf("from must round-trip: %+v != %+v", back, r)
 	}
 }

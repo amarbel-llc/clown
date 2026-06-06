@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -78,11 +79,21 @@ type ack struct {
 	Acked map[string]int `json:"acked"`
 }
 
-// loadAck reads the channel ack cursor, treating a missing or corrupt file as
+// AckFileFor is the per-reader ack cursor on a shared (broadcast) channel
+// (RFC-0009 §9): each reader keeps its own watermark so independent monitors
+// each see a broadcast exactly once. readerID is the reader's own channel id.
+// The `.ack-` prefix keeps the file inside scanWaking's dotfile skip, so it is
+// never parsed as a job journal. Ack files accumulate one per reader; GC is
+// tracked as clown#113.
+func AckFileFor(channelID, readerID string) string {
+	return filepath.Join(JournalDir(channelID), ".ack-"+readerID+".json")
+}
+
+// loadAckPath reads an ack cursor file, treating a missing or corrupt file as
 // an empty set so unacked events re-emit (at-least-once, RFC-0009 §10).
-func loadAck(channelID string) ack {
+func loadAckPath(path string) ack {
 	a := ack{V: 1, Acked: map[string]int{}}
-	b, err := os.ReadFile(AckFile(channelID))
+	b, err := os.ReadFile(path)
 	if err != nil {
 		return a // missing => empty (RFC-0009 §10)
 	}
@@ -93,15 +104,21 @@ func loadAck(channelID string) ack {
 	return a // corrupt => empty
 }
 
-// saveAck writes the ack cursor atomically via temp-file + rename.
-func saveAck(channelID string, a ack) error {
+// saveAckPath writes an ack cursor atomically via temp-file + rename.
+func saveAckPath(path string, a ack) error {
 	b, err := json.Marshal(a)
 	if err != nil {
 		return err
 	}
-	tmp := AckFile(channelID) + ".tmp"
+	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, b, 0o600); err != nil {
 		return err
 	}
-	return os.Rename(tmp, AckFile(channelID)) // atomic
+	return os.Rename(tmp, path) // atomic
 }
+
+// loadAck reads the channel's own `.ack.json` cursor.
+func loadAck(channelID string) ack { return loadAckPath(AckFile(channelID)) }
+
+// saveAck writes the channel's own `.ack.json` cursor.
+func saveAck(channelID string, a ack) error { return saveAckPath(AckFile(channelID), a) }

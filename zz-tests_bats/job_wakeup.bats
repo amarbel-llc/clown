@@ -1,11 +1,13 @@
 # Conformance suite for clown's job-wakeup channel (RFC-0009).
 #
-# Exercises the reference producer (`clown job start|progress|done|read`)
-# and monitor (`clown job-watch`) through the real CLI, asserting the
-# on-disk JSONL journal, the terminal-once invariant, the wake policy
-# (only terminal events wake), the §9 notification-line format, the
-# replay / at-least-once guarantee, and the CLOWN_DISABLE_JOB_WAKEUP
-# kill switch.
+# Exercises the reference producer (`clown job
+# start|progress|done|message|read`) and monitor (`clown job-watch`)
+# through the real CLI, asserting the on-disk JSONL journal, the
+# terminal-once invariant, the wake policy (terminal events and
+# `message` wake), the §9 notification-line format (incl. the
+# `from`-rendering), the replay / at-least-once guarantee, the
+# broadcast-channel condvar semantics, and the
+# CLOWN_DISABLE_JOB_WAKEUP kill switch.
 #
 # No network: this suite touches only the per-channel journal under
 # $XDG_STATE_HOME and a unixgram socket under $XDG_RUNTIME_DIR. It runs
@@ -183,6 +185,61 @@ teardown() {
   refute_output --partial "[clown-job]"
 }
 
+# §4/§5/§9: a directed `message` is a standalone single-record waking job;
+# the monitor surfaces it with the §9 from-rendering, exactly once.
+@test "directed message wakes with the from-line" {
+  export CLOWN_SESSION_ID="test/msg-directed"
+  id="$("$CLOWN_BIN" job message --target test/msg-directed \
+    --from test/msg-sender --source spinclass --message "ping")"
+
+  run "$CLOWN_BIN" job-watch --once
+  assert_success
+  assert_line "[clown-job] spinclass ${id} message from test/msg-sender: ping"
+
+  # acked thereafter: a second monitor pass emits nothing.
+  run "$CLOWN_BIN" job-watch --once
+  assert_success
+  refute_output --partial "[clown-job]"
+}
+
+# §8: job message usage errors — --target and --message are required.
+@test "job message without --target or --message is a usage error (exit 2)" {
+  run "$CLOWN_BIN" job message --message hi
+  assert_failure 2
+  run "$CLOWN_BIN" job message --target test/chan
+  assert_failure 2
+}
+
+# §9 condvar pin: a reader's FIRST attach to the broadcast channel
+# initializes its per-reader ack at current end (a pre-existing broadcast
+# is NOT replayed); a broadcast sent AFTER first attach — while no monitor
+# is running — IS delivered on the next attach, exactly once.
+@test "broadcast: first attach at end, post-attach broadcast delivered once" {
+  export CLOWN_SESSION_ID="test/bcast-reader"
+
+  # Broadcast emitted before this reader ever attached.
+  "$CLOWN_BIN" job message --target '*' --from test/bcast-sender \
+    --source spinclass --message "pre-attach"
+
+  # First attach: init-at-end, nothing replayed.
+  run "$CLOWN_BIN" job-watch --once
+  assert_success
+  refute_output --partial "pre-attach"
+
+  # Broadcast after attach, monitor down.
+  id="$("$CLOWN_BIN" job message --target '*' --from test/bcast-sender \
+    --source spinclass --message "post-attach")"
+
+  run "$CLOWN_BIN" job-watch --once
+  assert_success
+  assert_line "[clown-job] spinclass ${id} message from test/bcast-sender: post-attach"
+
+  # Exactly once: the per-reader broadcast ack gates the replay.
+  run "$CLOWN_BIN" job-watch --once
+  assert_success
+  refute_output --partial "post-attach"
+}
+
 # §8: CLOWN_DISABLE_JOB_WAKEUP=1 — job-watch exits 0 immediately and the
 # emit subcommands are no-ops that still exit 0.
 @test "CLOWN_DISABLE_JOB_WAKEUP=1 makes job-watch exit 0 immediately" {
@@ -197,6 +254,8 @@ teardown() {
   CLOWN_DISABLE_JOB_WAKEUP=1 run "$CLOWN_BIN" job progress some-job --message hi
   assert_success
   CLOWN_DISABLE_JOB_WAKEUP=1 run "$CLOWN_BIN" job done some-job --state succeeded
+  assert_success
+  CLOWN_DISABLE_JOB_WAKEUP=1 run "$CLOWN_BIN" job message --target '*' --message hi
   assert_success
 
   # No journal was written for the channel (disabled start is a no-op,

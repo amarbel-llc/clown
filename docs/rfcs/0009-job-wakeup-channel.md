@@ -102,7 +102,13 @@ debuggability.
 A producer targeting the originating session uses the resolved session key. A
 producer MAY target another session by passing that session's key explicitly
 (`clown job start --target <key>`); the channel id is then derived from the
-target key. There is no broadcast form in v1.
+target key.
+
+The session key `*` is RESERVED as the **broadcast key**. It MUST NOT name a
+real session. A producer passing `--target '*'` writes to the **broadcast
+channel**, whose channel id is derived from `*` by the normal derivation above
+(`ChannelID("*")`). Every monitor services the broadcast channel in addition
+to its own (§9). Broadcast records receive no nudge (§6).
 
 ### 3. Paths
 
@@ -111,7 +117,10 @@ Journal (durable, survives reboot):
 ```
 $XDG_STATE_HOME/clown/jobs/<channel-id>/<job-id>.jsonl
 $XDG_STATE_HOME/clown/jobs/<channel-id>/.ack.json
+$XDG_STATE_HOME/clown/jobs/<channel-id>/.ack-<reader-channel-id>.json
 ```
+
+(the third form is the per-reader ack file used on the broadcast channel, §9).
 
 When `XDG_STATE_HOME` is unset it defaults to `$HOME/.local/state`.
 
@@ -164,6 +173,8 @@ Fields:
   increment `seq` by exactly `1`.
 - `ts` (REQUIRED, string) — event time as RFC 3339 with nanosecond precision in
   UTC (`...Z`).
+- `from` (OPTIONAL, string) — the sender's session key, for events that carry
+  a sender identity (currently `message`, §5). Omitted when empty.
 - `message` (OPTIONAL, string) — human-readable detail. MUST NOT contain a
   newline; producers MUST replace any newline with a space.
 - `result_ref` (OPTIONAL, string) — an opaque pointer the agent MAY use to fetch
@@ -171,31 +182,39 @@ Fields:
   to be auto-executed (§Security Considerations).
 
 Producers MUST write a `started` record (`seq` 0) when a job is created and
-exactly one terminal record (§5) when it finishes.
+exactly one terminal record (§5) when it finishes — except for **standalone
+waking-event jobs**: a job whose single record (`seq` 0) is itself a
+non-terminal waking event (currently only `message`). Such a job is
+self-contained — it MUST consist of exactly that one record, with no `started`
+and no terminal record, and a producer MUST NOT append further records to it.
+The job id for a `message` job SHOULD be `msg-<8 hex>`.
 
 ### 5. Event Types and Wake Policy
 
-| `type`        | Terminal | Wakes (v1) | Journaled |
-|---------------|----------|------------|-----------|
-| `started`     | no       | no         | yes       |
-| `progress`    | no       | no         | yes       |
-| `succeeded`   | yes      | yes        | yes       |
-| `failed`      | yes      | yes        | yes       |
-| `cancelled`   | yes      | yes        | yes       |
-| `interrupted` | yes      | yes        | yes       |
+| `type`        | Terminal | Wakes | Journaled |
+|---------------|----------|-------|-----------|
+| `started`     | no       | no    | yes       |
+| `progress`    | no       | no    | yes       |
+| `succeeded`   | yes      | yes   | yes       |
+| `failed`      | yes      | yes   | yes       |
+| `cancelled`   | yes      | yes   | yes       |
+| `interrupted` | yes      | yes   | yes       |
+| `message`     | no       | yes   | yes       |
 
-A **waking** event is one whose `type` has "Wakes" = yes. Exactly the four
-terminal types wake in v1.
+A **waking** event is one whose `type` has "Wakes" = yes. The waking set is
+the four terminal types plus `message`, the non-terminal waking class: a
+self-contained, single-record standalone waking-event job (§4) carrying an
+optional sender key in `from` (the spinclass-chat migration described in
+FDR-0013).
 
 After a terminal record is written for a job, a producer MUST NOT append further
 records to that job.
 
-The type field is an open registry. Types `needs-attention` and `message` are
-RESERVED for a future revision in which they wake as non-terminal events (the
-spinclass-chat migration described in FDR-0013). A monitor that encounters a
-`type` it does not recognize MUST NOT crash and MUST treat the event as
-non-waking (journal-only). Consequently a producer MUST NOT rely on a reserved
-or unknown type waking an older monitor.
+The type field is an open registry. The type `needs-attention` remains
+RESERVED for a future revision in which it wakes as a non-terminal event. A
+monitor that encounters a `type` it does not recognize MUST NOT crash and MUST
+treat the event as non-waking (journal-only). Consequently a producer MUST NOT
+rely on a reserved or unknown type waking an older monitor.
 
 ### 6. Nudge Datagram
 
@@ -224,11 +243,18 @@ socket, e.g. when no monitor is running, is the common case on hosts where the
 monitor is gated off — see FDR-0013). Correctness MUST NOT depend on the nudge
 being delivered.
 
+Records written to the broadcast channel (§2) get **no nudge**: a producer
+MUST NOT send a datagram for a broadcast record. Each monitor's periodic
+re-scan (§9) is the broadcast delivery path; producer-side socket spray (one
+datagram per known reader socket) is a documented future tuning lever
+(FDR-0013), not part of this revision.
+
 ### 7. Durability and Ordering
 
-For a **terminal** (waking) record, a producer MUST append the record to the
-journal file and `fsync` the file (or otherwise guarantee the write is durable)
-**before** sending the corresponding nudge. This guarantees the journal is never
+For a **waking** record (the terminal types and `message`), a producer MUST
+append the record to the journal file and `fsync` the file (or otherwise
+guarantee the write is durable) **before** sending the corresponding nudge (if
+any — broadcast records get none, §6). This guarantees the journal is never
 behind the socket: a nudge never references an event that is not yet durable.
 
 For non-waking records (`started`, `progress`) the `fsync` is OPTIONAL.
@@ -257,6 +283,17 @@ monitor; the on-disk and on-wire formats above remain the actual contract.
   — Append the terminal record, `fsync`, then send the nudge. MUST exit non-zero
   without appending if the job already has a terminal record.
 
+- `clown job message --target <session-key|'*'> [--from <sender-key>]
+  [--source <s>] --message <body> [--result-ref <r>]`
+  — Emit a standalone waking-event job (§4): allocate a `msg-<8 hex>` id and
+  append the single `message` record (`seq` 0) to the target channel, fsynced
+  (§7). MUST print the job id as a single line to stdout and exit `0`.
+  `--target` and `--message` are REQUIRED; a missing `--target` or a missing
+  or empty `--message` is a usage error (exit `2`). `--from` is OPTIONAL and
+  carries the sender's session key in the record's `from` field. A directed
+  message MUST be followed by a nudge; a broadcast message (`--target '*'`)
+  MUST NOT be (§6). Newlines in the body are flattened to spaces (§4).
+
 - `clown job read [--job <job-id>] [--since <ts>] [--type <t>]... [--peek]
   [--json]`
   — The pull/observability surface and the fallback delivery path when no
@@ -277,8 +314,8 @@ monitor; the on-disk and on-wire formats above remain the actual contract.
 
 When `CLOWN_DISABLE_JOB_WAKEUP` is set to `1`, `clown job-watch` MUST exit `0`
 immediately without binding a socket, and the emit subcommands (`start`,
-`progress`, `done`) MUST behave as no-ops that still exit `0` (so producers need
-no conditional logic).
+`progress`, `done`, `message`) MUST behave as no-ops that still exit `0` (so
+producers need no conditional logic).
 
 ### 9. Monitor Behavior, Replay, and At-Least-Once Delivery
 
@@ -303,16 +340,53 @@ To **emit** a waking record the monitor MUST:
    ```
 
    When `result_ref` is present the monitor MUST append ` · <result_ref>`. When
-   `message` is absent the trailing `: ` MUST be omitted.
+   `message` is absent the trailing `: ` MUST be omitted. When the record
+   carries a `from` (§4), the segment ` from <from>` MUST be inserted before
+   the colon:
+
+   ```
+   [clown-job] <source> <job-id> <type> from <from>: <message>
+   ```
+
+   (the message-omission and ` · <result_ref>` rules are unchanged).
 
 5. Persist the ack: set the acked sequence for `job` to that record's `seq` in
-   `.ack.json`.
+   the ack file being serviced.
 
 `.ack.json` schema:
 
 ```json
 { "v": 1, "acked": { "build-3f2ab1c9": 2 } }
 ```
+
+**Broadcast channel servicing.** In addition to its own channel, the monitor
+MUST service the broadcast channel (`ChannelID("*")`, §2) on every cycle —
+the initial replay and each nudge- or timer-triggered re-scan. Because many
+readers share the broadcast journal, each reader keeps a **per-reader ack
+file** in the broadcast channel directory:
+
+```
+$XDG_STATE_HOME/clown/jobs/<broadcast-channel-id>/.ack-<reader-channel-id>.json
+```
+
+where `<reader-channel-id>` is the monitor's own channel id. The file uses the
+`.ack.json` schema above. (Per-reader ack files accumulate one per reader;
+their GC is tracked as clown#113 and out of scope here.)
+
+The broadcast channel has **condvar semantics** (normative): on a reader's
+**first attach** — defined as that reader's per-reader ack file not existing
+(an existence check; a corrupt-but-present file instead loads as empty per
+§10) — the monitor MUST initialize at the current end of the channel: build an
+ack map covering every waking record already present and persist it WITHOUT
+emitting any of them. The monitor MUST create the broadcast channel directory
+(mode `0700`) if needed so the ack file persists even when the channel is
+empty — a monitor restart MUST NOT look like a first attach again. Thereafter
+the normal replay-unacked semantics of steps 1–5 apply to the broadcast
+channel too, against the per-reader ack file. Like a waiter on a condition
+variable, a reader only observes broadcasts sent after it first attached.
+
+The monitor binds only its own channel's nudge socket; broadcast records are
+picked up by the periodic re-scan (§6).
 
 The channel guarantees each waking event is surfaced **at least once**: because
 the ack is persisted after the line is written, a crash between step 4 and step
@@ -350,6 +424,10 @@ most trigger a re-scan; it cannot fabricate a wakeup. Fabricating a wakeup
 requires writing a journal record, which requires the same user identity that
 could run any producer anyway.
 
+The broadcast channel widens the audience, not the trust model: any local
+process can wake every session by writing a record to the broadcast journal,
+which is the same single-user trust domain as writing any directed channel.
+
 `message` and `result_ref` are emitted into the agent's context. A local process
 could therefore inject text the agent reads (a prompt-injection vector at
 local-user trust level). `result_ref` is opaque data and MUST NOT be
@@ -377,6 +455,9 @@ Tests use binary injection via `bats-emo`:
 | §8, `CLOWN_DISABLE_JOB_WAKEUP` | `job_wakeup.bats` | watch exits 0 without binding; emits are no-ops |
 | §9, replay & at-least-once | `job_wakeup.bats` | a monitor started after `done` replays the unacked terminal event once |
 | §9, notification line format | `job_wakeup.bats` | emitted line matches `[clown-job] <source> <job> <type>: <message>` |
+| §4/§5/§9, directed `message` wakes with `from` | `job_wakeup.bats` | a single-record `message` job surfaces once via `job-watch --once` with the ` from <from>` segment |
+| §8, `job message` usage errors | `job_wakeup.bats` | missing `--target` or `--message` exits 2 |
+| §9, broadcast condvar semantics | `job_wakeup.bats` | first attach initializes at end (pre-existing broadcast not replayed); a post-attach broadcast is delivered exactly once on the next attach |
 
 ## Compatibility
 

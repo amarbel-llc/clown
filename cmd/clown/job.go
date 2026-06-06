@@ -20,13 +20,13 @@ func jobWakeupDisabled() bool {
 	return os.Getenv("CLOWN_DISABLE_JOB_WAKEUP") == "1"
 }
 
-// runJob dispatches `clown job <subcommand>` (RFC-0009 §8). When the facility is
-// disabled the emit subcommands (start/progress/done) no-op with exit 0 so
-// producers need no conditional logic; read still works since it is a pull, not
-// an emit (RFC-0009 §8).
+// runJob dispatches `clown job <subcommand>` (RFC-0009 §8). When the facility
+// is disabled the emit subcommands (start/progress/done/message) no-op with
+// exit 0 so producers need no conditional logic; read still works since it is
+// a pull, not an emit (RFC-0009 §8).
 func runJob(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "clown job: missing subcommand (start|progress|done|read)")
+		fmt.Fprintln(os.Stderr, "clown job: missing subcommand (start|progress|done|message|read)")
 		return 2
 	}
 	switch args[0] {
@@ -45,6 +45,11 @@ func runJob(args []string) int {
 			return 0
 		}
 		return jobDone(args[1:])
+	case "message":
+		if jobWakeupDisabled() {
+			return 0
+		}
+		return jobMessage(args[1:])
 	case "read":
 		return jobRead(args[1:])
 	default:
@@ -111,6 +116,38 @@ func jobDone(args []string) int {
 		fmt.Fprintf(os.Stderr, "clown job done: %v\n", err)
 		return 1
 	}
+	return 0
+}
+
+// jobMessage emits a standalone single-record waking `message` job (RFC-0009
+// §4, §8). --target is required and may be the reserved broadcast key '*';
+// --message is required and must be non-empty (usage error exit 2 otherwise).
+// --from is the optional sender session key rendered in the notification line.
+// Prints the generated job id on success.
+func jobMessage(args []string) int {
+	fs := flag.NewFlagSet("job message", flag.ContinueOnError)
+	target := fs.String("target", "", "target session key, or '*' for broadcast")
+	from := fs.String("from", "", "sender session key")
+	source := fs.String("source", "", "emitting plugin label")
+	message := fs.String("message", "", "message body")
+	resultRef := fs.String("result-ref", "", "opaque result pointer")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *target == "" {
+		fmt.Fprintln(os.Stderr, "clown job message: --target is required (a session key or '*')")
+		return 2
+	}
+	if *message == "" {
+		fmt.Fprintln(os.Stderr, "clown job message: --message is required and must be non-empty")
+		return 2
+	}
+	id, err := jobwake.Message(*target, *source, *from, *message, *resultRef)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clown job message: %v\n", err)
+		return 1
+	}
+	fmt.Println(id)
 	return 0
 }
 
@@ -267,11 +304,16 @@ func runJobWatch(args []string) int {
 
 // notificationLine renders a waking record as the agent notification line
 // (RFC-0009 §9): "[clown-job] <source> <job> <type>: <message> · <result_ref>".
-// The ": " is omitted when message is empty; " · <result_ref>" is appended only
-// when result_ref is present. Embedded newlines in message are flattened to
-// spaces so the line never breaks the one-line-per-event contract.
+// When the record carries a `from` (sender session key), " from <from>" is
+// inserted before the colon. The ": " is omitted when message is empty;
+// " · <result_ref>" is appended only when result_ref is present. Embedded
+// newlines in message are flattened to spaces so the line never breaks the
+// one-line-per-event contract.
 func notificationLine(r jobwake.Record) string {
 	line := fmt.Sprintf("[clown-job] %s %s %s", r.Source, r.Job, r.Type)
+	if from := flattenLine(r.From); from != "" {
+		line += " from " + from
+	}
 	if msg := flattenLine(r.Message); msg != "" {
 		line += ": " + msg
 	}

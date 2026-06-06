@@ -49,13 +49,28 @@ synthesized built-in plugin dir passed with `--plugin-dir`), so plugins do not
 each declare it. The monitor prints **one stdout line per *waking* event**,
 which the harness delivers to the agent as a notification.
 
-**Wake policy.** Only **terminal** events wake: `succeeded`, `failed`,
-`cancelled`, `interrupted`. `started` and `progress` are journal-only — visible
-via the pull surface but never a notification, so a chatty job cannot spam the
-agent (and cannot trip the harness's "too many events" monitor cutoff). The
-event-type field is open: `needs-attention` and `message` are reserved for a
-near-term revision that wakes on non-terminal events (the spinclass-chat
-migration below).
+**Wake policy.** The waking set is the **terminal** events — `succeeded`,
+`failed`, `cancelled`, `interrupted` — plus the non-terminal `message` class
+(below). `started` and `progress` are journal-only — visible via the pull
+surface but never a notification, so a chatty job cannot spam the agent (and
+cannot trip the harness's "too many events" monitor cutoff). The event-type
+field is open: `needs-attention` remains reserved for a future revision.
+
+**Messages and broadcast (the chat-migration consumer).** `clown job message`
+emits a standalone single-record waking job (`msg-<8hex>`, one `message`
+record, no `started`/terminal) carrying an optional sender key (`--from`),
+rendered in the notification as
+`[clown-job] <source> <job> message from <from>: <body>`. `--target '*'`
+addresses the reserved **broadcast channel**: one record, delivered by every
+session's monitor, each reader tracking its own ack watermark
+(`.ack-<reader-channel-id>.json` in the broadcast channel dir; growth/GC is
+clown#113). Broadcast has **condvar semantics** — a reader's first attach
+initializes its watermark at the channel's current end, so a session only
+sees broadcasts sent after its monitor first attached; pre-existing
+broadcasts are never replayed to new sessions. Broadcast records get no
+nudge; the monitor's 1s rescan tick is the delivery path. This is the
+interface the spinclass-chat migration consumes (chat send == directed or
+broadcast `message`).
 
 **Who gets woken.** A job is delivered to a *session key*. By default that is
 the session that started the job; clown resolves it as `CLOWN_SESSION_ID`, else
@@ -70,6 +85,7 @@ case.
 - `clown job start [--target KEY] [--label L] [--source S]` → prints a job id.
 - `clown job progress JOB [--message M]` → journal-only liveness.
 - `clown job done JOB --state succeeded|failed|cancelled|interrupted [--message M] [--result-ref R]` → durable terminal event + wake.
+- `clown job message --target KEY|'*' [--from SENDER] [--source S] --message BODY [--result-ref R]` → standalone single-record waking message (directed or broadcast); prints the job id.
 - `clown job-read [--job JOB] [--since TS] [--type T]... [--peek] [--json]` → pull/observe (and the delivery path on hosts where the monitor is gated off).
 - `clown job-watch` → the monitor (clown-registered; not run by hand normally).
 
@@ -132,8 +148,10 @@ Observing progress on demand (pull; never wakes):
   `clown job-watch` monitor). The channel remains `experimental` rather than
   `testing` until a second distinct plugin emits on it; the spinclass chat
   migration (below) is that second consumer, in progress.
-- **Terminal-only wakeups in v1.** A backgrounded job that pauses for input does
-  not yet have a waking event; `needs-attention` is reserved but unimplemented.
+- **No needs-attention class yet.** A backgrounded job that pauses for input
+  does not yet have a waking event; `needs-attention` is reserved but
+  unimplemented (`message` — the other formerly-reserved type — is now
+  implemented as the non-terminal waking class).
 - **`progress`/`started` are best-effort.** They are journal-only and have no
   delivery guarantee; only terminal events are at-least-once.
 - **At-least-once, not exactly-once.** A monitor crash between printing a wakeup
@@ -152,6 +170,7 @@ Observing progress on demand (pull; never wakes):
 | Lever | Current | Rationale | Change signal |
 |---|---|---|---|
 | poll-fallback / re-scan interval | 1s | spinclass-proven; safety net for lost nudges and the macOS pull path | wake latency complaints, or idle-scan CPU shows up |
+| broadcast nudge | none (rescan tick is the delivery path) | one writer cannot know every reader's socket; the 1s tick bounds latency cheaply | broadcast wake latency matters → escalate to producer socket-spray (one datagram per known reader socket) |
 | journal retention / GC | 7 days | bounds disk; matches session-tombstone-style sweep | journal dir growth becomes material |
 | progress-record cap per job | uncapped, journal-only | progress is cheap and never woken | a chatty plugin bloats a single job journal |
 | nudge datagram size cap | 512 B | tiny `v|job|type` line; well under any datagram limit | a future need to carry payload in the nudge |
@@ -170,9 +189,10 @@ Observing progress on demand (pull; never wakes):
   migrated, so old and new coexist during the dual-architecture period.
 - **Forward-looking: spinclass-chat migration.** A chat message addressed to a
   session is exactly a non-terminal *waking* event with addressable targeting.
-  Migrating spinclass `internal/chat` onto this channel (via the reserved
-  `message`/`needs-attention` types) is the proof the abstraction is right — if
-  it cannot express chat, it is the wrong abstraction.
+  The `message` class and the broadcast channel (above) are now implemented on
+  clown's side; migrating spinclass `internal/chat` onto them is the proof the
+  abstraction is right — if it cannot express chat, it is the wrong
+  abstraction.
 - **Prior art.** spinclass `internal/chat` (file-store + monitor); clown's
   stdio-bridge forward-only heartbeat mode (the *synchronous* progress-keepalive
   cousin, distinct from this async wakeup path).

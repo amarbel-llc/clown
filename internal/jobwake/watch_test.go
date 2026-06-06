@@ -2,6 +2,7 @@ package jobwake
 
 import (
 	"context"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -86,6 +87,138 @@ func TestWatchNeverEmitsProgress(t *testing.T) {
 	}
 	if emitted[0].Type != TypeFailed {
 		t.Fatalf("only the terminal record may wake, got %+v", emitted[0])
+	}
+}
+
+// TestReplayOnceEmitsDirectedMessageOnce: a directed `message` is a waking
+// event — ReplayOnce emits it once and the ack gates re-emission thereafter.
+func TestReplayOnceEmitsDirectedMessageOnce(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("XDG_RUNTIME_DIR", shortRuntimeDir(t))
+	t.Setenv("CLOWN_SESSION_ID", "sender")
+
+	id, err := Message("k", "spinclass", "sender", "ping", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var first []Record
+	if err := ReplayOnce("k", func(r Record) error { first = append(first, r); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if len(first) != 1 || first[0].Type != TypeMessage || first[0].Job != id || first[0].From != "sender" {
+		t.Fatalf("want one message emit with from, got %+v", first)
+	}
+
+	var second []Record
+	if err := ReplayOnce("k", func(r Record) error { second = append(second, r); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if len(second) != 0 {
+		t.Fatalf("second ReplayOnce must emit nothing (acked), got %+v", second)
+	}
+}
+
+// TestWatchEmitsDirectedMessage: the long-running monitor also wakes on a
+// directed message (the non-terminal waking class).
+func TestWatchEmitsDirectedMessage(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("XDG_RUNTIME_DIR", shortRuntimeDir(t))
+	t.Setenv("CLOWN_SESSION_ID", "sender")
+
+	if _, err := Message("k", "s", "sender", "ping", ""); err != nil {
+		t.Fatal(err)
+	}
+	emitted := drainWatch(t, "k")
+	if len(emitted) != 1 || emitted[0].Type != TypeMessage {
+		t.Fatalf("want one message emit, got %+v", emitted)
+	}
+}
+
+// replayBroadcast runs ReplayOnce for a reader session and returns what was
+// emitted, failing the test on error.
+func replayBroadcast(t *testing.T, reader string) []Record {
+	t.Helper()
+	var got []Record
+	if err := ReplayOnce(reader, func(r Record) error { got = append(got, r); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
+// TestBroadcastCondvarSemantics pins the RFC-0009 §9 condvar contract:
+//  1. a broadcast pre-existing a reader's FIRST attach is NOT emitted
+//     (first attach initializes the per-reader ack at current end);
+//  2. the persisted watermark means a broadcast sent AFTER first attach,
+//     while the monitor is down, IS emitted on the next attach;
+//  3. it is emitted exactly once (acked thereafter).
+func TestBroadcastCondvarSemantics(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("XDG_RUNTIME_DIR", shortRuntimeDir(t))
+	t.Setenv("CLOWN_SESSION_ID", "sender")
+
+	if _, err := Message(BroadcastKey, "s", "sender", "pre-attach", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	// First attach: init at end, nothing emitted.
+	if got := replayBroadcast(t, "reader"); len(got) != 0 {
+		t.Fatalf("first attach must not replay pre-existing broadcasts, got %+v", got)
+	}
+
+	// Broadcast while the monitor is down, post-attach.
+	id, err := Message(BroadcastKey, "s", "sender", "post-attach", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := replayBroadcast(t, "reader")
+	if len(got) != 1 || got[0].Job != id || got[0].Message != "post-attach" {
+		t.Fatalf("post-attach broadcast must be emitted on next attach, got %+v", got)
+	}
+
+	if got := replayBroadcast(t, "reader"); len(got) != 0 {
+		t.Fatalf("broadcast must be emitted exactly once per reader, got %+v", got)
+	}
+}
+
+// TestBroadcastTwoReadersIndependentAcks: two distinct reader sessions each
+// receive a post-attach broadcast exactly once, via independent per-reader
+// ack files in the broadcast channel dir.
+func TestBroadcastTwoReadersIndependentAcks(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("XDG_RUNTIME_DIR", shortRuntimeDir(t))
+	t.Setenv("CLOWN_SESSION_ID", "sender")
+
+	// Both readers attach (init-at-end) before the broadcast.
+	if got := replayBroadcast(t, "reader-1"); len(got) != 0 {
+		t.Fatalf("reader-1 first attach must emit nothing, got %+v", got)
+	}
+	if got := replayBroadcast(t, "reader-2"); len(got) != 0 {
+		t.Fatalf("reader-2 first attach must emit nothing, got %+v", got)
+	}
+
+	id, err := Message(BroadcastKey, "s", "sender", "to everyone", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, reader := range []string{"reader-1", "reader-2"} {
+		got := replayBroadcast(t, reader)
+		if len(got) != 1 || got[0].Job != id {
+			t.Fatalf("%s must receive the broadcast once, got %+v", reader, got)
+		}
+		if again := replayBroadcast(t, reader); len(again) != 0 {
+			t.Fatalf("%s must not receive the broadcast twice, got %+v", reader, again)
+		}
+	}
+
+	// Independent ack files exist for both readers in the broadcast dir.
+	bcid := ChannelID(BroadcastKey)
+	for _, reader := range []string{"reader-1", "reader-2"} {
+		if _, err := os.Stat(AckFileFor(bcid, ChannelID(reader))); err != nil {
+			t.Fatalf("missing per-reader ack for %s: %v", reader, err)
+		}
 	}
 }
 

@@ -2,6 +2,7 @@ package jobwake
 
 import (
 	"context"
+	"os"
 	"time"
 )
 
@@ -16,7 +17,7 @@ const rescanInterval = time.Second
 // returns nil on a clean ctx cancel.
 func Watch(ctx context.Context, sessionKey string, emit func(Record) error) error {
 	cid := ChannelID(sessionKey)
-	if err := emitUnacked(cid, emit); err != nil {
+	if err := serviceChannels(cid, emit); err != nil {
 		return err
 	}
 	conn, err := bindNudge(cid)
@@ -49,29 +50,81 @@ func Watch(ctx context.Context, sessionKey string, emit func(Record) error) erro
 		case <-ctx.Done():
 			return nil
 		case <-datagrams:
-			if err := emitUnacked(cid, emit); err != nil {
+			if err := serviceChannels(cid, emit); err != nil {
 				return err
 			}
 		case <-ticker.C:
-			if err := emitUnacked(cid, emit); err != nil {
+			if err := serviceChannels(cid, emit); err != nil {
 				return err
 			}
 		}
 	}
 }
 
-// ReplayOnce emits every unacked waking event for the session's channel once,
-// advancing the ack cursor, and returns without binding the nudge socket or
-// blocking. It backs `clown job-watch --once` (the conformance suite and
-// pull-style replay); the long-running monitor uses Watch.
+// ReplayOnce emits every unacked waking event for the session's own channel
+// and the broadcast channel once, advancing the respective ack cursors, and
+// returns without binding the nudge socket or blocking. It backs
+// `clown job-watch --once` (the conformance suite and pull-style replay); the
+// long-running monitor uses Watch.
 func ReplayOnce(sessionKey string, emit func(Record) error) error {
-	return emitUnacked(ChannelID(sessionKey), emit)
+	return serviceChannels(ChannelID(sessionKey), emit)
 }
 
-// emitUnacked emits every waking record whose seq exceeds the acked seq for its
-// job, oldest first, advancing the persisted ack after each successful emit.
-func emitUnacked(cid string, emit func(Record) error) error {
-	a := loadAck(cid)
+// serviceChannels runs one monitor cycle for a reader (RFC-0009 §9): replay
+// the reader's own channel against its `.ack.json`, then the broadcast channel
+// against the reader's per-reader ack file. The nudge socket stays
+// own-channel-only; broadcast delivery rides the periodic rescan.
+func serviceChannels(cid string, emit func(Record) error) error {
+	if err := emitUnacked(cid, AckFile(cid), emit); err != nil {
+		return err
+	}
+	return serviceBroadcast(cid, emit)
+}
+
+// serviceBroadcast replays the broadcast channel for one reader with condvar
+// semantics (RFC-0009 §9): on first attach — the reader's ack file does not
+// exist (os.Stat, not corrupt-loads-empty) — initialize at current end by
+// persisting an ack map covering every existing waking record WITHOUT
+// emitting; thereafter normal replay-unacked applies.
+func serviceBroadcast(readerCID string, emit func(Record) error) error {
+	bcid := ChannelID(BroadcastKey)
+	ackPath := AckFileFor(bcid, readerCID)
+	if _, err := os.Stat(ackPath); err != nil {
+		if !os.IsNotExist(err) {
+			return err
+		}
+		return initBroadcastAck(bcid, ackPath)
+	}
+	return emitUnacked(bcid, ackPath, emit)
+}
+
+// initBroadcastAck persists a first-attach ack covering every waking record
+// already in the broadcast channel, without emitting any of them. The channel
+// dir is created (mode 0700) if needed so the ack file persists even when the
+// broadcast channel is empty — a restart must not look like first attach
+// again (RFC-0009 §9).
+func initBroadcastAck(bcid, ackPath string) error {
+	waking, err := scanWaking(bcid)
+	if err != nil {
+		return err
+	}
+	a := ack{V: 1, Acked: map[string]int{}}
+	for _, r := range waking {
+		if prev, ok := a.Acked[r.Job]; !ok || r.Seq > prev {
+			a.Acked[r.Job] = r.Seq
+		}
+	}
+	if err := os.MkdirAll(JournalDir(bcid), 0o700); err != nil {
+		return err
+	}
+	return saveAckPath(ackPath, a)
+}
+
+// emitUnacked emits every waking record whose seq exceeds the acked seq for
+// its job, oldest first, advancing the ack persisted at ackPath after each
+// successful emit (at-least-once: persist follows emit).
+func emitUnacked(cid, ackPath string, emit func(Record) error) error {
+	a := loadAckPath(ackPath)
 	waking, err := scanWaking(cid)
 	if err != nil {
 		return err
@@ -84,7 +137,7 @@ func emitUnacked(cid string, emit func(Record) error) error {
 			return err
 		}
 		a.Acked[r.Job] = r.Seq
-		if err := saveAck(cid, a); err != nil { // persist after emit => at-least-once
+		if err := saveAckPath(ackPath, a); err != nil { // persist after emit => at-least-once
 			return err
 		}
 	}

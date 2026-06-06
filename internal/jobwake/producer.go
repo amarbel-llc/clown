@@ -150,6 +150,41 @@ func Progress(target, jobID, message string) error {
 	return nil
 }
 
+// Message emits a standalone waking-event job (RFC-0009 §4 carve-out): one
+// self-contained single-record job of the non-terminal waking type `message`,
+// with no started and no terminal record. target selects the channel: empty
+// resolves the current session, an explicit key targets that session, and
+// BroadcastKey ("*") targets the broadcast channel. from is the OPTIONAL
+// sender session key carried in the record's `from` field. The record is
+// fsynced before any nudge (waking => durable-first, RFC-0009 §7); broadcast
+// records get NO nudge — the monitors' periodic rescan is the delivery path
+// (RFC-0009 §6). It returns the generated job id (`msg-<8hex>`).
+func Message(target, source, from, body, resultRef string) (string, error) {
+	session := resolveSession(target)
+	if source == "" {
+		if v := os.Getenv("CLOWN_JOB_SOURCE"); v != "" {
+			source = v
+		} else {
+			source = "clown"
+		}
+	}
+	cid := ChannelID(session)
+	if err := os.MkdirAll(JournalDir(cid), 0o700); err != nil {
+		return "", err
+	}
+	id := newJobID("msg")
+	rec := Record{V: SchemaVersion, Job: id, Session: session, Source: source,
+		From: from, Type: TypeMessage, TS: nowTS(), Message: oneLine(body),
+		ResultRef: resultRef}
+	if err := appendRecord(cid, rec, true); err != nil { // fsync before nudge
+		return "", err
+	}
+	if session != BroadcastKey {
+		sendNudge(cid, id, TypeMessage)
+	}
+	return id, nil
+}
+
 // Done appends the single terminal record (fsynced) and then sends the nudge,
 // guaranteeing the journal is durable before the socket (RFC-0009 §7). It
 // rejects a non-terminal state and a second terminal append (RFC-0009 §5, §8).

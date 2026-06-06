@@ -10,6 +10,13 @@ const (
 	TypeFailed      = "failed"
 	TypeCancelled   = "cancelled"
 	TypeInterrupted = "interrupted"
+	TypeMessage     = "message"
+
+	// BroadcastKey is the reserved session key naming the broadcast channel
+	// (RFC-0009 §2). It is never a real session; records targeted at it land
+	// in ChannelID(BroadcastKey) and every monitor services that channel with
+	// condvar semantics (RFC-0009 §9).
+	BroadcastKey = "*"
 )
 
 // Record is one line in a job's JSONL journal (RFC-0009 §4).
@@ -18,6 +25,7 @@ type Record struct {
 	Job       string `json:"job"`
 	Session   string `json:"session"`
 	Source    string `json:"source"`
+	From      string `json:"from,omitempty"`
 	Type      string `json:"type"`
 	Seq       int    `json:"seq"`
 	TS        string `json:"ts"`
@@ -35,7 +43,7 @@ func IsTerminal(t string) bool {
 	return false
 }
 
-// IsWaking reports whether an event of this type wakes the agent. In v1 the
-// waking set is exactly the terminal set; unknown/reserved types do not wake
-// (RFC-0009 §5).
-func IsWaking(t string) bool { return IsTerminal(t) }
+// IsWaking reports whether an event of this type wakes the agent. The waking
+// set is the terminal set plus the non-terminal `message` type; unknown and
+// reserved types (`needs-attention`) do not wake (RFC-0009 §5).
+func IsWaking(t string) bool { return IsTerminal(t) || t == TypeMessage }

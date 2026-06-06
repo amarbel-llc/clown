@@ -79,6 +79,21 @@ func TestNotificationLine(t *testing.T) {
 			rec:  jobwake.Record{Source: "s", Job: "j3", Type: jobwake.TypeSucceeded, Message: "line1\nline2"},
 			want: "[clown-job] s j3 succeeded: line1 line2",
 		},
+		{
+			name: "from inserted before the colon",
+			rec:  jobwake.Record{Source: "spinclass", Job: "msg-1a2b", Type: jobwake.TypeMessage, From: "clown/other", Message: "ping"},
+			want: "[clown-job] spinclass msg-1a2b message from clown/other: ping",
+		},
+		{
+			name: "from without message omits colon",
+			rec:  jobwake.Record{Source: "spinclass", Job: "msg-2c3d", Type: jobwake.TypeMessage, From: "clown/other"},
+			want: "[clown-job] spinclass msg-2c3d message from clown/other",
+		},
+		{
+			name: "from with message and result_ref",
+			rec:  jobwake.Record{Source: "spinclass", Job: "msg-4e5f", Type: jobwake.TypeMessage, From: "clown/other", Message: "ping", ResultRef: "ref"},
+			want: "[clown-job] spinclass msg-4e5f message from clown/other: ping · ref",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -229,6 +244,97 @@ func TestJobDoneTargetWakesTargetSession(t *testing.T) {
 	// The current session must not have the cross-session job.
 	if _, err := jobwake.ReadJob(jobwake.ChannelID("repo/branch"), id); !os.IsNotExist(err) {
 		t.Fatalf("current session must not have the cross-session job; err = %v", err)
+	}
+}
+
+// TestJobMessagePrintsIDAndWritesSingleRecord covers the message subcommand:
+// it prints the msg- job id and writes the single-record standalone waking
+// job into the target channel with `from` carried.
+func TestJobMessagePrintsIDAndWritesSingleRecord(t *testing.T) {
+	jobTestEnv(t)
+	out := captureStdout(t, func() int {
+		return jobMessage([]string{"--target", "other-session", "--from", "repo/branch",
+			"--source", "spinclass", "--message", "ping"})
+	})
+	id := trimTrailingNewline(out)
+	if !strings.HasPrefix(id, "msg-") {
+		t.Fatalf("job message must print a msg- id, got %q", id)
+	}
+	recs, err := jobwake.ReadJob(jobwake.ChannelID("other-session"), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) != 1 || recs[0].Type != jobwake.TypeMessage || recs[0].Seq != 0 ||
+		recs[0].From != "repo/branch" || recs[0].Message != "ping" {
+		t.Fatalf("want one message record with from, got %+v", recs)
+	}
+}
+
+func TestJobMessageBroadcastTarget(t *testing.T) {
+	jobTestEnv(t)
+	out := captureStdout(t, func() int {
+		return jobMessage([]string{"--target", "*", "--from", "repo/branch",
+			"--source", "spinclass", "--message", "to everyone"})
+	})
+	id := trimTrailingNewline(out)
+	recs, err := jobwake.ReadJob(jobwake.ChannelID("*"), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) != 1 || recs[0].Session != "*" {
+		t.Fatalf("broadcast message must land in the broadcast channel, got %+v", recs)
+	}
+}
+
+func TestJobMessageMissingTargetExits2(t *testing.T) {
+	jobTestEnv(t)
+	if code := jobMessage([]string{"--message", "hi"}); code != 2 {
+		t.Fatalf("job message with no --target exit = %d, want 2", code)
+	}
+}
+
+func TestJobMessageMissingMessageExits2(t *testing.T) {
+	jobTestEnv(t)
+	if code := jobMessage([]string{"--target", "k"}); code != 2 {
+		t.Fatalf("job message with no --message exit = %d, want 2", code)
+	}
+	if code := jobMessage([]string{"--target", "k", "--message", ""}); code != 2 {
+		t.Fatalf("job message with empty --message exit = %d, want 2", code)
+	}
+}
+
+// TestJobMessageDisabledIsNoOp: runJob's top-level kill-switch check covers
+// the message subcommand like the other emits (RFC-0009 §8).
+func TestJobMessageDisabledIsNoOp(t *testing.T) {
+	jobTestEnv(t)
+	t.Setenv("CLOWN_DISABLE_JOB_WAKEUP", "1")
+	if code := runJob([]string{"message", "--target", "k", "--message", "hi"}); code != 0 {
+		t.Fatalf("disabled job message exit = %d, want 0", code)
+	}
+	if entries, err := os.ReadDir(jobwake.JournalDir(jobwake.ChannelID("k"))); err == nil && len(entries) > 0 {
+		t.Fatalf("disabled job message must not write journal, found %d entries", len(entries))
+	}
+}
+
+// TestJobWatchOnceEmitsMessageFromLine: a directed message surfaces through
+// job-watch --once with the §9 from-rendering, exactly once.
+func TestJobWatchOnceEmitsMessageFromLine(t *testing.T) {
+	jobTestEnv(t) // session is "repo/branch"
+	out := captureStdout(t, func() int {
+		return jobMessage([]string{"--target", "repo/branch", "--from", "clown/other",
+			"--source", "spinclass", "--message", "ping"})
+	})
+	id := trimTrailingNewline(out)
+
+	first := captureStdout(t, func() int { return runJobWatch([]string{"--once"}) })
+	want := "[clown-job] spinclass " + id + " message from clown/other: ping"
+	if trimTrailingNewline(first) != want {
+		t.Fatalf("job-watch --once output = %q, want %q", first, want)
+	}
+
+	second := captureStdout(t, func() int { return runJobWatch([]string{"--once"}) })
+	if second != "" {
+		t.Fatalf("second --once must emit nothing (acked), got %q", second)
 	}
 }
 
