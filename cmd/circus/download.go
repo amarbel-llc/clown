@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/progress"
 	tea "github.com/charmbracelet/bubbletea"
+	"golang.org/x/term"
 
 	"github.com/amarbel-llc/clown/internal/circusmodels"
 )
@@ -170,6 +172,18 @@ func cmdDownload(args []string) int {
 
 	dir := circusmodels.Dir()
 
+	// The bubbletea progress bar needs a real terminal (it opens /dev/tty
+	// for input); off-terminal it aborts the whole download with "could
+	// not open a new TTY" (clown#55). Degrade to a bar-less download with
+	// a single final summary line instead.
+	if !progressUIWanted(os.Stdin, os.Stdout) {
+		if err := downloadPlain(context.Background(), entry, dir, os.Stdout); err != nil {
+			fmt.Fprintf(os.Stderr, "circus: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+
 	var bar progress.Model
 	if entry.Size > 0 {
 		bar = progress.New(progress.WithDefaultGradient())
@@ -203,4 +217,25 @@ func cmdDownload(args []string) int {
 	dest := filepath.Join(dir, name+".gguf")
 	fmt.Printf("circus: downloaded %s to %s\n", name, dest)
 	return 0
+}
+
+// progressUIWanted reports whether the interactive bubbletea progress bar
+// can run: both the input and output streams must be terminals (bubbletea
+// falls back to opening /dev/tty when stdin is not one, which fails hard in
+// non-TTY contexts — clown#55). Mirrors internal/pluginhost's interactive
+// gate.
+func progressUIWanted(stdin, stdout *os.File) bool {
+	return term.IsTerminal(int(stdin.Fd())) && term.IsTerminal(int(stdout.Fd()))
+}
+
+// downloadPlain is the non-TTY download path (clown#55): no progress UI at
+// all, just the download followed by a single summary line on w.
+func downloadPlain(ctx context.Context, entry circusmodels.RegistryEntry, dir string, w io.Writer) error {
+	var written int64
+	dest, err := circusmodels.Download(ctx, entry, dir, func(n, _ int64) { written = n })
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(w, "circus: downloaded %s: %d bytes to %s\n", entry.Name, written, dest)
+	return nil
 }
