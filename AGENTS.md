@@ -433,8 +433,9 @@ The flake produces a `symlinkJoin` of five components:
    `--plugin-dir`). `CLOWN_DISABLE_JOB_WAKEUP=1` is the kill switch. Contract:
    RFC-0009 (`docs/rfcs/0009-job-wakeup-channel.md`); feature treatment:
    FDR-0013 (`docs/features/0013-job-wakeup-channel.md`); man page:
-   `clown-job(1)`. Status: clown-side implemented and bats-conformance-tested;
-   no production plugin consumer emits real events yet.
+   `clown-job(1)`. Status: `testing` (FDR-0013) — live-proven 2026-06-06 by
+   two producers (moxy `get-hubbed.ci-watch`, spinclass async merge/check)
+   plus cross-session directed and broadcast `message` wakes.
 
 ## Nix Conventions
 
