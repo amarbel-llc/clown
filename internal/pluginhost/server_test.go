@@ -172,6 +172,23 @@ func TestManagedServer_UnexpectedDeathNonZero(t *testing.T) {
 	}
 }
 
+func TestManagedServer_CrashBeforeHandshakeCapturesFinalStderr(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	srv := newTestServer(t, "crash-before-handshake")
+	srv.Logger = logger
+
+	if err := srv.Start(context.Background()); err == nil {
+		t.Fatal("expected Start to fail when the plugin crashes before handshake")
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "fatal: fakeserver crash diagnostic") {
+		t.Errorf("expected final stderr diagnostic in log, got:\n%s", output)
+	}
+}
+
 func TestManagedServer_SignalDeath(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))

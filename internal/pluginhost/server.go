@@ -30,10 +30,11 @@ type ManagedServer struct {
 	PluginDir string
 	Logger    *slog.Logger
 
-	cmd       *exec.Cmd
-	handshake Handshake
-	done      chan struct{}
-	waitState *os.ProcessState
+	cmd        *exec.Cmd
+	handshake  Handshake
+	done       chan struct{}
+	stderrDone chan struct{}
+	waitState  *os.ProcessState
 }
 
 func (s *ManagedServer) logger() *slog.Logger {
@@ -91,6 +92,7 @@ func (s *ManagedServer) Start(ctx context.Context) error {
 	}
 	log.Info("plugin server process started", "pid", s.cmd.Process.Pid)
 
+	s.stderrDone = make(chan struct{})
 	go s.forwardStderr(stderr)
 
 	hs, err := s.readHandshake(ctx, stdout)
@@ -170,6 +172,11 @@ func (s *ManagedServer) Done() <-chan struct{} {
 }
 
 func (s *ManagedServer) reap() {
+	// os/exec documents that Wait closes the pipes after the command
+	// exits, so calling Wait before all reads complete discards any
+	// buffered output. Drain stderr to EOF first so a crashing plugin's
+	// final diagnostic line reaches the log (clown#72).
+	<-s.stderrDone
 	_ = s.cmd.Wait()
 	s.waitState = s.cmd.ProcessState
 	close(s.done)
@@ -227,6 +234,7 @@ func (s *ManagedServer) readHandshake(ctx context.Context, r io.Reader) (Handsha
 }
 
 func (s *ManagedServer) forwardStderr(r io.Reader) {
+	defer close(s.stderrDone)
 	scanner := bufio.NewScanner(r)
 	log := s.logger()
 	for scanner.Scan() {
@@ -249,6 +257,12 @@ func (s *ManagedServer) kill() {
 		if s.done != nil {
 			<-s.done
 		} else {
+			// Same contract as reap(): drain stderr to EOF before
+			// Wait closes the pipes, or the plugin's final stderr
+			// diagnostic is lost (clown#72).
+			if s.stderrDone != nil {
+				<-s.stderrDone
+			}
 			_ = s.cmd.Wait()
 		}
 	}

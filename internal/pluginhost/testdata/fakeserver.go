@@ -13,6 +13,20 @@ import (
 )
 
 func main() {
+	mode := "sleep"
+	if len(os.Args) > 1 {
+		mode = os.Args[1]
+	}
+
+	// crash-before-handshake exercises the clown#72 path: the plugin
+	// writes a final stderr diagnostic and exits without ever emitting
+	// the clown-protocol handshake on stdout.
+	if mode == "crash-before-handshake" {
+		fmt.Fprintln(os.Stderr, "starting up")
+		fmt.Fprintln(os.Stderr, "fatal: fakeserver crash diagnostic")
+		os.Exit(1)
+	}
+
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "listen: %v\n", err)
@@ -27,11 +41,6 @@ func main() {
 	go srv.Serve(ln)
 
 	fmt.Printf("1|1|tcp|%s|streamable-http\n", ln.Addr().String())
-
-	mode := "sleep"
-	if len(os.Args) > 1 {
-		mode = os.Args[1]
-	}
 
 	switch mode {
 	case "exit-immediate":
