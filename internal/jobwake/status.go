@@ -29,6 +29,18 @@ func SpoolPath(target, jobID string) (string, error) {
 	return SpoolFile(cid, jobID), nil
 }
 
+// ResolveSpool validates the job id and returns the absolute output-spool path
+// for the job in the channel resolved from target, creating nothing (no file,
+// no directory). It is the read-only path resolver the operator tail surface
+// uses; SpoolPath is the producer-facing variant that also ensures the channel
+// dir exists. An invalid job id wraps ErrInvalidJobID.
+func ResolveSpool(target, jobID string) (string, error) {
+	if err := validateJobID(jobID); err != nil {
+		return "", err
+	}
+	return SpoolFile(ChannelID(resolveSession(target)), jobID), nil
+}
+
 // Status is the journal+spool-derived view of one job (RFC-0010 §3). The JSON
 // field names are the contract the consumer (moxy async-result) mirrors
 // verbatim; absent optionals are omitted.
@@ -53,7 +65,14 @@ type Status struct {
 // producer liveness: a job whose producer died without a terminal record reports
 // `running` with a stale last_activity (the RFC-0009 §10 gap is unchanged).
 func StatusOf(target, jobID string, tailN int, now time.Time) (Status, error) {
-	cid := ChannelID(resolveSession(target))
+	return statusOfChannel(ChannelID(resolveSession(target)), jobID, tailN, now)
+}
+
+// statusOfChannel is StatusOf for an already-resolved channel id. It is the
+// shared core both StatusOf (which resolves the channel from a session target)
+// and the enumeration path (ListJobs/ListAllJobs, which already hold the cid)
+// call, so status derivation lives in exactly one place.
+func statusOfChannel(cid, jobID string, tailN int, now time.Time) (Status, error) {
 	recs, err := ReadJob(cid, jobID)
 	if err != nil {
 		return Status{}, err

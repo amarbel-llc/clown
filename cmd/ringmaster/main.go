@@ -18,12 +18,46 @@ func main() {
 	os.Exit(run(os.Args[1:]))
 }
 
+func usage(w *os.File) {
+	fmt.Fprintln(w, "usage: ringmaster <command> [args]")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "commands:")
+	fmt.Fprintln(w, "  daemon [--socket PATH] [--llama-server PATH]   run the llama-server control-plane daemon")
+	fmt.Fprintln(w, "  ls [--target KEY] [--all] [--json]            list background jobs")
+	fmt.Fprintln(w, "  status <job-id> [--target KEY] [--tail N]     show one job's status and output tail")
+	fmt.Fprintln(w, "  tail <job-id> [--target KEY] [-f] [-n N]      print (and optionally follow) a job's output")
+	fmt.Fprintln(w, "  cancel <job-id> [--target KEY] [--message M]  cooperatively cancel a job")
+}
+
 func run(args []string) int {
-	if len(args) < 1 || args[0] != "daemon" {
-		fmt.Fprintln(os.Stderr, "usage: ringmaster daemon [--socket PATH] [--llama-server PATH]")
+	if len(args) < 1 {
+		usage(os.Stderr)
 		return 2
 	}
+	switch args[0] {
+	case "daemon":
+		return runDaemon(args[1:])
+	case "ls":
+		return ringmasterLs(args[1:])
+	case "status":
+		return ringmasterStatus(args[1:])
+	case "tail":
+		return ringmasterTail(args[1:])
+	case "cancel":
+		return ringmasterCancel(args[1:])
+	case "-h", "--help", "help":
+		usage(os.Stdout)
+		return 0
+	default:
+		fmt.Fprintf(os.Stderr, "ringmaster: unknown command %q\n", args[0])
+		usage(os.Stderr)
+		return 2
+	}
+}
 
+// runDaemon runs the llama-server control-plane daemon (FDR-0010). args are the
+// arguments following the `daemon` subcommand.
+func runDaemon(args []string) int {
 	socket := ""
 	// llamaServer defaults to the build-time path (burned in via
 	// buildcfg.LlamaServerPath in flake.nix). --llama-server
@@ -32,7 +66,7 @@ func run(args []string) int {
 	// empty, so the daemon errors out clearly instead of constructing
 	// a nil launcher and serving "launcher not configured" forever.
 	llamaServer := buildcfg.LlamaServerPath
-	for i := 1; i < len(args); i++ {
+	for i := 0; i < len(args); i++ {
 		switch {
 		case args[i] == "--socket" && i+1 < len(args):
 			socket = args[i+1]

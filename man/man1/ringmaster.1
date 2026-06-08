@@ -5,11 +5,30 @@
 .Os
 .Sh NAME
 .Nm ringmaster
-.Nd llama-server control-plane daemon
+.Nd llama-server control-plane daemon and background-job control
 .Sh SYNOPSIS
 .Nm
 .Cm daemon
 .Op Fl -socket Ar path
+.Nm
+.Cm ls
+.Op Fl -target Ar key
+.Op Fl -all
+.Op Fl -json
+.Nm
+.Cm status Ar job-id
+.Op Fl -target Ar key
+.Op Fl -tail Ar n
+.Op Fl -json
+.Nm
+.Cm tail Ar job-id
+.Op Fl -target Ar key
+.Op Fl f
+.Op Fl n Ar lines
+.Nm
+.Cm cancel Ar job-id
+.Op Fl -target Ar key
+.Op Fl -message Ar text
 .Sh DESCRIPTION
 .Nm
 is a long-lived per-user daemon that spawns and supervises
@@ -33,6 +52,20 @@ See
 for the architecture and
 .Xr clown-plugin-protocol 7
 for unrelated background on the clown plugin protocol.
+.Pp
+.Nm
+additionally serves as the operator-facing control surface for clown's
+background jobs: the
+.Cm ls , status , tail ,
+and
+.Cm cancel
+subcommands list, inspect, follow, and cancel the long-running jobs that
+agents drive through the
+.Xr clown-job 1
+producer surface
+.Pq the job-wakeup channel and output spool .
+These subcommands need no running daemon; they read and append to the
+on-disk job journal directly.
 .Pp
 .Nm
 is intended to run under
@@ -61,6 +94,46 @@ environment variable when set, or
 otherwise.
 Accepts connections until SIGTERM/SIGINT, at which point in-flight
 RPCs drain and the listener closes.
+.It Cm ls Oo Fl -target Ar key Oc Oo Fl -all Oc Oo Fl -json Oc
+List background jobs as a table of job id, source, state, elapsed time,
+and last activity.
+By default lists the jobs in the current session's channel
+.Pq resolved like Xr clown-job 1 ;
+.Fl -target
+selects another session key, and
+.Fl -all
+spans every channel on the host, prefixing each row with a short channel
+id.
+.Fl -json
+emits a JSON array instead.
+.It Cm status Ar job-id Oo Fl -target Ar key Oc Oo Fl -tail Ar n Oc Oo Fl -json Oc
+Print one job's full status
+.Pq state, source, elapsed, last activity
+followed by the last
+.Ar n
+.Pq default 20
+lines of its output spool.
+Mirrors
+.Xr clown-job 1
+.Cm status .
+A malformed job id exits 2; a missing job exits 1.
+.It Cm tail Ar job-id Oo Fl -target Ar key Oc Oo Fl f Oc Oo Fl n Ar lines Oc
+Print the last
+.Ar lines
+.Pq default 20
+lines of a job's output spool.
+With
+.Fl f ,
+follow the spool, streaming appended output until the job reaches a
+terminal state or the operator interrupts.
+.It Cm cancel Ar job-id Oo Fl -target Ar key Oc Oo Fl -message Ar text Oc
+Cooperatively cancel a job by writing its terminal
+.Sq cancelled
+record.
+This wakes the originating session's monitor and signals the owning
+producer to stop; see
+.Sx CAVEATS .
+A missing job, or one that is already terminal, exits 1.
 .El
 .Sh ENVIRONMENT
 .Bl -tag -width Ds
@@ -93,6 +166,19 @@ is unset.
 Directory scanned for downloadable GGUF files by the
 .Cm ListAvailableModels
 RPC.
+.It Pa ~/.local/state/clown/jobs
+Per-channel background-job journals
+.Pq Pa <channel>/<job-id>.jsonl
+and output spools
+.Pq Pa <channel>/<job-id>.out
+read by
+.Cm ls , status ,
+and
+.Cm tail
+and appended to by
+.Cm cancel .
+Honors
+.Ev XDG_STATE_HOME .
 .El
 .Sh RPC SURFACE
 .Nm
@@ -162,6 +248,7 @@ Same as
 .Sh SEE ALSO
 .Xr circus 1 ,
 .Xr clown 1 ,
+.Xr clown-job 1 ,
 .Xr llama-server 1 ,
 .Xr ringmaster 7 ,
 .Xr ringmaster-testing 7
@@ -178,5 +265,23 @@ channel rather than reaping independently.
 If you embed
 .Nm Ap s
 launcher in your own code, preserve this invariant.
+.Pp
+.Cm cancel
+is cooperative, not forceful.
+Background jobs are not spawned by
+.Nm
+and the job journal deliberately records no worker PID
+.Pq a PID is meaningless across the sessions and hosts a channel may span ,
+so
+.Cm cancel
+writes the terminal
+.Sq cancelled
+record rather than sending a signal to an operating-system process.
+The owning producer is responsible for observing the cancellation and
+tearing down its own process tree.
+A producer that has hard-crashed without writing a terminal record cannot
+be reaped by
+.Cm cancel ;
+its journal is garbage-collected after the retention window.
 .Sh AUTHORS
 .An "amarbel, LLC"

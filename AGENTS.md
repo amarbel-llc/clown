@@ -469,6 +469,21 @@ The flake produces a `symlinkJoin` of five components:
    job tools (spinclass `session-job-status`/chat, moxy `async-result` status)
    migrate onto. Status: `accepted` (RFC-0011), reviewed by both consumers.
 
+   **Operator job control (`ringmaster ls|status|tail|cancel`).** The
+   `ringmaster` binary (`cmd/ringmaster`, FDR-0010's llama-server
+   control-plane daemon) doubles as the human-facing control surface for
+   the job channel (clown#124, `cmd/ringmaster/jobs.go`): `ls` lists a
+   channel's jobs (`--all` spans every channel on the host), `status`
+   mirrors `clown job status`, `tail [-f]` streams the output spool, and
+   `cancel` writes the terminal `cancelled` record. All four read/append
+   the on-disk journal+spool directly (no daemon required) over the same
+   single `internal/jobwake` code path (`ListJobs`/`ListAllJobs`,
+   `StatusOf`, `ResolveSpool`, `Done`). `cancel` is **cooperative**: jobs
+   aren't ringmaster-spawned and the journal carries no worker PID (an
+   RFC-0010 decision), so it wakes the owning session's monitor and
+   signals the producer to stop rather than killing an OS process. Man
+   page: `ringmaster(1)`.
+
 ## Nix Conventions
 
 The `amarbel-llc/nixpkgs` fork migrated to a thin overlay flake on
