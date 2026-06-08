@@ -437,6 +437,21 @@ The flake produces a `symlinkJoin` of five components:
    two producers (moxy `get-hubbed.ci-watch`, spinclass async merge/check)
    plus cross-session directed and broadcast `message` wakes.
 
+   **Job output spool + status probe (`clown job spool-path` / `clown job
+   status`).** An observability layer over the channel (RFC-0010,
+   `docs/rfcs/0010-job-output-spool-and-status.md`; `internal/jobwake/status.go`):
+   a producer-written, append-only `<job-id>.out` spool sibling to the journal,
+   and a journal+spool-derived status probe. `spool-path` resolves/prints the
+   `.out` path (empty+exit0 when disabled, exit2 on a malformed id); `status`
+   reports `{state, source, started, ended, elapsed_sec, last_activity,
+   spool_bytes, progress, tail}` (`--json` or a human header + bounded tail),
+   journal-derived only — it never infers producer liveness, so a hard-crashed
+   producer reports `running` with a stale `last_activity` (the RFC-0009 §10
+   gap). The spool is reaped with its journal (plus an age-gated orphan sweep).
+   Both subcommands validate the job id through the same `validateJobID`
+   choke point as the rest of the channel (clown#123). moxy is the motivating
+   consumer (its FDR-0005, moxy#341); impl tracked in clown#122.
+
 ## Nix Conventions
 
 The `amarbel-llc/nixpkgs` fork migrated to a thin overlay flake on

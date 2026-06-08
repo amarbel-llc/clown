@@ -3,12 +3,14 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/amarbel-llc/clown/internal/jobwake"
 )
@@ -26,7 +28,7 @@ func jobWakeupDisabled() bool {
 // a pull, not an emit (RFC-0009 §8).
 func runJob(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "clown job: missing subcommand (start|progress|done|message|read)")
+		fmt.Fprintln(os.Stderr, "clown job: missing subcommand (start|progress|done|message|read|spool-path|status)")
 		return 2
 	}
 	switch args[0] {
@@ -52,6 +54,15 @@ func runJob(args []string) int {
 		return jobMessage(args[1:])
 	case "read":
 		return jobRead(args[1:])
+	case "spool-path":
+		if jobWakeupDisabled() {
+			return 0 // RFC-0010 §2: empty stdout + exit 0 when disabled
+		}
+		return jobSpoolPath(args[1:])
+	case "status":
+		// A read-only pull, like `read`: works regardless of the disable
+		// switch (RFC-0010 §3).
+		return jobStatus(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "clown job: unknown subcommand %q\n", args[0])
 		return 2
@@ -148,6 +159,86 @@ func jobMessage(args []string) int {
 		return 1
 	}
 	fmt.Println(id)
+	return 0
+}
+
+// jobSpoolPath resolves and prints the absolute output-spool path for a job
+// (RFC-0010 §2). It creates the channel directory but NOT the spool file (that
+// is the producer's append). An invalid job id is a usage error (exit 2).
+func jobSpoolPath(args []string) int {
+	jobID, rest, ok := leadingJobID(args)
+	if !ok {
+		fmt.Fprintln(os.Stderr, "clown job spool-path: missing <job-id>")
+		return 2
+	}
+	fs := flag.NewFlagSet("job spool-path", flag.ContinueOnError)
+	target := fs.String("target", "", "target session key (default: resolved session)")
+	if err := fs.Parse(rest); err != nil {
+		return 2
+	}
+	path, err := jobwake.SpoolPath(*target, jobID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clown job spool-path: %v\n", err)
+		if errors.Is(err, jobwake.ErrInvalidJobID) {
+			return 2
+		}
+		return 1
+	}
+	fmt.Println(path)
+	return 0
+}
+
+// jobStatus prints a job's journal+spool-derived status (RFC-0010 §3). It is a
+// read-only pull, available regardless of CLOWN_DISABLE_JOB_WAKEUP. A missing
+// journal exits 1; an invalid job id exits 2.
+func jobStatus(args []string) int {
+	jobID, rest, ok := leadingJobID(args)
+	if !ok {
+		fmt.Fprintln(os.Stderr, "clown job status: missing <job-id>")
+		return 2
+	}
+	fs := flag.NewFlagSet("job status", flag.ContinueOnError)
+	target := fs.String("target", "", "target session key (default: resolved session)")
+	tail := fs.Int("tail", 20, "number of trailing spool lines to show")
+	asJSON := fs.Bool("json", false, "emit the status as a single JSON object")
+	if err := fs.Parse(rest); err != nil {
+		return 2
+	}
+	st, err := jobwake.StatusOf(*target, jobID, *tail, time.Now().UTC())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clown job status: %v\n", err)
+		if errors.Is(err, jobwake.ErrInvalidJobID) {
+			return 2
+		}
+		return 1 // missing journal and any other failure
+	}
+	if *asJSON {
+		b, err := json.Marshal(st)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "clown job status: %v\n", err)
+			return 1
+		}
+		fmt.Println(string(b))
+		return 0
+	}
+	return printStatusHuman(jobID, st)
+}
+
+// printStatusHuman renders the one-line status header followed by the spool tail
+// under a separator (RFC-0010 §3).
+func printStatusHuman(jobID string, st jobwake.Status) int {
+	header := fmt.Sprintf("job %s (%s): %s, elapsed %s",
+		jobID, st.Source, st.State, time.Duration(st.ElapsedSec)*time.Second)
+	if st.LastActivity != "" {
+		header += ", last activity " + st.LastActivity
+	}
+	fmt.Println(header)
+	if len(st.Tail) > 0 {
+		fmt.Println("---")
+		for _, line := range st.Tail {
+			fmt.Println(line)
+		}
+	}
 	return 0
 }
 

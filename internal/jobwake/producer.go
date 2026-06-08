@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -13,19 +14,25 @@ import (
 
 var jobIDRe = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
 
+// ErrInvalidJobID is wrapped by every validateJobID failure so callers (notably
+// the CLI) can distinguish a usage error — a malformed job id, which exits 2 —
+// from a runtime error such as a missing journal, which exits 1.
+var ErrInvalidJobID = errors.New("invalid job id")
+
 // validateJobID enforces the RFC-0009 §4 job-id grammar before an id is used to
 // compose a filesystem path, and additionally rejects "." and ".." which the
 // grammar admits. The grammar excludes "/", so a traversal id like "../foo" is
 // already a grammar failure; the explicit "."/".." reject is belt-and-suspenders
 // for the forms that survive suffix stripping. Every path-composing entry point
 // (appendRecord for the write side, ReadJob for the read side) calls this so the
-// §4 grammar is enforced in code, not merely documented (clown#123).
+// §4 grammar is enforced in code, not merely documented (clown#123). Failures
+// wrap ErrInvalidJobID so callers can branch on errors.Is.
 func validateJobID(id string) error {
 	if !jobIDRe.MatchString(id) {
-		return fmt.Errorf("invalid job id %q: must match %s", id, jobIDRe.String())
+		return fmt.Errorf("%w %q: must match %s", ErrInvalidJobID, id, jobIDRe.String())
 	}
 	if id == "." || id == ".." {
-		return fmt.Errorf("invalid job id %q: must not be %q or %q", id, ".", "..")
+		return fmt.Errorf("%w %q: must not be %q or %q", ErrInvalidJobID, id, ".", "..")
 	}
 	return nil
 }

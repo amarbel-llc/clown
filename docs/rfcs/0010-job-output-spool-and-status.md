@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 date: 2026-06-07
 ---
 
@@ -170,7 +170,7 @@ Tests use binary injection via `bats-emo`:
 | §3, status derives state/elapsed from journal records | `job_output_spool.bats` | running vs terminal derivation |
 | §3, last_activity from spool mtime; tail bounded to N lines | `job_output_spool.bats` | tail + activity semantics |
 | §3, missing journal exits 1 | `job_output_spool.bats` | unknown-job diagnostic |
-| §4, sweep reaps spool with journal and orphan spools | `job_output_spool.bats` | GC coupling |
+| §4, sweep reaps spool with journal and orphan spools | `internal/jobwake/status_test.go` | GC coupling (Go: the sweep runs only in the blocking monitor, not via the CLI surface bats drives) |
 
 ## Compatibility
 

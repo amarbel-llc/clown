@@ -34,6 +34,9 @@ func sweep(readerCID string, now time.Time) {
 	reapAgedJournals(readerCID, cutoff)
 	reapAgedJournals(bcid, cutoff)
 
+	reapOrphanSpools(readerCID, cutoff)
+	reapOrphanSpools(bcid, cutoff)
+
 	pruneAckEntries(readerCID, AckFile(readerCID))
 	pruneAckEntries(bcid, AckFileFor(bcid, readerCID))
 
@@ -41,8 +44,9 @@ func sweep(readerCID string, now time.Time) {
 }
 
 // reapAgedJournals removes <job-id>.jsonl files in the channel dir whose
-// mtime is before cutoff. Dotfiles (ack cursors) and non-journal files are
-// never touched.
+// mtime is before cutoff, along with each reaped job's <job-id>.out spool
+// (RFC-0010 §4: the spool dies with its journal, regardless of the spool's own
+// mtime). Dotfiles (ack cursors) and non-journal files are never touched.
 func reapAgedJournals(cid string, cutoff time.Time) {
 	entries, err := os.ReadDir(JournalDir(cid))
 	if err != nil {
@@ -58,7 +62,38 @@ func reapAgedJournals(cid string, cutoff time.Time) {
 			continue
 		}
 		if info.ModTime().Before(cutoff) {
-			_ = os.Remove(filepath.Join(JournalDir(cid), name))
+			jobID := strings.TrimSuffix(name, ".jsonl")
+			_ = os.Remove(JournalFile(cid, jobID))
+			_ = os.Remove(SpoolFile(cid, jobID)) // RFC-0010 §4
+		}
+	}
+}
+
+// reapOrphanSpools removes <job-id>.out spools whose <job-id>.jsonl journal is
+// absent and whose own mtime is before cutoff (RFC-0010 §4). The age gate means
+// a spool created by `clown job spool-path` before its `started` journal is
+// written is never reaped mid-setup. A spool whose journal still exists is left
+// to reapAgedJournals, which removes the pair together.
+func reapOrphanSpools(cid string, cutoff time.Time) {
+	entries, err := os.ReadDir(JournalDir(cid))
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || strings.HasPrefix(name, ".") || !strings.HasSuffix(name, ".out") {
+			continue
+		}
+		jobID := strings.TrimSuffix(name, ".out")
+		if _, err := os.Stat(JournalFile(cid, jobID)); err == nil {
+			continue // journal present => reaped with its journal, not here
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if info.ModTime().Before(cutoff) {
+			_ = os.Remove(SpoolFile(cid, jobID))
 		}
 	}
 }

@@ -33,6 +33,14 @@
 .Ar ...
 .Op Fl -peek
 .Op Fl -json
+.Nm clown job spool-path
+.Ar job-id
+.Op Fl -target Ar session-key
+.Nm clown job status
+.Ar job-id
+.Op Fl -target Ar session-key
+.Op Fl -tail Ar n
+.Op Fl -json
 .Nm clown job-watch
 .Sh DESCRIPTION
 The
@@ -239,6 +247,74 @@ which is meant to suppress that cursor advance, is accepted for forward
 compatibility but is presently a
 .Em no-op :
 no cursor is advanced regardless.
+.It Nm clown job spool-path Ar job-id Oo Fl -target Ar session-key Oc
+Print the absolute path of the job's output
+.Em spool
+\(em a producer-written, append-only side file carrying the job's live
+subprocess output, a sibling of the journal at
+.Pa <job-id>.out
+.Pq RFC-0010 .
+The path is printed as a single line and the channel directory is created if
+absent, but the spool file itself is
+.Em not :
+writing it is the producer's append.
+.Pp
+The spool is the producer's to write and is optional \(em a job without one
+is fully conformant and
+.Nm clown job status
+degrades gracefully.
+When the facility is disabled via
+.Ev CLOWN_DISABLE_JOB_WAKEUP
+this subcommand prints nothing and exits
+.Li 0 ,
+mirroring the disabled
+.Nm clown job start ;
+producers tolerate an empty path by skipping the spool.
+A malformed
+.Ar job-id
+is a usage error
+.Pq exit Li 2 .
+.It Nm clown job status Ar job-id Oo Fl -target Ar session-key Oc Oo Fl -tail Ar n Oc Oo Fl -json Oc
+Report a running or finished job's status, derived from its journal and spool
+alone: the
+.Li state
+.Pq the terminal record's type if present, else Li running ,
+.Li started ,
+.Li ended ,
+.Li elapsed_sec ,
+.Li last_activity
+.Pq the later of the spool's mtime and the newest journal record's timestamp ,
+.Li spool_bytes ,
+the newest
+.Li progress
+message, and a bounded
+.Li tail
+of the spool
+.Pq the last Ar n No lines, default 20 .
+.Pp
+Like
+.Nm clown job read
+it is a read-only pull, available regardless of
+.Ev CLOWN_DISABLE_JOB_WAKEUP .
+With
+.Fl -json
+the status is one JSON object on a single line; otherwise a one-line header is
+printed, followed by the tail under a
+.Ql ---
+separator.
+The probe reports journal-derived state only \(em it never infers producer
+liveness, so a job whose producer died without a terminal record reports
+.Li running
+with a stale
+.Li last_activity .
+When no journal exists for
+.Ar job-id
+it exits
+.Li 1 ;
+a malformed
+.Ar job-id
+is a usage error
+.Pq exit Li 2 .
 .It Nm clown job-watch Op Fl -once
 Run the channel monitor.
 It resolves the session key (see
@@ -369,8 +445,13 @@ immediately without binding a socket, and the emit subcommands
 behave as no-ops that still exit
 .Li 0 ,
 so producers need no conditional logic.
+.Nm clown job spool-path
+likewise prints nothing and exits
+.Li 0 .
 .Nm clown job read
-still works, since it is a pull rather than an emit.
+and
+.Nm clown job status
+still work, since they are pulls rather than emits.
 .It Ev CLOWN_SESSION_ID
 The highest-priority session-key source; also the variable clown exports
 the resolved key into (see
@@ -413,6 +494,11 @@ When unset, the socket falls back to a per-user directory under
 .Bl -tag -width Ds
 .It Pa $XDG_STATE_HOME/clown/jobs/<channel-id>/<job-id>.jsonl
 Per-job durable journal, one JSON record per line.
+.It Pa $XDG_STATE_HOME/clown/jobs/<channel-id>/<job-id>.out
+Per-job output spool: producer-written, append-only, best-effort live
+subprocess output surfaced by
+.Nm clown job status .
+Optional; reaped with its journal.
 .It Pa $XDG_STATE_HOME/clown/jobs/<channel-id>/.ack.json
 Per-channel monitor ack state.
 .It Pa $XDG_STATE_HOME/clown/jobs/<channel-id>/.ack-<reader-channel-id>.json
@@ -432,11 +518,15 @@ also exits
 on a clean interrupt
 .Pq Dv SIGINT No or Dv SIGTERM .
 .It Li 1
-A runtime failure (e.g. a journal write error, or
+A runtime failure (e.g. a journal write error,
 .Nm clown job done
-on a job that already has a terminal record).
+on a job that already has a terminal record, or
+.Nm clown job status
+for a job with no journal).
 .It Li 2
 A usage error: missing or unknown subcommand, a missing required
+.Ar job-id ,
+a malformed
 .Ar job-id ,
 or an invalid flag.
 .El
@@ -497,6 +587,10 @@ the at-least-once replay semantics \(em is specified in
 with the feature-level treatment in
 .Pa docs/features/0013-job-wakeup-channel.md ,
 both within the clown source repository.
+The output spool and status probe
+.Pq Nm clown job spool-path , Nm clown job status
+are specified in
+.Pa docs/rfcs/0010-job-output-spool-and-status.md .
 .Sh AUTHORS
 .An amarbel, LLC
 .Lk https://github.com/amarbel-llc/clown

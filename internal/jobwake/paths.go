@@ -64,6 +64,12 @@ func JournalFile(channelID, jobID string) string {
 	return filepath.Join(JournalDir(channelID), jobID+".jsonl")
 }
 
+// SpoolFile is the producer-written output spool for one job: a sibling of the
+// job's journal carrying the live subprocess output (RFC-0010 §1).
+func SpoolFile(channelID, jobID string) string {
+	return filepath.Join(JournalDir(channelID), jobID+".out")
+}
+
 // AckFile is the per-channel monitor ack cursor.
 func AckFile(channelID string) string {
 	return filepath.Join(JournalDir(channelID), ".ack.json")
