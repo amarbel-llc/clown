@@ -320,12 +320,26 @@ Designing for both the agent and producer de-dup, the RECOMMENDED ordering is:
    `job_message`). This is the highest-value de-dup: it gives the agent direct
    job visibility and cross-session messaging, and lets plugins retire their
    private agent tools that reimplement the same channel —
-   - spinclass `session-job-status` → `job_status`,
+   - spinclass `session-job-status` → `job_status` — the status view only; its
+     rendered TAP result rides `result_ref` to spinclass's stored `job.json`
+     (see *Result-of-record stays with the producer*), and its serve-PID crash
+     detection is preserved by emitting the `interrupted` terminal record on
+     PID-death (RFC-0010 §3 producer-emitted liveness), which `job_status` then
+     reports,
    - spinclass `chat-send` / `chat-read` → `job_message` / `job_read` (these are
-     already the RFC-0009 `message` channel),
+     already the RFC-0009 `message` channel; two mapping prerequisites — the
+     subject/body split and the read cursor — are noted below),
    - moxy `async-result`'s status view → `job_status` (+ `job_read`).
-   Plugins SHOULD keep their existing tools as thin aliases during a deprecation
-   window so consumers migrate without a flag day.
+   Plugins SHOULD keep their existing tools during migration so consumers move
+   without a flag day. For a plugin that hard-requires clown, the old tool MAY
+   become a thin alias and be retired once consumers migrate. But for a plugin
+   where **clown is optional** — e.g. spinclass, whose `job.json` is its
+   system-of-record and whose `chat-read` polling is its documented clown-absent
+   receive path — the native tool is a **permanent** dual-path, not a
+   retire-after-deprecation alias: `job_*` is preferred when clown is present
+   (server injected), and the native path remains the fallback whenever the
+   facility is disabled, clown is absent, or the provider takes no `--plugin-dir`
+   (§2). Plugin authors MUST NOT plan a flag day they cannot reach.
 
 2. **Phase 2 — producer surface** (`job_start`, `job_progress`, `job_done`,
    `job_spool_path`). These complete the contract and let the agent drive a job
@@ -339,6 +353,17 @@ is disabled or clown is absent, or a job whose `job_start` never wrote. A
 producer that keeps its own job index therefore remains the resilient fallback
 for not-in-journal jobs: the migration makes `job_status` the *primary* status
 path, not the *sole* one.
+
+A chat-mapping prerequisite for `chat-send` / `chat-read` → `job_message` /
+`job_read`: `chat-send` splits a subject (the ≤200-char wake line) from a body
+(full text, recovered on read), whereas `job_message` carries a single
+`message`, so the migration needs a documented convention (`message` = the
+subject/wake line; body via `result_ref` or a defined field). And `chat-read`
+advances an exactly-once per-session read cursor — a different de-dup model from
+`job_read`'s `since`/RFC3339 lower-bound scan — so faithful receive needs a
+`job_read` cursor mode (the persisted read cursor RFC-0009 §8 marks
+not-yet-implemented). Until both land, `chat-*` stays native and only the
+`job_status` / `job_read`-for-jobs migration proceeds.
 
 The end state the ordering converges on is a single platform vocabulary: the
 agent speaks `job_*` for everything, plugins stop shipping bespoke job tools,
