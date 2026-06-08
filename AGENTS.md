@@ -452,6 +452,23 @@ The flake produces a `symlinkJoin` of five components:
    choke point as the rest of the channel (clown#123). moxy is the motivating
    consumer (its FDR-0005, moxy#341); impl tracked in clown#122.
 
+   **Job-platform MCP tools (`clown job-mcp`).** RFC-0011
+   (`docs/rfcs/0011-job-platform-mcp-tools.md`; `cmd/clown/jobmcp.go`) exposes
+   the platform to the agent directly as MCP tools — `job_start`,
+   `job_progress`, `job_done`, `job_message`, `job_read`, `job_status`,
+   `job_spool_path` — each equivalent to the matching `clown job` subcommand
+   (one `internal/jobwake` code path). `clown job-mcp` is a hand-rolled stdio
+   JSON-RPC server; clown injects it by adding a `stdioServers` entry to the
+   synthesized `clown-builtin-jobs` plugin (alongside the job-watch monitor),
+   which `clown-stdio-bridge` wraps to streamable-HTTP and clown's own
+   pluginhost manages — clown self-consuming RFC-0002, no privileged path. The
+   tools surface as `plugin:clown-builtin-jobs:jobs`. Injected only for
+   `--plugin-dir` providers with the bridge available (nix builds); absent in
+   dev builds and when `CLOWN_DISABLE_JOB_WAKEUP=1`. The CLI stays the producer
+   front-end; the MCP tools are the agent-facing surface that plugin-private
+   job tools (spinclass `session-job-status`/chat, moxy `async-result` status)
+   migrate onto. Status: `accepted` (RFC-0011), reviewed by both consumers.
+
 ## Nix Conventions
 
 The `amarbel-llc/nixpkgs` fork migrated to a thin overlay flake on

@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/amarbel-llc/clown/internal/buildcfg"
 )
 
 func TestJobMonitorPluginDirSynthesized(t *testing.T) {
@@ -38,6 +40,9 @@ func TestJobMonitorPluginDirSynthesized(t *testing.T) {
 	}
 	if err := json.Unmarshal(b, &m); err != nil {
 		t.Fatalf("manifest is not valid JSON: %v\n%s", err, b)
+	}
+	if m.Name != "clown-builtin-jobs" {
+		t.Fatalf("plugin name = %q, want clown-builtin-jobs", m.Name)
 	}
 	// Guard against a regression to the experimental.monitors shape: the raw
 	// JSON must not carry an "experimental" key at all.
@@ -95,5 +100,67 @@ func TestJobMonitorDisabledReturnsEmpty(t *testing.T) {
 	if dir != "" {
 		_ = os.RemoveAll(dir)
 		t.Fatalf("expected no plugin dir when disabled, got %q", dir)
+	}
+}
+
+// When the stdio bridge is available, the synthesized built-in plugin also
+// carries a clown.json declaring the job-mcp stdio server (RFC-0011 §1).
+func TestJobMonitorPluginDirIncludesMCPWhenBridgeSet(t *testing.T) {
+	t.Setenv("CLOWN_DISABLE_JOB_WAKEUP", "")
+	orig := buildcfg.StdioBridgePath
+	buildcfg.StdioBridgePath = "/nix/store/x/bin/clown-stdio-bridge"
+	t.Cleanup(func() { buildcfg.StdioBridgePath = orig })
+
+	dir, err := synthJobMonitorPluginDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+
+	b, err := os.ReadFile(filepath.Join(dir, "clown.json"))
+	if err != nil {
+		t.Fatalf("expected clown.json when bridge is set: %v", err)
+	}
+	var cfg struct {
+		Version      int `json:"version"`
+		StdioServers map[string]struct {
+			Command string   `json:"command"`
+			Args    []string `json:"args"`
+		} `json:"stdioServers"`
+	}
+	if err := json.Unmarshal(b, &cfg); err != nil {
+		t.Fatalf("clown.json invalid: %v\n%s", err, b)
+	}
+	if cfg.Version != 1 {
+		t.Fatalf("clown.json version = %d, want 1", cfg.Version)
+	}
+	jobs, ok := cfg.StdioServers["jobs"]
+	if !ok {
+		t.Fatalf("clown.json missing stdioServers.jobs; got %s", b)
+	}
+	if !filepath.IsAbs(jobs.Command) {
+		t.Fatalf("jobs.command = %q, want an absolute path", jobs.Command)
+	}
+	if len(jobs.Args) != 1 || jobs.Args[0] != "job-mcp" {
+		t.Fatalf("jobs.args = %v, want [job-mcp]", jobs.Args)
+	}
+}
+
+// In dev builds (no bridge path) the MCP server is omitted so host discovery's
+// Desugar does not error and abort the launch; the monitor still ships.
+func TestJobMonitorPluginDirNoMCPWhenBridgeUnset(t *testing.T) {
+	t.Setenv("CLOWN_DISABLE_JOB_WAKEUP", "")
+	orig := buildcfg.StdioBridgePath
+	buildcfg.StdioBridgePath = ""
+	t.Cleanup(func() { buildcfg.StdioBridgePath = orig })
+
+	dir, err := synthJobMonitorPluginDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+
+	if _, err := os.Stat(filepath.Join(dir, "clown.json")); !os.IsNotExist(err) {
+		t.Fatalf("clown.json must be absent without a bridge path, stat err = %v", err)
 	}
 }

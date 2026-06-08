@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+
+	"github.com/amarbel-llc/clown/internal/buildcfg"
 )
 
 // jobMonitorPlugin is the synthesized built-in plugin manifest that registers
@@ -82,7 +84,7 @@ func synthJobMonitorPluginDir() (string, error) {
 		return "", err
 	}
 	manifest := jobMonitorPlugin{
-		Name:    "clown-builtin-jobwake",
+		Name:    "clown-builtin-jobs",
 		Version: "1",
 		Monitors: []jobMonitorEntry{{
 			Name:        "clown-job-watch",
@@ -98,6 +100,36 @@ func synthJobMonitorPluginDir() (string, error) {
 	if err := os.WriteFile(filepath.Join(manifestDir, "plugin.json"), b, 0o600); err != nil {
 		_ = os.RemoveAll(dir)
 		return "", err
+	}
+
+	// When the stdio bridge is available (nix builds; empty in dev `go run`),
+	// the same built-in plugin also serves the job-platform MCP tools
+	// (RFC-0011): a clown.json stdioServers entry runs `clown job-mcp`, which
+	// clown's own pluginhost Desugars through clown-stdio-bridge to
+	// streamable-HTTP — clown self-consuming RFC-0002. Skipped in dev builds,
+	// where Desugar errors without a bridge path and would abort the launch;
+	// the monitor still works there. The command MUST be absolute (the
+	// synthesized plugin dir holds no clown binary for Desugar to resolve a
+	// relative command against), so a missing clownExePath() also skips it.
+	if exe := clownExePath(); exe != "" && buildcfg.StdioBridgePath != "" {
+		clownCfg := map[string]any{
+			"version": 1,
+			"stdioServers": map[string]any{
+				"jobs": map[string]any{
+					"command": exe,
+					"args":    []string{"job-mcp"},
+				},
+			},
+		}
+		cb, err := json.MarshalIndent(clownCfg, "", "  ")
+		if err != nil {
+			_ = os.RemoveAll(dir)
+			return "", err
+		}
+		if err := os.WriteFile(filepath.Join(dir, "clown.json"), cb, 0o600); err != nil {
+			_ = os.RemoveAll(dir)
+			return "", err
+		}
 	}
 	return dir, nil
 }

@@ -165,6 +165,8 @@ func run(rawArgs []string) int {
 			return runJob(rawArgs[1:])
 		case "job-watch":
 			return runJobWatch(rawArgs[1:])
+		case "job-mcp":
+			return runJobMCP(rawArgs[1:])
 		}
 	}
 

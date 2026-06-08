@@ -42,6 +42,7 @@
 .Op Fl -tail Ar n
 .Op Fl -json
 .Nm clown job-watch
+.Nm clown job-mcp
 .Sh DESCRIPTION
 The
 .Nm clown job
@@ -339,6 +340,39 @@ the conformance suite, also usable as a pull-style replay.
 This subcommand is normally spawned by
 .Nm clown
 as a registered monitor, not run by hand.
+.It Nm clown job-mcp
+Run clown's built-in job-platform MCP server (RFC-0011): a stdio JSON-RPC
+server exposing the job-wakeup platform as the MCP tools
+.Li job_start ,
+.Li job_progress ,
+.Li job_done ,
+.Li job_message ,
+.Li job_read ,
+.Li job_status ,
+and
+.Li job_spool_path ,
+each equivalent to the matching
+.Nm clown job
+subcommand.
+Like
+.Nm clown job-watch
+this is normally spawned by
+.Nm clown ,
+not run by hand:
+.Nm clown
+synthesizes the
+.Li clown-builtin-jobs
+plugin declaring it as a
+.Xr clown-json 5
+stdioServers entry, which
+.Xr clown-stdio-bridge 1
+wraps to streamable-HTTP and clown's own plugin host manages \(em clown
+self-consuming its plugin protocol; see
+.Xr clown-plugin-protocol 7 .
+The tools surface to the agent as
+.Li plugin:clown-builtin-jobs:jobs .
+When the stdio bridge is unavailable (dev builds) or the facility is
+disabled, the server is not injected.
 .El
 .Sh SESSION KEY
 A
@@ -591,6 +625,10 @@ The output spool and status probe
 .Pq Nm clown job spool-path , Nm clown job status
 are specified in
 .Pa docs/rfcs/0010-job-output-spool-and-status.md .
+The MCP tool surface
+.Pq Nm clown job-mcp
+is specified in
+.Pa docs/rfcs/0011-job-platform-mcp-tools.md .
 .Sh AUTHORS
 .An amarbel, LLC
 .Lk https://github.com/amarbel-llc/clown
