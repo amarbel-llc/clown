@@ -12,6 +12,9 @@ import (
 // ReadJob parses a job's JSONL journal in append order, skipping blank or
 // malformed lines (RFC-0009 §10). Callers tolerate os.IsNotExist.
 func ReadJob(channelID, jobID string) ([]Record, error) {
+	if err := validateJobID(jobID); err != nil {
+		return nil, err
+	}
 	f, err := os.Open(JournalFile(channelID, jobID))
 	if err != nil {
 		return nil, err // callers tolerate os.IsNotExist

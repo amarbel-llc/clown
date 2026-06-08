@@ -13,6 +13,23 @@ import (
 
 var jobIDRe = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
 
+// validateJobID enforces the RFC-0009 §4 job-id grammar before an id is used to
+// compose a filesystem path, and additionally rejects "." and ".." which the
+// grammar admits. The grammar excludes "/", so a traversal id like "../foo" is
+// already a grammar failure; the explicit "."/".." reject is belt-and-suspenders
+// for the forms that survive suffix stripping. Every path-composing entry point
+// (appendRecord for the write side, ReadJob for the read side) calls this so the
+// §4 grammar is enforced in code, not merely documented (clown#123).
+func validateJobID(id string) error {
+	if !jobIDRe.MatchString(id) {
+		return fmt.Errorf("invalid job id %q: must match %s", id, jobIDRe.String())
+	}
+	if id == "." || id == ".." {
+		return fmt.Errorf("invalid job id %q: must not be %q or %q", id, ".", "..")
+	}
+	return nil
+}
+
 // StartOpts configures a new job. Target overrides the resolved SessionKey;
 // Source identifies the emitting plugin; Label seeds the generated job id.
 type StartOpts struct {
@@ -75,8 +92,8 @@ func Start(o StartOpts) (string, error) {
 		return "", err
 	}
 	id := newJobID(o.Label)
-	if !jobIDRe.MatchString(id) {
-		return "", fmt.Errorf("generated job id %q is invalid", id)
+	if err := validateJobID(id); err != nil {
+		return "", fmt.Errorf("generated job id %q invalid: %w", id, err)
 	}
 	rec := Record{V: SchemaVersion, Job: id, Session: session, Source: source,
 		Type: TypeStarted, TS: nowTS()}
@@ -98,6 +115,9 @@ func Start(o StartOpts) (string, error) {
 // clown-job CLI is one process per job operation); this invariant is the
 // caller's responsibility, not enforced here.
 func appendRecord(cid string, partial Record, fsync bool) error {
+	if err := validateJobID(partial.Job); err != nil {
+		return err
+	}
 	existing, err := ReadJob(cid, partial.Job)
 	if err != nil && !os.IsNotExist(err) {
 		return err
