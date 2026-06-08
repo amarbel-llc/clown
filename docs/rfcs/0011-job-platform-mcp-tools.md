@@ -320,12 +320,18 @@ Designing for both the agent and producer de-dup, the RECOMMENDED ordering is:
    `job_message`). This is the highest-value de-dup: it gives the agent direct
    job visibility and cross-session messaging, and lets plugins retire their
    private agent tools that reimplement the same channel —
-   - spinclass `session-job-status` → `job_status` — the status view only; its
-     rendered TAP result rides `result_ref` to spinclass's stored `job.json`
-     (see *Result-of-record stays with the producer*), and its serve-PID crash
-     detection is preserved by emitting the `interrupted` terminal record on
-     PID-death (RFC-0010 §3 producer-emitted liveness), which `job_status` then
-     reports,
+   - spinclass `session-job-status` → `job_status` — the live/graceful status
+     view only. Its rendered TAP result rides `result_ref` to spinclass's stored
+     `job.json` (see *Result-of-record stays with the producer*). Mind the
+     liveness split (RFC-0010 §3): a worker death the producer can detect emits
+     `interrupted` and `job_status` reports it, but a hard crash of the serve
+     process itself is the RFC-0009 §10 gap — `job_status` (journal-derived-only)
+     reports stale `running`, and spinclass's reader-side serve-PID demotion
+     stays a native capability (a further reason its tool is a permanent
+     dual-path). A future spinclass-side option to make `job_status` agree,
+     without a platform PID field: have that reader emit `clown job done --state
+     interrupted` for the dead serve, turning its reader-side check into an
+     emitter,
    - spinclass `chat-send` / `chat-read` → `job_message` / `job_read` (these are
      already the RFC-0009 `message` channel; two mapping prerequisites — the
      subject/body split and the read cursor — are noted below),
