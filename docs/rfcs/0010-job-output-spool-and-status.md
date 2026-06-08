@@ -74,9 +74,13 @@ a sibling of the job's journal `<job-id>.jsonl` (RFC-0009 §3).
   bounded tail (§3).
 
 Before composing the spool path, an implementation MUST validate `<job-id>`
-against the RFC-0009 §4 job-id grammar (`[A-Za-z0-9._-]{1,128}`) and MUST
-additionally reject the ids `.` and `..`, which that grammar admits but which
-would escape the channel directory.
+with the shared `jobwake.validateJobID` (clown#123): the RFC-0009 §4 grammar
+(`[A-Za-z0-9._-]{1,128}`) plus an explicit `.`/`..` reject. The grammar
+already forbids `/`, so the actual traversal vector (`../foo` →
+`../foo.out`) is the grammar gap, not `.`/`..` alone (which the `.out`
+suffix de-fangs into literal in-directory names); `validateJobID` closes
+both. The validator is the same choke-point guard the journal paths use, so
+the spool path inherits it rather than re-specifying a spool-only check.
 
 ### 2. Spool Path Discovery (`clown job spool-path`)
 
@@ -107,10 +111,11 @@ journal and spool alone:
 | Field | Derivation |
 |---|---|
 | `state` | type of the journal's terminal record if present, else `running` |
+| `source` | `source` of the `started` (or terminal) record — the emitting plugin |
 | `started` | `ts` of the `started` record (seq 0) |
 | `ended` | `ts` of the terminal record; absent while running |
 | `elapsed_sec` | `ended − started` when terminal, else `now − started` |
-| `last_activity` | spool mtime when the spool exists; else `ts` of the newest journal record |
+| `last_activity` | `max(spool mtime, ts of the newest journal record)` — so a `progress` record written after the last output still advances liveness; the bare spool mtime alone would understate it |
 | `spool_bytes` | spool size in bytes; `0` / absent when no spool exists |
 | `progress` | `message` of the newest `progress` record, if any |
 | `tail` | last `N` lines of the spool (default `20`) |
@@ -125,17 +130,35 @@ journal and spool alone:
 - When no journal exists for `<job-id>` on the resolved channel, the probe
   MUST exit `1` with a diagnostic on stderr (unlike `clown job read --job`,
   whose empty stream is a valid answer; a status of nothing is not).
-- The probe reports **journal-derived state only**. It MUST NOT guess at
-  producer liveness: a job whose producer died without a terminal record
-  reports `running` with a stale `last_activity` (the RFC-0009 §10
-  producer-death gap is unchanged). Consumers SHOULD treat a long-idle
-  `last_activity` as the death signal.
+- The probe reports **journal-derived state only** and MUST NOT infer death
+  from `last_activity`. A stale spool mtime is ambiguous — producer-dead OR
+  producer-alive-but-quiet (a long `nix build` realisation, a buffered test
+  step) — so treating idle as dead would mislabel live work. `last_activity`
+  is a liveness *hint*, never a death signal. **Producer liveness is the
+  producer's concern**: a producer that can detect its own worker is gone
+  (e.g. a PID check) MUST write the `interrupted` terminal record (RFC-0009
+  already defines the type and its wake), and the probe then reports it for
+  free — the same layering that makes the spool producer-written. A producer
+  that crashes hard, unable to emit, leaves the job `running` until the
+  journal GC: the RFC-0009 §10 producer-death gap, unchanged and explicitly
+  NOT something this probe papers over with mtime heuristics. (Recording a
+  worker PID in the journal so the probe could demote was considered and
+  rejected: a PID is meaningless across the sessions/hosts a channel may
+  span, and it would move a producer-specific state transition into the
+  platform.)
 
 ### 4. Garbage Collection
 
 The RFC-0009 §7 sweep MUST reap a job's spool whenever it reaps that job's
-journal, and MUST reap orphan spools (a `.out` file whose `.jsonl` sibling is
-absent) on the same age policy. Spools impose no new retention knob.
+journal — the spool's lifetime is bound to the journal's, not to age-since-
+start. Because the journal GC keys on mtime, a job still running past the GC
+horizon keeps a fresh journal (its `progress`/output keep mtime current) and
+its live spool is retained; only once the journal ages out (terminal and
+quiet) does the spool go with it. The sweep MUST additionally reap orphan
+spools (a `.out` whose `.jsonl` sibling is absent) on the same age policy —
+but age-gated, so a spool created by `spool-path` in the window *before* its
+producer writes the `started` journal is not reaped mid-setup. Spools impose
+no new retention knob.
 
 ## Security Considerations
 
@@ -145,10 +168,11 @@ absent) on the same age policy. Spools impose no new retention knob.
   matching the journal's posture. Tails surface only through the explicit
   pull probe — they MUST NOT be embedded in notification lines or any other
   push surface, so a wake never leaks output the agent didn't ask for.
-- **Path safety**: spool paths embed a caller-supplied job id; §1's grammar
-  check plus the `.`/`..` rejection prevents traversal out of the channel
-  directory. Implementations MUST apply the same validation in `spool-path`,
-  `status`, and the GC sweep.
+- **Path safety**: spool paths embed a caller-supplied job id; the shared
+  `jobwake.validateJobID` (clown#123) closes the traversal vector (`/` in an
+  id) at every path-composing entry point. `spool-path` and `status` MUST
+  call it before composing `<job-id>.out`; the GC sweep operates on dirent
+  names (single path components) and needs no guard.
 - **Cross-session reads**: `--target` lets any local process probe any
   session's jobs. This matches RFC-0009's existing trust model — the channel
   trusts everything running as the user — and adds no new boundary.
@@ -166,7 +190,7 @@ Tests use binary injection via `bats-emo`:
 | Requirement | Test File | Description |
 |-------------|-----------|-------------|
 | §2, spool-path prints channel-dir path; empty + exit 0 when disabled | `job_output_spool.bats` | path shape, disabled-channel signature |
-| §1/§2, `.`/`..` and grammar-violating ids rejected with exit 2 | `job_output_spool.bats` | traversal guard |
+| §1/§2, grammar-violating ids (incl. `/`-bearing) rejected with exit 2 via validateJobID | `job_output_spool.bats` | traversal guard |
 | §3, status derives state/elapsed from journal records | `job_output_spool.bats` | running vs terminal derivation |
 | §3, last_activity from spool mtime; tail bounded to N lines | `job_output_spool.bats` | tail + activity semantics |
 | §3, missing journal exits 1 | `job_output_spool.bats` | unknown-job diagnostic |
@@ -182,12 +206,26 @@ probing a pre-spool producer's job still gets state, `started`, `elapsed_sec`
 and journal-derived `last_activity`. The reserved `needs-attention` event
 type (RFC-0009 §5) remains reserved and is unrelated to this surface.
 
+The spool is **additive, not a replacement** for a producer's own store. A
+producer keeps whatever system-of-record it needs (spinclass's worktree-local
+`job.json` holds the structured TAP result its `session-job-status` returns,
+which is domain output the generic stdout spool does not carry; and spinclass
+runs with clown optional/dormant when `$CLOWN_BIN` is unset). Convergence on
+this surface therefore means a consumer *prefers* the clown spool for the
+live tail + `last_activity` when present and falls back to its private log
+otherwise — never "drop your own store." The probe exit-1-on-missing-journal
+contract (§3) is consistent with that: absence is a clean negative, not an
+error to the consumer's own path.
+
 ## References
 
 ### Normative
 
 - [RFC-0009] `docs/rfcs/0009-job-wakeup-channel.md` — journal schema, channel
   identity, path conventions, disable switch, GC sweep.
+- [clown#123] `jobwake.validateJobID` — the shared job-id grammar guard
+  (RFC-0009 §4 grammar + `.`/`..` reject) §1/§2 reference, enforced at every
+  path-composing entry point (fixed on clown master, commit eb37158).
 
 ### Informative
 

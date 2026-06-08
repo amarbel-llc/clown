@@ -298,6 +298,20 @@ serve different callers:
   to migrate emit calls to MCP; an MCP server calling another MCP server's tools
   is not the natural pattern, and the CLI already de-dupes the producer path.
 
+### Result-of-record stays with the producer
+
+The tools migrate the *status and observability* view, not a producer's
+**result-of-record** store. A producer keeps whatever holds its domain result —
+spinclass's worktree-local `job.json` (the structured TAP result behind
+`session-job-status`), moxy's async result blob — and points to it via the
+terminal record's `result_ref` (RFC-0009 §4), which `job_read` and the wake line
+surface. The end-state layering is therefore: clown owns the journal, status,
+spool, and wake; the producer owns its result blob; `result_ref` is the pointer
+between them. So `job_status` superseding a plugin's status view never orphans
+the result — the agent follows `result_ref` (via `job_read`) to the producer's
+own fetch. This does not change `job_status`'s output shape (§3.6): `result_ref`
+rides on the terminal record, not in the status object.
+
 ### Recommended migration and phase ordering
 
 Designing for both the agent and producer de-dup, the RECOMMENDED ordering is:
@@ -318,6 +332,13 @@ Designing for both the agent and producer de-dup, the RECOMMENDED ordering is:
    end-to-end, and give MCP-native producers an alternative to shelling out.
    Producer plugins MAY adopt them but are not required to; the CLI remains
    supported indefinitely.
+
+A resilience note for Phase 1: `job_status` fails (exit `1` / tool error) for a
+job absent from the journal — a producer's locally minted id when the facility
+is disabled or clown is absent, or a job whose `job_start` never wrote. A
+producer that keeps its own job index therefore remains the resilient fallback
+for not-in-journal jobs: the migration makes `job_status` the *primary* status
+path, not the *sole* one.
 
 The end state the ordering converges on is a single platform vocabulary: the
 agent speaks `job_*` for everything, plugins stop shipping bespoke job tools,
