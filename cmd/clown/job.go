@@ -87,7 +87,7 @@ func jobStart(args []string) int {
 }
 
 func jobProgress(args []string) int {
-	jobID, rest, ok := leadingJobID(args)
+	jobID, rest, ok := jobwake.LeadingArg(args)
 	if !ok {
 		fmt.Fprintln(os.Stderr, "clown job progress: missing <job-id>")
 		return 2
@@ -106,7 +106,7 @@ func jobProgress(args []string) int {
 }
 
 func jobDone(args []string) int {
-	jobID, rest, ok := leadingJobID(args)
+	jobID, rest, ok := jobwake.LeadingArg(args)
 	if !ok {
 		fmt.Fprintln(os.Stderr, "clown job done: missing <job-id>")
 		return 2
@@ -166,7 +166,7 @@ func jobMessage(args []string) int {
 // (RFC-0010 §2). It creates the channel directory but NOT the spool file (that
 // is the producer's append). An invalid job id is a usage error (exit 2).
 func jobSpoolPath(args []string) int {
-	jobID, rest, ok := leadingJobID(args)
+	jobID, rest, ok := jobwake.LeadingArg(args)
 	if !ok {
 		fmt.Fprintln(os.Stderr, "clown job spool-path: missing <job-id>")
 		return 2
@@ -192,7 +192,7 @@ func jobSpoolPath(args []string) int {
 // read-only pull, available regardless of CLOWN_DISABLE_JOB_WAKEUP. A missing
 // journal exits 1; an invalid job id exits 2.
 func jobStatus(args []string) int {
-	jobID, rest, ok := leadingJobID(args)
+	jobID, rest, ok := jobwake.LeadingArg(args)
 	if !ok {
 		fmt.Fprintln(os.Stderr, "clown job status: missing <job-id>")
 		return 2
@@ -227,12 +227,7 @@ func jobStatus(args []string) int {
 // printStatusHuman renders the one-line status header followed by the spool tail
 // under a separator (RFC-0010 §3).
 func printStatusHuman(jobID string, st jobwake.Status) int {
-	header := fmt.Sprintf("job %s (%s): %s, elapsed %s",
-		jobID, st.Source, st.State, time.Duration(st.ElapsedSec)*time.Second)
-	if st.LastActivity != "" {
-		header += ", last activity " + st.LastActivity
-	}
-	fmt.Println(header)
+	fmt.Println(st.Header(jobID))
 	if len(st.Tail) > 0 {
 		fmt.Println("---")
 		for _, line := range st.Tail {
@@ -240,18 +235,6 @@ func printStatusHuman(jobID string, st jobwake.Status) int {
 		}
 	}
 	return 0
-}
-
-// leadingJobID splits a positional job id (the RFC-0009 §8 `<job-id>` argument
-// that precedes the flags) from the remaining flag args. Go's flag package
-// stops at the first non-flag token, so progress/done — which take the job id
-// first — must peel it off before parsing. Returns ok=false when the first
-// token is missing or looks like a flag.
-func leadingJobID(args []string) (jobID string, rest []string, ok bool) {
-	if len(args) == 0 || args[0] == "" || args[0][0] == '-' {
-		return "", args, false
-	}
-	return args[0], args[1:], true
 }
 
 // jobRead is the pull / observability surface (RFC-0009 §8). With --job it

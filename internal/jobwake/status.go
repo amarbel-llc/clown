@@ -2,6 +2,7 @@ package jobwake
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -39,6 +40,18 @@ func ResolveSpool(target, jobID string) (string, error) {
 		return "", err
 	}
 	return SpoolFile(ChannelID(resolveSession(target)), jobID), nil
+}
+
+// Header renders the one-line human status header shared by `clown job status`
+// and `ringmaster status`: "job <id> (<source>): <state>, elapsed <d>" with an
+// optional ", last activity <ts>" suffix (RFC-0010 §3).
+func (s Status) Header(jobID string) string {
+	h := fmt.Sprintf("job %s (%s): %s, elapsed %s",
+		jobID, s.Source, s.State, time.Duration(s.ElapsedSec)*time.Second)
+	if s.LastActivity != "" {
+		h += ", last activity " + s.LastActivity
+	}
+	return h
 }
 
 // Status is the journal+spool-derived view of one job (RFC-0010 §3). The JSON
@@ -108,7 +121,7 @@ func statusOfChannel(cid, jobID string, tailN int, now time.Time) (Status, error
 		if mt := info.ModTime(); mt.After(lastAct) {
 			lastAct = mt
 		}
-		st.Tail = tailLines(SpoolFile(cid, jobID), tailN)
+		st.Tail, _ = SpoolTail(SpoolFile(cid, jobID), tailN)
 	}
 	if !lastAct.IsZero() {
 		st.LastActivity = lastAct.UTC().Format(time.RFC3339Nano)
@@ -127,30 +140,33 @@ func parseTS(s string) time.Time {
 	return t
 }
 
-// tailLines returns the last n lines of the spool, read from a bounded trailing
-// window so the probe never scales with spool size (RFC-0010 §3). A partial line
-// at the leading edge of the window is dropped. Returns nil on any read error or
-// an empty spool.
-func tailLines(path string, n int) []string {
+// SpoolTail returns the last n lines of the spool at path together with the
+// file's size, read from a bounded trailing window so the read never scales with
+// spool size (RFC-0010 §3). A partial line at the window's leading edge is
+// dropped. The returned size is the EOF offset a follow loop resumes from. A
+// missing or unreadable spool yields (nil, 0). n<=0 returns every line in the
+// window. It backs both the status-probe tail and `ringmaster tail`.
+func SpoolTail(path string, n int) ([]string, int64) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil
+		return nil, 0
 	}
 	defer f.Close()
 	info, err := f.Stat()
 	if err != nil {
-		return nil
+		return nil, 0
 	}
+	size := info.Size()
 	start := int64(0)
-	if info.Size() > spoolTailWindow {
-		start = info.Size() - spoolTailWindow
+	if size > spoolTailWindow {
+		start = size - spoolTailWindow
 	}
 	if _, err := f.Seek(start, io.SeekStart); err != nil {
-		return nil
+		return nil, size
 	}
 	data, err := io.ReadAll(f)
 	if err != nil {
-		return nil
+		return nil, size
 	}
 	if start > 0 {
 		if i := bytes.IndexByte(data, '\n'); i >= 0 {
@@ -159,11 +175,35 @@ func tailLines(path string, n int) []string {
 	}
 	trimmed := strings.TrimRight(string(data), "\n")
 	if trimmed == "" {
-		return nil
+		return nil, size
 	}
 	lines := strings.Split(trimmed, "\n")
 	if n > 0 && len(lines) > n {
 		lines = lines[len(lines)-n:]
 	}
-	return lines
+	return lines, size
+}
+
+// StreamSpool copies any bytes appended to path past offset to w and returns the
+// new EOF offset. A missing, shrunk, or unreadable spool is a no-op returning the
+// input offset. It is the follow primitive behind `ringmaster tail -f`; like the
+// rest of the follow path it is best-effort and swallows I/O errors so a
+// transient read failure does not abort the stream.
+func StreamSpool(w io.Writer, path string, offset int64) int64 {
+	f, err := os.Open(path)
+	if err != nil {
+		return offset
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil || info.Size() <= offset {
+		return offset
+	}
+	if _, err := f.Seek(offset, io.SeekStart); err != nil {
+		return offset
+	}
+	if _, err := io.Copy(w, f); err != nil {
+		return offset
+	}
+	return info.Size()
 }

@@ -6,10 +6,8 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"text/tabwriter"
 	"time"
@@ -29,17 +27,6 @@ import (
 // therefore writes the terminal `cancelled` record, which wakes the originating
 // session's monitor and signals the owning producer to stop; it does not itself
 // send a signal to an OS process.
-
-// leadingArg peels a required positional argument (the job id) off the front of
-// an arg slice before the flag set parses the rest. Go's flag package stops at
-// the first non-flag token, so subcommands that take a positional id first must
-// split it out. Returns ok=false when the first token is missing or is a flag.
-func leadingArg(args []string) (val string, rest []string, ok bool) {
-	if len(args) == 0 || args[0] == "" || args[0][0] == '-' {
-		return "", args, false
-	}
-	return args[0], args[1:], true
-}
 
 // jobErrExit maps a jobwake error to the conventional CLI exit code: a malformed
 // job id is a usage error (2); a missing journal or any other failure is 1.
@@ -130,7 +117,7 @@ func shortChannel(cid string) string {
 // ringmasterStatus prints one job's full journal+spool-derived status, mirroring
 // `clown job status` so operators and agents read the same view (RFC-0010 §3).
 func ringmasterStatus(args []string) int {
-	jobID, rest, ok := leadingArg(args)
+	jobID, rest, ok := jobwake.LeadingArg(args)
 	if !ok {
 		fmt.Fprintln(os.Stderr, "ringmaster status: missing <job-id>")
 		return 2
@@ -157,12 +144,7 @@ func ringmasterStatus(args []string) int {
 		fmt.Println(string(b))
 		return 0
 	}
-	header := fmt.Sprintf("job %s (%s): %s, elapsed %s",
-		jobID, st.Source, st.State, time.Duration(st.ElapsedSec)*time.Second)
-	if st.LastActivity != "" {
-		header += ", last activity " + st.LastActivity
-	}
-	fmt.Println(header)
+	fmt.Println(st.Header(jobID))
 	if len(st.Tail) > 0 {
 		fmt.Println("---")
 		for _, line := range st.Tail {
@@ -177,7 +159,7 @@ func ringmasterStatus(args []string) int {
 // polls the spool because the producer is a separate process that may not exist
 // yet; there is no inotify dependency.
 func ringmasterTail(args []string) int {
-	jobID, rest, ok := leadingArg(args)
+	jobID, rest, ok := jobwake.LeadingArg(args)
 	if !ok {
 		fmt.Fprintln(os.Stderr, "ringmaster tail: missing <job-id>")
 		return 2
@@ -196,7 +178,10 @@ func ringmasterTail(args []string) int {
 		return jobErrExit(err)
 	}
 
-	offset := printSpoolTail(path, *n)
+	lines, offset := jobwake.SpoolTail(path, *n)
+	for _, l := range lines {
+		fmt.Println(l)
+	}
 	if !*follow {
 		return 0
 	}
@@ -210,79 +195,14 @@ func ringmasterTail(args []string) int {
 		case <-ctx.Done():
 			return 0
 		case <-ticker.C:
-			offset = streamSpoolFrom(path, offset)
+			offset = jobwake.StreamSpool(os.Stdout, path, offset)
 			st, err := jobwake.StatusOf(*target, jobID, 0, time.Now().UTC())
 			if err == nil && jobwake.IsTerminal(st.State) {
-				streamSpoolFrom(path, offset) // drain a final write that raced the terminal record
+				jobwake.StreamSpool(os.Stdout, path, offset) // drain a final write that raced the terminal record
 				return 0
 			}
 		}
 	}
-}
-
-// printSpoolTail prints the last n lines of the spool and returns the byte
-// offset (current size) to resume a follow from. A missing spool prints nothing
-// and resumes from offset 0 (the producer may not have appended yet).
-func printSpoolTail(path string, n int) int64 {
-	f, err := os.Open(path)
-	if err != nil {
-		return 0
-	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		return 0
-	}
-	size := info.Size()
-	const window = 64 * 1024
-	start := int64(0)
-	if size > window {
-		start = size - window
-	}
-	if _, err := f.Seek(start, io.SeekStart); err != nil {
-		return size
-	}
-	data, err := io.ReadAll(f)
-	if err != nil {
-		return size
-	}
-	if start > 0 {
-		if i := strings.IndexByte(string(data), '\n'); i >= 0 {
-			data = data[i+1:]
-		}
-	}
-	trimmed := strings.TrimRight(string(data), "\n")
-	if trimmed != "" {
-		lines := strings.Split(trimmed, "\n")
-		if n > 0 && len(lines) > n {
-			lines = lines[len(lines)-n:]
-		}
-		for _, l := range lines {
-			fmt.Println(l)
-		}
-	}
-	return size
-}
-
-// streamSpoolFrom writes any bytes appended past offset to stdout verbatim and
-// returns the new offset. A missing or shrunk spool is a no-op.
-func streamSpoolFrom(path string, offset int64) int64 {
-	f, err := os.Open(path)
-	if err != nil {
-		return offset
-	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil || info.Size() <= offset {
-		return offset
-	}
-	if _, err := f.Seek(offset, io.SeekStart); err != nil {
-		return offset
-	}
-	if _, err := io.Copy(os.Stdout, f); err != nil {
-		return offset
-	}
-	return info.Size()
 }
 
 // ringmasterCancel writes the terminal `cancelled` record for a job (RFC-0009
@@ -291,7 +211,7 @@ func streamSpoolFrom(path string, offset int64) int64 {
 // signal (jobs are not ringmaster-spawned; the journal carries no PID). A
 // missing job exits 1; an already-terminal job exits 1 with its final state.
 func ringmasterCancel(args []string) int {
-	jobID, rest, ok := leadingArg(args)
+	jobID, rest, ok := jobwake.LeadingArg(args)
 	if !ok {
 		fmt.Fprintln(os.Stderr, "ringmaster cancel: missing <job-id>")
 		return 2
