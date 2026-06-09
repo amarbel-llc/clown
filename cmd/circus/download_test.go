@@ -92,13 +92,13 @@ func TestDownloadPlainPropagatesError(t *testing.T) {
 
 func TestParseDownloadArgs(t *testing.T) {
 	tests := []struct {
-		name      string
-		args      []string
-		wantName  string
-		wantURL   string
-		wantSHA   string
-		wantSize  int64
-		wantErr   bool
+		name     string
+		args     []string
+		wantName string
+		wantURL  string
+		wantSHA  string
+		wantSize int64
+		wantErr  bool
 	}{
 		{
 			name:     "name only (registry lookup case)",

@@ -588,8 +588,7 @@
               "podman"
               "lima"
             ];
-            limactlPath =
-              if tentBackend == "lima" then "${pkgs.lima}/bin/limactl" else "";
+            limactlPath = if tentBackend == "lima" then "${pkgs.lima}/bin/limactl" else "";
           in
           buildGoApplication {
             pname = "clown";
@@ -1135,7 +1134,11 @@
               HOME_VOLUME="$HOME:$HOME:rw,security_model=none"
               echo ">> initializing podman machine $NAME" >&2
               podman machine init "$NAME" \
-                ${lib.concatMapStringsSep " \\\n                " (v: "--volume ${lib.escapeShellArg v}") devTentVolumes} \
+                ${
+                  lib.concatMapStringsSep " \\\n                " (
+                    v: "--volume ${lib.escapeShellArg v}"
+                  ) devTentVolumes
+                } \
                 --volume "$HOME_VOLUME"
             fi
             # 3. Start it if not already running. `podman machine start`

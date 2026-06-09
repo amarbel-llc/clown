@@ -10,7 +10,12 @@
   };
 
   outputs =
-    { self, nixpkgs, clown, ... }:
+    {
+      self,
+      nixpkgs,
+      clown,
+      ...
+    }:
     let
       systems = [
         "x86_64-darwin"

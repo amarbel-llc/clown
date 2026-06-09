@@ -765,10 +765,10 @@ func TestNewTentExecutor_EmptyImageRef(t *testing.T) {
 
 func TestResolvePassDevshell(t *testing.T) {
 	cases := []struct {
-		name        string
-		flags       parsedFlags
-		inNixShell  string // empty = unset, non-empty = set to this value
-		want        bool
+		name       string
+		flags      parsedFlags
+		inNixShell string // empty = unset, non-empty = set to this value
+		want       bool
 	}{
 		{
 			name: "no flag, no env → off",

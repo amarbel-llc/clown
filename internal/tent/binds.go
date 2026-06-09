@@ -12,38 +12,38 @@ import (
 // model:
 //
 //   - /nix/var       — nix-daemon socket + per-user/system profile-link
-//                      targets. Required for `nix --version`, `nix
-//                      flake show`, `nix build`, `nix shell`, `nix run`
-//                      against the host store.
+//     targets. Required for `nix --version`, `nix
+//     flake show`, `nix build`, `nix shell`, `nix run`
+//     against the host store.
 //   - /etc/nix       — daemon config (extra-platforms,
-//                      experimental-features, substituters). Without
-//                      this `nix` works but uses default settings,
-//                      which often differs from the host.
+//     experimental-features, substituters). Without
+//     this `nix` works but uses default settings,
+//     which often differs from the host.
 //   - $HOME/.nix-profile, $HOME/.local/state/nix/profiles/profile
-//                    — the user's home-manager profile-link dirs. Combined
-//                      with RewritePathToNixStore these put the user's
-//                      home-manager tool surface (git, jq, curl, …) on
-//                      the in-tent PATH.
+//     — the user's home-manager profile-link dirs. Combined
+//     with RewritePathToNixStore these put the user's
+//     home-manager tool surface (git, jq, curl, …) on
+//     the in-tent PATH.
 //   - $HOME/.gitconfig, $HOME/.config/git
-//                    — git identity, signing config, aliases. Read-only;
-//                      a future change synthesizes a tent-specific
-//                      gitconfig instead of bind-mounting the user's
-//                      (FDR-0007 follow-up).
+//     — git identity, signing config, aliases. Read-only;
+//     a future change synthesizes a tent-specific
+//     gitconfig instead of bind-mounting the user's
+//     (FDR-0007 follow-up).
 //   - $HOME/.config/nix
-//                    — user-level nix config (auth tokens for private
-//                      caches, evaluator flags, …).
+//     — user-level nix config (auth tokens for private
+//     caches, evaluator flags, …).
 //   - $HOME/.config/ssh
-//                    — ssh client config + known_hosts. Deliberately
-//                      separate from $HOME/.ssh/ so the latter (which
-//                      may hold private key material) stays
-//                      unreachable inside the tent. Some users
-//                      (notably this repo's primary author) ship an
-//                      ssh wrapper via home-manager that defaults
-//                      $SSH_HOME to ~/.config/ssh; pairing that
-//                      with SSH_HOME in DefaultEnvPassthrough makes
-//                      the wrapper resolve correctly inside the tent.
-//                      Hosts without this convention simply have
-//                      the path absent and the bind is skipped.
+//     — ssh client config + known_hosts. Deliberately
+//     separate from $HOME/.ssh/ so the latter (which
+//     may hold private key material) stays
+//     unreachable inside the tent. Some users
+//     (notably this repo's primary author) ship an
+//     ssh wrapper via home-manager that defaults
+//     $SSH_HOME to ~/.config/ssh; pairing that
+//     with SSH_HOME in DefaultEnvPassthrough makes
+//     the wrapper resolve correctly inside the tent.
+//     Hosts without this convention simply have
+//     the path absent and the bind is skipped.
 //
 // Paths are returned in canonical bind order. Callers should filter to
 // existing paths via DefaultReadOnlyBinds, which stats each entry.

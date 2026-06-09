@@ -17,12 +17,12 @@ var (
 	// `<version>+<shortSha>` build identifier the agent stamps into
 	// sign-offs; Commit (the full rev) backs the commit URL. Empty in dev
 	// builds (go build, go run).
-	ShortSha string
-	ClaudeCodeVersion   string
-	ClaudeCodeRev       string
-	CodexVersion        string
-	CodexRev            string
-	LlamaServerPath     string
+	ShortSha          string
+	ClaudeCodeVersion string
+	ClaudeCodeRev     string
+	CodexVersion      string
+	CodexRev          string
+	LlamaServerPath   string
 	// StdioBridgePath is the absolute path to the clown-stdio-bridge
 	// binary in its own Nix store output, baked at build time. Used by
 	// pluginhost.Desugar to rewrite stdioServers entries into httpServers

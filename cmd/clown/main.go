@@ -823,11 +823,11 @@ func userHasSubuid(name, uid string) (missing bool, err error) {
 // ensureTentImage runs `podman image exists <ref>` and, when the
 // image is absent, materializes it. Order of precedence:
 //
-//   1. A baked tarball (linux clown binaries): `podman load -i <tarball>`.
-//   2. A baked flake ref (darwin clown binaries, and future profile-
-//      driven image variation): `nix build <flakeRef>#packages.<linux-
-//      system>.tent-image` then `podman load -i <result>`.
-//   3. Neither: error out with a clear message.
+//  1. A baked tarball (linux clown binaries): `podman load -i <tarball>`.
+//  2. A baked flake ref (darwin clown binaries, and future profile-
+//     driven image variation): `nix build <flakeRef>#packages.<linux-
+//     system>.tent-image` then `podman load -i <result>`.
+//  3. Neither: error out with a clear message.
 //
 // Idempotent — second-and-onward runs short-circuit on the existence
 // check. On a TTY, both the build and load steps render via the

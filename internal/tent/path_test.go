@@ -129,7 +129,7 @@ func TestRewritePathToNixStore(t *testing.T) {
 			name: "non-store-resolving entries dropped",
 			in:   "/usr/bin:/home/u/.local/bin",
 			resolve: map[string]string{
-				"/usr/bin":          "/usr/bin",
+				"/usr/bin":           "/usr/bin",
 				"/home/u/.local/bin": "/home/u/.local/bin",
 			},
 			want: "",
@@ -158,8 +158,8 @@ func TestRewritePathToNixStore(t *testing.T) {
 			name: "duplicates after rewrite preserved",
 			in:   "/home/u/.nix-profile/bin:/home/u/.local/state/nix/profiles/profile/bin",
 			resolve: map[string]string{
-				"/home/u/.nix-profile/bin":                          "/nix/store/zzz-hm/bin",
-				"/home/u/.local/state/nix/profiles/profile/bin":     "/nix/store/zzz-hm/bin",
+				"/home/u/.nix-profile/bin":                      "/nix/store/zzz-hm/bin",
+				"/home/u/.local/state/nix/profiles/profile/bin": "/nix/store/zzz-hm/bin",
 			},
 			want: "/nix/store/zzz-hm/bin:/nix/store/zzz-hm/bin",
 		},
