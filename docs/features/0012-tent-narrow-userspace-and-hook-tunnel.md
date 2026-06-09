@@ -1,6 +1,7 @@
 ---
 status: exploring
 date: 2026-05-27
+superseded-by: FDR-0014 (cloud tent — the cross-arch problem this record addresses is removed by the cloud substrate)
 promotion-criteria: cross-arch papercuts (Mach-O bash, host nix-store leak-through, --tent-pass-devshell PATH races) eliminated by construction; a host-side hook tunnel exists and survives a representative plugin set (docs-r-us, eng:*, course-correct, spinclass) without per-plugin tent-awareness; agent-driven git work via grit MCP matches the ergonomics of agent-driven git work via in-tent `git` today; clown depends on moxy as a documented peer
 ---
 
