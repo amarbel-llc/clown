@@ -42,6 +42,21 @@ func ResolveSpool(target, jobID string) (string, error) {
 	return SpoolFile(ChannelID(resolveSession(target)), jobID), nil
 }
 
+// ResolveSpoolChannel is ResolveSpool addressed by an explicit channel id rather
+// than a session key/target — the raw-channel path behind `ringmaster tail
+// --channel`. It validates both the channel id and the job id, creates nothing,
+// and returns the spool path. An invalid channel id wraps ErrInvalidChannelID;
+// an invalid job id wraps ErrInvalidJobID.
+func ResolveSpoolChannel(cid, jobID string) (string, error) {
+	if err := ValidateChannelID(cid); err != nil {
+		return "", err
+	}
+	if err := validateJobID(jobID); err != nil {
+		return "", err
+	}
+	return SpoolFile(cid, jobID), nil
+}
+
 // Header renders the one-line human status header shared by `clown job status`
 // and `ringmaster status`: "job <id> (<source>): <state>, elapsed <d>" with an
 // optional ", last activity <ts>" suffix (RFC-0010 §3).
@@ -79,6 +94,20 @@ type Status struct {
 // `running` with a stale last_activity (the RFC-0009 §10 gap is unchanged).
 func StatusOf(target, jobID string, tailN int, now time.Time) (Status, error) {
 	return statusOfChannel(ChannelID(resolveSession(target)), jobID, tailN, now)
+}
+
+// StatusOfChannel is StatusOf addressed by an explicit channel id instead of a
+// session key/target. It is the operator/cross-session path: a job discovered
+// via `ringmaster ls --all` carries a (hashed, non-reversible) channel id but
+// not its session key, so the session-key resolution StatusOf performs cannot
+// reach it. cid is validated as a channel id (guarding the composed path);
+// derivation is otherwise identical (see statusOfChannel). An invalid channel id
+// wraps ErrInvalidChannelID.
+func StatusOfChannel(cid, jobID string, tailN int, now time.Time) (Status, error) {
+	if err := ValidateChannelID(cid); err != nil {
+		return Status{}, err
+	}
+	return statusOfChannel(cid, jobID, tailN, now)
 }
 
 // statusOfChannel is StatusOf for an already-resolved channel id. It is the

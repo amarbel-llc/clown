@@ -6,8 +6,11 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 )
 
@@ -34,6 +37,35 @@ func SessionKey() string {
 func ChannelID(sessionKey string) string {
 	sum := sha256.Sum256([]byte(sessionKey))
 	return hex.EncodeToString(sum[:16])
+}
+
+// ChannelForTarget resolves the channel id for a target session key, applying
+// the same empty=>current-session rule as the producer surface (resolveSession).
+// It is the session-key addressing path; ValidateChannelID plus the *Channel
+// helpers (StatusOfChannel/ResolveSpoolChannel/DoneChannel) are the raw
+// channel-id path the operator uses to reach a job by the id `ls --all` prints.
+func ChannelForTarget(target string) string {
+	return ChannelID(resolveSession(target))
+}
+
+var channelIDRe = regexp.MustCompile(`^[0-9a-f]{1,64}$`)
+
+// ErrInvalidChannelID is wrapped by ValidateChannelID failures so callers can
+// map a malformed operator-supplied channel id to a usage error (exit 2),
+// mirroring ErrInvalidJobID on the job-id side.
+var ErrInvalidChannelID = errors.New("invalid channel id")
+
+// ValidateChannelID enforces the channel-id alphabet (lowercase hex, 1–64 chars)
+// before an operator-supplied id is used to compose a filesystem path. ChannelID
+// emits exactly 32 lowercase hex digits; the looser 1–64 bound keeps a future
+// short-prefix addressing mode non-breaking while still excluding "/", ".", and
+// "..", so a traversal id like "../foo" can never survive. Failures wrap
+// ErrInvalidChannelID.
+func ValidateChannelID(cid string) error {
+	if !channelIDRe.MatchString(cid) {
+		return fmt.Errorf("%w %q: must match %s", ErrInvalidChannelID, cid, channelIDRe.String())
+	}
+	return nil
 }
 
 func stateHome() string {

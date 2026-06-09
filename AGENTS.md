@@ -478,11 +478,16 @@ The flake produces a `symlinkJoin` of five components:
    `cancel` writes the terminal `cancelled` record. All four read/append
    the on-disk journal+spool directly (no daemon required) over the same
    single `internal/jobwake` code path (`ListJobs`/`ListAllJobs`,
-   `StatusOf`, `ResolveSpool`, `Done`). `cancel` is **cooperative**: jobs
-   aren't ringmaster-spawned and the journal carries no worker PID (an
-   RFC-0010 decision), so it wakes the owning session's monitor and
-   signals the producer to stop rather than killing an OS process. Man
-   page: `ringmaster(1)`.
+   `StatusOfChannel`, `ResolveSpoolChannel`, `DoneChannel`). `cancel` is
+   **cooperative**: jobs aren't ringmaster-spawned and the journal carries
+   no worker PID (an RFC-0010 decision), so it wakes the owning session's
+   monitor and signals the producer to stop rather than killing an OS
+   process. A job is addressed either by `--target <session-key>` (hashed
+   to a channel) or by `--channel <id>` — the raw channel id `ls --all`
+   prints — which lets an operator reach a job in a session whose key it
+   doesn't hold (the channel id is a one-way hash, so `--target` can't get
+   there); the two are mutually exclusive and `--channel` is validated as
+   hex against path traversal (clown#125). Man page: `ringmaster(1)`.
 
 ## Nix Conventions
 

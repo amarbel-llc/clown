@@ -21,6 +21,12 @@ import (
 // through the `clown job` MCP/CLI producer surface — list, inspect, follow, and
 // cancel long-running background jobs out-of-band (clown#124).
 //
+// Jobs can be addressed two ways. --target takes a session key the operator
+// holds and hashes it to a channel. --channel takes a raw channel id directly —
+// the form `ls --all` prints — so an operator can act on a job in a session
+// whose key it does not hold (the channel id is a one-way hash of the key, so
+// --target cannot reach it). The two are mutually exclusive (clown#125).
+//
 // Cancellation is cooperative: jobs are NOT spawned by ringmaster and the
 // journal carries no worker PID (a deliberate RFC-0010 §"alternatives" call —
 // a PID is meaningless across the sessions/hosts a channel may span). `cancel`
@@ -29,12 +35,36 @@ import (
 // send a signal to an OS process.
 
 // jobErrExit maps a jobwake error to the conventional CLI exit code: a malformed
-// job id is a usage error (2); a missing journal or any other failure is 1.
+// job id or channel id is a usage error (2); a missing journal or any other
+// failure is 1.
 func jobErrExit(err error) int {
-	if errors.Is(err, jobwake.ErrInvalidJobID) {
+	if errors.Is(err, jobwake.ErrInvalidJobID) || errors.Is(err, jobwake.ErrInvalidChannelID) {
 		return 2
 	}
 	return 1
+}
+
+// channelFor resolves the channel id a single-job verb operates on from its
+// --target / --channel flags. --channel (a raw channel id, as printed by `ls
+// --all`) and --target (a session key) are mutually exclusive: --target hashes a
+// session key the operator holds, while --channel reaches a channel whose
+// session key is not recoverable (the id is a one-way hash). --channel is
+// validated as hex so an operator-supplied value can never compose a traversal
+// path. On conflict or a malformed channel it prints a usage error under prog
+// and returns ok=false (the caller exits 2).
+func channelFor(prog, target, channel string) (string, bool) {
+	if channel != "" {
+		if target != "" {
+			fmt.Fprintf(os.Stderr, "%s: --target and --channel are mutually exclusive\n", prog)
+			return "", false
+		}
+		if err := jobwake.ValidateChannelID(channel); err != nil {
+			fmt.Fprintf(os.Stderr, "%s: %v\n", prog, err)
+			return "", false
+		}
+		return channel, true
+	}
+	return jobwake.ChannelForTarget(target), true
 }
 
 // ringmasterLs lists jobs in a channel (the current session by default, every
@@ -94,8 +124,10 @@ func ringmasterLs(args []string) int {
 			last = "-"
 		}
 		if *all {
+			// Full channel id, not a prefix: it is the exact value `status
+			// --channel`/`tail`/`cancel` take to act on the row (clown#125).
 			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
-				shortChannel(r.Channel), r.JobID, r.Status.Source, r.Status.State, elapsed, last)
+				r.Channel, r.JobID, r.Status.Source, r.Status.State, elapsed, last)
 		} else {
 			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n",
 				r.JobID, r.Status.Source, r.Status.State, elapsed, last)
@@ -103,15 +135,6 @@ func ringmasterLs(args []string) int {
 	}
 	_ = tw.Flush()
 	return 0
-}
-
-// shortChannel renders a channel id as its first 8 hex digits for the --all
-// listing, where the full 32-digit hash is more noise than signal.
-func shortChannel(cid string) string {
-	if len(cid) > 8 {
-		return cid[:8]
-	}
-	return cid
 }
 
 // ringmasterStatus prints one job's full journal+spool-derived status, mirroring
@@ -124,13 +147,18 @@ func ringmasterStatus(args []string) int {
 	}
 	fs := flag.NewFlagSet("ringmaster status", flag.ContinueOnError)
 	target := fs.String("target", "", "session key (default: current session)")
+	channel := fs.String("channel", "", "raw channel id from `ls --all` (mutually exclusive with --target)")
 	tail := fs.Int("tail", 20, "number of trailing spool lines to show")
 	asJSON := fs.Bool("json", false, "emit the status as a single JSON object")
 	if err := fs.Parse(rest); err != nil {
 		return 2
 	}
+	cid, ok := channelFor("ringmaster status", *target, *channel)
+	if !ok {
+		return 2
+	}
 
-	st, err := jobwake.StatusOf(*target, jobID, *tail, time.Now().UTC())
+	st, err := jobwake.StatusOfChannel(cid, jobID, *tail, time.Now().UTC())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ringmaster status: %v\n", err)
 		return jobErrExit(err)
@@ -166,13 +194,18 @@ func ringmasterTail(args []string) int {
 	}
 	fs := flag.NewFlagSet("ringmaster tail", flag.ContinueOnError)
 	target := fs.String("target", "", "session key (default: current session)")
+	channel := fs.String("channel", "", "raw channel id from `ls --all` (mutually exclusive with --target)")
 	follow := fs.Bool("f", false, "follow: stream new output until the job ends")
 	n := fs.Int("n", 20, "trailing lines to print before following")
 	if err := fs.Parse(rest); err != nil {
 		return 2
 	}
+	cid, ok := channelFor("ringmaster tail", *target, *channel)
+	if !ok {
+		return 2
+	}
 
-	path, err := jobwake.ResolveSpool(*target, jobID)
+	path, err := jobwake.ResolveSpoolChannel(cid, jobID)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ringmaster tail: %v\n", err)
 		return jobErrExit(err)
@@ -196,7 +229,7 @@ func ringmasterTail(args []string) int {
 			return 0
 		case <-ticker.C:
 			offset = jobwake.StreamSpool(os.Stdout, path, offset)
-			st, err := jobwake.StatusOf(*target, jobID, 0, time.Now().UTC())
+			st, err := jobwake.StatusOfChannel(cid, jobID, 0, time.Now().UTC())
 			if err == nil && jobwake.IsTerminal(st.State) {
 				jobwake.StreamSpool(os.Stdout, path, offset) // drain a final write that raced the terminal record
 				return 0
@@ -218,14 +251,19 @@ func ringmasterCancel(args []string) int {
 	}
 	fs := flag.NewFlagSet("ringmaster cancel", flag.ContinueOnError)
 	target := fs.String("target", "", "session key (default: current session)")
+	channel := fs.String("channel", "", "raw channel id from `ls --all` (mutually exclusive with --target)")
 	message := fs.String("message", "cancelled by operator via ringmaster", "human-readable cancel reason")
 	if err := fs.Parse(rest); err != nil {
+		return 2
+	}
+	cid, ok := channelFor("ringmaster cancel", *target, *channel)
+	if !ok {
 		return 2
 	}
 
 	// Pre-check so the operator gets a clear "no such job" / "already <state>"
 	// instead of silently materializing a one-record journal for a typo'd id.
-	st, err := jobwake.StatusOf(*target, jobID, 0, time.Now().UTC())
+	st, err := jobwake.StatusOfChannel(cid, jobID, 0, time.Now().UTC())
 	if err != nil {
 		if os.IsNotExist(err) {
 			fmt.Fprintf(os.Stderr, "ringmaster cancel: no such job %q\n", jobID)
@@ -239,7 +277,7 @@ func ringmasterCancel(args []string) int {
 		return 1
 	}
 
-	if err := jobwake.Done(*target, jobID, jobwake.TypeCancelled, *message, ""); err != nil {
+	if err := jobwake.DoneChannel(cid, jobID, jobwake.TypeCancelled, *message, ""); err != nil {
 		fmt.Fprintf(os.Stderr, "ringmaster cancel: %v\n", err)
 		return 1
 	}

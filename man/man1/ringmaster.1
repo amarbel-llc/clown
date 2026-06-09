@@ -17,17 +17,17 @@
 .Op Fl -json
 .Nm
 .Cm status Ar job-id
-.Op Fl -target Ar key
+.Op Fl -target Ar key | Fl -channel Ar id
 .Op Fl -tail Ar n
 .Op Fl -json
 .Nm
 .Cm tail Ar job-id
-.Op Fl -target Ar key
+.Op Fl -target Ar key | Fl -channel Ar id
 .Op Fl f
 .Op Fl n Ar lines
 .Nm
 .Cm cancel Ar job-id
-.Op Fl -target Ar key
+.Op Fl -target Ar key | Fl -channel Ar id
 .Op Fl -message Ar text
 .Sh DESCRIPTION
 .Nm
@@ -67,6 +67,21 @@ producer surface
 These subcommands need no running daemon; they read and append to the
 on-disk job journal directly.
 .Pp
+A single job is addressed two ways.
+.Fl -target
+takes a session key the operator holds and hashes it to a channel
+.Pq resolved like Xr clown-job 1 .
+.Fl -channel
+takes a raw channel id directly \(em the value
+.Cm ls Fl -all
+prints \(em so an operator can act on a job in a session whose key it does
+not hold; the channel id is a one-way hash of the session key, so
+.Fl -target
+cannot reach it.
+The two are mutually exclusive, and a
+.Fl -channel
+that is not lowercase hex is rejected as a usage error.
+.Pp
 .Nm
 is intended to run under
 .Xr launchd 8
@@ -102,11 +117,12 @@ By default lists the jobs in the current session's channel
 .Fl -target
 selects another session key, and
 .Fl -all
-spans every channel on the host, prefixing each row with a short channel
-id.
+spans every channel on the host, prefixing each row with its full channel
+id \(em the exact value the action subcommands accept via
+.Fl -channel .
 .Fl -json
 emits a JSON array instead.
-.It Cm status Ar job-id Oo Fl -target Ar key Oc Oo Fl -tail Ar n Oc Oo Fl -json Oc
+.It Cm status Ar job-id Oo Fl -target Ar key | Fl -channel Ar id Oc Oo Fl -tail Ar n Oc Oo Fl -json Oc
 Print one job's full status
 .Pq state, source, elapsed, last activity
 followed by the last
@@ -116,8 +132,8 @@ lines of its output spool.
 Mirrors
 .Xr clown-job 1
 .Cm status .
-A malformed job id exits 2; a missing job exits 1.
-.It Cm tail Ar job-id Oo Fl -target Ar key Oc Oo Fl f Oc Oo Fl n Ar lines Oc
+A malformed job id or channel id exits 2; a missing job exits 1.
+.It Cm tail Ar job-id Oo Fl -target Ar key | Fl -channel Ar id Oc Oo Fl f Oc Oo Fl n Ar lines Oc
 Print the last
 .Ar lines
 .Pq default 20
@@ -126,7 +142,7 @@ With
 .Fl f ,
 follow the spool, streaming appended output until the job reaches a
 terminal state or the operator interrupts.
-.It Cm cancel Ar job-id Oo Fl -target Ar key Oc Oo Fl -message Ar text Oc
+.It Cm cancel Ar job-id Oo Fl -target Ar key | Fl -channel Ar id Oc Oo Fl -message Ar text Oc
 Cooperatively cancel a job by writing its terminal
 .Sq cancelled
 record.

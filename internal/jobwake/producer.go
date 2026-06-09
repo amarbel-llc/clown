@@ -233,3 +233,31 @@ func Done(target, jobID, state, message, resultRef string) error {
 	sendNudge(cid, jobID, state)
 	return nil
 }
+
+// DoneChannel is Done addressed by an explicit channel id instead of a session
+// key/target — the raw-channel cancellation path behind `ringmaster cancel
+// --channel`. It recovers the originating session key from the job's existing
+// records so the terminal record stays well-formed, appends the terminal record
+// (fsynced), then nudges the channel socket: the owning session's monitor binds
+// SocketPath(cid) — the same channel — so the wake still lands without ever
+// needing the pre-image session key. An invalid channel id wraps
+// ErrInvalidChannelID.
+func DoneChannel(cid, jobID, state, message, resultRef string) error {
+	if !IsTerminal(state) {
+		return fmt.Errorf("invalid terminal state %q", state)
+	}
+	if err := ValidateChannelID(cid); err != nil {
+		return err
+	}
+	session := ""
+	if recs, err := ReadJob(cid, jobID); err == nil && len(recs) > 0 {
+		session = recs[0].Session // keep the terminal record's session consistent
+	}
+	rec := Record{V: SchemaVersion, Job: jobID, Session: session, Type: state,
+		TS: nowTS(), Message: oneLine(message), ResultRef: resultRef}
+	if err := appendRecord(cid, rec, true); err != nil { // fsync before nudge
+		return err
+	}
+	sendNudge(cid, jobID, state)
+	return nil
+}

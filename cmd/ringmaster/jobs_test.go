@@ -235,3 +235,131 @@ func TestCancelMissingAndDouble(t *testing.T) {
 		t.Fatalf("second cancel on terminal job: want exit 1, got %d", code)
 	}
 }
+
+// foreignJob starts a job under session "owner" and then rebinds the current
+// session to "operator", returning the job id and owner's channel id. This is
+// the #125 setup: an operator at a terminal it does not own the session key for,
+// reaching a job only by the channel id `ls --all` prints.
+func foreignJob(t *testing.T) (id, ownerChannel string) {
+	t.Helper()
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("CLOWN_SESSION_ID", "owner")
+	id, err := jobwake.Start(jobwake.StartOpts{Source: "moxy", Label: "build"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownerChannel = jobwake.ChannelID("owner")
+	t.Setenv("CLOWN_SESSION_ID", "operator")
+	return id, ownerChannel
+}
+
+// status --channel reaches a job in a session the operator does not hold the key
+// for, while the default (operator-session) lookup cannot see it.
+func TestStatusByChannel(t *testing.T) {
+	id, ch := foreignJob(t)
+
+	out := captureStdout(t, func() {
+		if code := run([]string{"status", id, "--channel", ch, "--json"}); code != 0 {
+			t.Fatalf("status --channel: want exit 0, got %d", code)
+		}
+	})
+	var st jobwake.Status
+	if err := json.Unmarshal([]byte(out), &st); err != nil {
+		t.Fatalf("status --channel --json invalid: %v\n%s", err, out)
+	}
+	if st.State != "running" || st.Source != "moxy" {
+		t.Fatalf("status --channel: got %+v", st)
+	}
+
+	// Without --channel the operator session can't see the foreign job.
+	if code := run([]string{"status", id}); code != 1 {
+		t.Fatalf("status without channel from foreign session: want exit 1, got %d", code)
+	}
+}
+
+// tail --channel streams a foreign-channel job's spool.
+func TestTailByChannel(t *testing.T) {
+	id, ch := foreignJob(t)
+	sp, err := jobwake.SpoolPath("owner", id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sp, []byte("a\nb\nc\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out := captureStdout(t, func() {
+		if code := run([]string{"tail", id, "--channel", ch, "-n", "2"}); code != 0 {
+			t.Fatalf("tail --channel: want exit 0, got %d", code)
+		}
+	})
+	if strings.Contains(out, "a") || !strings.Contains(out, "b") || !strings.Contains(out, "c") {
+		t.Fatalf("tail --channel -n 2: want last two lines, got:\n%s", out)
+	}
+}
+
+// cancel --channel writes the terminal record for a foreign-channel job.
+func TestCancelByChannel(t *testing.T) {
+	id, ch := foreignJob(t)
+
+	out := captureStdout(t, func() {
+		if code := run([]string{"cancel", id, "--channel", ch}); code != 0 {
+			t.Fatalf("cancel --channel: want exit 0, got %d", code)
+		}
+	})
+	if !strings.Contains(out, id) {
+		t.Fatalf("cancel --channel should print the job id, got %q", out)
+	}
+	st, err := jobwake.StatusOfChannel(ch, id, 0, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.State != jobwake.TypeCancelled {
+		t.Fatalf("cancel --channel: want cancelled, got %q", st.State)
+	}
+}
+
+// --target and --channel are mutually exclusive; supplying both is a usage error.
+func TestTargetChannelMutuallyExclusive(t *testing.T) {
+	jobEnv(t)
+	id, _ := jobwake.Start(jobwake.StartOpts{Source: "moxy"})
+	ch := jobwake.ChannelID("k")
+	for _, verb := range [][]string{
+		{"status", id, "--target", "k", "--channel", ch},
+		{"tail", id, "--target", "k", "--channel", ch},
+		{"cancel", id, "--target", "k", "--channel", ch},
+	} {
+		if code := run(verb); code != 2 {
+			t.Fatalf("%v: want exit 2 for --target+--channel, got %d", verb, code)
+		}
+	}
+}
+
+// A malformed --channel is a usage error (exit 2), like a malformed job id.
+func TestChannelInvalid(t *testing.T) {
+	jobEnv(t)
+	id, _ := jobwake.Start(jobwake.StartOpts{Source: "moxy"})
+	if code := run([]string{"status", id, "--channel", "../etc"}); code != 2 {
+		t.Fatalf("status --channel ../etc: want exit 2, got %d", code)
+	}
+}
+
+// ls --all prints the full channel id (not a truncated prefix), so the value is
+// the exact one status/tail/cancel --channel take.
+func TestLsAllPrintsFullChannel(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("CLOWN_SESSION_ID", "owner")
+	id, _ := jobwake.Start(jobwake.StartOpts{Source: "moxy"})
+	full := jobwake.ChannelID("owner")
+
+	out := captureStdout(t, func() {
+		if code := run([]string{"ls", "--all"}); code != 0 {
+			t.Fatalf("ls --all: want exit 0, got %d", code)
+		}
+	})
+	if !strings.Contains(out, full) {
+		t.Fatalf("ls --all should print full channel id %s, got:\n%s", full, out)
+	}
+	if !strings.Contains(out, id) {
+		t.Fatalf("ls --all should list the job %s, got:\n%s", id, out)
+	}
+}
