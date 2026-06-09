@@ -96,6 +96,16 @@ operator's machine                         cloud (DigitalOcean)
   path, firewall expectations, hostname convention — is **RFC-0012**, so eng
   and clown version independently.
 
+**The tent replaces the working tree; it does not mirror it.** The local tent
+bind-mounted `$PWD` so the agent edited the operator's on-disk tree. A cloud
+tent does the opposite: it **holds its own git clones** and the agent works
+directly against them on the VM — the same model as a fresh remote-execution
+environment, where the repo is cloned on session start and work flows back
+through ordinary `git push`. There is no rsync/mutagen sync layer and no
+`$PWD` bind, because the operator's local checkout is not in the loop at all.
+The host runs the orchestration CLI and a Tailscale client; the *code* lives on
+the tent.
+
 ## Interface (sketch — to be firmed in `proposed`)
 
 ```sh
@@ -146,14 +156,20 @@ FDR-0014**" banner rather than being rewritten.
 
 ## Non-goals / open questions
 
-1. **Working-tree delivery.** How the operator's local repo reaches the cloud
-   tent (push a branch and clone? mutagen/rsync over Tailscale SSH? work
-   entirely cloud-side?) is the biggest unanswered design question and is
-   deferred to `proposed`. The local tent bind-mounted `$PWD`; a cloud tent
-   cannot.
-2. **Ephemeral vs. reattachable.** Per-session throwaway droplets (clean, but
-   slow cold-start and repeated clone cost) vs. a long-lived per-operator tent
-   you reattach to. Likely a knob.
+1. **Repo-clone credentials (resolved framing).** The working-tree question is
+   *not* "how does the local tree reach the tent" — the tent clones the repos
+   itself (above). The real question is how the tent authenticates those clones
+   (and pushes): a GitHub token / deploy key delivered alongside the auth key at
+   first boot, ssh-agent forwarded over Tailscale SSH, or the operator cloning
+   manually after connect. Tailscale SSH makes operator-driven clone trivial;
+   automated provisioning needs a credential channel. Which repos to clone (and
+   from where) is itself a provisioning input. Deferred to `proposed`.
+2. **Ephemeral vs. reattachable + commit discipline.** Because the tent holds
+   the only copy of in-progress work, per-session throwaway droplets lose
+   anything uncommitted on `down`. Either the tent is long-lived/reattachable,
+   or `down` enforces commit+push first (or warns on a dirty tree) — the same
+   discipline a remote-execution session already lives by. Likely a knob with a
+   safe default (refuse to destroy a dirty tent).
 3. **Cost / lifecycle hygiene.** Cloud tents cost money and leak if not
    destroyed; `down` must be reliable and a sweep for orphaned droplets is
    probably required.

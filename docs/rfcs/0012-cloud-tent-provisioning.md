@@ -50,8 +50,10 @@ contain any tailnet identifier, auth key, or operator secret.
 
 1.3. The image MUST boot with: `services.tailscale` enabled, an SSH daemon
 reachable over the tailnet, a serial console (for provider-console recovery),
-and the agent runtime clown FDR-0014 requires (the latter referenced, not
-specified here).
+`git` plus the agent runtime clown FDR-0014 requires (the latter referenced,
+not specified here). The tent **clones its own repos** (FDR-0014); the image is
+the host of those clones, not a mirror of an operator's working tree, so no
+file-sync agent is part of this contract.
 
 ## 2. First-boot auth-key delivery
 
@@ -74,6 +76,15 @@ Tailscale credentials (`TAILSCALE_API_KEY` / OAuth client) supplied to the
 `tailscale` OpenTofu provider. "The current user's tailnet by default" is
 realized by *which credentials mint the key*, never by a tailnet id in the
 image (2.2 of FDR-0005).
+
+2.5. **Repo-clone credentials.** Since the tent clones its own repos (§1.3), a
+git credential (GitHub token / deploy key, or a forwarded ssh-agent over
+Tailscale SSH) is required for private clones and for pushing work back. Like
+the auth key (2.1), any such credential MUST NOT be baked into the image and
+MUST land only in guest tmpfs if delivered at provision time. The set of repos
+to clone is a provisioning input. The exact mechanism (auto-clone at first boot
+vs. operator-driven clone after Tailscale-SSH connect) is open (FDR-0014 open
+question 1) and is NOT yet a normative clause.
 
 ## 3. Network posture
 
