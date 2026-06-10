@@ -102,6 +102,42 @@ func TestStatusOfTerminal(t *testing.T) {
 	}
 }
 
+// A standalone message job: a single self-contained `message` record (no
+// started, no terminal) rests at `delivered`, not `running`. ended is the
+// message ts and elapsed is 0 — never the unbounded now-started a running job
+// reports (the RFC-0009 §4 carve-out).
+func TestStatusOfDeliveredMessage(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("XDG_RUNTIME_DIR", shortRuntimeDir(t))
+	t.Setenv("CLOWN_SESSION_ID", "k")
+
+	id, err := Message("", "spinclass", "", "ping", "ref")
+	if err != nil {
+		t.Fatal(err)
+	}
+	recs, _ := ReadJob(ChannelID("k"), id)
+	// now is far past the message ts; elapsed must still be 0, proving it is
+	// derived from ended (the message ts), not now-started.
+	now := parseTS(recs[0].TS).Add(72 * time.Hour)
+
+	st, err := StatusOf("", id, 20, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.State != StateDelivered {
+		t.Fatalf("state: want %q, got %q", StateDelivered, st.State)
+	}
+	if st.Started != recs[0].TS || st.Ended != recs[0].TS {
+		t.Fatalf("started/ended must both be the message ts, got %+v", st)
+	}
+	if st.ElapsedSec != 0 {
+		t.Fatalf("elapsed: want 0 (delivered, not running), got %d", st.ElapsedSec)
+	}
+	if st.Source != "spinclass" {
+		t.Fatalf("source: want spinclass, got %q", st.Source)
+	}
+}
+
 // With a spool present: spool_bytes is its size, tail is the last N lines from
 // the bounded window, and last_activity is max(spool mtime, journal ts) — here
 // the spool mtime is forced newer (RFC-0010 §3).

@@ -110,11 +110,11 @@ journal and spool alone:
 
 | Field | Derivation |
 |---|---|
-| `state` | type of the journal's terminal record if present, else `running` |
+| `state` | type of the journal's terminal record if present; `delivered` for a standalone `message` job (a single self-contained waking record, RFC-0009 §4); else `running` |
 | `source` | `source` of the `started` (or terminal) record — the emitting plugin |
-| `started` | `ts` of the `started` record (seq 0) |
-| `ended` | `ts` of the terminal record; absent while running |
-| `elapsed_sec` | `ended − started` when terminal, else `now − started` |
+| `started` | `ts` of the `started` record (seq 0), or the `message` record for a standalone message job |
+| `ended` | `ts` of the terminal record (or the `message` record for a `delivered` job); absent while `running` |
+| `elapsed_sec` | `ended − started` when `ended` is set (terminal or `delivered`), else `now − started`. A `delivered` message has `ended == started`, so its elapsed is `0` — not the unbounded `now − started` the `running` default would report |
 | `last_activity` | `max(spool mtime, ts of the newest journal record)` — so a `progress` record written after the last output still advances liveness; the bare spool mtime alone would understate it |
 | `spool_bytes` | spool size in bytes; `0` / absent when no spool exists |
 | `progress` | `message` of the newest `progress` record, if any |
@@ -159,6 +159,49 @@ spools (a `.out` whose `.jsonl` sibling is absent) on the same age policy —
 but age-gated, so a spool created by `spool-path` in the window *before* its
 producer writes the `started` journal is not reaped mid-setup. Spools impose
 no new retention knob.
+
+#### 4.1 Cleanup on Terminate (PROPOSED — clown#126, pending sign-off)
+
+> Status: **proposed**, not yet implemented. The age-based sweep above (§4) is
+> the shipped behavior. This subsection specifies the state-aware reap tier
+> that supersedes the start-only, state-blind sweep; until it lands, treat §4
+> as authoritative.
+
+The §4 sweep keys on mtime alone, runs only at monitor start (RFC-0009 §9), and
+gives a fire-and-forget `message` the same 7-day window as a long-lived job.
+On a host whose monitors started days ago it barely runs, so delivered
+notifications accumulate (a single `*` channel can hold thousands). This
+amendment adds an ack-driven reap tier with one invariant:
+
+> **Delivery-before-reap.** A waking record (RFC-0009 §5) MUST NOT be reaped
+> before it has been **delivered** — its `seq` acked on its owning channel
+> (RFC-0009 §9) — *except* by the age-based backstop, which remains the
+> last-resort bound for an owner that never returns. This preserves
+> at-least-once.
+
+1. **Delivered messages reap on ack.** When a monitor persists the ack for a
+   `message` record on **its own** channel, it SHOULD reap that job's journal
+   and spool immediately: the wake is the whole job (RFC-0009 §4) and, once
+   delivered, the journal has no residual value — any body lives in the
+   producer's own store, not here. This MUST NOT apply on the broadcast
+   channel (`*`): its readers are independent, so one reader's ack does not
+   mean delivery to the others; broadcast messages stay age-based.
+
+2. **Lifecycle terminals get a shorter resting-retention.** A terminal job
+   whose terminal `seq` is acked on its owning channel MAY be reaped after a
+   `restingRetention` window (RECOMMENDED ~24h) — short enough to bound
+   accumulation, long enough for `ls`/`tail` post-mortem. The full
+   `journalRetention` (§4) is demoted to the backstop for **undelivered**
+   terminals (an owner that died before acking), honoring delivery-before-reap.
+
+3. **Periodic sweep.** The sweep MUST run not only at monitor start but
+   periodically while the monitor lives (RECOMMENDED ≤1h), so retention
+   actually fires on long-lived hosts.
+
+A `message` that is never delivered (directed at a session whose monitor never
+runs) is never acked and so falls to the age backstop — never dropped early.
+`ringmaster cancel` on a `delivered` message MUST be refused (a delivered
+notification has no lifecycle to cancel).
 
 ## Security Considerations
 

@@ -15,6 +15,23 @@ import (
 // dropped.
 const spoolTailWindow = 64 * 1024
 
+// Status states that are derived, not journal record types. A job's State is
+// usually its terminal record type (succeeded/failed/cancelled/interrupted);
+// these two cover the records that carry no terminal of their own.
+const (
+	// StateRunning is the derived state of a job with a started record and no
+	// terminal: the producer is presumed alive. Status never probes liveness,
+	// so a producer that died without a terminal still reports running (the
+	// RFC-0009 §10 gap).
+	StateRunning = "running"
+	// StateDelivered is the derived state of a standalone `message` job — a
+	// single self-contained waking record with no started and no terminal
+	// (the RFC-0009 §4 carve-out). The wake IS the whole job; it has no
+	// running phase, so it rests at delivered with elapsed 0 rather than the
+	// unbounded now-started "running" the lifecycle default would assign.
+	StateDelivered = "delivered"
+)
+
 // SpoolPath validates the job id, ensures the channel journal directory exists,
 // and returns the absolute output-spool path for the job (RFC-0010 §2). It does
 // NOT create the spool file — that is the producer's append. target selects the
@@ -123,12 +140,19 @@ func statusOfChannel(cid, jobID string, tailN int, now time.Time) (Status, error
 		return Status{}, os.ErrNotExist // present-but-empty journal: nothing to report
 	}
 
-	st := Status{State: "running", Source: recs[0].Source, Started: recs[0].TS}
+	st := Status{State: StateRunning, Source: recs[0].Source, Started: recs[0].TS}
 	for _, r := range recs {
-		if r.Type == TypeProgress {
+		switch {
+		case r.Type == TypeProgress:
 			st.Progress = r.Message
-		}
-		if IsTerminal(r.Type) {
+		case r.Type == TypeMessage:
+			// A standalone message is complete the instant it is written: no
+			// started, no producer behind it, no running phase. Rest it at
+			// delivered with ended=its ts so elapsed is 0 — not the unbounded
+			// now-started the running default would grow (RFC-0009 §4).
+			st.State = StateDelivered
+			st.Ended = r.TS
+		case IsTerminal(r.Type):
 			st.State = r.Type
 			st.Ended = r.TS
 		}
