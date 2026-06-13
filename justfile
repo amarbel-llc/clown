@@ -1301,31 +1301,50 @@ debug-probe-real-llama-server:
     echo "Summary:"
     echo "  /health-without-model: ${ok:-NO}"
 
-# Tag a release. The "v" prefix is added for you, so pass the semver
-# without it. Usage: just tag 0.1.0 "feat: managed settings burnin"
-[group("maint")]
-tag version message:
+# Rewrite the CLOWN_VERSION line in version.env to the given semver
+# (eng-versioning(7)). Pure mutation — does not stage or commit; `release`
+# composes that. No-op (exit 0) if already at the target. Usage:
+# just bump-version 0.5.0
+[group("maintenance")]
+bump-version new_version:
     #!/usr/bin/env bash
     set -euo pipefail
-    tag="v{{version}}"
+    . version.env
+    current="$CLOWN_VERSION"
+    if [[ "$current" == "{{new_version}}" ]]; then
+        gum log --level info "version.env already at {{new_version}}"
+        exit 0
+    fi
+    sed -i.bak 's/^export CLOWN_VERSION=.*/export CLOWN_VERSION={{new_version}}/' version.env && rm version.env.bak
+    gum log --level info "bumped CLOWN_VERSION: $current → {{new_version}}"
+
+# Create a signed, verified git tag for the CURRENT CLOWN_VERSION (read from
+# version.env) and push it to origin (eng-versioning(7)). The "v" prefix is
+# added for you. Pass a changelog as the message for richer notes; defaults
+# to "release v<ver>". Usage: just tag "release v0.5.0"
+[group("maintenance")]
+[positional-arguments]
+tag message="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    . version.env
+    tag="v${CLOWN_VERSION}"
+    if git rev-parse "$tag" >/dev/null 2>&1; then
+        gum log --level error "tag $tag already exists"
+        exit 1
+    fi
+    msg="${1:-release $tag}"
     prev=$(git tag --sort=-v:refname -l "v*" | head -1)
     if [[ -n "$prev" ]]; then
         gum log --level info "Previous: $prev"
         git log --oneline "$prev"..HEAD
     fi
-    git tag -s -m {{quote(message)}} "$tag"
+    git tag -s -m "$msg" "$tag"
     gum log --level info "Created tag: $tag"
     git push origin "$tag"
     gum log --level info "Pushed $tag"
     git tag -v "$tag"
 
-# Cut a release: assemble a changelog-style message from commits
-# since the last v* tag, then call `tag` to sign, push, and verify.
-# The "v" prefix is added for you, so pass the semver without it.
-# Usage: just release 0.1.0
-#
-# Use `just tag <version> <message>` directly if you want full
-# control over the tag message.
 # Throwaway: launch ./result/bin/clown with an ad-hoc plugin dir
 # supplied via the new --plugin-dir flag. The wrapper script in
 # result/bin/clown sets CLOWN_PLUGIN_META at exec time, so the env-var
@@ -1401,19 +1420,36 @@ debug-circus-api model="":
         -d "{\"model\":\"$model_id\",\"max_tokens\":10,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}" \
         | jq .
 
-[group("maint")]
-release version:
+# Cut a release (eng-versioning(7)): refuse off the default branch,
+# assemble the changelog BEFORE bumping (so the release commit isn't in its
+# own notes), bump CLOWN_VERSION in version.env, commit, sign+push the tag,
+# and create the GitHub Release. The bump+commit is skipped when version.env
+# already holds the target (a prior commit may have pre-bumped it). The "v"
+# prefix is added for you. Usage: just release 0.5.0
+[group("maintenance")]
+release new_version:
     #!/usr/bin/env bash
     set -euo pipefail
-    echo "{{version}}" > version.txt
-    git add version.txt
-    git commit -m "release v{{version}}"
-    prev=$(git tag --sort=-v:refname -l "v*" | head -1)
-    header="release v{{version}}"
-    if [[ -n "$prev" ]]; then
-        summary=$(git log --format='- %s' "$prev"..HEAD)
-        msg="$header"$'\n\n'"$summary"
-    else
-        msg="$header"
+    default_branch=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##' || true)
+    default_branch="${default_branch:-master}"
+    current_branch=$(git rev-parse --abbrev-ref HEAD)
+    if [[ "$current_branch" != "$default_branch" ]]; then
+        gum log --level error "release must run on $default_branch, not $current_branch"
+        exit 1
     fi
-    just tag "{{version}}" "$msg"
+    # Changelog BEFORE the bump so the release commit isn't in its own notes.
+    prev=$(git tag --sort=-v:refname -l "v*" | head -1)
+    header="release v{{new_version}}"
+    if [[ -n "$prev" ]]; then
+        notes="$header"$'\n\n'"$(git log --format='- %s' "$prev"..HEAD)"
+    else
+        notes="$header"
+    fi
+    # Bump + commit, unless version.env already holds the target.
+    just bump-version "{{new_version}}"
+    if ! git diff --quiet version.env; then
+        git add version.env
+        git commit -m "release v{{new_version}}"
+    fi
+    just tag "$notes"
+    gh release create "v{{new_version}}" --title "v{{new_version}}" --notes "$notes"

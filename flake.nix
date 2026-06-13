@@ -150,7 +150,13 @@
           Grep
         '';
 
-        clownVersion = lib.trim (builtins.readFile ./version.txt);
+        # Single source of truth: version.env (eng-versioning(7)), a
+        # `export CLOWN_VERSION=<sem>` file. clown shares this one version
+        # across every derivation below and embeds it via -X buildcfg.Version
+        # (not -X main.version), so it reads version.env at eval time with the
+        # spec's single-line match rather than relying on the fork's
+        # auto-embed (which only feeds main.version for one fork-built binary).
+        clownVersion = builtins.head (builtins.match ".*CLOWN_VERSION=([^\n]+).*" (builtins.readFile ./version.env));
         clownRev = self.rev or self.dirtyRev or "dirty";
         clownShortRev = self.shortRev or self.dirtyShortRev or "dirty";
         claudeCodeVersion = pkgs-llm-agents.claude-code.version;

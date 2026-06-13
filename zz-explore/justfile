@@ -1078,7 +1078,7 @@ tent-hang-tty-state CLAUDE_PID:
 #                  let podman pick a fresh subuid mapping. Set empty
 #                  string to drop the flag entirely.
 #   IMAGE          override the image tag. Defaults to the one in
-#                  version.txt (clown-tent:$(cat version.txt)).
+#                  version.env (clown-tent:$CLOWN_VERSION).
 #   EXTRA_MOUNTS   extra '--volume' args (space-separated). Use to
 #                  test additional binds beyond the tent default
 #                  (eg. EXTRA_MOUNTS='--volume /nix/var:/nix/var:ro').
@@ -1108,7 +1108,7 @@ tent-probe CMD USERNS='keep-id' IMAGE='' EXTRA_MOUNTS='' PASS_DEVSHELL='0':
     image="{{IMAGE}}"
     if [[ -z "$image" ]]; then
         root=$(git rev-parse --show-toplevel)
-        ver=$(tr -d '[:space:]' < "$root/version.txt")
+        ver=$(. "$root/version.env" && printf '%s' "$CLOWN_VERSION")
         image="clown-tent:$ver"
     fi
 
@@ -1575,7 +1575,7 @@ io-probe PIDS:
 #   ls -d /nix/store/*claude-code*/bin/claude
 #
 # IMAGE defaults to the tent image whose tag matches the worktree's
-# version.txt (mirrors what `clown --tent` would launch). Override
+# version.env (mirrors what `clown --tent` would launch). Override
 # to test against a differently-tagged tent.
 #
 # Usage (positional — `KEY=value` style does NOT work in just):
@@ -1590,7 +1590,7 @@ tent-claude-version CLAUDE_BIN IMAGE='':
 
     if [[ -z "$image" ]]; then
         root=$(git rev-parse --show-toplevel)
-        ver=$(tr -d '[:space:]' < "$root/version.txt")
+        ver=$(. "$root/version.env" && printf '%s' "$CLOWN_VERSION")
         image="clown-tent:$ver"
     fi
 

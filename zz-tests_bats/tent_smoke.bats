@@ -20,15 +20,15 @@ setup() {
     skip "podman not on PATH (likely a sandbox lane; tent_smoke runs only on the host)"
   fi
 
-  # Resolve the tent image tag from the repo's version.txt. The
+  # Resolve the tent image tag from the repo's version.env. The
   # justfile recipe loads (or builds) this tag before invoking bats,
   # so by the time we get here it should be present in the local
   # podman store.
   local root
   root="$(git rev-parse --show-toplevel)"
-  TENT_IMAGE="clown-tent:$(tr -d '[:space:]' < "$root/version.txt")"
+  TENT_IMAGE="clown-tent:$(. "$root/version.env" && printf '%s' "$CLOWN_VERSION")"
   if ! podman image exists "$TENT_IMAGE"; then
-    # Fall back to the newest clown-tent image so a stale version.txt
+    # Fall back to the newest clown-tent image so a stale version.env
     # doesn't block the suite.
     TENT_IMAGE="$(podman image ls --filter reference='clown-tent*' \
                     --format '{{.Repository}}:{{.Tag}}' | head -1)"
