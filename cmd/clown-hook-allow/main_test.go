@@ -92,6 +92,24 @@ func TestEvaluate(t *testing.T) {
 			input:    `{}`,
 			want:     "defer",
 		},
+		{
+			name:     "clown-builtin-jobs job_read → allow",
+			toolName: "mcp__plugin_clown-builtin-jobs_jobs__job_read",
+			input:    `{}`,
+			want:     "allow",
+		},
+		{
+			name:     "clown-builtin-jobs broadcast job_message → allow",
+			toolName: "mcp__plugin_clown-builtin-jobs_jobs__job_message",
+			input:    `{"target":"*","message":"hi"}`,
+			want:     "allow",
+		},
+		{
+			name:     "another plugin's MCP tool defers",
+			toolName: "mcp__plugin_moxy_moxy__rg_search",
+			input:    `{"pattern":"x"}`,
+			want:     "defer",
+		},
 	}
 
 	for _, tc := range tests {
