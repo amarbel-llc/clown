@@ -222,6 +222,66 @@ func TestBroadcastTwoReadersIndependentAcks(t *testing.T) {
 	}
 }
 
+// TestBroadcastSuppressesSenderSelfEcho pins the #114/#115 fix: a session's
+// broadcast must not wake the sender's own monitor. The sender and a bystander
+// both attach (init-at-end), the sender broadcasts post-attach, and the
+// sender's own replay emits nothing — yet the record is ACKED (the load-bearing
+// half: a suppressed record must not linger unacked in the sender's broadcast
+// ack map). The bystander still receives it exactly once.
+func TestBroadcastSuppressesSenderSelfEcho(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("XDG_RUNTIME_DIR", shortRuntimeDir(t))
+	t.Setenv("CLOWN_SESSION_ID", "sender")
+
+	if got := replayBroadcast(t, "sender"); len(got) != 0 {
+		t.Fatalf("sender first attach must emit nothing, got %+v", got)
+	}
+	if got := replayBroadcast(t, "bystander"); len(got) != 0 {
+		t.Fatalf("bystander first attach must emit nothing, got %+v", got)
+	}
+
+	id, err := Message(BroadcastKey, "s", "sender", "hello all", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The sender's own monitor must NOT be woken by its own broadcast.
+	if got := replayBroadcast(t, "sender"); len(got) != 0 {
+		t.Fatalf("sender must not self-echo its own broadcast, got %+v", got)
+	}
+	// The suppressed record must be acked, so it does not re-surface and does
+	// not sit permanently unacked (#114).
+	bcid := ChannelID(BroadcastKey)
+	a := loadAckPath(AckFileFor(bcid, ChannelID("sender")))
+	if _, ok := a.Acked[id]; !ok {
+		t.Fatalf("sender's suppressed broadcast must be acked, ack map: %+v", a.Acked)
+	}
+
+	// A different reader still receives it exactly once.
+	got := replayBroadcast(t, "bystander")
+	if len(got) != 1 || got[0].Job != id {
+		t.Fatalf("bystander must receive the broadcast once, got %+v", got)
+	}
+}
+
+// TestDirectedSelfMessageStillWakes locks the #114 carve-out: self-echo
+// suppression applies to the broadcast channel only, never the own-channel
+// path, so a deliberate directed self-message (--target <own-key> with
+// from=<own-key>, the "remind myself" case) still wakes.
+func TestDirectedSelfMessageStillWakes(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("XDG_RUNTIME_DIR", shortRuntimeDir(t))
+	t.Setenv("CLOWN_SESSION_ID", "k")
+
+	if _, err := Message("k", "s", "k", "note to self", ""); err != nil {
+		t.Fatal(err)
+	}
+	got := replayBroadcast(t, "k") // ReplayOnce services the own channel too
+	if len(got) != 1 || got[0].Type != TypeMessage {
+		t.Fatalf("directed self-message must still wake, got %+v", got)
+	}
+}
+
 func TestReplayOnceEmitsUnackedThenNothing(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("XDG_RUNTIME_DIR", shortRuntimeDir(t))

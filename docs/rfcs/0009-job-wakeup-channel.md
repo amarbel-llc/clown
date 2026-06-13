@@ -385,6 +385,15 @@ the normal replay-unacked semantics of steps 1–5 apply to the broadcast
 channel too, against the per-reader ack file. Like a waiter on a condition
 variable, a reader only observes broadcasts sent after it first attached.
 
+**Broadcast self-suppression** (normative): when servicing the broadcast
+channel, a monitor MUST NOT emit a record whose `from` (§4) equals the reader's
+own resolved session key (§2) — a session is not woken by its own broadcast,
+which carries zero new information (the emit already returned success). The
+monitor MUST still advance its per-reader ack for that record, so a suppressed
+self-broadcast does not linger permanently unacked. This applies to the
+broadcast channel only: a deliberate directed self-message (`--target
+<own-key>`) on the reader's own channel still wakes (the "remind myself" case).
+
 The monitor binds only its own channel's nudge socket; broadcast records are
 picked up by the periodic re-scan (§6).
 
@@ -458,6 +467,7 @@ Tests use binary injection via `bats-emo`:
 | §4/§5/§9, directed `message` wakes with `from` | `job_wakeup.bats` | a single-record `message` job surfaces once via `job-watch --once` with the ` from <from>` segment |
 | §8, `job message` usage errors | `job_wakeup.bats` | missing `--target` or `--message` exits 2 |
 | §9, broadcast condvar semantics | `job_wakeup.bats` | first attach initializes at end (pre-existing broadcast not replayed); a post-attach broadcast is delivered exactly once on the next attach |
+| §9, broadcast self-echo suppression | `job_wakeup.bats` | a session's own `--target '*'` broadcast is not emitted by its own monitor but is delivered to a peer reader |
 
 ## Compatibility
 

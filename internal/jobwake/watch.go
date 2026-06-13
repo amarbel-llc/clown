@@ -20,7 +20,7 @@ func Watch(ctx context.Context, sessionKey string, emit func(Record) error) erro
 	// One-shot journal GC + ack reaping at monitor start (clown#113).
 	// Best-effort by construction; runs neither on ticks nor in ReplayOnce.
 	sweep(cid, time.Now())
-	if err := serviceChannels(cid, emit); err != nil {
+	if err := serviceChannels(cid, sessionKey, emit); err != nil {
 		return err
 	}
 	conn, err := bindNudge(cid)
@@ -53,11 +53,11 @@ func Watch(ctx context.Context, sessionKey string, emit func(Record) error) erro
 		case <-ctx.Done():
 			return nil
 		case <-datagrams:
-			if err := serviceChannels(cid, emit); err != nil {
+			if err := serviceChannels(cid, sessionKey, emit); err != nil {
 				return err
 			}
 		case <-ticker.C:
-			if err := serviceChannels(cid, emit); err != nil {
+			if err := serviceChannels(cid, sessionKey, emit); err != nil {
 				return err
 			}
 		}
@@ -70,18 +70,21 @@ func Watch(ctx context.Context, sessionKey string, emit func(Record) error) erro
 // `clown job-watch --once` (the conformance suite and pull-style replay); the
 // long-running monitor uses Watch.
 func ReplayOnce(sessionKey string, emit func(Record) error) error {
-	return serviceChannels(ChannelID(sessionKey), emit)
+	return serviceChannels(ChannelID(sessionKey), sessionKey, emit)
 }
 
 // serviceChannels runs one monitor cycle for a reader (RFC-0009 §9): replay
 // the reader's own channel against its `.ack.json`, then the broadcast channel
 // against the reader's per-reader ack file. The nudge socket stays
-// own-channel-only; broadcast delivery rides the periodic rescan.
-func serviceChannels(cid string, emit func(Record) error) error {
-	if err := emitUnacked(cid, AckFile(cid), emit); err != nil {
+// own-channel-only; broadcast delivery rides the periodic rescan. sessionKey is
+// the reader's resolved key (RFC-0009 §2); it is passed to the broadcast path
+// for self-echo suppression but NOT to the own-channel path, so a deliberate
+// directed self-message still wakes.
+func serviceChannels(cid, sessionKey string, emit func(Record) error) error {
+	if err := emitUnacked(cid, AckFile(cid), "", emit); err != nil {
 		return err
 	}
-	return serviceBroadcast(cid, emit)
+	return serviceBroadcast(cid, sessionKey, emit)
 }
 
 // serviceBroadcast replays the broadcast channel for one reader with condvar
@@ -89,7 +92,7 @@ func serviceChannels(cid string, emit func(Record) error) error {
 // exist (os.Stat, not corrupt-loads-empty) — initialize at current end by
 // persisting an ack map covering every existing waking record WITHOUT
 // emitting; thereafter normal replay-unacked applies.
-func serviceBroadcast(readerCID string, emit func(Record) error) error {
+func serviceBroadcast(readerCID, readerKey string, emit func(Record) error) error {
 	bcid := ChannelID(BroadcastKey)
 	ackPath := AckFileFor(bcid, readerCID)
 	if _, err := os.Stat(ackPath); err != nil {
@@ -98,7 +101,7 @@ func serviceBroadcast(readerCID string, emit func(Record) error) error {
 		}
 		return initBroadcastAck(bcid, ackPath)
 	}
-	return emitUnacked(bcid, ackPath, emit)
+	return emitUnacked(bcid, ackPath, readerKey, emit)
 }
 
 // initBroadcastAck persists a first-attach ack covering every waking record
@@ -126,7 +129,15 @@ func initBroadcastAck(bcid, ackPath string) error {
 // emitUnacked emits every waking record whose seq exceeds the acked seq for
 // its job, oldest first, advancing the ack persisted at ackPath after each
 // successful emit (at-least-once: persist follows emit).
-func emitUnacked(cid, ackPath string, emit func(Record) error) error {
+//
+// selfKey suppresses broadcast self-echo (RFC-0009 §9): when non-empty, a
+// record whose `from` equals selfKey is acked WITHOUT being emitted — the
+// sender already knows it sent the broadcast, so waking it on its own message
+// is a wake for zero new information, but the ack must still advance so the
+// record does not linger unacked in this reader's broadcast ack map. The
+// own-channel path passes an empty selfKey, so a deliberate directed
+// self-message (--target <own-key>, the "remind myself" case) still wakes.
+func emitUnacked(cid, ackPath, selfKey string, emit func(Record) error) error {
 	a := loadAckPath(ackPath)
 	waking, err := scanWaking(cid)
 	if err != nil {
@@ -136,8 +147,10 @@ func emitUnacked(cid, ackPath string, emit func(Record) error) error {
 		if prev, ok := a.Acked[r.Job]; ok && r.Seq <= prev {
 			continue
 		}
-		if err := emit(r); err != nil {
-			return err
+		if selfKey == "" || r.From != selfKey {
+			if err := emit(r); err != nil {
+				return err
+			}
 		}
 		a.Acked[r.Job] = r.Seq
 		if err := saveAckPath(ackPath, a); err != nil { // persist after emit => at-least-once

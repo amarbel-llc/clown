@@ -240,6 +240,34 @@ teardown() {
   refute_output --partial "post-attach"
 }
 
+# §9 self-echo suppression: a session's own broadcast MUST NOT wake its own
+# monitor (the sender already knows it sent it), while a peer attached before
+# the broadcast IS woken. Origin-based, not "broadcasts never replay".
+@test "broadcast: sender's own monitor does not self-echo, peer is woken" {
+  # Peer attaches first (init-at-end) so a later broadcast IS delivered to it.
+  CLOWN_SESSION_ID="test/echo-peer" run "$CLOWN_BIN" job-watch --once
+  assert_success
+
+  # Sender attaches first too.
+  export CLOWN_SESSION_ID="test/echo-sender"
+  run "$CLOWN_BIN" job-watch --once
+  assert_success
+
+  # Sender broadcasts with from == its own session key.
+  id="$("$CLOWN_BIN" job message --target '*' --from test/echo-sender \
+    --source spinclass --message "self hello")"
+
+  # The sender's own monitor must NOT surface its own broadcast.
+  run "$CLOWN_BIN" job-watch --once
+  assert_success
+  refute_output --partial "self hello"
+
+  # The peer, attached before the broadcast, IS woken by it.
+  CLOWN_SESSION_ID="test/echo-peer" run "$CLOWN_BIN" job-watch --once
+  assert_success
+  assert_line "[clown-job] spinclass ${id} message from test/echo-sender: self hello"
+}
+
 # §8: CLOWN_DISABLE_JOB_WAKEUP=1 — job-watch exits 0 immediately and the
 # emit subcommands are no-ops that still exit 0.
 @test "CLOWN_DISABLE_JOB_WAKEUP=1 makes job-watch exit 0 immediately" {
