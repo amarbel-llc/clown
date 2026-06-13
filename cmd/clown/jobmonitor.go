@@ -131,5 +131,48 @@ func synthJobMonitorPluginDir() (string, error) {
 			return "", err
 		}
 	}
+
+	// When the clown-hook-allow binary path is baked in (nix builds), ship a
+	// PreToolUse hook THROUGH THE PLUGIN so the job MCP tools auto-allow with no
+	// permission prompt (clown#130). This is the live mechanism: claude loads a
+	// plugin's hooks/hooks.json via --plugin-dir in every session — unlike
+	// managed-settings, which it does not read outside --tent (clown#133). The
+	// `.*` matcher routes every tool through clown-hook-allow, which returns
+	// "allow" for the clown-builtin-jobs tool prefix and /nix/store reads and
+	// "defer" otherwise, leaving all other permission decisions untouched.
+	// Mirrors how spinclass and moxy auto-allow their own tools. Skipped in dev
+	// builds (empty HookAllowPath), where the tools prompt as before.
+	if buildcfg.HookAllowPath != "" {
+		hooksDir := filepath.Join(dir, "hooks")
+		if err := os.MkdirAll(hooksDir, 0o700); err != nil {
+			_ = os.RemoveAll(dir)
+			return "", err
+		}
+		hooksCfg := map[string]any{
+			"hooks": map[string]any{
+				"PreToolUse": []any{
+					map[string]any{
+						"matcher": ".*",
+						"hooks": []any{
+							map[string]any{
+								"type":    "command",
+								"command": buildcfg.HookAllowPath,
+								"timeout": 5,
+							},
+						},
+					},
+				},
+			},
+		}
+		hb, err := json.MarshalIndent(hooksCfg, "", "  ")
+		if err != nil {
+			_ = os.RemoveAll(dir)
+			return "", err
+		}
+		if err := os.WriteFile(filepath.Join(hooksDir, "hooks.json"), hb, 0o600); err != nil {
+			_ = os.RemoveAll(dir)
+			return "", err
+		}
+	}
 	return dir, nil
 }

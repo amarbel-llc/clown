@@ -616,6 +616,7 @@
               "-X github.com/amarbel-llc/clown/internal/buildcfg.CrushCliPath=${pkgs-llm-agents.crush}/bin/crush"
               "-X github.com/amarbel-llc/clown/internal/buildcfg.ClownboxCliPath=${clownboxCliPath}"
               "-X github.com/amarbel-llc/clown/internal/buildcfg.StdioBridgePath=${clown-stdio-bridge}/bin/clown-stdio-bridge"
+              "-X github.com/amarbel-llc/clown/internal/buildcfg.HookAllowPath=${clown-hook-allow}/bin/clown-hook-allow"
               "-X github.com/amarbel-llc/clown/internal/buildcfg.DefaultProvider=${defaultProvider}"
               "-X github.com/amarbel-llc/clown/internal/buildcfg.DefaultProfile=${defaultProfile}"
               "-X github.com/amarbel-llc/clown/internal/buildcfg.PodmanPath=${tentPodmanPath}"

@@ -146,6 +146,75 @@ func TestJobMonitorPluginDirIncludesMCPWhenBridgeSet(t *testing.T) {
 	}
 }
 
+// When the clown-hook-allow path is baked in, the synthesized plugin ships a
+// PreToolUse hook (hooks/hooks.json) wiring clown-hook-allow so the job tools
+// auto-allow via the --plugin-dir mechanism (clown#130). The matcher is ".*"
+// (clown-hook-allow decides per tool) and the command is the absolute baked
+// path.
+func TestJobMonitorPluginDirIncludesHookWhenHookAllowSet(t *testing.T) {
+	t.Setenv("CLOWN_DISABLE_JOB_WAKEUP", "")
+	orig := buildcfg.HookAllowPath
+	buildcfg.HookAllowPath = "/nix/store/x/bin/clown-hook-allow"
+	t.Cleanup(func() { buildcfg.HookAllowPath = orig })
+
+	dir, err := synthJobMonitorPluginDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+
+	b, err := os.ReadFile(filepath.Join(dir, "hooks", "hooks.json"))
+	if err != nil {
+		t.Fatalf("expected hooks/hooks.json when hook-allow path is set: %v", err)
+	}
+	var cfg struct {
+		Hooks struct {
+			PreToolUse []struct {
+				Matcher string `json:"matcher"`
+				Hooks   []struct {
+					Type    string `json:"type"`
+					Command string `json:"command"`
+				} `json:"hooks"`
+			} `json:"PreToolUse"`
+		} `json:"hooks"`
+	}
+	if err := json.Unmarshal(b, &cfg); err != nil {
+		t.Fatalf("hooks.json invalid: %v\n%s", err, b)
+	}
+	if len(cfg.Hooks.PreToolUse) != 1 {
+		t.Fatalf("want one PreToolUse entry, got %d; %s", len(cfg.Hooks.PreToolUse), b)
+	}
+	entry := cfg.Hooks.PreToolUse[0]
+	if entry.Matcher != ".*" {
+		t.Fatalf("matcher = %q, want .* (clown-hook-allow decides per tool)", entry.Matcher)
+	}
+	if len(entry.Hooks) != 1 || entry.Hooks[0].Type != "command" {
+		t.Fatalf("want one command hook, got %+v", entry.Hooks)
+	}
+	if entry.Hooks[0].Command != buildcfg.HookAllowPath {
+		t.Fatalf("command = %q, want the baked HookAllowPath %q", entry.Hooks[0].Command, buildcfg.HookAllowPath)
+	}
+}
+
+// In dev builds (no hook-allow path) the PreToolUse hook is omitted; the tools
+// prompt as before rather than shipping a hook pointing at a nonexistent path.
+func TestJobMonitorPluginDirNoHookWhenHookAllowUnset(t *testing.T) {
+	t.Setenv("CLOWN_DISABLE_JOB_WAKEUP", "")
+	orig := buildcfg.HookAllowPath
+	buildcfg.HookAllowPath = ""
+	t.Cleanup(func() { buildcfg.HookAllowPath = orig })
+
+	dir, err := synthJobMonitorPluginDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+
+	if _, err := os.Stat(filepath.Join(dir, "hooks", "hooks.json")); !os.IsNotExist(err) {
+		t.Fatalf("hooks/hooks.json must be absent without a hook-allow path, stat err = %v", err)
+	}
+}
+
 // In dev builds (no bridge path) the MCP server is omitted so host discovery's
 // Desugar does not error and abort the launch; the monitor still ships.
 func TestJobMonitorPluginDirNoMCPWhenBridgeUnset(t *testing.T) {

@@ -33,6 +33,16 @@ var (
 	// layout. Empty in dev builds (go build, go run); stdioServers
 	// requires the Nix-built artifact.
 	StdioBridgePath string
+	// HookAllowPath is the absolute path to the clown-hook-allow binary in
+	// its own Nix store output, baked at build time. The synthesized
+	// clown-builtin-jobs plugin wires it as a PreToolUse hook (hooks/hooks.json,
+	// discovered via --plugin-dir) so the job MCP tools — and /nix/store reads —
+	// auto-allow without a per-call permission prompt (clown#130). The plugin
+	// hook path is the live mechanism: claude loads it in every session, unlike
+	// managed-settings, which is not read outside --tent (clown#133). Empty in
+	// dev builds (go build, go run); the hook is then omitted and the tools
+	// prompt as before. Mirrors how spinclass/moxy auto-allow their own tools.
+	HookAllowPath string
 	// DefaultProvider is the provider name used when neither
 	// --provider nor CLOWN_PROVIDER is set. Empty falls back to
 	// the historical "claude" default in main.go.
