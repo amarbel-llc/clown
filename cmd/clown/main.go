@@ -1304,40 +1304,43 @@ All arguments after -- are forwarded verbatim to the provider.
 `, defaultProvider, defaultProfileSuffix)
 }
 
-func printVersion() {
-	type row struct {
-		component string
-		version   string
-		rev       string
-	}
+// versionRow is one line of the `clown version` component table.
+type versionRow struct {
+	component string
+	version   string
+	rev       string
+}
 
-	header := row{"COMPONENT", "VERSION", "REV"}
-	fixed := []row{
+// buildVersionRows returns the `clown version` component-table rows in the
+// eng-versioning(7) "self-as-row" order: clown folds its own identity into the
+// table as the FIRST row (no separate self-line, no blank line), followed by
+// every pinned downstream component (claude-code, codex) and plugin, sorted for
+// stable output. clown is a self-pinning orchestrator, so the self-as-row
+// variant — where the binary is naturally one entry among the things it pins —
+// is the blessed shape (eng-versioning(7) cites cmd/clown as its reference).
+func buildVersionRows() []versionRow {
+	self := versionRow{"clown", buildcfg.Version, buildcfg.Commit}
+	rest := []versionRow{
 		{"claude-code", buildcfg.ClaudeCodeVersion, buildcfg.ClaudeCodeRev},
-		{"clown", buildcfg.Version, buildcfg.Commit},
 		{"codex", buildcfg.CodexVersion, buildcfg.CodexRev},
 	}
-
-	var plugin []row
-	metaDir := os.Getenv("CLOWN_PLUGIN_META")
-	if metaDir != "" {
+	if metaDir := os.Getenv("CLOWN_PLUGIN_META"); metaDir != "" {
 		if data, err := os.ReadFile(metaDir + "/version-info"); err == nil {
 			for _, line := range strings.Split(string(data), "\n") {
-				line = strings.TrimSpace(line)
-				if line != "" {
-					plugin = append(plugin, row{component: line})
+				if line = strings.TrimSpace(line); line != "" {
+					rest = append(rest, versionRow{component: line})
 				}
 			}
 		}
 	}
+	// Stable order for everything except the self-row, which is pinned first.
+	sort.Slice(rest, func(i, j int) bool { return rest[i].component < rest[j].component })
+	return append([]versionRow{self}, rest...)
+}
 
-	all := append(fixed, plugin...)
-	sort.Slice(all, func(i, j int) bool {
-		return all[i].component < all[j].component
-	})
-
-	fmt.Fprintf(os.Stdout, "%-20s %-12s %s\n", header.component, header.version, header.rev)
-	for _, r := range all {
+func printVersion() {
+	fmt.Fprintf(os.Stdout, "%-20s %-12s %s\n", "COMPONENT", "VERSION", "REV")
+	for _, r := range buildVersionRows() {
 		if r.version != "" {
 			fmt.Fprintf(os.Stdout, "%-20s %-12s %s\n", r.component, r.version, r.rev)
 		} else {
