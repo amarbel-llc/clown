@@ -1,19 +1,27 @@
-// clown-hook-allow is a Claude Code PreToolUse hook handler. It reads
-// the hook event JSON from stdin and emits a permission decision on
-// stdout. It returns "allow" for two trusted classes — Read/Glob/Grep
-// against paths under /nix/store, and clown's own clown-builtin-jobs MCP
-// tools (the job-wakeup plumbing, clown#130) — and "defer" for everything
-// else (let downstream hooks or the default permission logic decide).
+// clown-hook-allow is a Claude Code PreToolUse hook handler. It reads the hook
+// event JSON from stdin and, for two trusted classes — Read/Glob/Grep against
+// paths under /nix/store, and clown's own clown-builtin-jobs MCP tools (the
+// job-wakeup plumbing, clown#130) — emits an ALLOW decision so the call is not
+// prompted. Everything else defers (emits nothing; the next hook or the default
+// permission logic decides).
 //
-// The /nix/store auto-allow exists because store paths are
-// content-addressed and immutable: reading them is information-only
-// and carries no risk worth a permission prompt. We adopted this hook
-// after empirically discovering that --allowed-tools "Read(/nix/store/**)"
-// is not honored by claude-code 2.1 for the Read tool.
+// Output form: the decision MUST be the nested hookSpecificOutput object
+// (hookEventName/permissionDecision/permissionDecisionReason). The older bare
+// {"permissionDecision":...} form is honored by claude-code for some built-in
+// tools but is IGNORED for MCP plugin tools (mcp__*) as of claude-code 2.1.177 —
+// empirically (clown#130): the bare allow was silently dropped for the
+// clown-builtin-jobs tools (and for /nix/store Reads) until this handler adopted
+// the nested form, which moxy's working hook already uses.
 //
-// Wire-up: clown's mkClownManagedSettings ships this binary's path as a
-// PreToolUse handler in the managed-settings.json baked into the
-// patched claude-code derivation.
+// The /nix/store auto-allow exists because store paths are content-addressed and
+// immutable: reading them is information-only and carries no risk worth a
+// prompt. (--allowed-tools "Read(/nix/store/**)" is not honored by claude-code
+// for the Read tool, which is why this is a hook.)
+//
+// Wire-up: clown synthesizes a built-in plugin (clown-builtin-jobs) whose
+// hooks/hooks.json registers this binary as a PreToolUse handler (matcher ".*"),
+// passed to claude via --plugin-dir. The legacy managed-settings wire-up is dead
+// — claude does not read managed-settings outside --tent (clown#133).
 package main
 
 import (
@@ -39,13 +47,27 @@ type hookInput struct {
 	ToolInput json.RawMessage `json:"tool_input"`
 }
 
-// decision is the bare hook output schema accepted by claude-code 2.1.
-// Verified empirically that this form, the nested
-// {"hookSpecificOutput":{...}} form, and even exit-0-with-no-stdout all
-// produce the same allow outcome — so we use the simplest one.
-type decision struct {
-	PermissionDecision string `json:"permissionDecision"`
-	Reason             string `json:"reason,omitempty"`
+// hookSpecificOutput is the PreToolUse permission-decision payload claude-code
+// honors for ALL tools, including MCP plugin tools (clown#130). See the package
+// doc for why the bare {"permissionDecision":...} form is insufficient for MCP
+// tools as of claude-code 2.1.177.
+type hookSpecificOutput struct {
+	HookEventName            string `json:"hookEventName"`
+	PermissionDecision       string `json:"permissionDecision"`
+	PermissionDecisionReason string `json:"permissionDecisionReason,omitempty"`
+}
+
+type hookOutput struct {
+	HookSpecificOutput hookSpecificOutput `json:"hookSpecificOutput"`
+}
+
+// allow builds a nested PreToolUse "allow" decision carrying the given reason.
+func allow(reason string) *hookOutput {
+	return &hookOutput{HookSpecificOutput: hookSpecificOutput{
+		HookEventName:            "PreToolUse",
+		PermissionDecision:       "allow",
+		PermissionDecisionReason: reason,
+	}}
 }
 
 func main() {
@@ -69,12 +91,17 @@ func run(stdin io.Reader, stdout io.Writer) error {
 		return fmt.Errorf("parsing hook input: %w", err)
 	}
 
-	d := evaluate(in)
-	out, _ := json.Marshal(d)
-	debugLog("output", string(out))
-
-	enc := json.NewEncoder(stdout)
-	if err := enc.Encode(d); err != nil {
+	out := evaluate(in)
+	if out == nil {
+		// Defer: emit nothing so the next hook / default permission logic
+		// decides. ("defer" is not a real claude-code decision value; no
+		// output is the canonical "no opinion".)
+		debugLog("output", "(defer)")
+		return nil
+	}
+	b, _ := json.Marshal(out)
+	debugLog("output", string(b))
+	if err := json.NewEncoder(stdout).Encode(out); err != nil {
 		return fmt.Errorf("writing decision: %w", err)
 	}
 	return nil
@@ -96,10 +123,11 @@ func debugLog(tag, payload string) {
 	fmt.Fprintf(f, "[%s] %s\n", tag, payload)
 }
 
-// evaluate returns the permission decision for a PreToolUse event. It
-// allows Read/Glob/Grep when the path argument is under /nix/store, and
-// any clown-builtin-jobs MCP tool (jobToolPrefix); every other case defers.
-func evaluate(in hookInput) decision {
+// evaluate returns a nested PreToolUse "allow" decision for a trusted event, or
+// nil to defer. It allows Read/Glob/Grep when the path argument is under
+// /nix/store, and any clown-builtin-jobs MCP tool (jobToolPrefix); every other
+// case defers.
+func evaluate(in hookInput) *hookOutput {
 	switch in.ToolName {
 	case "Read":
 		var ti struct {
@@ -107,7 +135,7 @@ func evaluate(in hookInput) decision {
 		}
 		_ = json.Unmarshal(in.ToolInput, &ti)
 		if isNixStorePath(ti.FilePath) {
-			return decision{PermissionDecision: "allow", Reason: "/nix/store reads are auto-allowed"}
+			return allow("/nix/store reads are auto-allowed")
 		}
 	case "Glob":
 		var ti struct {
@@ -119,7 +147,7 @@ func evaluate(in hookInput) decision {
 		// itself is absolute) or a path + relative pattern. Allow when
 		// either is rooted in /nix/store.
 		if isNixStorePath(ti.Path) || isNixStorePath(ti.Pattern) {
-			return decision{PermissionDecision: "allow", Reason: "/nix/store globs are auto-allowed"}
+			return allow("/nix/store globs are auto-allowed")
 		}
 	case "Grep":
 		var ti struct {
@@ -127,7 +155,7 @@ func evaluate(in hookInput) decision {
 		}
 		_ = json.Unmarshal(in.ToolInput, &ti)
 		if isNixStorePath(ti.Path) {
-			return decision{PermissionDecision: "allow", Reason: "/nix/store greps are auto-allowed"}
+			return allow("/nix/store greps are auto-allowed")
 		}
 	}
 	// clown's own job-wakeup MCP tools are auto-allowed regardless of arguments
@@ -135,9 +163,9 @@ func evaluate(in hookInput) decision {
 	// intended cross-session workflow, and the channel is the same single-user
 	// trust domain as any local write — so even broadcast job_message is allowed.
 	if strings.HasPrefix(in.ToolName, jobToolPrefix) {
-		return decision{PermissionDecision: "allow", Reason: "clown-builtin-jobs job-channel tools are auto-allowed"}
+		return allow("clown-builtin-jobs job-channel tools are auto-allowed")
 	}
-	return decision{PermissionDecision: "defer"}
+	return nil // defer
 }
 
 // isNixStorePath reports whether p is anchored at /nix/store/. Empty

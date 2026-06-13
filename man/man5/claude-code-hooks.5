@@ -236,7 +236,7 @@ Permit the tool invocation without further prompting.
 .It Cm deny
 Block the tool invocation.
 An optional
-.Cm reason
+.Cm permissionDecisionReason
 field provides an explanation shown to the user.
 .It Cm ask
 Escalate to the user for a manual decision.
@@ -248,13 +248,33 @@ This is the default behavior when no
 is returned.
 .El
 .Pp
+The decision MUST be wrapped in a
+.Cm hookSpecificOutput
+object with
+.Cm hookEventName
+set to PreToolUse, a
+.Cm permissionDecision ,
+and an optional
+.Cm permissionDecisionReason .
+The bare, unwrapped
+.Cm permissionDecision
+form is honored for some built-in tools but is IGNORED for MCP plugin
+tools (names beginning with mcp__), so a handler that allows an MCP tool
+MUST use the wrapped form.
+To defer, emit no output at all rather than a
+.Cm permissionDecision
+of defer.
+.Pp
 Example response from a
 .Cm PreToolUse
 command handler:
 .Bd -literal -offset indent
 {
-  "permissionDecision": "deny",
-  "reason": "Writes to /etc are not permitted"
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "Writes to /etc are not permitted"
+  }
 }
 .Ed
 .Sh INPUT REWRITING

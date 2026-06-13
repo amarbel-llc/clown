@@ -114,13 +114,29 @@ func TestEvaluate(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			d := evaluate(hookInput{
+			out := evaluate(hookInput{
 				ToolName:  tc.toolName,
 				ToolInput: json.RawMessage(tc.input),
 			})
-			if d.PermissionDecision != tc.want {
-				t.Errorf("got decision %q, want %q (reason=%q)",
-					d.PermissionDecision, tc.want, d.Reason)
+			switch tc.want {
+			case "allow":
+				if out == nil {
+					t.Fatal("got defer (nil), want allow")
+				}
+				if out.HookSpecificOutput.PermissionDecision != "allow" {
+					t.Errorf("permissionDecision = %q, want allow", out.HookSpecificOutput.PermissionDecision)
+				}
+				// The nested form MUST carry hookEventName, or claude-code
+				// 2.1.177 ignores the allow for MCP tools (clown#130).
+				if out.HookSpecificOutput.HookEventName != "PreToolUse" {
+					t.Errorf("hookEventName = %q, want PreToolUse", out.HookSpecificOutput.HookEventName)
+				}
+			case "defer":
+				if out != nil {
+					t.Errorf("got %+v, want defer (nil)", out)
+				}
+			default:
+				t.Fatalf("bad want %q", tc.want)
 			}
 		})
 	}
@@ -133,12 +149,34 @@ func TestRun_EndToEnd(t *testing.T) {
 		t.Fatalf("run: %v", err)
 	}
 
-	var got decision
+	// MUST emit the nested hookSpecificOutput form — the bare form is ignored
+	// for MCP tools by claude-code 2.1.177 (clown#130). Guard against a regress
+	// to the bare shape.
+	if !bytes.Contains(out.Bytes(), []byte(`"hookSpecificOutput"`)) {
+		t.Fatalf("output must use the nested hookSpecificOutput form; got %s", out.String())
+	}
+	var got hookOutput
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("parsing stdout: %v", err)
 	}
-	if got.PermissionDecision != "allow" {
-		t.Errorf("permissionDecision = %q, want allow", got.PermissionDecision)
+	if got.HookSpecificOutput.PermissionDecision != "allow" {
+		t.Errorf("permissionDecision = %q, want allow", got.HookSpecificOutput.PermissionDecision)
+	}
+	if got.HookSpecificOutput.HookEventName != "PreToolUse" {
+		t.Errorf("hookEventName = %q, want PreToolUse", got.HookSpecificOutput.HookEventName)
+	}
+}
+
+// Defer MUST emit nothing (no opinion) so the next hook / default logic decides
+// — not a bare {"permissionDecision":"defer"} (not a real claude-code value).
+func TestRun_DeferEmitsNothing(t *testing.T) {
+	in := strings.NewReader(`{"tool_name":"Read","tool_input":{"file_path":"/etc/passwd"}}`)
+	var out bytes.Buffer
+	if err := run(in, &out); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if out.Len() != 0 {
+		t.Errorf("defer must emit nothing; got %q", out.String())
 	}
 }
 
