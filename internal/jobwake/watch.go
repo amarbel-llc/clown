@@ -10,6 +10,12 @@ import (
 // LEVER, RFC-0009 §9 / FDR-0013). 1s matches spinclass chat-watch parity.
 const rescanInterval = time.Second
 
+// sweepInterval is how often the monitor runs the GC sweep while it lives
+// (TUNING LEVER, RFC-0010 §4). The sweep also runs once at start; without a
+// periodic cadence a long-lived monitor on an always-on host would almost never
+// GC (clown#126).
+const sweepInterval = time.Hour
+
 // Watch runs the channel monitor (RFC-0009 §9): it replays unacked waking
 // events, binds the nudge socket, then loops on datagram-or-ticker re-scanning,
 // emitting each new waking event exactly once via emit. The ack is persisted
@@ -48,6 +54,8 @@ func Watch(ctx context.Context, sessionKey string, emit func(Record) error) erro
 
 	ticker := time.NewTicker(rescanInterval)
 	defer ticker.Stop()
+	sweepTicker := time.NewTicker(sweepInterval)
+	defer sweepTicker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -60,6 +68,8 @@ func Watch(ctx context.Context, sessionKey string, emit func(Record) error) erro
 			if err := serviceChannels(cid, sessionKey, emit); err != nil {
 				return err
 			}
+		case <-sweepTicker.C:
+			sweep(cid, time.Now()) // periodic GC so a long-lived monitor keeps reaping (clown#126)
 		}
 	}
 }
@@ -81,7 +91,7 @@ func ReplayOnce(sessionKey string, emit func(Record) error) error {
 // for self-echo suppression but NOT to the own-channel path, so a deliberate
 // directed self-message still wakes.
 func serviceChannels(cid, sessionKey string, emit func(Record) error) error {
-	if err := emitUnacked(cid, AckFile(cid), "", emit); err != nil {
+	if err := emitUnacked(cid, AckFile(cid), "", true /* reap delivered messages */, emit); err != nil {
 		return err
 	}
 	return serviceBroadcast(cid, sessionKey, emit)
@@ -101,7 +111,7 @@ func serviceBroadcast(readerCID, readerKey string, emit func(Record) error) erro
 		}
 		return initBroadcastAck(bcid, ackPath)
 	}
-	return emitUnacked(bcid, ackPath, readerKey, emit)
+	return emitUnacked(bcid, ackPath, readerKey, false /* per-reader acks: do not reap */, emit)
 }
 
 // initBroadcastAck persists a first-attach ack covering every waking record
@@ -137,7 +147,15 @@ func initBroadcastAck(bcid, ackPath string) error {
 // record does not linger unacked in this reader's broadcast ack map. The
 // own-channel path passes an empty selfKey, so a deliberate directed
 // self-message (--target <own-key>, the "remind myself" case) still wakes.
-func emitUnacked(cid, ackPath, selfKey string, emit func(Record) error) error {
+//
+// reapDelivered enables immediate reap of a delivered standalone message
+// (RFC-0010 §4): on the OWNING channel a message's wake IS the whole job
+// (RFC-0009 §4) and any chat body lives in a separate store, so once emitted it
+// has no residual value and is reaped at once instead of accruing a msg-* row.
+// It is false on the broadcast channel: many readers share the journal, so
+// reaping on one reader's ack would starve the others (broadcast messages rest
+// on the age backstop, acked per-reader).
+func emitUnacked(cid, ackPath, selfKey string, reapDelivered bool, emit func(Record) error) error {
 	a := loadAckPath(ackPath)
 	waking, err := scanWaking(cid)
 	if err != nil {
@@ -151,6 +169,15 @@ func emitUnacked(cid, ackPath, selfKey string, emit func(Record) error) error {
 			if err := emit(r); err != nil {
 				return err
 			}
+		}
+		// A delivered message on the owning channel is reaped in place of
+		// acking: the gone journal can never re-emit, so the reap IS the ack —
+		// no entry is persisted (which would only be a dangling entry for the
+		// next sweep to prune). A crash between emit and reap re-emits on
+		// restart, which the at-least-once contract already permits.
+		if reapDelivered && r.Type == TypeMessage {
+			reapJob(cid, r.Job)
+			continue
 		}
 		a.Acked[r.Job] = r.Seq
 		if err := saveAckPath(ackPath, a); err != nil { // persist after emit => at-least-once

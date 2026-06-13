@@ -174,7 +174,9 @@ Observing progress on demand (pull; never wakes):
 |---|---|---|---|
 | poll-fallback / re-scan interval | 1s | spinclass-proven; safety net for lost nudges and the macOS pull path | wake latency complaints, or idle-scan CPU shows up |
 | broadcast nudge | none (rescan tick is the delivery path) | one writer cannot know every reader's socket; the 1s tick bounds latency cheaply | broadcast wake latency matters → escalate to producer socket-spray (one datagram per known reader socket) |
-| journal retention / GC | 7 days | bounds disk; matches session-tombstone-style sweep | journal dir growth becomes material |
+| journal retention / GC (backstop) | 7 days | bounds disk for undelivered records + orphaned jobs; matches session-tombstone-style sweep | journal dir growth becomes material |
+| resting retention (delivered terminals) | 24h | delivered terminals need only brief `ls`/`tail` post-mortem; delivered messages reap on ack (RFC-0010 §4.1, clown#126) | post-mortem window feels too short/long |
+| GC sweep cadence | at monitor start + hourly | a long-lived monitor must keep reaping, not GC only at start (clown#126) | reap latency or idle-sweep CPU shows up |
 | progress-record cap per job | uncapped, journal-only | progress is cheap and never woken | a chatty plugin bloats a single job journal |
 | nudge datagram size cap | 512 B | tiny `v|job|type` line; well under any datagram limit | a future need to carry payload in the nudge |
 | nudge transport | UDS datagram | fs-scoped perms, no port, tmpfs auto-clean | a non-local emitter ever needs UDP loopback |

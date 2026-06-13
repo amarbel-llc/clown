@@ -292,6 +292,14 @@ func ringmasterCancel(args []string) int {
 		fmt.Fprintf(os.Stderr, "ringmaster cancel: job %q already %s\n", jobID, st.State)
 		return 1
 	}
+	// A delivered standalone message (RFC-0009 §4) has no producer to cancel:
+	// it is a single non-terminal `message` record, so DoneChannel would happily
+	// append a `cancelled` record after it, producing a nonsense two-record
+	// notification journal (clown#126). Refuse it like an already-terminal job.
+	if st.State == jobwake.StateDelivered {
+		fmt.Fprintf(os.Stderr, "ringmaster cancel: job %q is a delivered message, not a cancellable job\n", jobID)
+		return 1
+	}
 
 	if err := jobwake.DoneChannel(cid, jobID, jobwake.TypeCancelled, *message, ""); err != nil {
 		fmt.Fprintf(os.Stderr, "ringmaster cancel: %v\n", err)

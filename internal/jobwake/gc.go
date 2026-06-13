@@ -13,6 +13,14 @@ import (
 // runs once at Watch start.
 const journalRetention = 7 * 24 * time.Hour
 
+// restingRetention is the shorter GC window for DELIVERED lifecycle terminals
+// (TUNING LEVER, RFC-0010 §4): a terminal record whose ack confirms delivery
+// needs only brief post-mortem retention for `ls`/`tail`, not the full
+// journalRetention. journalRetention remains the backstop for UNDELIVERED
+// terminals (a producer that died before its terminal was acked) and for
+// orphaned never-terminal jobs. MUST be <= journalRetention.
+const restingRetention = 24 * time.Hour
+
 // sweep is the one-shot GC pass run at monitor start (clown#113). For the
 // reader's own channel and the broadcast channel it:
 //
@@ -30,6 +38,13 @@ const journalRetention = 7 * 24 * time.Hour
 func sweep(readerCID string, now time.Time) {
 	bcid := ChannelID(BroadcastKey)
 	cutoff := now.Add(-journalRetention)
+	restingCutoff := now.Add(-restingRetention)
+
+	// Resting-retention tier (own channel only): a DELIVERED lifecycle terminal
+	// is reaped after the short window, ahead of the journalRetention backstop.
+	// Broadcast is excluded — its per-reader acks give no single "delivered"
+	// verdict, so any terminals there rest on the age backstop below.
+	reapAckedTerminals(readerCID, AckFile(readerCID), restingCutoff)
 
 	reapAgedJournals(readerCID, cutoff)
 	reapAgedJournals(bcid, cutoff)
@@ -62,10 +77,57 @@ func reapAgedJournals(cid string, cutoff time.Time) {
 			continue
 		}
 		if info.ModTime().Before(cutoff) {
-			jobID := strings.TrimSuffix(name, ".jsonl")
-			_ = os.Remove(JournalFile(cid, jobID))
-			_ = os.Remove(SpoolFile(cid, jobID)) // RFC-0010 §4
+			reapJob(cid, strings.TrimSuffix(name, ".jsonl"))
 		}
+	}
+}
+
+// reapJob removes a job's journal and its output spool together (RFC-0010 §4:
+// the spool dies with its journal, regardless of the spool's own mtime).
+// Best-effort; missing files are ignored.
+func reapJob(cid, jobID string) {
+	_ = os.Remove(JournalFile(cid, jobID))
+	_ = os.Remove(SpoolFile(cid, jobID))
+}
+
+// reapAckedTerminals reaps job journals on the owning channel whose terminal
+// record has been ACKED (delivered) and whose mtime is older than restingCutoff
+// — the RFC-0010 §4 resting-retention tier. A delivered terminal needs only
+// brief post-mortem retention for `ls`/`tail`; undelivered terminals (producer
+// died before the ack) and orphaned never-terminal jobs are left to
+// reapAgedJournals' longer journalRetention backstop. Acks are read from
+// ackPath (the channel's own `.ack.json`); the pruneAckEntries pass that runs
+// later in the same sweep drops the now-dangling ack entries for jobs reaped
+// here. Broadcast is not swept this way (its per-reader acks carry no single
+// delivered verdict).
+func reapAckedTerminals(cid, ackPath string, restingCutoff time.Time) {
+	entries, err := os.ReadDir(JournalDir(cid))
+	if err != nil {
+		return
+	}
+	a := loadAckPath(ackPath)
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || strings.HasPrefix(name, ".") || !strings.HasSuffix(name, ".jsonl") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil || !info.ModTime().Before(restingCutoff) {
+			continue
+		}
+		jobID := strings.TrimSuffix(name, ".jsonl")
+		recs, err := ReadJob(cid, jobID)
+		if err != nil || len(recs) == 0 {
+			continue
+		}
+		last := recs[len(recs)-1]
+		if !IsTerminal(last.Type) {
+			continue // not terminal: backstop only
+		}
+		if acked, ok := a.Acked[jobID]; !ok || acked < last.Seq {
+			continue // terminal not yet delivered: backstop only
+		}
+		reapJob(cid, jobID)
 	}
 }
 

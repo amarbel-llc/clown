@@ -30,6 +30,15 @@ func age(t *testing.T, path string) {
 	}
 }
 
+// ageBy sets a file's mtime to d in the past.
+func ageBy(t *testing.T, path string, d time.Duration) {
+	t.Helper()
+	old := time.Now().Add(-d)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestSweepReapsAgedJournalsKeepsFresh(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	cid := ChannelID("k")
@@ -190,6 +199,98 @@ func TestSweepDoesNotCauseReemit(t *testing.T) {
 	}
 	if len(second) != 0 {
 		t.Fatalf("post-sweep replay must emit nothing, got %+v", second)
+	}
+}
+
+// A delivered standalone message on the owning channel is reaped the instant it
+// is acked (RFC-0010 §4): its wake is the whole job, so it leaves no msg-* row.
+func TestDeliveredMessageReapedOnOwnChannel(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("XDG_RUNTIME_DIR", shortRuntimeDir(t))
+	t.Setenv("CLOWN_SESSION_ID", "k")
+	id, err := Message("", "s", "", "ping", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cid := ChannelID("k")
+	if _, err := os.Stat(JournalFile(cid, id)); err != nil {
+		t.Fatalf("setup: message journal should exist, err = %v", err)
+	}
+
+	var got []Record
+	if err := ReplayOnce("k", func(r Record) error { got = append(got, r); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Type != TypeMessage {
+		t.Fatalf("want one message emit, got %+v", got)
+	}
+	if _, err := os.Stat(JournalFile(cid, id)); !os.IsNotExist(err) {
+		t.Errorf("delivered message journal must be reaped on own-channel ack, stat err = %v", err)
+	}
+}
+
+// A delivered broadcast message is NOT reaped on one reader's ack: readers share
+// the journal and a second reader may not have acked yet (RFC-0010 §4).
+func TestBroadcastMessageNotReapedOnOneReaderAck(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("XDG_RUNTIME_DIR", shortRuntimeDir(t))
+	t.Setenv("CLOWN_SESSION_ID", "sender")
+
+	for _, r := range []string{"reader-1", "reader-2"} {
+		if got := replayBroadcast(t, r); len(got) != 0 {
+			t.Fatalf("%s first attach must emit nothing, got %+v", r, got)
+		}
+	}
+	id, err := Message(BroadcastKey, "s", "sender", "to all", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bcid := ChannelID(BroadcastKey)
+
+	if got := replayBroadcast(t, "reader-1"); len(got) != 1 || got[0].Job != id {
+		t.Fatalf("reader-1 must receive the broadcast, got %+v", got)
+	}
+	if _, err := os.Stat(JournalFile(bcid, id)); err != nil {
+		t.Fatalf("broadcast message journal must survive one reader's ack, stat err = %v", err)
+	}
+	if got := replayBroadcast(t, "reader-2"); len(got) != 1 || got[0].Job != id {
+		t.Fatalf("reader-2 must still receive the broadcast, got %+v", got)
+	}
+}
+
+// Resting-retention tier (RFC-0010 §4): a terminal job whose terminal record is
+// acked is reaped after restingRetention, well before the journalRetention
+// backstop; an unacked terminal and an orphaned never-terminal job both survive
+// the resting window and wait for the 7d backstop.
+func TestSweepRestingRetentionForDeliveredTerminals(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	cid := ChannelID("k")
+
+	delivered := writeJournal(t, cid, "delivered-job")     // seq-1 succeeded record
+	undelivered := writeJournal(t, cid, "undelivered-job") // same shape, never acked
+	orphan := JournalFile(cid, "orphan-job")               // started, no terminal
+	if err := os.WriteFile(orphan, []byte(`{"v":1,"job":"orphan-job","type":"started","seq":0}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveAckPath(AckFile(cid), ack{V: 1, Acked: map[string]int{"delivered-job": 1}}); err != nil {
+		t.Fatal(err)
+	}
+
+	restAge := restingRetention + time.Hour // past resting, well under journalRetention
+	ageBy(t, delivered, restAge)
+	ageBy(t, undelivered, restAge)
+	ageBy(t, orphan, restAge)
+
+	sweep(cid, time.Now())
+
+	if _, err := os.Stat(delivered); !os.IsNotExist(err) {
+		t.Errorf("delivered terminal past restingRetention must be reaped, stat err = %v", err)
+	}
+	if _, err := os.Stat(undelivered); err != nil {
+		t.Errorf("undelivered terminal must survive the resting window (backstop only), stat err = %v", err)
+	}
+	if _, err := os.Stat(orphan); err != nil {
+		t.Errorf("orphaned running job must survive the resting window (backstop only), stat err = %v", err)
 	}
 }
 

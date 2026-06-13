@@ -265,6 +265,27 @@ func TestCancelMissingAndDouble(t *testing.T) {
 	}
 }
 
+// ringmaster cancel refuses a delivered message: it has no producer to cancel,
+// and appending a `cancelled` record after a non-terminal `message` would
+// produce a nonsense two-record journal (#126).
+func TestCancelRefusesDeliveredMessage(t *testing.T) {
+	jobEnv(t)
+	id, err := jobwake.Message("", "spinclass", "", "ping", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code := run([]string{"cancel", id}); code != 1 {
+		t.Fatalf("cancel on a delivered message: want exit 1, got %d", code)
+	}
+	recs, err := jobwake.ReadJob(jobwake.ChannelID("k"), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) != 1 || recs[0].Type != jobwake.TypeMessage {
+		t.Fatalf("cancel must not append to a delivered message, got %+v", recs)
+	}
+}
+
 // foreignJob starts a job under session "owner" and then rebinds the current
 // session to "operator", returning the job id and owner's channel id. This is
 // the #125 setup: an operator at a terminal it does not own the session key for,

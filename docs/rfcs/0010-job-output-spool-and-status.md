@@ -160,12 +160,11 @@ but age-gated, so a spool created by `spool-path` in the window *before* its
 producer writes the `started` journal is not reaped mid-setup. Spools impose
 no new retention knob.
 
-#### 4.1 Cleanup on Terminate (PROPOSED — clown#126, pending sign-off)
+#### 4.1 Cleanup on Terminate (clown#126)
 
-> Status: **proposed**, not yet implemented. The age-based sweep above (§4) is
-> the shipped behavior. This subsection specifies the state-aware reap tier
-> that supersedes the start-only, state-blind sweep; until it lands, treat §4
-> as authoritative.
+> Status: **implemented** (clown#126). The state-aware reap tier below
+> supersedes the start-only, state-blind §4 sweep; §4 remains the age-based
+> backstop for undelivered records and orphaned jobs.
 
 The §4 sweep keys on mtime alone, runs only at monitor start (RFC-0009 §9), and
 gives a fire-and-forget `message` the same 7-day window as a long-lived job.
@@ -179,13 +178,15 @@ amendment adds an ack-driven reap tier with one invariant:
 > last-resort bound for an owner that never returns. This preserves
 > at-least-once.
 
-1. **Delivered messages reap on ack.** When a monitor persists the ack for a
-   `message` record on **its own** channel, it SHOULD reap that job's journal
-   and spool immediately: the wake is the whole job (RFC-0009 §4) and, once
-   delivered, the journal has no residual value — any body lives in the
-   producer's own store, not here. This MUST NOT apply on the broadcast
-   channel (`*`): its readers are independent, so one reader's ack does not
-   mean delivery to the others; broadcast messages stay age-based.
+1. **Delivered messages reap on ack.** When a monitor delivers (emits) a
+   `message` record on **its own** channel, it reaps that job's journal and
+   spool immediately, in place of persisting an ack: the wake is the whole job
+   (RFC-0009 §4) and, once delivered, the journal has no residual value — any
+   body lives in the producer's own store, not here. The removed journal cannot
+   re-emit, so the reap subsumes the ack (no dangling ack entry is left). This
+   MUST NOT apply on the broadcast channel (`*`): its readers are independent,
+   so one reader's ack does not mean delivery to the others; broadcast messages
+   stay age-based.
 
 2. **Lifecycle terminals get a shorter resting-retention.** A terminal job
    whose terminal `seq` is acked on its owning channel MAY be reaped after a
@@ -238,6 +239,9 @@ Tests use binary injection via `bats-emo`:
 | §3, last_activity from spool mtime; tail bounded to N lines | `job_output_spool.bats` | tail + activity semantics |
 | §3, missing journal exits 1 | `job_output_spool.bats` | unknown-job diagnostic |
 | §4, sweep reaps spool with journal and orphan spools | `internal/jobwake/status_test.go` | GC coupling (Go: the sweep runs only in the blocking monitor, not via the CLI surface bats drives) |
+| §4.1, delivered message reaped on own-channel ack; broadcast survives one reader's ack | `internal/jobwake/gc_test.go` | reap-on-delivery, broadcast carve-out |
+| §4.1, resting-retention reaps a delivered terminal ~24h; undelivered/orphan kept to the backstop | `internal/jobwake/gc_test.go` | two-tier retention |
+| §4.1, `ringmaster cancel` refuses a delivered message | `cmd/ringmaster/jobs_test.go` | no spurious terminal on a notification |
 
 ## Compatibility
 
