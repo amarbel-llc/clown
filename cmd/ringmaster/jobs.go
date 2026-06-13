@@ -205,6 +205,22 @@ func ringmasterTail(args []string) int {
 		return 2
 	}
 
+	// Verify the job exists in the resolved channel before reading its spool.
+	// ResolveSpoolChannel + SpoolTail create and validate nothing, so a job
+	// addressed by an id from `ls --all` but living in another channel (no
+	// --channel passed) resolves to the CURRENT session's channel, finds no
+	// spool, and prints nothing at exit 0 — silently indistinguishable from a
+	// job that simply has not produced output yet. `status` already errors here
+	// via ReadJob; `tail` must too, and point the operator at --channel (#128).
+	if _, err := jobwake.StatusOfChannel(cid, jobID, 0, time.Now().UTC()); err != nil {
+		if os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "ringmaster tail: no such job %q (if it is in another session, pass --channel from `ls --all`)\n", jobID)
+			return 1
+		}
+		fmt.Fprintf(os.Stderr, "ringmaster tail: %v\n", err)
+		return jobErrExit(err)
+	}
+
 	path, err := jobwake.ResolveSpoolChannel(cid, jobID)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ringmaster tail: %v\n", err)

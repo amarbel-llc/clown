@@ -159,6 +159,35 @@ func TestTailNonFollow(t *testing.T) {
 	}
 }
 
+// tail on a job that does not exist in the resolved channel errors (exit 1)
+// rather than silently printing nothing at exit 0. This covers the #128 trap:
+// an id copied from `ls --all` but tailed without --channel resolves to the
+// current session's channel and previously read an empty/absent spool in
+// silence. A missing job mirrors `status`; a malformed id is still a usage
+// error (exit 2).
+func TestTailMissingAndInvalid(t *testing.T) {
+	jobEnv(t)
+	if code := run([]string{"tail"}); code != 2 {
+		t.Fatalf("tail without id: want exit 2, got %d", code)
+	}
+	if code := run([]string{"tail", "nope-12345678"}); code != 1 {
+		t.Fatalf("tail missing job: want exit 1, got %d", code)
+	}
+	if code := run([]string{"tail", "../passwd"}); code != 2 {
+		t.Fatalf("tail invalid id: want exit 2, got %d", code)
+	}
+}
+
+// A foreign-channel job tailed WITHOUT --channel resolves to the operator's own
+// session, where the job does not exist, and must error (exit 1) instead of
+// silently succeeding — the operator-visible half of #128.
+func TestTailForeignWithoutChannelErrors(t *testing.T) {
+	id, _ := foreignJob(t)
+	if code := run([]string{"tail", id}); code != 1 {
+		t.Fatalf("tail foreign job without --channel: want exit 1, got %d", code)
+	}
+}
+
 // tail -f streams output appended after the job starts and returns once the job
 // reaches a terminal state.
 func TestTailFollowStopsOnTerminal(t *testing.T) {

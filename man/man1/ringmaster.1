@@ -142,6 +142,14 @@ With
 .Fl f ,
 follow the spool, streaming appended output until the job reaches a
 terminal state or the operator interrupts.
+The job must exist in the resolved channel: a malformed job id or channel id
+exits 2, and a job absent from the channel exits 1 rather than printing
+nothing.
+When an id from
+.Cm ls Fl -all
+names a job in another session, pass that row's
+.Fl -channel
+so the lookup reaches the owning channel.
 .It Cm cancel Ar job-id Oo Fl -target Ar key | Fl -channel Ar id Oc Oo Fl -message Ar text Oc
 Cooperatively cancel a job by writing its terminal
 .Sq cancelled
