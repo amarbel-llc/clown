@@ -21,11 +21,18 @@ import (
 const heartbeatEnvVar = "CLOWN_BRIDGE_HEARTBEAT_INTERVAL"
 
 // heartbeatModeEnvVar selects a named heartbeat mode that overrides the
-// interval-derived policy. The recognized override is "forward-only"
-// (alias "child"): keep SSE streaming on so child notifications/progress
-// and the final response are delivered, but suppress the bridge's own
-// timer so heartbeats are activity-driven by the child alone. Unset or
-// any unrecognized value falls back to the heartbeatEnvVar cadence.
+// interval-derived policy. Recognized overrides:
+//   - "forward-only" (alias "child"): keep SSE streaming on so child
+//     notifications/progress and the final response are delivered, but
+//     suppress the bridge's own timer so heartbeats are activity-driven by the
+//     child alone.
+//   - "forward-only+fallback" (alias "child+fallback"): like forward-only, but
+//     arm an ACTIVITY-GATED fallback timer — the bridge emits a heartbeat only
+//     after the child has been silent for heartbeatEnvVar's interval, re-arming
+//     on every child message. A bridge-side keep-alive ceiling that still lets
+//     a genuinely hung child time out (clown#109).
+//
+// Unset or any unrecognized value falls back to the heartbeatEnvVar cadence.
 const heartbeatModeEnvVar = "CLOWN_BRIDGE_HEARTBEAT"
 
 const heartbeatDefault = 30 * time.Second
@@ -50,21 +57,31 @@ func heartbeatInterval() time.Duration {
 
 // heartbeatMode resolves the per-POST streaming/timer policy from the two
 // heartbeat env vars. It reports whether the response should stream
-// (text/event-stream) and, if so, the cadence of the bridge's own timer
-// heartbeats. A zero interval with streaming=true means forward-only:
-// stream but emit no timer heartbeats, leaving keep-alive entirely to the
-// child's own notifications/progress. heartbeatModeEnvVar takes
-// precedence; unset or unrecognized values fall back to the
-// heartbeatEnvVar cadence (streaming when that cadence is > 0).
-func heartbeatMode() (streaming bool, interval time.Duration) {
+// (text/event-stream), the timer interval, and whether that interval is
+// activity-gated (fallback). heartbeatModeEnvVar takes precedence.
+//
+//   - "forward-only"/"child": stream, no bridge timer (interval 0) — keep-alive
+//     is the child's own notifications/progress alone.
+//   - "forward-only+fallback"/"child+fallback": stream, and arm an
+//     activity-gated fallback timer (fallback=true) whose threshold reuses
+//     heartbeatInterval() (heartbeatDefault when that is 0/off).
+//   - otherwise: the heartbeatEnvVar cadence as a fixed-interval timer
+//     (fallback=false; streaming when the cadence is > 0).
+func heartbeatMode() (streaming bool, interval time.Duration, fallback bool) {
 	if v, set := os.LookupEnv(heartbeatModeEnvVar); set {
 		switch strings.ToLower(strings.TrimSpace(v)) {
 		case "forward-only", "child":
-			return true, 0
+			return true, 0, false
+		case "forward-only+fallback", "child+fallback":
+			iv := heartbeatInterval()
+			if iv <= 0 {
+				iv = heartbeatDefault
+			}
+			return true, iv, true
 		}
 	}
 	iv := heartbeatInterval()
-	return iv > 0, iv
+	return iv > 0, iv, false
 }
 
 // httpHandler exposes the wrapped stdio MCP server over streamable-HTTP
@@ -151,8 +168,8 @@ func (h *httpHandler) handlePost(w http.ResponseWriter, r *http.Request) {
 		h.logger.Printf(
 			"clown-stdio-bridge: post start id=%s method=%q has_progressToken=%t body_size=%d",
 			idKey, probe.Method, hasToken, len(body))
-		if streaming, interval := heartbeatMode(); streaming {
-			h.handlePostStreaming(w, r, idKey, probe.ID, body, interval, started, label)
+		if streaming, interval, fallback := heartbeatMode(); streaming {
+			h.handlePostStreaming(w, r, idKey, probe.ID, body, interval, fallback, started, label)
 			return
 		}
 		// Synchronous JSON response (streaming disabled).
@@ -223,6 +240,7 @@ func (h *httpHandler) handlePostStreaming(
 	id json.RawMessage,
 	body []byte,
 	interval time.Duration,
+	fallback bool,
 	started time.Time,
 	label string,
 ) {
@@ -258,18 +276,54 @@ func (h *httpHandler) handlePostStreaming(
 		results <- sendResult{resp: resp, err: err}
 	}()
 
-	// In forward-only mode (interval == 0) the bridge emits no heartbeats
-	// of its own: streaming stays on so the child's own
-	// notifications/progress and the final response are delivered, but a
-	// nil tick channel makes the timer case below unreachable. time.NewTicker
-	// would also panic on a non-positive duration, so it must be skipped.
-	var tickC <-chan time.Time
-	if interval > 0 {
+	// Timer policy:
+	//   - forward-only (interval == 0): no timer at all — nil channels make the
+	//     timer cases below unreachable (time.NewTicker/NewTimer also panic on a
+	//     non-positive duration, so they must be skipped).
+	//   - fixed cadence (interval > 0, !fallback): a periodic ticker fires every
+	//     interval regardless of child activity (the original behavior).
+	//   - activity-gated fallback (interval > 0, fallback): a resettable timer
+	//     fires only after the child has been silent for interval; every child
+	//     message — observed via the translator broadcast — re-arms it, so a
+	//     slow-but-progressing call stays alive while a genuinely hung child
+	//     eventually stops re-arming and times out (clown#109).
+	var (
+		tickC    <-chan time.Time       // fixed-cadence ticker
+		silenceC <-chan time.Time       // activity-gated fallback timer's channel
+		silence  *time.Timer            // backing timer for silenceC
+		activity <-chan json.RawMessage // child-output signal (fallback only)
+	)
+	switch {
+	case fallback && interval > 0:
+		silence = time.NewTimer(interval)
+		defer silence.Stop()
+		silenceC = silence.C
+		var cancel func()
+		activity, cancel = h.t.Subscribe()
+		defer cancel()
+	case interval > 0:
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		tickC = ticker.C
 	}
 	var seq int64
+
+	emitHeartbeat := func() {
+		seq++
+		heartbeatKind := "comment"
+		if len(progressToken) > 0 {
+			heartbeatKind = "progress"
+			notif := fmt.Sprintf(
+				`{"jsonrpc":"2.0","method":"notifications/progress","params":{"progressToken":%s,"progress":%d,"message":"clown-stdio-bridge: still waiting"}}`,
+				progressToken, seq)
+			fmt.Fprintf(w, "data: %s\n\n", notif)
+		} else {
+			fmt.Fprintf(w, ": heartbeat %d\n\n", seq)
+		}
+		flusher.Flush()
+		h.logger.Printf("clown-stdio-bridge: heartbeat id=%s seq=%d kind=%s elapsed_ms=%d",
+			idKey, seq, heartbeatKind, time.Since(started).Milliseconds())
+	}
 
 	for {
 		select {
@@ -313,21 +367,25 @@ func (h *httpHandler) handlePostStreaming(
 			fmt.Fprintf(w, "data: %s\n\n", res.resp)
 			flusher.Flush()
 			return
-		case <-tickC:
-			seq++
-			heartbeatKind := "comment"
-			if len(progressToken) > 0 {
-				heartbeatKind = "progress"
-				notif := fmt.Sprintf(
-					`{"jsonrpc":"2.0","method":"notifications/progress","params":{"progressToken":%s,"progress":%d,"message":"clown-stdio-bridge: still waiting"}}`,
-					progressToken, seq)
-				fmt.Fprintf(w, "data: %s\n\n", notif)
-			} else {
-				fmt.Fprintf(w, ": heartbeat %d\n\n", seq)
+		case <-activity:
+			// Child produced output: it is progressing, so re-arm the silence
+			// window. We only OBSERVE here (the GET stream forwards child
+			// notifications to its own subscribers); we do not re-emit. activity
+			// is nil outside fallback mode, so this case never fires there.
+			if !silence.Stop() {
+				select {
+				case <-silence.C:
+				default:
+				}
 			}
-			flusher.Flush()
-			h.logger.Printf("clown-stdio-bridge: heartbeat id=%s seq=%d kind=%s elapsed_ms=%d",
-				idKey, seq, heartbeatKind, time.Since(started).Milliseconds())
+			silence.Reset(interval)
+		case <-tickC:
+			emitHeartbeat()
+		case <-silenceC:
+			// Fallback: the child has been silent for interval — emit one
+			// heartbeat, then re-arm to fire again after continued silence.
+			emitHeartbeat()
+			silence.Reset(interval)
 		}
 	}
 }

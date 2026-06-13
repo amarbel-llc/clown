@@ -336,6 +336,128 @@ func TestHTTP_PostStreamingForwardOnlySuppressesTimer(t *testing.T) {
 	}
 }
 
+// TestHTTP_PostStreamingFallbackHeartbeatOnSilence verifies the
+// activity-gated fallback mode (clown#109): with a silent child, the bridge
+// fires at least one heartbeat once the silence threshold elapses — unlike
+// plain forward-only, which would emit none.
+func TestHTTP_PostStreamingFallbackHeartbeatOnSilence(t *testing.T) {
+	// 20ms silence threshold; child stays silent 80ms (≥4 thresholds) before
+	// responding, so the fallback timer must fire at least once.
+	t.Setenv(heartbeatEnvVar, "20ms")
+	t.Setenv(heartbeatModeEnvVar, "forward-only+fallback")
+
+	stdinR, stdinW := io.Pipe()
+	stdoutR, stdoutW := io.Pipe()
+	tr := newTranslator(stdinW, stdoutR, nullLogger{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = tr.Run(ctx) }()
+	defer func() {
+		_ = stdinR.Close()
+		_ = stdinW.Close()
+		_ = stdoutR.Close()
+		_ = stdoutW.Close()
+	}()
+
+	// Silent child: wait 80ms with no output, then echo.
+	go func() {
+		buf := make([]byte, 4096)
+		n, err := stdinR.Read(buf)
+		if err != nil {
+			return
+		}
+		var msg map[string]any
+		if jerr := json.Unmarshal(bytes.TrimSpace(buf[:n]), &msg); jerr != nil {
+			return
+		}
+		time.Sleep(80 * time.Millisecond)
+		resp := map[string]any{"jsonrpc": "2.0", "id": msg["id"], "result": map[string]any{"ok": true}}
+		out, _ := json.Marshal(resp)
+		_, _ = stdoutW.Write(append(out, '\n'))
+	}()
+
+	h := &httpHandler{t: tr, logger: nullLogger{}}
+	srv := httptest.NewServer(http.HandlerFunc(h.handleMCP))
+	defer srv.Close()
+
+	body := `{"jsonrpc":"2.0","id":11,"method":"slow"}`
+	resp, err := http.Post(srv.URL, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+	got, _ := io.ReadAll(resp.Body)
+	if !bytes.Contains(got, []byte(": heartbeat")) {
+		t.Errorf("fallback must emit a heartbeat after the silence threshold; got %q", got)
+	}
+	if !bytes.Contains(got, []byte(`"id":11`)) {
+		t.Errorf("expected final response id=11; got %q", got)
+	}
+}
+
+// TestHTTP_PostStreamingFallbackResetByActivity verifies that steady child
+// output re-arms the fallback timer (clown#109): the child emits a
+// notification every 10ms — well under the 50ms threshold — for ~120ms before
+// responding, so the silence window never elapses and NO heartbeat is emitted
+// despite the total wait exceeding the threshold many times over.
+func TestHTTP_PostStreamingFallbackResetByActivity(t *testing.T) {
+	t.Setenv(heartbeatEnvVar, "50ms")
+	t.Setenv(heartbeatModeEnvVar, "forward-only+fallback")
+
+	stdinR, stdinW := io.Pipe()
+	stdoutR, stdoutW := io.Pipe()
+	tr := newTranslator(stdinW, stdoutR, nullLogger{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = tr.Run(ctx) }()
+	defer func() {
+		_ = stdinR.Close()
+		_ = stdinW.Close()
+		_ = stdoutR.Close()
+		_ = stdoutW.Close()
+	}()
+
+	// Active child: emit a notification every 10ms for ~120ms (each well under
+	// the 50ms threshold), then respond. Notifications carry a method, so the
+	// translator routes them to the broadcast the POST handler observes.
+	go func() {
+		buf := make([]byte, 4096)
+		n, err := stdinR.Read(buf)
+		if err != nil {
+			return
+		}
+		var msg map[string]any
+		if jerr := json.Unmarshal(bytes.TrimSpace(buf[:n]), &msg); jerr != nil {
+			return
+		}
+		for i := 0; i < 12; i++ {
+			time.Sleep(10 * time.Millisecond)
+			_, _ = stdoutW.Write([]byte(`{"jsonrpc":"2.0","method":"notifications/message","params":{"data":"tick"}}` + "\n"))
+		}
+		resp := map[string]any{"jsonrpc": "2.0", "id": msg["id"], "result": map[string]any{"ok": true}}
+		out, _ := json.Marshal(resp)
+		_, _ = stdoutW.Write(append(out, '\n'))
+	}()
+
+	h := &httpHandler{t: tr, logger: nullLogger{}}
+	srv := httptest.NewServer(http.HandlerFunc(h.handleMCP))
+	defer srv.Close()
+
+	body := `{"jsonrpc":"2.0","id":12,"method":"slow"}`
+	resp, err := http.Post(srv.URL, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+	got, _ := io.ReadAll(resp.Body)
+	if bytes.Contains(got, []byte(": heartbeat")) {
+		t.Errorf("steady child activity must keep re-arming the fallback timer (no heartbeat); got %q", got)
+	}
+	if !bytes.Contains(got, []byte(`"id":12`)) {
+		t.Errorf("expected final response id=12; got %q", got)
+	}
+}
+
 // setOrUnsetEnv sets (or unsets) an env var for the duration of the test,
 // restoring the original state on cleanup. Unlike t.Setenv it can model an
 // absent variable, which heartbeatMode distinguishes from an empty value.
@@ -365,6 +487,7 @@ func TestHeartbeatMode(t *testing.T) {
 		intervalSet  bool
 		wantStream   bool
 		wantInterval time.Duration
+		wantFallback bool
 	}{
 		{name: "default: stream at default cadence", wantStream: true, wantInterval: heartbeatDefault},
 		{name: "explicit interval", interval: "5s", intervalSet: true, wantStream: true, wantInterval: 5 * time.Second},
@@ -373,6 +496,9 @@ func TestHeartbeatMode(t *testing.T) {
 		{name: "child alias", mode: "child", modeSet: true, wantStream: true, wantInterval: 0},
 		{name: "forward-only is case/space insensitive", mode: "  Forward-Only  ", modeSet: true, wantStream: true, wantInterval: 0},
 		{name: "forward-only overrides a short interval", mode: "forward-only", modeSet: true, interval: "20ms", intervalSet: true, wantStream: true, wantInterval: 0},
+		{name: "fallback arms an activity-gated timer at the interval", mode: "forward-only+fallback", modeSet: true, interval: "20ms", intervalSet: true, wantStream: true, wantInterval: 20 * time.Millisecond, wantFallback: true},
+		{name: "fallback alias child+fallback", mode: "child+fallback", modeSet: true, interval: "5s", intervalSet: true, wantStream: true, wantInterval: 5 * time.Second, wantFallback: true},
+		{name: "fallback with no/off interval uses the default threshold", mode: "forward-only+fallback", modeSet: true, interval: "off", intervalSet: true, wantStream: true, wantInterval: heartbeatDefault, wantFallback: true},
 		{name: "unknown mode falls back to interval", mode: "bogus", modeSet: true, interval: "5s", intervalSet: true, wantStream: true, wantInterval: 5 * time.Second},
 		{name: "unknown mode falls back to default", mode: "bogus", modeSet: true, wantStream: true, wantInterval: heartbeatDefault},
 	}
@@ -380,12 +506,15 @@ func TestHeartbeatMode(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			setOrUnsetEnv(t, heartbeatModeEnvVar, tt.mode, tt.modeSet)
 			setOrUnsetEnv(t, heartbeatEnvVar, tt.interval, tt.intervalSet)
-			gotStream, gotInterval := heartbeatMode()
+			gotStream, gotInterval, gotFallback := heartbeatMode()
 			if gotStream != tt.wantStream {
 				t.Errorf("streaming = %v, want %v", gotStream, tt.wantStream)
 			}
 			if gotInterval != tt.wantInterval {
 				t.Errorf("interval = %v, want %v", gotInterval, tt.wantInterval)
+			}
+			if gotFallback != tt.wantFallback {
+				t.Errorf("fallback = %v, want %v", gotFallback, tt.wantFallback)
 			}
 		})
 	}

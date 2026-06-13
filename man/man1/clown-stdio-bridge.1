@@ -192,6 +192,21 @@ carried solely by the wrapped child's own
 .Li notifications/progress .
 This lets a genuinely silent child time out instead of being held open
 indefinitely by a blind timer.
+.Pp
+The value
+.Li forward-only+fallback
+.Pq alias Li child+fallback
+is the same, but additionally arms an
+.Em activity-gated
+fallback timer: the bridge emits a heartbeat only after the child has been
+silent for the
+.Ev CLOWN_BRIDGE_HEARTBEAT_INTERVAL
+threshold
+.Pq default when that is unset or Li 0 ,
+re-arming on every message the child emits.
+This gives a bridge-side keep-alive ceiling for a slow-but-progressing call
+while still letting a genuinely hung child stop re-arming and time out.
+.Pp
 Unset or any unrecognized value falls back to the
 .Ev CLOWN_BRIDGE_HEARTBEAT_INTERVAL
 cadence.
