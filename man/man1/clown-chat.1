@@ -1,0 +1,75 @@
+.\" Copyright (c) 2026 amarbel, LLC
+.\" SPDX-License-Identifier: MIT
+.Dd @MDOCDATE@
+.Dt CLOWN-CHAT 1
+.Os
+.Sh NAME
+.Nm clown-chat
+.Nd clown-owned cross-session chat over the job-wakeup channel
+.Sh SYNOPSIS
+.Nm clown chat send
+.Fl -target Ar session-key | group | '*'
+.Fl -subject Ar subject
+.Op Fl -body Ar body
+.Op Fl -from Ar sender-key
+.Op Fl -source Ar source
+.Nm clown chat read
+.Op Fl -peek
+.Op Fl -json
+.Sh DESCRIPTION
+.Nm clown chat
+is clown's cross-session chat surface (RFC-0013 §3), built on the job-wakeup
+channel (see
+.Xr clown-job 1 ) .
+It replaces the chat tools spinclass previously served.
+A chat message is a
+.Em chat
+record \(em a waking, non-terminal type distinct from
+.Em message \(em
+whose one-line subject is the wake notification and whose full body is stored in
+the message's output spool, so a long body never truncates the wake line.
+.Bl -tag -width Ds
+.It Nm clown chat send
+Send a chat message.
+.Fl -target
+is a session key (a single clown, addressed by its per-instance key), a
+.Ev SPINCLASS_SESSION_ID
+group label (fans out to every clown under that spinclass session), or
+.Ql *
+for broadcast.
+.Fl -subject
+is the one-line wake notification (required).
+.Fl -body
+is the full message recovered by
+.Nm clown chat read .
+.Fl -from
+defaults to this session's key.
+Prints the generated job id.
+.It Nm clown chat read
+Read chat messages addressed to this session \(em its own (direct), group, and
+broadcast channels \(em newer than the read cursor, oldest first, each body
+recovered from its spool.
+The read advances a per-reader cursor distinct from the wake monitor's, so a
+wake never consumes a read and a read never consumes a wake.
+Unlike the wake monitor it includes this session's own sent messages
+(conversation history).
+.Fl -peek
+reads without advancing the cursor.
+.Fl -json
+emits one JSON object per message
+.Pq Li {job,from,source,scope,subject,body,ts} .
+.El
+.Sh ENVIRONMENT
+.Bl -tag -width Ds
+.It Ev CLOWN_SESSION_ID
+The reader's per-instance key; its channel is the direct-message target (see
+.Xr clown-job 1 ) .
+.It Ev SPINCLASS_SESSION_ID
+The group decoration; chat read also services the group channel
+.Pq Li ChannelID Ns Pq Ev SPINCLASS_SESSION_ID .
+.El
+.Sh SEE ALSO
+.Xr clown-job 1
+.Sh STANDARDS
+RFC-0013 (clownfile, per-instance identity, and clown-owned chat) and RFC-0009
+(job-wakeup channel).

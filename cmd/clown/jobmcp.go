@@ -105,6 +105,10 @@ func jobToolList() []map[string]any {
 			"inputSchema": obj(map[string]any{"job_id": str, "target": target, "tail": map[string]any{"type": "integer"}}, "job_id")},
 		{"name": "job_spool_path", "description": "Resolve and return the absolute output-spool path for a job. Does not create the file.",
 			"inputSchema": obj(map[string]any{"job_id": str, "target": target}, "job_id")},
+		{"name": "chat_send", "description": "Send a chat message (RFC-0013 §3): a one-line subject (the wake) plus an optional full body recovered by chat_read. target: session key / SPINCLASS_SESSION_ID group / '*' broadcast.",
+			"inputSchema": obj(map[string]any{"target": target, "subject": str, "body": str, "from": str, "source": str}, "target", "subject")},
+		{"name": "chat_read", "description": "Read chat messages addressed to this session (own/group/broadcast) newer than the read cursor; advances the cursor unless peek. Returns a JSON array of {job,from,source,scope,subject,body,ts}.",
+			"inputSchema": obj(map[string]any{"peek": map[string]any{"type": "boolean"}})},
 	}
 }
 
@@ -141,6 +145,16 @@ func callJobTool(params json.RawMessage) map[string]any {
 	case "job_spool_path":
 		path, err := jobwake.SpoolPath(argStr(a, "target"), argStr(a, "job_id"))
 		return toolResult(path, err)
+	case "chat_send":
+		from := argStr(a, "from")
+		if from == "" {
+			from = jobwake.SessionKey()
+		}
+		id, err := jobwake.SendChat(argStr(a, "target"), from, argStr(a, "source"),
+			argStr(a, "subject"), argStr(a, "body"))
+		return toolResult(id, err)
+	case "chat_read":
+		return chatReadTool(a)
 	default:
 		return toolErr(fmt.Sprintf("unknown tool %q", p.Name))
 	}
@@ -198,6 +212,22 @@ func jobReadTool(a map[string]any) map[string]any {
 		recs = []jobwake.Record{}
 	}
 	b, err := json.Marshal(recs)
+	if err != nil {
+		return toolErr(err.Error())
+	}
+	return toolText(string(b))
+}
+
+func chatReadTool(a map[string]any) map[string]any {
+	peek, _ := a["peek"].(bool)
+	msgs, err := jobwake.ReadChat(peek)
+	if err != nil {
+		return toolErr(err.Error())
+	}
+	if msgs == nil {
+		msgs = []jobwake.ChatMessage{}
+	}
+	b, err := json.Marshal(msgs)
 	if err != nil {
 		return toolErr(err.Error())
 	}

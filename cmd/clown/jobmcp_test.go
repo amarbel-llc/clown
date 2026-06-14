@@ -77,13 +77,14 @@ func TestJobMCPInitializeAndToolsList(t *testing.T) {
 	for _, want := range []string{
 		"job_start", "job_progress", "job_done", "job_message",
 		"job_read", "job_status", "job_spool_path",
+		"chat_send", "chat_read",
 	} {
 		if !names[want] {
 			t.Errorf("tools/list missing %q", want)
 		}
 	}
-	if len(tools) != 7 {
-		t.Errorf("want 7 tools, got %d", len(tools))
+	if len(tools) != 9 {
+		t.Errorf("want 9 tools, got %d", len(tools))
 	}
 }
 

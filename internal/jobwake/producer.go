@@ -70,6 +70,18 @@ func sanitizeLabel(s string) string {
 
 func nowTS() string { return time.Now().UTC().Format(time.RFC3339Nano) }
 
+// defaultSource resolves a producer's source label: the explicit value when
+// non-empty, else CLOWN_JOB_SOURCE, else "clown".
+func defaultSource(source string) string {
+	if source != "" {
+		return source
+	}
+	if v := os.Getenv("CLOWN_JOB_SOURCE"); v != "" {
+		return v
+	}
+	return "clown"
+}
+
 // resolveSession picks the session key a producer operation writes to: the
 // explicit target when non-empty (so a cross-session producer started with
 // `clown job start --target <key>` keeps writing to that channel through
@@ -86,14 +98,7 @@ func resolveSession(target string) string {
 // and appends the seq-0 `started` record (RFC-0009 §8). It returns the job id.
 func Start(o StartOpts) (string, error) {
 	session := resolveSession(o.Target)
-	source := o.Source
-	if source == "" {
-		if v := os.Getenv("CLOWN_JOB_SOURCE"); v != "" {
-			source = v
-		} else {
-			source = "clown"
-		}
-	}
+	source := defaultSource(o.Source)
 	cid := ChannelID(session)
 	if err := os.MkdirAll(JournalDir(cid), 0o700); err != nil {
 		return "", err
@@ -188,13 +193,7 @@ func Progress(target, jobID, message string) error {
 // (RFC-0009 §6). It returns the generated job id (`msg-<8hex>`).
 func Message(target, source, from, body, resultRef string) (string, error) {
 	session := resolveSession(target)
-	if source == "" {
-		if v := os.Getenv("CLOWN_JOB_SOURCE"); v != "" {
-			source = v
-		} else {
-			source = "clown"
-		}
-	}
+	source = defaultSource(source)
 	cid := ChannelID(session)
 	if err := os.MkdirAll(JournalDir(cid), 0o700); err != nil {
 		return "", err
@@ -208,6 +207,41 @@ func Message(target, source, from, body, resultRef string) (string, error) {
 	}
 	if session != BroadcastKey {
 		sendNudge(cid, id, TypeMessage)
+	}
+	return id, nil
+}
+
+// SendChat emits a chat message (RFC-0013 §3): a waking `chat` record carrying
+// the one-line SUBJECT (the wake notification) plus the full multi-line BODY
+// written to the message's output spool (the body store, RFC-0010), so a long
+// body never re-triggers the subject-line truncation guard (#103). Unlike a
+// plain `message` wake, a `chat` record is NOT reaped on delivery (TypeChat is
+// not TypeMessage, which the own-channel reap targets) — the body must survive
+// for chat-read, so it rests until the age-based GC. target selects the channel
+// like Message (per-instance key / SPINCLASS group / BroadcastKey). from is the
+// OPTIONAL sender session key. The body is written before the record + nudge, so
+// any reader that discovers the record always finds its body. Returns the
+// generated job id (`chat-<8hex>`).
+func SendChat(target, from, source, subject, body string) (string, error) {
+	session := resolveSession(target)
+	source = defaultSource(source)
+	cid := ChannelID(session)
+	if err := os.MkdirAll(JournalDir(cid), 0o700); err != nil {
+		return "", err
+	}
+	id := newJobID("chat")
+	if body != "" {
+		if err := os.WriteFile(SpoolFile(cid, id), []byte(body), 0o600); err != nil {
+			return "", err
+		}
+	}
+	rec := Record{V: SchemaVersion, Job: id, Session: session, Source: source,
+		From: from, Type: TypeChat, TS: nowTS(), Message: oneLine(subject)}
+	if err := appendRecord(cid, rec, true); err != nil { // fsync before nudge
+		return "", err
+	}
+	if session != BroadcastKey {
+		sendNudge(cid, id, TypeChat)
 	}
 	return id, nil
 }

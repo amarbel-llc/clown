@@ -12,6 +12,13 @@ const (
 	TypeInterrupted = "interrupted"
 	TypeMessage     = "message"
 
+	// TypeChat is a chat message (RFC-0013 §3): a waking, non-terminal record
+	// like TypeMessage, but its body is preserved (in the spool) for chat-read
+	// rather than being a fire-and-forget wake. Crucially it is NOT TypeMessage,
+	// so the own-channel reap (which targets TypeMessage) leaves it on disk until
+	// the age-based GC — the body must survive for chat-read.
+	TypeChat = "chat"
+
 	// BroadcastKey is the reserved session key naming the broadcast channel
 	// (RFC-0009 §2). It is never a real session; records targeted at it land
 	// in ChannelID(BroadcastKey) and every monitor services that channel with
@@ -44,6 +51,7 @@ func IsTerminal(t string) bool {
 }
 
 // IsWaking reports whether an event of this type wakes the agent. The waking
-// set is the terminal set plus the non-terminal `message` type; unknown and
-// reserved types (`needs-attention`) do not wake (RFC-0009 §5).
-func IsWaking(t string) bool { return IsTerminal(t) || t == TypeMessage }
+// set is the terminal set plus the non-terminal `message` and `chat` types;
+// unknown and reserved types (`needs-attention`) do not wake (RFC-0009 §5,
+// RFC-0013 §3).
+func IsWaking(t string) bool { return IsTerminal(t) || t == TypeMessage || t == TypeChat }

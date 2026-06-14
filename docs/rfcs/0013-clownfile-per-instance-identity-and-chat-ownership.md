@@ -193,14 +193,26 @@ listing.
 
 #### 3.1 Store
 
-1. The job-wakeup journal (RFC-0009) MUST be the sole chat message store. A chat
-   message MUST be a `message` journal record written to the target channel,
-   equivalent to `clown job message` / the RFC-0011 `job_message` tool. There
-   MUST NOT be a separate chat store.
-2. Chat read MUST be served from the journal (the RFC-0011 `job_read` path
-   filtered to `message` records), enriched with presence data (§3.3). A
-   per-reader cursor MUST be keyed by the reader's per-instance channel (§2.1),
-   so each clown tracks its own read position.
+A chat message is a single `chat` journal record (type `chat` — a distinct
+waking type, NOT `message`) on the target channel, paired with the message's
+RFC-0010 output spool. (The journal alone is NOT a store: a plain `message`
+record carries only a one-line subject, so the body needs the spool.)
+
+1. The record's `message` field MUST carry the one-line **subject** — the wake
+   notification, under the same length guard as any wake line. The full
+   multi-line **body** MUST be written to the message's spool
+   (`SpoolFile(channel, jobID)`) and MUST NOT be placed in the wake line (a body
+   there would re-trigger subject-line truncation). The **journal record plus
+   its spool** are the store; there MUST NOT be a separate chat store.
+2. Because the body must survive for chat-read, a `chat` record MUST NOT be
+   reaped on delivery (unlike a plain `message` wake, which the own-channel reap
+   removes once delivered). It rests until the age-based GC (RFC-0010 §4); chat
+   is ephemeral.
+3. Chat read MUST be served from the journal (`chat` records, each body
+   recovered from its spool), enriched with presence data (§3.3). The read MUST
+   advance a per-reader cursor that is DISTINCT from the monitor's wake ack, so
+   a wake never consumes a pull read or vice-versa; the cursor is keyed by the
+   reader's per-instance channel (§2.1) on each of the reader's channels (§3.2).
 
 #### 3.2 Derived-channel addressing
 

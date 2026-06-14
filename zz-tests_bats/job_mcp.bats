@@ -35,16 +35,17 @@ teardown() {
   assert_output --partial '"name":"clown-jobs"'
 }
 
-# §3: tools/list enumerates exactly the seven job_* tools.
-@test "job-mcp tools/list enumerates the seven job tools" {
+# §3: tools/list enumerates the seven job_* tools plus the two chat tools
+# (RFC-0013 §3 chat surface rides the same clown-builtin-jobs server).
+@test "job-mcp tools/list enumerates the job and chat tools" {
   req='{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
   run bash -c "printf '%s\n' '$req' | '$CLOWN_BIN' job-mcp"
   assert_success
-  for tool in job_start job_progress job_done job_message job_read job_status job_spool_path; do
+  for tool in job_start job_progress job_done job_message job_read job_status job_spool_path chat_send chat_read; do
     assert_output --partial "\"$tool\""
   done
   count="$(printf '%s' "$output" | jq -r '.result.tools | length')"
-  assert_equal "$count" "7"
+  assert_equal "$count" "9"
 }
 
 # §3/§4: tools/call job_start then job_status round-trips and the status is
