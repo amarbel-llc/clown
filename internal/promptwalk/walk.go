@@ -99,6 +99,13 @@ func walkAncestors(startDir, homeDir string) ([]string, error) {
 	return dirs, nil
 }
 
+// Ancestors returns the directories from startDir up to homeDir (or /),
+// deepest-first, both endpoints included. It is the exported form of the
+// `.circus/` ascent, reused by the clownfile cascade (RFC-0013 §1.1).
+func Ancestors(startDir, homeDir string) ([]string, error) {
+	return walkAncestors(startDir, homeDir)
+}
+
 // collectFragments reads *.md files from dir (non-recursive, sorted by
 // name) and appends each non-empty file's content followed by two
 // newlines to b.

@@ -1,0 +1,73 @@
+.\" Copyright (c) 2026 amarbel, LLC
+.\" SPDX-License-Identifier: MIT
+.Dd @MDOCDATE@
+.Dt CLOWNFILE 5
+.Os
+.Sh NAME
+.Nm clownfile
+.Nd clown per-instance configuration file
+.Sh DESCRIPTION
+A
+.Nm
+is a TOML file that sets per-directory defaults for a clown session (RFC-0013).
+clown discovers clownfiles by ascending from the current directory to
+.Ev HOME ,
+merging them so a
+.Nm
+closer to the current directory overrides one closer to
+.Ev HOME ,
+per key.
+An absent
+.Nm
+is not an error; a malformed one is.
+.Pp
+This page documents the
+.Sy [profile]
+table; the
+.Sy [attach]
+table (multiplexer templates) is reserved for a future release.
+.Ss [profile]
+The
+.Sy [profile]
+table provides defaults layered beneath explicit command-line flags and
+environment variables.
+The named-profile registry
+.Pq Fl -profile
+is a separate mechanism and wins over these defaults.
+.Bl -tag -width Ds
+.It Sy provider
+The provider (claude, codex, circus, opencode, crush).
+Applied only when neither
+.Fl -provider
+nor
+.Ev CLOWN_PROVIDER
+is set; a clownfile provider also suppresses the interactive profile picker.
+.It Sy backend
+The tent container backend (podman or lima) used by
+.Fl -tent .
+.It Sy model
+The model.
+Injected as
+.Fl -model
+for the claude-family providers (claude, circus, clownbox) when the user has not
+already passed
+.Fl -model ;
+other providers source their model elsewhere.
+.It Sy [profile.env]
+A table of environment variables exported into the provider and its plugin
+servers, set only when not already present (the ambient environment wins).
+.El
+.Sh EXAMPLES
+.Bd -literal -offset indent
+[profile]
+provider = "claude"
+model = "claude-sonnet-4-6"
+
+[profile.env]
+ANTHROPIC_LOG = "info"
+.Ed
+.Sh SEE ALSO
+.Xr clown-chat 1 ,
+.Xr clown-job 1
+.Sh STANDARDS
+RFC-0013 (clownfile, per-instance identity, and clown-owned chat).

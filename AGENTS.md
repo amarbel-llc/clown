@@ -290,6 +290,21 @@ becomes a profile field and `newBackend()` becomes the profile
 resolution sink. The interface is intentionally minimal so that
 migration is a wiring change, not a Go-API redesign.
 
+**clownfile (RFC-0013 §1) — the per-instance config layer.** The
+`clownfile` (TOML, discovered by ascending $PWD→$HOME via
+`internal/clownfile`) is clown's cascading per-directory config. Its
+`[profile]` table sets provider/backend/model/env defaults *beneath*
+explicit flags/env (precedence `--provider` > `CLOWN_PROVIDER` > clownfile
+> `buildcfg.DefaultProvider`): a clownfile provider also suppresses the
+picker, `[profile].backend` is the runtime source `newBackend(backend)`
+now reads (falling back to `buildcfg.TentBackend`), `[profile].model` is
+injected as `--model` for the claude family, and `[profile.env]` is
+exported only-if-unset (ambient wins). The named-profile registry
+(`--profile`) is a separate mechanism that wins over clownfile defaults.
+The `[attach]` table (zmx/posh mux templates + the spinclass
+`[session-entry]` takeover) is deferred (P5-attach). Man page:
+`clownfile(5)`.
+
 ## Architecture
 
 The flake produces a `symlinkJoin` of five components:

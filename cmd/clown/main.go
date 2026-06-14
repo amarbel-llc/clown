@@ -24,6 +24,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/amarbel-llc/clown/internal/buildcfg"
+	"github.com/amarbel-llc/clown/internal/clownfile"
 	"github.com/amarbel-llc/clown/internal/jobwake"
 	"github.com/amarbel-llc/clown/internal/pluginhost"
 	"github.com/amarbel-llc/clown/internal/profile"
@@ -215,6 +216,27 @@ func runWithFlags(flags parsedFlags) int {
 		return 1
 	}
 
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
+		return 1
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
+		return 1
+	}
+
+	// Apply the clownfile [profile] defaults (RFC-0013 §1) under explicit
+	// flags/env, before provider selection so a clownfile-set provider takes
+	// effect and suppresses the interactive picker.
+	cf, err := clownfile.Discover(cwd, homeDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
+		return 1
+	}
+	applyClownfileProfile(&flags, cf.Profile)
+
 	profiles, err := loadProfiles("")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown: loading profiles: %v\n", err)
@@ -270,17 +292,6 @@ func runWithFlags(flags parsedFlags) int {
 		}
 		execProcess(cliPath, flags.forwarded)
 		return 0 // unreachable
-	}
-
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
-		return 1
-	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
-		return 1
 	}
 
 	pluginDirs := readPluginDirs()
@@ -340,6 +351,43 @@ func runWithFlags(flags parsedFlags) int {
 	}
 }
 
+// applyClownfileProfile layers the clownfile [profile] defaults beneath explicit
+// flags/env (RFC-0013 §1.2): provider only when not already explicit (a
+// clownfile provider itself counts as explicit, so it also suppresses the
+// interactive picker); backend (the clownfile is its only runtime source);
+// model injected into the forwarded args for the claude-family providers that
+// take a passthrough --model; env set only-if-unset so the ambient environment
+// wins over a project default.
+func applyClownfileProfile(flags *parsedFlags, p clownfile.Profile) {
+	if !flags.providerExplicit && p.Provider != "" {
+		flags.provider = p.Provider
+		flags.providerExplicit = true
+	}
+	if flags.backend == "" {
+		flags.backend = p.Backend
+	}
+	if p.Model != "" && providerTakesModelFlag(flags.provider) && claudeFlagValue(flags.forwarded, "--model") == "" {
+		flags.forwarded = append([]string{"--model", p.Model}, flags.forwarded...)
+	}
+	for k, v := range p.Env {
+		if os.Getenv(k) == "" {
+			_ = os.Setenv(k, v)
+		}
+	}
+}
+
+// providerTakesModelFlag reports whether a provider accepts a passthrough
+// --model flag (the claude family wraps claude, which does). codex/opencode/
+// crush source their model elsewhere (their own config or the named-profile
+// registry), so a clownfile model default is not injected for them.
+func providerTakesModelFlag(provider string) bool {
+	switch provider {
+	case "claude", "circus", "clownbox":
+		return true
+	}
+	return false
+}
+
 // clownboxDisabledMessage is returned by resolveProvider when the
 // clownbox provider is requested in a build that omits its closure.
 // The build-time ldflag leaves ClownboxCliPath as the empty string when
@@ -396,11 +444,14 @@ type tentExecutor struct {
 // Errors out with a clear message on dev builds where the requisite
 // path ldflag is empty.
 //
-// Future: a TOML profile system will replace this build-time
-// selection with runtime selection. The interface contract (returned
-// tent.Backend) stays the same; only the resolution sink moves.
-func newBackend() (tent.Backend, error) {
-	switch buildcfg.TentBackend {
+// backend is the runtime backend (clownfile [profile].backend, RFC-0013 §1.2);
+// empty falls back to the build-time buildcfg.TentBackend. The returned
+// tent.Backend interface is the same regardless of source.
+func newBackend(backend string) (tent.Backend, error) {
+	if backend == "" {
+		backend = buildcfg.TentBackend
+	}
+	switch backend {
 	case "", "podman":
 		if buildcfg.PodmanPath == "" {
 			return nil, fmt.Errorf("--tent (podman backend) requires a build with podman wired in; this build has buildcfg.PodmanPath empty (try `nix build`)")
@@ -415,7 +466,7 @@ func newBackend() (tent.Backend, error) {
 		}
 		return tent.NewLima(buildcfg.LimactlPath, buildcfg.PodmanMachineName), nil
 	default:
-		return nil, fmt.Errorf("unknown tent backend %q (recognized: podman, lima)", buildcfg.TentBackend)
+		return nil, fmt.Errorf("unknown tent backend %q (recognized: podman, lima)", backend)
 	}
 }
 
@@ -540,7 +591,7 @@ func runClaude(cliPath string, flags parsedFlags, prompts promptwalk.PromptResul
 				"podman_path", buildcfg.PodmanPath,
 			)
 
-			tentExec, err := newTentExecutor(innerCliPath, pluginDirs, tentLogger, flags.verbose, resolvePassDevshell(flags))
+			tentExec, err := newTentExecutor(innerCliPath, pluginDirs, tentLogger, flags.verbose, resolvePassDevshell(flags), flags.backend)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "clown: %v\n", err)
 				tentLogger.Error("tent setup failed", "err", err)
@@ -570,8 +621,8 @@ func runClaude(cliPath string, flags parsedFlags, prompts promptwalk.PromptResul
 // Each setup phase is timed and logged so intermittent startup hangs
 // can be localized. When logger is nil (test callers), logging is
 // skipped; when verbose is true, phase boundaries also print to stderr.
-func newTentExecutor(innerCliPath string, pluginDirs []string, logger *slog.Logger, verbose, passDevshell bool) (*tentExecutor, error) {
-	backend, err := newBackend()
+func newTentExecutor(innerCliPath string, pluginDirs []string, logger *slog.Logger, verbose, passDevshell bool, backendName string) (*tentExecutor, error) {
+	backend, err := newBackend(backendName)
 	if err != nil {
 		return nil, err
 	}
@@ -1378,6 +1429,10 @@ type parsedFlags struct {
 	provider             string
 	providerExplicit     bool
 	profile              string
+	// backend is the tent container backend (podman|lima) sourced from the
+	// clownfile [profile].backend; empty falls back to buildcfg.TentBackend at
+	// newBackend. There is no flag/env source for it yet (RFC-0013 §1.2).
+	backend string
 	naked                bool
 	skipFailed           bool
 	disableClownProtocol bool

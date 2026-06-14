@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/amarbel-llc/clown/internal/buildcfg"
+	"github.com/amarbel-llc/clown/internal/clownfile"
 	"github.com/amarbel-llc/clown/internal/promptwalk"
 	"github.com/amarbel-llc/clown/internal/tent"
 )
@@ -62,6 +63,62 @@ func TestEnsureJobWakeupEnvLeavesPresetUntouched(t *testing.T) {
 	if got := os.Getenv("CLOWN_BIN"); got != "/custom/clown" {
 		t.Fatalf("CLOWN_BIN = %q, want preset value left untouched", got)
 	}
+}
+
+func TestApplyClownfileProfile(t *testing.T) {
+	t.Run("provider applied when not explicit, then marked explicit", func(t *testing.T) {
+		f := parsedFlags{provider: "claude"}
+		applyClownfileProfile(&f, clownfile.Profile{Provider: "codex"})
+		if f.provider != "codex" || !f.providerExplicit {
+			t.Fatalf("got provider=%q explicit=%v, want codex/true", f.provider, f.providerExplicit)
+		}
+	})
+	t.Run("explicit provider wins over clownfile", func(t *testing.T) {
+		f := parsedFlags{provider: "claude", providerExplicit: true}
+		applyClownfileProfile(&f, clownfile.Profile{Provider: "codex"})
+		if f.provider != "claude" {
+			t.Fatalf("explicit provider must win, got %q", f.provider)
+		}
+	})
+	t.Run("backend applied", func(t *testing.T) {
+		f := parsedFlags{}
+		applyClownfileProfile(&f, clownfile.Profile{Backend: "lima"})
+		if f.backend != "lima" {
+			t.Fatalf("backend = %q, want lima", f.backend)
+		}
+	})
+	t.Run("model injected for claude family, not codex", func(t *testing.T) {
+		f := parsedFlags{provider: "claude"}
+		applyClownfileProfile(&f, clownfile.Profile{Model: "opus"})
+		if !reflect.DeepEqual(f.forwarded, []string{"--model", "opus"}) {
+			t.Fatalf("forwarded = %v, want [--model opus]", f.forwarded)
+		}
+		f2 := parsedFlags{provider: "codex"}
+		applyClownfileProfile(&f2, clownfile.Profile{Model: "opus"})
+		if len(f2.forwarded) != 0 {
+			t.Fatalf("codex must not get an injected --model, got %v", f2.forwarded)
+		}
+	})
+	t.Run("user --model wins over clownfile model", func(t *testing.T) {
+		f := parsedFlags{provider: "claude", forwarded: []string{"--model", "sonnet"}}
+		applyClownfileProfile(&f, clownfile.Profile{Model: "opus"})
+		if !reflect.DeepEqual(f.forwarded, []string{"--model", "sonnet"}) {
+			t.Fatalf("user --model must win, got %v", f.forwarded)
+		}
+	})
+	t.Run("env set only-if-unset", func(t *testing.T) {
+		t.Setenv("CLOWNFILE_TEST_A", "")
+		t.Setenv("CLOWNFILE_TEST_B", "ambient")
+		f := parsedFlags{}
+		applyClownfileProfile(&f, clownfile.Profile{Env: map[string]string{
+			"CLOWNFILE_TEST_A": "fromfile", "CLOWNFILE_TEST_B": "fromfile"}})
+		if got := os.Getenv("CLOWNFILE_TEST_A"); got != "fromfile" {
+			t.Errorf("unset env must be set from clownfile, got %q", got)
+		}
+		if got := os.Getenv("CLOWNFILE_TEST_B"); got != "ambient" {
+			t.Errorf("ambient env must win, got %q", got)
+		}
+	})
 }
 
 func TestParseFlags(t *testing.T) {
@@ -723,7 +780,7 @@ func TestPrependPluginDirs(t *testing.T) {
 func TestNewBackend_EmptyPodmanPath(t *testing.T) {
 	withBuildcfgString(t, &buildcfg.TentBackend, "podman")
 	withBuildcfgString(t, &buildcfg.PodmanPath, "")
-	if _, err := newBackend(); err == nil || !strings.Contains(err.Error(), "podman") {
+	if _, err := newBackend(""); err == nil || !strings.Contains(err.Error(), "podman") {
 		t.Fatalf("expected podman-missing error, got %v", err)
 	}
 }
@@ -734,7 +791,7 @@ func TestNewBackend_LimaEmptyLimactlPath(t *testing.T) {
 	withBuildcfgString(t, &buildcfg.TentBackend, "lima")
 	withBuildcfgString(t, &buildcfg.LimactlPath, "")
 	withBuildcfgString(t, &buildcfg.PodmanMachineName, "any")
-	if _, err := newBackend(); err == nil || !strings.Contains(err.Error(), "limactl") {
+	if _, err := newBackend(""); err == nil || !strings.Contains(err.Error(), "limactl") {
 		t.Fatalf("expected limactl-missing error, got %v", err)
 	}
 }
@@ -745,7 +802,7 @@ func TestNewBackend_LimaEmptyMachineName(t *testing.T) {
 	withBuildcfgString(t, &buildcfg.TentBackend, "lima")
 	withBuildcfgString(t, &buildcfg.LimactlPath, "/usr/bin/false")
 	withBuildcfgString(t, &buildcfg.PodmanMachineName, "")
-	if _, err := newBackend(); err == nil || !strings.Contains(err.Error(), "machine name") {
+	if _, err := newBackend(""); err == nil || !strings.Contains(err.Error(), "machine name") {
 		t.Fatalf("expected machine-name-empty error, got %v", err)
 	}
 }
@@ -753,7 +810,7 @@ func TestNewBackend_LimaEmptyMachineName(t *testing.T) {
 // TestNewBackend_UnknownBackend pins the typo-detection behavior.
 func TestNewBackend_UnknownBackend(t *testing.T) {
 	withBuildcfgString(t, &buildcfg.TentBackend, "docker")
-	if _, err := newBackend(); err == nil || !strings.Contains(err.Error(), "unknown tent backend") {
+	if _, err := newBackend(""); err == nil || !strings.Contains(err.Error(), "unknown tent backend") {
 		t.Fatalf("expected unknown-backend error, got %v", err)
 	}
 }
@@ -762,7 +819,7 @@ func TestNewTentExecutor_EmptyImageRef(t *testing.T) {
 	withBuildcfgString(t, &buildcfg.TentBackend, "podman")
 	withBuildcfgString(t, &buildcfg.PodmanPath, "/usr/bin/false")
 	withBuildcfgString(t, &buildcfg.TentImageRef, "")
-	if _, err := newTentExecutor("/x/claude", nil, nil, false, false); err == nil || !strings.Contains(err.Error(), "TentImageRef") {
+	if _, err := newTentExecutor("/x/claude", nil, nil, false, false, ""); err == nil || !strings.Contains(err.Error(), "TentImageRef") {
 		t.Fatalf("expected TentImageRef-empty error, got %v", err)
 	}
 }
