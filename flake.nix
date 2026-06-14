@@ -408,9 +408,12 @@
             --replace-fail 'bin/mock-mcp-server' "$out/bin/mock-mcp-server"
         '';
 
-        # PreToolUse hook that auto-allows Read/Glob/Grep against
-        # /nix/store paths. Wired into mkClownManagedSettings below so
-        # every clown-launched claude session inherits the allow.
+        # PreToolUse hook that auto-allows Read/Glob/Grep against /nix/store
+        # paths (and the clown-builtin-jobs tools). Its path is baked in via
+        # buildcfg.HookAllowPath and shipped THROUGH THE PLUGIN by
+        # synthJobMonitorPluginDir (clown#130) — the live --plugin-dir hook
+        # mechanism, not managed-settings (which claude does not read outside
+        # --tent; clown#133).
         clown-hook-allow = buildGoApplication {
           pname = "clown-hook-allow";
           version = clownVersion;
@@ -538,10 +541,10 @@
 
         # tent runs an *unpatched* claude-code from numtide/llm-agents.nix
         # so the inner ring has no managed-settings shim — tent is the
-        # boundary. The patched 2.1.111 (npm-source, cli.js-redirected
-        # via mkPatchedClaudeCode) stays the default for un-tented clown;
-        # see flake.nix:600-621 and FDR-0007 for the rationale. To bump
-        # the tent's claude-code, run `nix flake update llm-agents`.
+        # boundary (FDR-0007). Un-tented clown also runs the unpatched
+        # upstream binary now (claudeCliPath); clown ships no managed-settings
+        # at all (clown#133). To bump the tent's claude-code, run
+        # `nix flake update llm-agents`.
         #
         # The binary baked here runs *inside the linux container*, so it
         # MUST be the linux variant of claude-code regardless of the
@@ -700,140 +703,21 @@
           ];
         };
 
-        # Managed settings burned into the patched claude-code derivation.
-        # Lives at the highest precedence tier, so it cannot be overridden by
-        # user settings, project settings, or CLI flags. See
-        # claude-code-settings(5) for the precedence chain.
-        #
-        # The `allowBypass` flag controls whether bypass-permissions mode
-        # (i.e. `--dangerously-skip-permissions`) is permitted. Naked clown
-        # leaves it disabled (no YOLO mode without an external safety net).
-        # Clownbox enables it because the bubblewrap sandbox is the safety
-        # net — bypassing claude's per-tool prompts is the whole point.
-        mkClownManagedSettings =
-          {
-            allowBypass ? false,
-          }:
-          pkgs.writeText "clown-managed-settings.json" (
-            builtins.toJSON {
-              permissions = {
-                # Block auto-mode (no prompts, classifier-gated tool calls).
-                # Orthogonal to sandboxing — kept on for both variants.
-                disableAutoMode = "disable";
-              }
-              // lib.optionalAttrs (!allowBypass) {
-                # Block --dangerously-skip-permissions and bypassPermissions
-                # mode. Sandboxed clownbox omits this so its inner claude can
-                # actually run in YOLO mode within the sandbox.
-                disableBypassPermissionsMode = "disable";
-              }
-              // {
-                # Hard denylist of destructive Bash patterns. Belt-and-
-                # suspenders even inside the sandbox: the bind-mount writes
-                # the repo, so `rm -rf *` is still destructive within scope.
-                deny = [
-                  "Bash(rm -rf *)"
-                  "Bash(sudo *)"
-                  "Bash(curl * | sh)"
-                  "Bash(wget * | sh)"
-                ];
-              };
-              # Disable auto-memory. The feature persists cross-session
-              # learnings under ~/.claude/projects/<project>/memory/ and
-              # auto-loads MEMORY.md into every session's context. Managed-
-              # tier setting; per docs, cannot be overridden by user, project,
-              # local, or CLI scopes. Applies to both naked and sandboxed
-              # variants — orthogonal to bypass-permissions posture.
-              autoMemoryEnabled = false;
-              # Replace Claude's stock commit/PR attribution with clown's. The
-              # system-prompt append (00-identity.md) still tells the model to
-              # sign off in chat and non-git contexts; these keys enforce the
-              # footer at the CLI level where the prompt can't reach.
-              attribution = {
-                commit = "Co-Authored-By: Clown <https://github.com/amarbel-llc/clown>";
-                pr = "🤡 Generated with [Clown](https://github.com/amarbel-llc/clown)";
-              };
-              # Auto-allow Read/Glob/Grep against /nix/store paths. The
-              # CLI-level --allowed-tools "Read(/nix/store/**)" form is not
-              # honored by claude-code 2.1 for the Read tool (verified
-              # empirically in 2026-04), so we use a PreToolUse hook
-              # instead. The hook returns "allow" only when the relevant
-              # path argument is rooted in /nix/store/, and "defer"
-              # otherwise — leaving every other permission decision
-              # untouched.
-              #
-              # Schema: each PreToolUse entry must wrap its handlers in a
-              # { matcher, hooks } object. The matcher is a regex over the
-              # tool name; without it the entry is silently dropped and
-              # the hook never fires. The claude-code-hooks(5) example
-              # showing a flat [{type, command}] array omits the matcher
-              # wrapper and does NOT work in 2.1.
-              hooks = {
-                PreToolUse = [
-                  {
-                    matcher = "Read|Glob|Grep";
-                    hooks = [
-                      {
-                        type = "command";
-                        command = "${clown-hook-allow}/bin/clown-hook-allow";
-                      }
-                    ];
-                  }
-                ];
-              };
-            }
-          );
-
-        clownManagedSettings = mkClownManagedSettings { allowBypass = false; };
-
-        # Was: patch upstream claude-code to read its managed-settings
-        # from a path under its own $out instead of /etc/claude-code,
-        # via perl -0777 in-place binary substitution on the Bun bundle.
-        # Now: no-op. The substitution corrupted the binary on darwin
-        # (Mach-O segment offsets and code signature both invalidated by
-        # length expansion) and patched the wrong code path anyway —
-        # /etc/claude-code is the linux-only default branch in the bun
-        # bundle; darwin uses /Library/Application Support/ClaudeCode,
-        # windows uses C:\Program Files\ClaudeCode. See clown#95 for
-        # the full analysis and the planned proper fix
-        # (length-preserving substitution + ad-hoc re-signing on darwin,
-        # plus a separate patch for the macos path).
-        #
-        # Today the unbypassable-settings invariant lives inside --tent
-        # only, per FDR-0007's "tent IS the boundary" framing. Un-tented
-        # clown ships the managed-settings JSON next to the binary but
-        # the binary's load path is unchanged, so on darwin and linux
-        # both, claude reads no managed-settings outside the tent. When
-        # tent goes default (clown#62), this whole mkPatchedClaudeCode
-        # pipeline can be deleted.
-        patchClaudeCodeManagedPath = _replacement: pkgs-llm-agents.claude-code;
-
-        # Ship the managed-settings JSON alongside the (unpatched)
-        # claude-code binary. Today the binary doesn't read this file
-        # outside --tent (see patchClaudeCodeManagedPath above), but
-        # shipping it preserves the on-disk layout that other code and
-        # tests expect, and is the right destination once clown#95 lands
-        # a working binary patch.
-        mkPatchedClaudeCode =
-          managedSettings:
-          (patchClaudeCodeManagedPath "$out/etc/claude").overrideAttrs (old: {
-            postInstall = (old.postInstall or "") + ''
-              mkdir -p "$out/etc/claude"
-              cp ${managedSettings} "$out/etc/claude/managed-settings.json"
-            '';
-
-            # Without the binary patch in place, only the JSON layout is
-            # worth asserting. The full binary-string check (no
-            # /etc/claude-code, yes $out/etc/claude) is gated on clown#95.
-            doInstallCheck = true;
-            installCheckPhase = ''
-              test -f "$out/etc/claude/managed-settings.json"
-            '';
-          });
-
-        patchedClaudeCode = mkPatchedClaudeCode clownManagedSettings;
-
-        claudeCliPath = "${patchedClaudeCode}/bin/claude";
+        # clown ships NO managed-settings (clown#133). The delivery strategy was
+        # a binary path-redirect (perl -0777 substitution making claude read
+        # $out/etc/claude instead of /etc/claude-code); it was non-viable —
+        # the substitution corrupted the darwin binary and patched the wrong
+        # code path, so it was already reduced to a no-op, meaning claude never
+        # read the managed-settings JSON outside --tent, and --tent runs the
+        # unpatched binary ("tent IS the boundary", FDR-0007). The settings were
+        # therefore inert everywhere; their intent now lives on mechanisms claude
+        # actually reads: tool auto-allow via the plugin-hook (clown#130,
+        # clown-hook-allow shipped through --plugin-dir), Bash blocking via the
+        # `--disallowed-tools 'Bash(*)'` CLI flag, and identity/attribution via
+        # the system-prompt append (00-identity.md). Re-homing auto-mode /
+        # auto-memory blocking onto a working settings mechanism, if wanted, is a
+        # separate follow-up (clown#143). claudeCliPath is the unpatched binary.
+        claudeCliPath = "${pkgs-llm-agents.claude-code}/bin/claude";
         codexCliPath = "${pkgs-codex.codex}/bin/codex";
         llamaServerPath = "${pkgs-llama.llama-cpp}/bin/llama-server";
 
@@ -903,16 +787,6 @@
                   fi
               done
             '';
-
-        # `managedSettingsRead` is wired as a flake check so the bundled
-        # managed-settings JSON ships alongside the (unpatched-for-now)
-        # claude-code binary. The historical string-level assertions
-        # (no /etc/claude-code, yes $out/etc/claude in the bundle) are
-        # currently disabled — see patchClaudeCodeManagedPath above and
-        # clown#95 for the corruption analysis and the planned proper
-        # fix. Once the binary patch is back in place, restore those
-        # assertions in mkPatchedClaudeCode's installCheckPhase.
-        managedSettingsReadTest = patchedClaudeCode;
 
         emptyPluginMeta = pkgs.runCommand "clown-empty-plugin-meta" { } ''
           mkdir -p $out
@@ -1020,14 +894,7 @@
               clown-completions
               clown-manpages
             ];
-          }).overrideAttrs
-            (old: {
-              passthru = (old.passthru or { }) // {
-                tests = {
-                  managedSettingsRead = managedSettingsReadTest;
-                };
-              };
-            });
+          });
 
         # Race-detector variant of clown-go. Built via the fork's
         # buildGoRace helper — overrides clown-go with CGO_ENABLED=1
@@ -1107,9 +974,6 @@
                 pkgs.mitmproxy
                 pkgs.gomod2nix
               ];
-            };
-            checks = {
-              managedSettingsRead = managedSettingsReadTest;
             };
           };
 
@@ -1434,7 +1298,6 @@
         };
 
         checks = {
-          managedSettingsRead = managedSettingsReadTest;
           # bats-default runs every *.bats. There's no per-file tag
           # filter today; tests that bind 127.0.0.1 work in the
           # standard nix sandbox and every other Linux sandbox we

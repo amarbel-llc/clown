@@ -336,12 +336,19 @@ The flake produces a `symlinkJoin` of five components:
    - Build-time configuration injected via `-ldflags -X` into
      `internal/buildcfg` (provider CLI paths, version strings, agents file,
      system-prompt-append.d path).
-   - The `claude-code` derivation is patched to redirect its managed-settings
-     path from `/etc/claude-code` to `$out/etc/claude`, and a managed
-     `managed-settings.json` is shipped with `permissions.disableAutoMode:
-     "disable"` and `autoMemoryEnabled: false`. Auto-mode and auto-memory
-     are therefore permanently unavailable through clown regardless of
-     user settings, project settings, or CLI flags.
+   - clown ships the **unpatched** upstream `claude-code` binary and **no
+     managed-settings** (clown#133). The former path-redirect strategy
+     (patching the binary to read `$out/etc/claude`) was non-viable — it
+     corrupted the darwin binary and patched the wrong code path, so claude
+     never read the JSON outside `--tent` and the settings were inert
+     everywhere. Their intent now lives on mechanisms claude actually reads:
+     tool auto-allow via the plugin-hook (`clown-hook-allow` shipped through
+     `--plugin-dir`, clown#130), Bash blocking via the
+     `--disallowed-tools 'Bash(*)'` CLI flag, and identity/attribution via the
+     system-prompt append (`00-identity.md`). Auto-mode/auto-memory blocking is
+     **not** currently enforced (the inert managed-settings was its only prior
+     home); re-homing it onto a working settings mechanism is a follow-up
+     (clown#143).
 
    **Plugin manifest compilation.** When a plugin has both `clown.json`
    (HTTP MCP servers) and `.claude-plugin/plugin.json` (claude-native
@@ -545,9 +552,10 @@ thin-wrapper master tip.
 - `nixpkgs` -> fork master (thin-wrapper era; overlay auto-applied)
 - `nixpkgs-master` -> pinned pre-migration SHA, used for
   `pkgs-master.just`
-- `nixpkgs-claude-code` -> pinned pre-migration SHA, used for
-  `pkgs-claude-code.claude-code` (which we then `overrideAttrs` to
-  patch the managed-settings path; see `flake.nix:522`)
+- `nixpkgs-claude-code` -> pinned pre-migration SHA; `pkgs-claude-code`
+  is now **unused** (claude-code comes from `pkgs-llm-agents.claude-code`,
+  unpatched, since clown#133 removed the managed-settings binary patch).
+  The input is kept for reference — see the comment on it in `flake.nix`.
 - `nixpkgs-codex` -> pinned pre-migration SHA, used for
   `pkgs-codex.codex`
 - `nixpkgs-llama` -> pinned pre-migration SHA for llama-cpp with
