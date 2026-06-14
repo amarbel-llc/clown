@@ -449,11 +449,16 @@ The flake produces a `symlinkJoin` of five components:
    `CLAUDE_SESSION_ID` → a generated UUIDv4 (RFC-0013 §2.3 dropped
    `SPINCLASS_SESSION_ID` from routing — it is now the group decoration naming
    the group channel `ChannelID(SPINCLASS_SESSION_ID)` that every clown under a
-   spinclass session watches), and clown exports the resolved value into every
-   plugin MCP server. Plugins consume it via the
-   `clown job start|progress|done|read` producer/pull CLI; clown registers the
-   `clown job-watch` monitor for the session automatically (synthesized
-   `--plugin-dir`). `CLOWN_DISABLE_JOB_WAKEUP=1` is the kill switch. Contract:
+   spinclass session watches). clown threads the resolved key EXPLICITLY rather
+   than stamping `CLOWN_SESSION_ID` on its own process env (clown#136): per-child
+   injection into each plugin MCP server it spawns (`pluginhost.Host.BaseEnv`)
+   plus `clown job-watch --session <key>` baked into the synthesized monitor
+   command — so the claude subtree (every `Bash` call and subagent) no longer
+   inherits the key. An exec-replacing provider (codex / `--naked`) is the
+   exception: it becomes the agent, so it receives the value via its env. Plugins
+   consume it via the `clown job start|progress|done|read` producer/pull CLI;
+   clown registers the `clown job-watch` monitor for the session automatically
+   (synthesized `--plugin-dir`). `CLOWN_DISABLE_JOB_WAKEUP=1` is the kill switch. Contract:
    RFC-0009 (`docs/rfcs/0009-job-wakeup-channel.md`); feature treatment:
    FDR-0013 (`docs/features/0013-job-wakeup-channel.md`); man page:
    `clown-job(1)`. Status: `testing` (FDR-0013) — live-proven 2026-06-06 by

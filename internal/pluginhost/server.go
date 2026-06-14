@@ -29,6 +29,12 @@ type ManagedServer struct {
 	Def       ServerDef
 	PluginDir string
 	Logger    *slog.Logger
+	// BaseEnv is clown-injected identity (CLOWN_SESSION_ID, CLOWN_BIN) applied
+	// to every managed server's environment (clown#136). It lets clown thread
+	// the per-instance routing key to producers explicitly instead of stamping
+	// it on its own process env (which the claude subtree would inherit). A
+	// per-server Def.Env entry overrides a BaseEnv entry of the same key.
+	BaseEnv map[string]string
 
 	cmd        *exec.Cmd
 	handshake  Handshake
@@ -60,6 +66,23 @@ func mergeEnv(base []string, extra map[string]string) []string {
 	return out
 }
 
+// mergeEnvMaps returns base overlaid with override (override wins on key
+// collision). Returns nil when both are empty so callers can leave cmd.Env
+// unset for implicit os.Environ() inheritance.
+func mergeEnvMaps(base, override map[string]string) map[string]string {
+	if len(base) == 0 && len(override) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(base)+len(override))
+	for k, v := range base {
+		out[k] = v
+	}
+	for k, v := range override {
+		out[k] = v
+	}
+	return out
+}
+
 func (s *ManagedServer) Start(ctx context.Context) error {
 	log := s.logger()
 
@@ -71,8 +94,11 @@ func (s *ManagedServer) Start(ctx context.Context) error {
 	s.cmd = exec.CommandContext(ctx, cmdPath, s.Def.Args...)
 	s.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
-	if len(s.Def.Env) > 0 {
-		s.cmd.Env = mergeEnv(os.Environ(), s.Def.Env)
+	// Apply clown-injected identity (BaseEnv) then the per-server Def.Env on
+	// top, so Def.Env wins on key collisions (clown#136). cmd.Env stays nil
+	// (implicit os.Environ() inheritance) only when there is nothing to inject.
+	if extra := mergeEnvMaps(s.BaseEnv, s.Def.Env); len(extra) > 0 {
+		s.cmd.Env = mergeEnv(os.Environ(), extra)
 	}
 
 	stdout, err := s.cmd.StdoutPipe()

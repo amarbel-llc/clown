@@ -1,64 +1,49 @@
 package main
 
 import (
-	"os"
 	"reflect"
 	"regexp"
 	"testing"
 )
 
-func TestPrepareClaudeSessionID_InjectsForFreshSession(t *testing.T) {
-	t.Setenv("CLOWN_SESSION_ID", "") // no per-instance key yet
-	got, id := prepareClaudeSessionID(nil)
-	if id == "" {
-		t.Fatal("expected a generated id, got empty")
+func TestDecideClaudeSession_InjectsForFreshSession(t *testing.T) {
+	got, channelKey, id := decideClaudeSession(nil, "")
+	if id == "" || !uuidRegexp.MatchString(id) {
+		t.Fatalf("id = %q, want a minted UUIDv4", id)
 	}
-	if !uuidRegexp.MatchString(id) {
-		t.Errorf("id %q is not a UUIDv4", id)
+	// Empty baseKey: the minted id is both claude's --session-id and the channel
+	// key, unifying resume id and the job-wakeup channel (RFC-0013 §2.1).
+	if channelKey != id {
+		t.Errorf("channelKey = %q, want the minted id %q", channelKey, id)
 	}
-	want := []string{"--session-id", id}
-	if !reflect.DeepEqual(got, want) {
+	if want := []string{"--session-id", id}; !reflect.DeepEqual(got, want) {
 		t.Errorf("forwarded = %v, want %v", got, want)
 	}
-	// The minted id is adopted as the per-instance channel key so the resume id
-	// and the job-wakeup channel are unified (RFC-0013 §2.1).
-	if got := os.Getenv("CLOWN_SESSION_ID"); got != id {
-		t.Errorf("CLOWN_SESSION_ID = %q, want adopted id %q", got, id)
-	}
 }
 
-func TestPrepareClaudeSessionID_PreservesUserSessionID(t *testing.T) {
-	t.Setenv("CLOWN_SESSION_ID", "")
+func TestDecideClaudeSession_PreservesUserSessionID(t *testing.T) {
 	args := []string{"--session-id", "abc-123", "--debug"}
-	got, id := prepareClaudeSessionID(args)
-	if id != "abc-123" {
-		t.Errorf("id = %q, want abc-123", id)
+	got, channelKey, id := decideClaudeSession(args, "")
+	if id != "abc-123" || channelKey != "abc-123" {
+		t.Errorf("(channelKey,id) = (%q,%q), want both abc-123", channelKey, id)
 	}
 	if !reflect.DeepEqual(got, args) {
 		t.Errorf("forwarded mutated unexpectedly: %v", got)
 	}
-	// A user-supplied session id is adopted as the channel key (RFC-0013 §2.1).
-	if got := os.Getenv("CLOWN_SESSION_ID"); got != "abc-123" {
-		t.Errorf("CLOWN_SESSION_ID = %q, want adopted abc-123", got)
-	}
 }
 
-func TestPrepareClaudeSessionID_PreservesUserSessionIDEqualsForm(t *testing.T) {
-	t.Setenv("CLOWN_SESSION_ID", "")
+func TestDecideClaudeSession_PreservesUserSessionIDEqualsForm(t *testing.T) {
 	args := []string{"--session-id=abc-123"}
-	got, id := prepareClaudeSessionID(args)
-	if id != "abc-123" {
-		t.Errorf("id = %q, want abc-123", id)
+	got, channelKey, id := decideClaudeSession(args, "")
+	if id != "abc-123" || channelKey != "abc-123" {
+		t.Errorf("(channelKey,id) = (%q,%q), want both abc-123", channelKey, id)
 	}
 	if !reflect.DeepEqual(got, args) {
 		t.Errorf("forwarded mutated unexpectedly: %v", got)
 	}
-	if got := os.Getenv("CLOWN_SESSION_ID"); got != "abc-123" {
-		t.Errorf("CLOWN_SESSION_ID = %q, want adopted abc-123", got)
-	}
 }
 
-func TestPrepareClaudeSessionID_PreservesResume(t *testing.T) {
+func TestDecideClaudeSession_PreservesResume(t *testing.T) {
 	cases := []struct {
 		name string
 		args []string
@@ -69,51 +54,46 @@ func TestPrepareClaudeSessionID_PreservesResume(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv("CLOWN_SESSION_ID", "")
-			got, id := prepareClaudeSessionID(tc.args)
-			if id != "abc-123" {
-				t.Errorf("id = %q, want abc-123", id)
+			got, channelKey, id := decideClaudeSession(tc.args, "")
+			if id != "abc-123" || channelKey != "abc-123" {
+				t.Errorf("(channelKey,id) = (%q,%q), want both abc-123", channelKey, id)
 			}
 			if !reflect.DeepEqual(got, tc.args) {
 				t.Errorf("forwarded mutated unexpectedly: %v", got)
-			}
-			// A resumed id is adopted as the channel key so the session arms the
-			// channel matching its resume id (RFC-0013 §2.1).
-			if got := os.Getenv("CLOWN_SESSION_ID"); got != "abc-123" {
-				t.Errorf("CLOWN_SESSION_ID = %q, want adopted abc-123", got)
 			}
 		})
 	}
 }
 
-func TestPrepareClaudeSessionID_ReusesUUIDChannelKey(t *testing.T) {
-	// ensureJobWakeupEnv already minted a UUID per-instance key; the claude
-	// --session-id reuses it (no fresh mint), unifying resume id and channel.
+func TestDecideClaudeSession_ReusesUUIDChannelKey(t *testing.T) {
+	// A UUID-shaped baseKey (minted earlier, or from CLAUDE_SESSION_ID) is reused
+	// as claude's --session-id with no fresh mint, unifying resume id and channel.
 	const uuid = "11111111-2222-4333-8444-555555555555"
-	t.Setenv("CLOWN_SESSION_ID", uuid)
-	got, id := prepareClaudeSessionID(nil)
-	if id != uuid {
-		t.Errorf("id = %q, want the existing CLOWN_SESSION_ID %q", id, uuid)
+	got, channelKey, id := decideClaudeSession(nil, uuid)
+	if id != uuid || channelKey != uuid {
+		t.Errorf("(channelKey,id) = (%q,%q), want both %q", channelKey, id, uuid)
 	}
 	if want := []string{"--session-id", uuid}; !reflect.DeepEqual(got, want) {
 		t.Errorf("forwarded = %v, want %v", got, want)
 	}
 }
 
-func TestPrepareClaudeSessionID_RespectsNonUUIDOperatorKey(t *testing.T) {
-	// A non-UUID explicit CLOWN_SESSION_ID is a deliberate operator override: it
-	// stays the channel key; claude gets its own minted UUID.
-	t.Setenv("CLOWN_SESSION_ID", "operator-key")
-	_, id := prepareClaudeSessionID(nil)
+func TestDecideClaudeSession_RespectsNonUUIDOperatorKey(t *testing.T) {
+	// A non-UUID baseKey is a deliberate operator override: it stays the channel
+	// key while claude gets its own minted UUID as --session-id and the hint.
+	got, channelKey, id := decideClaudeSession(nil, "operator-key")
 	if !uuidRegexp.MatchString(id) {
 		t.Errorf("claude id = %q, want a minted UUIDv4", id)
 	}
-	if got := os.Getenv("CLOWN_SESSION_ID"); got != "operator-key" {
-		t.Errorf("CLOWN_SESSION_ID = %q, want operator-key left untouched", got)
+	if channelKey != "operator-key" {
+		t.Errorf("channelKey = %q, want operator-key (the channel stays the override)", channelKey)
+	}
+	if want := []string{"--session-id", id}; !reflect.DeepEqual(got, want) {
+		t.Errorf("forwarded = %v, want %v", got, want)
 	}
 }
 
-func TestPrepareClaudeSessionID_SkipsForPrint(t *testing.T) {
+func TestDecideClaudeSession_SkipsForPrint(t *testing.T) {
 	cases := []struct {
 		name string
 		args []string
@@ -124,9 +104,13 @@ func TestPrepareClaudeSessionID_SkipsForPrint(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, id := prepareClaudeSessionID(tc.args)
+			got, channelKey, id := decideClaudeSession(tc.args, "base")
 			if id != "" {
 				t.Errorf("id = %q, want empty (print mode skips hint)", id)
+			}
+			// No hint, but the channel key still flows through as baseKey.
+			if channelKey != "base" {
+				t.Errorf("channelKey = %q, want baseKey passthrough in print mode", channelKey)
 			}
 			if !reflect.DeepEqual(got, tc.args) {
 				t.Errorf("forwarded mutated in print mode: %v", got)
@@ -135,7 +119,7 @@ func TestPrepareClaudeSessionID_SkipsForPrint(t *testing.T) {
 	}
 }
 
-func TestPrepareClaudeSessionID_SkipsForContinue(t *testing.T) {
+func TestDecideClaudeSession_SkipsForContinue(t *testing.T) {
 	cases := []struct {
 		name string
 		args []string
@@ -145,7 +129,7 @@ func TestPrepareClaudeSessionID_SkipsForContinue(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, id := prepareClaudeSessionID(tc.args)
+			_, _, id := decideClaudeSession(tc.args, "base")
 			if id != "" {
 				t.Errorf("id = %q, want empty (continue mode skips hint)", id)
 			}

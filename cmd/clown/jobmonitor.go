@@ -43,11 +43,22 @@ func clownExePath() string {
 // appear; an absolute path from clownExePath() makes the monitor run regardless
 // of PATH. When it cannot be resolved we fall back to the bare `clown
 // job-watch`, which still works wherever clown is on PATH.
-func jobWatchCommand() string {
+//
+// key is the resolved per-instance channel key (RFC-0009 §2). It is baked in as
+// `--session <key>` so the monitor learns its channel explicitly rather than by
+// inheriting CLOWN_SESSION_ID from the ambient env (clown#136) — the same
+// "identity via a non-inheritable channel" pattern, which lets clown keep the
+// key out of the claude subtree. Empty key omits the flag (the monitor then
+// falls back to env resolution, e.g. dev builds / direct invocation).
+func jobWatchCommand(key string) string {
+	base := "clown job-watch"
 	if exe := clownExePath(); exe != "" {
-		return exe + " job-watch"
+		base = exe + " job-watch"
 	}
-	return "clown job-watch"
+	if key != "" {
+		return base + " --session " + key
+	}
+	return base
 }
 
 // providerUsesPluginDirs reports whether the provider consumes --plugin-dir
@@ -70,7 +81,7 @@ func providerUsesPluginDirs(provider string) bool {
 // its path. The caller appends the path to the --plugin-dir set passed to
 // Claude and removes the directory on shutdown. When CLOWN_DISABLE_JOB_WAKEUP=1
 // it returns ("", nil) so the monitor is not registered (RFC-0009 §8).
-func synthJobMonitorPluginDir() (string, error) {
+func synthJobMonitorPluginDir(sessionKey string) (string, error) {
 	if jobWakeupDisabled() {
 		return "", nil
 	}
@@ -88,7 +99,7 @@ func synthJobMonitorPluginDir() (string, error) {
 		Version: "1",
 		Monitors: []jobMonitorEntry{{
 			Name:        "clown-job-watch",
-			Command:     jobWatchCommand(),
+			Command:     jobWatchCommand(sessionKey),
 			Description: "clown job-wakeup channel: wakes this session when a background job finishes",
 		}},
 	}

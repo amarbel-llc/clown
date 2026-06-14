@@ -8,59 +8,54 @@ import (
 	"github.com/amarbel-llc/clown/internal/jobwake"
 )
 
-// prepareClaudeSessionID inspects the user's forwarded args and decides
-// (1) whether a post-exit `clown resume clown://claude/<id>` hint should
-// be printed, and (2) what id to print. Three cases:
+// decideClaudeSession inspects the user's forwarded args plus the resolved base
+// channel key and decides three things, returning them so the caller threads
+// them explicitly (no process-env mutation — clown#136):
 //
-//   - --print/-p or --continue/-c is set: skip the hint entirely.
-//     --print is a one-shot; resuming it makes no sense and printing on
-//     stdout would pollute pipelines. --continue resumes the most recent
-//     session, but we cannot determine its id without a transcript scan.
+//  1. newForwarded — the args to pass claude, possibly with an injected
+//     --session-id (so the resume id and the job-wakeup channel key are one,
+//     RFC-0013 §2.1).
+//  2. channelKey — the per-instance key the job-watch monitor (--session) and
+//     the MCP producers (pluginhost BaseEnv) use.
+//  3. hintID — the id to print as the post-exit `clown resume` hint, or "" for
+//     no hint.
 //
-//   - --resume <id> or --session-id <id> is already in args: keep args
-//     unchanged, print the hint with the user-supplied id, and adopt that id
-//     as the per-instance channel key (RFC-0013 §2.1).
+// Cases:
 //
-//   - Neither: unify with the per-instance key ensureJobWakeupEnv already
-//     minted (CLOWN_SESSION_ID, when UUID-shaped) as the claude --session-id,
-//     else inject a freshly minted uuid. Either way the resume id and the
-//     job-wakeup channel key are the same id.
+//   - --print/-p or --continue/-c: skip the hint (a --print one-shot is not
+//     resumable and printing would pollute its stdout; --continue's id is
+//     unknown without a transcript scan). The channel key stays baseKey.
 //
-// Returns the (possibly-modified) forwarded args and the id to print
-// (empty string signals "no hint").
-func prepareClaudeSessionID(forwarded []string) (newForwarded []string, sessionID string) {
+//   - --session-id <id> or --resume <id> already present: adopt that id as both
+//     the channel key and the hint; args unchanged.
+//
+//   - baseKey is UUID-shaped (minted, or from CLAUDE_SESSION_ID): inject
+//     --session-id baseKey; channel key and hint are baseKey.
+//
+//   - baseKey is empty or a non-UUID operator override: mint a fresh uuid for
+//     claude's --session-id and the hint. When baseKey is a non-empty operator
+//     key, keep it as the channel (claude gets its own id); when empty, adopt
+//     the minted id as the channel key too.
+func decideClaudeSession(forwarded []string, baseKey string) (newForwarded []string, channelKey, hintID string) {
 	if claudeFlagPresent(forwarded, "--print", "-p") || claudeFlagPresent(forwarded, "--continue", "-c") {
-		return forwarded, ""
+		return forwarded, baseKey, ""
 	}
 	if id := claudeFlagValue(forwarded, "--session-id"); id != "" {
-		adoptInstanceKey(id)
-		return forwarded, id
+		return forwarded, id, id
 	}
 	if id := claudeFlagValue(forwarded, "--resume", "-r"); id != "" {
-		adoptInstanceKey(id)
-		return forwarded, id
+		return forwarded, id, id
 	}
-	cs := os.Getenv("CLOWN_SESSION_ID")
-	if isUUID(cs) {
-		return append([]string{"--session-id", cs}, forwarded...), cs
+	if isUUID(baseKey) {
+		return append([]string{"--session-id", baseKey}, forwarded...), baseKey, baseKey
 	}
 	id := newUUIDv4()
-	if cs == "" {
-		// No per-instance key yet (ensureJobWakeupEnv did not run, e.g. a direct
-		// call) — adopt the minted id so the channel key and the claude
-		// --session-id stay unified. A non-UUID cs is a deliberate operator
-		// override: leave it as the channel and give claude its own id.
-		adoptInstanceKey(id)
+	channelKey = baseKey
+	if baseKey == "" {
+		channelKey = id
 	}
-	return append([]string{"--session-id", id}, forwarded...), id
+	return append([]string{"--session-id", id}, forwarded...), channelKey, id
 }
-
-// adoptInstanceKey sets the per-instance routing key (CLOWN_SESSION_ID) to the
-// resolved claude session id, so a resumed or user-named session arms the
-// channel matching its resume id (RFC-0013 §2.1). It runs inside
-// withClaudeResumeHint before runWithPluginHost spawns any plugin server or the
-// job-watch monitor, so every child inherits the unified key.
-func adoptInstanceKey(id string) { _ = os.Setenv("CLOWN_SESSION_ID", id) }
 
 // isUUID reports whether s is shaped like an RFC 4122 UUID (36 chars, hyphens at
 // the canonical positions, hex elsewhere). It decides whether an existing
@@ -123,19 +118,6 @@ func claudeFlagValue(args []string, names ...string) string {
 // Single line, no prefix, no trailing context.
 func printResumeHint(sessionID string) {
 	fmt.Fprintf(os.Stdout, "clown resume clown://claude/%s\n", sessionID)
-}
-
-// withClaudeResumeHint wraps a claude-style provider invocation with
-// session-id injection and the post-exit hint. The run callback
-// receives the (possibly-modified) forwarded args and returns the
-// provider's exit code.
-func withClaudeResumeHint(forwarded []string, run func(forwarded []string) int) int {
-	newForwarded, id := prepareClaudeSessionID(forwarded)
-	code := run(newForwarded)
-	if id != "" {
-		printResumeHint(id)
-	}
-	return code
 }
 
 // newUUIDv4 returns a fresh UUIDv4 for use as a claude session id. It delegates

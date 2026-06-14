@@ -46,6 +46,8 @@
 .Nm clown job whoami
 .Op Fl -json
 .Nm clown job-watch
+.Op Fl -once
+.Op Fl -session Ar session-key
 .Nm clown job-mcp
 .Sh DESCRIPTION
 The
@@ -350,7 +352,7 @@ With
 .Fl -json
 the identity is a single JSON object with keys sessionKey, channelId, source,
 and (under spinclass) spinclassDecoration and groupChannelId.
-.It Nm clown job-watch Op Fl -once
+.It Nm clown job-watch Op Fl -once Op Fl -session Ar session-key
 Run the channel monitor.
 It resolves the session key (see
 .Sx SESSION KEY ) ,
@@ -378,6 +380,22 @@ it replays unacked waking events and exits
 .Li 0
 without binding the socket or blocking \(em the deterministic mode used by
 the conformance suite, also usable as a pull-style replay.
+.Fl -session
+overrides the resolved per-instance key with an explicit one.
+.Nm clown
+bakes it into the spawned monitor command (clown#136) so the monitor watches
+the correct channel without
+.Nm clown
+having to export
+.Ev CLOWN_SESSION_ID
+into the agent provider's environment \(em which the provider's whole subtree
+(every
+.Ic Bash
+call and subagent)
+would otherwise inherit.
+The group decoration
+.Pq Ev SPINCLASS_SESSION_ID
+and the broadcast channel are still resolved from the environment.
 This subcommand is normally spawned by
 .Nm clown
 as a registered monitor, not run by hand.

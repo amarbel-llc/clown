@@ -126,38 +126,56 @@ func main() {
 	os.Exit(run(os.Args[1:]))
 }
 
-// ensureJobWakeupEnv exports the job-wakeup channel environment once, so every
-// child process — plugin MCP servers (which inherit os.Environ()) and the
-// Claude-spawned job-watch monitor — can produce to and resolve the same
-// channel without further configuration:
-//
-//   - CLOWN_SESSION_ID: the per-instance channel key (RFC-0009 §2 as amended by
-//     RFC-0013 §2.3 — SPINCLASS_SESSION_ID is the group decoration, not the
-//     routing key). Set only if unset, so an explicit caller-provided key wins.
-//     For the claude path it is unified with the claude --session-id in
-//     prepareClaudeSessionID, so the resume id and the channel key are one.
-//   - CLOWN_BIN: the absolute path to this clown binary, so plugin producers
-//     (e.g. get-hubbed's ci-watch) can locate `clown job` reliably regardless of
-//     PATH via ${CLOWN_BIN:-clown}. Set only if unset and resolvable.
-func ensureJobWakeupEnv() {
-	if os.Getenv("CLOWN_SESSION_ID") == "" {
-		_ = os.Setenv("CLOWN_SESSION_ID", jobwake.SessionKey())
+// sessionIdentity is the resolved job-wakeup channel identity for this clown
+// invocation (clown#136). clown threads it EXPLICITLY to the processes that
+// need it — the job-watch monitor (baked `--session`) and the MCP producers it
+// spawns (pluginhost BaseEnv) — instead of stamping CLOWN_SESSION_ID onto its
+// own process env. The latter is the maximally-ambient form: the claude
+// subprocess inherits clown's env, so every Bash call and subagent would carry
+// the key too. Shrinking that surface to zero on the paths clown controls is
+// the point (RFC-0009 §2; spinclass#169 still owns the spawn-boundary scrub).
+type sessionIdentity struct {
+	Key string // per-instance routing key (RFC-0009 §2; RFC-0013 §2.3)
+	Bin string // absolute clown path, for producers' ${CLOWN_BIN:-clown}
+}
+
+// resolveSessionIdentity resolves the channel key and clown binary path WITHOUT
+// mutating the process env. Key precedence is jobwake.SessionKey()'s
+// (CLOWN_SESSION_ID → CLAUDE_SESSION_ID → freshly minted UUID); Bin honors an
+// explicit CLOWN_BIN, else the running executable.
+func resolveSessionIdentity() sessionIdentity {
+	bin := os.Getenv("CLOWN_BIN")
+	if bin == "" {
+		bin = clownExePath()
 	}
-	if os.Getenv("CLOWN_BIN") == "" {
-		if exe := clownExePath(); exe != "" {
-			_ = os.Setenv("CLOWN_BIN", exe)
-		}
+	return sessionIdentity{Key: jobwake.SessionKey(), Bin: bin}
+}
+
+// envMap renders the identity as the env clown injects into a child that needs
+// it (a pluginhost producer, or a provider clown execs into). Empty fields are
+// omitted so a child never sees an empty-valued override.
+func (id sessionIdentity) envMap() map[string]string {
+	m := map[string]string{}
+	if id.Key != "" {
+		m["CLOWN_SESSION_ID"] = id.Key
+	}
+	if id.Bin != "" {
+		m["CLOWN_BIN"] = id.Bin
+	}
+	return m
+}
+
+// applyIdentityEnv stamps the identity onto clown's OWN process env. It is used
+// ONLY immediately before an exec-replacing provider launch (codex / --naked):
+// those replace clown and ARE the agent, so there is no separate claude subtree
+// to keep clean — preserving their access to the key matters more (clown#136).
+func applyIdentityEnv(id sessionIdentity) {
+	for k, v := range id.envMap() {
+		_ = os.Setenv(k, v)
 	}
 }
 
 func run(rawArgs []string) int {
-	// Resolve and export the job-wakeup channel env once, before any
-	// subcommand dispatch or plugin-host launch, so every child (plugin
-	// MCP servers via os.Environ(), and the Claude-spawned job-watch
-	// monitor) shares the same channel key and can locate clown
-	// (RFC-0009 §2).
-	ensureJobWakeupEnv()
-
 	if len(rawArgs) > 0 {
 		switch rawArgs[0] {
 		case "resume":
@@ -285,11 +303,28 @@ func runWithFlags(flags parsedFlags) int {
 		return 1
 	}
 
+	// Resolve the job-wakeup channel identity once, here, so the monitor synth
+	// (--session) and the plugin host (BaseEnv) below share the SAME final key
+	// (clown#136). No os.Setenv on clown's own process — the key is threaded
+	// explicitly to the children that need it.
+	flags.identity = resolveSessionIdentity()
+	// For the claude provider, unify the channel key with claude's
+	// --session-id / --resume id and inject the flag (RFC-0013 §2.1). Lifting
+	// this out of runClaude (it formerly lived in withClaudeResumeHint) is what
+	// lets the monitor and producers see the final key before they are built.
+	// claude learns its id via the arg, not the env, so its subtree stays clean.
+	if flags.provider == "claude" && !flags.naked {
+		flags.forwarded, flags.identity.Key, flags.resumeHintID = decideClaudeSession(flags.forwarded, flags.identity.Key)
+	}
+
 	if flags.naked {
 		if flags.provider == "opencode" || flags.provider == "crush" {
 			fmt.Fprintf(os.Stderr, "clown: --naked is not supported with --provider %s (config injection required)\n", flags.provider)
 			return 1
 		}
+		// --naked exec-replaces clown with the provider; it IS the agent, so
+		// stamp identity on the env it inherits (clown#136 §5).
+		applyIdentityEnv(flags.identity)
 		execProcess(cliPath, flags.forwarded)
 		return 0 // unreachable
 	}
@@ -307,7 +342,7 @@ func runWithFlags(flags parsedFlags) int {
 	// --naked) would skip the deferred cleanup and leak the dir, and they
 	// ignore --plugin-dir anyway.
 	if providerUsesPluginDirs(flags.provider) && !flags.naked {
-		if monitorDir, err := synthJobMonitorPluginDir(); err != nil {
+		if monitorDir, err := synthJobMonitorPluginDir(flags.identity.Key); err != nil {
 			fmt.Fprintf(os.Stderr, "clown: registering job-watch monitor: %v\n", err)
 		} else if monitorDir != "" {
 			defer os.RemoveAll(monitorDir)
@@ -548,7 +583,11 @@ func runClaude(cliPath string, flags parsedFlags, prompts promptwalk.PromptResul
 		return 1
 	}
 
-	return withClaudeResumeHint(flags.forwarded, func(forwarded []string) int {
+	// The --session-id / resume-id decision and the channel-key unification
+	// already happened in runWithFlags (decideClaudeSession), so flags.forwarded
+	// carries the injected --session-id and flags.resumeHintID holds the id to
+	// print. This local closure just runs claude; the hint prints after it exits.
+	run := func(forwarded []string) int {
 		args, cleanup, err := provider.BuildClaudeArgs(provider.ClaudeArgs{
 			CLIPath:             innerCliPath,
 			AgentsFile:          buildcfg.AgentsFile,
@@ -609,7 +648,12 @@ func runClaude(cliPath string, flags parsedFlags, prompts promptwalk.PromptResul
 		}
 
 		return runWithPluginHost(executor, args, pluginDirs, flags, tentLogger)
-	})
+	}
+	code := run(flags.forwarded)
+	if flags.resumeHintID != "" {
+		printResumeHint(flags.resumeHintID)
+	}
+	return code
 }
 
 // newTentExecutor constructs a tentExecutor wrapping the inner claude
@@ -964,6 +1008,10 @@ func runWithPluginHost(executor Executor, args []string, pluginDirs []string, fl
 		Logger:         logger,
 		BridgePath:     buildcfg.StdioBridgePath,
 		URLHostRewrite: pluginURLHostFor(flags),
+		// Inject the per-instance identity into every managed producer so it
+		// resolves the same channel without clown polluting its own (and the
+		// claude subtree's) env (clown#136).
+		BaseEnv: flags.identity.envMap(),
 	}
 	discovered, err := host.Discover()
 	if err != nil {
@@ -1145,6 +1193,9 @@ func runCodex(cliPath string, flags parsedFlags, prompts promptwalk.PromptResult
 	}
 	defer cleanup()
 
+	// codex exec-replaces clown and IS the agent, so stamp identity on the env
+	// it inherits (clown#136 §5).
+	applyIdentityEnv(flags.identity)
 	execProcess(cliPath, args)
 	return 0 // unreachable
 }
@@ -1460,6 +1511,16 @@ type parsedFlags struct {
 	// CLOWN_PLUGIN_META and let users wire ad-hoc plugins (typically
 	// stdioServers test plugins) without re-baking the build.
 	extraPluginDirs []string
+	// identity is the resolved job-wakeup channel identity (clown#136),
+	// populated in runWithFlags. Threaded here (rather than as a new param on
+	// every provider fn) since parsedFlags already reaches runClaude /
+	// runWithPluginHost / runCodex. Empty for subcommand paths that never
+	// reach runWithFlags.
+	identity sessionIdentity
+	// resumeHintID is the claude session id to print as the post-exit
+	// `clown resume` hint (RFC-0013 §2.1). Set by decideClaudeSession via
+	// runWithFlags for the claude provider; empty means no hint.
+	resumeHintID string
 }
 
 func parseFlags(args []string) (parsedFlags, error) {

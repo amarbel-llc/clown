@@ -33,35 +33,50 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func TestEnsureJobWakeupEnvResolvesAndExportsWhenUnset(t *testing.T) {
+func TestResolveSessionIdentityResolvesWhenUnset(t *testing.T) {
 	t.Setenv("CLOWN_SESSION_ID", "")
 	t.Setenv("CLAUDE_SESSION_ID", "")
 	t.Setenv("SPINCLASS_SESSION_ID", "repo/branch")
 	t.Setenv("CLOWN_BIN", "")
-	ensureJobWakeupEnv()
+	id := resolveSessionIdentity()
 	// RFC-0013 §2.3: SPINCLASS_SESSION_ID is the group decoration, not the
-	// routing key, so the exported key is a freshly minted per-instance id —
+	// routing key, so the resolved key is a freshly minted per-instance id —
 	// never the spinclass value.
-	if got := os.Getenv("CLOWN_SESSION_ID"); got == "" || got == "repo/branch" {
-		t.Fatalf("CLOWN_SESSION_ID = %q, want a per-instance key (not the spinclass value)", got)
+	if id.Key == "" || id.Key == "repo/branch" {
+		t.Fatalf("identity.Key = %q, want a per-instance key (not the spinclass value)", id.Key)
 	}
-	// CLOWN_BIN is set to the running binary's absolute path (os.Executable
+	// Bin resolves to the running binary's absolute path (os.Executable
 	// resolves under the test binary), so plugin producers can locate clown.
-	if got := os.Getenv("CLOWN_BIN"); got == "" {
-		t.Fatal("CLOWN_BIN = empty, want the resolved absolute clown path")
+	if id.Bin == "" {
+		t.Fatal("identity.Bin = empty, want the resolved absolute clown path")
+	}
+	// clown#136: resolveSessionIdentity must NOT mutate the process env — the
+	// key is threaded explicitly, never stamped where the claude subtree would
+	// inherit it.
+	if got := os.Getenv("CLOWN_SESSION_ID"); got != "" {
+		t.Fatalf("CLOWN_SESSION_ID = %q, want resolveSessionIdentity to leave the env untouched", got)
 	}
 }
 
-func TestEnsureJobWakeupEnvLeavesPresetUntouched(t *testing.T) {
+func TestResolveSessionIdentityHonorsPreset(t *testing.T) {
 	t.Setenv("CLOWN_SESSION_ID", "explicit")
 	t.Setenv("SPINCLASS_SESSION_ID", "repo/branch")
 	t.Setenv("CLOWN_BIN", "/custom/clown")
-	ensureJobWakeupEnv()
-	if got := os.Getenv("CLOWN_SESSION_ID"); got != "explicit" {
-		t.Fatalf("CLOWN_SESSION_ID = %q, want preset value left untouched", got)
+	id := resolveSessionIdentity()
+	if id.Key != "explicit" {
+		t.Fatalf("identity.Key = %q, want preset value", id.Key)
 	}
-	if got := os.Getenv("CLOWN_BIN"); got != "/custom/clown" {
-		t.Fatalf("CLOWN_BIN = %q, want preset value left untouched", got)
+	if id.Bin != "/custom/clown" {
+		t.Fatalf("identity.Bin = %q, want preset value", id.Bin)
+	}
+}
+
+func TestSessionIdentityEnvMapOmitsEmpty(t *testing.T) {
+	if m := (sessionIdentity{Key: "k", Bin: "/b"}).envMap(); m["CLOWN_SESSION_ID"] != "k" || m["CLOWN_BIN"] != "/b" {
+		t.Fatalf("envMap = %v, want both keys populated", m)
+	}
+	if m := (sessionIdentity{}).envMap(); len(m) != 0 {
+		t.Fatalf("envMap of empty identity = %v, want no entries", m)
 	}
 }
 

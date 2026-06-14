@@ -79,6 +79,40 @@ func TestMergeEnvEmptyExtraReturnsBase(t *testing.T) {
 	}
 }
 
+func TestMergeEnvMapsOverrideWins(t *testing.T) {
+	if got := mergeEnvMaps(nil, nil); got != nil {
+		t.Fatalf("both empty must return nil, got %v", got)
+	}
+	got := mergeEnvMaps(map[string]string{"A": "base", "B": "base"}, map[string]string{"B": "override", "C": "override"})
+	if got["A"] != "base" || got["B"] != "override" || got["C"] != "override" {
+		t.Fatalf("override must win on collision; got %v", got)
+	}
+}
+
+// clown#136: a managed server inherits the Host-injected BaseEnv, with the
+// per-server Def.Env winning on key collision.
+func TestManagedServer_BaseEnvInjected(t *testing.T) {
+	srv := newTestServer(t, "sleep")
+	srv.BaseEnv = map[string]string{"CLOWN_SESSION_ID": "chan-k", "CLOWN_BIN": "/x/clown"}
+	srv.Def.Env = map[string]string{"CLOWN_BIN": "/override/clown"}
+
+	if err := srv.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Stop()
+
+	env := strings.Join(srv.cmd.Env, "\n")
+	if !strings.Contains(env, "CLOWN_SESSION_ID=chan-k") {
+		t.Errorf("child env missing BaseEnv CLOWN_SESSION_ID; got:\n%s", env)
+	}
+	if !strings.Contains(env, "CLOWN_BIN=/override/clown") {
+		t.Errorf("Def.Env must override BaseEnv for CLOWN_BIN; got:\n%s", env)
+	}
+	if strings.Contains(env, "CLOWN_BIN=/x/clown") {
+		t.Errorf("overridden BaseEnv value must not survive; got:\n%s", env)
+	}
+}
+
 func TestManagedServer_CleanStop(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))

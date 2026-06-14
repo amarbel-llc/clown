@@ -391,8 +391,18 @@ func runJobWatch(args []string) int {
 	}
 	fs := flag.NewFlagSet("job-watch", flag.ContinueOnError)
 	once := fs.Bool("once", false, "replay unacked waking events, then exit")
+	session := fs.String("session", "", "per-instance channel key to watch (RFC-0009 §2); overrides CLOWN_SESSION_ID")
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+
+	// --session seeds this monitor's OWN process env (clown#136). The monitor
+	// is a leaf — it spawns no claude subtree — so localizing the key here is
+	// harmless, and it makes every jobwake.SessionKey() call inside Watch
+	// (channel derivation, presence registration) resolve to the explicit key
+	// without clown having to stamp CLOWN_SESSION_ID on the env claude inherits.
+	if *session != "" {
+		_ = os.Setenv("CLOWN_SESSION_ID", *session)
 	}
 
 	emit := func(r jobwake.Record) error {

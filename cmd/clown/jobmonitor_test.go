@@ -12,7 +12,7 @@ import (
 
 func TestJobMonitorPluginDirSynthesized(t *testing.T) {
 	t.Setenv("CLOWN_DISABLE_JOB_WAKEUP", "")
-	dir, err := synthJobMonitorPluginDir()
+	dir, err := synthJobMonitorPluginDir("sess-key-xyz")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,8 +69,13 @@ func TestJobMonitorPluginDirSynthesized(t *testing.T) {
 	if !filepath.IsAbs(strings.Fields(mon.Command)[0]) {
 		t.Fatalf("monitor command = %q, want an absolute path (os.Executable resolves in go test)", mon.Command)
 	}
-	if !strings.HasSuffix(mon.Command, "job-watch") {
-		t.Fatalf("monitor command = %q, want it to end in job-watch", mon.Command)
+	if !strings.Contains(mon.Command, " job-watch ") {
+		t.Fatalf("monitor command = %q, want the job-watch subcommand", mon.Command)
+	}
+	// clown#136: the resolved per-instance key is baked in as --session so the
+	// monitor watches the right channel without inheriting CLOWN_SESSION_ID.
+	if !strings.HasSuffix(mon.Command, "--session sess-key-xyz") {
+		t.Fatalf("monitor command = %q, want it to bake --session sess-key-xyz", mon.Command)
 	}
 }
 
@@ -82,18 +87,22 @@ func TestJobMonitorCommandIsAbsoluteWhenResolvable(t *testing.T) {
 	if err != nil {
 		t.Skipf("os.Executable unavailable: %v", err)
 	}
-	cmd := jobWatchCommand()
+	cmd := jobWatchCommand("")
 	if !filepath.IsAbs(strings.Fields(cmd)[0]) {
 		t.Fatalf("monitor command %q should start with an absolute path (os.Executable=%q)", cmd, exe)
 	}
 	if !strings.HasSuffix(cmd, " job-watch") {
-		t.Fatalf("monitor command %q should end with the job-watch subcommand", cmd)
+		t.Fatalf("monitor command %q should end with the job-watch subcommand (empty key omits --session)", cmd)
+	}
+	// A non-empty key is appended as --session (clown#136).
+	if keyed := jobWatchCommand("k-1"); !strings.HasSuffix(keyed, " job-watch --session k-1") {
+		t.Fatalf("monitor command %q should bake --session for a non-empty key", keyed)
 	}
 }
 
 func TestJobMonitorDisabledReturnsEmpty(t *testing.T) {
 	t.Setenv("CLOWN_DISABLE_JOB_WAKEUP", "1")
-	dir, err := synthJobMonitorPluginDir()
+	dir, err := synthJobMonitorPluginDir("")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +120,7 @@ func TestJobMonitorPluginDirIncludesMCPWhenBridgeSet(t *testing.T) {
 	buildcfg.StdioBridgePath = "/nix/store/x/bin/clown-stdio-bridge"
 	t.Cleanup(func() { buildcfg.StdioBridgePath = orig })
 
-	dir, err := synthJobMonitorPluginDir()
+	dir, err := synthJobMonitorPluginDir("")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +166,7 @@ func TestJobMonitorPluginDirIncludesHookWhenHookAllowSet(t *testing.T) {
 	buildcfg.HookAllowPath = "/nix/store/x/bin/clown-hook-allow"
 	t.Cleanup(func() { buildcfg.HookAllowPath = orig })
 
-	dir, err := synthJobMonitorPluginDir()
+	dir, err := synthJobMonitorPluginDir("")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +213,7 @@ func TestJobMonitorPluginDirNoHookWhenHookAllowUnset(t *testing.T) {
 	buildcfg.HookAllowPath = ""
 	t.Cleanup(func() { buildcfg.HookAllowPath = orig })
 
-	dir, err := synthJobMonitorPluginDir()
+	dir, err := synthJobMonitorPluginDir("")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +232,7 @@ func TestJobMonitorPluginDirNoMCPWhenBridgeUnset(t *testing.T) {
 	buildcfg.StdioBridgePath = ""
 	t.Cleanup(func() { buildcfg.StdioBridgePath = orig })
 
-	dir, err := synthJobMonitorPluginDir()
+	dir, err := synthJobMonitorPluginDir("")
 	if err != nil {
 		t.Fatal(err)
 	}

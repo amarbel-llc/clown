@@ -76,17 +76,30 @@ in this order:
 3. Otherwise a clown-generated value: the Claude Code session UUID when
    available, else a random 128-bit value rendered as 32 lowercase hex digits.
 
-clown MUST export the resolved value as `CLOWN_SESSION_ID` into the environment
-of every plugin MCP server process it launches and into the monitor process, so
-producers and the monitor agree on the default channel without further
-configuration.
+clown MUST make the resolved value reach producers and the monitor WITHOUT
+stamping `CLOWN_SESSION_ID` on its own process environment (clown#136). Stamping
+it process-wide is the maximally-ambient form: the agent provider clown launches
+inherits clown's environment, so every command and subagent the provider spawns
+would carry the key too — a needlessly wide identity surface. Instead clown MUST
+thread the value explicitly:
 
-clown SHOULD also export `CLOWN_BIN`, the absolute path to the running clown
-binary, into the same environments. Plugin producers that shell out to the CLI
-(§8) SHOULD locate it via `${CLOWN_BIN:-clown}` so they invoke `clown job`
-reliably regardless of `PATH` (a plugin's nix-wrapped `PATH` need not contain
-clown). `CLOWN_BIN` MUST name a binary that accepts the `job` and `job-watch`
-subcommands.
+1. Into the environment of each plugin MCP server process it launches
+   (per-child injection at spawn), so producers resolve the same default channel.
+2. Into the monitor as the `clown job-watch --session <key>` argument (§8), so
+   the monitor watches the resolved channel without inheriting the variable.
+
+A provider that clown **exec-replaces** (it becomes the agent itself, leaving no
+separate provider subtree to keep clean) MAY instead receive the value via its
+environment. (Reducing the ambient surface on the paths clown controls does not
+fix a caller that re-propagates a provided `CLOWN_SESSION_ID` across a spawn
+boundary; that scrub is the spawner's responsibility.)
+
+clown SHOULD also provide `CLOWN_BIN`, the absolute path to the running clown
+binary, to the same producer environments. Plugin producers that shell out to
+the CLI (§8) SHOULD locate it via `${CLOWN_BIN:-clown}` so they invoke `clown
+job` reliably regardless of `PATH` (a plugin's nix-wrapped `PATH` need not
+contain clown). `CLOWN_BIN` MUST name a binary that accepts the `job` and
+`job-watch` subcommands.
 
 A **channel id** is the filesystem-safe identifier derived from a session key:
 
@@ -311,9 +324,13 @@ monitor; the on-disk and on-wire formats above remain the actual contract.
   given, advance that cursor past every event scanned. With `--job` it MUST
   return that job's full record stream and MUST NOT advance the cursor.
 
-- `clown job-watch [--once]`
+- `clown job-watch [--once] [--session <session-key>]`
   — The monitor (§9). Resolve the session key (§2), bind the channel socket,
-  replay unacked waking events, then block. SIGINT or SIGTERM MUST cause a
+  replay unacked waking events, then block. `--session` overrides the resolved
+  per-instance key so clown can arm the monitor on the right channel without
+  exporting `CLOWN_SESSION_ID` into the agent provider's environment (§2,
+  clown#136); the group decoration (`SPINCLASS_SESSION_ID`) and broadcast
+  channels are still env/derivation-sourced. SIGINT or SIGTERM MUST cause a
   graceful exit with status `0`. The monitor MUST NOT treat stdin EOF as a
   shutdown signal: monitor hosts (Claude Code) spawn monitors with an
   immediately-EOF stdin, so an EOF-triggered exit kills the monitor at session

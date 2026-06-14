@@ -46,6 +46,13 @@ type Host struct {
 	// rewritten as httpServers entries pointing at the bridge.
 	BridgePath string
 
+	// BaseEnv is clown-injected identity (CLOWN_SESSION_ID, CLOWN_BIN) applied
+	// to every managed server clown spawns (clown#136). Threading it here is
+	// what lets clown stop stamping the per-instance key onto its own process
+	// env — producers get it explicitly, while the claude subtree (bash,
+	// subagents) no longer inherits it.
+	BaseEnv map[string]string
+
 	// URLHostRewrite, when non-empty, replaces the host portion of
 	// each MCP server URL written into the compiled plugin manifest
 	// (the URL component sent to claude-code, NOT the address
@@ -137,6 +144,7 @@ func (h *Host) StartAll(ctx context.Context, discovered []DiscoveredServer) Star
 				Def:       d.Def,
 				PluginDir: d.PluginDir,
 				Logger:    h.Logger,
+				BaseEnv:   h.BaseEnv,
 			}
 			err := srv.Start(ctx)
 			results <- startResult{server: srv, src: d, err: err}
