@@ -327,6 +327,74 @@ allowtools-nix-store-smoke:
       | "  \(.name)\t\(if .err then "FAIL (denied)" else "PASS" end)\t\(.snippet)"
     ' "$transcript"
 
+# Live-contract check for the Explore→Discover subagent rewrite
+# (cmd/clown-hook-allow). Spawns claude via the built clown in --print
+# mode and explicitly asks it to dispatch the Explore subagent, with
+# CLOWN_HOOK_DEBUG_LOG set so we capture the EXACT PreToolUse stdin the
+# hook received (confirming tool_name is "Agent" vs "Task") and the
+# decision it emitted (confirming our updatedInput rewrites subagent_type
+# to "Discover"). Then dumps the transcript so the actual launched
+# subagent can be inspected. Requires `just build` to have produced
+# ./result/bin/clown WITH the rewrite (a nix build — HookAllowPath is
+# only baked in there). Costs API spend; not a routine test.
+#
+# What to look for in the output:
+#   - "=== hook debug log ===" should show an [input] line with
+#     tool_name "Agent" (or "Task") and tool_input.subagent_type
+#     "Explore", followed by an [output] line whose
+#     hookSpecificOutput.updatedInput.subagent_type is "Discover".
+#   - "=== Agent tool_use inputs ===" shows what subagent_type the model
+#     emitted (Explore); the rewrite happens in the hook, after that.
+allowtools-explore-rewrite-smoke:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    root=$(git rev-parse --show-toplevel)
+    cd "$root"
+
+    if [[ ! -x ./result/bin/clown ]]; then
+        echo "FAIL: ./result/bin/clown missing — run 'just build' first" >&2
+        exit 2
+    fi
+
+    prompt="Use the Agent tool with subagent_type \"Explore\" to find which file defines the disallowed-tools list. Do not use Read, Glob, or Grep directly — dispatch the Explore subagent."
+
+    transcript=$(mktemp)
+    debug_log=$(mktemp)
+    trap 'rm -f "$transcript" "$debug_log"' EXIT
+
+    echo "=== clown -p (capturing stream-json to $transcript, hook debug log to $debug_log) ==="
+    CLOWN_HOOK_DEBUG_LOG="$debug_log" ./result/bin/clown -- -p --output-format stream-json --verbose "$prompt" \
+        | tee "$transcript" >/dev/null || true
+
+    echo
+    echo "=== hook debug log (real PreToolUse stdin + emitted decision) ==="
+    if [[ -s "$debug_log" ]]; then
+        # Surface only the Agent/Task subagent events, pretty-printed, so
+        # the input tool_name and the output updatedInput are easy to read.
+        grep -E '"(tool_name|subagent_type|updatedInput)"' "$debug_log" || cat "$debug_log"
+    else
+        echo "  (empty — hook was never invoked; is this a nix build with the rewrite?)"
+    fi
+
+    echo
+    echo "=== Agent tool_use inputs (what the model emitted) ==="
+    jq -r '
+      select(.type == "assistant")
+      | .message.content[]?
+      | select(.type == "tool_use" and (.name == "Agent" or .name == "Task"))
+      | "  name=\(.name) subagent_type=\(.input.subagent_type // "<none>")"
+    ' "$transcript" 2>/dev/null || echo "  (no Agent/Task tool_use found)"
+
+    echo
+    echo "=== verdict ==="
+    if grep -q '"subagent_type":"Discover"' "$debug_log" 2>/dev/null \
+       || grep -q '"subagent_type": "Discover"' "$debug_log" 2>/dev/null; then
+        echo "  PASS: hook rewrote subagent_type to Discover (see [output] above)"
+    else
+        echo "  INCONCLUSIVE: no Discover rewrite seen in the debug log."
+        echo "  Either the model never dispatched Explore, or the rewrite did not fire."
+    fi
+
 # Repro for issue #35 (closed as misdiagnosed 2026-04-29): verify whether
 # mkCircus preserves plugin store paths in the closure of
 # circus.packages.default. Builds a synthetic fake-flake plugin (a

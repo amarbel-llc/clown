@@ -136,9 +136,14 @@
         agents-json = builtins.toJSON agents;
         agents-file = pkgs.writeText "clown-agents.json" agents-json;
 
+        # Agent(Explore) is intentionally NOT disallowed: the clown-hook-allow
+        # PreToolUse hook (cmd/clown-hook-allow) rewrites an Explore subagent
+        # launch to clown's read-only Discover subagent (subagents/discover.md)
+        # via updatedInput, so Explore is transparently redirected rather than
+        # blocked. Re-adding Agent(Explore) here would refuse the call before
+        # the hook can redirect it.
         disallowed-tools-file = pkgs.writeText "disallowed-tools.txt" ''
           Bash(*)
-          Agent(Explore)
           WebFetch
           WebSearch
           Write
@@ -156,7 +161,9 @@
         # (not -X main.version), so it reads version.env at eval time with the
         # spec's single-line match rather than relying on the fork's
         # auto-embed (which only feeds main.version for one fork-built binary).
-        clownVersion = builtins.head (builtins.match ".*CLOWN_VERSION=([^\n]+).*" (builtins.readFile ./version.env));
+        clownVersion = builtins.head (
+          builtins.match ".*CLOWN_VERSION=([^\n]+).*" (builtins.readFile ./version.env)
+        );
         clownRev = self.rev or self.dirtyRev or "dirty";
         clownShortRev = self.shortRev or self.dirtyShortRev or "dirty";
         claudeCodeVersion = pkgs-llm-agents.claude-code.version;

@@ -306,7 +306,12 @@ The flake produces a `symlinkJoin` of five components:
    - **Append**: All `.md` files from `.circus/system-prompt.d/` directories,
      shallowest-first, plus builtin fragments from `system-prompt-append.d/`
    - Per-provider safety defaults (via `internal/provider`):
-     - Claude: `--disallowed-tools 'Bash(*)'`, `--disallowed-tools 'Agent(Explore)'`
+     - Claude: `--disallowed-tools 'Bash(*)'` (plus `WebFetch`, `WebSearch`,
+       `Write`, and others from the build-time disallowed-tools file). The
+       built-in `Explore` subagent is NOT disallowed — the `clown-hook-allow`
+       PreToolUse hook rewrites an `Agent(Explore)` launch to clown's read-only
+       `Discover` subagent (`subagents/discover.md`) via `updatedInput`, so it
+       is transparently redirected rather than blocked.
      - Codex: `--sandbox workspace-write`
    - Directly manages HTTP MCP server lifecycle for Claude plugins (via
      `internal/pluginhost`): discovers `clown.json` manifests, launches

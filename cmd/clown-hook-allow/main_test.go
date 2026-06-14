@@ -110,6 +110,24 @@ func TestEvaluate(t *testing.T) {
 			input:    `{"pattern":"x"}`,
 			want:     "defer",
 		},
+		{
+			name:     "Agent launching Discover defers (no rewrite)",
+			toolName: "Agent",
+			input:    `{"subagent_type":"Discover","prompt":"explore"}`,
+			want:     "defer",
+		},
+		{
+			name:     "Agent with no subagent_type defers",
+			toolName: "Agent",
+			input:    `{"prompt":"do something"}`,
+			want:     "defer",
+		},
+		{
+			name:     "Agent with malformed input defers",
+			toolName: "Agent",
+			input:    `not json`,
+			want:     "defer",
+		},
 	}
 
 	for _, tc := range tests {
@@ -142,6 +160,75 @@ func TestEvaluate(t *testing.T) {
 	}
 }
 
+// TestEvaluate_ExploreRewrite verifies the Explore→Discover subagent rewrite:
+// subagent_type is swapped, every other input field is preserved, and the
+// decision carries the nested allow form with updatedInput.
+func TestEvaluate_ExploreRewrite(t *testing.T) {
+	for _, toolName := range []string{"Agent", "Task"} {
+		t.Run(toolName, func(t *testing.T) {
+			out := evaluate(hookInput{
+				ToolName: toolName,
+				ToolInput: json.RawMessage(
+					`{"subagent_type":"Explore","description":"look around","prompt":"find the config loader","model":"haiku"}`),
+			})
+			if out == nil {
+				t.Fatal("got defer (nil), want a rewrite decision")
+			}
+			if out.HookSpecificOutput.PermissionDecision != "allow" {
+				t.Errorf("permissionDecision = %q, want allow", out.HookSpecificOutput.PermissionDecision)
+			}
+			if out.HookSpecificOutput.HookEventName != "PreToolUse" {
+				t.Errorf("hookEventName = %q, want PreToolUse", out.HookSpecificOutput.HookEventName)
+			}
+			if len(out.HookSpecificOutput.UpdatedInput) == 0 {
+				t.Fatal("updatedInput is empty; want the rewritten tool input")
+			}
+
+			var got map[string]any
+			if err := json.Unmarshal(out.HookSpecificOutput.UpdatedInput, &got); err != nil {
+				t.Fatalf("parsing updatedInput: %v", err)
+			}
+			if got["subagent_type"] != "Discover" {
+				t.Errorf("subagent_type = %v, want Discover", got["subagent_type"])
+			}
+			// Sibling fields MUST survive the rewrite untouched.
+			if got["description"] != "look around" {
+				t.Errorf("description = %v, want preserved", got["description"])
+			}
+			if got["prompt"] != "find the config loader" {
+				t.Errorf("prompt = %v, want preserved", got["prompt"])
+			}
+			if got["model"] != "haiku" {
+				t.Errorf("model = %v, want preserved", got["model"])
+			}
+		})
+	}
+}
+
+// TestRun_ExploreRewriteEndToEnd confirms the wire output for a rewrite carries
+// the nested hookSpecificOutput.updatedInput shape through run().
+func TestRun_ExploreRewriteEndToEnd(t *testing.T) {
+	in := strings.NewReader(`{"tool_name":"Agent","tool_input":{"subagent_type":"Explore","prompt":"go"}}`)
+	var out bytes.Buffer
+	if err := run(in, &out); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if !bytes.Contains(out.Bytes(), []byte(`"updatedInput"`)) {
+		t.Fatalf("output must carry updatedInput; got %s", out.String())
+	}
+	var got hookOutput
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("parsing stdout: %v", err)
+	}
+	var ui map[string]any
+	if err := json.Unmarshal(got.HookSpecificOutput.UpdatedInput, &ui); err != nil {
+		t.Fatalf("parsing updatedInput: %v", err)
+	}
+	if ui["subagent_type"] != "Discover" {
+		t.Errorf("subagent_type = %v, want Discover", ui["subagent_type"])
+	}
+}
+
 func TestRun_EndToEnd(t *testing.T) {
 	in := strings.NewReader(`{"tool_name":"Read","tool_input":{"file_path":"/nix/store/abc-pkg/x"}}`)
 	var out bytes.Buffer
@@ -154,6 +241,10 @@ func TestRun_EndToEnd(t *testing.T) {
 	// to the bare shape.
 	if !bytes.Contains(out.Bytes(), []byte(`"hookSpecificOutput"`)) {
 		t.Fatalf("output must use the nested hookSpecificOutput form; got %s", out.String())
+	}
+	// A plain allow must NOT carry updatedInput (omitempty); only rewrites do.
+	if bytes.Contains(out.Bytes(), []byte(`"updatedInput"`)) {
+		t.Errorf("plain allow must omit updatedInput; got %s", out.String())
 	}
 	var got hookOutput
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
