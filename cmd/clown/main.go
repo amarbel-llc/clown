@@ -137,6 +137,14 @@ func main() {
 //     (e.g. get-hubbed's ci-watch) can locate `clown job` reliably regardless of
 //     PATH via ${CLOWN_BIN:-clown}. Set only if unset and resolvable.
 func ensureJobWakeupEnv() {
+	// Warn (visibility only — precedence is unchanged) when an explicit
+	// CLOWN_SESSION_ID disagrees with this session's SPINCLASS_SESSION_ID.
+	// Evaluated before the only-if-unset set below, because the leak case
+	// (clown#135) is precisely when CLOWN_SESSION_ID is already populated by
+	// a parent env.
+	if w := sessionKeyDivergenceWarning(os.Getenv("CLOWN_SESSION_ID"), os.Getenv("SPINCLASS_SESSION_ID")); w != "" {
+		fmt.Fprintln(os.Stderr, w)
+	}
 	if os.Getenv("CLOWN_SESSION_ID") == "" {
 		_ = os.Setenv("CLOWN_SESSION_ID", jobwake.SessionKey())
 	}
@@ -145,6 +153,17 @@ func ensureJobWakeupEnv() {
 			_ = os.Setenv("CLOWN_BIN", exe)
 		}
 	}
+}
+
+// sessionKeyDivergenceWarning returns a one-line warning when an explicit
+// CLOWN_SESSION_ID disagrees with SPINCLASS_SESSION_ID, or "" when there is no
+// divergence (either key empty, or the two equal). CLOWN_SESSION_ID still wins
+// per RFC-0009 §2; this only surfaces the likely env-leak case (clown#135).
+func sessionKeyDivergenceWarning(clownKey, spinclassKey string) string {
+	if clownKey == "" || spinclassKey == "" || clownKey == spinclassKey {
+		return ""
+	}
+	return fmt.Sprintf("clown: CLOWN_SESSION_ID (%s) differs from SPINCLASS_SESSION_ID (%s); using CLOWN_SESSION_ID per RFC-0009 §2 — if unexpected a parent env may have leaked it (clown#135)", clownKey, spinclassKey)
 }
 
 func run(rawArgs []string) int {

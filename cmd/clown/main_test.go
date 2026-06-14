@@ -60,6 +60,37 @@ func TestEnsureJobWakeupEnvLeavesPresetUntouched(t *testing.T) {
 	}
 }
 
+func TestSessionKeyDivergenceWarning(t *testing.T) {
+	cases := []struct {
+		name      string
+		clown     string
+		spinclass string
+		wantEmpty bool
+	}{
+		{"both set and differ", "parent/leaked", "repo/branch", false},
+		{"equal", "repo/branch", "repo/branch", true},
+		{"spinclass unset", "repo/branch", "", true},
+		{"clown unset", "", "repo/branch", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := sessionKeyDivergenceWarning(tc.clown, tc.spinclass)
+			if tc.wantEmpty {
+				if got != "" {
+					t.Fatalf("warning = %q, want empty", got)
+				}
+				return
+			}
+			if got == "" {
+				t.Fatal("warning = empty, want non-empty divergence warning")
+			}
+			if !strings.Contains(got, tc.clown) || !strings.Contains(got, tc.spinclass) {
+				t.Errorf("warning = %q, want both %q and %q", got, tc.clown, tc.spinclass)
+			}
+		})
+	}
+}
+
 func TestParseFlags(t *testing.T) {
 	cases := []struct {
 		name string
