@@ -14,22 +14,34 @@ import (
 	"strconv"
 )
 
-// SessionKey resolves the active session key per RFC-0009 §2:
-// CLOWN_SESSION_ID, else SPINCLASS_SESSION_ID, else CLAUDE_SESSION_ID, else a
-// generated random 128-bit value rendered as 32 lowercase hex digits.
+// SessionKey resolves the active session key per RFC-0009 §2 (see
+// ResolveSessionKey for the precedence; this drops the source label).
 func SessionKey() string {
+	k, _ := ResolveSessionKey()
+	return k
+}
+
+// ResolveSessionKey resolves the active session key AND reports which
+// precedence branch supplied it (RFC-0009 §2): CLOWN_SESSION_ID, else
+// SPINCLASS_SESSION_ID, else CLAUDE_SESSION_ID, else a generated random
+// 128-bit value rendered as 32 lowercase hex digits (source "generated"). The
+// source label backs `clown job whoami` (clown#135 / RFC-0012 §1): surfacing it
+// is what lets a consumer tell a leaked/inherited CLOWN_SESSION_ID (source
+// CLOWN_SESSION_ID, key not matching the session's own SPINCLASS_SESSION_ID)
+// from a correctly-resolved session.
+func ResolveSessionKey() (key, source string) {
 	if v := os.Getenv("CLOWN_SESSION_ID"); v != "" {
-		return v
+		return v, "CLOWN_SESSION_ID"
 	}
 	if v := os.Getenv("SPINCLASS_SESSION_ID"); v != "" {
-		return v
+		return v, "SPINCLASS_SESSION_ID"
 	}
 	if v := os.Getenv("CLAUDE_SESSION_ID"); v != "" {
-		return v
+		return v, "CLAUDE_SESSION_ID"
 	}
 	b := make([]byte, 16)
 	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
+	return hex.EncodeToString(b), "generated"
 }
 
 // ChannelID derives the filesystem-safe channel identifier from a session key:

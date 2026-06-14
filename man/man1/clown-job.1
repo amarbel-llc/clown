@@ -41,6 +41,8 @@
 .Op Fl -target Ar session-key
 .Op Fl -tail Ar n
 .Op Fl -json
+.Nm clown job whoami
+.Op Fl -json
 .Nm clown job-watch
 .Nm clown job-mcp
 .Sh DESCRIPTION
@@ -316,6 +318,24 @@ a malformed
 .Ar job-id
 is a usage error
 .Pq exit Li 2 .
+.It Nm clown job whoami Op Fl -json
+Print this session's resolved identity: the session key, its derived channel
+id, and the
+.Em source
+\(em which precedence branch supplied the key (CLOWN_SESSION_ID,
+SPINCLASS_SESSION_ID, CLAUDE_SESSION_ID, or generated; see
+.Sx SESSION KEY ) .
+It is the authoritative answer to which channel this session's producers and
+monitor resolve to, and a pure read available regardless of
+.Ev CLOWN_DISABLE_JOB_WAKEUP .
+It is the diagnostic for directed-wake divergence: a leaked or inherited
+.Ev CLOWN_SESSION_ID
+shows source CLOWN_SESSION_ID with a key that does not match the session's own
+.Ev SPINCLASS_SESSION_ID .
+With
+.Fl -json
+the identity is a single JSON object with keys sessionKey, channelId, and
+source.
 .It Nm clown job-watch Op Fl -once
 Run the channel monitor.
 It resolves the session key (see

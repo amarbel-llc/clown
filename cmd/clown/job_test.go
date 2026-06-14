@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"io"
 	"os"
 	"strings"
@@ -118,6 +119,50 @@ func jobTestEnv(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", rt)
 	t.Setenv("CLOWN_SESSION_ID", "repo/branch")
 	t.Setenv("CLOWN_DISABLE_JOB_WAKEUP", "")
+}
+
+// whoami --json reports the resolved {sessionKey, channelId, source} for the
+// current session (clown#135 / RFC-0012 §1).
+func TestJobWhoamiJSON(t *testing.T) {
+	jobTestEnv(t) // CLOWN_SESSION_ID = "repo/branch"
+	got := captureStdout(t, func() int { return jobWhoami([]string{"--json"}) })
+	var id struct {
+		SessionKey string `json:"sessionKey"`
+		ChannelID  string `json:"channelId"`
+		Source     string `json:"source"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(got)), &id); err != nil {
+		t.Fatalf("whoami --json not valid JSON: %v\n%s", err, got)
+	}
+	if id.SessionKey != "repo/branch" {
+		t.Errorf("sessionKey = %q, want repo/branch", id.SessionKey)
+	}
+	if id.Source != "CLOWN_SESSION_ID" {
+		t.Errorf("source = %q, want CLOWN_SESSION_ID", id.Source)
+	}
+	if id.ChannelID != jobwake.ChannelID("repo/branch") {
+		t.Errorf("channelId = %q, want %q", id.ChannelID, jobwake.ChannelID("repo/branch"))
+	}
+}
+
+// The divergence whoami exists to surface: CLOWN_SESSION_ID set to a value that
+// differs from the session's own SPINCLASS_SESSION_ID (the spawn-env leak,
+// clown#135). whoami reports the resolved (leaked) key + source CLOWN_SESSION_ID;
+// the consumer compares sessionKey against SPINCLASS_SESSION_ID to detect it.
+func TestJobWhoamiSurfacesDivergence(t *testing.T) {
+	t.Setenv("CLOWN_SESSION_ID", "driver-key")
+	t.Setenv("SPINCLASS_SESSION_ID", "repo/branch")
+	got := captureStdout(t, func() int { return jobWhoami([]string{"--json"}) })
+	var id struct {
+		SessionKey string `json:"sessionKey"`
+		Source     string `json:"source"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(got)), &id); err != nil {
+		t.Fatalf("whoami --json: %v\n%s", err, got)
+	}
+	if id.SessionKey != "driver-key" || id.Source != "CLOWN_SESSION_ID" {
+		t.Fatalf("got (%q, %q), want (driver-key, CLOWN_SESSION_ID)", id.SessionKey, id.Source)
+	}
 }
 
 func TestJobStartPrintsIDAndWritesRecord(t *testing.T) {

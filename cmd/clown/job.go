@@ -28,7 +28,7 @@ func jobWakeupDisabled() bool {
 // a pull, not an emit (RFC-0009 §8).
 func runJob(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "clown job: missing subcommand (start|progress|done|message|read|spool-path|status)")
+		fmt.Fprintln(os.Stderr, "clown job: missing subcommand (start|progress|done|message|read|spool-path|status|whoami)")
 		return 2
 	}
 	switch args[0] {
@@ -63,10 +63,47 @@ func runJob(args []string) int {
 		// A read-only pull, like `read`: works regardless of the disable
 		// switch (RFC-0010 §3).
 		return jobStatus(args[1:])
+	case "whoami":
+		// Pure identity introspection (clown#135 / RFC-0012 §1): works
+		// regardless of the disable switch — it touches no channel.
+		return jobWhoami(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "clown job: unknown subcommand %q\n", args[0])
 		return 2
 	}
+}
+
+// jobWhoami prints the resolved session key, its derived channel id, and the
+// precedence source that supplied the key (clown#135 / RFC-0012 §1). It is the
+// authoritative read of "what channel does this session resolve to": the
+// diagnostic for directed-wake divergence — a leaked/inherited CLOWN_SESSION_ID
+// surfaces as source=CLOWN_SESSION_ID with a key that does not match the
+// session's own SPINCLASS_SESSION_ID — and the resolver a consumer (spinclass)
+// calls to address the exact channel a session's watcher armed. Pure read:
+// unaffected by CLOWN_DISABLE_JOB_WAKEUP.
+func jobWhoami(args []string) int {
+	fs := flag.NewFlagSet("clown job whoami", flag.ContinueOnError)
+	asJSON := fs.Bool("json", false, "emit the identity as a single JSON object")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	key, source := jobwake.ResolveSessionKey()
+	cid := jobwake.ChannelID(key)
+	if *asJSON {
+		b, err := json.Marshal(struct {
+			SessionKey string `json:"sessionKey"`
+			ChannelID  string `json:"channelId"`
+			Source     string `json:"source"`
+		}{SessionKey: key, ChannelID: cid, Source: source})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "clown job whoami: %v\n", err)
+			return 1
+		}
+		fmt.Println(string(b))
+		return 0
+	}
+	fmt.Printf("sessionKey: %s\nchannelId:  %s\nsource:     %s\n", key, cid, source)
+	return 0
 }
 
 func jobStart(args []string) int {
