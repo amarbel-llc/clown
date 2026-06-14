@@ -2,13 +2,15 @@ package jobwake
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 )
 
 func TestRecordJSONRoundTrip(t *testing.T) {
 	r := Record{V: 1, Job: "b-1", Session: "repo/branch", Source: "moxy",
-		Type: TypeSucceeded, Seq: 2, TS: "2026-06-05T00:00:00Z", Message: "ok"}
+		Type: TypeSucceeded, Seq: 2, TS: "2026-06-05T00:00:00Z", Message: "ok",
+		Resources: []Resource{{URI: "madder://blobs/abc", Digest: "abc", MediaType: "text/plain", Size: 42}}}
 	b, err := json.Marshal(r)
 	if err != nil {
 		t.Fatal(err)
@@ -17,7 +19,7 @@ func TestRecordJSONRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(b, &back); err != nil {
 		t.Fatal(err)
 	}
-	if back != r {
+	if !reflect.DeepEqual(back, r) {
 		t.Fatalf("round trip mismatch: %+v != %+v", back, r)
 	}
 }
@@ -65,7 +67,7 @@ func TestRecordFromOmittedWhenEmpty(t *testing.T) {
 	if err := json.Unmarshal(b, &back); err != nil {
 		t.Fatal(err)
 	}
-	if back != r {
+	if !reflect.DeepEqual(back, r) {
 		t.Fatalf("from must round-trip: %+v != %+v", back, r)
 	}
 }

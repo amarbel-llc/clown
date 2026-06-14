@@ -38,6 +38,22 @@ type Record struct {
 	TS        string `json:"ts"`
 	Message   string `json:"message,omitempty"`
 	ResultRef string `json:"result_ref,omitempty"`
+	// Resources are by-reference attachments riding the event (RFC-0009 §4,
+	// clown#112): content the receiver fetches (e.g. a madder://blobs/<digest>
+	// URI), distinct from the free-text result_ref. Additive + optional, so the
+	// schema version (V) is unchanged; old readers ignore it.
+	Resources []Resource `json:"resources,omitempty"`
+}
+
+// Resource is one by-reference attachment on a record (clown#112). URI is the
+// fetchable reference (a madder://blobs/<digest> blob, a path, or any URI the
+// receiver can resolve); the rest is optional metadata. clown is a pure carrier
+// — it does not read or write the referenced store.
+type Resource struct {
+	URI       string `json:"uri"`
+	Digest    string `json:"digest,omitempty"`
+	MediaType string `json:"mediaType,omitempty"`
+	Size      int64  `json:"size,omitempty"`
 }
 
 // IsTerminal reports whether an event type ends a job's lifecycle (RFC-0009 §5).

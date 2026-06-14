@@ -218,6 +218,33 @@ func TestJobDoneBadStateExitsNonZero(t *testing.T) {
 	}
 }
 
+// The notification line carries a one-line resource-count hint (clown#112);
+// the URIs come from the pull side.
+func TestNotificationLineResources(t *testing.T) {
+	r := jobwake.Record{Source: "s", Job: "j", Type: jobwake.TypeMessage, Message: "hi",
+		Resources: []jobwake.Resource{{URI: "madder://blobs/x"}, {URI: "madder://blobs/y"}}}
+	if line := notificationLine(r); !strings.Contains(line, "2 resource(s)") {
+		t.Fatalf("notification line must hint the resource count, got %q", line)
+	}
+}
+
+// `clown job done --resource <uri>` attaches the resource to the terminal record.
+func TestJobDoneCarriesResource(t *testing.T) {
+	jobTestEnv(t)
+	out := captureStdout(t, func() int { return jobStart([]string{"--source", "s"}) })
+	id := trimTrailingNewline(out)
+	if code := jobDone([]string{id, "--state", "succeeded", "--resource", "madder://blobs/z"}); code != 0 {
+		t.Fatalf("job done exit = %d, want 0", code)
+	}
+	recs, err := jobwake.ReadJob(jobwake.ChannelID("repo/branch"), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) != 2 || len(recs[1].Resources) != 1 || recs[1].Resources[0].URI != "madder://blobs/z" {
+		t.Fatalf("terminal record must carry the resource, got %+v", recs)
+	}
+}
+
 func TestJobDoneSecondTerminalExitsNonZero(t *testing.T) {
 	jobTestEnv(t)
 	out := captureStdout(t, func() int { return jobStart([]string{"--source", "s"}) })

@@ -155,7 +155,8 @@ A record:
   "seq": 2,
   "ts": "2026-06-05T17:04:05.123456789Z",
   "message": "nix build ok",
-  "result_ref": "moxy job-read --job build-3f2ab1c9"
+  "result_ref": "moxy job-read --job build-3f2ab1c9",
+  "resources": [{"uri": "madder://blobs/blake2b256-…", "mediaType": "text/plain", "size": 4096}]
 }
 ```
 
@@ -180,6 +181,14 @@ Fields:
 - `result_ref` (OPTIONAL, string) — an opaque pointer the agent MAY use to fetch
   full results (e.g. a CLI invocation hint or a path). It is data, not a command
   to be auto-executed (§Security Considerations).
+- `resources` (OPTIONAL, array) — by-reference attachments the receiver MAY
+  fetch (clown#112). Each is an object with `uri` (REQUIRED, string — a fetchable
+  reference such as a `madder://blobs/<digest>` blob, a path, or any URI the
+  receiver resolves) plus OPTIONAL `digest`, `mediaType`, `size`. clown is a pure
+  carrier — it does not read or write the referenced store. The field is additive
+  and optional, so `v` stays `1`; the URIs are surfaced on the pull side
+  (`clown job read` / `clown chat read`), with the notification line (§9)
+  carrying only a one-line resource-count hint.
 
 Producers MUST write a `started` record (`seq` 0) when a job is created and
 exactly one terminal record (§5) when it finishes — except for **standalone
@@ -340,9 +349,11 @@ To **emit** a waking record the monitor MUST:
    ```
 
    When `result_ref` is present the monitor MUST append ` · <result_ref>`. When
-   `message` is absent the trailing `: ` MUST be omitted. When the record
-   carries a `from` (§4), the segment ` from <from>` MUST be inserted before
-   the colon:
+   the record carries `resources` (§4), the monitor MUST append a one-line count
+   hint ` · <n> resource(s)` (the URIs are recovered on the pull side, not put on
+   the wake line). When `message` is absent the trailing `: ` MUST be omitted.
+   When the record carries a `from` (§4), the segment ` from <from>` MUST be
+   inserted before the colon:
 
    ```
    [clown-job] <source> <job-id> <type> from <from>: <message>

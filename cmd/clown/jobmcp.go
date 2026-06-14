@@ -90,15 +90,21 @@ func jobToolList() []map[string]any {
 		}
 		return m
 	}
+	resourceArr := map[string]any{
+		"type":        "array",
+		"description": "by-reference attachments (e.g. madder://blobs/<digest>); the receiver fetches each uri (clown#112)",
+		"items": obj(map[string]any{"uri": str, "digest": str, "mediaType": str,
+			"size": map[string]any{"type": "integer"}}, "uri"),
+	}
 	return []map[string]any{
 		{"name": "job_start", "description": "Allocate a job and append its started record. Returns the job id.",
 			"inputSchema": obj(map[string]any{"target": target, "label": str, "source": str})},
 		{"name": "job_progress", "description": "Append a journal-only progress record (never wakes).",
 			"inputSchema": obj(map[string]any{"job_id": str, "target": target, "message": str}, "job_id")},
 		{"name": "job_done", "description": "Append the single terminal record and wake. state: succeeded|failed|cancelled|interrupted.",
-			"inputSchema": obj(map[string]any{"job_id": str, "state": str, "target": target, "message": str, "result_ref": str}, "job_id", "state")},
+			"inputSchema": obj(map[string]any{"job_id": str, "state": str, "target": target, "message": str, "result_ref": str, "resources": resourceArr}, "job_id", "state")},
 		{"name": "job_message", "description": "Emit a standalone waking message job to a session ('*' broadcasts).",
-			"inputSchema": obj(map[string]any{"target": target, "message": str, "from": str, "source": str, "result_ref": str}, "target", "message")},
+			"inputSchema": obj(map[string]any{"target": target, "message": str, "from": str, "source": str, "result_ref": str, "resources": resourceArr}, "target", "message")},
 		{"name": "job_read", "description": "Read a job's full record stream (job) or the channel's waking events (since/type filters). Returns a JSON array of records.",
 			"inputSchema": obj(map[string]any{"job": str, "target": target, "since": str, "type": map[string]any{"type": "array", "items": str}})},
 		{"name": "job_status", "description": "Journal+spool-derived status of a job (state, elapsed, last_activity, spool_bytes, tail). Returns a JSON object.",
@@ -106,7 +112,7 @@ func jobToolList() []map[string]any {
 		{"name": "job_spool_path", "description": "Resolve and return the absolute output-spool path for a job. Does not create the file.",
 			"inputSchema": obj(map[string]any{"job_id": str, "target": target}, "job_id")},
 		{"name": "chat_send", "description": "Send a chat message (RFC-0013 §3): a one-line subject (the wake) plus an optional full body recovered by chat_read. target: session key / SPINCLASS_SESSION_ID group / '*' broadcast.",
-			"inputSchema": obj(map[string]any{"target": target, "subject": str, "body": str, "from": str, "source": str}, "target", "subject")},
+			"inputSchema": obj(map[string]any{"target": target, "subject": str, "body": str, "from": str, "source": str, "resources": resourceArr}, "target", "subject")},
 		{"name": "chat_read", "description": "Read chat messages addressed to this session (own/group/broadcast) newer than the read cursor; advances the cursor unless peek. Returns a JSON array of {job,from,source,scope,subject,body,ts}.",
 			"inputSchema": obj(map[string]any{"peek": map[string]any{"type": "boolean"}})},
 		{"name": "chat_list", "description": "List live chat recipients (presence): each {sessionKey, channelId, decoration, description, lastSeen}, groupable by decoration. Replaces spinclass chat-list-sessions.",
@@ -134,11 +140,11 @@ func callJobTool(params json.RawMessage) map[string]any {
 		return toolResult("ok", err)
 	case "job_done":
 		err := jobwake.Done(argStr(a, "target"), argStr(a, "job_id"),
-			argStr(a, "state"), argStr(a, "message"), argStr(a, "result_ref"))
+			argStr(a, "state"), argStr(a, "message"), argStr(a, "result_ref"), parseResources(a)...)
 		return toolResult("ok", err)
 	case "job_message":
 		id, err := jobwake.Message(argStr(a, "target"), argStr(a, "source"),
-			argStr(a, "from"), argStr(a, "message"), argStr(a, "result_ref"))
+			argStr(a, "from"), argStr(a, "message"), argStr(a, "result_ref"), parseResources(a)...)
 		return toolResult(id, err)
 	case "job_read":
 		return jobReadTool(a)
@@ -153,7 +159,7 @@ func callJobTool(params json.RawMessage) map[string]any {
 			from = jobwake.SessionKey()
 		}
 		id, err := jobwake.SendChat(argStr(a, "target"), from, argStr(a, "source"),
-			argStr(a, "subject"), argStr(a, "body"))
+			argStr(a, "subject"), argStr(a, "body"), parseResources(a)...)
 		return toolResult(id, err)
 	case "chat_read":
 		return chatReadTool(a)
@@ -236,6 +242,33 @@ func chatReadTool(a map[string]any) map[string]any {
 		return toolErr(err.Error())
 	}
 	return toolText(string(b))
+}
+
+// parseResources extracts the MCP `resources` argument — an array of
+// {uri, digest, mediaType, size} objects — into []jobwake.Resource (clown#112).
+// Entries without a uri are skipped; JSON numbers decode to float64.
+func parseResources(a map[string]any) []jobwake.Resource {
+	raw, ok := a["resources"].([]any)
+	if !ok {
+		return nil
+	}
+	var out []jobwake.Resource
+	for _, item := range raw {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		uri := argStr(m, "uri")
+		if uri == "" {
+			continue
+		}
+		r := jobwake.Resource{URI: uri, Digest: argStr(m, "digest"), MediaType: argStr(m, "mediaType")}
+		if s, ok := m["size"].(float64); ok {
+			r.Size = int64(s)
+		}
+		out = append(out, r)
+	}
+	return out
 }
 
 func chatListTool() map[string]any {

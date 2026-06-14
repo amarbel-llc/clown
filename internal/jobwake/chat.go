@@ -9,13 +9,14 @@ import (
 // ChatMessage is a chat message returned by ReadChat: the record metadata plus
 // the full body recovered from the message's spool (RFC-0013 §3).
 type ChatMessage struct {
-	Job     string `json:"job"`
-	From    string `json:"from,omitempty"`
-	Source  string `json:"source"`
-	Scope   string `json:"scope"` // "direct" | "group" | "broadcast"
-	Subject string `json:"subject,omitempty"`
-	Body    string `json:"body,omitempty"`
-	TS      string `json:"ts"`
+	Job       string     `json:"job"`
+	From      string     `json:"from,omitempty"`
+	Source    string     `json:"source"`
+	Scope     string     `json:"scope"` // "direct" | "group" | "broadcast"
+	Subject   string     `json:"subject,omitempty"`
+	Body      string     `json:"body,omitempty"`
+	Resources []Resource `json:"resources,omitempty"` // by-reference attachments (clown#112)
+	TS        string     `json:"ts"`
 }
 
 // chatCursorPath is the per-reader chat read cursor for a channel — DISTINCT
@@ -87,7 +88,7 @@ func readChatChannel(cid, readerCID, scope string, peek bool) ([]ChatMessage, er
 			body = string(b)
 		}
 		out = append(out, ChatMessage{Job: r.Job, From: r.From, Source: r.Source,
-			Scope: scope, Subject: r.Message, Body: body, TS: r.TS})
+			Scope: scope, Subject: r.Message, Body: body, Resources: r.Resources, TS: r.TS})
 		a.Acked[r.Job] = r.Seq
 		advanced = true
 	}

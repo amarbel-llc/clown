@@ -261,6 +261,16 @@ Because chat is a clown construct riding the job-wakeup channel,
 MUST mean no chat — by design, not as a regression. No spinclass-local fallback
 store exists. (This RFC introduces no change to RFC-0009 §8.)
 
+#### 3.5 Resource attachments
+
+A chat message MAY carry resource references via the record's `resources` field
+(RFC-0009 §4, clown#112). clown is a **carrier only**: it records and transports
+each reference (a `madder://blobs/<digest>` URI or any fetchable URI) but does
+NOT read or write the blob store. The full reference list MUST survive for
+chat-read (it rides the `chat` record, which §3.1 already exempts from the
+delivery reap); the wake notification surfaces only a one-line resource count.
+The reader fetches each URI itself, out of band (e.g. via moxy/madder).
+
 ## Security Considerations
 
 - **Channel addressing is hash-based, not capability-based.** `ChannelID` is a

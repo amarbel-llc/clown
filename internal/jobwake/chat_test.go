@@ -126,3 +126,19 @@ func TestReadChatIncludesOwnSent(t *testing.T) {
 		t.Fatalf("chat-read must include own sent messages, got %+v", got)
 	}
 }
+
+// chat-send carries resource attachments (clown#112) and chat-read returns them.
+func TestReadChatReturnsResources(t *testing.T) {
+	chatEnv(t, "k", "")
+	res := Resource{URI: "madder://blobs/deadbeef", MediaType: "text/plain", Size: 9}
+	if _, err := SendChat("k", "sender", "src", "hi", "body", res); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadChat(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || len(got[0].Resources) != 1 || got[0].Resources[0].URI != res.URI {
+		t.Fatalf("chat-read must return the resource, got %+v", got)
+	}
+}

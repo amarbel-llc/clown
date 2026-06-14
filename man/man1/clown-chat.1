@@ -13,6 +13,7 @@
 .Op Fl -body Ar body
 .Op Fl -from Ar sender-key
 .Op Fl -source Ar source
+.Op Fl -resource Ar uri
 .Nm clown chat read
 .Op Fl -peek
 .Op Fl -json
@@ -46,6 +47,12 @@ is the full message recovered by
 .Nm clown chat read .
 .Fl -from
 defaults to this session's key.
+.Fl -resource
+attaches a resource reference (a
+.Li madder://blobs/ Ns Ar digest
+URI or any fetchable URI); repeat it to attach several (clown#112).
+clown carries the reference only \(em the blob store is external (madder); the
+reader fetches the URI itself.
 Prints the generated job id.
 .It Nm clown chat read
 Read chat messages addressed to this session \(em its own (direct), group, and
@@ -55,11 +62,14 @@ The read advances a per-reader cursor distinct from the wake monitor's, so a
 wake never consumes a read and a read never consumes a wake.
 Unlike the wake monitor it includes this session's own sent messages
 (conversation history).
+Any resource references carried by a message
+.Pq Fl -resource No on send
+are listed beneath it.
 .Fl -peek
 reads without advancing the cursor.
 .Fl -json
 emits one JSON object per message
-.Pq Li {job,from,source,scope,subject,body,ts} .
+.Pq Li {job,from,source,scope,subject,body,resources,ts} .
 .It Nm clown chat list
 List the live chat recipients, grouped by their spinclass session (the
 .Ev SPINCLASS_SESSION_ID

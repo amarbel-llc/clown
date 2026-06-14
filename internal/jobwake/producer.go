@@ -191,7 +191,7 @@ func Progress(target, jobID, message string) error {
 // fsynced before any nudge (waking => durable-first, RFC-0009 §7); broadcast
 // records get NO nudge — the monitors' periodic rescan is the delivery path
 // (RFC-0009 §6). It returns the generated job id (`msg-<8hex>`).
-func Message(target, source, from, body, resultRef string) (string, error) {
+func Message(target, source, from, body, resultRef string, resources ...Resource) (string, error) {
 	session := resolveSession(target)
 	source = defaultSource(source)
 	cid := ChannelID(session)
@@ -201,7 +201,7 @@ func Message(target, source, from, body, resultRef string) (string, error) {
 	id := newJobID("msg")
 	rec := Record{V: SchemaVersion, Job: id, Session: session, Source: source,
 		From: from, Type: TypeMessage, TS: nowTS(), Message: oneLine(body),
-		ResultRef: resultRef}
+		ResultRef: resultRef, Resources: resources}
 	if err := appendRecord(cid, rec, true); err != nil { // fsync before nudge
 		return "", err
 	}
@@ -222,7 +222,7 @@ func Message(target, source, from, body, resultRef string) (string, error) {
 // OPTIONAL sender session key. The body is written before the record + nudge, so
 // any reader that discovers the record always finds its body. Returns the
 // generated job id (`chat-<8hex>`).
-func SendChat(target, from, source, subject, body string) (string, error) {
+func SendChat(target, from, source, subject, body string, resources ...Resource) (string, error) {
 	session := resolveSession(target)
 	source = defaultSource(source)
 	cid := ChannelID(session)
@@ -236,7 +236,8 @@ func SendChat(target, from, source, subject, body string) (string, error) {
 		}
 	}
 	rec := Record{V: SchemaVersion, Job: id, Session: session, Source: source,
-		From: from, Type: TypeChat, TS: nowTS(), Message: oneLine(subject)}
+		From: from, Type: TypeChat, TS: nowTS(), Message: oneLine(subject),
+		Resources: resources}
 	if err := appendRecord(cid, rec, true); err != nil { // fsync before nudge
 		return "", err
 	}
@@ -253,14 +254,14 @@ func SendChat(target, from, source, subject, body string) (string, error) {
 // cross-session target the job was started with (mirrors Start's
 // StartOpts.Target), so a cross-session producer's done wakes the right
 // session.
-func Done(target, jobID, state, message, resultRef string) error {
+func Done(target, jobID, state, message, resultRef string, resources ...Resource) error {
 	if !IsTerminal(state) {
 		return fmt.Errorf("invalid terminal state %q", state)
 	}
 	session := resolveSession(target)
 	cid := ChannelID(session)
 	rec := Record{V: SchemaVersion, Job: jobID, Session: session, Type: state,
-		TS: nowTS(), Message: oneLine(message), ResultRef: resultRef}
+		TS: nowTS(), Message: oneLine(message), ResultRef: resultRef, Resources: resources}
 	if err := appendRecord(cid, rec, true); err != nil { // fsync before nudge
 		return err
 	}

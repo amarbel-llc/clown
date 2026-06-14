@@ -157,6 +157,8 @@ func jobDone(args []string) int {
 	state := fs.String("state", "", "succeeded|failed|cancelled|interrupted")
 	message := fs.String("message", "", "human-readable detail")
 	resultRef := fs.String("result-ref", "", "opaque result pointer")
+	var resources stringList
+	fs.Var(&resources, "resource", "attach a resource by URI, e.g. madder://blobs/<digest> (repeatable)")
 	if err := fs.Parse(rest); err != nil {
 		return 2
 	}
@@ -164,7 +166,7 @@ func jobDone(args []string) int {
 		fmt.Fprintln(os.Stderr, "clown job done: --state is required")
 		return 2
 	}
-	if err := jobwake.Done(*target, jobID, *state, *message, *resultRef); err != nil {
+	if err := jobwake.Done(*target, jobID, *state, *message, *resultRef, resourcesFromURIs(resources)...); err != nil {
 		fmt.Fprintf(os.Stderr, "clown job done: %v\n", err)
 		return 1
 	}
@@ -183,6 +185,8 @@ func jobMessage(args []string) int {
 	source := fs.String("source", "", "emitting plugin label")
 	message := fs.String("message", "", "message body")
 	resultRef := fs.String("result-ref", "", "opaque result pointer")
+	var resources stringList
+	fs.Var(&resources, "resource", "attach a resource by URI, e.g. madder://blobs/<digest> (repeatable)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -194,7 +198,7 @@ func jobMessage(args []string) int {
 		fmt.Fprintln(os.Stderr, "clown job message: --message is required and must be non-empty")
 		return 2
 	}
-	id, err := jobwake.Message(*target, *source, *from, *message, *resultRef)
+	id, err := jobwake.Message(*target, *source, *from, *message, *resultRef, resourcesFromURIs(resources)...)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown job message: %v\n", err)
 		return 1
@@ -440,6 +444,11 @@ func notificationLine(r jobwake.Record) string {
 	}
 	if r.ResultRef != "" {
 		line += " · " + flattenLine(r.ResultRef)
+	}
+	if n := len(r.Resources); n > 0 {
+		// One-line contract (RFC-0009 §9): the wake carries only a count hint;
+		// the URIs come from the pull side (clown job read / chat read, #112).
+		line += fmt.Sprintf(" · %d resource(s)", n)
 	}
 	return line
 }

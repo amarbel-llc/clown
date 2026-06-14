@@ -42,6 +42,8 @@ func chatSend(args []string) int {
 	source := fs.String("source", "", "emitting source label")
 	subject := fs.String("subject", "", "one-line subject (the wake notification)")
 	body := fs.String("body", "", "full message body (recovered by chat read)")
+	var resources stringList
+	fs.Var(&resources, "resource", "attach a resource by URI, e.g. madder://blobs/<digest> (repeatable)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -57,7 +59,7 @@ func chatSend(args []string) int {
 	if from2 == "" {
 		from2 = jobwake.SessionKey()
 	}
-	id, err := jobwake.SendChat(*target, from2, *source, *subject, *body)
+	id, err := jobwake.SendChat(*target, from2, *source, *subject, *body, resourcesFromURIs(resources)...)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown chat send: %v\n", err)
 		return 1
@@ -96,6 +98,9 @@ func chatRead(args []string) int {
 		fmt.Printf("%s [%s]: %s\n", displaySender(m, names), m.Scope, m.Subject)
 		if m.Body != "" {
 			fmt.Println(m.Body)
+		}
+		for _, r := range m.Resources {
+			fmt.Printf("  resource: %s\n", r.URI)
 		}
 	}
 	return 0
@@ -177,4 +182,18 @@ func displaySender(m jobwake.ChatMessage, names map[string]string) string {
 		return n + " (" + m.From + ")"
 	}
 	return m.From
+}
+
+// resourcesFromURIs builds resource attachments from bare URIs (the CLI form;
+// the MCP surface carries the richer {uri,digest,mediaType,size} objects). Used
+// by chat send and job message/done (clown#112).
+func resourcesFromURIs(uris []string) []jobwake.Resource {
+	if len(uris) == 0 {
+		return nil
+	}
+	out := make([]jobwake.Resource, 0, len(uris))
+	for _, u := range uris {
+		out = append(out, jobwake.Resource{URI: u})
+	}
+	return out
 }

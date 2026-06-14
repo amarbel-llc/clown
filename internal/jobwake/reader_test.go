@@ -3,6 +3,7 @@ package jobwake
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -87,7 +88,7 @@ func TestScanWakingMatchesDirectScan(t *testing.T) {
 		t.Fatalf("want exactly the one terminal waking record, got %+v", exported)
 	}
 	for i := range exported {
-		if exported[i] != direct[i] {
+		if !reflect.DeepEqual(exported[i], direct[i]) {
 			t.Fatalf("ScanWaking[%d]=%+v differs from scanWaking[%d]=%+v", i, exported[i], i, direct[i])
 		}
 		if !IsWaking(exported[i].Type) {

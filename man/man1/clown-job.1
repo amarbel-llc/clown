@@ -20,12 +20,14 @@
 .Fl -state Ar succeeded | failed | cancelled | interrupted
 .Op Fl -message Ar message
 .Op Fl -result-ref Ar ref
+.Op Fl -resource Ar uri
 .Nm clown job message
 .Fl -target Ar session-key | '*'
 .Op Fl -from Ar sender-key
 .Op Fl -source Ar source
 .Fl -message Ar body
 .Op Fl -result-ref Ar ref
+.Op Fl -resource Ar uri
 .Nm clown job read
 .Op Fl -job Ar job-id
 .Op Fl -since Ar ts
@@ -152,7 +154,7 @@ Append a
 .Li progress
 record to the job and optionally send a nudge.
 Journal-only: it is recorded and observable but never wakes the agent.
-.It Nm clown job done Ar job-id Fl -state Ar state Oo Fl -message Ar message Oc Oo Fl -result-ref Ar ref Oc
+.It Nm clown job done Ar job-id Fl -state Ar state Oo Fl -message Ar message Oc Oo Fl -result-ref Ar ref Oc Oo Fl -resource Ar uri Oc
 Append the job's single terminal record, flush it durably, then send the
 nudge.
 .Ar state
@@ -168,7 +170,15 @@ record.
 is an opaque pointer the agent may use to fetch full results (e.g. a CLI
 invocation hint or a path); it is data surfaced to the agent as text, not
 a command the monitor auto-executes.
-.It Nm clown job message Fl -target Ar session-key | '*' Oo Fl -from Ar sender-key Oc Oo Fl -source Ar source Oc Fl -message Ar body Oo Fl -result-ref Ar ref Oc
+.Fl -resource
+attaches a resource reference (a
+.Li madder://blobs/ Ns Ar digest
+URI or any fetchable URI) carried verbatim in the record; repeat it to attach
+several (clown#112).
+clown is a carrier only \(em the blob store is external (madder); the consumer
+fetches each URI itself, and the notification line shows only the count (see
+.Sx NOTIFICATION LINE ) .
+.It Nm clown job message Fl -target Ar session-key | '*' Oo Fl -from Ar sender-key Oc Oo Fl -source Ar source Oc Fl -message Ar body Oo Fl -result-ref Ar ref Oc Oo Fl -resource Ar uri Oc
 Emit a standalone single-record waking
 .Li message
 job: a self-contained job whose only record
@@ -194,6 +204,9 @@ is a usage error
 optionally carries the sender's session key, rendered in the notification
 line (see
 .Sx NOTIFICATION LINE ) .
+.Fl -resource
+attaches resource references, exactly as for
+.Nm clown job done .
 .Pp
 .Fl -target Ar '*'
 addresses the reserved
@@ -479,6 +492,13 @@ When
 is present,
 .Dq Li " \(bu " <result_ref>
 is appended.
+When the record carries
+.Li resources
+(clown#112),
+.Dq Li " \(bu " <n> " resource(s)"
+is appended as a one-line count hint; the resource URIs are recovered on the
+pull side via
+.Nm clown job read .
 Any newline in
 .Li message
 or
