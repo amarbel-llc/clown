@@ -5,16 +5,18 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"sort"
+	"time"
 
 	"github.com/amarbel-llc/clown/internal/jobwake"
 )
 
-// runChat dispatches `clown chat <send|read>` (RFC-0013 §3): the clown-owned
-// chat surface that replaces spinclass's chat-send/chat-read. chat-list arrives
-// with the presence index (P3b).
+// runChat dispatches `clown chat <send|read|list>` (RFC-0013 §3): the
+// clown-owned chat surface that replaces spinclass's chat-send / chat-read /
+// chat-list-sessions.
 func runChat(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "clown chat: expected a subcommand (send|read)")
+		fmt.Fprintln(os.Stderr, "clown chat: expected a subcommand (send|read|list)")
 		return 2
 	}
 	switch args[0] {
@@ -22,6 +24,8 @@ func runChat(args []string) int {
 		return chatSend(args[1:])
 	case "read":
 		return chatRead(args[1:])
+	case "list":
+		return chatList(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "clown chat: unknown subcommand %q\n", args[0])
 		return 2
@@ -87,8 +91,9 @@ func chatRead(args []string) int {
 		}
 		return 0
 	}
+	names := presenceNames()
 	for _, m := range msgs {
-		fmt.Printf("%s [%s]: %s\n", chatSender(m), m.Scope, m.Subject)
+		fmt.Printf("%s [%s]: %s\n", displaySender(m, names), m.Scope, m.Subject)
 		if m.Body != "" {
 			fmt.Println(m.Body)
 		}
@@ -96,12 +101,80 @@ func chatRead(args []string) int {
 	return 0
 }
 
-// chatSender renders the displayable sender of a chat message: the explicit
-// `from` session key when present, else the source label. Readable-name
-// enrichment via the presence index lands with P3b.
-func chatSender(m jobwake.ChatMessage) string {
-	if m.From != "" {
-		return m.From
+// chatList prints the live chat recipients, grouped by their spinclass session
+// (the decoration). It replaces spinclass chat-list-sessions. --json emits one
+// JSON presence record per line.
+func chatList(args []string) int {
+	fs := flag.NewFlagSet("clown chat list", flag.ContinueOnError)
+	asJSON := fs.Bool("json", false, "emit one JSON object per presence record")
+	if err := fs.Parse(args); err != nil {
+		return 2
 	}
-	return m.Source
+	ps, err := jobwake.ListPresence(time.Now())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clown chat list: %v\n", err)
+		return 1
+	}
+	if *asJSON {
+		enc := json.NewEncoder(os.Stdout)
+		for _, p := range ps {
+			if err := enc.Encode(p); err != nil {
+				fmt.Fprintf(os.Stderr, "clown chat list: %v\n", err)
+				return 1
+			}
+		}
+		return 0
+	}
+	groups := map[string][]jobwake.Presence{}
+	var order []string
+	for _, p := range ps {
+		if _, ok := groups[p.Decoration]; !ok {
+			order = append(order, p.Decoration)
+		}
+		groups[p.Decoration] = append(groups[p.Decoration], p)
+	}
+	sort.Strings(order)
+	for _, g := range order {
+		label := g
+		if label == "" {
+			label = "(no session)"
+		}
+		fmt.Println(label)
+		for _, p := range groups[g] {
+			desc := p.Description
+			if desc == "" {
+				desc = "-"
+			}
+			fmt.Printf("  %s  %s\n", p.SessionKey, desc)
+		}
+	}
+	return 0
+}
+
+// presenceNames maps per-instance session keys to their readable description
+// (SPINCLASS_DESCRIPTION) from the presence index, for sender enrichment.
+func presenceNames() map[string]string {
+	m := map[string]string{}
+	ps, err := jobwake.ListPresence(time.Now())
+	if err != nil {
+		return m
+	}
+	for _, p := range ps {
+		if p.Description != "" {
+			m[p.SessionKey] = p.Description
+		}
+	}
+	return m
+}
+
+// displaySender renders the sender of a chat message: the presence description
+// (with the key) when known, else the raw `from` key, else the source label.
+func displaySender(m jobwake.ChatMessage, names map[string]string) string {
+	if m.From == "" {
+		return m.Source
+	}
+	if n, ok := names[m.From]; ok {
+		return n + " (" + m.From + ")"
+	}
+	return m.From
 }

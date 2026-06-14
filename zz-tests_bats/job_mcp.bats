@@ -41,11 +41,11 @@ teardown() {
   req='{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
   run bash -c "printf '%s\n' '$req' | '$CLOWN_BIN' job-mcp"
   assert_success
-  for tool in job_start job_progress job_done job_message job_read job_status job_spool_path chat_send chat_read; do
+  for tool in job_start job_progress job_done job_message job_read job_status job_spool_path chat_send chat_read chat_list; do
     assert_output --partial "\"$tool\""
   done
   count="$(printf '%s' "$output" | jq -r '.result.tools | length')"
-  assert_equal "$count" "9"
+  assert_equal "$count" "10"
 }
 
 # §3/§4: tools/call job_start then job_status round-trips and the status is

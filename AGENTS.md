@@ -477,6 +477,20 @@ The flake produces a `symlinkJoin` of five components:
    job tools (spinclass `session-job-status`/chat, moxy `async-result` status)
    migrate onto. Status: `accepted` (RFC-0011), reviewed by both consumers.
 
+   **Cross-session chat (`clown chat`).** RFC-0013 §3 makes chat a clown
+   construct on the job channel (rescope companion to spinclass FDR-0017). A chat
+   message is a `chat` record (a waking type distinct from `message`, so the
+   own-channel reap leaves it) carrying the one-line subject in the record and
+   the full body in the message's RFC-0010 spool. `clown chat send|read|list`
+   (CLI) and `chat_send`/`chat_read`/`chat_list` (the same `clown-builtin-jobs`
+   server) are the surface: read aggregates the reader's own/group/broadcast
+   channels with a per-clown cursor distinct from the wake ack; `list` reads a
+   presence index the job-watch monitor registers per session
+   (`$XDG_STATE_HOME/clown/presence/`, keyed by per-instance channel, refreshed
+   on a ticker, `SPINCLASS_DESCRIPTION` as the readable label). The spinclass
+   chat surface (`internal/chat`, `chat-*`, `chatroom`) is deleted in a lockstep
+   hard-swap cutover (FDR-0017; accept-the-window). Man page: `clown-chat(1)`.
+
    **Operator job control (`ringmaster ls|status|tail|cancel`).** The
    `ringmaster` binary (`cmd/ringmaster`, FDR-0010's llama-server
    control-plane daemon) doubles as the human-facing control surface for

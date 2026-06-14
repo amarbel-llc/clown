@@ -16,6 +16,8 @@
 .Nm clown chat read
 .Op Fl -peek
 .Op Fl -json
+.Nm clown chat list
+.Op Fl -json
 .Sh DESCRIPTION
 .Nm clown chat
 is clown's cross-session chat surface (RFC-0013 §3), built on the job-wakeup
@@ -58,6 +60,14 @@ reads without advancing the cursor.
 .Fl -json
 emits one JSON object per message
 .Pq Li {job,from,source,scope,subject,body,ts} .
+.It Nm clown chat list
+List the live chat recipients, grouped by their spinclass session (the
+.Ev SPINCLASS_SESSION_ID
+decoration).
+Each entry shows the recipient's per-instance key and its
+.Ev SPINCLASS_DESCRIPTION .
+.Fl -json
+emits one JSON presence record per line.
 .El
 .Sh ENVIRONMENT
 .Bl -tag -width Ds

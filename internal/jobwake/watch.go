@@ -16,6 +16,10 @@ const rescanInterval = time.Second
 // GC (clown#126).
 const sweepInterval = time.Hour
 
+// presenceInterval is how often the live monitor refreshes its chat presence
+// record's lastSeen (RFC-0013 §3.3) — a comfortable fraction of presenceStale.
+const presenceInterval = 30 * time.Second
+
 // Watch runs the channel monitor (RFC-0009 §9): it replays unacked waking
 // events, binds the nudge socket, then loops on datagram-or-ticker re-scanning,
 // emitting each new waking event exactly once via emit. The ack is persisted
@@ -38,6 +42,11 @@ func Watch(ctx context.Context, sessionKey string, emit func(Record) error) erro
 		_ = removeSocket(cid)
 	}()
 
+	// Chat presence (RFC-0013 §3.3): register the session as live, refresh it on
+	// the presence ticker below, and remove it on a clean shutdown. Best-effort.
+	_ = RegisterPresence(time.Now())
+	defer RemovePresence()
+
 	datagrams := make(chan struct{}, 64)
 	go func() {
 		buf := make([]byte, 512)
@@ -56,6 +65,8 @@ func Watch(ctx context.Context, sessionKey string, emit func(Record) error) erro
 	defer ticker.Stop()
 	sweepTicker := time.NewTicker(sweepInterval)
 	defer sweepTicker.Stop()
+	presenceTicker := time.NewTicker(presenceInterval)
+	defer presenceTicker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -70,6 +81,8 @@ func Watch(ctx context.Context, sessionKey string, emit func(Record) error) erro
 			}
 		case <-sweepTicker.C:
 			sweep(cid, time.Now()) // periodic GC so a long-lived monitor keeps reaping (clown#126)
+		case <-presenceTicker.C:
+			_ = RegisterPresence(time.Now()) // refresh chat presence lastSeen (RFC-0013 §3.3)
 		}
 	}
 }

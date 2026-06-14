@@ -109,6 +109,8 @@ func jobToolList() []map[string]any {
 			"inputSchema": obj(map[string]any{"target": target, "subject": str, "body": str, "from": str, "source": str}, "target", "subject")},
 		{"name": "chat_read", "description": "Read chat messages addressed to this session (own/group/broadcast) newer than the read cursor; advances the cursor unless peek. Returns a JSON array of {job,from,source,scope,subject,body,ts}.",
 			"inputSchema": obj(map[string]any{"peek": map[string]any{"type": "boolean"}})},
+		{"name": "chat_list", "description": "List live chat recipients (presence): each {sessionKey, channelId, decoration, description, lastSeen}, groupable by decoration. Replaces spinclass chat-list-sessions.",
+			"inputSchema": obj(map[string]any{})},
 	}
 }
 
@@ -155,6 +157,8 @@ func callJobTool(params json.RawMessage) map[string]any {
 		return toolResult(id, err)
 	case "chat_read":
 		return chatReadTool(a)
+	case "chat_list":
+		return chatListTool()
 	default:
 		return toolErr(fmt.Sprintf("unknown tool %q", p.Name))
 	}
@@ -228,6 +232,21 @@ func chatReadTool(a map[string]any) map[string]any {
 		msgs = []jobwake.ChatMessage{}
 	}
 	b, err := json.Marshal(msgs)
+	if err != nil {
+		return toolErr(err.Error())
+	}
+	return toolText(string(b))
+}
+
+func chatListTool() map[string]any {
+	ps, err := jobwake.ListPresence(time.Now())
+	if err != nil {
+		return toolErr(err.Error())
+	}
+	if ps == nil {
+		ps = []jobwake.Presence{}
+	}
+	b, err := json.Marshal(ps)
 	if err != nil {
 		return toolErr(err.Error())
 	}
