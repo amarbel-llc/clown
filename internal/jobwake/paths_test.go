@@ -2,14 +2,24 @@ package jobwake
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
+func isUUIDShaped(s string) bool { return len(s) == 36 && strings.Count(s, "-") == 4 }
+
 func TestSessionKeyResolutionOrder(t *testing.T) {
+	// SPINCLASS_SESSION_ID is the group decoration, NOT the routing key
+	// (RFC-0013 §2.3): with no CLOWN/CLAUDE id it must not supply the key.
 	t.Setenv("CLOWN_SESSION_ID", "")
+	t.Setenv("CLAUDE_SESSION_ID", "")
 	t.Setenv("SPINCLASS_SESSION_ID", "repo/branch")
-	if got := SessionKey(); got != "repo/branch" {
-		t.Fatalf("want spinclass key, got %q", got)
+	if got := SessionKey(); got == "repo/branch" {
+		t.Fatalf("SPINCLASS_SESSION_ID must not supply the routing key, got %q", got)
+	}
+	t.Setenv("CLAUDE_SESSION_ID", "claude-x")
+	if got := SessionKey(); got != "claude-x" {
+		t.Fatalf("want CLAUDE_SESSION_ID when CLOWN unset, got %q", got)
 	}
 	t.Setenv("CLOWN_SESSION_ID", "explicit")
 	if got := SessionKey(); got != "explicit" {
@@ -22,8 +32,22 @@ func TestSessionKeyGeneratedWhenUnset(t *testing.T) {
 	t.Setenv("SPINCLASS_SESSION_ID", "")
 	t.Setenv("CLAUDE_SESSION_ID", "")
 	got := SessionKey()
-	if len(got) != 32 {
-		t.Fatalf("generated key must be 32 hex chars, got %q (len %d)", got, len(got))
+	if !isUUIDShaped(got) {
+		t.Fatalf("generated key must be a UUIDv4, got %q (len %d)", got, len(got))
+	}
+}
+
+func TestGroupKeyAndGroupChannel(t *testing.T) {
+	t.Setenv("SPINCLASS_SESSION_ID", "")
+	if GroupKey() != "" || GroupChannel() != "" {
+		t.Fatal("no spinclass decoration: GroupKey/GroupChannel must be empty")
+	}
+	t.Setenv("SPINCLASS_SESSION_ID", "repo/branch")
+	if got := GroupKey(); got != "repo/branch" {
+		t.Fatalf("GroupKey = %q, want repo/branch", got)
+	}
+	if got, want := GroupChannel(), ChannelID("repo/branch"); got != want {
+		t.Fatalf("GroupChannel = %q, want ChannelID(repo/branch) = %q", got, want)
 	}
 }
 
@@ -36,7 +60,7 @@ func TestResolveSessionKeySource(t *testing.T) {
 		wantKey, wantSource string
 	}{
 		{"clown wins", "clown-key", "repo/branch", "claude-x", "clown-key", "CLOWN_SESSION_ID"},
-		{"spinclass when no clown", "", "repo/branch", "claude-x", "repo/branch", "SPINCLASS_SESSION_ID"},
+		{"claude when no clown; spinclass ignored", "", "repo/branch", "claude-x", "claude-x", "CLAUDE_SESSION_ID"},
 		{"claude when no clown/spin", "", "", "claude-x", "claude-x", "CLAUDE_SESSION_ID"},
 	}
 	for _, tc := range cases {
@@ -51,7 +75,16 @@ func TestResolveSessionKeySource(t *testing.T) {
 		})
 	}
 
-	// All unset → a generated key with source "generated".
+	// SPINCLASS_SESSION_ID alone does NOT supply the key (RFC-0013 §2.3) — it
+	// falls through to a generated UUID.
+	t.Setenv("CLOWN_SESSION_ID", "")
+	t.Setenv("SPINCLASS_SESSION_ID", "repo/branch")
+	t.Setenv("CLAUDE_SESSION_ID", "")
+	if k, s := ResolveSessionKey(); s != "generated" || !isUUIDShaped(k) {
+		t.Fatalf("spinclass-only: got (%q, %q), want a generated UUID", k, s)
+	}
+
+	// All unset → a generated UUIDv4 with source "generated".
 	t.Setenv("CLOWN_SESSION_ID", "")
 	t.Setenv("SPINCLASS_SESSION_ID", "")
 	t.Setenv("CLAUDE_SESSION_ID", "")
@@ -59,8 +92,8 @@ func TestResolveSessionKeySource(t *testing.T) {
 	if s != "generated" {
 		t.Fatalf("all unset: source = %q, want generated", s)
 	}
-	if len(k) != 32 {
-		t.Fatalf("generated key = %q (len %d), want 32 hex", k, len(k))
+	if !isUUIDShaped(k) {
+		t.Fatalf("generated key = %q (len %d), want a UUIDv4", k, len(k))
 	}
 }
 

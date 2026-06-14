@@ -34,11 +34,15 @@ func TestMain(m *testing.M) {
 
 func TestEnsureJobWakeupEnvResolvesAndExportsWhenUnset(t *testing.T) {
 	t.Setenv("CLOWN_SESSION_ID", "")
+	t.Setenv("CLAUDE_SESSION_ID", "")
 	t.Setenv("SPINCLASS_SESSION_ID", "repo/branch")
 	t.Setenv("CLOWN_BIN", "")
 	ensureJobWakeupEnv()
-	if got := os.Getenv("CLOWN_SESSION_ID"); got != "repo/branch" {
-		t.Fatalf("CLOWN_SESSION_ID = %q, want resolved spinclass key %q", got, "repo/branch")
+	// RFC-0013 §2.3: SPINCLASS_SESSION_ID is the group decoration, not the
+	// routing key, so the exported key is a freshly minted per-instance id —
+	// never the spinclass value.
+	if got := os.Getenv("CLOWN_SESSION_ID"); got == "" || got == "repo/branch" {
+		t.Fatalf("CLOWN_SESSION_ID = %q, want a per-instance key (not the spinclass value)", got)
 	}
 	// CLOWN_BIN is set to the running binary's absolute path (os.Executable
 	// resolves under the test binary), so plugin producers can locate clown.
@@ -57,37 +61,6 @@ func TestEnsureJobWakeupEnvLeavesPresetUntouched(t *testing.T) {
 	}
 	if got := os.Getenv("CLOWN_BIN"); got != "/custom/clown" {
 		t.Fatalf("CLOWN_BIN = %q, want preset value left untouched", got)
-	}
-}
-
-func TestSessionKeyDivergenceWarning(t *testing.T) {
-	cases := []struct {
-		name      string
-		clown     string
-		spinclass string
-		wantEmpty bool
-	}{
-		{"both set and differ", "parent/leaked", "repo/branch", false},
-		{"equal", "repo/branch", "repo/branch", true},
-		{"spinclass unset", "repo/branch", "", true},
-		{"clown unset", "", "repo/branch", true},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := sessionKeyDivergenceWarning(tc.clown, tc.spinclass)
-			if tc.wantEmpty {
-				if got != "" {
-					t.Fatalf("warning = %q, want empty", got)
-				}
-				return
-			}
-			if got == "" {
-				t.Fatal("warning = empty, want non-empty divergence warning")
-			}
-			if !strings.Contains(got, tc.clown) || !strings.Contains(got, tc.spinclass) {
-				t.Errorf("warning = %q, want both %q and %q", got, tc.clown, tc.spinclass)
-			}
-		})
 	}
 }
 

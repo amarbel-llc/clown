@@ -425,9 +425,12 @@ The flake produces a `symlinkJoin` of five components:
    journal (`$XDG_STATE_HOME/clown/jobs/`, the at-least-once source of truth)
    plus a lossy UDS-datagram nudge for sub-second latency; only terminal events
    (`succeeded`/`failed`/`cancelled`/`interrupted`) wake, `started`/`progress`
-   are journal-only. The session key resolves `CLOWN_SESSION_ID` →
-   `SPINCLASS_SESSION_ID` → `CLAUDE_SESSION_ID` → generated, and clown exports
-   the resolved value into every plugin MCP server. Plugins consume it via the
+   are journal-only. The per-instance session key resolves `CLOWN_SESSION_ID` →
+   `CLAUDE_SESSION_ID` → a generated UUIDv4 (RFC-0013 §2.3 dropped
+   `SPINCLASS_SESSION_ID` from routing — it is now the group decoration naming
+   the group channel `ChannelID(SPINCLASS_SESSION_ID)` that every clown under a
+   spinclass session watches), and clown exports the resolved value into every
+   plugin MCP server. Plugins consume it via the
    `clown job start|progress|done|read` producer/pull CLI; clown registers the
    `clown job-watch` monitor for the session automatically (synthesized
    `--plugin-dir`). `CLOWN_DISABLE_JOB_WAKEUP=1` is the kill switch. Contract:

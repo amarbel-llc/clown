@@ -1,12 +1,14 @@
 package main
 
 import (
+	"os"
 	"reflect"
 	"regexp"
 	"testing"
 )
 
 func TestPrepareClaudeSessionID_InjectsForFreshSession(t *testing.T) {
+	t.Setenv("CLOWN_SESSION_ID", "") // no per-instance key yet
 	got, id := prepareClaudeSessionID(nil)
 	if id == "" {
 		t.Fatal("expected a generated id, got empty")
@@ -18,9 +20,15 @@ func TestPrepareClaudeSessionID_InjectsForFreshSession(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("forwarded = %v, want %v", got, want)
 	}
+	// The minted id is adopted as the per-instance channel key so the resume id
+	// and the job-wakeup channel are unified (RFC-0013 §2.1).
+	if got := os.Getenv("CLOWN_SESSION_ID"); got != id {
+		t.Errorf("CLOWN_SESSION_ID = %q, want adopted id %q", got, id)
+	}
 }
 
 func TestPrepareClaudeSessionID_PreservesUserSessionID(t *testing.T) {
+	t.Setenv("CLOWN_SESSION_ID", "")
 	args := []string{"--session-id", "abc-123", "--debug"}
 	got, id := prepareClaudeSessionID(args)
 	if id != "abc-123" {
@@ -29,9 +37,14 @@ func TestPrepareClaudeSessionID_PreservesUserSessionID(t *testing.T) {
 	if !reflect.DeepEqual(got, args) {
 		t.Errorf("forwarded mutated unexpectedly: %v", got)
 	}
+	// A user-supplied session id is adopted as the channel key (RFC-0013 §2.1).
+	if got := os.Getenv("CLOWN_SESSION_ID"); got != "abc-123" {
+		t.Errorf("CLOWN_SESSION_ID = %q, want adopted abc-123", got)
+	}
 }
 
 func TestPrepareClaudeSessionID_PreservesUserSessionIDEqualsForm(t *testing.T) {
+	t.Setenv("CLOWN_SESSION_ID", "")
 	args := []string{"--session-id=abc-123"}
 	got, id := prepareClaudeSessionID(args)
 	if id != "abc-123" {
@@ -39,6 +52,9 @@ func TestPrepareClaudeSessionID_PreservesUserSessionIDEqualsForm(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, args) {
 		t.Errorf("forwarded mutated unexpectedly: %v", got)
+	}
+	if got := os.Getenv("CLOWN_SESSION_ID"); got != "abc-123" {
+		t.Errorf("CLOWN_SESSION_ID = %q, want adopted abc-123", got)
 	}
 }
 
@@ -53,6 +69,7 @@ func TestPrepareClaudeSessionID_PreservesResume(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("CLOWN_SESSION_ID", "")
 			got, id := prepareClaudeSessionID(tc.args)
 			if id != "abc-123" {
 				t.Errorf("id = %q, want abc-123", id)
@@ -60,7 +77,39 @@ func TestPrepareClaudeSessionID_PreservesResume(t *testing.T) {
 			if !reflect.DeepEqual(got, tc.args) {
 				t.Errorf("forwarded mutated unexpectedly: %v", got)
 			}
+			// A resumed id is adopted as the channel key so the session arms the
+			// channel matching its resume id (RFC-0013 §2.1).
+			if got := os.Getenv("CLOWN_SESSION_ID"); got != "abc-123" {
+				t.Errorf("CLOWN_SESSION_ID = %q, want adopted abc-123", got)
+			}
 		})
+	}
+}
+
+func TestPrepareClaudeSessionID_ReusesUUIDChannelKey(t *testing.T) {
+	// ensureJobWakeupEnv already minted a UUID per-instance key; the claude
+	// --session-id reuses it (no fresh mint), unifying resume id and channel.
+	const uuid = "11111111-2222-4333-8444-555555555555"
+	t.Setenv("CLOWN_SESSION_ID", uuid)
+	got, id := prepareClaudeSessionID(nil)
+	if id != uuid {
+		t.Errorf("id = %q, want the existing CLOWN_SESSION_ID %q", id, uuid)
+	}
+	if want := []string{"--session-id", uuid}; !reflect.DeepEqual(got, want) {
+		t.Errorf("forwarded = %v, want %v", got, want)
+	}
+}
+
+func TestPrepareClaudeSessionID_RespectsNonUUIDOperatorKey(t *testing.T) {
+	// A non-UUID explicit CLOWN_SESSION_ID is a deliberate operator override: it
+	// stays the channel key; claude gets its own minted UUID.
+	t.Setenv("CLOWN_SESSION_ID", "operator-key")
+	_, id := prepareClaudeSessionID(nil)
+	if !uuidRegexp.MatchString(id) {
+		t.Errorf("claude id = %q, want a minted UUIDv4", id)
+	}
+	if got := os.Getenv("CLOWN_SESSION_ID"); got != "operator-key" {
+		t.Errorf("CLOWN_SESSION_ID = %q, want operator-key left untouched", got)
 	}
 }
 

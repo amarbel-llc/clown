@@ -310,3 +310,68 @@ func TestReplayOnceEmitsUnackedThenNothing(t *testing.T) {
 		t.Fatalf("second ReplayOnce must emit nothing (acked), got %+v", second)
 	}
 }
+
+// TestGroupChannelDelivery: a message addressed to the SPINCLASS_SESSION_ID
+// lands on the group channel ChannelID(SPINCLASS_SESSION_ID) and is delivered to
+// a clown under that decoration, with the same condvar (init-at-end) +
+// exactly-once semantics as broadcast (RFC-0013 §3.2).
+func TestGroupChannelDelivery(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("XDG_RUNTIME_DIR", shortRuntimeDir(t))
+	t.Setenv("SPINCLASS_SESSION_ID", "repo/branch")
+
+	// First attach: init group ack at end — a pre-existing group message is not
+	// replayed.
+	if _, err := Message("repo/branch", "spinclass", "sender", "pre-attach", ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := replayBroadcast(t, "instance-1"); len(got) != 0 {
+		t.Fatalf("first attach must not replay a pre-existing group message, got %+v", got)
+	}
+
+	// A group message sent after attach is delivered exactly once.
+	id, err := Message("repo/branch", "spinclass", "sender", "post-attach", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := replayBroadcast(t, "instance-1")
+	if len(got) != 1 || got[0].Job != id || got[0].Message != "post-attach" {
+		t.Fatalf("group message must be delivered once, got %+v", got)
+	}
+	if again := replayBroadcast(t, "instance-1"); len(again) != 0 {
+		t.Fatalf("group message must be delivered exactly once, got %+v", again)
+	}
+}
+
+// TestGroupChannelSuppressesSenderSelfEcho: a clown's own group-send does not
+// wake itself, but a sibling under the same SPINCLASS_SESSION_ID receives it
+// once (self-echo suppression on the group channel, RFC-0013 §3.2).
+func TestGroupChannelSuppressesSenderSelfEcho(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("XDG_RUNTIME_DIR", shortRuntimeDir(t))
+	t.Setenv("SPINCLASS_SESSION_ID", "repo/branch")
+
+	// Both instances attach (init group ack at end).
+	if got := replayBroadcast(t, "sender-instance"); len(got) != 0 {
+		t.Fatalf("sender first attach must emit nothing, got %+v", got)
+	}
+	if got := replayBroadcast(t, "sibling-instance"); len(got) != 0 {
+		t.Fatalf("sibling first attach must emit nothing, got %+v", got)
+	}
+
+	// The sender group-sends with from = its own per-instance key.
+	id, err := Message("repo/branch", "s", "sender-instance", "team update", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The sender must not self-echo its own group message.
+	if got := replayBroadcast(t, "sender-instance"); len(got) != 0 {
+		t.Fatalf("sender must not self-echo its group message, got %+v", got)
+	}
+	// A sibling under the same decoration receives it exactly once.
+	got := replayBroadcast(t, "sibling-instance")
+	if len(got) != 1 || got[0].Job != id {
+		t.Fatalf("sibling must receive the group message once, got %+v", got)
+	}
+}

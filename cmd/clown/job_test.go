@@ -145,23 +145,35 @@ func TestJobWhoamiJSON(t *testing.T) {
 	}
 }
 
-// The divergence whoami exists to surface: CLOWN_SESSION_ID set to a value that
-// differs from the session's own SPINCLASS_SESSION_ID (the spawn-env leak,
-// clown#135). whoami reports the resolved (leaked) key + source CLOWN_SESSION_ID;
-// the consumer compares sessionKey against SPINCLASS_SESSION_ID to detect it.
-func TestJobWhoamiSurfacesDivergence(t *testing.T) {
-	t.Setenv("CLOWN_SESSION_ID", "driver-key")
+// whoami reports the per-instance routing key (here an explicit CLOWN_SESSION_ID)
+// AND the group decoration + group channel derived from SPINCLASS_SESSION_ID
+// (RFC-0013 §2.4), so a consumer can address this clown alone or its whole
+// spinclass session.
+func TestJobWhoamiReportsKeyAndGroup(t *testing.T) {
+	t.Setenv("CLOWN_SESSION_ID", "instance-key")
 	t.Setenv("SPINCLASS_SESSION_ID", "repo/branch")
 	got := captureStdout(t, func() int { return jobWhoami([]string{"--json"}) })
 	var id struct {
-		SessionKey string `json:"sessionKey"`
-		Source     string `json:"source"`
+		SessionKey          string `json:"sessionKey"`
+		ChannelID           string `json:"channelId"`
+		Source              string `json:"source"`
+		SpinclassDecoration string `json:"spinclassDecoration"`
+		GroupChannelID      string `json:"groupChannelId"`
 	}
 	if err := json.Unmarshal([]byte(strings.TrimSpace(got)), &id); err != nil {
 		t.Fatalf("whoami --json: %v\n%s", err, got)
 	}
-	if id.SessionKey != "driver-key" || id.Source != "CLOWN_SESSION_ID" {
-		t.Fatalf("got (%q, %q), want (driver-key, CLOWN_SESSION_ID)", id.SessionKey, id.Source)
+	if id.SessionKey != "instance-key" || id.Source != "CLOWN_SESSION_ID" {
+		t.Fatalf("got key (%q, %q), want (instance-key, CLOWN_SESSION_ID)", id.SessionKey, id.Source)
+	}
+	if id.ChannelID != jobwake.ChannelID("instance-key") {
+		t.Errorf("channelId = %q, want %q", id.ChannelID, jobwake.ChannelID("instance-key"))
+	}
+	if id.SpinclassDecoration != "repo/branch" {
+		t.Errorf("spinclassDecoration = %q, want repo/branch", id.SpinclassDecoration)
+	}
+	if id.GroupChannelID != jobwake.ChannelID("repo/branch") {
+		t.Errorf("groupChannelId = %q, want %q", id.GroupChannelID, jobwake.ChannelID("repo/branch"))
 	}
 }
 

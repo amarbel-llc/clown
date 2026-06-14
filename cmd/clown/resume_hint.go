@@ -1,10 +1,11 @@
 package main
 
 import (
-	"crypto/rand"
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/amarbel-llc/clown/internal/jobwake"
 )
 
 // prepareClaudeSessionID inspects the user's forwarded args and decides
@@ -17,10 +18,13 @@ import (
 //     session, but we cannot determine its id without a transcript scan.
 //
 //   - --resume <id> or --session-id <id> is already in args: keep args
-//     unchanged and print the hint with the user-supplied id.
+//     unchanged, print the hint with the user-supplied id, and adopt that id
+//     as the per-instance channel key (RFC-0013 §2.1).
 //
-//   - Neither: inject `--session-id <uuid>` so claude lands its
-//     transcript at a known id, and print the hint with that uuid.
+//   - Neither: unify with the per-instance key ensureJobWakeupEnv already
+//     minted (CLOWN_SESSION_ID, when UUID-shaped) as the claude --session-id,
+//     else inject a freshly minted uuid. Either way the resume id and the
+//     job-wakeup channel key are the same id.
 //
 // Returns the (possibly-modified) forwarded args and the id to print
 // (empty string signals "no hint").
@@ -29,13 +33,55 @@ func prepareClaudeSessionID(forwarded []string) (newForwarded []string, sessionI
 		return forwarded, ""
 	}
 	if id := claudeFlagValue(forwarded, "--session-id"); id != "" {
+		adoptInstanceKey(id)
 		return forwarded, id
 	}
 	if id := claudeFlagValue(forwarded, "--resume", "-r"); id != "" {
+		adoptInstanceKey(id)
 		return forwarded, id
 	}
+	cs := os.Getenv("CLOWN_SESSION_ID")
+	if isUUID(cs) {
+		return append([]string{"--session-id", cs}, forwarded...), cs
+	}
 	id := newUUIDv4()
+	if cs == "" {
+		// No per-instance key yet (ensureJobWakeupEnv did not run, e.g. a direct
+		// call) — adopt the minted id so the channel key and the claude
+		// --session-id stay unified. A non-UUID cs is a deliberate operator
+		// override: leave it as the channel and give claude its own id.
+		adoptInstanceKey(id)
+	}
 	return append([]string{"--session-id", id}, forwarded...), id
+}
+
+// adoptInstanceKey sets the per-instance routing key (CLOWN_SESSION_ID) to the
+// resolved claude session id, so a resumed or user-named session arms the
+// channel matching its resume id (RFC-0013 §2.1). It runs inside
+// withClaudeResumeHint before runWithPluginHost spawns any plugin server or the
+// job-watch monitor, so every child inherits the unified key.
+func adoptInstanceKey(id string) { _ = os.Setenv("CLOWN_SESSION_ID", id) }
+
+// isUUID reports whether s is shaped like an RFC 4122 UUID (36 chars, hyphens at
+// the canonical positions, hex elsewhere). It decides whether an existing
+// CLOWN_SESSION_ID can double as the claude --session-id.
+func isUUID(s string) bool {
+	if len(s) != 36 {
+		return false
+	}
+	for i, c := range s {
+		switch i {
+		case 8, 13, 18, 23:
+			if c != '-' {
+				return false
+			}
+		default:
+			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // claudeFlagPresent reports whether any of the supplied flag names
@@ -92,18 +138,7 @@ func withClaudeResumeHint(forwarded []string, run func(forwarded []string) int) 
 	return code
 }
 
-// newUUIDv4 generates a fresh UUIDv4 for use as a claude session id.
-// Uses crypto/rand for randomness; on the extremely unlikely failure
-// returns the zero UUID rather than aborting (the session is still
-// valid and resumable, we just lose entropy).
-func newUUIDv4() string {
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return "00000000-0000-0000-0000-000000000000"
-	}
-	// RFC 4122: set version (4) and variant (10x) bits.
-	b[6] = (b[6] & 0x0f) | 0x40
-	b[8] = (b[8] & 0x3f) | 0x80
-	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
-		b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
-}
+// newUUIDv4 returns a fresh UUIDv4 for use as a claude session id. It delegates
+// to jobwake.NewUUID so the per-instance key generator (RFC-0013 §2.1) has a
+// single implementation.
+func newUUIDv4() string { return jobwake.NewUUID() }

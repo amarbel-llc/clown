@@ -21,27 +21,36 @@ func SessionKey() string {
 	return k
 }
 
-// ResolveSessionKey resolves the active session key AND reports which
-// precedence branch supplied it (RFC-0009 §2): CLOWN_SESSION_ID, else
-// SPINCLASS_SESSION_ID, else CLAUDE_SESSION_ID, else a generated random
-// 128-bit value rendered as 32 lowercase hex digits (source "generated"). The
-// source label backs `clown job whoami` (clown#135 / RFC-0012 §1): surfacing it
-// is what lets a consumer tell a leaked/inherited CLOWN_SESSION_ID (source
-// CLOWN_SESSION_ID, key not matching the session's own SPINCLASS_SESSION_ID)
-// from a correctly-resolved session.
+// ResolveSessionKey resolves the active per-instance session key AND reports
+// which precedence branch supplied it (RFC-0009 §2, as amended by RFC-0013 §2.3):
+// CLOWN_SESSION_ID, else CLAUDE_SESSION_ID, else a freshly generated UUIDv4
+// (source "generated"). SPINCLASS_SESSION_ID is NOT in the routing precedence —
+// RFC-0013 demotes it to a non-routing group decoration (see GroupKey). The
+// source label backs `clown job whoami` (RFC-0012 §1): it lets a consumer tell a
+// leaked/inherited CLOWN_SESSION_ID from a freshly minted per-instance key.
 func ResolveSessionKey() (key, source string) {
 	if v := os.Getenv("CLOWN_SESSION_ID"); v != "" {
 		return v, "CLOWN_SESSION_ID"
 	}
-	if v := os.Getenv("SPINCLASS_SESSION_ID"); v != "" {
-		return v, "SPINCLASS_SESSION_ID"
-	}
 	if v := os.Getenv("CLAUDE_SESSION_ID"); v != "" {
 		return v, "CLAUDE_SESSION_ID"
 	}
-	b := make([]byte, 16)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b), "generated"
+	return NewUUID(), "generated"
+}
+
+// NewUUID returns a fresh RFC 4122 v4 UUID (lowercase, hyphenated). It is the
+// per-instance session-key generator (RFC-0013 §2.1): the generated key doubles
+// as the claude --session-id, so it MUST be UUID-shaped. On the (vanishingly
+// unlikely) rand failure it returns the nil UUID rather than aborting — the
+// session is still resolvable, only entropy is lost.
+func NewUUID() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "00000000-0000-0000-0000-000000000000"
+	}
+	b[6] = (b[6] & 0x0f) | 0x40 // version 4
+	b[8] = (b[8] & 0x3f) | 0x80 // variant 10x
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
 // ChannelID derives the filesystem-safe channel identifier from a session key:
@@ -49,6 +58,24 @@ func ResolveSessionKey() (key, source string) {
 func ChannelID(sessionKey string) string {
 	sum := sha256.Sum256([]byte(sessionKey))
 	return hex.EncodeToString(sum[:16])
+}
+
+// GroupKey returns the group-label decoration for this session — the
+// SPINCLASS_SESSION_ID (RFC-0013 §2.2), or "" when not running under spinclass.
+// It is NOT the routing key (see ResolveSessionKey); it names the group of clown
+// instances that share a spinclass worktree.
+func GroupKey() string { return os.Getenv("SPINCLASS_SESSION_ID") }
+
+// GroupChannel returns the channel a group message fans out on —
+// ChannelID(GroupKey()) (RFC-0013 §3.2) — or "" when there is no group
+// decoration. Every clown under a spinclass session watches this channel, so a
+// message addressed to the SPINCLASS_SESSION_ID reaches all of them.
+func GroupChannel() string {
+	k := GroupKey()
+	if k == "" {
+		return ""
+	}
+	return ChannelID(k)
 }
 
 // ChannelForTarget resolves the channel id for a target session key, applying

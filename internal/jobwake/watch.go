@@ -83,15 +83,19 @@ func ReplayOnce(sessionKey string, emit func(Record) error) error {
 	return serviceChannels(ChannelID(sessionKey), sessionKey, emit)
 }
 
-// serviceChannels runs one monitor cycle for a reader (RFC-0009 §9): replay
-// the reader's own channel against its `.ack.json`, then the broadcast channel
-// against the reader's per-reader ack file. The nudge socket stays
-// own-channel-only; broadcast delivery rides the periodic rescan. sessionKey is
-// the reader's resolved key (RFC-0009 §2); it is passed to the broadcast path
-// for self-echo suppression but NOT to the own-channel path, so a deliberate
-// directed self-message still wakes.
+// serviceChannels runs one monitor cycle for a reader (RFC-0009 §9, RFC-0013
+// §3.2): replay the reader's own channel against its `.ack.json`, then the group
+// channel (ChannelID(SPINCLASS_SESSION_ID), when present), then the broadcast
+// channel — the latter two against per-reader ack files. The nudge socket stays
+// own-channel-only; group and broadcast delivery ride the periodic rescan.
+// sessionKey is the reader's resolved key (RFC-0009 §2); it is passed to the
+// group and broadcast paths for self-echo suppression but NOT to the own-channel
+// path, so a deliberate directed self-message still wakes.
 func serviceChannels(cid, sessionKey string, emit func(Record) error) error {
 	if err := emitUnacked(cid, AckFile(cid), "", true /* reap delivered messages */, emit); err != nil {
+		return err
+	}
+	if err := serviceGroup(cid, sessionKey, emit); err != nil {
 		return err
 	}
 	return serviceBroadcast(cid, sessionKey, emit)
@@ -109,17 +113,39 @@ func serviceBroadcast(readerCID, readerKey string, emit func(Record) error) erro
 		if !os.IsNotExist(err) {
 			return err
 		}
-		return initBroadcastAck(bcid, ackPath)
+		return initAckAtEnd(bcid, ackPath)
 	}
 	return emitUnacked(bcid, ackPath, readerKey, false /* per-reader acks: do not reap */, emit)
 }
 
-// initBroadcastAck persists a first-attach ack covering every waking record
-// already in the broadcast channel, without emitting any of them. The channel
-// dir is created (mode 0700) if needed so the ack file persists even when the
-// broadcast channel is empty — a restart must not look like first attach
-// again (RFC-0009 §9).
-func initBroadcastAck(bcid, ackPath string) error {
+// serviceGroup replays the group channel for one reader (RFC-0013 §3.2): the
+// channel ChannelID(SPINCLASS_SESSION_ID) that every clown sharing a spinclass
+// worktree watches, so a message addressed to the SPINCLASS_SESSION_ID fans out
+// to all of them. Same condvar / per-reader-ack / self-echo semantics as
+// serviceBroadcast. A no-op when there is no group decoration, or when the group
+// channel equals the reader's own channel (an explicit CLOWN_SESSION_ID set to
+// the spinclass key — no distinct group).
+func serviceGroup(readerCID, readerKey string, emit func(Record) error) error {
+	gcid := GroupChannel()
+	if gcid == "" || gcid == readerCID {
+		return nil
+	}
+	ackPath := AckFileFor(gcid, readerCID)
+	if _, err := os.Stat(ackPath); err != nil {
+		if !os.IsNotExist(err) {
+			return err
+		}
+		return initAckAtEnd(gcid, ackPath)
+	}
+	return emitUnacked(gcid, ackPath, readerKey, false /* per-reader acks: do not reap */, emit)
+}
+
+// initAckAtEnd persists a first-attach ack covering every waking record already
+// in the channel, without emitting any of them — condvar init-at-end semantics
+// shared by the broadcast and group channels (RFC-0009 §9, RFC-0013 §3.2). The
+// channel dir is created (mode 0700) if needed so the ack file persists even when
+// the channel is empty — a restart must not look like first attach again.
+func initAckAtEnd(bcid, ackPath string) error {
 	waking, err := scanWaking(bcid)
 	if err != nil {
 		return err

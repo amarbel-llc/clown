@@ -319,23 +319,24 @@ a malformed
 is a usage error
 .Pq exit Li 2 .
 .It Nm clown job whoami Op Fl -json
-Print this session's resolved identity: the session key, its derived channel
-id, and the
+Print this clown instance's resolved identity: the per-instance session key, its
+derived channel id, the
 .Em source
 \(em which precedence branch supplied the key (CLOWN_SESSION_ID,
-SPINCLASS_SESSION_ID, CLAUDE_SESSION_ID, or generated; see
-.Sx SESSION KEY ) .
-It is the authoritative answer to which channel this session's producers and
-monitor resolve to, and a pure read available regardless of
+CLAUDE_SESSION_ID, or generated; see
+.Sx SESSION KEY ) \(em
+and, when running under spinclass, the group decoration
+.Pq Ev SPINCLASS_SESSION_ID
+and its derived group channel.
+It is the authoritative answer to which channels this instance's producers and
+monitor resolve to \(em the per-instance channel that addresses this clown
+alone, and the group channel that fans out to every clown under the same
+spinclass session \(em and a pure read available regardless of
 .Ev CLOWN_DISABLE_JOB_WAKEUP .
-It is the diagnostic for directed-wake divergence: a leaked or inherited
-.Ev CLOWN_SESSION_ID
-shows source CLOWN_SESSION_ID with a key that does not match the session's own
-.Ev SPINCLASS_SESSION_ID .
 With
 .Fl -json
-the identity is a single JSON object with keys sessionKey, channelId, and
-source.
+the identity is a single JSON object with keys sessionKey, channelId, source,
+and (under spinclass) spinclassDecoration and groupChannelId.
 .It Nm clown job-watch Op Fl -once
 Run the channel monitor.
 It resolves the session key (see
@@ -398,25 +399,31 @@ disabled, the server is not injected.
 A
 .Em session key
 names the agent session a wakeup is delivered to.
-The active session key is resolved in this order:
+The active per-instance session key is resolved in this order (RFC-0013,
+section 2.3):
 .Bl -enum -offset indent
 .It
 .Ev CLOWN_SESSION_ID ,
 if set and non-empty.
 .It
 otherwise
-.Ev SPINCLASS_SESSION_ID ,
-if set and non-empty (the spinclass
-.Ar repo Ns Li / Ns Ar branch
-key).
-.It
-otherwise
 .Ev CLAUDE_SESSION_ID ,
 if set and non-empty.
 .It
-otherwise a clown-generated random 128-bit value rendered as 32
-lowercase hex digits.
+otherwise a clown-generated UUIDv4.
 .El
+.Pp
+.Ev SPINCLASS_SESSION_ID
+is
+.Em not
+in this precedence: it is the group
+.Em decoration
+(the spinclass
+.Ar repo Ns Li / Ns Ar branch
+label) naming the group of clown instances that share a worktree.
+A message addressed to it fans out on the group channel
+.Pq Li ChannelID Ns Pq Ev SPINCLASS_SESSION_ID ,
+which every clown under that session also watches.
 .Pp
 .Nm clown
 exports the resolved value as
@@ -513,15 +520,16 @@ the resolved key into (see
 .It Ev SPINCLASS_SESSION_ID
 The spinclass
 .Ar repo Ns Li / Ns Ar branch
-session key, consulted when
+label.
+It is the group
+.Em decoration ,
+not a routing-key source (RFC-0013, section 2.3): it names the group channel
+.Pq Li ChannelID Ns Pq Ev SPINCLASS_SESSION_ID
+that every clown under the session also watches.
+.It Ev CLAUDE_SESSION_ID
+Consulted when
 .Ev CLOWN_SESSION_ID
 is unset.
-.It Ev CLAUDE_SESSION_ID
-Consulted when neither
-.Ev CLOWN_SESSION_ID
-nor
-.Ev SPINCLASS_SESSION_ID
-is set.
 .It Ev CLOWN_BIN
 Absolute path to the clown binary, exported by
 .Nm clown
