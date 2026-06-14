@@ -2,6 +2,7 @@ package jobwake
 
 import (
 	"context"
+	"errors"
 	"os"
 	"sync"
 	"testing"
@@ -374,4 +375,34 @@ func TestGroupChannelSuppressesSenderSelfEcho(t *testing.T) {
 	if len(got) != 1 || got[0].Job != id {
 		t.Fatalf("sibling must receive the group message once, got %+v", got)
 	}
+}
+
+// TestWatchSingletonSecondNoOps pins the clown#132 singleton: while one monitor
+// holds the per-channel lock, a second Watch over the same channel returns
+// ErrAlreadyWatching (a clean no-op) rather than becoming a second deliverer;
+// releasing the lock lets a fresh acquire succeed.
+func TestWatchSingletonSecondNoOps(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("XDG_RUNTIME_DIR", shortRuntimeDir(t))
+	t.Setenv("CLOWN_SESSION_ID", "k")
+
+	unlock, err := acquireWatchLock(ChannelID("k"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// With the lock held, Watch returns immediately (no socket bind, no loop).
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if got := Watch(ctx, "k", func(Record) error { return nil }); !errors.Is(got, ErrAlreadyWatching) {
+		t.Fatalf("second Watch: got %v, want ErrAlreadyWatching", got)
+	}
+
+	// Releasing the lock lets a fresh acquire succeed (the singleton is now free).
+	unlock()
+	unlock2, err := acquireWatchLock(ChannelID("k"))
+	if err != nil {
+		t.Fatalf("after release, acquire failed: %v", err)
+	}
+	unlock2()
 }

@@ -27,6 +27,16 @@ const presenceInterval = 30 * time.Second
 // returns nil on a clean ctx cancel.
 func Watch(ctx context.Context, sessionKey string, emit func(Record) error) error {
 	cid := ChannelID(sessionKey)
+	// Singleton: exactly one live monitor per channel (clown#132). A second
+	// job-watch over the same channel no-ops with ErrAlreadyWatching rather than
+	// becoming a second deliverer racing the first on the shared ack. The flock
+	// auto-releases on process death. Acquired before any work (sweep/replay/bind)
+	// so a no-op'd monitor touches nothing.
+	unlock, err := acquireWatchLock(cid)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	// One-shot journal GC + ack reaping at monitor start (clown#113).
 	// Best-effort by construction; runs neither on ticks nor in ReplayOnce.
 	sweep(cid, time.Now())

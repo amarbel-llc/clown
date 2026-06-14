@@ -349,6 +349,13 @@ A clean interrupt
 .Pq Dv SIGINT No or Dv SIGTERM
 causes a graceful exit with status
 .Li 0 .
+The monitor is a per-channel singleton (clown#132): it takes an exclusive lock,
+so a second
+.Nm clown job-watch
+over the same channel exits
+.Li 0
+as a no-op rather than becoming a second deliverer.
+The lock auto-releases on exit (or process death).
 The monitor deliberately ignores stdin: monitor hosts spawn it with an
 immediately-EOF stdin, so exiting on stdin EOF would kill the monitor at
 session start.

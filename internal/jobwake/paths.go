@@ -150,3 +150,11 @@ func AckFile(channelID string) string {
 func SocketPath(channelID string) string {
 	return filepath.Join(runtimeDir(), channelID+".sock")
 }
+
+// WatchLockFile is the per-channel job-watch singleton lock (clown#132): a
+// sibling of the nudge socket in the per-boot runtime dir, so a crashed
+// monitor's flock releases with its fd and the lock state never persists across
+// boots.
+func WatchLockFile(channelID string) string {
+	return filepath.Join(runtimeDir(), channelID+".watch.lock")
+}

@@ -410,6 +410,12 @@ func runJobWatch(args []string) int {
 	if ctx.Err() != nil {
 		return 0 // SIGINT/SIGTERM is a normal monitor shutdown
 	}
+	if errors.Is(err, jobwake.ErrAlreadyWatching) {
+		// Singleton (clown#132): another live monitor already owns this channel,
+		// so this one is a no-op, not a failure.
+		fmt.Fprintln(os.Stderr, "clown job-watch: another monitor is already watching this channel; exiting")
+		return 0
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown job-watch: %v\n", err)
 		return 1
