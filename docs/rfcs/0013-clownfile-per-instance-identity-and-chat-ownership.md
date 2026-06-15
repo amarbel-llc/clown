@@ -185,6 +185,12 @@ remains spinclass's (`internal/remote`, FDR-0011).
 
 ##### Open question — detached-spawn executor
 
+> **Resolved by [RFC-0014].** Sasha (2026-06-15) settled this: the orchestrator
+> (spinclass) exits multiplexing entirely and clown owns the detached-spawn
+> executor — option (b) below. The normative spawn wire (spawn-mode signal,
+> prompt-return guarantee, `SessionStart`-fires, decoration passthrough) lives in
+> RFC-0014 §5. The discussion below is retained for context.
+
 `start` and `resume` are unambiguously clown-executed (rule 3: clown self-wraps on
 boot). The executor of `spawn`/`spawn-entry`/`spawn-window` is NOT yet settled and
 MUST be resolved before those templates are relied upon:
