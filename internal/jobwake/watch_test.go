@@ -312,14 +312,14 @@ func TestReplayOnceEmitsUnackedThenNothing(t *testing.T) {
 	}
 }
 
-// TestGroupChannelDelivery: a message addressed to the SPINCLASS_SESSION_ID
-// lands on the group channel ChannelID(SPINCLASS_SESSION_ID) and is delivered to
-// a clown under that decoration, with the same condvar (init-at-end) +
-// exactly-once semantics as broadcast (RFC-0013 §3.2).
+// TestGroupChannelDelivery: a message addressed to the group-id lands on the
+// group channel ChannelID(group-id) and is delivered to a clown under that
+// decoration, with the same condvar (init-at-end) + exactly-once semantics as
+// broadcast (RFC-0013 §3.2).
 func TestGroupChannelDelivery(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("XDG_RUNTIME_DIR", shortRuntimeDir(t))
-	t.Setenv("SPINCLASS_SESSION_ID", "repo/branch")
+	t.Setenv("CLOWN_GROUP_ID", "repo/branch")
 
 	// First attach: init group ack at end — a pre-existing group message is not
 	// replayed.
@@ -345,12 +345,12 @@ func TestGroupChannelDelivery(t *testing.T) {
 }
 
 // TestGroupChannelSuppressesSenderSelfEcho: a clown's own group-send does not
-// wake itself, but a sibling under the same SPINCLASS_SESSION_ID receives it
-// once (self-echo suppression on the group channel, RFC-0013 §3.2).
+// wake itself, but a sibling under the same group-id receives it once (self-echo
+// suppression on the group channel, RFC-0013 §3.2).
 func TestGroupChannelSuppressesSenderSelfEcho(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("XDG_RUNTIME_DIR", shortRuntimeDir(t))
-	t.Setenv("SPINCLASS_SESSION_ID", "repo/branch")
+	t.Setenv("CLOWN_GROUP_ID", "repo/branch")
 
 	// Both instances attach (init group ack at end).
 	if got := replayBroadcast(t, "sender-instance"); len(got) != 0 {

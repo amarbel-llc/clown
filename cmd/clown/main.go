@@ -189,6 +189,10 @@ func run(rawArgs []string) int {
 	// its presence gates off the multiplexer re-wrap (loop guard) and its value
 	// pins identity (resolveSessionIdentity / runWithFlags).
 	attachedID, rawArgs = extractAttachID(rawArgs)
+	// --clown-attach=spawn (RFC-0014 §5): a detached-worker launch. Strip it here
+	// too so no downstream parser sees it; the mode decision in runWithFlags reads
+	// attachSpawn.
+	attachSpawn, rawArgs = extractAttachSpawn(rawArgs)
 
 	if len(rawArgs) > 0 {
 		switch rawArgs[0] {
@@ -269,6 +273,20 @@ func runWithFlags(flags parsedFlags) int {
 	}
 	applyClownfileProfile(&flags, cf.Profile)
 
+	// RFC-0014 §2/§4: resolve the group-id and presence description from the
+	// clownfile via env interpolation, then export them as CLOWN_GROUP_ID /
+	// CLOWN_GROUP_DESCRIPTION. Unlike the per-instance key (threaded explicitly,
+	// clown#136), the group decoration SHOULD be shared, so it goes on clown's own
+	// env — jobwake (GroupKey), the producers, and the claude subtree's ad-hoc
+	// `clown chat`/`job` all inherit the same group. Empty ⇒ ungrouped, no export.
+	flags.groupID = clownfile.ResolveEnv(cf.Attach.GroupID)
+	if flags.groupID != "" {
+		_ = os.Setenv("CLOWN_GROUP_ID", flags.groupID)
+	}
+	if desc := clownfile.ResolveEnv(cf.Attach.Description); desc != "" {
+		_ = os.Setenv("CLOWN_GROUP_DESCRIPTION", desc)
+	}
+
 	profiles, err := loadProfiles("")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown: loading profiles: %v\n", err)
@@ -334,6 +352,12 @@ func runWithFlags(flags parsedFlags) int {
 	attachMode := clownfile.ModeStart
 	if claudeFlagValue(flags.forwarded, "--resume", "-r", "--session-id") != "" {
 		attachMode = clownfile.ModeResume
+	}
+	// A detached-worker launch (orchestrator passes --clown-attach=spawn,
+	// RFC-0014 §5) is exclusive: it resolves the [attach].spawn template, never
+	// start/resume.
+	if attachSpawn {
+		attachMode = clownfile.ModeSpawn
 	}
 
 	if flags.provider == "claude" && !flags.naked {
@@ -1549,6 +1573,10 @@ type parsedFlags struct {
 	// runWithPluginHost / runCodex. Empty for subcommand paths that never
 	// reach runWithFlags.
 	identity sessionIdentity
+	// groupID is the resolved clownfile [attach].group-id (env-interpolated,
+	// RFC-0014 §2), used for the {group} resume title. Exported as CLOWN_GROUP_ID
+	// so jobwake + the claude subtree resolve the same group; "" ⇒ ungrouped.
+	groupID string
 	// resumeHintID is the claude session id to print as the post-exit
 	// `clown resume` hint (RFC-0013 §2.1). Set by decideClaudeSession via
 	// runWithFlags for the claude provider; empty means no hint.

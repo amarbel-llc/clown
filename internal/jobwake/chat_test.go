@@ -5,12 +5,12 @@ import (
 	"testing"
 )
 
-func chatEnv(t *testing.T, sessionKey, spinclass string) {
+func chatEnv(t *testing.T, sessionKey, group string) {
 	t.Helper()
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("XDG_RUNTIME_DIR", shortRuntimeDir(t))
 	t.Setenv("CLOWN_SESSION_ID", sessionKey)
-	t.Setenv("SPINCLASS_SESSION_ID", spinclass)
+	t.Setenv("CLOWN_GROUP_ID", group)
 }
 
 func TestSendChatWritesRecordAndSpoolBody(t *testing.T) {
@@ -96,7 +96,7 @@ func TestChatSurvivesMonitorReap(t *testing.T) {
 	}
 }
 
-// A chat addressed to SPINCLASS_SESSION_ID is read via the reader's group channel.
+// A chat addressed to the group-id is read via the reader's group channel.
 func TestReadChatGroupScope(t *testing.T) {
 	chatEnv(t, "instance-1", "repo/branch")
 	if _, err := SendChat("repo/branch", "sibling", "src", "team", "group-body"); err != nil {

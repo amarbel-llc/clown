@@ -108,7 +108,7 @@ func ReplayOnce(sessionKey string, emit func(Record) error) error {
 
 // serviceChannels runs one monitor cycle for a reader (RFC-0009 §9, RFC-0013
 // §3.2): replay the reader's own channel against its `.ack.json`, then the group
-// channel (ChannelID(SPINCLASS_SESSION_ID), when present), then the broadcast
+// channel (ChannelID(group-id), when present), then the broadcast
 // channel — the latter two against per-reader ack files. The nudge socket stays
 // own-channel-only; group and broadcast delivery ride the periodic rescan.
 // sessionKey is the reader's resolved key (RFC-0009 §2); it is passed to the
@@ -142,9 +142,9 @@ func serviceBroadcast(readerCID, readerKey string, emit func(Record) error) erro
 }
 
 // serviceGroup replays the group channel for one reader (RFC-0013 §3.2): the
-// channel ChannelID(SPINCLASS_SESSION_ID) that every clown sharing a spinclass
-// worktree watches, so a message addressed to the SPINCLASS_SESSION_ID fans out
-// to all of them. Same condvar / per-reader-ack / self-echo semantics as
+// channel ChannelID(group-id) that every clown sharing a group-id watches, so a
+// message addressed to the group-id fans out to all of them (RFC-0014 §2/§3).
+// Same condvar / per-reader-ack / self-echo semantics as
 // serviceBroadcast. A no-op when there is no group decoration, or when the group
 // channel equals the reader's own channel (an explicit CLOWN_SESSION_ID set to
 // the spinclass key — no distinct group).

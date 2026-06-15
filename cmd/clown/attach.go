@@ -17,6 +17,18 @@ import (
 // provider subtree would inherit (reuses the clown#136 threading).
 const attachIDFlag = "--clown-attach-id"
 
+// attachModeFlag selects the [attach] mode for a fresh launch (RFC-0014 §5).
+// Only "spawn" (a detached-worker launch) is acted on today — start/resume are
+// auto-detected from the forwarded args — but any value is stripped so it never
+// reaches a downstream parser. The orchestrator (e.g. `sc spawn`) passes
+// --clown-attach=spawn.
+const attachModeFlag = "--clown-attach"
+
+// attachSpawn records --clown-attach=spawn from the outer invocation: the
+// detached-worker launch signal (RFC-0014 §5). Like attachedID it is captured
+// and stripped in run() before any flag parsing.
+var attachSpawn bool
+
 // attachedID is the pinned per-instance id when this clown is the inner process
 // of an [attach] re-exec (set from attachIDFlag by extractAttachID in run()).
 // Empty means this is the outer/un-attached process. Package-level because the
@@ -46,6 +58,32 @@ func extractAttachID(args []string) (id string, rest []string) {
 		rest = append(rest, a)
 	}
 	return id, rest
+}
+
+// extractAttachSpawn removes the attachModeFlag (and its value) from args and
+// reports whether spawn mode was selected (RFC-0014 §5). Supports both
+// "--clown-attach spawn" and "--clown-attach=spawn". It must run AFTER
+// extractAttachID so the longer "--clown-attach-id" is already gone; it matches
+// only the exact "--clown-attach" token or "--clown-attach=" prefix, so it would
+// not swallow "--clown-attach-id" regardless of order.
+func extractAttachSpawn(args []string) (spawn bool, rest []string) {
+	rest = make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == attachModeFlag {
+			if i+1 < len(args) {
+				spawn = spawn || args[i+1] == "spawn"
+				i++ // consume the value
+			}
+			continue
+		}
+		if v, ok := stringsCutPrefix(a, attachModeFlag+"="); ok {
+			spawn = spawn || v == "spawn"
+			continue
+		}
+		rest = append(rest, a)
+	}
+	return spawn, rest
 }
 
 // stringsCutPrefix is strings.CutPrefix (Go 1.20+) inlined to avoid widening
@@ -97,7 +135,7 @@ func maybeReexecMultiplexer(cf clownfile.Clownfile, flags parsedFlags, mode clow
 	}
 
 	if mode == clownfile.ModeResume {
-		if title := cf.Attach.Title(id); title != "" {
+		if title := cf.Attach.Title(id, flags.groupID); title != "" {
 			// OSC-2 window title; best-effort, before handing the terminal to the mux.
 			fmt.Fprintf(os.Stderr, "\033]2;%s\007", title)
 		}

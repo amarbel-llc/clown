@@ -308,9 +308,12 @@ itself under the configured `start`/`resume` template on boot
 after the per-instance id is resolved), pinning the id via the hidden
 `--clown-attach-id` flag — an arg, not env, so it reuses the clown#136
 hygiene and the inner run skips re-wrapping (loop guard). `{id}`/`{entry}`
-substitute (`{entry}` splices clown's argv); `resume-title` emits an OSC-2
-title; `spawn`/`spawn-entry`/`spawn-window` are parsed but schema-only this
-release (executor unresolved — RFC §1.3 open question). `CLOWN_ATTACH_FORCE=1`
+substitute (`{entry}` splices clown's argv); `resume-title` (default `{group}`,
+RFC-0014) emits an OSC-2 title resolving to the group-id, falling back to `{id}`
+when ungrouped; `spawn` IS executed for a detached-worker launch when the
+orchestrator passes the hidden `--clown-attach=spawn` arg (`clownfile.ModeSpawn`,
+RFC-0014 §5: clown owns the detached-spawn executor — the resolved §1.3 open
+question), while `spawn-window` stays schema-only. `CLOWN_ATTACH_FORCE=1`
 overrides the interactive-TTY gate; a configured-but-uninstalled multiplexer
 degrades to inline rather than erroring (clown#146), so the burned-in default is
 safe on hosts without the mux. clown ships a **burned-in default clownfile**
@@ -318,11 +321,18 @@ safe on hosts without the mux. clown ships a **burned-in default clownfile**
 `buildcfg.DefaultClownfilePath`) carrying the `[attach]` defaults; `clownfile.Discover`
 merges it as the lowest-precedence base beneath the `$PWD→$HOME` ascent, so a worktree
 self-wraps without an explicit table and any user `clownfile` still overrides per key
-(`multiplexer = "none"` opts out). Those defaults lock `spawn`/`spawn-entry`/`resume-title`
-to spinclass's real `[session-entry]` defaults; `start`/`resume` are clown-native. The
-spinclass `[session-entry]` takeover (spinclass dropping its mux defaults) is the lockstep
-spinclass-side half (FDR-0017 Piece 1); remote attach stays spinclass. Man page:
-`clownfile(5)`.
+(`multiplexer = "none"` opts out). Those defaults lock `spawn`/`spawn-entry`
+to spinclass's real `[session-entry]` defaults; `start`/`resume` are clown-native.
+**The awareness seam (RFC-0014)**: `[attach].group-id` (env-interpolated, default
+`"${SPINCLASS_SESSION_ID}"`) is exported as `CLOWN_GROUP_ID` and keys the group
+chat channel, presence decoration, and the `{group}` title; clown no longer reads
+`SPINCLASS_SESSION_ID` by name (`jobwake.GroupKey()` reads `CLOWN_GROUP_ID`),
+`[attach].description` (`CLOWN_GROUP_DESCRIPTION`) is the presence label, and the
+presence index is the clown→spinclass half spinclass consumes for liveness +
+`sc list`. The spinclass `[session-entry]` takeover (spinclass dropping its mux
+defaults + wiring `--clown-attach=spawn`/presence) is the lockstep spinclass-side
+half (FDR-0017 Piece 1); remote attach stays spinclass. Man pages: `clownfile(5)`;
+RFCs: RFC-0013 §1.3, RFC-0014.
 
 ## Architecture
 

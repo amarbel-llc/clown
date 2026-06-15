@@ -74,13 +74,12 @@ func runJob(args []string) int {
 }
 
 // jobWhoami prints the resolved per-instance session key, its derived channel
-// id, the precedence source that supplied the key, and — when running under
-// spinclass — the group decoration (SPINCLASS_SESSION_ID) and its derived group
-// channel (RFC-0012 §1, RFC-0013 §2.4). It is the authoritative read of "what
-// channels does this clown resolve to": the per-instance channel a consumer
-// addresses to reach this clown alone, and the group channel that fans out to
-// every clown under the same spinclass session. Pure read: unaffected by
-// CLOWN_DISABLE_JOB_WAKEUP.
+// id, the precedence source that supplied the key, and — when grouped — the
+// group decoration (group-id, RFC-0014 §2) and its derived group channel
+// (RFC-0012 §1, RFC-0013 §2.4). It is the authoritative read of "what channels
+// does this clown resolve to": the per-instance channel a consumer addresses to
+// reach this clown alone, and the group channel that fans out to every clown
+// sharing a group-id. Pure read: unaffected by CLOWN_DISABLE_JOB_WAKEUP.
 func jobWhoami(args []string) int {
 	fs := flag.NewFlagSet("clown job whoami", flag.ContinueOnError)
 	asJSON := fs.Bool("json", false, "emit the identity as a single JSON object")
@@ -93,12 +92,12 @@ func jobWhoami(args []string) int {
 	groupChannel := jobwake.GroupChannel()
 	if *asJSON {
 		b, err := json.Marshal(struct {
-			SessionKey          string `json:"sessionKey"`
-			ChannelID           string `json:"channelId"`
-			Source              string `json:"source"`
-			SpinclassDecoration string `json:"spinclassDecoration,omitempty"`
-			GroupChannelID      string `json:"groupChannelId,omitempty"`
-		}{SessionKey: key, ChannelID: cid, Source: source, SpinclassDecoration: decoration, GroupChannelID: groupChannel})
+			SessionKey     string `json:"sessionKey"`
+			ChannelID      string `json:"channelId"`
+			Source         string `json:"source"`
+			Decoration     string `json:"decoration,omitempty"`
+			GroupChannelID string `json:"groupChannelId,omitempty"`
+		}{SessionKey: key, ChannelID: cid, Source: source, Decoration: decoration, GroupChannelID: groupChannel})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "clown job whoami: %v\n", err)
 			return 1
@@ -106,7 +105,7 @@ func jobWhoami(args []string) int {
 		fmt.Println(string(b))
 		return 0
 	}
-	fmt.Printf("sessionKey:          %s\nchannelId:           %s\nsource:              %s\nspinclassDecoration: %s\ngroupChannelId:      %s\n", key, cid, source, decoration, groupChannel)
+	fmt.Printf("sessionKey:     %s\nchannelId:      %s\nsource:         %s\ndecoration:     %s\ngroupChannelId: %s\n", key, cid, source, decoration, groupChannel)
 	return 0
 }
 

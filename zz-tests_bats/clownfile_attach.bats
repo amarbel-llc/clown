@@ -24,9 +24,14 @@ setup() {
   STUB_BIN="$BATS_TEST_TMPDIR/bin"
   mkdir -p "$STUB_BIN"
   MUX_ARGV="$BATS_TEST_TMPDIR/zmx-argv"
+  MUX_GROUP="$BATS_TEST_TMPDIR/zmx-group"
+  # The stub records its argv AND the inherited CLOWN_GROUP_ID — clown exports
+  # the resolved group-id onto its own env before the re-exec (RFC-0014 §2), so
+  # syscall.Exec(os.Environ()) carries it into the multiplexer.
   cat >"$STUB_BIN/zmx" <<EOF
 #!$(command -v bash)
 printf '%s\n' "\$@" >"$MUX_ARGV"
+printf '%s' "\${CLOWN_GROUP_ID-}" >"$MUX_GROUP"
 exit 0
 EOF
   chmod +x "$STUB_BIN/zmx"
@@ -59,4 +64,48 @@ EOF
   [ "${lines[6]}" = "claude" ]
   [ "${lines[7]}" = "--" ]
   [ "${lines[8]}" = "--version" ]
+}
+
+# --clown-attach=spawn (RFC-0014 §5) resolves the [attach].spawn template (with
+# --detach) rather than start/resume, so the worker detaches and clown returns.
+@test "clownfile [attach] spawn mode resolves the --detach spawn template" {
+  cat >"$HOME/clownfile" <<'EOF'
+[attach]
+multiplexer = "zmx"
+spawn = ["zmx", "attach", "{id}", "--detach", "{entry}"]
+EOF
+
+  cd "$HOME"
+  run env CLOWN_ATTACH_FORCE=1 CLOWN_SESSION_ID=spawn-sess \
+    "$CLOWN_BIN" --clown-attach=spawn --provider claude -- --version
+  [ "$status" -eq 0 ]
+  [ -f "$MUX_ARGV" ]
+
+  run cat "$MUX_ARGV"
+  [ "${lines[0]}" = "attach" ]
+  [ "${lines[1]}" = "spawn-sess" ]
+  [ "${lines[2]}" = "--detach" ]          # the spawn template, not start/resume
+  [[ "${lines[3]}" == *clown ]]            # the spliced {entry}[0]
+  [ "${lines[4]}" = "--clown-attach-id" ] # loop guard pinned for the inner worker
+  [ "${lines[5]}" = "spawn-sess" ]
+}
+
+# group-id is env-interpolated and exported as CLOWN_GROUP_ID (RFC-0014 §2), so
+# the multiplexer (and the claude subtree / producers) inherit the resolved group.
+@test "clownfile [attach] group-id interpolates SPINCLASS_SESSION_ID into CLOWN_GROUP_ID" {
+  cat >"$HOME/clownfile" <<'EOF'
+[attach]
+multiplexer = "zmx"
+group-id = "team-${SPINCLASS_SESSION_ID}"
+start = ["zmx", "attach", "{id}", "{entry}"]
+EOF
+
+  cd "$HOME"
+  run env CLOWN_ATTACH_FORCE=1 CLOWN_SESSION_ID=g-sess SPINCLASS_SESSION_ID=repo/branch \
+    "$CLOWN_BIN" --provider claude -- --version
+  [ "$status" -eq 0 ]
+  [ -f "$MUX_GROUP" ]
+
+  run cat "$MUX_GROUP"
+  [ "${lines[0]}" = "team-repo/branch" ]  # ${SPINCLASS_SESSION_ID} composed into group-id
 }

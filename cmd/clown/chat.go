@@ -34,10 +34,10 @@ func runChat(args []string) int {
 
 // chatSend emits a chat message: a one-line subject (the wake) plus an optional
 // full body (stored in the spool for chat read). target is a session key, a
-// SPINCLASS_SESSION_ID group, or "*" for broadcast.
+// group-id group, or "*" for broadcast.
 func chatSend(args []string) int {
 	fs := flag.NewFlagSet("clown chat send", flag.ContinueOnError)
-	target := fs.String("target", "", "recipient: a session key, a SPINCLASS_SESSION_ID group, or * for broadcast")
+	target := fs.String("target", "", "recipient: a session key, a group-id group, or * for broadcast")
 	from := fs.String("from", "", "sender session key (default: this session)")
 	source := fs.String("source", "", "emitting source label")
 	subject := fs.String("subject", "", "one-line subject (the wake notification)")
@@ -157,7 +157,7 @@ func chatList(args []string) int {
 }
 
 // presenceNames maps per-instance session keys to their readable description
-// (SPINCLASS_DESCRIPTION) from the presence index, for sender enrichment.
+// (CLOWN_GROUP_DESCRIPTION) from the presence index, for sender enrichment.
 func presenceNames() map[string]string {
 	m := map[string]string{}
 	ps, err := jobwake.ListPresence(time.Now())

@@ -32,6 +32,32 @@ func TestExtractAttachID(t *testing.T) {
 	}
 }
 
+func TestExtractAttachSpawn(t *testing.T) {
+	cases := []struct {
+		name      string
+		args      []string
+		wantSpawn bool
+		wantArg   []string
+	}{
+		{"absent", []string{"--provider", "claude"}, false, []string{"--provider", "claude"}},
+		{"equals form", []string{"--clown-attach=spawn", "--", "hi"}, true, []string{"--", "hi"}},
+		{"space form", []string{"--clown-attach", "spawn", "resume"}, true, []string{"resume"}},
+		{"other mode stripped, not spawn", []string{"--clown-attach=start", "x"}, false, []string{"x"}},
+		{"does not swallow --clown-attach-id", []string{"--clown-attach-id", "k", "y"}, false, []string{"--clown-attach-id", "k", "y"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			spawn, rest := extractAttachSpawn(tc.args)
+			if spawn != tc.wantSpawn {
+				t.Errorf("spawn = %v, want %v", spawn, tc.wantSpawn)
+			}
+			if !reflect.DeepEqual(rest, tc.wantArg) {
+				t.Errorf("rest = %v, want %v", rest, tc.wantArg)
+			}
+		})
+	}
+}
+
 // resolveSessionIdentity pins to attachedID (the [attach] re-exec id) at top
 // precedence over the env-derived key (clown#145 / RFC-0013 §1.3).
 func TestResolveSessionIdentityHonorsAttachID(t *testing.T) {

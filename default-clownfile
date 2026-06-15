@@ -8,28 +8,30 @@
 #
 # The [attach] defaults below match spinclass's confirmed real [session-entry]
 # defaults where one exists (FDR-0017 Piece 1), so the takeover is mechanical:
-#   - spawn / spawn-entry / resume-title: equal to spinclass's real defaults.
+#   - spawn / spawn-entry: equal to spinclass's real defaults.
 #   - start / resume: clown-native (spinclass shipped no baked mux template here;
 #     clown now owns the interactive self-wrap).
-# Placeholders: {id} = the per-instance session key (RFC-0013 §2); the exact
-# element "{entry}" splices clown's own entrypoint argv.
+# Placeholders: {id} = the per-instance session key (RFC-0013 §2); {group} = the
+# resolved group-id (RFC-0014, title only, falls back to {id} when empty); the
+# exact element "{entry}" splices clown's own entrypoint argv.
 
 [attach]
 multiplexer  = "zmx"
 # group-id keys the group chat channel, presence grouping, and the {group} resume
-# title (RFC-0014). It is sourced by ENV INTERPOLATION: "${SPINCLASS_SESSION_ID}"
+# title (RFC-0014 §2). It is sourced by ENV INTERPOLATION: "${SPINCLASS_SESSION_ID}"
 # binds to the orchestrator's session key when present, and interpolates to the
 # empty string (⇒ ungrouped) for a bare clown — a graceful, lightly-coupled
 # default that names the orchestrator var only as a config template, never in
 # clown code. Shipping it here (not an eng-root clownfile) makes the cutover
 # atomic: the same release that drops the hardcoded SPINCLASS_SESSION_ID read
 # also supplies this binding, so there is no no-group window.
-# NOTE: inert until the group-id field + {group} placeholder ship (RFC-0014
-# implementation follow-up); resume-title flips to "{group}" at that point.
 group-id     = "${SPINCLASS_SESSION_ID}"
+# description is the human-readable presence label (RFC-0014 §4.1), same
+# interpolation + graceful-empty contract as group-id.
+description  = "${SPINCLASS_DESCRIPTION}"
 start        = ["zmx", "attach", "{id}", "{entry}"]
 resume       = ["zmx", "attach", "{id}", "{entry}"]
-resume-title = "{id}"
+resume-title = "{group}"
 spawn        = ["zmx", "attach", "{id}", "--detach", "{entry}"]
 spawn-entry  = ["clown", "--", "{prompt}"]
 # spawn-window has no default (unset = no window).

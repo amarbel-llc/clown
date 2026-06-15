@@ -9,8 +9,8 @@ import (
 func TestRegisterAndListPresence(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("CLOWN_SESSION_ID", "instance-1")
-	t.Setenv("SPINCLASS_SESSION_ID", "repo/branch")
-	t.Setenv("SPINCLASS_DESCRIPTION", "fixing the thing")
+	t.Setenv("CLOWN_GROUP_ID", "repo/branch")
+	t.Setenv("CLOWN_GROUP_DESCRIPTION", "fixing the thing")
 
 	now := time.Now()
 	if err := RegisterPresence(now); err != nil {
@@ -35,7 +35,7 @@ func TestRegisterAndListPresence(t *testing.T) {
 func TestRemovePresence(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("CLOWN_SESSION_ID", "instance-1")
-	t.Setenv("SPINCLASS_SESSION_ID", "")
+	t.Setenv("CLOWN_GROUP_ID", "")
 	now := time.Now()
 	if err := RegisterPresence(now); err != nil {
 		t.Fatal(err)
@@ -53,7 +53,7 @@ func TestRemovePresence(t *testing.T) {
 func TestListPresencePrunesStale(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("CLOWN_SESSION_ID", "instance-1")
-	t.Setenv("SPINCLASS_SESSION_ID", "")
+	t.Setenv("CLOWN_GROUP_ID", "")
 	past := time.Now().Add(-2 * presenceStale)
 	if err := RegisterPresence(past); err != nil {
 		t.Fatal(err)

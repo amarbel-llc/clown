@@ -38,11 +38,11 @@ func TestSessionKeyGeneratedWhenUnset(t *testing.T) {
 }
 
 func TestGroupKeyAndGroupChannel(t *testing.T) {
-	t.Setenv("SPINCLASS_SESSION_ID", "")
+	t.Setenv("CLOWN_GROUP_ID", "")
 	if GroupKey() != "" || GroupChannel() != "" {
-		t.Fatal("no spinclass decoration: GroupKey/GroupChannel must be empty")
+		t.Fatal("no group-id: GroupKey/GroupChannel must be empty")
 	}
-	t.Setenv("SPINCLASS_SESSION_ID", "repo/branch")
+	t.Setenv("CLOWN_GROUP_ID", "repo/branch")
 	if got := GroupKey(); got != "repo/branch" {
 		t.Fatalf("GroupKey = %q, want repo/branch", got)
 	}

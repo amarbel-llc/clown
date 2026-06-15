@@ -111,7 +111,7 @@ func jobToolList() []map[string]any {
 			"inputSchema": obj(map[string]any{"job_id": str, "target": target, "tail": map[string]any{"type": "integer"}}, "job_id")},
 		{"name": "job_spool_path", "description": "Resolve and return the absolute output-spool path for a job. Does not create the file.",
 			"inputSchema": obj(map[string]any{"job_id": str, "target": target}, "job_id")},
-		{"name": "chat_send", "description": "Send a chat message (RFC-0013 §3): a one-line subject (the wake) plus an optional full body recovered by chat_read. target: session key / SPINCLASS_SESSION_ID group / '*' broadcast.",
+		{"name": "chat_send", "description": "Send a chat message (RFC-0013 §3): a one-line subject (the wake) plus an optional full body recovered by chat_read. target: session key / group-id group / '*' broadcast.",
 			"inputSchema": obj(map[string]any{"target": target, "subject": str, "body": str, "from": str, "source": str, "resources": resourceArr}, "target", "subject")},
 		{"name": "chat_read", "description": "Read chat messages addressed to this session (own/group/broadcast) newer than the read cursor; advances the cursor unless peek. Returns a JSON array of {job,from,source,scope,subject,body,ts}.",
 			"inputSchema": obj(map[string]any{"peek": map[string]any{"type": "boolean"}})},

@@ -146,19 +146,19 @@ func TestJobWhoamiJSON(t *testing.T) {
 }
 
 // whoami reports the per-instance routing key (here an explicit CLOWN_SESSION_ID)
-// AND the group decoration + group channel derived from SPINCLASS_SESSION_ID
-// (RFC-0013 §2.4), so a consumer can address this clown alone or its whole
-// spinclass session.
+// AND the group decoration + group channel derived from the group-id
+// (CLOWN_GROUP_ID, RFC-0014 §2), so a consumer can address this clown alone or
+// its whole group.
 func TestJobWhoamiReportsKeyAndGroup(t *testing.T) {
 	t.Setenv("CLOWN_SESSION_ID", "instance-key")
-	t.Setenv("SPINCLASS_SESSION_ID", "repo/branch")
+	t.Setenv("CLOWN_GROUP_ID", "repo/branch")
 	got := captureStdout(t, func() int { return jobWhoami([]string{"--json"}) })
 	var id struct {
-		SessionKey          string `json:"sessionKey"`
-		ChannelID           string `json:"channelId"`
-		Source              string `json:"source"`
-		SpinclassDecoration string `json:"spinclassDecoration"`
-		GroupChannelID      string `json:"groupChannelId"`
+		SessionKey     string `json:"sessionKey"`
+		ChannelID      string `json:"channelId"`
+		Source         string `json:"source"`
+		Decoration     string `json:"decoration"`
+		GroupChannelID string `json:"groupChannelId"`
 	}
 	if err := json.Unmarshal([]byte(strings.TrimSpace(got)), &id); err != nil {
 		t.Fatalf("whoami --json: %v\n%s", err, got)
@@ -169,8 +169,8 @@ func TestJobWhoamiReportsKeyAndGroup(t *testing.T) {
 	if id.ChannelID != jobwake.ChannelID("instance-key") {
 		t.Errorf("channelId = %q, want %q", id.ChannelID, jobwake.ChannelID("instance-key"))
 	}
-	if id.SpinclassDecoration != "repo/branch" {
-		t.Errorf("spinclassDecoration = %q, want repo/branch", id.SpinclassDecoration)
+	if id.Decoration != "repo/branch" {
+		t.Errorf("decoration = %q, want repo/branch", id.Decoration)
 	}
 	if id.GroupChannelID != jobwake.ChannelID("repo/branch") {
 		t.Errorf("groupChannelId = %q, want %q", id.GroupChannelID, jobwake.ChannelID("repo/branch"))

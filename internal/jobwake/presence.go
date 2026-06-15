@@ -22,8 +22,8 @@ const presenceStale = 2 * time.Minute
 type Presence struct {
 	SessionKey  string `json:"sessionKey"`            // per-instance routing key
 	ChannelID   string `json:"channelId"`             // ChannelID(SessionKey)
-	Decoration  string `json:"decoration,omitempty"`  // SPINCLASS_SESSION_ID group label
-	Description string `json:"description,omitempty"` // SPINCLASS_DESCRIPTION (readable)
+	Decoration  string `json:"decoration,omitempty"`  // group-id (CLOWN_GROUP_ID) group label
+	Description string `json:"description,omitempty"` // CLOWN_GROUP_DESCRIPTION (readable)
 	LastSeen    string `json:"lastSeen"`              // RFC3339Nano, refreshed by the monitor
 }
 
@@ -38,8 +38,8 @@ func presenceFile(channelID string) string {
 }
 
 // RegisterPresence writes (or refreshes) the current session's presence record:
-// its per-instance key + channel, the SPINCLASS_SESSION_ID group decoration and
-// SPINCLASS_DESCRIPTION (both launch-time env), and a fresh lastSeen. The write
+// its per-instance key + channel, the group-id decoration (CLOWN_GROUP_ID) and
+// CLOWN_GROUP_DESCRIPTION (both clown-exported env), and a fresh lastSeen. The write
 // is atomic (temp + rename). Best-effort by contract — a presence failure must
 // never break the monitor.
 func RegisterPresence(now time.Time) error {
@@ -48,7 +48,7 @@ func RegisterPresence(now time.Time) error {
 		SessionKey:  key,
 		ChannelID:   ChannelID(key),
 		Decoration:  GroupKey(),
-		Description: os.Getenv("SPINCLASS_DESCRIPTION"),
+		Description: os.Getenv("CLOWN_GROUP_DESCRIPTION"),
 		LastSeen:    now.UTC().Format(time.RFC3339Nano),
 	}
 	if err := os.MkdirAll(PresenceDir(), 0o700); err != nil {

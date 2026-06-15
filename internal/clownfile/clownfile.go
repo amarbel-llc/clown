@@ -37,13 +37,22 @@ type Profile struct {
 // is unresolved (RFC §1.3 open question), so this revision does not run them.
 type Attach struct {
 	Multiplexer string   `toml:"multiplexer"`  // "zmx" | "none"
+	GroupID     string   `toml:"group-id"`     // group key, env-interpolated (RFC-0014 §2); "" ⇒ ungrouped
+	Description string   `toml:"description"`  // presence label, env-interpolated (RFC-0014 §4.1)
 	Start       []string `toml:"start"`        // fresh interactive self-wrap argv
 	Resume      []string `toml:"resume"`       // reattach argv
 	ResumeTitle string   `toml:"resume-title"` // OSC-2 title emitted before a resume attach
-	Spawn       []string `toml:"spawn"`        // detached-worker launch (schema-only this revision)
+	Spawn       []string `toml:"spawn"`        // detached-worker launch (RFC-0014 §5)
 	SpawnEntry  []string `toml:"spawn-entry"`  // harness argv a spawned worker boots (schema-only)
 	SpawnWindow []string `toml:"spawn-window"` // fire-and-forget window opener (schema-only)
 }
+
+// ResolveEnv expands ${NAME} / $NAME environment references in a config string,
+// substituting an unset variable with the empty string (RFC-0014 §2.1). It is
+// applied to the env-interpolated fields (GroupID, Description); clown performs
+// purely textual substitution and never interprets the meaning of a variable,
+// which is what keeps clown orchestrator-agnostic.
+func ResolveEnv(s string) string { return os.ExpandEnv(s) }
 
 // AttachMode selects which executed template Resolve renders.
 type AttachMode int
@@ -53,6 +62,8 @@ const (
 	ModeStart AttachMode = iota
 	// ModeResume is a reattach (the Resume template).
 	ModeResume
+	// ModeSpawn is a detached-worker launch (the Spawn template, RFC-0014 §5).
+	ModeSpawn
 )
 
 // Enabled reports whether [attach] requests a multiplexer wrap. "" and "none"
@@ -65,13 +76,14 @@ func (a Attach) Enabled() bool {
 // survives substitution (RFC-0013 §1.3 rule 2).
 var placeholderRe = regexp.MustCompile(`\{[a-zA-Z][a-zA-Z0-9_-]*\}`)
 
-// Resolve renders the executed template for mode into a concrete multiplexer
-// argv (RFC-0013 §1.3): the exact element "{entry}" is replaced by splicing the
-// entry argv into that position, and "{id}" is string-substituted within any
-// element. Only {id}/{entry} are available for the interactive Start/Resume
-// modes; any other surviving {...} placeholder (e.g. {prompt}/{dir}, or an
-// unknown token) is rejected with a diagnostic. Returns an error when the
-// multiplexer is not enabled or the selected template is empty.
+// Resolve renders the executed template for mode (Start/Resume/Spawn) into a
+// concrete multiplexer argv (RFC-0013 §1.3, RFC-0014 §5): the exact element
+// "{entry}" is replaced by splicing the entry argv into that position, and
+// "{id}" is string-substituted within any element. Only {id}/{entry} are
+// available in these argv templates; any other surviving {...} placeholder (e.g.
+// {group} — which is title-only — {prompt}/{dir}, or an unknown token) is
+// rejected with a diagnostic. Returns an error when the multiplexer is not
+// enabled or the selected template is empty.
 func (a Attach) Resolve(mode AttachMode, id string, entry []string) ([]string, error) {
 	if a.Multiplexer != "zmx" && a.Multiplexer != "none" {
 		return nil, fmt.Errorf("clownfile [attach]: multiplexer must be \"zmx\" or \"none\", got %q", a.Multiplexer)
@@ -85,6 +97,8 @@ func (a Attach) Resolve(mode AttachMode, id string, entry []string) ([]string, e
 		tmpl = a.Start
 	case ModeResume:
 		tmpl = a.Resume
+	case ModeSpawn:
+		tmpl = a.Spawn
 	default:
 		return nil, fmt.Errorf("clownfile [attach]: unknown mode %d", mode)
 	}
@@ -106,11 +120,18 @@ func (a Attach) Resolve(mode AttachMode, id string, entry []string) ([]string, e
 	return out, nil
 }
 
-// Title renders ResumeTitle with {id} substituted, for emission as an OSC-2
-// terminal title before a resume attach (RFC-0013 §1.3 rule 4). Empty when no
-// title is configured.
-func (a Attach) Title(id string) string {
-	return strings.ReplaceAll(a.ResumeTitle, "{id}", id)
+// Title renders ResumeTitle for emission as an OSC-2 terminal title before a
+// resume attach (RFC-0013 §1.3 rule 4, RFC-0014 §3.1). {group} resolves to the
+// group key, falling back to the per-instance id when the group is empty (so a
+// bare clown shows its key, never a literal "{group}"); {id} resolves to the
+// per-instance id. Empty when no title is configured.
+func (a Attach) Title(id, group string) string {
+	g := group
+	if g == "" {
+		g = id
+	}
+	t := strings.ReplaceAll(a.ResumeTitle, "{group}", g)
+	return strings.ReplaceAll(t, "{id}", id)
 }
 
 // Clownfile is one parsed clownfile.
@@ -189,6 +210,12 @@ func mergeInto(dst *Clownfile, src Clownfile) {
 	// merge element-wise).
 	if src.Attach.Multiplexer != "" {
 		dst.Attach.Multiplexer = src.Attach.Multiplexer
+	}
+	if src.Attach.GroupID != "" {
+		dst.Attach.GroupID = src.Attach.GroupID
+	}
+	if src.Attach.Description != "" {
+		dst.Attach.Description = src.Attach.Description
 	}
 	if src.Attach.ResumeTitle != "" {
 		dst.Attach.ResumeTitle = src.Attach.ResumeTitle

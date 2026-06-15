@@ -24,8 +24,8 @@ func SessionKey() string {
 // ResolveSessionKey resolves the active per-instance session key AND reports
 // which precedence branch supplied it (RFC-0009 §2, as amended by RFC-0013 §2.3):
 // CLOWN_SESSION_ID, else CLAUDE_SESSION_ID, else a freshly generated UUIDv4
-// (source "generated"). SPINCLASS_SESSION_ID is NOT in the routing precedence —
-// RFC-0013 demotes it to a non-routing group decoration (see GroupKey). The
+// (source "generated"). The group decoration (CLOWN_GROUP_ID, see GroupKey) is
+// NOT in the routing precedence — it names a group, not the instance. The
 // source label backs `clown job whoami` (RFC-0012 §1): it lets a consumer tell a
 // leaked/inherited CLOWN_SESSION_ID from a freshly minted per-instance key.
 func ResolveSessionKey() (key, source string) {
@@ -60,16 +60,18 @@ func ChannelID(sessionKey string) string {
 	return hex.EncodeToString(sum[:16])
 }
 
-// GroupKey returns the group-label decoration for this session — the
-// SPINCLASS_SESSION_ID (RFC-0013 §2.2), or "" when not running under spinclass.
-// It is NOT the routing key (see ResolveSessionKey); it names the group of clown
-// instances that share a spinclass worktree.
-func GroupKey() string { return os.Getenv("SPINCLASS_SESSION_ID") }
+// GroupKey returns the group-label decoration for this session — the resolved
+// group-id (RFC-0014 §2), carried in CLOWN_GROUP_ID, or "" when ungrouped. clown
+// resolves group-id from the clownfile (env-interpolated) and exports
+// CLOWN_GROUP_ID; jobwake never reads an orchestrator variable by name (RFC-0014
+// §1/§2.2). It is NOT the routing key (see ResolveSessionKey); it names the group
+// of clown instances that share a group-id (e.g. a spinclass worktree).
+func GroupKey() string { return os.Getenv("CLOWN_GROUP_ID") }
 
 // GroupChannel returns the channel a group message fans out on —
 // ChannelID(GroupKey()) (RFC-0013 §3.2) — or "" when there is no group
-// decoration. Every clown under a spinclass session watches this channel, so a
-// message addressed to the SPINCLASS_SESSION_ID reaches all of them.
+// decoration. Every clown sharing a group-id watches this channel, so a message
+// addressed to the group-id reaches all of them.
 func GroupChannel() string {
 	k := GroupKey()
 	if k == "" {

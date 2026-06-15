@@ -113,10 +113,68 @@ func TestAttachResolveRejectsDisabledAndEmpty(t *testing.T) {
 }
 
 func TestAttachTitleSubstitutesID(t *testing.T) {
-	if got := (Attach{ResumeTitle: "clown {id}"}).Title("abc"); got != "clown abc" {
+	if got := (Attach{ResumeTitle: "clown {id}"}).Title("abc", ""); got != "clown abc" {
 		t.Fatalf("Title = %q, want \"clown abc\"", got)
 	}
-	if got := (Attach{}).Title("abc"); got != "" {
+	if got := (Attach{}).Title("abc", ""); got != "" {
 		t.Fatalf("empty ResumeTitle must yield empty Title, got %q", got)
+	}
+}
+
+// {group} resolves to the group key, and falls back to {id} when the group is
+// empty (never emitting a literal "{group}") — RFC-0014 §3.1.
+func TestAttachTitleGroupAndFallback(t *testing.T) {
+	a := Attach{ResumeTitle: "{group}"}
+	if got := a.Title("inst-1", "repo/branch"); got != "repo/branch" {
+		t.Fatalf("Title {group} = %q, want repo/branch", got)
+	}
+	if got := a.Title("inst-1", ""); got != "inst-1" {
+		t.Fatalf("Title {group} empty-group = %q, want {id} fallback inst-1", got)
+	}
+	// Mixed: both placeholders present.
+	if got := (Attach{ResumeTitle: "{group}:{id}"}).Title("inst-1", "g"); got != "g:inst-1" {
+		t.Fatalf("Title mixed = %q, want g:inst-1", got)
+	}
+}
+
+// ModeSpawn resolves the Spawn template (RFC-0014 §5); {entry} splices and {id}
+// substitutes exactly as Start/Resume.
+func TestAttachResolveSpawnMode(t *testing.T) {
+	a := Attach{Multiplexer: "zmx", Spawn: []string{"zmx", "attach", "{id}", "--detach", "{entry}"}}
+	got, err := a.Resolve(ModeSpawn, "k", []string{"clown", "--", "hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"zmx", "attach", "k", "--detach", "clown", "--", "hi"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Resolve spawn = %v, want %v", got, want)
+	}
+}
+
+// {group} is title-only: it MUST be rejected in an argv template (RFC-0014 §3.1).
+func TestAttachResolveRejectsGroupPlaceholder(t *testing.T) {
+	a := Attach{Multiplexer: "zmx", Start: []string{"zmx", "{group}", "{entry}"}}
+	if _, err := a.Resolve(ModeStart, "k", []string{"clown"}); err == nil {
+		t.Fatal("Resolve must reject a surviving {group} placeholder in an argv template")
+	}
+}
+
+// ResolveEnv expands ${NAME}/$NAME, unset ⇒ empty, and composes within a string
+// (RFC-0014 §2.1).
+func TestResolveEnv(t *testing.T) {
+	t.Setenv("SPINCLASS_SESSION_ID", "repo/branch")
+	t.Setenv("SPINCLASS_REPO", "repo")
+	if got := ResolveEnv("${SPINCLASS_SESSION_ID}"); got != "repo/branch" {
+		t.Errorf("ResolveEnv = %q, want repo/branch", got)
+	}
+	if got := ResolveEnv("team-${SPINCLASS_SESSION_ID}"); got != "team-repo/branch" {
+		t.Errorf("ResolveEnv compose = %q, want team-repo/branch", got)
+	}
+	if got := ResolveEnv("${SPINCLASS_REPO}"); got != "repo" {
+		t.Errorf("ResolveEnv coarser = %q, want repo", got)
+	}
+	t.Setenv("SPINCLASS_SESSION_ID", "")
+	if got := ResolveEnv("${SPINCLASS_SESSION_ID}"); got != "" {
+		t.Errorf("ResolveEnv unset = %q, want empty", got)
 	}
 }

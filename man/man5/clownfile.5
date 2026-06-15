@@ -60,7 +60,7 @@ servers, set only when not already present (the ambient environment wins).
 .Ss [attach]
 The
 .Sy [attach]
-table is clown's multiplexer/attach layer (RFC-0013 §1.3).
+table is clown's multiplexer/attach layer (RFC-0013 §1.3, RFC-0014).
 When
 .Sy multiplexer
 is set to a value other than
@@ -77,6 +77,10 @@ splices clown's own entrypoint argv;
 and
 .Ql {dir}
 are available to the spawn templates only.
+.Ql {group}
+resolves to the group-id and is available in
+.Sy resume-title
+only (rejected in argv templates).
 An unrecognized placeholder is rejected.
 .Bl -tag -width Ds
 .It Sy multiplexer
@@ -87,6 +91,24 @@ or
 (and an absent
 .Sy [attach] )
 runs clown inline.
+.It Sy group-id
+The group key (RFC-0014 §2), env-interpolated at load \(em
+.Ql ${NAME}
+expands, an unset variable becomes the empty string.
+It keys the group chat channel, presence grouping, and the
+.Ql {group}
+title.
+clown exports it as
+.Ev CLOWN_GROUP_ID ;
+empty means ungrouped.
+The default binds the orchestrator session key via
+.Ql ${SPINCLASS_SESSION_ID} ,
+gracefully empty for a bare clown.
+.It Sy description
+The human-readable presence label (RFC-0014 §4.1), env-interpolated like
+.Sy group-id ;
+exported as
+.Ev CLOWN_GROUP_DESCRIPTION .
 .It Sy start
 The argv template clown re-execs into for a fresh interactive launch.
 .It Sy resume
@@ -98,12 +120,22 @@ or
 or
 .Nm clown resume ) .
 .It Sy resume-title
-A string emitted as an OSC-2 terminal title before a resume attach
-.Pq Ql {id} No is substituted .
-.It Sy spawn , Sy spawn-entry , Sy spawn-window
-Detached-worker templates.
-This release parses and holds them as the single-source schema but does not
-execute them; their executor is an open question (RFC-0013 §1.3).
+A string emitted as an OSC-2 terminal title before a resume attach.
+.Ql {group}
+(the default) resolves to the group-id, falling back to
+.Ql {id}
+when ungrouped;
+.Ql {id}
+is also available.
+.It Sy spawn
+The argv template for a detached-worker launch (RFC-0014 §5), resolved and
+executed when an orchestrator passes
+.Fl -clown-attach Ns = Ns Ql spawn .
+The template must detach (the default uses zmx with
+.Fl -detach )
+so clown returns promptly to its launcher.
+.It Sy spawn-entry , Sy spawn-window
+Parsed and held as schema; not executed by clown this release.
 .El
 .Pp
 clown self-execs
@@ -151,9 +183,11 @@ ANTHROPIC_LOG = "info"
 
 [attach]
 multiplexer = "zmx"
+group-id = "${SPINCLASS_SESSION_ID}"
+description = "${SPINCLASS_DESCRIPTION}"
 start = ["zmx", "attach", "{id}", "{entry}"]
 resume = ["zmx", "attach", "{id}", "{entry}"]
-resume-title = "{id}"
+resume-title = "{group}"
 spawn = ["zmx", "attach", "{id}", "--detach", "{entry}"]
 spawn-entry = ["clown", "--", "{prompt}"]
 .Ed
@@ -161,4 +195,5 @@ spawn-entry = ["clown", "--", "{prompt}"]
 .Xr clown-chat 1 ,
 .Xr clown-job 1
 .Sh STANDARDS
-RFC-0013 (clownfile, per-instance identity, and clown-owned chat).
+RFC-0013 (clownfile, per-instance identity, and clown-owned chat);
+RFC-0014 (clown-spinclass awareness seam: group-id and presence).
