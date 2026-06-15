@@ -60,8 +60,12 @@ broadcast channels \(em newer than the read cursor, oldest first, each body
 recovered from its spool.
 The read advances a per-reader cursor distinct from the wake monitor's, so a
 wake never consumes a read and a read never consumes a wake.
-Unlike the wake monitor it includes this session's own sent messages
-(conversation history).
+Unlike the wake monitor, which suppresses the sender's own messages, it shows
+this session's own sends that land on a channel it reads \(em its group,
+broadcast, and self-directed sends (conversation history).
+A direct send to another session is delivered to that session's channel, not
+this one, so it does not appear in your own read; the recipient reads it from
+their channel.
 Any resource references carried by a message
 .Pq Fl -resource No on send
 are listed beneath it.

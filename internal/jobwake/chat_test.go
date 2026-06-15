@@ -111,8 +111,9 @@ func TestReadChatGroupScope(t *testing.T) {
 	}
 }
 
-// chat-read INCLUDES the reader's own sent messages (conversation history),
-// unlike the wake monitor which suppresses self-echo.
+// chat-read INCLUDES the reader's own sends that land on a channel it reads —
+// here a self-directed send (--target own key) on the own channel — unlike the
+// wake monitor which suppresses self-echo (conversation history).
 func TestReadChatIncludesOwnSent(t *testing.T) {
 	chatEnv(t, "me", "")
 	if _, err := SendChat("me", "me", "src", "note", "to-self"); err != nil {
@@ -124,6 +125,34 @@ func TestReadChatIncludesOwnSent(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].From != "me" || got[0].Body != "to-self" {
 		t.Fatalf("chat-read must include own sent messages, got %+v", got)
+	}
+}
+
+// A direct chat to ANOTHER session lands on that recipient's channel, not the
+// sender's, so the sender's own chat-read does NOT echo it back (clown#147).
+// "Own sent messages" in clown-chat(1) means the reader's sends that land on a
+// channel it reads (group, broadcast, self-directed) — never a cross-session
+// direct send, whose only copy is on the recipient's channel.
+func TestReadChatExcludesOwnDirectSendToOther(t *testing.T) {
+	chatEnv(t, "me", "")
+	if _, err := SendChat("other", "me", "src", "hey other", "for-other"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadChat(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("a direct send to another session must not appear in the sender's chat-read, got %+v", got)
+	}
+	// The message DID land on the recipient's channel (where its own chat-read
+	// would find it), confirming it was delivered, just not to the sender.
+	recs, err := scanWaking(ChannelID("other"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) != 1 || recs[0].Type != TypeChat {
+		t.Fatalf("the direct send must be on the recipient's channel, got %+v", recs)
 	}
 }
 
