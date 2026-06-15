@@ -10,6 +10,10 @@ var (
 	AgentsFile          string
 	DisallowedToolsFile string
 	SystemPromptAppendD string
+	// DefaultClownfilePath is the burned-in base clownfile (RFC-0013 §1.3): the
+	// lowest-precedence layer of the clownfile cascade, supplying default [attach]
+	// multiplexer self-wrap templates. Empty in dev builds (then skipped).
+	DefaultClownfilePath string
 	Version             string
 	Commit              string
 	// ShortSha is the abbreviated git revision (git's short rev, with a

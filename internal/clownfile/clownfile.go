@@ -128,15 +128,29 @@ func Load(path string) (Clownfile, error) {
 
 // Discover walks startDir up to homeDir, loading a `clownfile` from each
 // ancestor and merging shallowest-first so a deeper file (closer to startDir)
-// overrides per key (RFC-0013 §1.1). Absent everywhere yields the zero value
-// (non-fatal); a present-but-malformed clownfile is an error.
-func Discover(startDir, homeDir string) (Clownfile, error) {
+// overrides per key (RFC-0013 §1.1). basePath, when non-empty, is a burned-in
+// default clownfile (the nix-store-shipped default, §1.3) merged FIRST as the
+// lowest-precedence layer, so any ancestor clownfile overrides it per key; an
+// absent basePath is non-fatal (dev builds leave it ""), a present-but-malformed
+// one is an error. Absent everywhere yields the zero value (non-fatal); a
+// present-but-malformed clownfile is an error.
+func Discover(startDir, homeDir, basePath string) (Clownfile, error) {
+	var merged Clownfile
+	if basePath != "" {
+		if _, err := os.Stat(basePath); err == nil {
+			c, err := Load(basePath)
+			if err != nil {
+				return Clownfile{}, fmt.Errorf("default clownfile %s: %w", basePath, err)
+			}
+			mergeInto(&merged, c)
+		}
+		// absent base (dev/test builds, missing store path) is non-fatal: skip.
+	}
 	ancestors, err := promptwalk.Ancestors(startDir, homeDir)
 	if err != nil {
 		return Clownfile{}, err
 	}
 	// ancestors is deepest-first; apply shallowest-first so deeper overrides.
-	var merged Clownfile
 	for i := len(ancestors) - 1; i >= 0; i-- {
 		path := filepath.Join(ancestors[i], Filename)
 		if _, err := os.Stat(path); err != nil {

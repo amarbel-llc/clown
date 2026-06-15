@@ -112,18 +112,24 @@ rather than an external orchestrator invoking the template.
 ```toml
 [attach]
 multiplexer  = "zmx"                                              # zmx | none
-start        = ["zmx", "attach", "{id}", "{entry}"]              # fresh interactive launch
-resume       = ["zmx", "attach", "{id}", "{entry}"]              # reattach (clown resume)
+start        = ["zmx", "attach", "{id}", "{entry}"]              # fresh interactive launch (clown-native)
+resume       = ["zmx", "attach", "{id}", "{entry}"]              # reattach (clown resume) (clown-native)
 resume-title = "{id}"                                             # OSC-2 title emitted before attach
 spawn        = ["zmx", "attach", "{id}", "--detach", "{entry}"]  # detached-worker launch
 spawn-entry  = ["clown", "--", "{prompt}"]                       # harness argv a spawned worker boots
-spawn-window = ["{open-terminal}", "{dir}", "{id}"]              # fire-and-forget window opener
+# spawn-window has no default (unset = no window).
 ```
 
-The argv values above are *illustrative*; concrete defaults are finalized against
-spinclass's `[session-entry]` defaults (FDR-0017 Piece 1) so the takeover is
-mechanical. The field set, placeholder vocabulary, and normative rules below are
-the firm contract.
+These are the values clown ships as its burned-in base clownfile — the
+lowest-precedence layer of the cascade (§1.1) merged beneath every discovered
+`clownfile`, so a user file overrides any key (e.g. `multiplexer = "none"` opts
+out of the wrap). `spawn`, `spawn-entry`, and `resume-title` equal spinclass's
+confirmed real `[session-entry]` defaults (FDR-0017 Piece 1), so the takeover is
+byte-mechanical. `start` and `resume` are **clown-native**: spinclass shipped no
+baked multiplexer template for the interactive path (it fell back to `$SHELL` with
+`$SPINCLASS_SESSION_ID` env expansion), and clown now owns the self-wrap using its
+own `{id}`. `spawn-window` has no default. The field set, placeholder vocabulary,
+and normative rules below are the firm contract.
 
 ##### Fields
 

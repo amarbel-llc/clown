@@ -311,9 +311,18 @@ hygiene and the inner run skips re-wrapping (loop guard). `{id}`/`{entry}`
 substitute (`{entry}` splices clown's argv); `resume-title` emits an OSC-2
 title; `spawn`/`spawn-entry`/`spawn-window` are parsed but schema-only this
 release (executor unresolved — RFC §1.3 open question). `CLOWN_ATTACH_FORCE=1`
-overrides the interactive-TTY gate. The spinclass `[session-entry]` takeover
-(spinclass dropping its mux defaults) is the lockstep spinclass-side half
-(FDR-0017 Piece 1); remote attach stays spinclass. Man page: `clownfile(5)`.
+overrides the interactive-TTY gate; a configured-but-uninstalled multiplexer
+degrades to inline rather than erroring (clown#146), so the burned-in default is
+safe on hosts without the mux. clown ships a **burned-in default clownfile**
+(`default-clownfile` at the repo root, path burned in via
+`buildcfg.DefaultClownfilePath`) carrying the `[attach]` defaults; `clownfile.Discover`
+merges it as the lowest-precedence base beneath the `$PWD→$HOME` ascent, so a worktree
+self-wraps without an explicit table and any user `clownfile` still overrides per key
+(`multiplexer = "none"` opts out). Those defaults lock `spawn`/`spawn-entry`/`resume-title`
+to spinclass's real `[session-entry]` defaults; `start`/`resume` are clown-native. The
+spinclass `[session-entry]` takeover (spinclass dropping its mux defaults) is the lockstep
+spinclass-side half (FDR-0017 Piece 1); remote attach stays spinclass. Man page:
+`clownfile(5)`.
 
 ## Architecture
 

@@ -105,7 +105,11 @@ func maybeReexecMultiplexer(cf clownfile.Clownfile, flags parsedFlags, mode clow
 
 	muxBin, err := exec.LookPath(argv[0])
 	if err != nil {
-		return fmt.Errorf("clownfile [attach]: multiplexer %q not found: %w", argv[0], err)
+		// The configured multiplexer is not installed. Since [attach] ships as a
+		// burned-in default (RFC-0013 §1.3), an absent mux must NOT break clown on
+		// hosts without it — degrade to running inline rather than failing. A
+		// found-but-unexecutable mux (the syscall.Exec error below) is still fatal.
+		return nil
 	}
 	if err := syscall.Exec(muxBin, argv, os.Environ()); err != nil {
 		return fmt.Errorf("clownfile [attach]: exec %s: %w", muxBin, err)

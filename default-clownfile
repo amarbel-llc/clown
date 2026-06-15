@@ -1,0 +1,24 @@
+# clown's burned-in default clownfile (RFC-0013 §1.3).
+#
+# This file ships in the nix store and is merged as the LOWEST-precedence layer
+# of the clownfile cascade: any user `clownfile` discovered ascending $PWD->$HOME
+# overrides these values per key. To opt out of the multiplexer self-wrap, set
+# `multiplexer = "none"` in a user clownfile (a non-empty scalar replaces this
+# default).
+#
+# The [attach] defaults below match spinclass's confirmed real [session-entry]
+# defaults where one exists (FDR-0017 Piece 1), so the takeover is mechanical:
+#   - spawn / spawn-entry / resume-title: equal to spinclass's real defaults.
+#   - start / resume: clown-native (spinclass shipped no baked mux template here;
+#     clown now owns the interactive self-wrap).
+# Placeholders: {id} = the per-instance session key (RFC-0013 §2); the exact
+# element "{entry}" splices clown's own entrypoint argv.
+
+[attach]
+multiplexer  = "zmx"
+start        = ["zmx", "attach", "{id}", "{entry}"]
+resume       = ["zmx", "attach", "{id}", "{entry}"]
+resume-title = "{id}"
+spawn        = ["zmx", "attach", "{id}", "--detach", "{entry}"]
+spawn-entry  = ["clown", "--", "{prompt}"]
+# spawn-window has no default (unset = no window).

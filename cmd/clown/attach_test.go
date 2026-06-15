@@ -78,3 +78,22 @@ func TestMaybeReexecSkipsWhenDisabled(t *testing.T) {
 		t.Fatalf(`multiplexer "none": want nil (skip), got %v`, err)
 	}
 }
+
+// A configured-but-uninstalled multiplexer degrades to inline rather than
+// failing, so the burned-in default clownfile is safe on hosts without the mux
+// (clown#146). argv[0] is a binary guaranteed not to exist, so exec.LookPath
+// fails deterministically; maybeReexecMultiplexer must return nil (run inline).
+func TestMaybeReexecDegradesWhenMuxAbsent(t *testing.T) {
+	prev := attachedID
+	attachedID = ""
+	t.Cleanup(func() { attachedID = prev })
+	t.Setenv("CLOWN_ATTACH_FORCE", "1")
+
+	cf := clownfile.Clownfile{Attach: clownfile.Attach{
+		Multiplexer: "zmx",
+		Start:       []string{"clown-nonexistent-mux-xyz-do-not-install", "{id}", "{entry}"},
+	}}
+	if err := maybeReexecMultiplexer(cf, parsedFlags{}, clownfile.ModeStart); err != nil {
+		t.Fatalf("absent multiplexer: want nil (degrade to inline), got %v", err)
+	}
+}

@@ -621,6 +621,7 @@
               "-X github.com/amarbel-llc/clown/internal/buildcfg.AgentsFile=${agents-file}"
               "-X github.com/amarbel-llc/clown/internal/buildcfg.DisallowedToolsFile=${disallowed-tools-file}"
               "-X github.com/amarbel-llc/clown/internal/buildcfg.SystemPromptAppendD=${./system-prompt-append.d}"
+              "-X github.com/amarbel-llc/clown/internal/buildcfg.DefaultClownfilePath=${./default-clownfile}"
               "-X github.com/amarbel-llc/clown/internal/buildcfg.Version=${clownVersion}"
               "-X github.com/amarbel-llc/clown/internal/buildcfg.Commit=${clownRev}"
               "-X github.com/amarbel-llc/clown/internal/buildcfg.ShortSha=${clownShortRev}"

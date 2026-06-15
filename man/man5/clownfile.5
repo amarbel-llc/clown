@@ -114,6 +114,32 @@ only when an interactive terminal is present;
 .Ev CLOWN_ATTACH_FORCE Ns = Ns Ql 1
 overrides that check for unusual terminals.
 Remote (ssh) attach is out of scope and remains spinclass's.
+.Pp
+clown ships these
+.Sy [attach]
+defaults burned in as a base clownfile \(em the lowest-precedence layer of the
+cascade, merged beneath every discovered
+.Sy clownfile
+\(em so a worktree self-wraps without an explicit table.
+A discovered
+.Sy clownfile
+overrides any key; set
+.Sy multiplexer No = Ql none
+to opt out.
+If the configured multiplexer is not installed, clown runs inline rather than
+failing.
+The
+.Sy spawn ,
+.Sy spawn-entry ,
+and
+.Sy resume-title
+defaults equal spinclass's real
+.Sy [session-entry]
+defaults (FDR-0017 Piece 1);
+.Sy start
+and
+.Sy resume
+are clown-native (spinclass had no baked interactive template).
 .Sh EXAMPLES
 .Bd -literal -offset indent
 [profile]
@@ -128,6 +154,8 @@ multiplexer = "zmx"
 start = ["zmx", "attach", "{id}", "{entry}"]
 resume = ["zmx", "attach", "{id}", "{entry}"]
 resume-title = "{id}"
+spawn = ["zmx", "attach", "{id}", "--detach", "{entry}"]
+spawn-entry = ["clown", "--", "{prompt}"]
 .Ed
 .Sh SEE ALSO
 .Xr clown-chat 1 ,
