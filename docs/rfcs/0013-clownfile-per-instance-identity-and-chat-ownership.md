@@ -103,30 +103,97 @@ ANTHROPIC_LOG = "info"
 
 #### 1.3 The `[attach]` table
 
-The `[attach]` table subsumes the multiplexer-invocation defaults spinclass
-currently ships as `[session-entry]`. When set, clown wraps *itself* in the
-configured multiplexer on boot — "implicit per-instance attach" — instead of an
-orchestrator invoking the template.
+The `[attach]` table is the clown-owned multiplexer/attach layer. It subsumes the
+full set of multiplexer-invocation templates spinclass previously shipped as
+`[session-entry]` (FDR-0017 Piece 1). When `multiplexer != "none"`, clown wraps
+*itself* in the configured multiplexer on boot — "implicit per-instance attach" —
+rather than an external orchestrator invoking the template.
 
 ```toml
 [attach]
-multiplexer = "zmx"          # zmx | none
-spawn  = ["zmx", "attach", "{id}", "--detach", "{entry}"]
-resume = ["zmx", "attach", "{id}", "{entry}"]
-start  = ["{entry}"]
+multiplexer  = "zmx"                                              # zmx | none
+start        = ["zmx", "attach", "{id}", "{entry}"]              # fresh interactive launch
+resume       = ["zmx", "attach", "{id}", "{entry}"]              # reattach (clown resume)
+resume-title = "{id}"                                             # OSC-2 title emitted before attach
+spawn        = ["zmx", "attach", "{id}", "--detach", "{entry}"]  # detached-worker launch
+spawn-entry  = ["clown", "--", "{prompt}"]                       # harness argv a spawned worker boots
+spawn-window = ["{open-terminal}", "{dir}", "{id}"]              # fire-and-forget window opener
 ```
 
-1. `multiplexer` MUST be `"zmx"` or `"none"`. `"none"` (the default when
+The argv values above are *illustrative*; concrete defaults are finalized against
+spinclass's `[session-entry]` defaults (FDR-0017 Piece 1) so the takeover is
+mechanical. The field set, placeholder vocabulary, and normative rules below are
+the firm contract.
+
+##### Fields
+
+- `multiplexer` — the multiplexer clown wraps itself in. `"none"` runs inline.
+- `start` — argv template clown re-execs into for a **fresh** interactive launch.
+- `resume` — argv template clown re-execs into for a **reattach** (a forwarded
+  `--resume`/`-r`/`--session-id`, or `clown resume`).
+- `resume-title` — a string clown emits as an OSC-2 terminal title immediately
+  before a `resume` attach.
+- `spawn` — argv template for launching a **detached** worker session.
+- `spawn-entry` — the harness argv a spawned worker boots as its `{entry}`.
+- `spawn-window` — a fire-and-forget terminal-window opener for a spawned worker.
+
+##### Placeholders
+
+| Placeholder | Expands to |
+|---|---|
+| `{id}` | the instance's per-instance id (§2.1) |
+| `{entry}` | clown's own entrypoint argv (the exact element `"{entry}"` is spliced) |
+| `{prompt}` | the initial prompt for a spawned worker |
+| `{dir}` | the worktree directory for a spawned worker |
+
+`{ssh}` is intentionally absent: remote attach is out of scope this revision and
+remains spinclass's (`internal/remote`, FDR-0011).
+
+##### Normative rules
+
+1. `multiplexer` MUST be `"zmx"` or `"none"`. `"none"` (and the default when
    `[attach]` is absent) MUST run clown inline with no multiplexer wrapping.
-2. `spawn`, `resume`, and `start` are argv-template arrays. The placeholder
-   `{id}` MUST be substituted with the instance's per-instance id (§2.1) and
-   `{entry}` with clown's own entrypoint argv. Unrecognized placeholders MUST be
-   rejected with a diagnostic.
-3. When `multiplexer != "none"`, clown MUST resolve the template for the active
-   mode and re-exec itself under it before launching the provider, and MUST do
-   so after minting the per-instance id (§2.1) so `{id}` is available.
-4. The `[attach]` table MUST NOT carry a `remote` mode in this revision; remote
-   attach is out of scope (see Introduction) and remains spinclass's.
+2. All template values are argv arrays (not shell strings). The placeholders
+   above MUST be substituted as defined; the exact element `"{entry}"` MUST
+   splice clown's entrypoint argv into that position. Any unrecognized `{...}`
+   placeholder MUST be rejected with a diagnostic.
+3. For an interactive launch with `multiplexer != "none"`, clown MUST resolve the
+   `start` (fresh) or `resume` (reattach) template and re-exec ITSELF under it
+   before launching the provider, and MUST do so AFTER minting the per-instance
+   id (§2.1) so `{id}` is available. The re-exec MUST pin that id into the inner
+   invocation as an argument — NOT as the ambient environment the provider
+   subtree would inherit (reusing the §2 / clown#136 identity threading) — so the
+   multiplexer session name (`{id}`) equals the inner clown's routing key and a
+   later `resume` reattaches the same session.
+4. When `resume-title` is non-empty and clown drives a `resume` attach, clown
+   SHOULD emit it as an OSC-2 title before attaching.
+5. The `[attach]` table MUST NOT carry a `remote` mode in this revision; remote
+   attach is out of scope (see Introduction) and remains spinclass's
+   (`internal/remote`, FDR-0011).
+6. `[attach]` MUST NOT carry user environment; per-run env belongs to
+   `[profile].env` (§1.2). The orchestration glue that STAYS spinclass —
+   `liveness-probe` (backs spinclass `session.State` liveness), tombstone
+   retention (worktree/session lifecycle), worktree creation, and the identity
+   env (`SPINCLASS_SESSION_ID` and the other `SPINCLASS_*`) — is NOT part of
+   `[attach]`; spinclass continues to own it (FDR-0017 Piece 1).
+
+##### Open question — detached-spawn executor
+
+`start` and `resume` are unambiguously clown-executed (rule 3: clown self-wraps on
+boot). The executor of `spawn`/`spawn-entry`/`spawn-window` is NOT yet settled and
+MUST be resolved before those templates are relied upon:
+
+- **(a) clown holds, orchestrator executes** — `[attach]` is the single source of
+  truth for the detached-spawn templates, but an external orchestrator (e.g.
+  spinclass `sc spawn`) reads them and performs the spawn; clown never executes
+  them.
+- **(b) clown executes** — clown grows a `clown spawn` (or equivalent) that
+  resolves and runs these templates itself.
+
+This revision specifies the *schema* (so the templates have a single home) but
+leaves the *executor* unspecified. An implementation (clown#145) MAY ship the
+`start`/`resume` self-wrap first and treat `spawn*` as schema-only pending this
+resolution. See FDR-0017 Piece 1.
 
 ### 2. Per-instance session identity
 

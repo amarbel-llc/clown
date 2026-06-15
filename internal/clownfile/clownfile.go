@@ -1,14 +1,16 @@
 // Package clownfile reads clown's cascading per-instance config file (RFC-0013
 // §1): a `clownfile` (TOML) discovered by ascending from $PWD to $HOME, with a
-// deeper file overriding a shallower one per key. This package implements the
-// [profile] layer (provider/backend/model/env defaults); the [attach] table is
-// future work.
+// deeper file overriding a shallower one per key. It implements the [profile]
+// layer (provider/backend/model/env defaults, §1.2) and the [attach] layer
+// (multiplexer self-wrap templates, §1.3).
 package clownfile
 
 import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 	"github.com/amarbel-llc/clown/internal/promptwalk"
@@ -28,9 +30,93 @@ type Profile struct {
 	Env      map[string]string `toml:"env"`
 }
 
+// Attach is the clownfile [attach] table: the clown-owned multiplexer/attach
+// layer (RFC-0013 §1.3) that subsumes spinclass's former [session-entry] mux
+// templates. clown EXECUTES Start/Resume (self-wrap on boot); Spawn/SpawnEntry/
+// SpawnWindow are parsed and held as the single-source schema but their executor
+// is unresolved (RFC §1.3 open question), so this revision does not run them.
+type Attach struct {
+	Multiplexer string   `toml:"multiplexer"`  // "zmx" | "none"
+	Start       []string `toml:"start"`        // fresh interactive self-wrap argv
+	Resume      []string `toml:"resume"`       // reattach argv
+	ResumeTitle string   `toml:"resume-title"` // OSC-2 title emitted before a resume attach
+	Spawn       []string `toml:"spawn"`        // detached-worker launch (schema-only this revision)
+	SpawnEntry  []string `toml:"spawn-entry"`  // harness argv a spawned worker boots (schema-only)
+	SpawnWindow []string `toml:"spawn-window"` // fire-and-forget window opener (schema-only)
+}
+
+// AttachMode selects which executed template Resolve renders.
+type AttachMode int
+
+const (
+	// ModeStart is a fresh interactive launch (the Start template).
+	ModeStart AttachMode = iota
+	// ModeResume is a reattach (the Resume template).
+	ModeResume
+)
+
+// Enabled reports whether [attach] requests a multiplexer wrap. "" and "none"
+// mean run inline (RFC-0013 §1.3 rule 1).
+func (a Attach) Enabled() bool {
+	return a.Multiplexer != "" && a.Multiplexer != "none"
+}
+
+// placeholderRe matches a {placeholder} token so Resolve can reject any that
+// survives substitution (RFC-0013 §1.3 rule 2).
+var placeholderRe = regexp.MustCompile(`\{[a-zA-Z][a-zA-Z0-9_-]*\}`)
+
+// Resolve renders the executed template for mode into a concrete multiplexer
+// argv (RFC-0013 §1.3): the exact element "{entry}" is replaced by splicing the
+// entry argv into that position, and "{id}" is string-substituted within any
+// element. Only {id}/{entry} are available for the interactive Start/Resume
+// modes; any other surviving {...} placeholder (e.g. {prompt}/{dir}, or an
+// unknown token) is rejected with a diagnostic. Returns an error when the
+// multiplexer is not enabled or the selected template is empty.
+func (a Attach) Resolve(mode AttachMode, id string, entry []string) ([]string, error) {
+	if a.Multiplexer != "zmx" && a.Multiplexer != "none" {
+		return nil, fmt.Errorf("clownfile [attach]: multiplexer must be \"zmx\" or \"none\", got %q", a.Multiplexer)
+	}
+	if !a.Enabled() {
+		return nil, fmt.Errorf("clownfile [attach]: multiplexer is %q; no wrap", a.Multiplexer)
+	}
+	var tmpl []string
+	switch mode {
+	case ModeStart:
+		tmpl = a.Start
+	case ModeResume:
+		tmpl = a.Resume
+	default:
+		return nil, fmt.Errorf("clownfile [attach]: unknown mode %d", mode)
+	}
+	if len(tmpl) == 0 {
+		return nil, fmt.Errorf("clownfile [attach]: empty template for the requested mode")
+	}
+	out := make([]string, 0, len(tmpl)+len(entry))
+	for _, el := range tmpl {
+		if el == "{entry}" {
+			out = append(out, entry...)
+			continue
+		}
+		s := strings.ReplaceAll(el, "{id}", id)
+		if m := placeholderRe.FindString(s); m != "" {
+			return nil, fmt.Errorf("clownfile [attach]: unrecognized or unavailable placeholder %s in %q", m, el)
+		}
+		out = append(out, s)
+	}
+	return out, nil
+}
+
+// Title renders ResumeTitle with {id} substituted, for emission as an OSC-2
+// terminal title before a resume attach (RFC-0013 §1.3 rule 4). Empty when no
+// title is configured.
+func (a Attach) Title(id string) string {
+	return strings.ReplaceAll(a.ResumeTitle, "{id}", id)
+}
+
 // Clownfile is one parsed clownfile.
 type Clownfile struct {
 	Profile Profile `toml:"profile"`
+	Attach  Attach  `toml:"attach"`
 }
 
 // Load parses a single clownfile from disk.
@@ -82,5 +168,30 @@ func mergeInto(dst *Clownfile, src Clownfile) {
 			dst.Profile.Env = map[string]string{}
 		}
 		dst.Profile.Env[k] = v
+	}
+
+	// [attach]: scalars replace when non-empty; argv templates replace wholesale
+	// when set (a deeper clownfile's template wins as a unit — argv lists do not
+	// merge element-wise).
+	if src.Attach.Multiplexer != "" {
+		dst.Attach.Multiplexer = src.Attach.Multiplexer
+	}
+	if src.Attach.ResumeTitle != "" {
+		dst.Attach.ResumeTitle = src.Attach.ResumeTitle
+	}
+	if src.Attach.Start != nil {
+		dst.Attach.Start = src.Attach.Start
+	}
+	if src.Attach.Resume != nil {
+		dst.Attach.Resume = src.Attach.Resume
+	}
+	if src.Attach.Spawn != nil {
+		dst.Attach.Spawn = src.Attach.Spawn
+	}
+	if src.Attach.SpawnEntry != nil {
+		dst.Attach.SpawnEntry = src.Attach.SpawnEntry
+	}
+	if src.Attach.SpawnWindow != nil {
+		dst.Attach.SpawnWindow = src.Attach.SpawnWindow
 	}
 }

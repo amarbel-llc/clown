@@ -301,9 +301,19 @@ now reads (falling back to `buildcfg.TentBackend`), `[profile].model` is
 injected as `--model` for the claude family, and `[profile.env]` is
 exported only-if-unset (ambient wins). The named-profile registry
 (`--profile`) is a separate mechanism that wins over clownfile defaults.
-The `[attach]` table (zmx/posh mux templates + the spinclass
-`[session-entry]` takeover) is deferred (P5-attach). Man page:
-`clownfile(5)`.
+The `[attach]` table (RFC-0013 §1.3, clown#145) is the multiplexer
+self-wrap layer: when `multiplexer` is `zmx` (not `none`), clown re-execs
+itself under the configured `start`/`resume` template on boot
+(`cmd/clown/attach.go` `maybeReexecMultiplexer`, gated in `runWithFlags`
+after the per-instance id is resolved), pinning the id via the hidden
+`--clown-attach-id` flag — an arg, not env, so it reuses the clown#136
+hygiene and the inner run skips re-wrapping (loop guard). `{id}`/`{entry}`
+substitute (`{entry}` splices clown's argv); `resume-title` emits an OSC-2
+title; `spawn`/`spawn-entry`/`spawn-window` are parsed but schema-only this
+release (executor unresolved — RFC §1.3 open question). `CLOWN_ATTACH_FORCE=1`
+overrides the interactive-TTY gate. The spinclass `[session-entry]` takeover
+(spinclass dropping its mux defaults) is the lockstep spinclass-side half
+(FDR-0017 Piece 1); remote attach stays spinclass. Man page: `clownfile(5)`.
 
 ## Architecture
 

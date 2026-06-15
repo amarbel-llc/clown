@@ -148,7 +148,14 @@ func resolveSessionIdentity() sessionIdentity {
 	if bin == "" {
 		bin = clownExePath()
 	}
-	return sessionIdentity{Key: jobwake.SessionKey(), Bin: bin}
+	// An [attach] re-exec pins the id via --clown-attach-id (RFC-0013 §1.3); it
+	// takes precedence so the inner clown's routing key equals the multiplexer
+	// session name minted by the outer.
+	key := attachedID
+	if key == "" {
+		key = jobwake.SessionKey()
+	}
+	return sessionIdentity{Key: key, Bin: bin}
 }
 
 // envMap renders the identity as the env clown injects into a child that needs
@@ -176,6 +183,13 @@ func applyIdentityEnv(id sessionIdentity) {
 }
 
 func run(rawArgs []string) int {
+	// The clownfile [attach] re-exec pins the per-instance id via the hidden
+	// --clown-attach-id flag (RFC-0013 §1.3). Capture and strip it before any
+	// dispatch or flag parsing so downstream parsers never see the internal flag;
+	// its presence gates off the multiplexer re-wrap (loop guard) and its value
+	// pins identity (resolveSessionIdentity / runWithFlags).
+	attachedID, rawArgs = extractAttachID(rawArgs)
+
 	if len(rawArgs) > 0 {
 		switch rawArgs[0] {
 		case "resume":
@@ -313,8 +327,26 @@ func runWithFlags(flags parsedFlags) int {
 	// this out of runClaude (it formerly lived in withClaudeResumeHint) is what
 	// lets the monitor and producers see the final key before they are built.
 	// claude learns its id via the arg, not the env, so its subtree stays clean.
+	// Resolve the [attach] mode from the ORIGINAL forwarded args, before
+	// decideClaudeSession injects --session-id (which would misdetect a fresh
+	// launch as a resume). A user --resume/-r/--session-id, or the resume
+	// subcommand path (launchResume adds --resume), selects the resume template.
+	attachMode := clownfile.ModeStart
+	if claudeFlagValue(flags.forwarded, "--resume", "-r", "--session-id") != "" {
+		attachMode = clownfile.ModeResume
+	}
+
 	if flags.provider == "claude" && !flags.naked {
 		flags.forwarded, flags.identity.Key, flags.resumeHintID = decideClaudeSession(flags.forwarded, flags.identity.Key)
+	}
+
+	// clownfile [attach] (RFC-0013 §1.3): wrap clown in the configured
+	// multiplexer on boot, after the per-instance id is resolved so {id} is
+	// available. No-op when already attached, disabled, or non-interactive; on a
+	// wrap it re-execs the multiplexer and does not return.
+	if err := maybeReexecMultiplexer(cf, flags, attachMode); err != nil {
+		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
+		return 1
 	}
 
 	if flags.naked {
