@@ -37,6 +37,14 @@ func main() {
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
+	// Dynamic system-prompt endpoint (RFC-0002 §dynamic fragments). Lets
+	// pluginhost tests exercise Host.FetchPromptFragments against a real
+	// started server. Any other path 404s, which the fetcher treats as
+	// "no fragment".
+	mux.HandleFunc("/clown/system-prompt", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/markdown")
+		_, _ = w.Write([]byte("FAKE-FRAGMENT"))
+	})
 	srv := &http.Server{Handler: mux}
 	go srv.Serve(ln)
 

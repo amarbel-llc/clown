@@ -48,6 +48,36 @@ teardown() {
   assert_equal "$count" "10"
 }
 
+# RFC-0002 §5.4: prompts/list advertises the system-prompt-append prompt that
+# clown-stdio-bridge fetches for dynamic system-prompt contribution.
+@test "job-mcp prompts/list advertises system-prompt-append" {
+  req='{"jsonrpc":"2.0","id":1,"method":"prompts/list"}'
+  run bash -c "printf '%s\n' '$req' | '$CLOWN_BIN' job-mcp"
+  assert_success
+  assert_output --partial '"system-prompt-append"'
+}
+
+# RFC-0002 §5: prompts/get returns a live fragment carrying the injected
+# session key (CLOWN_SESSION_ID=test/chan from setup) and the server's own tool
+# catalog — runtime state the build-time static path cannot express.
+@test "job-mcp prompts/get returns the live system-prompt fragment" {
+  req='{"jsonrpc":"2.0","id":1,"method":"prompts/get","params":{"name":"system-prompt-append"}}'
+  run bash -c "printf '%s\n' '$req' | '$CLOWN_BIN' job-mcp"
+  assert_success
+  assert_output --partial 'clown job platform'
+  assert_output --partial 'test/chan'
+  assert_output --partial 'job_start'
+}
+
+# An unknown prompt name is a JSON-RPC error (not a crash, not an empty result).
+@test "job-mcp prompts/get on an unknown name returns a JSON-RPC error" {
+  req='{"jsonrpc":"2.0","id":1,"method":"prompts/get","params":{"name":"nope"}}'
+  run bash -c "printf '%s\n' '$req' | '$CLOWN_BIN' job-mcp"
+  assert_success
+  code="$(printf '%s' "$output" | jq -r '.error.code')"
+  assert_equal "$code" "-32602"
+}
+
 # §3/§4: tools/call job_start then job_status round-trips and the status is
 # journal-derived (running before any terminal record).
 @test "job-mcp job_start then job_status round-trips" {

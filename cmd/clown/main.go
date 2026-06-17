@@ -644,7 +644,7 @@ func runClaude(cliPath string, flags parsedFlags, prompts promptwalk.PromptResul
 	// carries the injected --session-id and flags.resumeHintID holds the id to
 	// print. This local closure just runs claude; the hint prints after it exits.
 	run := func(forwarded []string) int {
-		args, cleanup, err := provider.BuildClaudeArgs(provider.ClaudeArgs{
+		args, appendFile, cleanup, err := provider.BuildClaudeArgs(provider.ClaudeArgs{
 			CLIPath:             innerCliPath,
 			AgentsFile:          buildcfg.AgentsFile,
 			DisallowedToolsFile: disallowedToolsFile,
@@ -703,7 +703,7 @@ func runClaude(cliPath string, flags parsedFlags, prompts promptwalk.PromptResul
 			tentLogger.Info("tent setup complete; entering plugin host")
 		}
 
-		return runWithPluginHost(executor, args, pluginDirs, flags, tentLogger)
+		return runWithPluginHost(executor, args, pluginDirs, flags, tentLogger, appendFile)
 	}
 	code := run(flags.forwarded)
 	if flags.resumeHintID != "" {
@@ -1023,7 +1023,12 @@ func ensureTentImage(backend tent.Backend, ref, tarball, flakeRef string) error 
 // All paths run the provider as a subprocess (cmd.Run) rather than
 // syscall.Exec, so clown retains control after the provider exits and
 // can run post-exit hooks like the resume hint.
-func runWithPluginHost(executor Executor, args []string, pluginDirs []string, flags parsedFlags, preLogger *slog.Logger) int {
+// appendFile, when non-empty, is the path of the claude
+// --append-system-prompt-file temp file. After the plugin host's servers are
+// healthy, runManaged folds any dynamic plugin-contributed fragments into it
+// (RFC-0002 §dynamic fragments). Empty for providers/paths that build no
+// append file.
+func runWithPluginHost(executor Executor, args []string, pluginDirs []string, flags parsedFlags, preLogger *slog.Logger, appendFile string) int {
 	skipFailed := flags.skipFailed || os.Getenv("CLOWN_SKIP_FAILED_PLUGINS") == "1"
 	disableClown := flags.disableClownProtocol || os.Getenv("CLOWN_DISABLE_CLOWN_PROTOCOL") == "1"
 	verbose := flags.verbose
@@ -1082,7 +1087,7 @@ func runWithPluginHost(executor Executor, args []string, pluginDirs []string, fl
 		return runProvider(executor, fullArgs, logger)
 	}
 
-	return runManaged(host, discovered, executor, args, pluginDirs, skipFailed, verbose, logger)
+	return runManaged(host, discovered, executor, args, pluginDirs, skipFailed, verbose, logger, appendFile)
 }
 
 // runProvider executes a provider as a subprocess, forwarding stdio
@@ -1173,6 +1178,7 @@ func runManaged(
 	skipFailed bool,
 	verbose bool,
 	logger *slog.Logger,
+	appendFile string,
 ) int {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1231,6 +1237,23 @@ func runManaged(
 		fmt.Fprintf(os.Stderr, "clown: compiling plugin manifests: %v\n", err)
 		logger.Error("compiling plugin manifests failed", "err", err)
 		return 1
+	}
+
+	// Dynamic system-prompt contribution (RFC-0002 §dynamic fragments): now
+	// that the opted-in servers are healthy and their handshake addresses are
+	// resolved, fetch their fragments and append them to the same prompt file
+	// claude reads. Append-last — dynamic fragments land after the static
+	// (identity → builtin → plugin-static → user) content. Best-effort: a
+	// fetch or write failure degrades to the static prompt, never blocks the
+	// launch.
+	if appendFile != "" {
+		if frags := host.FetchPromptFragments(ctx); len(frags) > 0 {
+			if err := appendPromptFragments(appendFile, frags); err != nil {
+				logger.Warn("appending dynamic prompt fragments failed; continuing with static prompt", "err", err)
+			} else {
+				logger.Info("appended dynamic prompt fragments", "count", len(frags))
+			}
+		}
 	}
 
 	fullArgs := prependPluginDirs(baseArgs, pluginDirs, dirMap)
@@ -1316,7 +1339,7 @@ func runClownbox(cliPath string, flags parsedFlags, prompts promptwalk.PromptRes
 		}
 	}()
 
-	args, cleanup, err := provider.BuildClaudeArgs(provider.ClaudeArgs{
+	args, appendFile, cleanup, err := provider.BuildClaudeArgs(provider.ClaudeArgs{
 		CLIPath:             cliPath,
 		AgentsFile:          buildcfg.AgentsFile,
 		DisallowedToolsFile: buildcfg.DisallowedToolsFile,
@@ -1329,7 +1352,7 @@ func runClownbox(cliPath string, flags parsedFlags, prompts promptwalk.PromptRes
 	}
 	defer cleanup()
 
-	return runWithPluginHost(&passthroughExecutor{cliPath: cliPath}, args, pluginDirs, flags, nil)
+	return runWithPluginHost(&passthroughExecutor{cliPath: cliPath}, args, pluginDirs, flags, nil, appendFile)
 }
 
 // prependPluginDirs inserts --plugin-dir flags at the start of args,
@@ -1391,6 +1414,25 @@ func resolveProvider(name string) (string, error) {
 
 func readPluginDirs() []string {
 	return readMetaList("plugin-dirs")
+}
+
+// appendPromptFragments appends dynamic, plugin-contributed system-prompt
+// fragments to the existing claude --append-system-prompt-file. The static
+// content already in the file ends with a trailing blank line (every fragment
+// promptwalk emits is followed by "\n\n", as is the prepended identity), so
+// the fragments are joined among themselves with two newlines and land last
+// with no extra separator — yielding exactly one blank line between the static
+// tail and the first dynamic fragment.
+func appendPromptFragments(path string, frags []string) error {
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if _, err := f.WriteString(strings.Join(frags, "\n\n") + "\n"); err != nil {
+		return err
+	}
+	return nil
 }
 
 // readPluginFragmentDirs returns the absolute paths to plugin-shipped
@@ -1533,13 +1575,13 @@ func execProcess(binary string, args []string) {
 }
 
 type parsedFlags struct {
-	provider             string
-	providerExplicit     bool
-	profile              string
+	provider         string
+	providerExplicit bool
+	profile          string
 	// backend is the tent container backend (podman|lima) sourced from the
 	// clownfile [profile].backend; empty falls back to buildcfg.TentBackend at
 	// newBackend. There is no flag/env source for it yet (RFC-0013 §1.2).
-	backend string
+	backend              string
 	naked                bool
 	skipFailed           bool
 	disableClownProtocol bool

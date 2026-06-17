@@ -1353,6 +1353,40 @@ debug-stdio-bridge-plugin PLUGIN_DIR=".tmp/stdio-bridge-plugin": build
         --plugin-dir "$plugin_dir" \
         -- "$plugin_dir/probe.sh"
 
+# Smoke the dynamic system-prompt fetch path (RFC-0002 §dynamic fragments)
+# locally with NO nix and NO claude: go-build clown + the stdio bridge (go
+# build sees the working tree, so untracked files compile), launch the bridge
+# wrapping the REAL `clown job-mcp`, then GET /clown/system-prompt and print the
+# live fragment. The fragment embeds CLOWN_SESSION_ID + job-mcp's own tool
+# catalog, so it proves the bridge->prompts/get->HTTP dogfood end to end.
+[group("debug")]
+debug-system-prompt-fetch SESSION="local-smoke":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tmp="$(mktemp -d)"
+    bridge_pid=
+    trap 'kill "${bridge_pid:-}" 2>/dev/null || true; rm -rf "$tmp"' EXIT
+    go build -o "$tmp/clown" ./cmd/clown
+    go build -o "$tmp/clown-stdio-bridge" ./cmd/clown-stdio-bridge
+    export CLOWN_SESSION_ID="{{SESSION}}"
+    "$tmp/clown-stdio-bridge" --command "$tmp/clown" -- job-mcp \
+        >"$tmp/handshake" 2>"$tmp/bridge.log" &
+    bridge_pid=$!
+    for _ in $(seq 1 30); do [[ -s "$tmp/handshake" ]] && break; sleep 0.1; done
+    handshake="$(head -n1 "$tmp/handshake")"
+    if [[ -z "$handshake" ]]; then
+        echo "FAIL: bridge produced no handshake; bridge log:" >&2
+        cat "$tmp/bridge.log" >&2
+        exit 1
+    fi
+    addr="$(awk -F'|' '{print $4}' <<<"$handshake")"
+    echo "bridge handshake : $handshake"
+    echo "session key      : $CLOWN_SESSION_ID"
+    echo "GET http://$addr/clown/system-prompt"
+    echo "------ fragment ------"
+    curl -sS "http://$addr/clown/system-prompt"
+    printf '\n------ end fragment ------\n'
+
 # Run the moxy-dependent integration tests with the opt-in env var pre-set.
 # Useful for verifying fixes to those recipes without typing the long form.
 [group("debug")]

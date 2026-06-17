@@ -116,6 +116,27 @@ See
 .Sx Request Timeout Regimes
 for how the presence or absence of this field changes whether keep-alive
 heartbeats can extend a long-running call.
+.It Fa systemPromptPath Pq string, optional
+Opt-in for dynamic system-prompt contribution.
+When non-empty,
+.Xr clown-plugin-host 1
+issues
+.Li GET http://<addr><systemPromptPath>
+after the server is healthy and folds a
+.Li 200
+body into the downstream system prompt, appended after all static prompt
+fragments.
+A
+.Li 204 ,
+empty body, or any non-
+.Li 200
+status contributes nothing.
+The fetch is best-effort: a timeout or transport error degrades to no
+fragment and never fails the launch.
+Unset means static-only.
+See
+.Xr clown-plugin-protocol 7 ,
+section 5.
 .El
 .Ss Stdio Server Definition
 Each stdio server definition is an object with the following fields:
@@ -151,6 +172,32 @@ The
 distinction is especially relevant here, since
 .Xr clown-stdio-bridge 1
 is what emits the keep-alive heartbeats.
+.It Fa systemPrompt Pq boolean, optional
+When
+.Li true ,
+opts this bridged server into dynamic system-prompt contribution: clown sets
+the synthesized
+.Fa httpServers
+entry's
+.Fa systemPromptPath
+to
+.Pa /clown/system-prompt ,
+which
+.Xr clown-stdio-bridge 1
+serves by issuing an MCP
+.Li prompts/get
+for the
+.Li system-prompt-append
+prompt to the wrapped child.
+The child must both be declared with
+.Li systemPrompt
+.Li true
+and expose that prompt; either absent yields no fragment.
+Default:
+.Li false .
+See
+.Xr clown-plugin-protocol 7 ,
+section 5.
 .El
 .Pp
 At discovery time, clown desugars each

@@ -15,17 +15,26 @@ type ClaudeArgs struct {
 }
 
 // BuildClaudeArgs assembles the argument list for the claude provider CLI.
-// It returns the args (excluding the binary path) and a cleanup function
-// that removes any temp files created for prompt fragments. The caller
-// must invoke cleanup after the downstream process exits.
-func BuildClaudeArgs(cfg ClaudeArgs, forwarded []string) ([]string, func(), error) {
+// It returns the args (excluding the binary path), the path of the
+// --append-system-prompt-file temp file (empty when no append fragments were
+// written), and a cleanup function that removes any temp files created for
+// prompt fragments. The caller must invoke cleanup after the downstream
+// process exits.
+//
+// The append-file path is surfaced so the plugin-host path can fold dynamic,
+// plugin-contributed fragments into the same file after its servers are
+// healthy but before claude is exec'd (RFC-0002 §dynamic fragments). clown
+// always prepends a build-identity fragment, so in practice this path is
+// non-empty for every real claude launch.
+func BuildClaudeArgs(cfg ClaudeArgs, forwarded []string) ([]string, string, func(), error) {
 	var args []string
 	var cleanups []string
+	var appendFile string
 
 	if cfg.DisallowedToolsFile != "" {
 		patterns, err := readDisallowedTools(cfg.DisallowedToolsFile)
 		if err != nil {
-			return nil, nil, err
+			return nil, "", nil, err
 		}
 		for _, p := range patterns {
 			args = append(args, "--disallowed-tools", p)
@@ -35,7 +44,7 @@ func BuildClaudeArgs(cfg ClaudeArgs, forwarded []string) ([]string, func(), erro
 	if cfg.AgentsFile != "" {
 		data, err := os.ReadFile(cfg.AgentsFile)
 		if err != nil {
-			return nil, nil, err
+			return nil, "", nil, err
 		}
 		args = append(args, "--agents", string(data))
 	}
@@ -47,14 +56,15 @@ func BuildClaudeArgs(cfg ClaudeArgs, forwarded []string) ([]string, func(), erro
 	if cfg.AppendFragments != "" {
 		f, err := os.CreateTemp("", "clown-prompt-*.txt")
 		if err != nil {
-			return nil, nil, err
+			return nil, "", nil, err
 		}
 		if _, err := f.WriteString(cfg.AppendFragments); err != nil {
 			f.Close()
 			os.Remove(f.Name())
-			return nil, nil, err
+			return nil, "", nil, err
 		}
 		f.Close()
+		appendFile = f.Name()
 		cleanups = append(cleanups, f.Name())
 		args = append(args, "--append-system-prompt-file", f.Name())
 	}
@@ -66,7 +76,7 @@ func BuildClaudeArgs(cfg ClaudeArgs, forwarded []string) ([]string, func(), erro
 			os.Remove(path)
 		}
 	}
-	return args, cleanup, nil
+	return args, appendFile, cleanup, nil
 }
 
 func readDisallowedTools(path string) ([]string, error) {

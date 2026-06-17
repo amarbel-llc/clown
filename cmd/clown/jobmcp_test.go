@@ -66,6 +66,12 @@ func TestJobMCPInitializeAndToolsList(t *testing.T) {
 	if si["name"] != "clown-jobs" {
 		t.Fatalf("serverInfo.name = %v, want clown-jobs", si["name"])
 	}
+	// The prompts capability MUST be advertised so claude (and the bridge's
+	// prompts/get fetch) know the server offers prompts (RFC-0002 §5).
+	caps, _ := result["capabilities"].(map[string]any)
+	if _, ok := caps["prompts"]; !ok {
+		t.Errorf("initialize capabilities missing prompts: %v", caps)
+	}
 
 	resp = mcpCall(t, map[string]any{"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
 	result, _ = resp["result"].(map[string]any)
@@ -85,6 +91,61 @@ func TestJobMCPInitializeAndToolsList(t *testing.T) {
 	}
 	if len(tools) != 10 {
 		t.Errorf("want 10 tools, got %d", len(tools))
+	}
+}
+
+func TestJobMCPPromptsList(t *testing.T) {
+	resp := mcpCall(t, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "prompts/list"})
+	result, ok := resp["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("prompts/list: no result: %v", resp)
+	}
+	prompts, _ := result["prompts"].([]any)
+	if len(prompts) != 1 {
+		t.Fatalf("want 1 prompt, got %d (%v)", len(prompts), prompts)
+	}
+	first, _ := prompts[0].(map[string]any)
+	if first["name"] != jobSystemPromptName {
+		t.Errorf("prompt name = %v, want %q", first["name"], jobSystemPromptName)
+	}
+}
+
+func TestJobMCPPromptsGet(t *testing.T) {
+	t.Setenv("CLOWN_SESSION_ID", "session-xyz")
+	resp := mcpCall(t, map[string]any{
+		"jsonrpc": "2.0", "id": 1, "method": "prompts/get",
+		"params": map[string]any{"name": jobSystemPromptName},
+	})
+	result, ok := resp["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("prompts/get: no result: %v", resp)
+	}
+	messages, _ := result["messages"].([]any)
+	if len(messages) == 0 {
+		t.Fatalf("prompts/get returned no messages: %v", result)
+	}
+	content, _ := messages[0].(map[string]any)["content"].(map[string]any)
+	text, _ := content["text"].(string)
+	// Runtime-dynamic, server-owned: the injected session key and the server's
+	// own tool catalog both appear — neither is expressible at build time.
+	if !strings.Contains(text, "session-xyz") {
+		t.Errorf("fragment missing injected session key; got:\n%s", text)
+	}
+	if !strings.Contains(text, "job_start") {
+		t.Errorf("fragment missing tool catalog; got:\n%s", text)
+	}
+	if !strings.Contains(text, "clown job platform") {
+		t.Errorf("fragment missing header; got:\n%s", text)
+	}
+}
+
+func TestJobMCPPromptsGetUnknown(t *testing.T) {
+	resp := mcpCall(t, map[string]any{
+		"jsonrpc": "2.0", "id": 1, "method": "prompts/get",
+		"params": map[string]any{"name": "no-such-prompt"},
+	})
+	if _, ok := resp["error"]; !ok {
+		t.Errorf("prompts/get for unknown name should error, got %v", resp)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/amarbel-llc/clown/internal/jobwake"
@@ -43,12 +44,24 @@ func serveJobMCP(in io.Reader, out io.Writer) {
 			_ = enc.Encode(rpcResult(req.ID, map[string]any{
 				"protocolVersion": "2025-06-18",
 				"serverInfo":      map[string]any{"name": "clown-jobs", "version": "1"},
-				"capabilities":    map[string]any{"tools": map[string]any{}},
+				"capabilities": map[string]any{
+					"tools":   map[string]any{},
+					"prompts": map[string]any{},
+				},
 			}))
 		case "tools/list":
 			_ = enc.Encode(rpcResult(req.ID, map[string]any{"tools": jobToolList()}))
 		case "tools/call":
 			_ = enc.Encode(rpcResult(req.ID, callJobTool(req.Params)))
+		case "prompts/list":
+			_ = enc.Encode(rpcResult(req.ID, map[string]any{"prompts": jobPromptList()}))
+		case "prompts/get":
+			res, ok := jobPromptGet(req.Params)
+			if !ok {
+				_ = enc.Encode(rpcError(req.ID, -32602, "unknown prompt"))
+				break
+			}
+			_ = enc.Encode(rpcResult(req.ID, res))
 		case "notifications/initialized":
 			// Notification (no id): no response.
 		default:
@@ -118,6 +131,68 @@ func jobToolList() []map[string]any {
 		{"name": "chat_list", "description": "List live chat recipients (presence): each {sessionKey, channelId, decoration, description, lastSeen}, groupable by decoration. Replaces spinclass chat-list-sessions.",
 			"inputSchema": obj(map[string]any{})},
 	}
+}
+
+// jobSystemPromptName is the well-known MCP prompt the stdio bridge requests
+// when clown asks for a dynamic system-prompt fragment (RFC-0002 §dynamic
+// fragments). It MUST match childPromptName in cmd/clown-stdio-bridge.
+const jobSystemPromptName = "system-prompt-append"
+
+// jobPromptList advertises the single dynamic system-prompt the job platform
+// contributes. Exposed via MCP prompts/list (a stable capability listing).
+func jobPromptList() []map[string]any {
+	return []map[string]any{{
+		"name":        jobSystemPromptName,
+		"description": "Live orientation for the clown job platform available in this session.",
+	}}
+}
+
+// jobPromptGet answers an MCP prompts/get. ok is false for any name other than
+// jobSystemPromptName, which the caller maps to a JSON-RPC error.
+func jobPromptGet(params json.RawMessage) (map[string]any, bool) {
+	var p struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, false
+	}
+	if p.Name != jobSystemPromptName {
+		return nil, false
+	}
+	return map[string]any{
+		"description": "clown job platform orientation",
+		"messages": []map[string]any{{
+			"role":    "user",
+			"content": map[string]any{"type": "text", "text": jobSystemPromptFragment()},
+		}},
+	}, true
+}
+
+// jobSystemPromptFragment builds the orientation fragment at request time. It
+// is genuinely runtime-dynamic: the tool list is the server's own catalog and
+// the channel key is resolved from the per-instance identity clown injected
+// into this process's env (clown#136) — state the build-time static fragment
+// mechanism (FDR-0003) structurally cannot express.
+func jobSystemPromptFragment() string {
+	tools := jobToolList()
+	names := make([]string, 0, len(tools))
+	for _, t := range tools {
+		if n, ok := t["name"].(string); ok {
+			names = append(names, n)
+		}
+	}
+	var b strings.Builder
+	b.WriteString("## clown job platform (live)\n\n")
+	b.WriteString("The clown job-wakeup channel is active for this session")
+	if session := jobwake.SessionKey(); session != "" {
+		fmt.Fprintf(&b, " (channel key `%s`)", session)
+	}
+	b.WriteString(".\n\n")
+	b.WriteString("Available tools: ")
+	b.WriteString(strings.Join(names, ", "))
+	b.WriteString(".\n\n")
+	b.WriteString("Use them to defer long-running work to the background and to coordinate across sessions; you are woken when a backgrounded job reaches a terminal state.")
+	return b.String()
 }
 
 // callJobTool decodes a tools/call params object and dispatches to jobwake.

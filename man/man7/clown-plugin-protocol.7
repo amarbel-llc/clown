@@ -27,6 +27,10 @@ failure handling, plugin manifest compilation, and shutdown.
 It is modeled on the
 .Lk https://github.com/hashicorp/go-plugin "hashicorp/go-plugin"
 handshake protocol.
+.Pp
+A server MAY additionally contribute a dynamic system-prompt fragment,
+computed at session launch; see
+.Sx DYNAMIC SYSTEM-PROMPT CONTRIBUTION .
 .Sh DISCOVERY
 .Xr clown-plugin-host 1
 receives plugin directories via
@@ -395,6 +399,63 @@ clown (Go binary, manages plugin lifecycle directly)
        \(br\(em remove compiled staging dirs
        \(da\(em exit with claude's exit code
 .Ed
+.Sh DYNAMIC SYSTEM-PROMPT CONTRIBUTION
+A server MAY contribute a system-prompt fragment computed at session launch
+\(em reflecting live runtime state the build-time static fragment mechanism
+cannot express.
+This is an OPTIONAL upgrade; a server that does not opt in is unaffected.
+.Pp
+A native
+.Fa httpServers
+entry opts in by setting
+.Fa systemPromptPath
+to a non-empty HTTP path it serves.
+A
+.Fa stdioServers
+entry opts in with
+.Fa systemPrompt Ns = Ns Li true ,
+which desugars to the fixed path
+.Pa /clown/system-prompt
+served by
+.Xr clown-stdio-bridge 1 .
+.Pp
+After a server is healthy and before the downstream command is exec'd, the
+host issues a single
+.Li GET http://<addr><systemPromptPath> .
+A
+.Li 200
+body is appended
+.Em last
+into the downstream system prompt (after identity, builtin, plugin-static,
+and user fragments).
+A
+.Li 204 ,
+empty body, or any non-
+.Li 200
+status contributes nothing.
+The fetch is best-effort: a timeout or transport error degrades to the static
+prompt and never fails the launch, and is not treated as a server failure.
+.Pp
+For a bridged stdio server,
+.Xr clown-stdio-bridge 1
+answers
+.Pa /clown/system-prompt
+by issuing an MCP
+.Li prompts/get
+for the
+.Li system-prompt-append
+prompt to the wrapped child, so the fragment is child-owned.
+This applies only to downstream providers that run under the plugin host and
+read an appendable system-prompt file (the claude family).
+See
+.Xr clown-json 5
+for the
+.Fa systemPromptPath
+and
+.Fa systemPrompt
+fields, and
+.Pa docs/rfcs/0002-clown-plugin-protocol.md
+section 5 for the normative contract.
 .Sh COMPATIBILITY
 This protocol is additive.
 Plugins without
@@ -439,4 +500,12 @@ influence model behavior.
 Clown's managed-settings guardrails (Bash disabled, auto-mode disabled)
 apply regardless of which HTTP MCP servers are running.
 Servers cannot override managed settings.
+.It
+A dynamic system-prompt fragment
+.Pq see Sx DYNAMIC SYSTEM-PROMPT CONTRIBUTION
+is injected into the downstream model's system prompt and can influence model
+behavior with the same authority a server already holds via its MCP tools.
+The host fetches fragments only from loopback addresses it launched and
+health-checked, never a remote or caller-supplied URL; the fragment is plain
+text, neither executed nor interpolated.
 .El

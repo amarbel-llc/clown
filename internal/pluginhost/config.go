@@ -10,6 +10,12 @@ import (
 	"time"
 )
 
+// BridgeSystemPromptPath is the fixed HTTP path clown-stdio-bridge serves
+// for dynamic system-prompt contribution. Desugar stamps it onto a bridged
+// server's SystemPromptPath when StdioServerDef.SystemPrompt is set. The
+// literal MUST match the handler registered in cmd/clown-stdio-bridge.
+const BridgeSystemPromptPath = "/clown/system-prompt"
+
 type ClownConfig struct {
 	Version int `json:"version"`
 	// HTTPServers declares MCP servers that already speak the
@@ -45,6 +51,14 @@ type ServerDef struct {
 	// this to override its default 60 s per-tool MCP request timeout.
 	// Units are milliseconds, matching Claude Code's wire format.
 	Timeout int `json:"timeout,omitempty"`
+	// SystemPromptPath, when non-empty, opts this server into dynamic
+	// system-prompt contribution (RFC-0002 §dynamic fragments). After the
+	// server is healthy, clown issues GET http://<addr><SystemPromptPath>
+	// and folds a 200 body into the claude --append-system-prompt-file.
+	// Empty (the default) means static-only — no fetch, no behavior change.
+	// Native httpServers set this directly; bridged stdioServers get it via
+	// Desugar from StdioServerDef.SystemPrompt.
+	SystemPromptPath string `json:"systemPromptPath,omitempty"`
 }
 
 // StdioServerDef declares a stdio MCP server that clown will bridge to
@@ -57,6 +71,14 @@ type StdioServerDef struct {
 	// Timeout has the same semantics as ServerDef.Timeout: when
 	// non-zero, propagates to the compiled plugin.json entry.
 	Timeout int `json:"timeout,omitempty"`
+	// SystemPrompt, when true, opts this bridged server into dynamic
+	// system-prompt contribution. Desugar translates it into the
+	// synthesized ServerDef's SystemPromptPath = BridgeSystemPromptPath,
+	// the fixed path clown-stdio-bridge serves (it answers by issuing an
+	// MCP prompts/get for the "system-prompt-append" prompt to the wrapped
+	// child). A bridged child opts in by both setting this AND exposing
+	// that prompt; either absent yields no fragment.
+	SystemPrompt bool `json:"systemPrompt,omitempty"`
 }
 
 // MonitorDef mirrors Anthropic's plugin monitor schema exactly. Fields
@@ -245,12 +267,17 @@ func Desugar(cfg *ClownConfig, bridgePath, pluginDir string) error {
 			env[k] = v
 		}
 		env["CLOWN_BRIDGE_SERVER_NAME"] = name
+		systemPromptPath := ""
+		if stdio.SystemPrompt {
+			systemPromptPath = BridgeSystemPromptPath
+		}
 		cfg.HTTPServers[name] = ServerDef{
-			Command:   bridgePath,
-			Args:      args,
-			Env:       env,
-			Transport: "streamable-http",
-			Timeout:   stdio.Timeout,
+			Command:          bridgePath,
+			Args:             args,
+			Env:              env,
+			Transport:        "streamable-http",
+			Timeout:          stdio.Timeout,
+			SystemPromptPath: systemPromptPath,
 			Healthcheck: HealthcheckDef{
 				Path:     "/healthz",
 				Interval: JSONDuration{Duration: 1 * time.Second},

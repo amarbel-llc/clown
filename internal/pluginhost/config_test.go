@@ -199,6 +199,25 @@ func TestDesugarStdioServers(t *testing.T) {
 	}
 }
 
+func TestDesugarSystemPromptOptIn(t *testing.T) {
+	cfg := &ClownConfig{
+		Version: 1,
+		StdioServers: map[string]StdioServerDef{
+			"jobs":  {Command: "/bin/jobs", SystemPrompt: true},
+			"plain": {Command: "/bin/plain"},
+		},
+	}
+	if err := Desugar(cfg, "/bin/bridge", "/plugins/x"); err != nil {
+		t.Fatalf("Desugar: %v", err)
+	}
+	if got := cfg.HTTPServers["jobs"].SystemPromptPath; got != BridgeSystemPromptPath {
+		t.Errorf("opted-in server SystemPromptPath = %q, want %q", got, BridgeSystemPromptPath)
+	}
+	if got := cfg.HTTPServers["plain"].SystemPromptPath; got != "" {
+		t.Errorf("non-opted server SystemPromptPath = %q, want empty", got)
+	}
+}
+
 func TestDesugarNoArgs(t *testing.T) {
 	cfg := &ClownConfig{
 		Version: 1,

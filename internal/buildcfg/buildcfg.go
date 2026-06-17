@@ -14,8 +14,8 @@ var (
 	// lowest-precedence layer of the clownfile cascade, supplying default [attach]
 	// multiplexer self-wrap templates. Empty in dev builds (then skipped).
 	DefaultClownfilePath string
-	Version             string
-	Commit              string
+	Version              string
+	Commit               string
 	// ShortSha is the abbreviated git revision (git's short rev, with a
 	// "-dirty" suffix for dirty trees). Displayed alongside Version as the
 	// `<version>+<shortSha>` build identifier the agent stamps into

@@ -15,7 +15,7 @@ func TestBuildClaudeArgs_DisallowedToolsFromFile(t *testing.T) {
 	f.WriteString("Bash(*)\nAgent(Explore)\nWebFetch\n")
 	f.Close()
 
-	args, cleanup, err := BuildClaudeArgs(ClaudeArgs{
+	args, _, cleanup, err := BuildClaudeArgs(ClaudeArgs{
 		DisallowedToolsFile: f.Name(),
 	}, nil)
 	if err != nil {
@@ -44,7 +44,7 @@ func TestBuildClaudeArgs_DisallowedToolsFileEmpty(t *testing.T) {
 	defer os.Remove(f.Name())
 	f.Close()
 
-	args, cleanup, err := BuildClaudeArgs(ClaudeArgs{
+	args, _, cleanup, err := BuildClaudeArgs(ClaudeArgs{
 		DisallowedToolsFile: f.Name(),
 	}, nil)
 	if err != nil {
@@ -68,7 +68,7 @@ func TestBuildClaudeArgs_DisallowedToolsFileCommentsAndBlanks(t *testing.T) {
 	f.WriteString("# comment\nBash(*)\n\n  \n# another comment\nWrite\n")
 	f.Close()
 
-	args, cleanup, err := BuildClaudeArgs(ClaudeArgs{
+	args, _, cleanup, err := BuildClaudeArgs(ClaudeArgs{
 		DisallowedToolsFile: f.Name(),
 	}, nil)
 	if err != nil {
@@ -94,7 +94,7 @@ func TestBuildClaudeArgs_DisallowedToolsFileCommentsAndBlanks(t *testing.T) {
 }
 
 func TestBuildClaudeArgs_NoDisallowedToolsFile(t *testing.T) {
-	args, cleanup, err := BuildClaudeArgs(ClaudeArgs{}, nil)
+	args, _, cleanup, err := BuildClaudeArgs(ClaudeArgs{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +116,7 @@ func TestBuildClaudeArgs_AgentsFile(t *testing.T) {
 	f.WriteString(`{"test-agent": {}}`)
 	f.Close()
 
-	args, cleanup, err := BuildClaudeArgs(ClaudeArgs{
+	args, _, cleanup, err := BuildClaudeArgs(ClaudeArgs{
 		AgentsFile: f.Name(),
 	}, nil)
 	if err != nil {
@@ -136,7 +136,7 @@ func TestBuildClaudeArgs_AgentsFile(t *testing.T) {
 }
 
 func TestBuildClaudeArgs_SystemPromptFile(t *testing.T) {
-	args, cleanup, err := BuildClaudeArgs(ClaudeArgs{
+	args, _, cleanup, err := BuildClaudeArgs(ClaudeArgs{
 		SystemPromptFile: "/tmp/test-prompt",
 	}, nil)
 	if err != nil {
@@ -156,7 +156,7 @@ func TestBuildClaudeArgs_SystemPromptFile(t *testing.T) {
 }
 
 func TestBuildClaudeArgs_AppendFragments(t *testing.T) {
-	args, cleanup, err := BuildClaudeArgs(ClaudeArgs{
+	args, _, cleanup, err := BuildClaudeArgs(ClaudeArgs{
 		AppendFragments: "test fragment content",
 	}, nil)
 	if err != nil {
@@ -180,7 +180,7 @@ func TestBuildClaudeArgs_AppendFragments(t *testing.T) {
 }
 
 func TestBuildClaudeArgs_ForwardedArgs(t *testing.T) {
-	args, cleanup, err := BuildClaudeArgs(ClaudeArgs{}, []string{"chat", "--resume"})
+	args, _, cleanup, err := BuildClaudeArgs(ClaudeArgs{}, []string{"chat", "--resume"})
 	if err != nil {
 		t.Fatal(err)
 	}

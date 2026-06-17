@@ -533,6 +533,28 @@ The flake produces a `symlinkJoin` of five components:
    job tools (spinclass `session-job-status`/chat, moxy `async-result` status)
    migrate onto. Status: `accepted` (RFC-0011), reviewed by both consumers.
 
+   **Dynamic system-prompt fragments (RFC-0002 §5).** An *optional, runtime*
+   upgrade from the build-time static plugin fragments (FDR-0003): a plugin
+   server opts in (`httpServers.<n>.systemPromptPath`, or
+   `stdioServers.<n>.systemPrompt: true` which Desugar maps to the fixed bridge
+   path `/clown/system-prompt`), and after the server is healthy clown
+   `GET`s that path and appends the body **last** into claude's
+   `--append-system-prompt-file` — after identity/builtin/plugin-static/user
+   content. The fetch is best-effort: a non-200/204/timeout degrades to static,
+   never failing the launch (`internal/pluginhost` `Host.FetchPromptFragments`;
+   the append seam is at the tail of `runManaged` in `cmd/clown/main.go`, fed the
+   append-file path now returned by `provider.BuildClaudeArgs`). For a bridged
+   stdio server, `clown-stdio-bridge` serves `/clown/system-prompt` by issuing an
+   MCP `prompts/get` for the `system-prompt-append` prompt to the wrapped child —
+   so the fragment is *child-owned* and computed at request time. The
+   `clown-builtin-jobs` server is the dogfood: `clown job-mcp` exposes that prompt
+   (`jobSystemPromptFragment`), returning a live orientation fragment built from
+   its own tool catalog plus the per-instance session key injected via
+   `Host.BaseEnv` (clown#136) — runtime state the static path can't express.
+   Scope: the claude family only (providers that run the plugin host and read an
+   append file); exec-replacing providers are unaffected. Man page:
+   `clown-json(5)` (`systemPromptPath`, `systemPrompt`).
+
    **Cross-session chat (`clown chat`).** RFC-0013 §3 makes chat a clown
    construct on the job channel (rescope companion to spinclass FDR-0017). A chat
    message is a `chat` record (a waking type distinct from `message`, so the

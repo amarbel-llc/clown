@@ -129,6 +129,11 @@ func synthJobMonitorPluginDir(sessionKey string) (string, error) {
 				"jobs": map[string]any{
 					"command": exe,
 					"args":    []string{"job-mcp"},
+					// Opt into dynamic system-prompt contribution: the bridge
+					// serves /clown/system-prompt by issuing prompts/get to
+					// job-mcp, and clown folds the live orientation fragment
+					// into claude's append prompt (RFC-0002 §dynamic fragments).
+					"systemPrompt": true,
 				},
 			},
 		}

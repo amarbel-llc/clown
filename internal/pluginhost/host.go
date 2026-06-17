@@ -3,11 +3,26 @@ package pluginhost
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"sort"
+	"strings"
 	"sync"
+	"time"
 )
+
+// promptFetchBudget caps how long FetchPromptFragments will block the launch
+// while collecting dynamic system-prompt fragments. A prompt fragment is not
+// load-bearing for the session booting, so this is deliberately short — far
+// below the 30 s healthcheck timeout — and a server that overruns it is
+// simply skipped (degrade to static).
+const promptFetchBudget = 3 * time.Second
+
+// maxPromptFragmentBytes bounds a single fragment body so a misbehaving
+// server cannot balloon the prompt.
+const maxPromptFragmentBytes = 64 * 1024
 
 type DiscoveredServer struct {
 	PluginDir  string
@@ -181,6 +196,64 @@ func (h *Host) serverEntryForManaged(srv *ManagedServer) MCPServerEntry {
 		Type:    typ,
 		URL:     hs.URLWithHostRewrite(h.URLHostRewrite),
 		Timeout: srv.Def.Timeout,
+	}
+}
+
+// FetchPromptFragments collects dynamic system-prompt fragments from every
+// started server that opted in via Def.SystemPromptPath, in h.Servers order
+// (which mirrors discovered/plugin-list order). For each, it GETs
+// http://<handshake-addr><SystemPromptPath> under a per-call slice of ctx
+// bounded by promptFetchBudget. A non-200 (e.g. the bridge's 204 when the
+// child exposes no such prompt), an empty body, or any transport error is
+// skipped silently — the fetch degrades to static rather than blocking the
+// launch. Returned fragments are trimmed and non-empty.
+//
+// Call this after StartAll (so handshakes are resolved) and before the
+// provider is exec'd, so appended fragments reach the same prompt file.
+func (h *Host) FetchPromptFragments(ctx context.Context) []string {
+	var frags []string
+	for _, srv := range h.Servers {
+		path := srv.Def.SystemPromptPath
+		if path == "" {
+			continue
+		}
+		frag, ok := h.fetchOnePromptFragment(ctx, srv, path)
+		if ok && frag != "" {
+			frags = append(frags, frag)
+		}
+	}
+	return frags
+}
+
+func (h *Host) fetchOnePromptFragment(ctx context.Context, srv *ManagedServer, path string) (string, bool) {
+	url := "http://" + srv.Handshake().Address + path
+	reqCtx, cancel := context.WithTimeout(ctx, promptFetchBudget)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, url, nil)
+	if err != nil {
+		h.logPromptSkip(srv, err)
+		return "", false
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		h.logPromptSkip(srv, err)
+		return "", false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", false
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxPromptFragmentBytes))
+	if err != nil {
+		h.logPromptSkip(srv, err)
+		return "", false
+	}
+	return strings.TrimSpace(string(body)), true
+}
+
+func (h *Host) logPromptSkip(srv *ManagedServer, err error) {
+	if h.Logger != nil {
+		h.Logger.Info("skipping dynamic system-prompt fragment", "server", srv.Name, "err", err)
 	}
 }
 

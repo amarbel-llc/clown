@@ -1,6 +1,6 @@
 ---
 status: testing
-date: 2026-04-22
+date: 2026-06-17
 ---
 
 # Clown Plugin Protocol: HTTP MCP Server Lifecycle Management
@@ -70,7 +70,7 @@ The manifest is a JSON file with the following top-level fields:
 |-------|------|----------|-------------|
 | `version` | integer | Yes | Schema version. MUST be `1`. |
 | `httpServers` | object | No | Map of server name to server definition. At least one of `httpServers`, `stdioServers`, or `monitors` SHOULD be present. |
-| `stdioServers` | object | No | Map of server name to stdio server definition. clown desugars these into `httpServers` entries via `clown-stdio-bridge`. See FDR 0002. |
+| `stdioServers` | object | No | Map of server name to stdio server definition. clown desugars these into `httpServers` entries via `clown-stdio-bridge`. A stdio entry MAY set `systemPrompt: true` to opt into dynamic system-prompt contribution (§ 5.1). See FDR 0002. |
 | `monitors` | array | No | Background-shell monitor declarations. clown injects this array verbatim into the compiled `.claude-plugin/plugin.json` so Claude Code (≥ v2.1.105) spawns and supervises each monitor. See § 1.2.1. |
 
 Each server definition is an object with the following fields:
@@ -83,6 +83,7 @@ Each server definition is an object with the following fields:
 | `transport` | string | No | `"streamable-http"` | MCP transport type: `streamable-http` or `sse` |
 | `healthcheck` | object | No | See below | Health check configuration |
 | `timeout` | integer | No | (unset) | Per-tool MCP request timeout in milliseconds. When set, forwarded verbatim into the compiled `plugin.json` as `mcpServers.<name>.timeout` to override Claude Code's default. Unrelated to `healthcheck.timeout`. |
+| `systemPromptPath` | string | No | (unset) | Opt-in for dynamic system-prompt contribution (§ 5). When non-empty, the host issues `GET http://<addr><systemPromptPath>` after the server is healthy and folds a `200` body into the downstream system prompt. Empty/unset means the server contributes nothing (static-only). |
 
 Healthcheck definition:
 
@@ -381,7 +382,94 @@ In this mode, claude's native plugin loader is the sole MCP registration
 path. This is intended as an escape hatch for debugging or for users who
 prefer native claude behavior.
 
+### 5. Dynamic System-Prompt Contribution
+
+A server MAY contribute a system-prompt fragment that is computed at session
+launch — reflecting live runtime state (a resolved session key, the server's
+own capability surface, discovered peers) that the build-time static fragment
+mechanism (FDR 0003) cannot express. This is an OPTIONAL upgrade: a server
+that does not opt in behaves exactly as before.
+
+#### 5.1 Opt-in
+
+A native `httpServers` entry opts in by setting `systemPromptPath` to a
+non-empty HTTP path it serves (§ 1.2).
+
+A `stdioServers` entry opts in by setting `systemPrompt: true`. At desugaring
+time (§ Specification note; FDR 0002) the host MUST set the synthesized
+`httpServers` entry's `systemPromptPath` to the fixed path
+`/clown/system-prompt`, which `clown-stdio-bridge` serves (§ 5.4). A stdio
+entry that omits `systemPrompt` (or sets it `false`) MUST NOT be probed.
+
+#### 5.2 Fetch Contract
+
+For each healthy server whose resolved `systemPromptPath` is non-empty, the
+host MUST issue exactly one `GET http://<addr><systemPromptPath>` after the
+healthcheck passes (§ 3.3) and before the downstream command is exec'd
+(§ 3.8). The server's response is interpreted as:
+
+| Response | Meaning |
+|----------|---------|
+| `200` with a non-empty body | The body (trimmed of leading/trailing whitespace) is the fragment. |
+| `204`, an empty body, or any non-`200` status | No fragment. The server contributes nothing this launch. |
+
+The fragment body SHOULD be Markdown (`Content-Type: text/markdown` or
+`text/plain`). The host MUST bound the fetch with a short timeout (the
+reference implementation uses 3 seconds, far below the 30 s healthcheck
+budget) and MUST bound the body size it reads (the reference implementation
+caps at 64 KiB).
+
+The fetch is best-effort and MUST NOT block or fail the launch: a timeout,
+transport error, non-`200`, or oversized body MUST degrade to "no fragment"
+and the session MUST proceed with whatever static prompt it already had. A
+fetch failure MUST NOT be treated as a server failure under § 3.4.
+
+#### 5.3 Ordering
+
+When fragments are collected from multiple opted-in servers, the host MUST
+preserve discovery order (plugin-list order). Collected dynamic fragments are
+appended **after** all static prompt content (the identity, builtin,
+plugin-static (FDR 0003), and user fragments), separated by a blank line.
+This "append-last" placement means a dynamic fragment is the lowest-priority,
+most-recent context in the assembled prompt.
+
+#### 5.4 Bridge Translation (stdio servers)
+
+`clown-stdio-bridge` MUST serve the fixed path `/clown/system-prompt`. On a
+`GET`, it MUST issue an MCP `prompts/get` request for the prompt named
+`system-prompt-append` to the wrapped child over the stdio transport, and:
+
+- on a successful result, return `200` with the concatenated text of the
+  result's `messages[].content` text parts;
+- on a JSON-RPC error, a missing prompt, a malformed result, or an empty
+  text body, return `204`.
+
+The bridge issues this `prompts/get` before the downstream MCP client has
+sent `initialize`. A wrapped child that does not require initialize-ordering
+(e.g. a stateless server) answers normally; a child that enforces ordering
+will error, which the bridge maps to `204`. A child opts in by both being
+declared with `systemPrompt: true` AND exposing the `system-prompt-append`
+prompt; either absent yields no fragment.
+
+#### 5.5 Scope
+
+Dynamic contribution applies only to downstream providers that run under the
+plugin host and read an appendable system-prompt file (the claude family).
+Providers that exec-replace the host or do not consume a system prompt are
+out of scope and MUST be unaffected.
+
 ## Security Considerations
+
+### Dynamic System-Prompt Fragments
+
+A dynamic fragment (§ 5) is injected into the downstream model's system
+prompt, so a server contributing one can influence model behavior with the
+same authority as the static system prompt. This is the same trust level a
+server already holds via the MCP tools it serves (see Trust Model) — both are
+shipped within trusted plugin flake outputs. The host MUST fetch fragments
+only from loopback addresses it itself launched and health-checked, never
+from a remote or caller-supplied URL. The fragment is plain text appended to
+a prompt file; it is not executed and is not interpolated.
 
 ### Local-only Binding
 
@@ -414,6 +502,20 @@ The server's stdout is consumed by the host for the handshake line.
 Servers MUST NOT write additional data to stdout after the handshake.
 Diagnostic output MUST go to stderr, which the host forwards with a prefix.
 
+## Conformance Testing
+
+Conformance tests for this specification live in `zz-tests_bats/`. Tests use
+binary injection via `bats-emo` (`require_bin`) rather than hardcoded build
+paths, so a Go and a future rewrite can run the same suite.
+
+### Covered Requirements
+
+| Requirement | Test File | Description |
+|-------------|-----------|-------------|
+| § 2.1, handshake format | `stdio_bridge.bats` | Handshake matches `1\|1\|tcp\|host:port\|streamable-http` |
+| § 3.3, healthcheck 200 | `stdio_bridge.bats` | `/healthz` returns 200 |
+| § 5.4, bridge `prompts/get` translation | `job_mcp.bats` | `clown job-mcp` answers `prompts/list` / `prompts/get` for `system-prompt-append`; the fragment carries live session + tool state |
+
 ## Compatibility
 
 This specification introduces a new manifest (`clown.json`) and binary
@@ -426,6 +528,13 @@ This specification introduces a new manifest (`clown.json`) and binary
 
 A plugin MAY ship both `clown.json` (for HTTP servers) and `.mcp.json`
 (for stdio servers) simultaneously.
+
+The § 5 dynamic system-prompt fields (`systemPromptPath`, `systemPrompt`) are
+additive and default to off: a manifest that omits them produces byte-for-byte
+the same behavior as before this amendment. A host that predates § 5 simply
+never issues the fetch, and a server's `systemPromptPath` is inert. The
+`system-prompt-append` MCP prompt a bridged server exposes is an ordinary MCP
+prompt; clients that do not request it are unaffected.
 
 ## References
 

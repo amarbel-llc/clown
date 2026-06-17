@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -121,6 +122,27 @@ func run(p parsedArgs) int {
 		}
 	})
 	mux.HandleFunc("/mcp", handler.handleMCP)
+	// Dynamic system-prompt contribution (RFC-0002 §dynamic fragments).
+	// clown GETs this path after the server is healthy and folds a 200 body
+	// into claude's --append-system-prompt-file. The bridge answers by
+	// issuing an MCP prompts/get for the well-known "system-prompt-append"
+	// prompt to the wrapped child, so the fragment is child-owned and
+	// computed at request time (live state). A child that exposes no such
+	// prompt — or any error — yields 204, which clown treats as "no
+	// fragment". The path literal MUST match pluginhost.BridgeSystemPromptPath.
+	mux.HandleFunc("/clown/system-prompt", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		text, ok := fetchChildSystemPrompt(r.Context(), tr)
+		if !ok || text == "" {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+		_, _ = io.WriteString(w, text)
+	})
 
 	srv := &http.Server{Handler: mux}
 	serveErr := make(chan error, 1)
