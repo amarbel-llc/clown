@@ -1,12 +1,16 @@
 package buildcfg
 
 var (
-	ClaudeCliPath       string
-	CodexCliPath        string
-	CircusCliPath       string
-	OpencodeCliPath     string
-	CrushCliPath        string
-	ClownboxCliPath     string
+	ClaudeCliPath   string
+	CodexCliPath    string
+	CircusCliPath   string
+	OpencodeCliPath string
+	CrushCliPath    string
+	ClownboxCliPath string
+	// TrapezeCliPath is the absolute path to the trapeze binary, baked in for
+	// the headless `trapeze` provider (OpenRouter backend + XMPP frontend).
+	// Empty (the default `go build`) falls back to resolving "trapeze" on PATH.
+	TrapezeCliPath      string
 	AgentsFile          string
 	DisallowedToolsFile string
 	SystemPromptAppendD string
@@ -14,8 +18,8 @@ var (
 	// lowest-precedence layer of the clownfile cascade, supplying default [attach]
 	// multiplexer self-wrap templates. Empty in dev builds (then skipped).
 	DefaultClownfilePath string
-	Version             string
-	Commit              string
+	Version              string
+	Commit               string
 	// ShortSha is the abbreviated git revision (git's short rev, with a
 	// "-dirty" suffix for dirty trees). Displayed alongside Version as the
 	// `<version>+<shortSha>` build identifier the agent stamps into
