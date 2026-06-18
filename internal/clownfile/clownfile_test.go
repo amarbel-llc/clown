@@ -184,6 +184,44 @@ func TestDiscoverXDGOnlyAndMalformed(t *testing.T) {
 	}
 }
 
+// pty-suspend is a *bool so a deeper clownfile can flip an enabled default back
+// off (a plain bool's false zero value would not override). Verify both the
+// unset (off) default and a base=true -> ancestor=false override.
+func TestPtySuspendOverride(t *testing.T) {
+	// Unset everywhere => off.
+	home := t.TempDir()
+	cf, err := Discover(home, home, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cf.Attach.PtySuspendEnabled() {
+		t.Error("unset pty-suspend must be off")
+	}
+
+	// base enables it; an ancestor ($HOME/clownfile) turns it back off.
+	home2 := t.TempDir()
+	base := filepath.Join(t.TempDir(), "default-clownfile")
+	writeFile(t, base, "[attach]\npty-suspend = true\n")
+	write(t, home2, "[attach]\npty-suspend = false\n")
+	cf, err = Discover(home2, home2, base, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cf.Attach.PtySuspendEnabled() {
+		t.Error("ancestor pty-suspend = false must override base = true")
+	}
+
+	// base enables it, no override => on.
+	home3 := t.TempDir()
+	cf, err = Discover(home3, home3, base, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cf.Attach.PtySuspendEnabled() {
+		t.Error("base pty-suspend = true with no override must be on")
+	}
+}
+
 func TestXDGPath(t *testing.T) {
 	// $XDG_CONFIG_HOME set wins.
 	t.Setenv("XDG_CONFIG_HOME", "/cfg")

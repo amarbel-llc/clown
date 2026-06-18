@@ -159,6 +159,27 @@ The template must detach (the default uses zmx with
 so clown returns promptly to its launcher.
 .It Sy spawn-entry , Sy spawn-window
 Parsed and held as schema; not executed by clown this release.
+.It Sy pty-suspend
+Boolean.
+When
+.Ql true ,
+an interactive provider run is wrapped in clown's ctrl-z escape-to-shell pty
+proxy: clown runs the provider on an inner pseudo-terminal and turns
+.Ql ^Z
+into a job-control suspend back to the launching shell, which a raw-mode TUI
+(such as claude) does not do for itself.
+.Ql fg
+resumes.
+Applies to the claude-family providers run inline; it is skipped for
+.Fl -tent
+(podman manages its own pty) and for exec-replacing providers
+.Pq codex , Fl -naked .
+Unset is off.
+Because it is a boolean with an overridable default, a deeper
+.Sy clownfile
+may set
+.Ql pty-suspend = false
+to turn off an enabled default.
 .El
 .Pp
 clown self-execs

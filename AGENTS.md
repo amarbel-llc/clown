@@ -326,6 +326,15 @@ runs **inline** unless a higher-precedence `clownfile` opts into `multiplexer = 
 (then the burned-in `start`/`resume`/`spawn` templates are inherited); any user
 `clownfile` overrides per key. Those zmx templates lock `spawn`/`spawn-entry`
 to spinclass's real `[session-entry]` defaults; `start`/`resume` are clown-native.
+`[attach].pty-suspend` (a `*bool`, default off, overridable per-clownfile) opts the
+interactive provider run into the **ctrl-z escape-to-shell pty proxy**
+(`internal/ptysuspend`): clown runs the provider on an inner pty and reclaims `^Z`
+(a raw-mode TUI like claude swallows it as a `0x1A` byte and never SIGTSTPs), turning
+it into a job-control suspend back to the launching shell (`fg` resumes, repaint via a
+winsize-toggle + `SIGWINCH`). Gated in `runProvider` to interactive + claude-family
+inline (not `--tent`/podman, not exec-replacing codex/`--naked`); resolved from the
+clownfile in `runWithFlags` into `parsedFlags.ptySuspend`. The burned-in default flips
+to `true` once resume-repaint/output-drain are dogfooded (FDR-0017 ctrl-z recon).
 **The awareness seam (RFC-0014)**: `[attach].group-id` (env-interpolated, default
 `"${SPINCLASS_SESSION_ID}"`) is exported as `CLOWN_GROUP_ID` and keys the group
 chat channel, presence decoration, and the `{group}` title; clown no longer reads

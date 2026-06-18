@@ -62,6 +62,13 @@ type Attach struct {
 	Spawn       []string `toml:"spawn"`        // detached-worker launch (RFC-0014 §5)
 	SpawnEntry  []string `toml:"spawn-entry"`  // harness argv a spawned worker boots (schema-only)
 	SpawnWindow []string `toml:"spawn-window"` // fire-and-forget window opener (schema-only)
+	// PtySuspend opts the interactive provider run into the ctrl-z escape-to-shell
+	// pty proxy (internal/ptysuspend): clown runs the provider on an inner pty and
+	// turns ^Z into a job-control suspend, which a raw-mode TUI (e.g. claude) does
+	// not do itself. A *bool so a deeper clownfile can override an enabled default
+	// back to false (a plain bool's false zero value would not override). nil =
+	// unset = off. See PtySuspendEnabled.
+	PtySuspend *bool `toml:"pty-suspend"`
 }
 
 // ResolveEnv expands ${NAME} / $NAME environment references in a config string,
@@ -87,6 +94,12 @@ const (
 // mean run inline (RFC-0013 §1.3 rule 1).
 func (a Attach) Enabled() bool {
 	return a.Multiplexer != "" && a.Multiplexer != "none"
+}
+
+// PtySuspendEnabled reports whether the ctrl-z escape-to-shell pty proxy is
+// requested. Unset (nil) is off.
+func (a Attach) PtySuspendEnabled() bool {
+	return a.PtySuspend != nil && *a.PtySuspend
 }
 
 // placeholderRe matches a {placeholder} token so Resolve can reject any that
@@ -273,5 +286,9 @@ func mergeInto(dst *Clownfile, src Clownfile) {
 	}
 	if src.Attach.SpawnWindow != nil {
 		dst.Attach.SpawnWindow = src.Attach.SpawnWindow
+	}
+	// *bool: a set value (true or false) in a deeper file overrides; nil inherits.
+	if src.Attach.PtySuspend != nil {
+		dst.Attach.PtySuspend = src.Attach.PtySuspend
 	}
 }

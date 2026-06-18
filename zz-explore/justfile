@@ -1124,6 +1124,102 @@ tent-hang-tty-state CLAUDE_PID:
     done
     echo
 
+# Empirical probe for the FDR-0017 ctrl-z / escape-to-shell regression recon
+# (clown took over multiplexing; ctrl-z from a clown session no longer drops to
+# a shell in the session root). Self-discovering: for every live claude process
+# owned by this user it dumps
+#   1. the ancestor process chain up to PID 1 — is clown's parent a multiplexer
+#      (zmx/zellij/posh/tmux) or an interactive shell? (= zmx self-wrap path vs
+#      inline path), and
+#   2. the controlling-tty termios at the claude pty and each pty layer. ISIG is
+#      the crux: with `-isig` (raw mode) ctrl-z is delivered to claude as a 0x1A
+#      byte and NEVER becomes SIGTSTP, so no job-control stop happens regardless
+#      of the parent. With `isig` set, ctrl-z DOES signal the foreground pgrp.
+# Reuses the `stty -a -F /proc/<pid>/fd/<n>` TCGETS technique from
+# tent-hang-tty-state. Read-only (TCGETS + /proc reads; no writes, no signals).
+# Usage: just explore ctrlz-tty-probe
+ctrlz-tty-probe:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    me="$(id -un)"
+    echo "time: $(date -Iseconds)"
+    echo
+    echo "=== candidate process tree (claude/clown/zmx/zellij/posh/tmux/shells) ==="
+    ps -u "$me" -o pid,ppid,pgid,sid,stat,tty,comm,args 2>/dev/null \
+      | awk 'NR==1 || tolower($0) ~ /claude|clown|zmx|zellij|posh|tmux|fish|bash|zsh|dash/' \
+      | grep -v -E 'ctrlz-tty-probe|[ /]awk ' || true
+    echo
+
+    # claude-code's comm is ".claude-wrapped" (the nix wrapper), argv[0] "claude".
+    mapfile -t raw_pids < <( { pgrep -u "$me" -x claude; pgrep -u "$me" -x '.claude-wrapped'; pgrep -u "$me" -f 'claude --plugin-dir'; } 2>/dev/null )
+    mapfile -t claude_pids < <(printf '%s\n' "${raw_pids[@]}" | grep -E '^[0-9]+$' | sort -un)
+    if [[ ${#claude_pids[@]} -eq 0 ]]; then
+        echo "(no claude process found via pgrep)"
+        exit 0
+    fi
+
+    for pid in "${claude_pids[@]}"; do
+        [[ -d "/proc/$pid" ]] || continue
+        echo "############################################################"
+        echo "### claude pid=$pid comm=$(cat /proc/$pid/comm 2>/dev/null)"
+        echo "############################################################"
+        for n in 0 1 2; do
+            fd_entry="/proc/$pid/fd/$n"
+            [[ -L "$fd_entry" ]] || continue
+            tgt=$(readlink "$fd_entry" 2>/dev/null || echo '?')
+            case "$tgt" in
+                /dev/pts/*|/dev/tty*)
+                    echo "-- claude fd $n -> $tgt (ISIG = does ctrl-z make a signal?) --"
+                    stty -a -F "$fd_entry" 2>&1 | tr ';' '\n' \
+                      | grep -Ei 'isig|icanon|-?echo|susp|^ *min|^ *time' | sed 's/^ *//' || true
+                    echo
+                    ;;
+            esac
+        done
+        echo "=== ancestor chain to PID 1 (parent muxer-vs-shell + termios isig) ==="
+        ancestor="$pid"
+        while [[ -n "$ancestor" && "$ancestor" != "1" ]]; do
+            [[ -d "/proc/$ancestor" ]] || break
+            comm=$(cat "/proc/$ancestor/comm" 2>/dev/null || echo "?")
+            fd0=$(readlink "/proc/$ancestor/fd/0" 2>/dev/null || echo "?")
+            isig=""
+            if [[ "$fd0" == /dev/pts/* || "$fd0" == /dev/tty* ]]; then
+                isig=$(stty -a -F "/proc/$ancestor/fd/0" 2>/dev/null | grep -oE '\-?isig' | head -1)
+            fi
+            printf "  pid=%-7s comm=%-18s fd0=%-12s %s\n" "$ancestor" "$comm" "$fd0" "${isig:+[$isig]}"
+            ancestor=$(awk '{print $4}' "/proc/$ancestor/stat" 2>/dev/null)
+        done
+        echo
+    done
+
+# Manual demo of the clown PTY-suspend proxy (FDR-0017 ctrl-z recon POC).
+# Runs `clown pty-suspend -- bash -c 'stty raw -echo -isig; exec cat'`: the inner
+# `cat` runs under an inner pty in RAW mode (ISIG off), exactly like claude's TUI,
+# so it would normally swallow ^Z. The proxy intercepts ^Z on the OUTER terminal
+# first and raises SIGTSTP on clown's process group. Press Ctrl-Z: you should
+# land back at a shell with the proxy as a stopped job (`jobs`); `fg` resumes it;
+# type to see `cat` echo your input; Ctrl-D inside cat exits cleanly.
+#
+# For the cleanest job-control behaviour run the printed command DIRECTLY in your
+# interactive shell (no `just` layer in the process group). Requires a built
+# clown (./result/bin/clown) or falls back to `go run`.
+# Usage: just explore pty-suspend-demo
+pty-suspend-demo:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    cd "$(git rev-parse --show-toplevel)"
+    if [[ -x ./result/bin/clown ]]; then
+        clown=(./result/bin/clown)
+    else
+        echo "note: ./result/bin/clown not found; using 'go run ./cmd/clown' (slower)" >&2
+        clown=(go run ./cmd/clown)
+    fi
+    inner='stty raw -echo -isig 2>/dev/null; exec cat'
+    echo "Direct equivalent (run this in your shell for the cleanest demo):"
+    printf '  %q ' "${clown[@]}"; printf 'pty-suspend -- bash -c %q\n\n' "$inner"
+    echo "Launching. Ctrl-Z to suspend -> shell; 'fg' to resume; type to see echo; Ctrl-D to exit cat."
+    exec "${clown[@]}" pty-suspend -- bash -c "$inner"
+
 # Generic probe loop for FDR-0007 tent design work. Runs an arbitrary
 # bash script inside the tent image using the *same* podman invocation
 # shape clown --tent uses (BuildArgs in internal/tent/tent.go), then

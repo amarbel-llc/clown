@@ -30,6 +30,7 @@ import (
 	"github.com/amarbel-llc/clown/internal/profile"
 	"github.com/amarbel-llc/clown/internal/promptwalk"
 	"github.com/amarbel-llc/clown/internal/provider"
+	"github.com/amarbel-llc/clown/internal/ptysuspend"
 	"github.com/amarbel-llc/clown/internal/tent"
 )
 
@@ -208,6 +209,8 @@ func run(rawArgs []string) int {
 			return runJobMCP(rawArgs[1:])
 		case "chat":
 			return runChat(rawArgs[1:])
+		case "pty-suspend":
+			return runPtySuspend(rawArgs[1:])
 		}
 	}
 
@@ -272,6 +275,11 @@ func runWithFlags(flags parsedFlags) int {
 		return 1
 	}
 	applyClownfileProfile(&flags, cf.Profile)
+
+	// clownfile [attach].pty-suspend: opt the interactive provider run into the
+	// ctrl-z escape-to-shell pty proxy. Resolved here so runProvider (deep in the
+	// plugin-host path) can gate on it without re-reading the clownfile.
+	flags.ptySuspend = cf.Attach.PtySuspendEnabled()
 
 	// RFC-0014 §2/§4: resolve the group-id and presence description from the
 	// clownfile via env interpolation, then export them as CLOWN_GROUP_ID /
@@ -1035,7 +1043,7 @@ func runWithPluginHost(executor Executor, args []string, pluginDirs []string, fl
 
 	if disableClown {
 		fullArgs := prependPluginDirs(args, pluginDirs, nil)
-		return runProvider(executor, fullArgs, nil)
+		return runProvider(executor, fullArgs, nil, flags.ptySuspend)
 	}
 
 	logger := preLogger
@@ -1084,17 +1092,17 @@ func runWithPluginHost(executor Executor, args []string, pluginDirs []string, fl
 	if len(discovered) == 0 {
 		logger.Info("no plugin servers discovered; passing plugin dirs through")
 		fullArgs := prependPluginDirs(args, pluginDirs, nil)
-		return runProvider(executor, fullArgs, logger)
+		return runProvider(executor, fullArgs, logger, flags.ptySuspend)
 	}
 
-	return runManaged(host, discovered, executor, args, pluginDirs, skipFailed, verbose, logger, appendFile)
+	return runManaged(host, discovered, executor, args, pluginDirs, skipFailed, verbose, logger, appendFile, flags.ptySuspend)
 }
 
 // runProvider executes a provider as a subprocess, forwarding stdio
 // and signals. Returns the provider's exit code (or 1 on a clown-side
 // failure). Used by every non-naked path so clown stays in the
 // process tree and can run post-exit hooks.
-func runProvider(executor Executor, args []string, logger *slog.Logger) int {
+func runProvider(executor Executor, args []string, logger *slog.Logger, ptySuspend bool) int {
 	binary, err := executor.Binary()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
@@ -1105,6 +1113,30 @@ func runProvider(executor Executor, args []string, logger *slog.Logger) int {
 	}
 
 	argv := executor.FormatArgs(args)
+
+	// ctrl-z escape-to-shell pty proxy (clownfile [attach].pty-suspend): run the
+	// provider on an inner pty so ^Z suspends clown back to the launching shell,
+	// which a raw-mode TUI (e.g. claude) does not do for itself. Gated to
+	// interactive sessions and providers that own their tty directly — not tent
+	// (podman manages its own pty via -it).
+	if ptySuspend && ptysuspend.Supported() && isInteractiveTerminal() && supportsPtySuspend(executor) {
+		if logger != nil {
+			logger.Info("running downstream via pty-suspend proxy", "binary", binary, "args", argv)
+		}
+		code, err := ptysuspend.Run(append([]string{binary}, argv...), os.Stdin)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "clown: pty-suspend: %v\n", err)
+			if logger != nil {
+				logger.Error("pty-suspend proxy failed", "err", err)
+			}
+			if code == 0 {
+				code = 1
+			}
+		}
+		resetTerminal()
+		return code
+	}
+
 	cmd := exec.Command(binary, argv...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
@@ -1169,6 +1201,15 @@ func runProvider(executor Executor, args []string, logger *slog.Logger) int {
 	return 0
 }
 
+// supportsPtySuspend reports whether the executor runs the provider as a direct
+// child whose tty clown owns (so the pty proxy can interpose). The tent
+// executor wraps the provider in podman, which manages its own pty (-it), so it
+// is excluded; direct/passthrough (claude, clownbox) qualify.
+func supportsPtySuspend(executor Executor) bool {
+	_, isTent := executor.(*tentExecutor)
+	return !isTent
+}
+
 func runManaged(
 	host *pluginhost.Host,
 	discovered []pluginhost.DiscoveredServer,
@@ -1179,6 +1220,7 @@ func runManaged(
 	verbose bool,
 	logger *slog.Logger,
 	appendFile string,
+	ptySuspend bool,
 ) int {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1228,7 +1270,7 @@ func runManaged(
 		logger.Info("no plugin servers healthy; falling back to original plugin dirs")
 		host.Shutdown()
 		fullArgs := prependPluginDirs(baseArgs, pluginDirs, nil)
-		return runProvider(executor, fullArgs, logger)
+		return runProvider(executor, fullArgs, logger, ptySuspend)
 	}
 	defer host.Shutdown()
 
@@ -1257,7 +1299,7 @@ func runManaged(
 	}
 
 	fullArgs := prependPluginDirs(baseArgs, pluginDirs, dirMap)
-	return runProvider(executor, fullArgs, logger)
+	return runProvider(executor, fullArgs, logger, ptySuspend)
 }
 
 func runCodex(cliPath string, flags parsedFlags, prompts promptwalk.PromptResult) int {
@@ -1586,6 +1628,10 @@ type parsedFlags struct {
 	skipFailed           bool
 	disableClownProtocol bool
 	tent                 bool
+	// ptySuspend mirrors clownfile [attach].pty-suspend: wrap the interactive
+	// provider in the ctrl-z escape-to-shell pty proxy. Sourced from the
+	// clownfile in runWithFlags; no flag/env source yet.
+	ptySuspend bool
 	// passDevshell records an explicit opt-in to devshell-PATH
 	// passthrough (either via the --tent-pass-devshell flag or the
 	// CLOWN_TENT_PASS_DEVSHELL=1 env var). It does NOT capture the
