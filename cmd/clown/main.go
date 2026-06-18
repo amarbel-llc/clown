@@ -266,7 +266,7 @@ func runWithFlags(flags parsedFlags) int {
 	// Apply the clownfile [profile] defaults (RFC-0013 §1) under explicit
 	// flags/env, before provider selection so a clownfile-set provider takes
 	// effect and suppresses the interactive picker.
-	cf, err := clownfile.Discover(cwd, homeDir, buildcfg.DefaultClownfilePath)
+	cf, err := clownfile.Discover(cwd, homeDir, buildcfg.DefaultClownfilePath, clownfile.XDGPath(homeDir))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
 		return 1

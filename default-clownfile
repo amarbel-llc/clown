@@ -2,21 +2,24 @@
 #
 # This file ships in the nix store and is merged as the LOWEST-precedence layer
 # of the clownfile cascade: any user `clownfile` discovered ascending $PWD->$HOME
-# overrides these values per key. To opt out of the multiplexer self-wrap, set
-# `multiplexer = "none"` in a user clownfile (a non-empty scalar replaces this
-# default).
+# (and the XDG user-global clownfile, clown#149) overrides these values per key.
+# The multiplexer defaults to "none", so clown runs INLINE by default. To opt
+# into a multiplexer self-wrap, set `multiplexer = "zmx"` in a user clownfile;
+# the start/resume/spawn templates below are then inherited (a non-empty scalar
+# replaces this default per key).
 #
-# The [attach] defaults below match spinclass's confirmed real [session-entry]
-# defaults where one exists (FDR-0017 Piece 1), so the takeover is mechanical:
+# The zmx [attach] templates below match spinclass's confirmed real
+# [session-entry] defaults where one exists (FDR-0017 Piece 1):
 #   - spawn / spawn-entry: equal to spinclass's real defaults.
 #   - start / resume: clown-native (spinclass shipped no baked mux template here;
-#     clown now owns the interactive self-wrap).
-# Placeholders: {id} = the per-instance session key (RFC-0013 §2); {group} = the
-# resolved group-id (RFC-0014, title only, falls back to {id} when empty); the
-# exact element "{entry}" splices clown's own entrypoint argv.
+#     clown owns the interactive self-wrap when zmx is opted into).
+# They are inert while `multiplexer = "none"` and used only when a user clownfile
+# opts into zmx. Placeholders: {id} = the per-instance session key (RFC-0013 §2);
+# {group} = the resolved group-id (RFC-0014, title only, falls back to {id} when
+# empty); the exact element "{entry}" splices clown's own entrypoint argv.
 
 [attach]
-multiplexer  = "zmx"
+multiplexer  = "none"
 # group-id keys the group chat channel, presence grouping, and the {group} resume
 # title (RFC-0014 §2). It is sourced by ENV INTERPOLATION: "${SPINCLASS_SESSION_ID}"
 # binds to the orchestrator's session key when present, and interpolates to the

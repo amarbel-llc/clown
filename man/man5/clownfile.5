@@ -10,16 +10,39 @@
 A
 .Nm
 is a TOML file that sets per-directory defaults for a clown session (RFC-0013).
-clown discovers clownfiles by ascending from the current directory to
-.Ev HOME ,
-merging them so a
+clown assembles the effective configuration by merging several layers, lowest
+precedence first, so a higher layer overrides a lower one per key:
+.Bl -enum -offset indent
+.It
+the burned-in default
 .Nm
-closer to the current directory overrides one closer to
+clown ships (the
+.Sy [attach]
+defaults described below);
+.It
+the user-global
+.Nm
+under the XDG config directory \(em
+.Pa $XDG_CONFIG_HOME/clown/clownfile ,
+or
+.Pa ~/.config/clown/clownfile
+when
+.Ev XDG_CONFIG_HOME
+is unset or empty;
+.It
+every
+.Nm
+found by ascending from the current directory to
 .Ev HOME ,
-per key.
+shallowest first, so a
+.Nm
+closer to the current directory \(em and
+.Pa $HOME/clownfile
+itself \(em overrides the XDG file.
+.El
 An absent
 .Nm
-is not an error; a malformed one is.
+at any layer is not an error; a malformed one is.
 .Pp
 This page documents the
 .Sy [profile]
@@ -151,13 +174,24 @@ clown ships these
 .Sy [attach]
 defaults burned in as a base clownfile \(em the lowest-precedence layer of the
 cascade, merged beneath every discovered
+.Sy clownfile .
+The burned-in
+.Sy multiplexer
+defaults to
+.Ql none ,
+so clown runs inline unless a higher-precedence
 .Sy clownfile
-\(em so a worktree self-wraps without an explicit table.
+opts in with
+.Sy multiplexer No = Ql zmx ,
+in which case the burned-in
+.Sy start ,
+.Sy resume ,
+and
+.Sy spawn
+templates are inherited.
 A discovered
 .Sy clownfile
-overrides any key; set
-.Sy multiplexer No = Ql none
-to opt out.
+overrides any key.
 If the configured multiplexer is not installed, clown runs inline rather than
 failing.
 The
@@ -172,6 +206,36 @@ defaults (FDR-0017 Piece 1);
 and
 .Sy resume
 are clown-native (spinclass had no baked interactive template).
+.Sh FILES
+.Bl -tag -width Ds
+.It Pa $XDG_CONFIG_HOME/clown/clownfile
+The user-global
+.Nm ,
+falling back to
+.Pa ~/.config/clown/clownfile
+when
+.Ev XDG_CONFIG_HOME
+is unset or empty.
+Sits above the burned-in default but below the
+.Ev HOME Ns -to-current-directory
+ascent, so any
+.Pa clownfile
+in that ascent overrides it.
+This is the recommended location for a personal
+.Nm
+and is what clown's home-manager module writes by default.
+.It Pa $HOME/clownfile
+The top of the ascent; a user-global
+.Nm
+that overrides the XDG file.
+Still supported for back-compat, but
+.Pa $XDG_CONFIG_HOME/clown/clownfile
+is preferred.
+.It Pa ./clownfile
+A directory-local
+.Nm ,
+the highest precedence in the cascade.
+.El
 .Sh EXAMPLES
 .Bd -literal -offset indent
 [profile]

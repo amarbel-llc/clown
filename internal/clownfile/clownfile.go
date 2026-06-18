@@ -20,6 +20,23 @@ import (
 // $PWD to $HOME (RFC-0013 §1.1).
 const Filename = "clownfile"
 
+// XDGPath returns the user-global clownfile under the XDG config directory:
+// $XDG_CONFIG_HOME/clown/clownfile, or <homeDir>/.config/clown/clownfile when
+// $XDG_CONFIG_HOME is unset or empty (clown#149). It is the conventional
+// per-user config location, keeping $HOME uncluttered. An empty homeDir with no
+// $XDG_CONFIG_HOME yields "" (Discover then skips the layer). The path is not
+// required to exist; Discover treats an absent file as non-fatal.
+func XDGPath(homeDir string) string {
+	base := os.Getenv("XDG_CONFIG_HOME")
+	if base == "" {
+		if homeDir == "" {
+			return ""
+		}
+		base = filepath.Join(homeDir, ".config")
+	}
+	return filepath.Join(base, "clown", Filename)
+}
+
 // Profile is the clownfile [profile] table: per-directory defaults for the run
 // (RFC-0013 §1.2). It is a default layer beneath explicit flags/env; the
 // named-profile registry (`--profile`) is a separate mechanism.
@@ -147,26 +164,30 @@ func Load(path string) (Clownfile, error) {
 	return c, err
 }
 
-// Discover walks startDir up to homeDir, loading a `clownfile` from each
-// ancestor and merging shallowest-first so a deeper file (closer to startDir)
-// overrides per key (RFC-0013 §1.1). basePath, when non-empty, is a burned-in
-// default clownfile (the nix-store-shipped default, §1.3) merged FIRST as the
-// lowest-precedence layer, so any ancestor clownfile overrides it per key; an
-// absent basePath is non-fatal (dev builds leave it ""), a present-but-malformed
-// one is an error. Absent everywhere yields the zero value (non-fatal); a
-// present-but-malformed clownfile is an error.
-func Discover(startDir, homeDir, basePath string) (Clownfile, error) {
+// Discover assembles the clownfile cascade for startDir (RFC-0013 §1.1),
+// merging lowest-to-highest precedence so a higher layer overrides per key:
+//
+//  1. basePath — the burned-in default clownfile (nix-store-shipped, §1.3);
+//     lowest precedence. Absent is non-fatal (dev builds leave it ""), a
+//     present-but-malformed one is an error.
+//  2. xdgPath — the user-global clownfile under the XDG config dir
+//     (typically from XDGPath(homeDir), i.e. ~/.config/clown/clownfile;
+//     clown#149). Absent is non-fatal, malformed is an error.
+//  3. the $PWD→$HOME ancestor chain, shallowest-first, so a deeper directory
+//     clownfile (and $HOME/clownfile itself) overrides the XDG file.
+//
+// Absent everywhere yields the zero value (non-fatal).
+func Discover(startDir, homeDir, basePath, xdgPath string) (Clownfile, error) {
 	var merged Clownfile
-	if basePath != "" {
-		if _, err := os.Stat(basePath); err == nil {
-			c, err := Load(basePath)
-			if err != nil {
-				return Clownfile{}, fmt.Errorf("default clownfile %s: %w", basePath, err)
-			}
-			mergeInto(&merged, c)
-		}
-		// absent base (dev/test builds, missing store path) is non-fatal: skip.
+	// 1. burned-in default (lowest precedence).
+	if err := mergeFileIfPresent(&merged, basePath, "default clownfile"); err != nil {
+		return Clownfile{}, err
 	}
+	// 2. XDG user-global clownfile, above the default but below the ascent.
+	if err := mergeFileIfPresent(&merged, xdgPath, "xdg clownfile"); err != nil {
+		return Clownfile{}, err
+	}
+	// 3. $PWD→$HOME ancestor chain (deeper overrides; $HOME/clownfile overrides XDG).
 	ancestors, err := promptwalk.Ancestors(startDir, homeDir)
 	if err != nil {
 		return Clownfile{}, err
@@ -184,6 +205,24 @@ func Discover(startDir, homeDir, basePath string) (Clownfile, error) {
 		mergeInto(&merged, c)
 	}
 	return merged, nil
+}
+
+// mergeFileIfPresent layers the clownfile at path over merged. An empty path or
+// an absent file is a non-fatal skip; a present-but-malformed file is an error
+// tagged with label. Shared by the burned-in default and XDG layers in Discover.
+func mergeFileIfPresent(merged *Clownfile, path, label string) error {
+	if path == "" {
+		return nil
+	}
+	if _, err := os.Stat(path); err != nil {
+		return nil // absent (or unstattable): non-fatal, skip the layer.
+	}
+	c, err := Load(path)
+	if err != nil {
+		return fmt.Errorf("%s %s: %w", label, path, err)
+	}
+	mergeInto(merged, c)
+	return nil
 }
 
 // mergeInto layers src over dst: scalar fields replace when non-empty; Env keys

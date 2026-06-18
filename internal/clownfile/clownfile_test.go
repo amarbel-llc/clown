@@ -38,7 +38,7 @@ func TestDiscoverCascadeDeeperOverrides(t *testing.T) {
 	// Deep (repo): override provider, add env B; model + A inherited.
 	write(t, repo, "[profile]\nprovider = \"codex\"\n[profile.env]\nB = \"2\"\n")
 
-	cf, err := Discover(child, home, "")
+	cf, err := Discover(child, home, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func TestDiscoverCascadeDeeperOverrides(t *testing.T) {
 
 func TestDiscoverAbsentIsZero(t *testing.T) {
 	home := t.TempDir()
-	cf, err := Discover(home, home, "")
+	cf, err := Discover(home, home, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +67,7 @@ func TestDiscoverAbsentIsZero(t *testing.T) {
 func TestDiscoverMalformedErrors(t *testing.T) {
 	home := t.TempDir()
 	write(t, home, "this is not = valid toml [[[")
-	if _, err := Discover(home, home, ""); err == nil {
+	if _, err := Discover(home, home, "", ""); err == nil {
 		t.Fatal("malformed clownfile must error")
 	}
 }
@@ -82,7 +82,7 @@ func TestDiscoverBaseIsLowestPrecedence(t *testing.T) {
 	// User clownfile at home overrides multiplexer + provider; start/resume-title inherit from base.
 	write(t, home, "[profile]\nprovider = \"codex\"\n[attach]\nmultiplexer = \"none\"\n")
 
-	cf, err := Discover(home, home, base)
+	cf, err := Discover(home, home, base, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestDiscoverBaseOnlyWhenNoAncestor(t *testing.T) {
 	home := t.TempDir()
 	base := filepath.Join(t.TempDir(), "default-clownfile")
 	writeFile(t, base, "[attach]\nmultiplexer = \"zmx\"\nspawn-entry = [\"clown\", \"--\", \"{prompt}\"]\n")
-	cf, err := Discover(home, home, base)
+	cf, err := Discover(home, home, base, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +121,7 @@ func TestDiscoverBaseOnlyWhenNoAncestor(t *testing.T) {
 // but malformed base is an error.
 func TestDiscoverBaseAbsentAndMalformed(t *testing.T) {
 	home := t.TempDir()
-	cf, err := Discover(home, home, filepath.Join(home, "nonexistent-base"))
+	cf, err := Discover(home, home, filepath.Join(home, "nonexistent-base"), "")
 	if err != nil {
 		t.Fatalf("absent base must be non-fatal, got %v", err)
 	}
@@ -130,7 +130,73 @@ func TestDiscoverBaseAbsentAndMalformed(t *testing.T) {
 	}
 	bad := filepath.Join(t.TempDir(), "bad-base")
 	writeFile(t, bad, "not = valid [[[")
-	if _, err := Discover(home, home, bad); err == nil {
+	if _, err := Discover(home, home, bad, ""); err == nil {
 		t.Fatal("malformed base clownfile must error")
+	}
+}
+
+// The XDG user-global clownfile (clown#149) sits above the burned-in base but
+// below the $PWD→$HOME ancestor chain: it overrides base keys, and an ancestor
+// (here $HOME/clownfile) overrides it, while its un-overridden keys survive.
+func TestDiscoverXDGLayerPrecedence(t *testing.T) {
+	home := t.TempDir()
+	base := filepath.Join(t.TempDir(), "default-clownfile")
+	xdg := filepath.Join(t.TempDir(), "xdg-clownfile")
+	writeFile(t, base, "[profile]\nprovider = \"claude\"\nmodel = \"opus\"\n")
+	// XDG overrides provider, adds backend; model inherits from base.
+	writeFile(t, xdg, "[profile]\nprovider = \"codex\"\nbackend = \"lima\"\n")
+	// Ancestor ($HOME/clownfile) overrides provider again; backend + model inherit.
+	write(t, home, "[profile]\nprovider = \"circus\"\n")
+
+	cf, err := Discover(home, home, base, xdg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cf.Profile.Provider != "circus" {
+		t.Errorf("provider = %q, want circus (ancestor overrides XDG)", cf.Profile.Provider)
+	}
+	if cf.Profile.Backend != "lima" {
+		t.Errorf("backend = %q, want lima (from XDG, un-overridden)", cf.Profile.Backend)
+	}
+	if cf.Profile.Model != "opus" {
+		t.Errorf("model = %q, want opus (from base, un-overridden)", cf.Profile.Model)
+	}
+}
+
+// With no base and no ancestor clownfile, the XDG file alone supplies defaults,
+// and a malformed XDG file is an error.
+func TestDiscoverXDGOnlyAndMalformed(t *testing.T) {
+	home := t.TempDir()
+	xdg := filepath.Join(t.TempDir(), "xdg-clownfile")
+	writeFile(t, xdg, "[profile]\nprovider = \"codex\"\n")
+	cf, err := Discover(home, home, "", xdg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cf.Profile.Provider != "codex" {
+		t.Errorf("provider = %q, want codex (from XDG alone)", cf.Profile.Provider)
+	}
+
+	bad := filepath.Join(t.TempDir(), "bad-xdg")
+	writeFile(t, bad, "not = valid [[[")
+	if _, err := Discover(home, home, "", bad); err == nil {
+		t.Fatal("malformed XDG clownfile must error")
+	}
+}
+
+func TestXDGPath(t *testing.T) {
+	// $XDG_CONFIG_HOME set wins.
+	t.Setenv("XDG_CONFIG_HOME", "/cfg")
+	if got, want := XDGPath("/home/u"), filepath.Join("/cfg", "clown", Filename); got != want {
+		t.Errorf("XDGPath with XDG_CONFIG_HOME = %q, want %q", got, want)
+	}
+	// Unset falls back to <homeDir>/.config.
+	t.Setenv("XDG_CONFIG_HOME", "")
+	if got, want := XDGPath("/home/u"), filepath.Join("/home/u", ".config", "clown", Filename); got != want {
+		t.Errorf("XDGPath fallback = %q, want %q", got, want)
+	}
+	// No home and no env yields "" (Discover then skips the layer).
+	if got := XDGPath(""); got != "" {
+		t.Errorf("XDGPath(\"\") with no env = %q, want empty", got)
 	}
 }

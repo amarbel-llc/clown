@@ -18,7 +18,7 @@ spawn        = ["zmx", "attach", "{id}", "--detach", "{entry}"]
 spawn-entry  = ["clown", "--", "{prompt}"]
 spawn-window = ["open-term", "{dir}", "{id}"]
 `)
-	cf, err := Discover(home, home, "")
+	cf, err := Discover(home, home, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +56,7 @@ func TestAttachMergeDeeperWinsWholesale(t *testing.T) {
 	write(t, home, "[attach]\nmultiplexer = \"zmx\"\nstart = [\"zmx\", \"attach\", \"{id}\", \"{entry}\"]\nresume-title = \"shallow\"\n")
 	write(t, repo, "[attach]\nstart = [\"posh\", \"{id}\", \"{entry}\"]\n")
 
-	cf, err := Discover(repo, home, "")
+	cf, err := Discover(repo, home, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}

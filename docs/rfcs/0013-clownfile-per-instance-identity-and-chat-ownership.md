@@ -75,7 +75,14 @@ same spirit as spinclass's sweatfile.
    up to `$HOME`. Files MUST be layered shallowest-first, so a clownfile closer
    to `$PWD` overrides one closer to `$HOME` on a per-key basis (table keys
    merge; scalar and array values at the same path replace).
-3. The absence of any clownfile MUST be non-fatal: clown MUST fall back to its
+3. Beneath that ascent clown MUST also merge two fixed lower-precedence layers: a
+   user-global clownfile at `$XDG_CONFIG_HOME/clown/clownfile` (default
+   `~/.config/clown/clownfile` when `$XDG_CONFIG_HOME` is unset; clown#149),
+   above clown's burned-in default clownfile (§1.3). The full precedence, lowest
+   to highest, is: burned-in default < XDG user-global < the `$HOME`→`$PWD`
+   ascent. A `$HOME/clownfile` in the ascent therefore overrides the XDG file;
+   both remain supported.
+4. The absence of any clownfile MUST be non-fatal: clown MUST fall back to its
    built-in defaults for every field.
 
 #### 1.2 The `[profile]` table
@@ -111,7 +118,7 @@ rather than an external orchestrator invoking the template.
 
 ```toml
 [attach]
-multiplexer  = "zmx"                                              # zmx | none
+multiplexer  = "none"                                            # zmx | none (default none = inline)
 start        = ["zmx", "attach", "{id}", "{entry}"]              # fresh interactive launch (clown-native)
 resume       = ["zmx", "attach", "{id}", "{entry}"]              # reattach (clown resume) (clown-native)
 resume-title = "{id}"                                             # OSC-2 title emitted before attach
@@ -122,8 +129,10 @@ spawn-entry  = ["clown", "--", "{prompt}"]                       # harness argv 
 
 These are the values clown ships as its burned-in base clownfile — the
 lowest-precedence layer of the cascade (§1.1) merged beneath every discovered
-`clownfile`, so a user file overrides any key (e.g. `multiplexer = "none"` opts
-out of the wrap). `spawn`, `spawn-entry`, and `resume-title` equal spinclass's
+`clownfile`, so a user file overrides any key. The burned-in `multiplexer`
+defaults to `"none"` (clown runs inline); a higher-precedence `clownfile` opts in
+with `multiplexer = "zmx"`, inheriting the `start`/`resume`/`spawn` templates
+below (inert while inline). `spawn`, `spawn-entry`, and `resume-title` equal spinclass's
 confirmed real `[session-entry]` defaults (FDR-0017 Piece 1), so the takeover is
 byte-mechanical. `start` and `resume` are **clown-native**: spinclass shipped no
 baked multiplexer template for the interactive path (it fell back to `$SHELL` with

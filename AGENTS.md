@@ -319,9 +319,12 @@ degrades to inline rather than erroring (clown#146), so the burned-in default is
 safe on hosts without the mux. clown ships a **burned-in default clownfile**
 (`default-clownfile` at the repo root, path burned in via
 `buildcfg.DefaultClownfilePath`) carrying the `[attach]` defaults; `clownfile.Discover`
-merges it as the lowest-precedence base beneath the `$PWD→$HOME` ascent, so a worktree
-self-wraps without an explicit table and any user `clownfile` still overrides per key
-(`multiplexer = "none"` opts out). Those defaults lock `spawn`/`spawn-entry`
+merges it as the lowest-precedence base, beneath the XDG user-global
+`$XDG_CONFIG_HOME/clown/clownfile` (`~/.config/clown/clownfile`, clown#149) and the
+`$PWD→$HOME` ascent. The burned-in `multiplexer` defaults to `"none"`, so a worktree
+runs **inline** unless a higher-precedence `clownfile` opts into `multiplexer = "zmx"`
+(then the burned-in `start`/`resume`/`spawn` templates are inherited); any user
+`clownfile` overrides per key. Those zmx templates lock `spawn`/`spawn-entry`
 to spinclass's real `[session-entry]` defaults; `start`/`resume` are clown-native.
 **The awareness seam (RFC-0014)**: `[attach].group-id` (env-interpolated, default
 `"${SPINCLASS_SESSION_ID}"`) is exported as `CLOWN_GROUP_ID` and keys the group
