@@ -1,18 +1,20 @@
 //go:build linux
 
 // Package ptysuspend runs a child command on an inner pseudo-terminal while
-// holding the outer (user-facing) terminal in raw mode, and intercepts the
-// ctrl-z byte (0x1A) on the input stream BEFORE it reaches the child. On ctrl-z
-// the proxy restores the outer terminal and raises SIGTSTP on its own process
-// group, so the launching shell suspends it and the user lands back at a shell;
-// `fg` resumes the proxy (re-enters raw mode and keeps relaying).
+// holding the outer (user-facing) terminal in raw mode, and intercepts a chosen
+// "escape" key on the input stream BEFORE it reaches the child. On the escape
+// key the proxy hands the terminal to a configured escape command (a shell, or
+// `sc exec <session> $SHELL`), waits for it to exit, then resumes the child.
 //
-// This supplies the ctrl-z "escape to shell" handler that a full-screen TUI
-// (e.g. claude-code) does not implement itself: such a TUI sets the terminal to
-// raw mode (ISIG off), so ctrl-z is delivered to it as a byte and never becomes
-// SIGTSTP. By interposing a pty and reading the user's input first, clown
-// reclaims ctrl-z for job control without the child's cooperation, for ANY
-// downstream provider. See clown's FDR-0017 ctrl-z recon.
+// This supplies the ctrl-z "escape to shell" UX that a full-screen TUI (e.g.
+// claude-code) does not implement itself: such a TUI sets the terminal to raw
+// mode (ISIG off), so ctrl-z is delivered to it as a byte and never escapes. By
+// interposing a pty and reading the user's input first, clown reclaims the key
+// for ANY downstream provider, uniformly whether clown is running inline or as
+// the command inside a multiplexer pane (clown owns the pane process either
+// way). The escape is a SHELL-OUT, not a job-control SIGTSTP: clown spawns the
+// escape command itself, so it does not depend on a job-control shell parent or
+// on the multiplexer — the mode-independent mechanism. See FDR-0017 ctrl-z recon.
 package ptysuspend
 
 import (
@@ -21,15 +23,37 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"sync"
 	"syscall"
 
 	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 )
 
-// ctrlZ is the byte a terminal in canonical mode would translate into SIGTSTP.
-// In raw mode it is delivered verbatim; the proxy intercepts it here.
-const ctrlZ = 0x1a
+// DefaultEscapeKey is ctrl-z (0x1a) — the byte a terminal in canonical mode
+// would translate into SIGTSTP; in a raw-mode TUI it is delivered verbatim, so
+// the proxy intercepts it. Callers may override via Options.EscapeKey.
+const DefaultEscapeKey = 0x1a
+
+// Options configures the proxy.
+type Options struct {
+	// Enabled gates the whole proxy; callers also check Supported() + interactivity.
+	Enabled bool
+	// EscapeKey is the input byte intercepted as the escape trigger. Zero means
+	// DefaultEscapeKey (ctrl-z).
+	EscapeKey byte
+	// EscapeArgv is the command run (with the terminal handed to it) when the
+	// escape key is pressed; it runs in clown's cwd (the worktree). Empty means
+	// the escape key is swallowed (no-op) rather than forwarded.
+	EscapeArgv []string
+}
+
+func (o Options) escapeKey() byte {
+	if o.EscapeKey == 0 {
+		return DefaultEscapeKey
+	}
+	return o.EscapeKey
+}
 
 // Supported reports whether the pty-suspend proxy is implemented on this
 // platform (linux). Callers gate on it so an enabled config degrades to a
@@ -37,10 +61,10 @@ const ctrlZ = 0x1a
 func Supported() bool { return true }
 
 // Run starts argv on a fresh inner pty, relays I/O to/from outer (the
-// user-facing terminal, typically os.Stdin), and gives ctrl-z escape-to-shell
-// semantics. It returns the child's exit code. outer MUST be an interactive
-// terminal; callers should gate on that before calling.
-func Run(argv []string, outer *os.File) (int, error) {
+// user-facing terminal, typically os.Stdin), and gives escape-to-shell
+// semantics on opts.EscapeKey. It returns the child's exit code. outer MUST be
+// an interactive terminal; callers should gate on that before calling.
+func Run(argv []string, outer *os.File, opts Options) (int, error) {
 	if len(argv) == 0 {
 		return 1, fmt.Errorf("ptysuspend: empty argv")
 	}
@@ -53,19 +77,17 @@ func Run(argv []string, outer *os.File) (int, error) {
 
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = slave, slave, slave
-	// Setsid: the child leads its OWN session, so when the proxy raises SIGTSTP
-	// on its own process group the child is unaffected and keeps running.
-	// Setctty: the child adopts the inner pts (fd 0) as its controlling tty, so
-	// its own raw-mode/ISIG changes land on the inner pty, not the outer one.
+	// Setsid + Setctty: the child leads its own session with the inner pts as its
+	// controlling tty, so its raw-mode/ISIG changes land on the inner pty and its
+	// job-control signals stay off the outer terminal.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true}
 	if err := cmd.Start(); err != nil {
 		slave.Close()
 		return 1, fmt.Errorf("ptysuspend: start %q: %w", argv[0], err)
 	}
-	// The parent does not need the slave once the child holds it.
-	slave.Close()
+	slave.Close() // the parent does not need the slave once the child holds it
 
-	r := &relay{outer: outer, master: master, childPid: cmd.Process.Pid}
+	r := &relay{outer: outer, master: master, childPid: cmd.Process.Pid, escapeArgv: opts.EscapeArgv}
 	r.origState, err = term.MakeRaw(int(outer.Fd()))
 	if err != nil {
 		_ = cmd.Process.Kill()
@@ -85,8 +107,8 @@ func Run(argv []string, outer *os.File) (int, error) {
 		}
 	}()
 
-	// Forward a process-level SIGTERM to the child's process group (keyboard
-	// ^C is a byte in raw mode and is relayed inline, so it needs no handler).
+	// Forward a process-level SIGTERM to the child's process group (keyboard ^C
+	// is a byte in raw mode and is relayed inline, so it needs no handler).
 	term3 := make(chan os.Signal, 1)
 	signal.Notify(term3, syscall.SIGTERM)
 	defer signal.Stop(term3)
@@ -98,29 +120,51 @@ func Run(argv []string, outer *os.File) (int, error) {
 		}
 	}()
 
-	// Child output -> user terminal.
-	go func() { _, _ = io.Copy(outer, master) }()
-	// User input -> child, with ctrl-z intercepted and turned into suspend.
-	go relayInput(r.outer, r.master, r.suspend)
+	// Child output -> user terminal (pausable while the escape command holds the
+	// terminal). User input -> child, with the escape key intercepted.
+	go r.copyOutput()
+	go relayInput(r.outer, r.master, opts.escapeKey(), r.shellOut)
 
 	err = cmd.Wait()
 	return exitCode(err), nil
 }
 
 type relay struct {
-	outer     *os.File
-	master    *os.File
-	origState *term.State
-	childPid  int
+	outer      *os.File
+	master     *os.File
+	origState  *term.State
+	childPid   int
+	escapeArgv []string
+	// outMu serialises writes to the outer terminal so shellOut can pause the
+	// child-output relay while the escape command owns the screen.
+	outMu sync.Mutex
 }
 
-// relayInput pumps in -> out, intercepting ctrl-z (0x1a): bytes before a ctrl-z
-// are forwarded, the ctrl-z itself is NOT forwarded but invokes onCtrlZ
-// (synchronously — onCtrlZ blocks until the session resumes), and bytes after
-// resume forwarding. ctrl-z is a single byte, so no cross-read scan state is
-// needed. Split out as a free function (in/out as interfaces, onCtrlZ as a
-// hook) so the interception logic is unit-testable without a real terminal.
-func relayInput(in io.Reader, out io.Writer, onCtrlZ func()) {
+// copyOutput pumps child output (inner master) to the outer terminal, taking
+// outMu around each write so shellOut can hold the screen. While paused the
+// child's output accumulates in the pty buffer and is drained on resume.
+func (r *relay) copyOutput() {
+	buf := make([]byte, 32*1024)
+	for {
+		n, err := r.master.Read(buf)
+		if n > 0 {
+			r.outMu.Lock()
+			_, _ = r.outer.Write(buf[:n])
+			r.outMu.Unlock()
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+// relayInput pumps in -> out, intercepting the escape key: bytes before it are
+// forwarded, the escape key itself is NOT forwarded but invokes onEscape
+// (synchronously — onEscape blocks until the escape command exits), and bytes
+// after resume forwarding. The escape key is a single byte, so no cross-read
+// scan state is needed. Split out as a free function (in/out as interfaces,
+// onEscape as a hook) so the interception logic is unit-testable.
+func relayInput(in io.Reader, out io.Writer, key byte, onEscape func()) {
 	buf := make([]byte, 4096)
 	for {
 		n, rerr := in.Read(buf)
@@ -128,11 +172,11 @@ func relayInput(in io.Reader, out io.Writer, onCtrlZ func()) {
 			chunk := buf[:n]
 			start := 0
 			for i := 0; i < len(chunk); i++ {
-				if chunk[i] == ctrlZ {
+				if chunk[i] == key {
 					if i > start {
 						_, _ = out.Write(chunk[start:i])
 					}
-					onCtrlZ()
+					onEscape()
 					start = i + 1
 				}
 			}
@@ -146,25 +190,30 @@ func relayInput(in io.Reader, out io.Writer, onCtrlZ func()) {
 	}
 }
 
-// suspend restores the outer terminal, stops the proxy's own process group
-// (returning the user to the launching shell), and on SIGCONT (`fg`) re-enters
-// raw mode and forces the child to repaint. Mirrors charmbracelet/bubbletea's
-// suspendProcess. The child, in its own session, keeps running throughout —
-// while the proxy is stopped it is not draining the child's output, so a child
-// that writes a lot mid-suspend pauses on a full pty buffer (no data loss; the
-// kernel preserves byte order and the proxy drains it on resume). For an
-// interactive TUI idle at a prompt — the usual ctrl-z moment — there is nothing
-// to drain. Eliminating the pause entirely would need a tmux-style separate
-// drainer process; see the package's follow-ups.
-func (r *relay) suspend() {
+// shellOut hands the outer terminal to the configured escape command, waits for
+// it to exit, then re-enters raw mode and repaints the child. Called from the
+// input goroutine, so that goroutine is parked here (not reading the terminal)
+// while the escape command reads it — no input contention. The child keeps
+// running on the inner pty; copyOutput is paused via outMu so its output does
+// not interleave with the escape command's screen, then drains on resume. This
+// works identically inline and inside a multiplexer pane: clown spawns the
+// escape command itself, with no dependence on a job-control shell parent.
+func (r *relay) shellOut() {
+	if len(r.escapeArgv) == 0 {
+		return // escape key swallowed; nothing configured to run
+	}
+
+	r.outMu.Lock()
+	defer r.outMu.Unlock()
+
 	_ = term.Restore(int(r.outer.Fd()), r.origState)
 
-	cont := make(chan os.Signal, 1)
-	signal.Notify(cont, syscall.SIGCONT)
-	defer signal.Stop(cont)
-
-	_ = syscall.Kill(0, syscall.SIGTSTP) // stop our process group; blocks until SIGCONT
-	<-cont
+	fmt.Fprintf(r.outer, "\r\n[clown] escape: %s — exit to resume\r\n", r.escapeArgv[0])
+	cmd := exec.Command(r.escapeArgv[0], r.escapeArgv[1:]...)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = r.outer, r.outer, r.outer
+	if err := cmd.Run(); err != nil {
+		fmt.Fprintf(r.outer, "\r\n[clown] escape command failed: %v\r\n", err)
+	}
 
 	if st, err := term.MakeRaw(int(r.outer.Fd())); err == nil {
 		r.origState = st
@@ -183,11 +232,11 @@ func (r *relay) syncWinsize() {
 }
 
 // repaintChild re-syncs the inner pty window size and forces the child (e.g.
-// claude's TUI) to redraw after a resume — the screen is stale because the
-// proxy drew nothing while suspended. A bare TIOCSWINSZ at the unchanged size
-// can be a no-op for apps that only redraw on an actual size *change*, so we
-// briefly perturb the size by one row and set it back (two resize events the
-// app cannot coalesce away), then send SIGWINCH to the child's process group.
+// claude's TUI) to redraw after resume — the screen is stale because the proxy
+// drew nothing while the escape command held the terminal. A bare TIOCSWINSZ at
+// the unchanged size can be a no-op for apps that only redraw on an actual size
+// *change*, so we briefly perturb the size by one row and set it back (two
+// resize events the app cannot coalesce away), then send SIGWINCH to the child.
 func (r *relay) repaintChild() {
 	ws, err := unix.IoctlGetWinsize(int(r.outer.Fd()), unix.TIOCGWINSZ)
 	if err == nil {

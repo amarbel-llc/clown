@@ -38,10 +38,17 @@ resume-title = "{group}"
 spawn        = ["zmx", "attach", "{id}", "--detach", "{entry}"]
 spawn-entry  = ["clown", "--", "{prompt}"]
 # spawn-window has no default (unset = no window).
-# pty-suspend wraps the interactive provider in clown's ctrl-z escape-to-shell
-# pty proxy (internal/ptysuspend): ^Z suspends clown back to the launching shell
-# (which a raw-mode TUI like claude does not do for itself). Default OFF in this
-# phase; opt in per-clownfile with `pty-suspend = true`. The burned-in default
-# flips to true once the proxy's resume-repaint / output-drain hardening has
-# been dogfooded (see internal/ptysuspend).
+# pty-suspend wraps the interactive provider in clown's escape-to-shell pty proxy
+# (internal/ptysuspend): clown runs the provider on an inner pty and intercepts
+# the escape key BEFORE the raw-mode TUI swallows it, hands the terminal to the
+# escape-command, and resumes the provider when it exits. A raw-mode TUI like
+# claude does not do this for itself. Works uniformly inline and inside a mux
+# pane (clown owns the pane process either way). Default OFF in this phase; opt
+# in per-clownfile with `pty-suspend = true`. The burned-in default flips to true
+# once dogfooded.
+#   escape-key      caret notation, default "^Z".
+#   escape-command  argv run with the terminal (each element env-interpolated);
+#                   empty falls back to $SHELL in the worktree. Intended default
+#                   once spinclass ships `sc exec`:
+#                     escape-command = ["sc", "exec", "${SPINCLASS_SESSION_ID}", "$SHELL"]
 # pty-suspend = false

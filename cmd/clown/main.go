@@ -276,10 +276,10 @@ func runWithFlags(flags parsedFlags) int {
 	}
 	applyClownfileProfile(&flags, cf.Profile)
 
-	// clownfile [attach].pty-suspend: opt the interactive provider run into the
-	// ctrl-z escape-to-shell pty proxy. Resolved here so runProvider (deep in the
-	// plugin-host path) can gate on it without re-reading the clownfile.
-	flags.ptySuspend = cf.Attach.PtySuspendEnabled()
+	// clownfile [attach] escape-to-shell pty proxy: resolve the enable bit + key +
+	// command here so runProvider (deep in the plugin-host path) can gate on it
+	// without re-reading the clownfile.
+	flags.ptyOpts = resolvePtyOptions(cf.Attach)
 
 	// RFC-0014 §2/§4: resolve the group-id and presence description from the
 	// clownfile via env interpolation, then export them as CLOWN_GROUP_ID /
@@ -1043,7 +1043,7 @@ func runWithPluginHost(executor Executor, args []string, pluginDirs []string, fl
 
 	if disableClown {
 		fullArgs := prependPluginDirs(args, pluginDirs, nil)
-		return runProvider(executor, fullArgs, nil, flags.ptySuspend)
+		return runProvider(executor, fullArgs, nil, flags.ptyOpts)
 	}
 
 	logger := preLogger
@@ -1092,17 +1092,17 @@ func runWithPluginHost(executor Executor, args []string, pluginDirs []string, fl
 	if len(discovered) == 0 {
 		logger.Info("no plugin servers discovered; passing plugin dirs through")
 		fullArgs := prependPluginDirs(args, pluginDirs, nil)
-		return runProvider(executor, fullArgs, logger, flags.ptySuspend)
+		return runProvider(executor, fullArgs, logger, flags.ptyOpts)
 	}
 
-	return runManaged(host, discovered, executor, args, pluginDirs, skipFailed, verbose, logger, appendFile, flags.ptySuspend)
+	return runManaged(host, discovered, executor, args, pluginDirs, skipFailed, verbose, logger, appendFile, flags.ptyOpts)
 }
 
 // runProvider executes a provider as a subprocess, forwarding stdio
 // and signals. Returns the provider's exit code (or 1 on a clown-side
 // failure). Used by every non-naked path so clown stays in the
 // process tree and can run post-exit hooks.
-func runProvider(executor Executor, args []string, logger *slog.Logger, ptySuspend bool) int {
+func runProvider(executor Executor, args []string, logger *slog.Logger, ptyOpts ptysuspend.Options) int {
 	binary, err := executor.Binary()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
@@ -1119,11 +1119,11 @@ func runProvider(executor Executor, args []string, logger *slog.Logger, ptySuspe
 	// which a raw-mode TUI (e.g. claude) does not do for itself. Gated to
 	// interactive sessions and providers that own their tty directly — not tent
 	// (podman manages its own pty via -it).
-	if ptySuspend && ptysuspend.Supported() && isInteractiveTerminal() && supportsPtySuspend(executor) {
+	if ptyOpts.Enabled && ptysuspend.Supported() && isInteractiveTerminal() && supportsPtySuspend(executor) {
 		if logger != nil {
 			logger.Info("running downstream via pty-suspend proxy", "binary", binary, "args", argv)
 		}
-		code, err := ptysuspend.Run(append([]string{binary}, argv...), os.Stdin)
+		code, err := ptysuspend.Run(append([]string{binary}, argv...), os.Stdin, ptyOpts)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "clown: pty-suspend: %v\n", err)
 			if logger != nil {
@@ -1210,6 +1210,53 @@ func supportsPtySuspend(executor Executor) bool {
 	return !isTent
 }
 
+// resolvePtyOptions builds the escape-to-shell pty proxy options from the
+// clownfile [attach] table: the enable bit (pty-suspend), the escape key
+// (escape-key in caret notation, default ^Z), and the escape command
+// (escape-command, each element env-interpolated). An empty escape-command falls
+// back to the user's $SHELL run in the worktree.
+func resolvePtyOptions(a clownfile.Attach) ptysuspend.Options {
+	opts := ptysuspend.Options{Enabled: a.PtySuspendEnabled()}
+	if k, ok := parseCaretKey(a.EscapeKey); ok {
+		opts.EscapeKey = k
+	}
+	if len(a.EscapeCommand) > 0 {
+		argv := make([]string, len(a.EscapeCommand))
+		for i, el := range a.EscapeCommand {
+			argv[i] = clownfile.ResolveEnv(el)
+		}
+		opts.EscapeArgv = argv
+	} else {
+		opts.EscapeArgv = []string{defaultShell()}
+	}
+	return opts
+}
+
+// parseCaretKey parses caret notation ("^X") into the control byte it denotes
+// (e.g. "^Z" -> 0x1a). Letters are case-insensitive. Returns (0, false) for
+// empty or unrecognised input, so the caller keeps the default.
+func parseCaretKey(s string) (byte, bool) {
+	if len(s) != 2 || s[0] != '^' {
+		return 0, false
+	}
+	c := s[1]
+	if c >= 'a' && c <= 'z' {
+		c -= 'a' - 'A'
+	}
+	if c >= '@' && c <= '_' {
+		return c & 0x1f, true
+	}
+	return 0, false
+}
+
+// defaultShell is the escape-command fallback when none is configured.
+func defaultShell() string {
+	if s := os.Getenv("SHELL"); s != "" {
+		return s
+	}
+	return "/bin/sh"
+}
+
 func runManaged(
 	host *pluginhost.Host,
 	discovered []pluginhost.DiscoveredServer,
@@ -1220,7 +1267,7 @@ func runManaged(
 	verbose bool,
 	logger *slog.Logger,
 	appendFile string,
-	ptySuspend bool,
+	ptyOpts ptysuspend.Options,
 ) int {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1270,7 +1317,7 @@ func runManaged(
 		logger.Info("no plugin servers healthy; falling back to original plugin dirs")
 		host.Shutdown()
 		fullArgs := prependPluginDirs(baseArgs, pluginDirs, nil)
-		return runProvider(executor, fullArgs, logger, ptySuspend)
+		return runProvider(executor, fullArgs, logger, ptyOpts)
 	}
 	defer host.Shutdown()
 
@@ -1299,7 +1346,7 @@ func runManaged(
 	}
 
 	fullArgs := prependPluginDirs(baseArgs, pluginDirs, dirMap)
-	return runProvider(executor, fullArgs, logger, ptySuspend)
+	return runProvider(executor, fullArgs, logger, ptyOpts)
 }
 
 func runCodex(cliPath string, flags parsedFlags, prompts promptwalk.PromptResult) int {
@@ -1628,10 +1675,10 @@ type parsedFlags struct {
 	skipFailed           bool
 	disableClownProtocol bool
 	tent                 bool
-	// ptySuspend mirrors clownfile [attach].pty-suspend: wrap the interactive
-	// provider in the ctrl-z escape-to-shell pty proxy. Sourced from the
-	// clownfile in runWithFlags; no flag/env source yet.
-	ptySuspend bool
+	// ptyOpts is the resolved escape-to-shell pty proxy config from the clownfile
+	// [attach] table (pty-suspend / escape-key / escape-command). Sourced in
+	// runWithFlags; no flag/env source yet.
+	ptyOpts ptysuspend.Options
 	// passDevshell records an explicit opt-in to devshell-PATH
 	// passthrough (either via the --tent-pass-devshell flag or the
 	// CLOWN_TENT_PASS_DEVSHELL=1 env var). It does NOT capture the

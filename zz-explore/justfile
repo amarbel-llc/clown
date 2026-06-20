@@ -1192,17 +1192,15 @@ ctrlz-tty-probe:
         echo
     done
 
-# Manual demo of the clown PTY-suspend proxy (FDR-0017 ctrl-z recon POC).
+# Manual demo of the clown escape-to-shell pty proxy (FDR-0017 ctrl-z recon).
 # Runs `clown pty-suspend -- bash -c 'stty raw -echo -isig; exec cat'`: the inner
 # `cat` runs under an inner pty in RAW mode (ISIG off), exactly like claude's TUI,
 # so it would normally swallow ^Z. The proxy intercepts ^Z on the OUTER terminal
-# first and raises SIGTSTP on clown's process group. Press Ctrl-Z: you should
-# land back at a shell with the proxy as a stopped job (`jobs`); `fg` resumes it;
-# type to see `cat` echo your input; Ctrl-D inside cat exits cleanly.
-#
-# For the cleanest job-control behaviour run the printed command DIRECTLY in your
-# interactive shell (no `just` layer in the process group). Requires a built
-# clown (./result/bin/clown) or falls back to `go run`.
+# first and SHELLS OUT — it hands the terminal to $SHELL in this dir. Press
+# Ctrl-Z: you should land in a fresh $SHELL (run commands; `exit` to return);
+# back in the demo, type to see `cat` echo your input; Ctrl-D inside cat exits.
+# (This is a shell-out, not a job-control suspend, so it works the same inline or
+# under a multiplexer.) Requires a built clown (./result/bin/clown) or `go run`.
 # Usage: just explore pty-suspend-demo
 pty-suspend-demo:
     #!/usr/bin/env bash
@@ -1217,7 +1215,7 @@ pty-suspend-demo:
     inner='stty raw -echo -isig 2>/dev/null; exec cat'
     echo "Direct equivalent (run this in your shell for the cleanest demo):"
     printf '  %q ' "${clown[@]}"; printf 'pty-suspend -- bash -c %q\n\n' "$inner"
-    echo "Launching. Ctrl-Z to suspend -> shell; 'fg' to resume; type to see echo; Ctrl-D to exit cat."
+    echo "Launching. Ctrl-Z shells out to \$SHELL in this dir; 'exit' to resume; type to see cat echo; Ctrl-D to exit cat."
     exec "${clown[@]}" pty-suspend -- bash -c "$inner"
 
 # Generic probe loop for FDR-0007 tent design work. Runs an arbitrary

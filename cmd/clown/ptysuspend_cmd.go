@@ -10,8 +10,8 @@ import (
 
 // runPtySuspend is the hidden `clown pty-suspend -- <cmd> [args...]` POC entry
 // (FDR-0017 ctrl-z recon). It wraps an arbitrary command in the ptysuspend
-// proxy so ctrl-z suspends to the launching shell even when the command runs a
-// raw-mode TUI. Generic on purpose — claude is only one downstream provider.
+// proxy so ^Z escapes to a shell even when the command runs a raw-mode TUI.
+// Generic on purpose — claude is only one downstream provider.
 //
 // When stdout/stdin are not an interactive terminal there is nothing to proxy,
 // so it runs the command with inherited stdio. Not wired into the default
@@ -38,7 +38,11 @@ func runPtySuspend(args []string) int {
 		return 0
 	}
 
-	code, err := ptysuspend.Run(args, os.Stdin)
+	// POC subcommand: the escape key (^Z) drops to the user's $SHELL in cwd.
+	code, err := ptysuspend.Run(args, os.Stdin, ptysuspend.Options{
+		Enabled:    true,
+		EscapeArgv: []string{defaultShell()},
+	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown pty-suspend: %v\n", err)
 		if code == 0 {

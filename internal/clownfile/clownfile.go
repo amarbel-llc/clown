@@ -62,13 +62,22 @@ type Attach struct {
 	Spawn       []string `toml:"spawn"`        // detached-worker launch (RFC-0014 §5)
 	SpawnEntry  []string `toml:"spawn-entry"`  // harness argv a spawned worker boots (schema-only)
 	SpawnWindow []string `toml:"spawn-window"` // fire-and-forget window opener (schema-only)
-	// PtySuspend opts the interactive provider run into the ctrl-z escape-to-shell
-	// pty proxy (internal/ptysuspend): clown runs the provider on an inner pty and
-	// turns ^Z into a job-control suspend, which a raw-mode TUI (e.g. claude) does
-	// not do itself. A *bool so a deeper clownfile can override an enabled default
-	// back to false (a plain bool's false zero value would not override). nil =
-	// unset = off. See PtySuspendEnabled.
+	// PtySuspend opts the interactive provider run into the escape-to-shell pty
+	// proxy (internal/ptysuspend): clown runs the provider on an inner pty and
+	// intercepts the escape key (EscapeKey) before the raw-mode TUI swallows it,
+	// handing the terminal to EscapeCommand and resuming on its exit. A *bool so a
+	// deeper clownfile can override an enabled default back to false (a plain
+	// bool's false zero value would not override). nil = unset = off. See
+	// PtySuspendEnabled.
 	PtySuspend *bool `toml:"pty-suspend"`
+	// EscapeKey names the input key that triggers the escape, as "^X" (caret
+	// notation, e.g. "^Z"). Empty defaults to ^Z. Parsed by the caller.
+	EscapeKey string `toml:"escape-key"`
+	// EscapeCommand is the argv run (with the terminal handed to it) on the escape
+	// key, each element env-interpolated by the caller. Empty falls back to the
+	// user's $SHELL in the worktree. The intended default is
+	// ["sc", "exec", "${SPINCLASS_SESSION_ID}", "$SHELL"].
+	EscapeCommand []string `toml:"escape-command"`
 }
 
 // ResolveEnv expands ${NAME} / $NAME environment references in a config string,
@@ -290,5 +299,11 @@ func mergeInto(dst *Clownfile, src Clownfile) {
 	// *bool: a set value (true or false) in a deeper file overrides; nil inherits.
 	if src.Attach.PtySuspend != nil {
 		dst.Attach.PtySuspend = src.Attach.PtySuspend
+	}
+	if src.Attach.EscapeKey != "" {
+		dst.Attach.EscapeKey = src.Attach.EscapeKey
+	}
+	if src.Attach.EscapeCommand != nil {
+		dst.Attach.EscapeCommand = src.Attach.EscapeCommand
 	}
 }

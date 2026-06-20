@@ -163,14 +163,17 @@ Parsed and held as schema; not executed by clown this release.
 Boolean.
 When
 .Ql true ,
-an interactive provider run is wrapped in clown's ctrl-z escape-to-shell pty
-proxy: clown runs the provider on an inner pseudo-terminal and turns
-.Ql ^Z
-into a job-control suspend back to the launching shell, which a raw-mode TUI
-(such as claude) does not do for itself.
-.Ql fg
-resumes.
-Applies to the claude-family providers run inline; it is skipped for
+an interactive provider run is wrapped in clown's escape-to-shell pty proxy:
+clown runs the provider on an inner pseudo-terminal and intercepts the escape
+key
+.Pq Sy escape-key
+before the raw-mode TUI swallows it, hands the terminal to
+.Sy escape-command ,
+and resumes the provider when that command exits.
+A raw-mode TUI (such as claude) does not provide this itself.
+It is a shell-out, not a job-control suspend, so it works uniformly whether
+clown runs inline or as the command inside a multiplexer pane.
+Applies to the claude-family providers; it is skipped for
 .Fl -tent
 (podman manages its own pty) and for exec-replacing providers
 .Pq codex , Fl -naked .
@@ -180,6 +183,23 @@ Because it is a boolean with an overridable default, a deeper
 may set
 .Ql pty-suspend = false
 to turn off an enabled default.
+.It Sy escape-key
+The input key intercepted as the escape trigger, in caret notation
+.Pq e.g. Ql ^Z .
+Default
+.Ql ^Z .
+.It Sy escape-command
+The argv run, with the terminal handed to it, on the escape key; each element is
+env-interpolated
+.Pq Ql ${NAME} No / Ql $NAME .
+It runs in the worktree
+.Pq clown's cwd .
+Empty falls back to the user's
+.Ev SHELL .
+The intended default once spinclass ships
+.Ql sc exec
+is
+.Ql ["sc", "exec", "${SPINCLASS_SESSION_ID}", "$SHELL"] .
 .El
 .Pp
 clown self-execs

@@ -327,14 +327,20 @@ runs **inline** unless a higher-precedence `clownfile` opts into `multiplexer = 
 `clownfile` overrides per key. Those zmx templates lock `spawn`/`spawn-entry`
 to spinclass's real `[session-entry]` defaults; `start`/`resume` are clown-native.
 `[attach].pty-suspend` (a `*bool`, default off, overridable per-clownfile) opts the
-interactive provider run into the **ctrl-z escape-to-shell pty proxy**
-(`internal/ptysuspend`): clown runs the provider on an inner pty and reclaims `^Z`
-(a raw-mode TUI like claude swallows it as a `0x1A` byte and never SIGTSTPs), turning
-it into a job-control suspend back to the launching shell (`fg` resumes, repaint via a
-winsize-toggle + `SIGWINCH`). Gated in `runProvider` to interactive + claude-family
-inline (not `--tent`/podman, not exec-replacing codex/`--naked`); resolved from the
-clownfile in `runWithFlags` into `parsedFlags.ptySuspend`. The burned-in default flips
-to `true` once resume-repaint/output-drain are dogfooded (FDR-0017 ctrl-z recon).
+interactive provider run into the **escape-to-shell pty proxy** (`internal/ptysuspend`):
+clown runs the provider on an inner pty and intercepts the escape key
+(`[attach].escape-key`, caret notation, default `^Z`) BEFORE the raw-mode TUI swallows
+it (claude takes `^Z` as a `0x1A` byte and never escapes), hands the terminal to
+`[attach].escape-command` (argv, env-interpolated, empty ⇒ `$SHELL` in the worktree;
+intended default `["sc","exec","${SPINCLASS_SESSION_ID}","$SHELL"]` once spinclass ships
+`sc exec`), and resumes the provider on its exit (output paused via a mutex, repaint via
+winsize-toggle + `SIGWINCH`). It is a **shell-out, not SIGTSTP** — so it works uniformly
+inline AND inside a mux pane (clown owns the pane process either way), per Sasha's
+both-modes decision (FDR-0017 ctrl-z recon). Gated in `runProvider` to interactive +
+claude-family (not `--tent`/podman, not exec-replacing codex/`--naked`) + `Supported()`
+(linux); resolved from the clownfile in `runWithFlags` via `resolvePtyOptions` into
+`parsedFlags.ptyOpts` (`ptysuspend.Options`). The burned-in default flips to `true` once
+dogfooded.
 **The awareness seam (RFC-0014)**: `[attach].group-id` (env-interpolated, default
 `"${SPINCLASS_SESSION_ID}"`) is exported as `CLOWN_GROUP_ID` and keys the group
 chat channel, presence decoration, and the `{group}` title; clown no longer reads

@@ -9,37 +9,55 @@ import (
 	"testing"
 )
 
-// TestRelayInputInterceptsCtrlZ is the core proof: ctrl-z (0x1a) in the input
-// stream is NOT forwarded to the child and instead triggers onCtrlZ (the
-// suspend hook). This is what reclaims ctrl-z from a raw-mode TUI that would
-// otherwise swallow the byte.
-func TestRelayInputInterceptsCtrlZ(t *testing.T) {
+// TestRelayInputInterceptsEscapeKey is the core proof: the escape key (here
+// ctrl-z, 0x1a) in the input stream is NOT forwarded to the child and instead
+// triggers onEscape (the shell-out hook). This is what reclaims the key from a
+// raw-mode TUI that would otherwise swallow the byte.
+func TestRelayInputInterceptsEscapeKey(t *testing.T) {
 	in := bytes.NewReader([]byte("ab\x1acd\x1aef"))
 	var out bytes.Buffer
 	calls := 0
-	relayInput(in, &out, func() { calls++ })
+	relayInput(in, &out, DefaultEscapeKey, func() { calls++ })
 
 	if got := out.String(); got != "abcdef" {
-		t.Errorf("forwarded = %q, want %q (ctrl-z stripped, surrounding bytes kept)", got, "abcdef")
+		t.Errorf("forwarded = %q, want %q (escape key stripped, surrounding bytes kept)", got, "abcdef")
 	}
 	if calls != 2 {
-		t.Errorf("onCtrlZ calls = %d, want 2", calls)
+		t.Errorf("onEscape calls = %d, want 2", calls)
 	}
 }
 
 // TestRelayInputForwardsPlain confirms ordinary input (incl. other control
-// bytes like ^C=0x03) passes through untouched and never triggers suspend.
+// bytes like ^C=0x03, which is not the escape key) passes through untouched and
+// never triggers the escape.
 func TestRelayInputForwardsPlain(t *testing.T) {
 	in := bytes.NewReader([]byte("hello\x03 world"))
 	var out bytes.Buffer
 	calls := 0
-	relayInput(in, &out, func() { calls++ })
+	relayInput(in, &out, DefaultEscapeKey, func() { calls++ })
 
 	if got := out.String(); got != "hello\x03 world" {
 		t.Errorf("forwarded = %q, want unchanged", got)
 	}
 	if calls != 0 {
-		t.Errorf("onCtrlZ calls = %d, want 0", calls)
+		t.Errorf("onEscape calls = %d, want 0", calls)
+	}
+}
+
+// TestRelayInputCustomKey confirms a configured non-default escape key is the
+// one intercepted (and ctrl-z then passes through).
+func TestRelayInputCustomKey(t *testing.T) {
+	const ctrlG = 0x07
+	in := bytes.NewReader([]byte("a\x07b\x1ac"))
+	var out bytes.Buffer
+	calls := 0
+	relayInput(in, &out, ctrlG, func() { calls++ })
+
+	if got := out.String(); got != "ab\x1ac" {
+		t.Errorf("forwarded = %q, want %q (^G stripped, ^Z forwarded)", got, "ab\x1ac")
+	}
+	if calls != 1 {
+		t.Errorf("onEscape calls = %d, want 1", calls)
 	}
 }
 
