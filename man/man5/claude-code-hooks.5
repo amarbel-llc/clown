@@ -17,8 +17,16 @@ under the
 .Cm hooks
 key.
 .Pp
-Each hook is an array of handler objects keyed by event name.
-When an event fires, all matching handlers execute in order.
+Each event name maps to an array of matcher groups.
+A matcher group is an object with an optional
+.Cm matcher
+.Pq a regular expression over tool names; omit it for events that are not tool-scoped
+and a
+.Cm hooks
+array of handler objects.
+When an event fires, every handler in a group whose
+.Cm matcher
+matches executes in order.
 Handlers can observe events passively, modify inputs, or control
 permission decisions.
 .Sh CONFIGURATION
@@ -27,7 +35,10 @@ Hooks are configured in any settings file
 under the top-level
 .Cm hooks
 object.
-The key is the event name and the value is an array of handler objects.
+The key is the event name and the value is an array of matcher-group
+objects (each a
+.Cm matcher Ns / Ns Cm hooks
+pair, as described above).
 .Pp
 Example:
 .Bd -literal -offset indent
@@ -35,19 +46,43 @@ Example:
   "hooks": {
     "PreToolUse": [
       {
-        "type": "command",
-        "command": "/usr/local/bin/audit-tool-use"
+        "matcher": "Read|Glob|Grep",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/bin/audit-tool-use"
+          }
+        ]
       }
     ],
     "SessionStart": [
       {
-        "type": "command",
-        "command": "echo session started >> /tmp/claude.log"
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo session started >> /tmp/claude.log"
+          }
+        ]
       }
     ]
   }
 }
 .Ed
+.Pp
+The
+.Cm matcher Ns / Ns Cm hooks
+wrapper is required.
+A flat array of bare handler objects \(em handlers without the enclosing
+.Cm hooks
+key \(em passes JSON validation but is silently ignored, and the handler
+never fires.
+The
+.Cm matcher
+is optional and applies only to tool-scoped events
+.Pq Cm PreToolUse , Cm PostToolUse , No and the permission events ;
+omit it for events such as
+.Cm SessionStart
+that are not tied to a tool.
 .Sh HANDLER TYPES
 .Bl -tag -width Ds
 .It Cm command

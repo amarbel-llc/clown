@@ -85,7 +85,11 @@ for descriptions of each mode.
 .Ss Hooks
 .Bl -tag -width Ds
 .It Cm hooks
-Object mapping event names to arrays of handler objects.
+Object mapping event names to arrays of matcher-group objects (each a
+.Cm matcher Ns / Ns Cm hooks
+pair; the bare handler array without the
+.Cm hooks
+wrapper is silently ignored).
 See
 .Xr claude-code-hooks 5
 for the full hook system reference.
@@ -253,8 +257,13 @@ manifest file in the plugin root directory.
   "hooks": {
     "PreToolUse": [
       {
-        "type": "command",
-        "command": "bin/check-tool"
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bin/check-tool"
+          }
+        ]
       }
     ]
   }
