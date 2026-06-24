@@ -55,6 +55,7 @@
 .Op Fl -once
 .Op Fl -session Ar session-key
 .Nm clown job-mcp
+.Op Fl -surface Ar name
 .Sh DESCRIPTION
 The
 .Nm clown job
@@ -465,17 +466,34 @@ not run by hand:
 .Nm clown
 synthesizes the
 .Li clown-builtin-jobs
-plugin declaring it as a
+plugin declaring it via two
 .Xr clown-json 5
-stdioServers entry, which
+stdioServers entries \(em
+.Fl -surface Ar ringmaster
+(job control: the lifecycle, status, and
+.Li job_wait
+tools) and
+.Fl -surface Ar troupe
+(messaging: the
+.Li chat_*
+tools and the standalone
+.Li job_message ) \(em
+which
 .Xr clown-stdio-bridge 1
 wraps to streamable-HTTP and clown's own plugin host manages \(em clown
 self-consuming its plugin protocol; see
 .Xr clown-plugin-protocol 7 .
 The tools surface to the agent as
-.Li plugin:clown-builtin-jobs:jobs .
+.Li plugin:clown-builtin-jobs:ringmaster
+and
+.Li plugin:clown-builtin-jobs:troupe
+.Pq clown#144 .
+Invoked without
+.Fl -surface
+(direct invocation, dev), the server exposes the whole catalog under one
+process.
 When the stdio bridge is unavailable (dev builds) or the facility is
-disabled, the server is not injected.
+disabled, the servers are not injected.
 .El
 .Sh SESSION KEY
 A

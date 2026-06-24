@@ -71,10 +71,14 @@ i.e. clown **self-consumes** its own plugin protocol — by synthesizing a
 built-in plugin directory containing:
 
 - `.claude-plugin/plugin.json` with a stable `name` of `clown-builtin-jobs`; and
-- `clown.json` (version `1`) declaring one `httpServers` entry named `jobs`
-  whose `command` is the absolute path to the running clown binary followed by
-  the `job-mcp` subcommand (resolved as in `jobMonitorPlugin` /
-  `clownExePath()`).
+- `clown.json` (version `1`) declaring the `job-mcp` server, whose `command` is
+  the absolute path to the running clown binary followed by the `job-mcp`
+  subcommand (resolved as in `jobMonitorPlugin` / `clownExePath()`). The catalog
+  is split across two `stdioServers` entries (clown#144) — `ringmaster`
+  (`job-mcp --surface ringmaster`: job control) and `troupe` (`job-mcp --surface
+  troupe`: messaging) — so the two mental models surface as distinct servers. A
+  bare `job-mcp` (no `--surface`) exposes the whole catalog and is the
+  direct-invocation / conformance form.
 
 The synthesized directory MUST be passed to the downstream agent via
 `--plugin-dir` and removed on shutdown, exactly as the synthesized job-watch
@@ -86,8 +90,11 @@ parse, healthcheck, manifest compilation to a URL-based `mcpServers` entry, and
 shutdown — MUST apply unchanged; the built-in server gets no privileged path.
 
 Consequently the tools surface to the agent as plugin-sourced MCP tools under
-the `clown-builtin-jobs` / `jobs` identity (e.g. `plugin:clown-builtin-jobs:jobs`),
-and tool names are the eight defined in §3.
+the `clown-builtin-jobs` plugin identity, split across the `ringmaster` and
+`troupe` servers (e.g. `plugin:clown-builtin-jobs:ringmaster`,
+`plugin:clown-builtin-jobs:troupe`; clown#144), and tool names are the eight
+defined in §3 partitioned by surface. The auto-allow hook (clown#130) keys on the
+`clown-builtin-jobs` plugin segment, so every server under it auto-allows.
 
 clown MUST inject the server only for providers that consume `--plugin-dir` and
 run the agent as a supervised subprocess (today: `claude`, `clownbox`), matching
@@ -306,7 +313,7 @@ serving/injection contract.
 
 | Requirement | Test File | Description |
 |-------------|-----------|-------------|
-| §1, built-in server injected as an RFC-0002 plugin; tools enumerate | `job_mcp.bats` | a session lists the `clown-builtin-jobs`/`jobs` tools |
+| §1, built-in server injected as an RFC-0002 plugin; tools enumerate | `job_mcp.bats` | a session lists the `clown-builtin-jobs` tools; `--surface` splits them into `ringmaster`/`troupe` |
 | §1, server absent for non-`--plugin-dir` providers | `job_mcp.bats` | codex/opencode/crush sessions expose no `job_*` tools |
 | §2, `CLOWN_DISABLE_JOB_WAKEUP=1` suppresses the whole surface | `job_mcp.bats` | no `job_*` tools when disabled |
 | §3/§4, each tool's effect equals the CLI's | `internal/.../*_test.go` | handlers route through `internal/jobwake`; journal/spool match the CLI |

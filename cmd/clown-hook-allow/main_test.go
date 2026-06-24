@@ -105,6 +105,20 @@ func TestEvaluate(t *testing.T) {
 			want:     "allow",
 		},
 		{
+			// clown#144: the split servers (troupe/ringmaster) live under the
+			// same plugin, so the plugin-segment prefix auto-allows them too.
+			name:     "clown-builtin-jobs ringmaster job_wait → allow",
+			toolName: "mcp__plugin_clown-builtin-jobs_ringmaster__job_wait",
+			input:    `{"job_id":"j1"}`,
+			want:     "allow",
+		},
+		{
+			name:     "clown-builtin-jobs troupe chat_send → allow",
+			toolName: "mcp__plugin_clown-builtin-jobs_troupe__chat_send",
+			input:    `{"target":"*","subject":"hi"}`,
+			want:     "allow",
+		},
+		{
 			name:     "another plugin's MCP tool defers",
 			toolName: "mcp__plugin_moxy_moxy__rg_search",
 			input:    `{"pattern":"x"}`,

@@ -48,6 +48,38 @@ teardown() {
   assert_equal "$count" "11"
 }
 
+# clown#144: `--surface ringmaster` exposes only the seven job-control tools and
+# reports the clown-ringmaster server identity. Exercises runJobMCP's real flag
+# parsing (the Go tests drive serveJobMCP directly).
+@test "job-mcp --surface ringmaster exposes only the job-control tools" {
+  req='{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+  run bash -c "printf '%s\n' '$req' | '$CLOWN_BIN' job-mcp --surface ringmaster"
+  assert_success
+  for tool in job_start job_progress job_done job_read job_status job_spool_path job_wait; do
+    assert_output --partial "\"$tool\""
+  done
+  for tool in chat_send chat_read chat_list job_message; do
+    refute_output --partial "\"$tool\""
+  done
+  count="$(printf '%s' "$output" | jq -r '.result.tools | length')"
+  assert_equal "$count" "7"
+}
+
+# clown#144: `--surface troupe` exposes only the four messaging tools.
+@test "job-mcp --surface troupe exposes only the messaging tools" {
+  req='{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+  run bash -c "printf '%s\n' '$req' | '$CLOWN_BIN' job-mcp --surface troupe"
+  assert_success
+  for tool in chat_send chat_read chat_list job_message; do
+    assert_output --partial "\"$tool\""
+  done
+  for tool in job_start job_done job_status job_wait; do
+    refute_output --partial "\"$tool\""
+  done
+  count="$(printf '%s' "$output" | jq -r '.result.tools | length')"
+  assert_equal "$count" "4"
+}
+
 # RFC-0002 §5.4: prompts/list advertises the system-prompt-append prompt that
 # clown-stdio-bridge fetches for dynamic system-prompt contribution.
 @test "job-mcp prompts/list advertises system-prompt-append" {

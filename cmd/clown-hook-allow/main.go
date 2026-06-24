@@ -46,11 +46,13 @@ const nixStorePrefix = "/nix/store/"
 
 // jobToolPrefix matches the MCP tool names of clown's synthesized
 // clown-builtin-jobs plugin (RFC-0011): Claude Code names a plugin server's
-// tools `mcp__plugin_<plugin>_<server>__<tool>`, and clown's built-in plugin is
-// `clown-builtin-jobs` with server `jobs`. These are clown's own job-wakeup
+// tools `mcp__plugin_<plugin>_<server>__<tool>`. The prefix keys on the PLUGIN
+// segment only — not a single server — so every server clown synthesizes under
+// this plugin auto-allows: the historical `jobs`, and the troupe (messaging) /
+// ringmaster (job control) split (clown#144). These are clown's own job-wakeup
 // plumbing — a core harness facility, not an external side-effecting service —
 // so every tool in the set is auto-allowed (clown#130).
-const jobToolPrefix = "mcp__plugin_clown-builtin-jobs_jobs__"
+const jobToolPrefix = "mcp__plugin_clown-builtin-jobs_"
 
 // Subagent-rewrite constants. Claude Code launches subagents through the Agent
 // tool (named "Agent" in this build's tool schema; "Task" in older/other

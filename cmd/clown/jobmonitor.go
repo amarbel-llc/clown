@@ -115,9 +115,12 @@ func synthJobMonitorPluginDir(sessionKey string) (string, error) {
 
 	// When the stdio bridge is available (nix builds; empty in dev `go run`),
 	// the same built-in plugin also serves the job-platform MCP tools
-	// (RFC-0011): a clown.json stdioServers entry runs `clown job-mcp`, which
-	// clown's own pluginhost Desugars through clown-stdio-bridge to
-	// streamable-HTTP — clown self-consuming RFC-0002. Skipped in dev builds,
+	// (RFC-0011): two clown.json stdioServers entries each run `clown job-mcp
+	// --surface <name>`, which clown's own pluginhost Desugars through
+	// clown-stdio-bridge to streamable-HTTP — clown self-consuming RFC-0002. The
+	// surface split (clown#144) gives the agent two intent-revealing tool groups:
+	// ringmaster (job control) and troupe (messaging), surfaced as
+	// plugin:clown-builtin-jobs:ringmaster / :troupe. Skipped in dev builds,
 	// where Desugar errors without a bridge path and would abort the launch;
 	// the monitor still works there. The command MUST be absolute (the
 	// synthesized plugin dir holds no clown binary for Desugar to resolve a
@@ -126,14 +129,23 @@ func synthJobMonitorPluginDir(sessionKey string) (string, error) {
 		clownCfg := map[string]any{
 			"version": 1,
 			"stdioServers": map[string]any{
-				"jobs": map[string]any{
-					"command": exe,
-					"args":    []string{"job-mcp"},
-					// Opt into dynamic system-prompt contribution: the bridge
-					// serves /clown/system-prompt by issuing prompts/get to
-					// job-mcp, and clown folds the live orientation fragment
-					// into claude's append prompt (RFC-0002 §dynamic fragments).
+				// ringmaster: job lifecycle + status (clown#144). It owns the
+				// dynamic system-prompt fragment, whose orientation covers the
+				// whole platform (both surfaces): the bridge serves
+				// /clown/system-prompt by issuing prompts/get to job-mcp, and clown
+				// folds the live fragment into claude's append prompt (RFC-0002
+				// §dynamic fragments). Only one surface carries it, so the prompt
+				// is appended once.
+				"ringmaster": map[string]any{
+					"command":      exe,
+					"args":         []string{"job-mcp", "--surface", "ringmaster"},
 					"systemPrompt": true,
+				},
+				// troupe: messaging — chat + the standalone waking job_message
+				// (clown#144).
+				"troupe": map[string]any{
+					"command": exe,
+					"args":    []string{"job-mcp", "--surface", "troupe"},
 				},
 			},
 		}

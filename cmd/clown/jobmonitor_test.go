@@ -112,8 +112,9 @@ func TestJobMonitorDisabledReturnsEmpty(t *testing.T) {
 	}
 }
 
-// When the stdio bridge is available, the synthesized built-in plugin also
-// carries a clown.json declaring the job-mcp stdio server (RFC-0011 §1).
+// When the stdio bridge is available, the synthesized built-in plugin carries a
+// clown.json declaring the job-mcp stdio servers, split into the troupe
+// (messaging) and ringmaster (job control) surfaces (RFC-0011 §1, clown#144).
 func TestJobMonitorPluginDirIncludesMCPWhenBridgeSet(t *testing.T) {
 	t.Setenv("CLOWN_DISABLE_JOB_WAKEUP", "")
 	orig := buildcfg.StdioBridgePath
@@ -133,8 +134,9 @@ func TestJobMonitorPluginDirIncludesMCPWhenBridgeSet(t *testing.T) {
 	var cfg struct {
 		Version      int `json:"version"`
 		StdioServers map[string]struct {
-			Command string   `json:"command"`
-			Args    []string `json:"args"`
+			Command      string   `json:"command"`
+			Args         []string `json:"args"`
+			SystemPrompt bool     `json:"systemPrompt"`
 		} `json:"stdioServers"`
 	}
 	if err := json.Unmarshal(b, &cfg); err != nil {
@@ -143,15 +145,37 @@ func TestJobMonitorPluginDirIncludesMCPWhenBridgeSet(t *testing.T) {
 	if cfg.Version != 1 {
 		t.Fatalf("clown.json version = %d, want 1", cfg.Version)
 	}
-	jobs, ok := cfg.StdioServers["jobs"]
-	if !ok {
-		t.Fatalf("clown.json missing stdioServers.jobs; got %s", b)
+	// The legacy single "jobs" server is gone; the split servers replace it.
+	if _, present := cfg.StdioServers["jobs"]; present {
+		t.Fatalf("clown.json must not declare the legacy 'jobs' server after the split; got %s", b)
 	}
-	if !filepath.IsAbs(jobs.Command) {
-		t.Fatalf("jobs.command = %q, want an absolute path", jobs.Command)
+	for surface, wantArgs := range map[string][]string{
+		"ringmaster": {"job-mcp", "--surface", "ringmaster"},
+		"troupe":     {"job-mcp", "--surface", "troupe"},
+	} {
+		srv, ok := cfg.StdioServers[surface]
+		if !ok {
+			t.Fatalf("clown.json missing stdioServers.%s; got %s", surface, b)
+		}
+		if !filepath.IsAbs(srv.Command) {
+			t.Fatalf("%s.command = %q, want an absolute path", surface, srv.Command)
+		}
+		if len(srv.Args) != len(wantArgs) {
+			t.Fatalf("%s.args = %v, want %v", surface, srv.Args, wantArgs)
+		}
+		for i := range wantArgs {
+			if srv.Args[i] != wantArgs[i] {
+				t.Fatalf("%s.args = %v, want %v", surface, srv.Args, wantArgs)
+			}
+		}
 	}
-	if len(jobs.Args) != 1 || jobs.Args[0] != "job-mcp" {
-		t.Fatalf("jobs.args = %v, want [job-mcp]", jobs.Args)
+	// Exactly one surface owns the dynamic system-prompt fragment (appended
+	// once); it is ringmaster, the job-control core.
+	if !cfg.StdioServers["ringmaster"].SystemPrompt {
+		t.Fatalf("ringmaster server must set systemPrompt:true; got %s", b)
+	}
+	if cfg.StdioServers["troupe"].SystemPrompt {
+		t.Fatalf("troupe server must not set systemPrompt (the fragment is appended once); got %s", b)
 	}
 }
 

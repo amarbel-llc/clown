@@ -11,15 +11,20 @@ import (
 // mcpCall drives serveJobMCP with a single JSON-RPC request and returns the
 // parsed response. The server is stateless (all state lives in jobwake's files
 // under XDG_STATE_HOME), so one call per request lets a test thread the job id
-// from job_start into later calls.
-func mcpCall(t *testing.T, req map[string]any) map[string]any {
+// from job_start into later calls. An optional surface (clown#144) selects the
+// tool slice; omitted means the whole catalog.
+func mcpCall(t *testing.T, req map[string]any, surface ...string) map[string]any {
 	t.Helper()
 	b, err := json.Marshal(req)
 	if err != nil {
 		t.Fatalf("marshal request: %v", err)
 	}
+	s := ""
+	if len(surface) > 0 {
+		s = surface[0]
+	}
 	var out bytes.Buffer
-	serveJobMCP(bytes.NewReader(append(b, '\n')), &out)
+	serveJobMCP(bytes.NewReader(append(b, '\n')), &out, s)
 	line := strings.TrimSpace(out.String())
 	if line == "" {
 		return nil // notification: no response
@@ -91,6 +96,66 @@ func TestJobMCPInitializeAndToolsList(t *testing.T) {
 	}
 	if len(tools) != 11 {
 		t.Errorf("want 11 tools, got %d", len(tools))
+	}
+}
+
+// listToolNames drives tools/list on a surface and returns the advertised tool
+// names plus the serverInfo.name from initialize.
+func listToolNames(t *testing.T, surface string) (map[string]bool, string) {
+	t.Helper()
+	initResp := mcpCall(t, map[string]any{"jsonrpc": "2.0", "id": 1, "method": "initialize"}, surface)
+	si, _ := initResp["result"].(map[string]any)["serverInfo"].(map[string]any)
+	resp := mcpCall(t, map[string]any{"jsonrpc": "2.0", "id": 2, "method": "tools/list"}, surface)
+	result, _ := resp["result"].(map[string]any)
+	tools, _ := result["tools"].([]any)
+	names := map[string]bool{}
+	for _, tl := range tools {
+		names[tl.(map[string]any)["name"].(string)] = true
+	}
+	return names, si["name"].(string)
+}
+
+// clown#144: the ringmaster surface exposes only the job-control tools (and
+// reports the clown-ringmaster server identity), none of the messaging tools.
+func TestJobMCPRingmasterSurface(t *testing.T) {
+	names, server := listToolNames(t, "ringmaster")
+	if server != "clown-ringmaster" {
+		t.Errorf("serverInfo.name = %q, want clown-ringmaster", server)
+	}
+	for _, want := range []string{"job_start", "job_progress", "job_done", "job_read", "job_status", "job_spool_path", "job_wait"} {
+		if !names[want] {
+			t.Errorf("ringmaster surface missing %q", want)
+		}
+	}
+	for _, unwanted := range []string{"job_message", "chat_send", "chat_read", "chat_list"} {
+		if names[unwanted] {
+			t.Errorf("ringmaster surface should not expose messaging tool %q", unwanted)
+		}
+	}
+	if len(names) != 7 {
+		t.Errorf("ringmaster surface tool count = %d, want 7", len(names))
+	}
+}
+
+// clown#144: the troupe surface exposes only the messaging tools (chat + the
+// standalone job_message) and reports the clown-troupe server identity.
+func TestJobMCPTroupeSurface(t *testing.T) {
+	names, server := listToolNames(t, "troupe")
+	if server != "clown-troupe" {
+		t.Errorf("serverInfo.name = %q, want clown-troupe", server)
+	}
+	for _, want := range []string{"job_message", "chat_send", "chat_read", "chat_list"} {
+		if !names[want] {
+			t.Errorf("troupe surface missing %q", want)
+		}
+	}
+	for _, unwanted := range []string{"job_start", "job_done", "job_status", "job_wait"} {
+		if names[unwanted] {
+			t.Errorf("troupe surface should not expose job-control tool %q", unwanted)
+		}
+	}
+	if len(names) != 4 {
+		t.Errorf("troupe surface tool count = %d, want 4", len(names))
 	}
 }
 

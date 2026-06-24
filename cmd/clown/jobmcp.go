@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -13,6 +14,41 @@ import (
 	"github.com/amarbel-llc/clown/internal/jobwake"
 )
 
+// Tool surfaces (clown#144): the two intent-revealing halves of the platform.
+// ringmaster is job control (lifecycle + status); troupe is messaging (chat +
+// the standalone waking job_message). clown synthesizes one stdioServers entry
+// per surface; an empty surface exposes the whole catalog.
+const (
+	surfaceRingmaster = "ringmaster"
+	surfaceTroupe     = "troupe"
+)
+
+// jobToolSurface classifies each tool into its split server (clown#144). It is
+// the single source of truth for the partition: jobToolList filters the catalog
+// against it, and the conformance tests assert the membership.
+var jobToolSurface = map[string]string{
+	"job_start":      surfaceRingmaster,
+	"job_progress":   surfaceRingmaster,
+	"job_done":       surfaceRingmaster,
+	"job_read":       surfaceRingmaster,
+	"job_status":     surfaceRingmaster,
+	"job_spool_path": surfaceRingmaster,
+	"job_wait":       surfaceRingmaster,
+	"job_message":    surfaceTroupe,
+	"chat_send":      surfaceTroupe,
+	"chat_read":      surfaceTroupe,
+	"chat_list":      surfaceTroupe,
+}
+
+// jobServerName is the MCP serverInfo.name for a surface. Empty keeps the
+// historical "clown-jobs" so the whole-catalog conformance path is unchanged.
+func jobServerName(surface string) string {
+	if surface == "" {
+		return "clown-jobs"
+	}
+	return "clown-" + surface
+}
+
 // runJobMCP is clown's built-in job-platform MCP server (RFC-0011): a
 // hand-rolled, line-delimited JSON-RPC 2.0 server on stdin/stdout (the MCP
 // stdio transport) exposing the seven job_* tools over internal/jobwake. It is
@@ -20,14 +56,30 @@ import (
 // clown-builtin-jobs plugin (jobmonitor.go), which clown-stdio-bridge wraps to
 // streamable-HTTP and clown's own pluginhost manages (clown self-consumes
 // RFC-0002). Every tool is equivalent to the matching `clown job` subcommand.
-func runJobMCP(_ []string) int {
-	serveJobMCP(os.Stdin, os.Stdout)
+//
+// --surface (clown#144) selects which slice of the catalog this instance
+// exposes: "ringmaster" (job lifecycle + status), "troupe" (messaging: chat +
+// the standalone job_message), or empty for the whole platform. clown synthesizes
+// one stdioServers entry per surface so the two intent-revealing tool groups
+// surface under distinct server names (plugin:clown-builtin-jobs:troupe /
+// :ringmaster). Empty (direct invocation / dev / the conformance suite) keeps the
+// historical all-tools behavior.
+func runJobMCP(args []string) int {
+	fs := flag.NewFlagSet("job-mcp", flag.ContinueOnError)
+	surface := fs.String("surface", "", "tool surface to expose: ringmaster, troupe, or empty for all (clown#144)")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	serveJobMCP(os.Stdin, os.Stdout, *surface)
 	return 0
 }
 
 // serveJobMCP runs the JSON-RPC loop against in/out, split from runJobMCP so
-// tests can drive it with in-memory streams.
-func serveJobMCP(in io.Reader, out io.Writer) {
+// tests can drive it with in-memory streams. surface filters the advertised tool
+// catalog (clown#144); tool DISPATCH is left whole — the catalog is the surface
+// boundary the agent sees, and every job_* / chat_* op is the same harmless
+// jobwake call regardless of which server routed it.
+func serveJobMCP(in io.Reader, out io.Writer, surface string) {
 	sc := bufio.NewScanner(in)
 	sc.Buffer(make([]byte, 64*1024), 1<<20)
 	enc := json.NewEncoder(out)
@@ -44,14 +96,14 @@ func serveJobMCP(in io.Reader, out io.Writer) {
 		case "initialize":
 			_ = enc.Encode(rpcResult(req.ID, map[string]any{
 				"protocolVersion": "2025-06-18",
-				"serverInfo":      map[string]any{"name": "clown-jobs", "version": "1"},
+				"serverInfo":      map[string]any{"name": jobServerName(surface), "version": "1"},
 				"capabilities": map[string]any{
 					"tools":   map[string]any{},
 					"prompts": map[string]any{},
 				},
 			}))
 		case "tools/list":
-			_ = enc.Encode(rpcResult(req.ID, map[string]any{"tools": jobToolList()}))
+			_ = enc.Encode(rpcResult(req.ID, map[string]any{"tools": jobToolList(surface)}))
 		case "tools/call":
 			_ = enc.Encode(rpcResult(req.ID, callJobTool(req.Params)))
 		case "prompts/list":
@@ -93,8 +145,9 @@ func toolErr(text string) map[string]any {
 }
 
 // jobToolList is the static tool catalog (RFC-0011 §3). target is the channel
-// override on every tool; defaults to the resolved session.
-func jobToolList() []map[string]any {
+// override on every tool; defaults to the resolved session. surface filters the
+// catalog to one split server's tools (clown#144); "" returns the whole platform.
+func jobToolList(surface string) []map[string]any {
 	str := map[string]any{"type": "string"}
 	target := map[string]any{"type": "string", "description": "channel override (session key, or '*' for broadcast where allowed); defaults to the resolved session"}
 	obj := func(props map[string]any, required ...string) map[string]any {
@@ -110,7 +163,7 @@ func jobToolList() []map[string]any {
 		"items": obj(map[string]any{"uri": str, "digest": str, "mediaType": str,
 			"size": map[string]any{"type": "integer"}}, "uri"),
 	}
-	return []map[string]any{
+	all := []map[string]any{
 		{"name": "job_start", "description": "Allocate a job and append its started record. Returns the job id.",
 			"inputSchema": obj(map[string]any{"target": target, "label": str, "source": str})},
 		{"name": "job_progress", "description": "Append a journal-only progress record (never wakes).",
@@ -134,6 +187,16 @@ func jobToolList() []map[string]any {
 		{"name": "chat_list", "description": "List live chat recipients (presence): each {sessionKey, channelId, decoration, description, lastSeen}, groupable by decoration. Replaces spinclass chat-list-sessions.",
 			"inputSchema": obj(map[string]any{})},
 	}
+	if surface == "" {
+		return all
+	}
+	out := make([]map[string]any, 0, len(all))
+	for _, t := range all {
+		if jobToolSurface[t["name"].(string)] == surface {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // jobSystemPromptName is the well-known MCP prompt the stdio bridge requests
@@ -177,7 +240,7 @@ func jobPromptGet(params json.RawMessage) (map[string]any, bool) {
 // into this process's env (clown#136) — state the build-time static fragment
 // mechanism (FDR-0003) structurally cannot express.
 func jobSystemPromptFragment() string {
-	tools := jobToolList()
+	tools := jobToolList("") // orientation covers the whole platform, both surfaces
 	names := make([]string, 0, len(tools))
 	for _, t := range tools {
 		if n, ok := t["name"].(string); ok {

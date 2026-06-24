@@ -541,11 +541,19 @@ The flake produces a `symlinkJoin` of five components:
    `job_spool_path`, `job_wait` (the blocking join, clown#154) — each equivalent
    to the matching `clown job` subcommand
    (one `internal/jobwake` code path). `clown job-mcp` is a hand-rolled stdio
-   JSON-RPC server; clown injects it by adding a `stdioServers` entry to the
+   JSON-RPC server; clown injects it by adding `stdioServers` entries to the
    synthesized `clown-builtin-jobs` plugin (alongside the job-watch monitor),
    which `clown-stdio-bridge` wraps to streamable-HTTP and clown's own
    pluginhost manages — clown self-consuming RFC-0002, no privileged path. The
-   tools surface as `plugin:clown-builtin-jobs:jobs`. Injected only for
+   catalog is split (clown#144) into two intent-revealing servers via
+   `clown job-mcp --surface <name>`: `ringmaster` (job control —
+   `job_start`/`job_progress`/`job_done`/`job_read`/`job_status`/`job_spool_path`/`job_wait`,
+   and it carries the dynamic system-prompt fragment) and `troupe` (messaging —
+   `chat_send`/`chat_read`/`chat_list` and the standalone `job_message`). The
+   tools surface as `plugin:clown-builtin-jobs:ringmaster` and
+   `plugin:clown-builtin-jobs:troupe`; the auto-allow hook (clown#130) matches the
+   plugin segment so both auto-allow. Invoked without `--surface` (direct/dev)
+   the server exposes the whole catalog. Injected only for
    `--plugin-dir` providers with the bridge available (nix builds); absent in
    dev builds and when `CLOWN_DISABLE_JOB_WAKEUP=1`. The CLI stays the producer
    front-end; the MCP tools are the agent-facing surface that plugin-private
