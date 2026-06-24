@@ -35,17 +35,17 @@ teardown() {
   assert_output --partial '"name":"clown-jobs"'
 }
 
-# §3: tools/list enumerates the seven job_* tools plus the two chat tools
+# §3: tools/list enumerates the eight job_* tools plus the two chat tools
 # (RFC-0013 §3 chat surface rides the same clown-builtin-jobs server).
 @test "job-mcp tools/list enumerates the job and chat tools" {
   req='{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
   run bash -c "printf '%s\n' '$req' | '$CLOWN_BIN' job-mcp"
   assert_success
-  for tool in job_start job_progress job_done job_message job_read job_status job_spool_path chat_send chat_read chat_list; do
+  for tool in job_start job_progress job_done job_message job_read job_status job_spool_path job_wait chat_send chat_read chat_list; do
     assert_output --partial "\"$tool\""
   done
   count="$(printf '%s' "$output" | jq -r '.result.tools | length')"
-  assert_equal "$count" "10"
+  assert_equal "$count" "11"
 }
 
 # RFC-0002 §5.4: prompts/list advertises the system-prompt-append prompt that
@@ -92,6 +92,37 @@ teardown() {
   assert_success
   state="$(printf '%s' "$output" | jq -r '.result.content[0].text | fromjson | .state')"
   assert_equal "$state" "running"
+}
+
+# clown#154: job_wait on an already-terminal job returns immediately with the
+# terminal status (state = succeeded), the same payload job_status reports. The
+# job is marked done out of band (clown job done) before the wait so the call
+# does not block.
+@test "job-mcp job_wait returns the terminal status of a finished job" {
+  start='{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"job_start","arguments":{"source":"moxy","label":"build"}}}'
+  run bash -c "printf '%s\n' '$start' | '$CLOWN_BIN' job-mcp"
+  assert_success
+  id="$(printf '%s' "$output" | jq -r '.result.content[0].text')"
+  [[ -n "$id" ]]
+
+  run "$CLOWN_BIN" job done "$id" --state succeeded --message "ok"
+  assert_success
+
+  wait="$(printf '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"job_wait","arguments":{"job_id":"%s"}}}' "$id")"
+  run bash -c "printf '%s\n' '$wait' | '$CLOWN_BIN' job-mcp"
+  assert_success
+  state="$(printf '%s' "$output" | jq -r '.result.content[0].text | fromjson | .state')"
+  assert_equal "$state" "succeeded"
+}
+
+# clown#154: job_wait on an unknown job id is a tool error, not an indefinite
+# block.
+@test "job-mcp job_wait on an unknown job is a tool error" {
+  req='{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"job_wait","arguments":{"job_id":"nope-1a2b"}}}'
+  run bash -c "printf '%s\n' '$req' | '$CLOWN_BIN' job-mcp"
+  assert_success
+  iserr="$(printf '%s' "$output" | jq -r '.result.isError')"
+  assert_equal "$iserr" "true"
 }
 
 # §3: an invalid (traversal) job id is surfaced as a tool error, not a crash.

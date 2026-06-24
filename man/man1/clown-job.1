@@ -43,6 +43,12 @@
 .Op Fl -target Ar session-key
 .Op Fl -tail Ar n
 .Op Fl -json
+.Nm clown job wait
+.Ar job-id
+.Op Fl -target Ar session-key
+.Op Fl -timeout Ar dur
+.Op Fl -tail Ar n
+.Op Fl -json
 .Nm clown job whoami
 .Op Fl -json
 .Nm clown job-watch
@@ -333,6 +339,43 @@ a malformed
 .Ar job-id
 is a usage error
 .Pq exit Li 2 .
+.It Nm clown job wait Ar job-id Oo Fl -target Ar session-key Oc Oo Fl -timeout Ar dur Oc Oo Fl -tail Ar n Oc Oo Fl -json Oc
+Block until the job reaches a terminal state
+.Pq Li succeeded , Li failed , Li cancelled , No or Li interrupted ,
+then print its status in exactly the form
+.Nm clown job status
+uses
+.Pq clown#154 .
+This is the synchronous
+.Em join :
+unlike
+.Nm clown job status ,
+which returns
+.Li running
+on a single read, it does not return while the job is still in flight.
+It polls the journal \(em the source of truth \(em rather than riding the
+per-channel nudge socket, which is a singleton owned by the live
+.Nm clown job-watch
+monitor and is written by a different process than the producer that records the
+terminal event.
+.Fl -timeout
+bounds the wait
+.Pq a Xr time 0 Ns -style duration, e.g. Ar 90s ; 0 No blocks until terminal or Dv SIGINT Ns / Ns Dv SIGTERM .
+Like
+.Nm clown job status
+it is a read-only pull, available regardless of
+.Ev CLOWN_DISABLE_JOB_WAKEUP .
+An unknown
+.Ar job-id
+.Pq one with no journal at wait start
+or a timeout exits
+.Li 1 ;
+a malformed
+.Ar job-id
+is a usage error
+.Pq exit Li 2 ;
+a signal is a clean exit
+.Li 0 .
 .It Nm clown job whoami Op Fl -json
 Print this clown instance's resolved identity: the per-instance session key, its
 derived channel id, the
@@ -408,8 +451,9 @@ server exposing the job-wakeup platform as the MCP tools
 .Li job_message ,
 .Li job_read ,
 .Li job_status ,
-and
 .Li job_spool_path ,
+and
+.Li job_wait ,
 each equivalent to the matching
 .Nm clown job
 subcommand.

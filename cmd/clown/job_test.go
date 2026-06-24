@@ -529,3 +529,58 @@ func TestRunJobUnknownSubcommandExits2(t *testing.T) {
 		t.Fatalf("missing subcommand exit = %d, want 2", code)
 	}
 }
+
+// TestJobWaitReturnsStatusOnTerminal: `clown job wait <id> --json` on an
+// already-terminal job prints its status with the terminal state (clown#154).
+func TestJobWaitReturnsStatusOnTerminal(t *testing.T) {
+	jobTestEnv(t)
+	id, err := jobwake.Start(jobwake.StartOpts{Source: "moxy", Label: "build"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := jobwake.Done("", id, jobwake.TypeSucceeded, "all good", "madder://blobs/x"); err != nil {
+		t.Fatal(err)
+	}
+	var code int
+	out := captureStdout(t, func() int { code = runJob([]string{"wait", id, "--json"}); return code })
+	if code != 0 {
+		t.Fatalf("job wait exit = %d, want 0", code)
+	}
+	var st jobwake.Status
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out)), &st); err != nil {
+		t.Fatalf("job wait --json not valid JSON: %v\n%s", err, out)
+	}
+	if st.State != jobwake.TypeSucceeded {
+		t.Fatalf("status state = %q, want succeeded", st.State)
+	}
+}
+
+// TestJobWaitMissingIDExits2: a missing <job-id> is a usage error.
+func TestJobWaitMissingIDExits2(t *testing.T) {
+	jobTestEnv(t)
+	if code := runJob([]string{"wait"}); code != 2 {
+		t.Fatalf("job wait without id exit = %d, want 2", code)
+	}
+}
+
+// TestJobWaitUnknownJobExits1: an unknown (never-started) job id is exit 1,
+// not an indefinite block (clown#154).
+func TestJobWaitUnknownJobExits1(t *testing.T) {
+	jobTestEnv(t)
+	if code := runJob([]string{"wait", "nope-1a2b"}); code != 1 {
+		t.Fatalf("job wait on unknown job exit = %d, want 1", code)
+	}
+}
+
+// TestJobWaitTimeoutExits1: a running job that never terminates within
+// --timeout exits 1 (timed out, job still running).
+func TestJobWaitTimeoutExits1(t *testing.T) {
+	jobTestEnv(t)
+	id, err := jobwake.Start(jobwake.StartOpts{Source: "moxy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code := runJob([]string{"wait", id, "--timeout", "50ms"}); code != 1 {
+		t.Fatalf("job wait timeout exit = %d, want 1", code)
+	}
+}

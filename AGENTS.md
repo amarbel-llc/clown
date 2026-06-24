@@ -538,7 +538,8 @@ The flake produces a `symlinkJoin` of five components:
    (`docs/rfcs/0011-job-platform-mcp-tools.md`; `cmd/clown/jobmcp.go`) exposes
    the platform to the agent directly as MCP tools — `job_start`,
    `job_progress`, `job_done`, `job_message`, `job_read`, `job_status`,
-   `job_spool_path` — each equivalent to the matching `clown job` subcommand
+   `job_spool_path`, `job_wait` (the blocking join, clown#154) — each equivalent
+   to the matching `clown job` subcommand
    (one `internal/jobwake` code path). `clown job-mcp` is a hand-rolled stdio
    JSON-RPC server; clown injects it by adding a `stdioServers` entry to the
    synthesized `clown-builtin-jobs` plugin (alongside the job-watch monitor),

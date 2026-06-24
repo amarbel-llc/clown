@@ -28,7 +28,7 @@ func jobWakeupDisabled() bool {
 // a pull, not an emit (RFC-0009 §8).
 func runJob(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "clown job: missing subcommand (start|progress|done|message|read|spool-path|status|whoami)")
+		fmt.Fprintln(os.Stderr, "clown job: missing subcommand (start|progress|done|message|read|spool-path|status|wait|whoami)")
 		return 2
 	}
 	switch args[0] {
@@ -63,6 +63,10 @@ func runJob(args []string) int {
 		// A read-only pull, like `read`: works regardless of the disable
 		// switch (RFC-0010 §3).
 		return jobStatus(args[1:])
+	case "wait":
+		// A blocking read-only pull (clown#154): like `status` it only reads
+		// the journal, so it is available regardless of the disable switch.
+		return jobWait(args[1:])
 	case "whoami":
 		// Pure identity introspection (clown#135 / RFC-0012 §1): works
 		// regardless of the disable switch — it touches no channel.
@@ -260,6 +264,73 @@ func jobStatus(args []string) int {
 		b, err := json.Marshal(st)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "clown job status: %v\n", err)
+			return 1
+		}
+		fmt.Println(string(b))
+		return 0
+	}
+	return printStatusHuman(jobID, st)
+}
+
+// jobWait blocks until the job reaches a terminal state, then prints its status
+// exactly as `clown job status` does — the synchronous join surface (clown#154).
+// Unlike `status` (a single read that returns `running`), it does not return
+// while the job is still in flight. --timeout bounds the wait (0 = block until
+// terminal or SIGINT/SIGTERM). Like `status` it is a read-only journal pull,
+// available regardless of CLOWN_DISABLE_JOB_WAKEUP. An invalid job id exits 2; an
+// unknown job or a timeout exits 1; a signal is a clean exit 0.
+func jobWait(args []string) int {
+	jobID, rest, ok := jobwake.LeadingArg(args)
+	if !ok {
+		fmt.Fprintln(os.Stderr, "clown job wait: missing <job-id>")
+		return 2
+	}
+	fs := flag.NewFlagSet("job wait", flag.ContinueOnError)
+	target := fs.String("target", "", "target session key (default: resolved session)")
+	timeout := fs.Duration("timeout", 0, "max time to block (0 = until terminal or signal)")
+	tail := fs.Int("tail", 20, "number of trailing spool lines to show on completion")
+	asJSON := fs.Bool("json", false, "emit the terminal status as a single JSON object")
+	if err := fs.Parse(rest); err != nil {
+		return 2
+	}
+
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	if *timeout > 0 {
+		var tcancel context.CancelFunc
+		ctx, tcancel = context.WithTimeout(ctx, *timeout)
+		defer tcancel()
+	}
+
+	if _, err := jobwake.WaitDone(ctx, *target, jobID); err != nil {
+		switch {
+		case errors.Is(err, jobwake.ErrInvalidJobID):
+			fmt.Fprintf(os.Stderr, "clown job wait: %v\n", err)
+			return 2
+		case errors.Is(err, jobwake.ErrJobNotFound):
+			fmt.Fprintf(os.Stderr, "clown job wait: %v\n", err)
+			return 1
+		case errors.Is(err, context.DeadlineExceeded):
+			fmt.Fprintf(os.Stderr, "clown job wait: timed out after %s; job still running\n", *timeout)
+			return 1
+		case errors.Is(err, context.Canceled):
+			return 0 // SIGINT/SIGTERM is a clean shutdown
+		default:
+			fmt.Fprintf(os.Stderr, "clown job wait: %v\n", err)
+			return 1
+		}
+	}
+
+	// Terminal reached: render the same payload as `clown job status` (#154).
+	st, err := jobwake.StatusOf(*target, jobID, *tail, time.Now().UTC())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clown job wait: %v\n", err)
+		return 1
+	}
+	if *asJSON {
+		b, err := json.Marshal(st)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "clown job wait: %v\n", err)
 			return 1
 		}
 		fmt.Println(string(b))

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -122,6 +123,8 @@ func jobToolList() []map[string]any {
 			"inputSchema": obj(map[string]any{"job": str, "target": target, "since": str, "type": map[string]any{"type": "array", "items": str}})},
 		{"name": "job_status", "description": "Journal+spool-derived status of a job (state, elapsed, last_activity, spool_bytes, tail). Returns a JSON object.",
 			"inputSchema": obj(map[string]any{"job_id": str, "target": target, "tail": map[string]any{"type": "integer"}}, "job_id")},
+		{"name": "job_wait", "description": "Block until a job reaches a terminal state (succeeded|failed|cancelled|interrupted), then return its status JSON (same payload as job_status). Returns immediately if already terminal; errors if the job is unknown. This is a blocking JOIN: subject to the MCP request timeout for the job's remaining duration, so call it when you have nothing else to do — the launch + wake-on-completion flow stays the right choice when there's other work to interleave. timeout_sec (>0) bounds the wait.",
+			"inputSchema": obj(map[string]any{"job_id": str, "target": target, "timeout_sec": map[string]any{"type": "integer"}, "tail": map[string]any{"type": "integer"}}, "job_id")},
 		{"name": "job_spool_path", "description": "Resolve and return the absolute output-spool path for a job. Does not create the file.",
 			"inputSchema": obj(map[string]any{"job_id": str, "target": target}, "job_id")},
 		{"name": "chat_send", "description": "Send a chat message (RFC-0013 §3): a one-line subject (the wake) plus an optional full body recovered by chat_read. target: session key / group-id group / '*' broadcast.",
@@ -225,6 +228,8 @@ func callJobTool(params json.RawMessage) map[string]any {
 		return jobReadTool(a)
 	case "job_status":
 		return jobStatusTool(a)
+	case "job_wait":
+		return jobWaitTool(a)
 	case "job_spool_path":
 		path, err := jobwake.SpoolPath(argStr(a, "target"), argStr(a, "job_id"))
 		return toolResult(path, err)
@@ -364,6 +369,35 @@ func chatListTool() map[string]any {
 func jobStatusTool(a map[string]any) map[string]any {
 	tail := argInt(a, "tail", 20)
 	st, err := jobwake.StatusOf(argStr(a, "target"), argStr(a, "job_id"), tail, time.Now().UTC())
+	if err != nil {
+		return toolErr(err.Error())
+	}
+	b, err := json.Marshal(st)
+	if err != nil {
+		return toolErr(err.Error())
+	}
+	return toolText(string(b))
+}
+
+// jobWaitTool blocks until the job is terminal, then returns its status JSON —
+// the same payload as job_status, so a caller joins and reads the result in one
+// tool call (clown#154). timeout_sec (>0) bounds the wait; on expiry the job is
+// still running and the tool reports an error rather than a status. The call
+// blocks the single-threaded JSON-RPC loop for its duration, which is the
+// documented blocking-join contract (subject to the MCP request timeout).
+func jobWaitTool(a map[string]any) map[string]any {
+	ctx := context.Background()
+	if secs := argInt(a, "timeout_sec", 0); secs > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(secs)*time.Second)
+		defer cancel()
+	}
+	target, jobID := argStr(a, "target"), argStr(a, "job_id")
+	if _, err := jobwake.WaitDone(ctx, target, jobID); err != nil {
+		return toolErr(err.Error())
+	}
+	tail := argInt(a, "tail", 20)
+	st, err := jobwake.StatusOf(target, jobID, tail, time.Now().UTC())
 	if err != nil {
 		return toolErr(err.Error())
 	}

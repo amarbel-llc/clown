@@ -8,7 +8,8 @@ date: 2026-06-08
 ## Abstract
 
 This specification defines a set of MCP tools — `job_start`, `job_progress`,
-`job_done`, `job_message`, `job_read`, `job_status`, and `job_spool_path` — that
+`job_done`, `job_message`, `job_read`, `job_status`, `job_spool_path`, and
+`job_wait` — that
 clown exposes directly to the running agent so that interacting with the
 job-wakeup platform (RFC-0009, RFC-0010) is done through one shared tool
 contract rather than each plugin shelling out to the `clown job` CLI or
@@ -86,7 +87,7 @@ shutdown — MUST apply unchanged; the built-in server gets no privileged path.
 
 Consequently the tools surface to the agent as plugin-sourced MCP tools under
 the `clown-builtin-jobs` / `jobs` identity (e.g. `plugin:clown-builtin-jobs:jobs`),
-and tool names are the seven defined in §3.
+and tool names are the eight defined in §3.
 
 clown MUST inject the server only for providers that consume `--plugin-dir` and
 run the agent as a supervised subprocess (today: `claude`, `clownbox`), matching
@@ -222,6 +223,41 @@ Resolve and return the producer-written spool path. Wraps `jobwake.SpoolPath`.
 
 Result: `{ "path": string }`, the absolute `<job-id>.out` path (RFC-0010 §1).
 The tool creates the channel directory but MUST NOT create the spool file.
+
+#### 3.8 `job_wait`
+
+Block until a job reaches a terminal state, then return its status — the
+synchronous *join* over the platform (clown#154). Wraps `jobwake.WaitDone`
+followed by `jobwake.StatusOf`.
+
+| Input | Type | Notes |
+|---|---|---|
+| `job_id` | string | |
+| `target?` | string | channel override |
+| `timeout_sec?` | integer | bound the wait; `0`/absent blocks until terminal |
+| `tail?` | integer | trailing spool lines on completion (default 20) |
+
+Behaviour: the tool MUST return immediately if the job is already terminal, and
+otherwise block until a terminal record (`succeeded`/`failed`/`cancelled`/
+`interrupted`) appears, then return the same `{ state, source, started, ended?,
+elapsed_sec, last_activity?, spool_bytes, progress?, tail? }` object §3.6
+defines. A job whose journal does not exist at the start of the wait MUST fail
+the call (the unknown-job guard — there is nothing to join); standalone
+`message`/`chat` jobs have no terminal record and so are not valid `job_wait`
+targets. When `timeout_sec > 0` elapses before a terminal record, the tool MUST
+fail the call (the job is still running) rather than return a non-terminal
+status.
+
+Because the platform is a cross-process journal — the producer that writes the
+terminal record is a different process than the `job-mcp` server answering
+`job_wait`, and the per-channel nudge socket is a singleton owned by the live
+`job-watch` monitor — the implementation polls the journal rather than awaiting
+an in-process completion signal. This is still a true join: it never burns agent
+turns the way client-side `job_status` polling does. As a blocking call it is
+subject to the MCP per-request timeout for the job's remaining duration, so it
+is the "I have nothing else to do, join now" path; the launch + wake-on-
+completion flow (RFC-0009 §9) stays the right choice when there is other work to
+interleave.
 
 ### 4. Equivalence with the CLI
 
