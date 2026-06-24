@@ -203,7 +203,21 @@ in each direction. On overflow:
   warning and drops the oldest pending message to make room. A
   metric or counter exposes the drop count for diagnosis.
 
-Exact limits are tuning parameters for the implementing RFC.
+Exact limits are tuning parameters for the implementing RFC. The v1
+implementation caps each queue at `queueDepth = 256` messages
+(`cmd/clown-stdio-bridge/translator.go`) — both the inbound stdin write
+queue and each outbound per-subscriber SSE broadcast queue. Worst-case
+memory per translator instance is therefore roughly
+
+```
+queueDepth × max-message-size × (1 + N subscribers)
+```
+
+≈ 256 × 1 MiB × small N for the loopback case the bridge serves, where
+`N` is the number of concurrent SSE subscribers (typically 1). 256 is a
+deliberately generous v1 default that absorbs bursts without unbounded
+growth; it is a tuning parameter, not a wire-format commitment, and the
+implementing RFC may surface it as a flag if real load demands.
 
 ## Trust Boundary
 
