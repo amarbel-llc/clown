@@ -19,7 +19,7 @@
     # gets resolved upstream (we tested `97b5957e`, 2026-04-20, the
     # 1.49.0 → 1.50.0 bump commit, and it errors out with `tar exit 2`
     # during the vendor build).
-    nixpkgs-master.url = "github:NixOS/nixpkgs/d233902339c02a9c334e7e593de68855ad26c4cb";
+    nixpkgs-master.url = "github:NixOS/nixpkgs/567a49d1913ce81ac6e9582e3553dd90a955875f";
     utils.url = "https://flakehub.com/f/numtide/flake-utils/0.1.102";
     # nixpkgs-claude-code is kept for reference but claude-code is now
     # sourced from llm-agents (2.1.150+). The old npm-source derivation
