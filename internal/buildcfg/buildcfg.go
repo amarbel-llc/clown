@@ -1,12 +1,16 @@
 package buildcfg
 
 var (
-	ClaudeCliPath       string
-	CodexCliPath        string
-	CircusCliPath       string
-	OpencodeCliPath     string
-	CrushCliPath        string
-	ClownboxCliPath     string
+	ClaudeCliPath   string
+	CodexCliPath    string
+	CircusCliPath   string
+	OpencodeCliPath string
+	CrushCliPath    string
+	ClownboxCliPath string
+	// TrapezeCliPath is the absolute path to the trapeze binary, baked in for
+	// the headless `trapeze` provider (OpenRouter backend + XMPP frontend).
+	// Empty (the default `go build`) falls back to resolving "trapeze" on PATH.
+	TrapezeCliPath      string
 	AgentsFile          string
 	DisallowedToolsFile string
 	SystemPromptAppendD string

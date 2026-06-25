@@ -448,6 +448,8 @@ func runWithFlags(flags parsedFlags) int {
 		return runOpencode(cliPath, flags.forwarded, selectedProfile)
 	case "crush":
 		return runCrush(cliPath, flags.forwarded, selectedProfile)
+	case "trapeze":
+		return runTrapeze(cliPath, flags.forwarded, selectedProfile)
 	case "clownbox":
 		return runClownbox(cliPath, flags, prompts, pluginDirs)
 	default:
@@ -1497,6 +1499,14 @@ func resolveProvider(name string) (string, error) {
 		return buildcfg.OpencodeCliPath, nil
 	case "crush":
 		return buildcfg.CrushCliPath, nil
+	case "trapeze":
+		// Headless trapeze provider (OpenRouter backend + XMPP frontend). The
+		// binary path is burned in by nix builds; a plain `go build` leaves it
+		// empty, so fall back to resolving "trapeze" on PATH for dev.
+		if buildcfg.TrapezeCliPath == "" {
+			return "trapeze", nil
+		}
+		return buildcfg.TrapezeCliPath, nil
 	case "clownbox":
 		if buildcfg.ClownboxCliPath == "" {
 			return "", fmt.Errorf("%s", clownboxDisabledMessage)
@@ -1578,7 +1588,7 @@ func printHelp() {
 	fmt.Printf(`Usage: clown [clown-flags] -- [provider-args]
 
 Clown flags (must appear before --):
-  --provider <name>          Provider to use: claude, codex, circus, opencode (default: %s)
+  --provider <name>          Provider to use: claude, codex, circus, opencode, crush, trapeze (default: %s)
   --profile <name>           Profile name; implies --provider from profile config%s
   --naked                    Pass through to provider without clown wrapping
   --skip-failed              Continue if plugin servers fail to start
