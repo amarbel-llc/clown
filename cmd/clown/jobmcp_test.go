@@ -202,6 +202,11 @@ func TestJobMCPPromptsGet(t *testing.T) {
 	if !strings.Contains(text, "clown job platform") {
 		t.Errorf("fragment missing header; got:\n%s", text)
 	}
+	// The Session Identity section names the per-instance key as the troupe
+	// address other sessions message this one at.
+	if !strings.Contains(text, "## Session Identity") {
+		t.Errorf("fragment missing Session Identity section; got:\n%s", text)
+	}
 }
 
 func TestJobMCPPromptsGetUnknown(t *testing.T) {

@@ -3,12 +3,14 @@ package main
 import (
 	"bufio"
 	"context"
+	_ "embed"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"strings"
+	"text/template"
 	"time"
 
 	"github.com/amarbel-llc/clown/internal/jobwake"
@@ -234,11 +236,36 @@ func jobPromptGet(params json.RawMessage) (map[string]any, bool) {
 	}, true
 }
 
-// jobSystemPromptFragment builds the orientation fragment at request time. It
-// is genuinely runtime-dynamic: the tool list is the server's own catalog and
-// the channel key is resolved from the per-instance identity clown injected
-// into this process's env (clown#136) — state the build-time static fragment
-// mechanism (FDR-0003) structurally cannot express.
+// jobFragmentTmplText is the embedded orientation-fragment template. The copy
+// lives in jobfragment.tmpl so the markdown — backtick-dense code spans and all
+// — is authored as markdown rather than as escaped Go string fragments (a raw
+// string literal cannot contain backticks at all).
+//
+//go:embed jobfragment.tmpl
+var jobFragmentTmplText string
+
+// jobFragmentTmpl is parsed once at init: a malformed template panics here, at
+// build/start, never at request time. The Session Identity section is gated on a
+// non-empty .SessionKey inside the template, so it only renders when this clown
+// has an address other sessions can reach — and this whole fragment is served
+// only when the live job platform is up (CLOWN_DISABLE_JOB_WAKEUP and dev builds
+// without the stdio bridge omit it), so it never advertises an unreachable one.
+var jobFragmentTmpl = template.Must(template.New("jobfragment").Parse(jobFragmentTmplText))
+
+// jobFragmentData is the template's view of the runtime-dynamic state: the
+// per-instance session key (the troupe address — chat_send / job_message
+// `target`, RFC-0013 §3) resolved from the identity clown injected into this
+// process's env (clown#136), and the server's own live tool catalog. Neither is
+// expressible by the build-time static fragment mechanism (FDR-0003).
+type jobFragmentData struct {
+	SessionKey string
+	Tools      string
+}
+
+// jobSystemPromptFragment renders the orientation fragment at request time from
+// the embedded template. A template execution error degrades to an empty
+// fragment rather than failing the prompt fetch — best-effort, like the rest of
+// the dynamic-fragment path.
 func jobSystemPromptFragment() string {
 	tools := jobToolList("") // orientation covers the whole platform, both surfaces
 	names := make([]string, 0, len(tools))
@@ -248,17 +275,13 @@ func jobSystemPromptFragment() string {
 		}
 	}
 	var b strings.Builder
-	b.WriteString("## clown job platform (live)\n\n")
-	b.WriteString("The clown job-wakeup channel is active for this session")
-	if session := jobwake.SessionKey(); session != "" {
-		fmt.Fprintf(&b, " (channel key `%s`)", session)
+	if err := jobFragmentTmpl.Execute(&b, jobFragmentData{
+		SessionKey: jobwake.SessionKey(),
+		Tools:      strings.Join(names, ", "),
+	}); err != nil {
+		return ""
 	}
-	b.WriteString(".\n\n")
-	b.WriteString("Available tools: ")
-	b.WriteString(strings.Join(names, ", "))
-	b.WriteString(".\n\n")
-	b.WriteString("Use them to defer long-running work to the background and to coordinate across sessions; you are woken when a backgrounded job reaches a terminal state.")
-	return b.String()
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // callJobTool decodes a tools/call params object and dispatches to jobwake.

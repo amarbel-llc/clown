@@ -1,0 +1,11 @@
+{{if .SessionKey}}## Session Identity
+
+Other clown sessions address this one by its per-instance session key `{{.SessionKey}}`. To message it they call troupe's `chat_send` (or `job_message`) with `target` set to that key; you reach another session the same way using its key (run `chat_list` to see who is present).
+
+{{end}}## clown job platform (live)
+
+The clown job-wakeup channel is active for this session.
+
+Available tools: {{.Tools}}.
+
+Use them to defer long-running work to the background and to coordinate across sessions; you are woken when a backgrounded job reaches a terminal state.
