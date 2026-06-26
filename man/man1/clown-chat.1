@@ -9,8 +9,7 @@
 .Sh SYNOPSIS
 .Nm clown chat send
 .Fl -target Ar session-key | group | '*'
-.Fl -subject Ar subject
-.Op Fl -body Ar body
+.Brq Fl -message Ar text | Fl -subject Ar subject Op Fl -body Ar body
 .Op Fl -from Ar sender-key
 .Op Fl -source Ar source
 .Op Fl -resource Ar uri
@@ -40,11 +39,23 @@ is a session key (a single clown, addressed by its per-instance key), a
 group label (fans out to every clown under that spinclass session), or
 .Ql *
 for broadcast.
+The message is given one of two ways.
+.Fl -message
+is the preferred form: a single string in git-commit format \(em a concise
+one-line summary, a blank line, then the body \(em which clown splits into the
+wake subject (the first line) and the body recovered by
+.Nm clown chat read
+(the remainder).
+A body that follows the summary without an intervening blank line is rejected.
+Alternatively, give the two parts explicitly with
 .Fl -subject
-is the one-line wake notification (required).
-.Fl -body
-is the full message recovered by
-.Nm clown chat read .
+(the one-line wake notification) and the optional
+.Fl -body .
+Exactly one of
+.Fl -message
+or
+.Fl -subject
+is required, and they are mutually exclusive.
 .Fl -from
 defaults to this session's key.
 .Fl -resource

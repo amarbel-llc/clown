@@ -34,14 +34,17 @@ func runChat(args []string) int {
 
 // chatSend emits a chat message: a one-line subject (the wake) plus an optional
 // full body (stored in the spool for chat read). target is a session key, a
-// group-id group, or "*" for broadcast.
+// group-id group, or "*" for broadcast. The message may be given either as a
+// single --message in git-commit format (summary line, blank line, body — clown
+// splits it) or as the explicit --subject/--body pair.
 func chatSend(args []string) int {
 	fs := flag.NewFlagSet("clown chat send", flag.ContinueOnError)
 	target := fs.String("target", "", "recipient: a session key, a group-id group, or * for broadcast")
 	from := fs.String("from", "", "sender session key (default: this session)")
 	source := fs.String("source", "", "emitting source label")
-	subject := fs.String("subject", "", "one-line subject (the wake notification)")
-	body := fs.String("body", "", "full message body (recovered by chat read)")
+	message := fs.String("message", "", "git-commit format: a one-line summary, a blank line, then the body")
+	subject := fs.String("subject", "", "one-line subject (the wake notification); alternative to --message")
+	body := fs.String("body", "", "full message body (recovered by chat read); pairs with --subject")
 	var resources stringList
 	fs.Var(&resources, "resource", "attach a resource by URI, e.g. madder://blobs/<digest> (repeatable)")
 	if err := fs.Parse(args); err != nil {
@@ -51,15 +54,27 @@ func chatSend(args []string) int {
 		fmt.Fprintln(os.Stderr, "clown chat send: --target is required")
 		return 2
 	}
-	if *subject == "" {
-		fmt.Fprintln(os.Stderr, "clown chat send: --subject is required")
+	subj, bdy := *subject, *body
+	switch {
+	case *message != "":
+		if *subject != "" || *body != "" {
+			fmt.Fprintln(os.Stderr, "clown chat send: --message is mutually exclusive with --subject/--body")
+			return 2
+		}
+		var err error
+		if subj, bdy, err = jobwake.SplitMessage(*message); err != nil {
+			fmt.Fprintf(os.Stderr, "clown chat send: %v\n", err)
+			return 2
+		}
+	case *subject == "":
+		fmt.Fprintln(os.Stderr, "clown chat send: --message or --subject is required")
 		return 2
 	}
 	from2 := *from
 	if from2 == "" {
 		from2 = jobwake.SessionKey()
 	}
-	id, err := jobwake.SendChat(*target, from2, *source, *subject, *body, resourcesFromURIs(resources)...)
+	id, err := jobwake.SendChat(*target, from2, *source, subj, bdy, resourcesFromURIs(resources)...)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown chat send: %v\n", err)
 		return 1

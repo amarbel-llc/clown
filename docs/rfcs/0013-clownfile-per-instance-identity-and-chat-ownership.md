@@ -301,6 +301,16 @@ record carries only a one-line subject, so the body needs the spool.)
    advance a per-reader cursor that is DISTINCT from the monitor's wake ack, so
    a wake never consumes a pull read or vice-versa; the cursor is keyed by the
    reader's per-instance channel (§2.1) on each of the reader's channels (§3.2).
+4. The agent-facing send surface SHOULD accept the message as a single
+   **git-commit-formatted** string — a one-line summary, a blank line, then the
+   body — and split it into the stored subject (the first line) and body (the
+   remainder). This steers callers to put substantive content in the body rather
+   than crammed into the one-line wake (the observed failure mode: messages sent
+   summary-only, leaving the recipient with no body). A body that follows the
+   summary WITHOUT an intervening blank line MUST be rejected rather than
+   silently folded into the wake line. The non-agent CLI MAY also accept an
+   explicit subject/body pair. The storage contract (§3.1.1) is unchanged: the
+   split is an input-shaping step ahead of the unchanged subject+body store.
 
 #### 3.2 Derived-channel addressing
 

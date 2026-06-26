@@ -182,8 +182,10 @@ func jobToolList(surface string) []map[string]any {
 			"inputSchema": obj(map[string]any{"job_id": str, "target": target, "timeout_sec": map[string]any{"type": "integer"}, "tail": map[string]any{"type": "integer"}}, "job_id")},
 		{"name": "job_spool_path", "description": "Resolve and return the absolute output-spool path for a job. Does not create the file.",
 			"inputSchema": obj(map[string]any{"job_id": str, "target": target}, "job_id")},
-		{"name": "chat_send", "description": "Send a chat message (RFC-0013 §3): a one-line subject (the wake) plus an optional full body recovered by chat_read. target: session key / group-id group / '*' broadcast.",
-			"inputSchema": obj(map[string]any{"target": target, "subject": str, "body": str, "from": str, "source": str, "resources": resourceArr}, "target", "subject")},
+		{"name": "chat_send", "description": "Send a chat message to another session (RFC-0013 §3). Write `message` like a git commit: a concise one-line summary, a blank line, then the details. clown delivers the summary as the wake notification the recipient sees immediately and the full text via chat_read. A single-line message (no body) is fine for something that fits in the summary; if you include details they MUST be separated from the summary by a blank line, or the call is rejected. target: session key / group-id group / '*' broadcast.",
+			"inputSchema": obj(map[string]any{"target": target,
+				"message": map[string]any{"type": "string", "description": "git-commit format: a one-line summary, a blank line, then the body. The first line becomes the wake; the rest is the body recovered by chat_read."},
+				"from":    str, "source": str, "resources": resourceArr}, "target", "message")},
 		{"name": "chat_read", "description": "Read chat messages addressed to this session (own/group/broadcast) newer than the read cursor; advances the cursor unless peek. Returns a JSON array of {job,from,source,scope,subject,body,ts}.",
 			"inputSchema": obj(map[string]any{"peek": map[string]any{"type": "boolean"}})},
 		{"name": "chat_list", "description": "List live chat recipients (presence): each {sessionKey, channelId, decoration, description, lastSeen}, groupable by decoration. Replaces spinclass chat-list-sessions.",
@@ -324,8 +326,12 @@ func callJobTool(params json.RawMessage) map[string]any {
 		if from == "" {
 			from = jobwake.SessionKey()
 		}
+		subject, body, err := jobwake.SplitMessage(argStr(a, "message"))
+		if err != nil {
+			return toolErr(err.Error())
+		}
 		id, err := jobwake.SendChat(argStr(a, "target"), from, argStr(a, "source"),
-			argStr(a, "subject"), argStr(a, "body"), parseResources(a)...)
+			subject, body, parseResources(a)...)
 		return toolResult(id, err)
 	case "chat_read":
 		return chatReadTool(a)

@@ -299,6 +299,62 @@ func TestJobMCPInvalidJobIDIsToolError(t *testing.T) {
 	}
 }
 
+// chat_send takes a single git-commit-style `message`: clown splits the first
+// line into the wake subject and the remainder (after the blank line) into the
+// body. A self-directed send lands on the sender's own channel, so chat_read
+// recovers both halves.
+func TestJobMCPChatSendSplitsGitCommit(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("CLOWN_SESSION_ID", "k")
+	rt, err := os.MkdirTemp("/tmp", "clown-mcp-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(rt)
+	t.Setenv("XDG_RUNTIME_DIR", rt)
+
+	resp := mcpCall(t, toolCall("chat_send", map[string]any{
+		"target":  "k",
+		"message": "the summary\n\nfirst body line\nsecond body line",
+	}))
+	if id, isErr := toolCallText(t, resp); isErr || id == "" {
+		t.Fatalf("chat_send: id=%q isErr=%v", id, isErr)
+	}
+
+	resp = mcpCall(t, toolCall("chat_read", map[string]any{}))
+	text, isErr := toolCallText(t, resp)
+	if isErr {
+		t.Fatalf("chat_read errored: %s", text)
+	}
+	var msgs []map[string]any
+	if err := json.Unmarshal([]byte(text), &msgs); err != nil {
+		t.Fatalf("chat_read json %q: %v", text, err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("chat_read returned %d messages, want 1: %s", len(msgs), text)
+	}
+	if msgs[0]["subject"] != "the summary" {
+		t.Errorf("subject = %v, want the first line as the wake", msgs[0]["subject"])
+	}
+	if msgs[0]["body"] != "first body line\nsecond body line" {
+		t.Errorf("body = %v, want the post-blank-line remainder", msgs[0]["body"])
+	}
+}
+
+// A message whose body follows the summary without a blank line is rejected as a
+// tool error rather than silently flattened into the wake.
+func TestJobMCPChatSendRejectsMissingBlankLine(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("CLOWN_SESSION_ID", "k")
+	resp := mcpCall(t, toolCall("chat_send", map[string]any{
+		"target":  "k",
+		"message": "summary line\nbody with no blank separator",
+	}))
+	if _, isErr := toolCallText(t, resp); !isErr {
+		t.Fatal("chat_send without a blank-line separator must return isError")
+	}
+}
+
 func TestJobMCPUnknownMethodErrors(t *testing.T) {
 	resp := mcpCall(t, map[string]any{"jsonrpc": "2.0", "id": 9, "method": "frobnicate"})
 	if resp["error"] == nil {

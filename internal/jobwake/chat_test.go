@@ -13,6 +13,44 @@ func chatEnv(t *testing.T, sessionKey, group string) {
 	t.Setenv("CLOWN_GROUP_ID", group)
 }
 
+func TestSplitMessage(t *testing.T) {
+	cases := []struct {
+		name        string
+		in          string
+		wantSubject string
+		wantBody    string
+		wantErr     bool
+	}{
+		{"single line", "just a headline", "just a headline", "", false},
+		{"trailing newline only", "headline\n", "headline", "", false},
+		{"summary blank body", "summary\n\nthe body", "summary", "the body", false},
+		{"multi-paragraph body", "summary\n\npara one\n\npara two", "summary", "para one\n\npara two", false},
+		{"extra blank lines after separator", "summary\n\n\nbody", "summary", "body", false},
+		{"whitespace-only separator", "summary\n \nbody", "summary", "body", false},
+		{"trailing whitespace lines treated as no body", "summary\n\n   \n", "summary", "", false},
+		{"missing blank separator", "summary\nbody right after", "", "", true},
+		{"subject trimmed", "  spaced summary  \n\nbody", "spaced summary", "body", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			subject, body, err := SplitMessage(c.in)
+			if c.wantErr {
+				if err == nil {
+					t.Fatalf("SplitMessage(%q) = (%q, %q, nil), want error", c.in, subject, body)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("SplitMessage(%q) unexpected error: %v", c.in, err)
+			}
+			if subject != c.wantSubject || body != c.wantBody {
+				t.Fatalf("SplitMessage(%q) = (%q, %q), want (%q, %q)",
+					c.in, subject, body, c.wantSubject, c.wantBody)
+			}
+		})
+	}
+}
+
 func TestSendChatWritesRecordAndSpoolBody(t *testing.T) {
 	chatEnv(t, "k", "")
 	id, err := SendChat("k", "sender", "src", "the subject", "the\nfull\nbody")

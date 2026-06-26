@@ -588,8 +588,14 @@ The flake produces a `symlinkJoin` of five components:
    own-channel reap leaves it) carrying the one-line subject in the record and
    the full body in the message's RFC-0010 spool. `clown chat send|read|list`
    (CLI) and `chat_send`/`chat_read`/`chat_list` (the same `clown-builtin-jobs`
-   server) are the surface: read aggregates the reader's own/group/broadcast
-   channels with a per-clown cursor distinct from the wake ack; `list` reads a
+   server) are the surface. `chat_send`/`--message` take the message in
+   **git-commit format** (a one-line summary, a blank line, then the body);
+   clown splits it into the stored subject (first line, the wake) and body
+   (remainder, the spool) via `jobwake.SplitMessage`, and rejects a body that
+   follows the summary without a blank line — this steers agents away from the
+   observed summary-only/no-body failure. The CLI also still accepts
+   an explicit `--subject`/`--body` pair. read aggregates the reader's
+   own/group/broadcast channels with a per-clown cursor distinct from the wake ack; `list` reads a
    presence index the job-watch monitor registers per session
    (`$XDG_STATE_HOME/clown/presence/`, keyed by per-instance channel, refreshed
    on a ticker, `SPINCLASS_DESCRIPTION` as the readable label). The spinclass

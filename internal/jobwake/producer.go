@@ -165,6 +165,31 @@ func oneLine(s string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(s, "\n", " "), "\r", " ")
 }
 
+// SplitMessage parses a git-commit-style chat message into a one-line subject
+// (the wake) and the remaining body (the spool). The convention mirrors a git
+// commit: a concise summary line, a blank line, then the detail body. A
+// single-line message is a legitimate short chat with no body. A body that
+// follows the summary WITHOUT an intervening blank line is rejected — the
+// caller surfaces the error rather than silently folding the detail into the
+// one-line wake. The returned subject/body are passed straight to
+// SendChat, so the durable storage model (subject in the journal record, body
+// in the output spool) is unchanged.
+func SplitMessage(message string) (subject, body string, err error) {
+	lines := strings.Split(strings.TrimRight(message, "\n"), "\n")
+	subject = strings.TrimSpace(lines[0])
+	// Single line, or nothing but blank lines after the summary: subject-only.
+	if len(lines) == 1 || strings.TrimSpace(strings.Join(lines[1:], "\n")) == "" {
+		return subject, "", nil
+	}
+	// A body is present: the line immediately after the summary must be blank
+	// (the git-commit separator). Whitespace-only counts as blank.
+	if strings.TrimSpace(lines[1]) != "" {
+		return "", "", fmt.Errorf("git-commit format: separate the subject and body with a blank line")
+	}
+	body = strings.TrimSpace(strings.Join(lines[2:], "\n"))
+	return subject, body, nil
+}
+
 // Progress appends a non-waking progress record. It is journal-only and never
 // wakes the agent, so it sends no nudge (RFC-0009 §5, §8). target selects the
 // channel: empty resolves the current session, else the cross-session target

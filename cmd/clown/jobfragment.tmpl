@@ -9,3 +9,5 @@ The clown job-wakeup channel is active for this session.
 Available tools: {{.Tools}}.
 
 Use them to defer long-running work to the background and to coordinate across sessions; you are woken when a backgrounded job reaches a terminal state.
+
+When you `chat_send`, write `message` like a git commit: a concise one-line summary, a blank line, then the details. The summary is the wake the recipient sees immediately; the full text reaches them via `chat_read`. Put substantive content in the body rather than cramming it into the summary — a body that follows the summary without a blank line between them is rejected.
