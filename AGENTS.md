@@ -358,10 +358,16 @@ chat channel, presence decoration, and the `{group}` title; clown no longer read
 `SPINCLASS_SESSION_ID` by name (`jobwake.GroupKey()` reads `CLOWN_GROUP_ID`),
 `[attach].description` (`CLOWN_GROUP_DESCRIPTION`) is the presence label, and the
 presence index is the clown→spinclass half spinclass consumes for liveness +
-`sc list`. The spinclass `[session-entry]` takeover (spinclass dropping its mux
-defaults + wiring `--clown-attach=spawn`/presence) is the lockstep spinclass-side
-half (FDR-0017 Piece 1); remote attach stays spinclass. Man pages: `clownfile(5)`;
-RFCs: RFC-0013 §1.3, RFC-0014.
+`sc list`. `clown presence list` (`cmd/clown/presence.go`) is the **stable query
+surface** over that index — `--group <id>` filters by decoration, `--quiet` makes
+it a `grep -q`-style liveness predicate (exit 0 iff a matching live record
+exists), `--json` emits the records; spinclass's probe is
+`clown presence list --group "$SPINCLASS_SESSION_ID" --quiet`, so the on-disk
+schema and the freshness window stay behind the CLI (spinclass#201). The spinclass
+`[session-entry]` takeover (spinclass dropping its mux defaults + wiring
+`--clown-attach=spawn`/presence) is the lockstep spinclass-side half (FDR-0017
+Piece 1); remote attach stays spinclass. Man pages: `clownfile(5)`,
+`clown-presence(1)`; RFCs: RFC-0013 §1.3, RFC-0014.
 
 ## Architecture
 

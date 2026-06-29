@@ -1,0 +1,94 @@
+.\" Copyright (c) 2026 amarbel, LLC
+.\" SPDX-License-Identifier: MIT
+.Dd @MDOCDATE@
+.Dt CLOWN-PRESENCE 1
+.Os
+.Sh NAME
+.Nm clown-presence
+.Nd query the clown session presence index
+.Sh SYNOPSIS
+.Nm clown presence list
+.Op Fl -group Ar group-id
+.Op Fl -json
+.Op Fl -quiet
+.Sh DESCRIPTION
+.Nm clown presence
+queries the presence index \(em the clown\(->spinclass liveness seam (RFC-0014).
+Every live clown writes a presence record under
+.Pa $XDG_STATE_HOME/clown/presence/ ,
+its job-watch monitor (see
+.Xr clown-job 1 )
+refreshes the record on a ticker, and a clean shutdown removes it; a stale
+record (one not refreshed within the freshness window) is pruned on read.
+This command is the stable query surface for that index: a consumer \(em notably
+spinclass's liveness probe \(em uses it instead of reading the on-disk JSON
+directly, so the record schema and the freshness window stay clown's concern.
+It is a pure read, available regardless of
+.Ev CLOWN_DISABLE_JOB_WAKEUP
+.Pq when disabled no records are written, so the listing is simply empty .
+.Pp
+A presence record is written only by a clown whose job-watch monitor is running:
+the claude-family providers, not
+.Fl -naked
+or an exec-replacing provider, and not when
+.Ev CLOWN_DISABLE_JOB_WAKEUP Ns = Ns Ql 1 .
+.Bl -tag -width Ds
+.It Nm clown presence list
+List the live presence records.
+By default the output is a human listing grouped by
+.Sy decoration
+(the group-id), each line showing a record's per-instance key and description \(em
+the same shape as
+.Nm clown chat list .
+.Fl -group
+restricts the listing to records whose
+.Sy decoration
+.Pq the group-id, Ev CLOWN_GROUP_ID , No e.g. a spinclass session's Ar repo Ns / Ns Ar branch
+equals
+.Ar group-id ;
+passing
+.Fl -group
+with an empty value selects the ungrouped records.
+.Fl -json
+emits one JSON record per line
+.Pq Li {sessionKey,channelId,decoration,description,lastSeen} .
+.Fl -quiet
+suppresses output and turns the command into a liveness predicate: it exits
+.Sy 0
+when at least one matching live record exists and
+.Sy 1
+when none do
+.Pq Xr grep 1 Fl q No style ,
+so a probe is
+.Dl clown presence list --group \(dq$ID\(dq --quiet
+.El
+.Sh ENVIRONMENT
+.Bl -tag -width Ds
+.It Ev XDG_STATE_HOME
+Root of the presence directory
+.Pq Pa $XDG_STATE_HOME/clown/presence/ .
+.It Ev CLOWN_GROUP_ID
+The group-id a live clown records as its
+.Sy decoration ;
+.Fl -group
+matches against it.
+.El
+.Sh EXIT STATUS
+.Nm clown presence list
+exits
+.Sy 0
+on success
+.Pq or, with Fl -quiet , No when a matching record is live ,
+.Sy 1
+on a read error
+.Pq or, with Fl -quiet , No when no matching record is live ,
+and
+.Sy 2
+on a usage error.
+.Sh SEE ALSO
+.Xr clown-chat 1 ,
+.Xr clown-job 1 ,
+.Xr clownfile 5
+.Sh STANDARDS
+RFC-0014 (clown\(enspinclass awareness seam: group-id and presence) and RFC-0013
+(clownfile, per-instance identity, and clown-owned chat).

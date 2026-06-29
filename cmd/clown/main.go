@@ -209,6 +209,8 @@ func run(rawArgs []string) int {
 			return runJobMCP(rawArgs[1:])
 		case "chat":
 			return runChat(rawArgs[1:])
+		case "presence":
+			return runPresence(rawArgs[1:])
 		case "pty-suspend":
 			return runPtySuspend(rawArgs[1:])
 		}
