@@ -3,23 +3,32 @@
 # This file ships in the nix store and is merged as the LOWEST-precedence layer
 # of the clownfile cascade: any user `clownfile` discovered ascending $PWD->$HOME
 # (and the XDG user-global clownfile, clown#149) overrides these values per key.
-# The multiplexer defaults to "none", so clown runs INLINE by default. To opt
-# into a multiplexer self-wrap, set `multiplexer = "zmx"` in a user clownfile;
-# the start/resume/spawn templates below are then inherited (a non-empty scalar
-# replaces this default per key).
+# The multiplexer defaults to "posh", so clown self-wraps each interactive
+# instance in a posh session by default (a non-interactive run, or one whose
+# configured multiplexer is not installed, degrades to INLINE — see
+# maybeReexecMultiplexer). To run inline unconditionally, set
+# `multiplexer = "none"` in a user clownfile; the start/resume/spawn templates
+# below are then inert.
 #
-# The zmx [attach] templates below match spinclass's confirmed real
-# [session-entry] defaults where one exists (FDR-0017 Piece 1):
-#   - spawn / spawn-entry: equal to spinclass's real defaults.
-#   - start / resume: clown-native (spinclass shipped no baked mux template here;
-#     clown owns the interactive self-wrap when zmx is opted into).
-# They are inert while `multiplexer = "none"` and used only when a user clownfile
-# opts into zmx. Placeholders: {id} = the per-instance session key (RFC-0013 §2);
-# {group} = the resolved group-id (RFC-0014, title only, falls back to {id} when
-# empty); the exact element "{entry}" splices clown's own entrypoint argv.
+# posh (the portable shell: zmx-style local session persistence + mosh-style
+# roaming) is the eng-standard session manager — the same substrate spinclass's
+# liveness-probe enumerates (eng home/spinclass.nix, substrate = "posh"). clown
+# OWNS the attach: spinclass execs clown and clown self-wraps in posh; spinclass
+# discovers the live session via clown's presence index (internal/jobwake/
+# presence.go, decoration == the group-id), NOT by the posh session name, so
+# clown keeps naming the session by its per-instance key (RFC-0013 §2.3).
+#
+# posh's `attach NAME [cmd...] [--detach]` is a drop-in for the former zmx
+# templates: a live NAME reattaches and ignores the command (so one template
+# serves both fresh-start and resume), and --detach is recognized anywhere in
+# argv (so the spawn template splices it before {entry}). Placeholders:
+# {id} = the per-instance session key (RFC-0013 §2), used as the posh session
+# NAME; {group} = the resolved group-id (RFC-0014, title only, falls back to
+# {id} when empty); the exact element "{entry}" splices clown's own entrypoint
+# argv (spliced RAW — local `posh attach` does not strip a leading "--").
 
 [attach]
-multiplexer  = "none"
+multiplexer  = "posh"
 # group-id keys the group chat channel, presence grouping, and the {group} resume
 # title (RFC-0014 §2). It is sourced by ENV INTERPOLATION: "${SPINCLASS_SESSION_ID}"
 # binds to the orchestrator's session key when present, and interpolates to the
@@ -32,10 +41,10 @@ group-id     = "${SPINCLASS_SESSION_ID}"
 # description is the human-readable presence label (RFC-0014 §4.1), same
 # interpolation + graceful-empty contract as group-id.
 description  = "${SPINCLASS_DESCRIPTION}"
-start        = ["zmx", "attach", "{id}", "{entry}"]
-resume       = ["zmx", "attach", "{id}", "{entry}"]
+start        = ["posh", "attach", "{id}", "{entry}"]
+resume       = ["posh", "attach", "{id}", "{entry}"]
 resume-title = "{group}"
-spawn        = ["zmx", "attach", "{id}", "--detach", "{entry}"]
+spawn        = ["posh", "attach", "{id}", "--detach", "{entry}"]
 spawn-entry  = ["clown", "--", "{prompt}"]
 # spawn-window has no default (unset = no window).
 # pty-suspend wraps the interactive provider in clown's escape-to-shell pty proxy

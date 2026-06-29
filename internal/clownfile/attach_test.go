@@ -112,6 +112,35 @@ func TestAttachResolveRejectsDisabledAndEmpty(t *testing.T) {
 	}
 }
 
+// posh is a first-class multiplexer alongside zmx: Enabled() reports a wrap and
+// Resolve renders the template with the same {id}/{entry} splicing. This is the
+// eng-standard session manager (the burned-in default), so the gate must accept
+// it. spawn splices --detach before {entry} (posh recognizes the flag anywhere).
+func TestAttachPoshMultiplexer(t *testing.T) {
+	if !(Attach{Multiplexer: "posh"}).Enabled() {
+		t.Fatal("multiplexer posh must be Enabled()")
+	}
+	a := Attach{
+		Multiplexer: "posh",
+		Start:       []string{"posh", "attach", "{id}", "{entry}"},
+		Spawn:       []string{"posh", "attach", "{id}", "--detach", "{entry}"},
+	}
+	got, err := a.Resolve(ModeStart, "k", []string{"clown", "--clown-attach-id", "k", "--", "hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"posh", "attach", "k", "clown", "--clown-attach-id", "k", "--", "hi"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("posh start Resolve = %v, want %v", got, want)
+	}
+	spawn, err := a.Resolve(ModeSpawn, "k", []string{"clown", "--", "hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"posh", "attach", "k", "--detach", "clown", "--", "hi"}; !reflect.DeepEqual(spawn, want) {
+		t.Fatalf("posh spawn Resolve = %v, want %v", spawn, want)
+	}
+}
+
 func TestAttachTitleSubstitutesID(t *testing.T) {
 	if got := (Attach{ResumeTitle: "clown {id}"}).Title("abc", ""); got != "clown abc" {
 		t.Fatalf("Title = %q, want \"clown abc\"", got)

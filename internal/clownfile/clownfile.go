@@ -53,7 +53,7 @@ type Profile struct {
 // SpawnWindow are parsed and held as the single-source schema but their executor
 // is unresolved (RFC §1.3 open question), so this revision does not run them.
 type Attach struct {
-	Multiplexer string   `toml:"multiplexer"`  // "zmx" | "none"
+	Multiplexer string   `toml:"multiplexer"`  // "zmx" | "posh" | "none"
 	GroupID     string   `toml:"group-id"`     // group key, env-interpolated (RFC-0014 §2); "" ⇒ ungrouped
 	Description string   `toml:"description"`  // presence label, env-interpolated (RFC-0014 §4.1)
 	Start       []string `toml:"start"`        // fresh interactive self-wrap argv
@@ -124,8 +124,8 @@ var placeholderRe = regexp.MustCompile(`\{[a-zA-Z][a-zA-Z0-9_-]*\}`)
 // rejected with a diagnostic. Returns an error when the multiplexer is not
 // enabled or the selected template is empty.
 func (a Attach) Resolve(mode AttachMode, id string, entry []string) ([]string, error) {
-	if a.Multiplexer != "zmx" && a.Multiplexer != "none" {
-		return nil, fmt.Errorf("clownfile [attach]: multiplexer must be \"zmx\" or \"none\", got %q", a.Multiplexer)
+	if a.Multiplexer != "zmx" && a.Multiplexer != "posh" && a.Multiplexer != "none" {
+		return nil, fmt.Errorf("clownfile [attach]: multiplexer must be \"zmx\", \"posh\", or \"none\", got %q", a.Multiplexer)
 	}
 	if !a.Enabled() {
 		return nil, fmt.Errorf("clownfile [attach]: multiplexer is %q; no wrap", a.Multiplexer)

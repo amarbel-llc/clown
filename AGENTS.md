@@ -302,7 +302,7 @@ injected as `--model` for the claude family, and `[profile.env]` is
 exported only-if-unset (ambient wins). The named-profile registry
 (`--profile`) is a separate mechanism that wins over clownfile defaults.
 The `[attach]` table (RFC-0013 §1.3, clown#145) is the multiplexer
-self-wrap layer: when `multiplexer` is `zmx` (not `none`), clown re-execs
+self-wrap layer: when `multiplexer` is `posh` or `zmx` (not `none`), clown re-execs
 itself under the configured `start`/`resume` template on boot
 (`cmd/clown/attach.go` `maybeReexecMultiplexer`, gated in `runWithFlags`
 after the per-instance id is resolved), pinning the id via the hidden
@@ -321,11 +321,22 @@ safe on hosts without the mux. clown ships a **burned-in default clownfile**
 `buildcfg.DefaultClownfilePath`) carrying the `[attach]` defaults; `clownfile.Discover`
 merges it as the lowest-precedence base, beneath the XDG user-global
 `$XDG_CONFIG_HOME/clown/clownfile` (`~/.config/clown/clownfile`, clown#149) and the
-`$PWD→$HOME` ascent. The burned-in `multiplexer` defaults to `"none"`, so a worktree
-runs **inline** unless a higher-precedence `clownfile` opts into `multiplexer = "zmx"`
-(then the burned-in `start`/`resume`/`spawn` templates are inherited); any user
-`clownfile` overrides per key. Those zmx templates lock `spawn`/`spawn-entry`
-to spinclass's real `[session-entry]` defaults; `start`/`resume` are clown-native.
+`$PWD→$HOME` ascent. The burned-in `multiplexer` defaults to `"posh"` (the eng-standard portable-shell
+session manager — zmx-style local persistence + mosh-style roaming), so every
+interactive clown self-wraps in a posh session by default unless a
+higher-precedence `clownfile` opts out with
+`multiplexer = "none"` (the burned-in `start`/`resume`/`spawn` templates drive
+`posh attach` / `posh attach --detach`); any user `clownfile` overrides per key.
+posh's `attach <name> [cmd] [--detach]` is a drop-in for the former zmx templates
+(a live `<name>` reattaches and ignores the command, so one template serves
+start+resume; `--detach` is recognized anywhere in argv). spinclass execs clown
+and clown owns the posh attach; spinclass discovers the live session through
+clown's presence index (`internal/jobwake/presence.go`, `decoration ==` the
+group-id), NOT the posh session name, so clown keeps naming the session by its
+per-instance key (RFC-0013 §2.3) — the spinclass-side probe rework is
+spinclass#175/#153 (umbrella spinclass#201).
+Those templates lock `spawn`/`spawn-entry` to spinclass's real `[session-entry]`
+defaults; `start`/`resume` are clown-native.
 `[attach].pty-suspend` (a `*bool`, default off, overridable per-clownfile) opts the
 interactive provider run into the **escape-to-shell pty proxy** (`internal/ptysuspend`):
 clown runs the provider on an inner pty and intercepts the escape key

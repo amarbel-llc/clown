@@ -107,13 +107,17 @@ only (rejected in argv templates).
 An unrecognized placeholder is rejected.
 .Bl -tag -width Ds
 .It Sy multiplexer
-.Ql zmx
+.Ql posh ,
+.Ql zmx ,
 or
 .Ql none .
 .Ql none
 (and an absent
 .Sy [attach] )
 runs clown inline.
+The burned-in default is
+.Ql posh
+(the eng-standard portable-shell session manager).
 .It Sy group-id
 The group key (RFC-0014 §2), env-interpolated at load \(em
 .Ql ${NAME}
@@ -154,7 +158,9 @@ is also available.
 The argv template for a detached-worker launch (RFC-0014 §5), resolved and
 executed when an orchestrator passes
 .Fl -clown-attach Ns = Ns Ql spawn .
-The template must detach (the default uses zmx with
+The template must detach (the default uses posh
+.Sy attach
+with
 .Fl -detach )
 so clown returns promptly to its launcher.
 .It Sy spawn-entry , Sy spawn-window
@@ -219,17 +225,19 @@ cascade, merged beneath every discovered
 The burned-in
 .Sy multiplexer
 defaults to
-.Ql none ,
-so clown runs inline unless a higher-precedence
+.Ql posh ,
+so clown self-wraps each interactive instance in a posh session unless a
+higher-precedence
 .Sy clownfile
-opts in with
-.Sy multiplexer No = Ql zmx ,
-in which case the burned-in
+opts out with
+.Sy multiplexer No = Ql none .
+The burned-in
 .Sy start ,
 .Sy resume ,
 and
 .Sy spawn
-templates are inherited.
+templates drive posh
+.Sy ( attach No and Sy attach Fl -detach ) .
 A discovered
 .Sy clownfile
 overrides any key.
@@ -287,13 +295,13 @@ model = "claude-sonnet-4-6"
 ANTHROPIC_LOG = "info"
 
 [attach]
-multiplexer = "zmx"
+multiplexer = "posh"
 group-id = "${SPINCLASS_SESSION_ID}"
 description = "${SPINCLASS_DESCRIPTION}"
-start = ["zmx", "attach", "{id}", "{entry}"]
-resume = ["zmx", "attach", "{id}", "{entry}"]
+start = ["posh", "attach", "{id}", "{entry}"]
+resume = ["posh", "attach", "{id}", "{entry}"]
 resume-title = "{group}"
-spawn = ["zmx", "attach", "{id}", "--detach", "{entry}"]
+spawn = ["posh", "attach", "{id}", "--detach", "{entry}"]
 spawn-entry = ["clown", "--", "{prompt}"]
 .Ed
 .Sh SEE ALSO

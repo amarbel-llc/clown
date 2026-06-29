@@ -118,11 +118,11 @@ rather than an external orchestrator invoking the template.
 
 ```toml
 [attach]
-multiplexer  = "none"                                            # zmx | none (default none = inline)
-start        = ["zmx", "attach", "{id}", "{entry}"]              # fresh interactive launch (clown-native)
-resume       = ["zmx", "attach", "{id}", "{entry}"]              # reattach (clown resume) (clown-native)
-resume-title = "{id}"                                             # OSC-2 title emitted before attach
-spawn        = ["zmx", "attach", "{id}", "--detach", "{entry}"]  # detached-worker launch
+multiplexer  = "posh"                                            # posh | zmx | none (default posh)
+start        = ["posh", "attach", "{id}", "{entry}"]             # fresh interactive launch (clown-native)
+resume       = ["posh", "attach", "{id}", "{entry}"]             # reattach (clown resume) (clown-native)
+resume-title = "{id}"                                            # OSC-2 title emitted before attach
+spawn        = ["posh", "attach", "{id}", "--detach", "{entry}"] # detached-worker launch
 spawn-entry  = ["clown", "--", "{prompt}"]                       # harness argv a spawned worker boots
 # spawn-window has no default (unset = no window).
 ```
@@ -130,15 +130,21 @@ spawn-entry  = ["clown", "--", "{prompt}"]                       # harness argv 
 These are the values clown ships as its burned-in base clownfile — the
 lowest-precedence layer of the cascade (§1.1) merged beneath every discovered
 `clownfile`, so a user file overrides any key. The burned-in `multiplexer`
-defaults to `"none"` (clown runs inline); a higher-precedence `clownfile` opts in
-with `multiplexer = "zmx"`, inheriting the `start`/`resume`/`spawn` templates
-below (inert while inline). `spawn`, `spawn-entry`, and `resume-title` equal spinclass's
-confirmed real `[session-entry]` defaults (FDR-0017 Piece 1), so the takeover is
+defaults to `"posh"` (clown self-wraps each interactive instance in a posh
+session); a higher-precedence `clownfile` opts out with `multiplexer = "none"`
+(inline). posh — zmx-style local session persistence plus mosh-style roaming — is
+the eng-standard substrate spinclass's liveness-probe enumerates; its
+`attach NAME [cmd] [--detach]` is a drop-in for the prior zmx templates (a live
+NAME reattaches and ignores the command, so one template serves start+resume;
+`--detach` is recognized anywhere in argv). `spawn`, `spawn-entry`, and
+`resume-title` equal spinclass's confirmed real `[session-entry]` defaults
+(FDR-0017 Piece 1, modulo the zmx→posh binary swap), so the takeover is
 byte-mechanical. `start` and `resume` are **clown-native**: spinclass shipped no
 baked multiplexer template for the interactive path (it fell back to `$SHELL` with
 `$SPINCLASS_SESSION_ID` env expansion), and clown now owns the self-wrap using its
 own `{id}`. `spawn-window` has no default. The field set, placeholder vocabulary,
-and normative rules below are the firm contract.
+and normative rules below are the firm contract. (The `"none"`→`"posh"` default
+flip and the `"posh"` value were amended post-acceptance; spinclass#201.)
 
 ##### Fields
 
@@ -166,8 +172,11 @@ remains spinclass's (`internal/remote`, FDR-0011).
 
 ##### Normative rules
 
-1. `multiplexer` MUST be `"zmx"` or `"none"`. `"none"` (and the default when
-   `[attach]` is absent) MUST run clown inline with no multiplexer wrapping.
+1. `multiplexer` MUST be `"posh"`, `"zmx"`, or `"none"`. `"none"` (and an absent
+   `[attach]`) MUST run clown inline with no multiplexer wrapping. (Amended
+   post-acceptance: `"posh"` — the eng-standard portable-shell session manager —
+   was added as a first-class value and the burned-in default flipped from
+   `"none"` to `"posh"`; see the §1.3 note below and spinclass#201.)
 2. All template values are argv arrays (not shell strings). The placeholders
    above MUST be substituted as defined; the exact element `"{entry}"` MUST
    splice clown's entrypoint argv into that position. Any unrecognized `{...}`
