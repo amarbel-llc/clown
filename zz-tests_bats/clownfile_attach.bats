@@ -51,9 +51,12 @@ EOF
   [ "$status" -eq 0 ]
   [ -f "$MUX_ARGV" ]
 
-  # The stub records argv[1:]; expected full mux argv is:
+  # The spliced {entry} is the RESOLVED argv (reexecArgv), not os.Args (clown#160):
   #   zmx attach test-sess-id <clownbin> --clown-attach-id test-sess-id \
-  #       --provider claude -- --version
+  #       --provider claude -- --session-id <minted-uuid> --version
+  # The explicit --provider is what suppresses the inner profile picker; the
+  # --session-id decideClaudeSession injects on this fresh start rides in the
+  # forwarded tail (a fresh UUID, so its exact value is not asserted).
   run cat "$MUX_ARGV"
   [ "${lines[0]}" = "attach" ]
   [ "${lines[1]}" = "test-sess-id" ]
@@ -63,7 +66,10 @@ EOF
   [ "${lines[5]}" = "--provider" ]
   [ "${lines[6]}" = "claude" ]
   [ "${lines[7]}" = "--" ]
-  [ "${lines[8]}" = "--version" ]
+  # forwarded tail: --session-id <uuid> --version (injected by decideClaudeSession)
+  [ "${lines[8]}" = "--session-id" ]
+  [ -n "${lines[9]}" ]                     # the minted UUID (value not asserted)
+  [ "${lines[10]}" = "--version" ]
 }
 
 # --clown-attach=spawn (RFC-0014 §5) resolves the [attach].spawn template (with

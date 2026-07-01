@@ -337,6 +337,11 @@ func runWithFlags(flags parsedFlags) int {
 		}
 		selectedProfile = chosen
 		flags.provider = selectedProfile.Provider
+		// Record the picked profile's name so a subsequent [attach] re-exec can
+		// carry it as --profile and the inner clown re-resolves the SAME profile
+		// (its backend/model/env/URL), rather than re-running this picker or
+		// losing the non-provider profile settings (clown#160).
+		flags.profile = selectedProfile.Name
 	}
 
 	cliPath, err := resolveProvider(flags.provider)

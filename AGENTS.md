@@ -308,13 +308,21 @@ itself under the configured `start`/`resume` template on boot
 after the per-instance id is resolved), pinning the id via the hidden
 `--clown-attach-id` flag — an arg, not env, so it reuses the clown#136
 hygiene and the inner run skips re-wrapping (loop guard). `{id}`/`{entry}`
-substitute (`{entry}` splices clown's argv); `resume-title` (default `{group}`,
+substitute (`{entry}` splices the RESOLVED clown argv — `parsedFlags.reexecArgv`,
+NOT `os.Args` — so any interactive selection already done in the outer process,
+the `resume` picker/confirm and the profile picker, is baked in as an explicit
+`--provider`/`--profile` and the injected `--resume`/`--session-id`, and the
+inner never re-runs a selector: the mux wraps the resolved provider session, not
+the pre-launch selection, clown#160); `resume-title` (default `{group}`,
 RFC-0014) emits an OSC-2 title resolving to the group-id, falling back to `{id}`
 when ungrouped; `spawn` IS executed for a detached-worker launch when the
 orchestrator passes the hidden `--clown-attach=spawn` arg (`clownfile.ModeSpawn`,
 RFC-0014 §5: clown owns the detached-spawn executor — the resolved §1.3 open
-question), while `spawn-window` stays schema-only. `CLOWN_ATTACH_FORCE=1`
-overrides the interactive-TTY gate; a configured-but-uninstalled multiplexer
+question), while `spawn-window` stays schema-only. The interactive-TTY gate
+applies to `start`/`resume` only (`CLOWN_ATTACH_FORCE=1` overrides it); `spawn`
+is exempt — a detached worker is always non-interactive (`sc spawn` runs clown
+with `/dev/null` stdio), so it MUST resolve its template regardless of TTY
+(clown#161). A configured-but-uninstalled multiplexer
 degrades to inline rather than erroring (clown#146), so the burned-in default is
 safe on hosts without the mux. clown ships a **burned-in default clownfile**
 (`default-clownfile` at the repo root, path burned in via

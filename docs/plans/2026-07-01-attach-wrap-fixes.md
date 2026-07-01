@@ -138,19 +138,24 @@ This makes the re-exec independent of `os.Args` shape: whether the user typed
 `clown resume`, `clown --profile foo`, or `clown -- --resume x`, the inner
 process receives one canonical resolved argv and neither picker re-fires.
 
-**Open implementation choice to settle before coding commit 2** (does not affect
-commit 1):
+**Implementation choice — settled on (a), full argv reconstruction:**
 
 - (a) *Full argv reconstruction* — `reexecArgv()` serializes every resolved
-  top-level flag. Most robust (fully decoupled from `os.Args`), but must
-  enumerate the flag set and stay in sync with `parseFlags`.
-- (b) *Minimal splice* — keep `os.Args[1:]` as the base but (i) strip a leading
-  `resume` subcommand token and (ii) ensure `--provider <resolved>` is present.
-  Smaller diff, but leaks `os.Args` structure and is easy to get subtly wrong
-  (equals-forms, interleaving).
+  top-level flag. Most robust (fully decoupled from `os.Args`); enumerates the
+  flag set, pinned by a unit test. **Chosen.**
+- (b) *Minimal splice* — keep `os.Args[1:]` and patch it. Rejected: leaks
+  `os.Args` structure, easy to get subtly wrong (equals-forms, interleaving).
 
-Leaning (a): it directly encodes "the mux wraps the resolved session" and kills a
-class of argv-shape bugs, at the cost of one enumeration that a unit test pins.
+(a) directly encodes "the mux wraps the resolved session" and kills a class of
+argv-shape bugs.
+
+**Regression fixed while implementing (a):** the profile picker (the bare-`clown`
+path in `runWithFlags`) set `flags.provider` + `selectedProfile` but NOT
+`flags.profile`. Emitting only `--provider` into the inner argv would drop the
+picked profile's non-provider settings (backend/model/env/URL), which
+opencode/crush consume from `selectedProfile` in-process. Fix: set
+`flags.profile = selectedProfile.Name` at the picker site so `reexecArgv()`
+carries `--profile <name>` and the inner re-resolves the identical profile.
 
 ### Tests
 

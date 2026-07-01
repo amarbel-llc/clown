@@ -163,3 +163,80 @@ func TestMaybeReexecSpawnBypassesTTYGate(t *testing.T) {
 		t.Fatal("ModeSpawn no-TTY: want the Resolve error (gate bypassed), got nil (gated out)")
 	}
 }
+
+// reexecArgv reconstructs the RESOLVED clown argv spliced into the mux {entry}
+// (clown#160). The invariant that kills the double dialog: the inner argv always
+// carries an explicit --provider (suppresses the profile picker) and, for a
+// resume, the injected --resume/--session-id in the forwarded tail (suppresses
+// the resume picker and selects the resume template).
+func TestReexecArgv(t *testing.T) {
+	cases := []struct {
+		name string
+		in   parsedFlags
+		want []string
+	}{
+		{
+			// resume subcommand: launchResume appends --resume <id>, then
+			// decideClaudeSession leaves it and identity.Key = <id>.
+			name: "resume",
+			in: parsedFlags{
+				provider:         "claude",
+				providerExplicit: true,
+				forwarded:        []string{"--resume", "sess-abc"},
+			},
+			want: []string{"--provider", "claude", "--", "--resume", "sess-abc"},
+		},
+		{
+			// profile pick resolves a provider even though the user never typed
+			// --provider; the fresh-start --session-id injection rides in forwarded.
+			name: "profile pick, fresh start",
+			in: parsedFlags{
+				provider:         "claude",
+				providerExplicit: true,
+				forwarded:        []string{"--session-id", "minted-uuid"},
+			},
+			want: []string{"--provider", "claude", "--", "--session-id", "minted-uuid"},
+		},
+		{
+			// clown -- --resume x: forwarded carries the user's --resume verbatim.
+			name: "dash-dash resume",
+			in: parsedFlags{
+				provider:         "claude",
+				providerExplicit: true,
+				forwarded:        []string{"--resume", "x"},
+			},
+			want: []string{"--provider", "claude", "--", "--resume", "x"},
+		},
+		{
+			// Profile pick (picker or --profile): both --provider and --profile are
+			// emitted so the inner re-resolves the SAME profile (its backend/model/
+			// env/URL), not just the bare provider — otherwise opencode/crush lose
+			// their profile config across the re-exec (clown#160).
+			name: "profile carried with provider",
+			in: parsedFlags{
+				provider: "opencode",
+				profile:  "crush-gateway",
+			},
+			want: []string{"--provider", "opencode", "--profile", "crush-gateway"},
+		},
+		{
+			// Non-selection top-level flags survive the re-exec.
+			name: "flags survive",
+			in: parsedFlags{
+				provider:        "codex",
+				tent:            true,
+				verbose:         true,
+				extraPluginDirs: []string{"/a", "/b"},
+			},
+			want: []string{"--provider", "codex", "--tent", "--verbose", "--plugin-dir", "/a", "--plugin-dir", "/b"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tc.in.reexecArgv()
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("reexecArgv() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

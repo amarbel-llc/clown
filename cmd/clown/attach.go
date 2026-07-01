@@ -128,16 +128,23 @@ func maybeReexecMultiplexer(cf clownfile.Clownfile, flags parsedFlags, mode clow
 
 	id := flags.identity.Key
 
-	// Replay this exact invocation inside the multiplexer, with the id pinned via
-	// the hidden flag so the inner clown adopts the same routing key (== the mux
-	// session name) and skips re-wrapping. os.Args is the OUTER argv (no attach
-	// flag yet); os.Environ() carries no CLOWN_SESSION_ID (clown#136), so the key
-	// flows only through the arg.
+	// Replay the RESOLVED invocation inside the multiplexer, with the id pinned
+	// via the hidden flag so the inner clown adopts the same routing key (== the
+	// mux session name) and skips re-wrapping. The entry is rebuilt from the
+	// resolved flags (flags.reexecArgv), NOT os.Args, so that any interactive
+	// selection already performed in the OUTER process (the `resume` subcommand's
+	// picker/confirm, the profile picker) is baked into the inner argv as an
+	// explicit --provider and, for a resume, an injected --resume/--session-id.
+	// Those are exactly the inner-picker suppression conditions, so the inner
+	// process renders each selection UI zero more times — the wrap covers the
+	// resolved provider session, not the pre-launch selection (clown#160).
+	// os.Environ() carries no CLOWN_SESSION_ID (clown#136), so the key flows only
+	// through the arg.
 	bin := clownExePath()
 	if bin == "" {
 		bin = os.Args[0]
 	}
-	entry := append([]string{bin, attachIDFlag, id}, os.Args[1:]...)
+	entry := append([]string{bin, attachIDFlag, id}, flags.reexecArgv()...)
 
 	argv, err := cf.Attach.Resolve(mode, id, entry)
 	if err != nil {
@@ -163,4 +170,63 @@ func maybeReexecMultiplexer(cf clownfile.Clownfile, flags parsedFlags, mode clow
 		return fmt.Errorf("clownfile [attach]: exec %s: %w", muxBin, err)
 	}
 	return nil // unreachable on success
+}
+
+// reexecArgv reconstructs a canonical clown argv from the RESOLVED flags, for the
+// [attach] multiplexer re-exec's {entry} (clown#160). It is deliberately NOT
+// os.Args: replaying the raw outer argv would replay a `resume` subcommand or a
+// picker-less bare `clown`, so the inner process would re-run the selection UI
+// the outer already ran. Emitting the resolved flags instead — an explicit
+// --provider, and (via flags.forwarded) the --resume/--session-id injected by
+// decideClaudeSession — makes the inner process take the non-interactive branch
+// of every selector.
+//
+// Only user/selection-derived top-level flags are emitted. Runtime-derived
+// fields with no flag source (backend, ptyOpts, identity, groupID, resumeHintID)
+// are intentionally omitted: the inner clown re-derives them deterministically
+// from the clownfile in runWithFlags. version/help never reach the wrap (they
+// early-return in run), so they are not emitted either.
+func (p parsedFlags) reexecArgv() []string {
+	var argv []string
+	// Provider: always explicit on the inner so the profile picker is suppressed.
+	// After selection the provider is resolved even when the user did not type
+	// --provider (a profile pick sets it), so emit it unconditionally.
+	if p.provider != "" {
+		argv = append(argv, "--provider", p.provider)
+	}
+	if p.profile != "" {
+		argv = append(argv, "--profile", p.profile)
+	}
+	if p.naked {
+		argv = append(argv, "--naked")
+	}
+	if p.skipFailed {
+		argv = append(argv, "--skip-failed")
+	}
+	if p.disableClownProtocol {
+		argv = append(argv, "--disable-clown-protocol")
+	}
+	if p.tent {
+		argv = append(argv, "--tent")
+	}
+	if p.passDevshell {
+		argv = append(argv, "--tent-pass-devshell")
+	}
+	if p.noPassDevshell {
+		argv = append(argv, "--no-tent-pass-devshell")
+	}
+	if p.verbose {
+		argv = append(argv, "--verbose")
+	}
+	for _, d := range p.extraPluginDirs {
+		argv = append(argv, "--plugin-dir", d)
+	}
+	// Forwarded provider args last, behind the -- separator. This carries the
+	// --resume/--session-id decideClaudeSession injected, which selects the
+	// resume attach template on the inner and suppresses the resume picker.
+	if len(p.forwarded) > 0 {
+		argv = append(argv, "--")
+		argv = append(argv, p.forwarded...)
+	}
+	return argv
 }
