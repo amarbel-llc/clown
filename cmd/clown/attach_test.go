@@ -1,6 +1,9 @@
 package main
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
 	"reflect"
 	"testing"
 
@@ -161,6 +164,54 @@ func TestMaybeReexecSpawnBypassesTTYGate(t *testing.T) {
 	// error. That error IS the proof the gate was passed.
 	if err := maybeReexecMultiplexer(cf, parsedFlags{}, clownfile.ModeSpawn); err == nil {
 		t.Fatal("ModeSpawn no-TTY: want the Resolve error (gate bypassed), got nil (gated out)")
+	}
+}
+
+// runMultiplexer runs the mux as a child (not syscall.Exec), so clown survives
+// to print the resume hint outside the mux. It must forward argv[1:] to the child
+// (argv[0] is the ignored template name) and propagate the child's exit code.
+func TestRunMultiplexer(t *testing.T) {
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skipf("sh not on PATH: %v", err)
+	}
+	dir := t.TempDir()
+	argvFile := filepath.Join(dir, "argv")
+	stub := filepath.Join(dir, "mux")
+	// The stub records the args it received and exits non-zero so we can assert
+	// both argv forwarding and exit-code propagation in one run.
+	script := "#!" + sh + "\nprintf '%s\\n' \"$@\" > " + argvFile + "\nexit 7\n"
+	if err := os.WriteFile(stub, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	code, err := runMultiplexer(stub, []string{"mux", "attach", "sess"})
+	if err != nil {
+		t.Fatalf("runMultiplexer: %v", err)
+	}
+	if code != 7 {
+		t.Errorf("exit code = %d, want 7 (child's code propagated)", code)
+	}
+	got, err := os.ReadFile(argvFile)
+	if err != nil {
+		t.Fatalf("reading child argv: %v", err)
+	}
+	if want := "attach\nsess\n"; string(got) != want {
+		t.Errorf("child argv = %q, want %q (argv[1:] forwarded, argv[0] dropped)", got, want)
+	}
+}
+
+// A binary that cannot be started surfaces the error (and code 1), rather than
+// os.Exit'ing — the caller (maybeReexecMultiplexer) turns it into a fatal wrap
+// error. (The mux-absent case is caught earlier by exec.LookPath; this covers a
+// resolved-but-unstartable path.)
+func TestRunMultiplexerStartError(t *testing.T) {
+	code, err := runMultiplexer(filepath.Join(t.TempDir(), "does-not-exist"), []string{"mux"})
+	if err == nil {
+		t.Fatal("want a start error for a nonexistent binary, got nil")
+	}
+	if code != 1 {
+		t.Errorf("code = %d, want 1 on start failure", code)
 	}
 }
 

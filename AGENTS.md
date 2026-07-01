@@ -302,10 +302,15 @@ injected as `--model` for the claude family, and `[profile.env]` is
 exported only-if-unset (ambient wins). The named-profile registry
 (`--profile`) is a separate mechanism that wins over clownfile defaults.
 The `[attach]` table (RFC-0013 §1.3, clown#145) is the multiplexer
-self-wrap layer: when `multiplexer` is `posh` or `zmx` (not `none`), clown re-execs
+self-wrap layer: when `multiplexer` is `posh` or `zmx` (not `none`), clown wraps
 itself under the configured `start`/`resume` template on boot
 (`cmd/clown/attach.go` `maybeReexecMultiplexer`, gated in `runWithFlags`
-after the per-instance id is resolved), pinning the id via the hidden
+after the per-instance id is resolved). For the interactive `start`/`resume`
+modes the mux is run as a CHILD + waited on (`runMultiplexer`, NOT `syscall.Exec`)
+so the outer clown survives the session and emits the `clown resume …` hint
+OUTSIDE the mux after it tears down — where it is catchable — then exits with the
+child's code; the inner attached clown suppresses its own hint (`attachedID !=
+""` guard in `runClaude`). The id is pinned via the hidden
 `--clown-attach-id` flag — an arg, not env, so it reuses the clown#136
 hygiene and the inner run skips re-wrapping (loop guard). `{id}`/`{entry}`
 substitute (`{entry}` splices the RESOLVED clown argv — `parsedFlags.reexecArgv`,

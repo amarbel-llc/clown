@@ -89,8 +89,16 @@ When
 is set to a value other than
 .Ql none ,
 clown wraps itself in the configured multiplexer on boot \(em "implicit
-per-instance attach" \(em by re-exec'ing the resolved template before launching
-the provider.
+per-instance attach" \(em by resolving the configured template and launching the
+multiplexer before the provider.
+For the interactive
+.Sy start
+and
+.Sy resume
+modes clown runs the multiplexer as a child and waits, so it survives the
+session and prints the
+.Ql clown resume
+hint after the multiplexer exits \(em outside it, where the user can catch it.
 The placeholder
 .Ql {id}
 expands to the per-instance session key and the exact element
@@ -137,9 +145,9 @@ The human-readable presence label (RFC-0014 §4.1), env-interpolated like
 exported as
 .Ev CLOWN_GROUP_DESCRIPTION .
 .It Sy start
-The argv template clown re-execs into for a fresh interactive launch.
+The argv template clown runs for a fresh interactive launch.
 .It Sy resume
-The argv template clown re-execs into for a reattach (a forwarded
+The argv template clown runs for a reattach (a forwarded
 .Fl -resume ,
 .Fl r ,
 or

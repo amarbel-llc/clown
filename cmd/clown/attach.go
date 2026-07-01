@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"syscall"
 
 	"github.com/amarbel-llc/clown/internal/clownfile"
@@ -97,8 +98,10 @@ func stringsCutPrefix(s, prefix string) (string, bool) {
 
 // maybeReexecMultiplexer wraps clown in the configured multiplexer per the
 // clownfile [attach] table (RFC-0013 §1.3). It returns nil when no wrap applies
-// (so the caller proceeds inline); on a successful wrap it syscall.Execs the
-// multiplexer and never returns; on a wrap failure it returns the error.
+// (so the caller proceeds inline); on a successful wrap it runs the multiplexer
+// as a child, waits for it, prints the resume hint (outside the mux), and
+// os.Exits with the child's code — so like the previous syscall.Exec it never
+// returns on success; on a wrap failure it returns the error.
 //
 // Skip conditions: this is already the inner attached process (attachedID set —
 // the loop guard), [attach] is disabled (multiplexer "" / "none"), or — for the
@@ -163,13 +166,80 @@ func maybeReexecMultiplexer(cf clownfile.Clownfile, flags parsedFlags, mode clow
 		// The configured multiplexer is not installed. Since [attach] ships as a
 		// burned-in default (RFC-0013 §1.3), an absent mux must NOT break clown on
 		// hosts without it — degrade to running inline rather than failing. A
-		// found-but-unexecutable mux (the syscall.Exec error below) is still fatal.
+		// found-but-unexecutable mux (the runMultiplexer error below) is still fatal.
 		return nil
 	}
-	if err := syscall.Exec(muxBin, argv, os.Environ()); err != nil {
-		return fmt.Errorf("clownfile [attach]: exec %s: %w", muxBin, err)
+
+	// Run the multiplexer as a CHILD and wait, rather than syscall.Exec'ing into
+	// it. clown surviving the session is what lets the OUTER process emit the
+	// resume hint AFTER the mux tears down — printing it from the inner clown
+	// lands it inside the mux, where the immediate teardown wipes it before the
+	// user can read it. It also turns the outer from a dead-end into a seam for
+	// any future post-session work (cleanup, presence dereg).
+	code, err := runMultiplexer(muxBin, argv)
+	if err != nil {
+		return fmt.Errorf("clownfile [attach]: run %s: %w", muxBin, err)
 	}
+	// Emit the resume hint here, in the outer terminal, now that the mux has torn
+	// down and restored the screen. Skipped for spawn (a detached worker with
+	// /dev/null stdio) and when there is no id to print. The inner clown suppresses
+	// its own print (attachedID != "" in runClaude), so this is the only emitter.
+	if mode != clownfile.ModeSpawn && flags.resumeHintID != "" {
+		printResumeHint(flags.resumeHintID)
+	}
+	os.Exit(code)
 	return nil // unreachable on success
+}
+
+// runMultiplexer runs the resolved multiplexer argv as a child process, inherits
+// clown's stdio, and waits for it to exit, returning the child's exit code. It is
+// the run-as-child alternative to syscall.Exec: clown stays alive across the
+// session so maybeReexecMultiplexer can print the resume hint OUTSIDE the mux
+// once the child is gone.
+//
+// argv[0] is the resolved binary name (already looked up by the caller); the
+// child is launched with argv[1:] as its args. Termination signals (SIGTERM /
+// SIGINT) are forwarded to the child, mirroring runProvider. A raw-mode TUI (posh
+// / claude) reads keyboard Ctrl-C as a byte rather than a signal, so those never
+// reach here — only an external kill does, making forwarding the right response
+// with no double-delivery. SIGWINCH is intentionally left alone: its default
+// disposition is ignore, and the kernel already delivers it to the child as the
+// terminal's foreground process group, which repaints itself.
+func runMultiplexer(muxBin string, argv []string) (int, error) {
+	cmd := exec.Command(muxBin, argv[1:]...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Env = os.Environ()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	// Stop notifications and close the channel on return so the forwarding
+	// goroutine exits (matters for the unit test, which does not os.Exit after).
+	defer func() {
+		signal.Stop(sigCh)
+		close(sigCh)
+	}()
+
+	if err := cmd.Start(); err != nil {
+		return 1, err
+	}
+	go func() {
+		for sig := range sigCh {
+			if cmd.Process != nil {
+				_ = cmd.Process.Signal(sig)
+			}
+		}
+	}()
+
+	err := cmd.Wait()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return exitErr.ExitCode(), nil
+		}
+		return 1, err
+	}
+	return 0, nil
 }
 
 // reexecArgv reconstructs a canonical clown argv from the RESOLVED flags, for the

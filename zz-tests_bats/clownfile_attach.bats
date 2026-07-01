@@ -101,6 +101,29 @@ EOF
   [ "${lines[5]}" = "spawn-sess" ]
 }
 
+# The resume hint is printed by the OUTER clown AFTER the mux child exits, not by
+# the inner clown inside the mux (where the immediate teardown wipes it). clown
+# runs the multiplexer as a child + waits (not syscall.Exec), so it survives to
+# print to its own stdout. Forwarded `--resume <id>` pins attachMode == ModeResume
+# and resumeHintID == <id>, so the emitted hint is deterministic. The stub mux
+# records argv and exits 0; the hint therefore lands on clown's stdout after it.
+@test "clownfile [attach] prints the resume hint outside the mux after it exits" {
+  cat >"$HOME/clownfile" <<'EOF'
+[attach]
+multiplexer = "zmx"
+resume = ["zmx", "attach", "{id}", "{entry}"]
+EOF
+
+  cd "$HOME"
+  run env CLOWN_ATTACH_FORCE=1 CLOWN_SESSION_ID=hint-sess \
+    "$CLOWN_BIN" --provider claude -- --resume my-fixed-id
+  [ "$status" -eq 0 ]
+  [ -f "$MUX_ARGV" ]   # the mux ran as a child (clown did not exec away)
+  # The outer clown emitted the hint to stdout once the stub mux exited — outside
+  # the mux, where the user can catch it.
+  [[ "$output" == *"clown resume clown://claude/my-fixed-id"* ]]
+}
+
 # group-id is env-interpolated and exported as CLOWN_GROUP_ID (RFC-0014 §2), so
 # the multiplexer (and the claude subtree / producers) inherit the resolved group.
 @test "clownfile [attach] group-id interpolates SPINCLASS_SESSION_ID into CLOWN_GROUP_ID" {

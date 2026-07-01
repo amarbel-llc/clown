@@ -727,7 +727,12 @@ func runClaude(cliPath string, flags parsedFlags, prompts promptwalk.PromptResul
 		return runWithPluginHost(executor, args, pluginDirs, flags, tentLogger, appendFile)
 	}
 	code := run(flags.forwarded)
-	if flags.resumeHintID != "" {
+	// The resume hint is emitted by the OUTER process after the multiplexer exits
+	// (maybeReexecMultiplexer), so an inner attached clown (attachedID != "") must
+	// NOT print it — inside the mux it is wiped by the immediate teardown. An empty
+	// attachedID also covers the genuinely un-wrapped run (mux disabled / absent /
+	// gated-out / non-claude inline), which is the correct place to print here.
+	if flags.resumeHintID != "" && attachedID == "" {
 		printResumeHint(flags.resumeHintID)
 	}
 	return code
