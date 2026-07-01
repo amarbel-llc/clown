@@ -68,6 +68,11 @@ EOF
 
 # --clown-attach=spawn (RFC-0014 §5) resolves the [attach].spawn template (with
 # --detach) rather than start/resume, so the worker detaches and clown returns.
+# NOTE: no CLOWN_ATTACH_FORCE here — spawn is a detached launch that is always
+# non-interactive (bats has no PTY, matching the real `sc spawn` /dev/null-stdio
+# context), and it MUST resolve its template regardless of TTY (clown#161). This
+# test exercises the real non-TTY spawn path; a CLOWN_ATTACH_FORCE crutch would
+# mask the gate exemption.
 @test "clownfile [attach] spawn mode resolves the --detach spawn template" {
   cat >"$HOME/clownfile" <<'EOF'
 [attach]
@@ -76,7 +81,7 @@ spawn = ["zmx", "attach", "{id}", "--detach", "{entry}"]
 EOF
 
   cd "$HOME"
-  run env CLOWN_ATTACH_FORCE=1 CLOWN_SESSION_ID=spawn-sess \
+  run env CLOWN_SESSION_ID=spawn-sess \
     "$CLOWN_BIN" --clown-attach=spawn --provider claude -- --version
   [ "$status" -eq 0 ]
   [ -f "$MUX_ARGV" ]

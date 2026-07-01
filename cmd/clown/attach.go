@@ -101,10 +101,13 @@ func stringsCutPrefix(s, prefix string) (string, bool) {
 // multiplexer and never returns; on a wrap failure it returns the error.
 //
 // Skip conditions: this is already the inner attached process (attachedID set —
-// the loop guard), [attach] is disabled (multiplexer "" / "none"), or there is
-// no interactive terminal (a multiplexer needs a TTY; non-interactive runs
-// inline). CLOWN_ATTACH_FORCE=1 overrides the TTY check — an escape hatch for
-// unusual terminals where detection misfires, and the test seam.
+// the loop guard), [attach] is disabled (multiplexer "" / "none"), or — for the
+// interactive start/resume modes only — there is no interactive terminal (an
+// interactive attach needs a TTY; non-interactive runs inline). ModeSpawn is
+// exempt from the TTY gate: it is a detached-worker launch that is always
+// non-interactive, so it MUST resolve its template regardless (RFC-0014 §5.1).
+// CLOWN_ATTACH_FORCE=1 overrides the TTY check for start/resume — an escape
+// hatch for unusual terminals where detection misfires, and the test seam.
 // mode is the resolved attach mode (ModeStart / ModeResume); the caller computes
 // it from the ORIGINAL forwarded args, before decideClaudeSession injects
 // --session-id (which would otherwise misdetect a fresh launch as a resume).
@@ -112,7 +115,14 @@ func maybeReexecMultiplexer(cf clownfile.Clownfile, flags parsedFlags, mode clow
 	if attachedID != "" || !cf.Attach.Enabled() {
 		return nil
 	}
-	if !isInteractiveTerminal() && os.Getenv("CLOWN_ATTACH_FORCE") != "1" {
+	// Spawn is a detached-worker launch (RFC-0014 §5): non-interactive by
+	// definition (the orchestrator runs clown with /dev/null stdio), so the
+	// interactive-TTY gate does NOT apply — clown MUST still resolve the
+	// [attach].spawn template (§5.1) so the worker detaches. Start/resume are
+	// interactive attaches and keep the gate; CLOWN_ATTACH_FORCE overrides it for
+	// unusual terminals where detection misfires, and as the test seam.
+	if mode != clownfile.ModeSpawn &&
+		!isInteractiveTerminal() && os.Getenv("CLOWN_ATTACH_FORCE") != "1" {
 		return nil
 	}
 

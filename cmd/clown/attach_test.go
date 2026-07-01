@@ -123,3 +123,43 @@ func TestMaybeReexecDegradesWhenMuxAbsent(t *testing.T) {
 		t.Fatalf("absent multiplexer: want nil (degrade to inline), got %v", err)
 	}
 }
+
+// TTY gate: ModeSpawn is exempt (a detached worker is always non-interactive, so
+// it MUST resolve its template regardless of TTY — RFC-0014 §5.1, clown#161),
+// while ModeStart under the same no-TTY/no-force conditions runs inline. Both
+// cases point at a nonexistent mux binary so the gate decision is observable
+// without actually execing: ModeStart returns nil at the gate (before LookPath),
+// and ModeSpawn falls through the gate to the mux-absent degrade path (also nil)
+// — so nil alone can't distinguish them. We instead assert the gate is passed by
+// spawn via a resolvable template element: a template with a surviving unknown
+// placeholder makes Resolve error, which is only reached AFTER the gate. So
+// ModeSpawn surfaces the Resolve error (gate passed) while ModeStart returns nil
+// (gated out before Resolve).
+func TestMaybeReexecSpawnBypassesTTYGate(t *testing.T) {
+	prev := attachedID
+	attachedID = ""
+	t.Cleanup(func() { attachedID = prev })
+	// Deliberately NOT setting CLOWN_ATTACH_FORCE, and bats/go test has no PTY, so
+	// isInteractiveTerminal() is false — the real spawn context.
+	t.Setenv("CLOWN_ATTACH_FORCE", "")
+
+	// A surviving {bogus} placeholder makes Attach.Resolve error — but Resolve is
+	// only reached if the TTY gate is passed. Reuse the same template for both
+	// modes so the ONLY variable is the gate.
+	tmpl := []string{"zmx", "attach", "{bogus}", "{entry}"}
+	cf := clownfile.Clownfile{Attach: clownfile.Attach{
+		Multiplexer: "zmx",
+		Start:       tmpl,
+		Spawn:       tmpl,
+	}}
+
+	// ModeStart: gated out before Resolve → nil, no error surfaced.
+	if err := maybeReexecMultiplexer(cf, parsedFlags{}, clownfile.ModeStart); err != nil {
+		t.Fatalf("ModeStart no-TTY: want nil (gated out), got %v", err)
+	}
+	// ModeSpawn: gate bypassed → Resolve runs and rejects {bogus}, surfacing an
+	// error. That error IS the proof the gate was passed.
+	if err := maybeReexecMultiplexer(cf, parsedFlags{}, clownfile.ModeSpawn); err == nil {
+		t.Fatal("ModeSpawn no-TTY: want the Resolve error (gate bypassed), got nil (gated out)")
+	}
+}
