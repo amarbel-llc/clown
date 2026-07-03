@@ -426,12 +426,16 @@ The flake produces a `symlinkJoin` of five components:
      **not** currently enforced (the inert managed-settings was its only prior
      home); re-homing it onto a working settings mechanism is a follow-up
      (clown#143). One such working mechanism now exists: `--settings <json>`
-     (an inline settings source claude merges at highest CLI precedence, plumbed
-     as `provider.ClaudeArgs.SettingsJSON`), used to inject
-     `CLAUDE_AFK_TIMEOUT_MS=2147483647` so an idle `AskUserQuestion` cannot
-     auto-continue past the user (the ~v2.1.196 regression, clown#163,
-     `cmd/clown/claudesettings.go`) — suppressed when the user has set the var
-     themselves so an explicit choice wins.
+     (an inline settings source claude merges as a scope in the documented
+     precedence cascade, plumbed as `provider.ClaudeArgs.SettingsJSON`), used by
+     `claudeSafetySettingsJSON()` (`cmd/clown/claudesettings.go`) to inject two
+     safety defaults in an `env` block, each suppressed independently when the
+     user sets that var: `CLAUDE_AFK_TIMEOUT_MS=2147483647` so an idle
+     `AskUserQuestion` cannot auto-continue past the user (the ~v2.1.196
+     regression, clown#163), and `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` to turn off
+     claude's autonomous auto memory (agent-written
+     `~/.claude/projects/<proj>/memory/`; CLAUDE.md/AGENTS.md unaffected —
+     clown#164, a documented control).
 
    **Plugin manifest compilation.** When a plugin has both `clown.json`
    (HTTP MCP servers) and `.claude-plugin/plugin.json` (claude-native
