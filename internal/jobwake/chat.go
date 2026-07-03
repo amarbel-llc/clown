@@ -87,8 +87,10 @@ func readChatChannel(cid, readerCID, scope string, peek bool) ([]ChatMessage, er
 		if b, rerr := os.ReadFile(SpoolFile(cid, r.Job)); rerr == nil {
 			body = string(b)
 		}
-		out = append(out, ChatMessage{Job: r.Job, From: r.From, Source: r.Source,
-			Scope: scope, Subject: r.Message, Body: body, Resources: r.Resources, TS: r.TS})
+		out = append(out, ChatMessage{
+			Job: r.Job, From: r.From, Source: r.Source,
+			Scope: scope, Subject: r.Message, Body: body, Resources: r.Resources, TS: r.TS,
+		})
 		a.Acked[r.Job] = r.Seq
 		advanced = true
 	}

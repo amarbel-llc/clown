@@ -26,7 +26,8 @@ func main() {
 	}
 	defer logFile.Close()
 
-	logger.Info("clown-plugin-host starting",
+	logger.Info(
+		"clown-plugin-host starting",
 		"version", version,
 		"commit", commit,
 		"pid", os.Getpid(),
@@ -56,7 +57,8 @@ func run(logger *slog.Logger, logPath string) int {
 	if verbose {
 		fmt.Fprintf(os.Stderr, "clown-plugin-host: logging to %s\n", logPath)
 	}
-	logger.Info("parsed arguments",
+	logger.Info(
+		"parsed arguments",
 		"plugin_dirs", parsed.pluginDirs,
 		"skip_failed", skipFailed,
 		"disable_clown_protocol", disableClown,

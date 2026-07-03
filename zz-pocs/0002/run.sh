@@ -14,7 +14,7 @@ echo "=== building ringmaster + sandbox-agent ==="
 nix build .#default --print-build-logs
 
 RINGMASTER="$POC_DIR/result/bin/ringmaster"
-if [[ ! -x "$RINGMASTER" ]]; then
+if [[ ! -x $RINGMASTER ]]; then
   echo "ringmaster binary not found at $RINGMASTER" >&2
   exit 1
 fi
@@ -25,7 +25,8 @@ echo "=== driving ringmaster with a canned MCP session ==="
 # Canned MCP session: initialize, tools/list, tools/call. One JSON object per
 # line. The tool call asks run_discover to operate on the clown worktree root.
 WORKSPACE_REF="$(cd ../.. && pwd)"
-REQUESTS=$(cat <<EOF
+REQUESTS=$(
+  cat <<EOF
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"run.sh","version":"0"}}}
 {"jsonrpc":"2.0","method":"notifications/initialized"}
 {"jsonrpc":"2.0","id":2,"method":"tools/list"}
@@ -51,7 +52,7 @@ OUT_REF=$(
     jq -r '.out_ref // empty'
 )
 
-if [[ -z "$OUT_REF" ]]; then
+if [[ -z $OUT_REF ]]; then
   echo "no out_ref returned — check responses above" >&2
   exit 1
 fi

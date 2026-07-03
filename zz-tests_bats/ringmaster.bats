@@ -48,11 +48,11 @@ setup_file() {
   # daemon mkdirs and binds synchronously after argv parsing, so this
   # is bounded by Go startup time — typically <100 ms.
   local elapsed=0
-  while [[ ! -S "$RINGMASTER_SOCKET" && $elapsed -lt 50 ]]; do
+  while [[ ! -S $RINGMASTER_SOCKET && $elapsed -lt 50 ]]; do
     sleep 0.1
     elapsed=$((elapsed + 1))
   done
-  if [[ ! -S "$RINGMASTER_SOCKET" ]]; then
+  if [[ ! -S $RINGMASTER_SOCKET ]]; then
     echo "ringmaster never bound socket; log:" >&2
     cat "$RM_DIR/rm.log" >&2
     return 1
@@ -60,7 +60,7 @@ setup_file() {
 }
 
 teardown_file() {
-  if [[ -n "${RM_PID:-}" ]]; then
+  if [[ -n ${RM_PID:-} ]]; then
     kill "$RM_PID" 2>/dev/null || true
     wait "$RM_PID" 2>/dev/null || true
   fi
@@ -155,15 +155,15 @@ setup() {
   assert_success
   local port_a
   port_a=$(printf '%s\n' "${lines[@]}" | awk '/^port:/ {print $2}')
-  [[ -n "$port_a" ]]
+  [[ -n $port_a ]]
 
   run "$CIRCUS_BIN" status multi-b
   assert_success
   local port_b
   port_b=$(printf '%s\n' "${lines[@]}" | awk '/^port:/ {print $2}')
-  [[ -n "$port_b" ]]
+  [[ -n $port_b ]]
 
-  [[ "$port_a" != "$port_b" ]]
+  [[ $port_a != "$port_b" ]]
 }
 
 @test "stopping one instance leaves the other running" {

@@ -56,8 +56,10 @@ func serveFakePromptChild(in io.Reader, out io.Writer, fragment string) {
 				}},
 			}}
 		} else {
-			resp = map[string]any{"jsonrpc": "2.0", "id": req.ID,
-				"error": map[string]any{"code": -32602, "message": "unknown prompt"}}
+			resp = map[string]any{
+				"jsonrpc": "2.0", "id": req.ID,
+				"error": map[string]any{"code": -32602, "message": "unknown prompt"},
+			}
 		}
 		b, _ := json.Marshal(resp)
 		_, _ = out.Write(append(b, '\n'))
@@ -91,24 +93,36 @@ func TestParsePromptGetText(t *testing.T) {
 		wantText string
 		wantOK   bool
 	}{
-		{"single text message",
+		{
+			"single text message",
 			`{"result":{"messages":[{"role":"user","content":{"type":"text","text":"hello"}}]}}`,
-			"hello", true},
-		{"two text messages joined",
+			"hello", true,
+		},
+		{
+			"two text messages joined",
 			`{"result":{"messages":[{"content":{"type":"text","text":"a"}},{"content":{"type":"text","text":"b"}}]}}`,
-			"a\n\nb", true},
-		{"non-text content skipped",
+			"a\n\nb", true,
+		},
+		{
+			"non-text content skipped",
 			`{"result":{"messages":[{"content":{"type":"image","text":""}}]}}`,
-			"", false},
-		{"error envelope",
+			"", false,
+		},
+		{
+			"error envelope",
 			`{"error":{"code":-32602,"message":"unknown prompt"}}`,
-			"", false},
-		{"empty messages",
+			"", false,
+		},
+		{
+			"empty messages",
 			`{"result":{"messages":[]}}`,
-			"", false},
-		{"malformed json",
+			"", false,
+		},
+		{
+			"malformed json",
 			`{not json`,
-			"", false},
+			"", false,
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -183,7 +183,8 @@ func TestEvaluate_ExploreRewrite(t *testing.T) {
 			out := evaluate(hookInput{
 				ToolName: toolName,
 				ToolInput: json.RawMessage(
-					`{"subagent_type":"Explore","description":"look around","prompt":"find the config loader","model":"haiku"}`),
+					`{"subagent_type":"Explore","description":"look around","prompt":"find the config loader","model":"haiku"}`,
+				),
 			})
 			if out == nil {
 				t.Fatal("got defer (nil), want a rewrite decision")

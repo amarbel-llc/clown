@@ -52,7 +52,7 @@ setup() {
 }
 
 teardown() {
-  if [[ -n "${CJW_RUNTIME_DIR:-}" ]]; then
+  if [[ -n ${CJW_RUNTIME_DIR:-} ]]; then
     rm -rf "$CJW_RUNTIME_DIR"
   fi
 }
@@ -61,7 +61,7 @@ teardown() {
 @test "job start prints a non-empty job id" {
   run "$RINGMASTER_BIN" start --source moxy --label build
   assert_success
-  [[ -n "$output" ]]
+  [[ -n $output ]]
   # single line, no embedded newline
   assert_equal "$(wc -l <<<"$output")" "1"
 }

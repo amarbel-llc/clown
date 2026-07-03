@@ -345,7 +345,8 @@ func (t *translator) SendRequest(ctx context.Context, idKey string, msg []byte) 
 		if existing.respCh == nil {
 			return nil, fmt.Errorf(
 				"abandoned JSON-RPC id %s still in flight (prior call canceled, response not yet delivered)",
-				idKey)
+				idKey,
+			)
 		}
 		return nil, fmt.Errorf("duplicate JSON-RPC id %s in flight", idKey)
 	}

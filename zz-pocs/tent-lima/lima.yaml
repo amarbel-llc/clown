@@ -28,8 +28,8 @@ disk: 100GiB
 # nerdctl which Lima bundles by default. Skip the per-distro images
 # list; Lima picks a sane aarch64 default.
 images:
-- location: https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-arm64.img
-  arch: aarch64
+  - location: https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-arm64.img
+    arch: aarch64
 
 # Mounts: mirror clown's tent set
 # (/nix/store ro, /nix/var rw, /etc/nix ro, $HOME rw).
@@ -44,17 +44,17 @@ images:
 # Lima-chosen in-VM path, and nerdctl bind-mounts in probe.sh use
 # that resolved path explicitly.
 mounts:
-- location: "/nix/store"
-  mountPoint: "/nix/store"
-  writable: false
-- location: "/nix/var"
-  mountPoint: "/nix/var"
-  writable: true
-- location: "/etc/nix"
-  mountPoint: "/etc/nix"
-  writable: false
-- location: "{{.Home}}"
-  writable: true
+  - location: "/nix/store"
+    mountPoint: "/nix/store"
+    writable: false
+  - location: "/nix/var"
+    mountPoint: "/nix/var"
+    writable: true
+  - location: "/etc/nix"
+    mountPoint: "/etc/nix"
+    writable: false
+  - location: "{{.Home}}"
+    writable: true
 
 # SSH agent forwarding into the VM. Lima sets up the agent socket at
 # /run/host-services/ssh-auth.sock inside the VM (Docker Desktop /

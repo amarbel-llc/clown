@@ -107,8 +107,10 @@ func Start(o StartOpts) (string, error) {
 	if err := validateJobID(id); err != nil {
 		return "", fmt.Errorf("generated job id %q invalid: %w", id, err)
 	}
-	rec := Record{V: SchemaVersion, Job: id, Session: session, Source: source,
-		Type: TypeStarted, TS: nowTS()}
+	rec := Record{
+		V: SchemaVersion, Job: id, Session: session, Source: source,
+		Type: TypeStarted, TS: nowTS(),
+	}
 	if err := appendRecord(cid, rec, false); err != nil {
 		return "", err
 	}
@@ -197,8 +199,10 @@ func SplitMessage(message string) (subject, body string, err error) {
 func Progress(target, jobID, message string) error {
 	session := resolveSession(target)
 	cid := ChannelID(session)
-	rec := Record{V: SchemaVersion, Job: jobID, Session: session, Type: TypeProgress,
-		TS: nowTS(), Message: oneLine(message)}
+	rec := Record{
+		V: SchemaVersion, Job: jobID, Session: session, Type: TypeProgress,
+		TS: nowTS(), Message: oneLine(message),
+	}
 	if err := appendRecord(cid, rec, false); err != nil {
 		return err
 	}
@@ -224,9 +228,11 @@ func Message(target, source, from, body, resultRef string, resources ...Resource
 		return "", err
 	}
 	id := newJobID("msg")
-	rec := Record{V: SchemaVersion, Job: id, Session: session, Source: source,
+	rec := Record{
+		V: SchemaVersion, Job: id, Session: session, Source: source,
 		From: from, Type: TypeMessage, TS: nowTS(), Message: oneLine(body),
-		ResultRef: resultRef, Resources: resources}
+		ResultRef: resultRef, Resources: resources,
+	}
 	if err := appendRecord(cid, rec, true); err != nil { // fsync before nudge
 		return "", err
 	}
@@ -260,9 +266,11 @@ func SendChat(target, from, source, subject, body string, resources ...Resource)
 			return "", err
 		}
 	}
-	rec := Record{V: SchemaVersion, Job: id, Session: session, Source: source,
+	rec := Record{
+		V: SchemaVersion, Job: id, Session: session, Source: source,
 		From: from, Type: TypeChat, TS: nowTS(), Message: oneLine(subject),
-		Resources: resources}
+		Resources: resources,
+	}
 	if err := appendRecord(cid, rec, true); err != nil { // fsync before nudge
 		return "", err
 	}
@@ -285,8 +293,10 @@ func Done(target, jobID, state, message, resultRef string, resources ...Resource
 	}
 	session := resolveSession(target)
 	cid := ChannelID(session)
-	rec := Record{V: SchemaVersion, Job: jobID, Session: session, Type: state,
-		TS: nowTS(), Message: oneLine(message), ResultRef: resultRef, Resources: resources}
+	rec := Record{
+		V: SchemaVersion, Job: jobID, Session: session, Type: state,
+		TS: nowTS(), Message: oneLine(message), ResultRef: resultRef, Resources: resources,
+	}
 	if err := appendRecord(cid, rec, true); err != nil { // fsync before nudge
 		return err
 	}
@@ -313,8 +323,10 @@ func DoneChannel(cid, jobID, state, message, resultRef string) error {
 	if recs, err := ReadJob(cid, jobID); err == nil && len(recs) > 0 {
 		session = recs[0].Session // keep the terminal record's session consistent
 	}
-	rec := Record{V: SchemaVersion, Job: jobID, Session: session, Type: state,
-		TS: nowTS(), Message: oneLine(message), ResultRef: resultRef}
+	rec := Record{
+		V: SchemaVersion, Job: jobID, Session: session, Type: state,
+		TS: nowTS(), Message: oneLine(message), ResultRef: resultRef,
+	}
 	if err := appendRecord(cid, rec, true); err != nil { // fsync before nudge
 		return err
 	}

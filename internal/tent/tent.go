@@ -275,7 +275,8 @@ func isCharDevice(f *os.File) bool {
 //	    <claudeBinary> <claudeArgs...>
 func BuildArgs(claudeBinary string, claudeArgs []string, opts Options) []string {
 	args := append([]string{}, PodmanConnectionArgs(opts.ConnectionName)...)
-	args = append(args,
+	args = append(
+		args,
 		"run",
 		"--rm",
 		"-i",
@@ -283,7 +284,8 @@ func BuildArgs(claudeBinary string, claudeArgs []string, opts Options) []string 
 	if opts.Tty {
 		args = append(args, "-t")
 	}
-	args = append(args,
+	args = append(
+		args,
 		"--network=host",
 		// `--userns=keep-id` was here originally for linux native
 		// rootless podman: it maps the host user to root inside the
@@ -306,7 +308,8 @@ func BuildArgs(claudeBinary string, claudeArgs []string, opts Options) []string 
 		claudeDir := filepath.Join(opts.Home, ".claude")
 		configDir := filepath.Join(opts.Home, ".config", "claude")
 		claudeJSON := filepath.Join(opts.Home, ".claude.json")
-		args = append(args,
+		args = append(
+			args,
 			"--volume", fmt.Sprintf("%s:%s", claudeDir, claudeDir),
 			"--volume", fmt.Sprintf("%s:%s", configDir, configDir),
 			"--volume", fmt.Sprintf("%s:%s", claudeJSON, claudeJSON),

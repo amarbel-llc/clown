@@ -144,34 +144,60 @@ func jobToolList(surface string) []map[string]any {
 	resourceArr := map[string]any{
 		"type":        "array",
 		"description": "by-reference attachments (e.g. madder://blobs/<digest>); the receiver fetches each uri (clown#112)",
-		"items": obj(map[string]any{"uri": str, "digest": str, "mediaType": str,
-			"size": map[string]any{"type": "integer"}}, "uri"),
+		"items": obj(map[string]any{
+			"uri": str, "digest": str, "mediaType": str,
+			"size": map[string]any{"type": "integer"},
+		}, "uri"),
 	}
 	all := []map[string]any{
-		{"name": "job_start", "description": "Allocate a job and append its started record. Returns the job id.",
-			"inputSchema": obj(map[string]any{"target": target, "label": str, "source": str})},
-		{"name": "job_progress", "description": "Append a journal-only progress record (never wakes).",
-			"inputSchema": obj(map[string]any{"job_id": str, "target": target, "message": str}, "job_id")},
-		{"name": "job_done", "description": "Append the single terminal record and wake. state: succeeded|failed|cancelled|interrupted.",
-			"inputSchema": obj(map[string]any{"job_id": str, "state": str, "target": target, "message": str, "result_ref": str, "resources": resourceArr}, "job_id", "state")},
-		{"name": "job_message", "description": "Emit a standalone waking message job to a session ('*' broadcasts).",
-			"inputSchema": obj(map[string]any{"target": target, "message": str, "from": str, "source": str, "result_ref": str, "resources": resourceArr}, "target", "message")},
-		{"name": "job_read", "description": "Read a job's full record stream (job) or the channel's waking events (since/type filters). Returns a JSON array of records.",
-			"inputSchema": obj(map[string]any{"job": str, "target": target, "since": str, "type": map[string]any{"type": "array", "items": str}})},
-		{"name": "job_status", "description": "Journal+spool-derived status of a job (state, elapsed, last_activity, spool_bytes, tail). Returns a JSON object.",
-			"inputSchema": obj(map[string]any{"job_id": str, "target": target, "tail": map[string]any{"type": "integer"}}, "job_id")},
-		{"name": "job_wait", "description": "Block until a job reaches a terminal state (succeeded|failed|cancelled|interrupted), then return its status JSON (same payload as job_status). Returns immediately if already terminal; errors if the job is unknown. This is a blocking JOIN: subject to the MCP request timeout for the job's remaining duration, so call it when you have nothing else to do — the launch + wake-on-completion flow stays the right choice when there's other work to interleave. timeout_sec (>0) bounds the wait.",
-			"inputSchema": obj(map[string]any{"job_id": str, "target": target, "timeout_sec": map[string]any{"type": "integer"}, "tail": map[string]any{"type": "integer"}}, "job_id")},
-		{"name": "job_spool_path", "description": "Resolve and return the absolute output-spool path for a job. Does not create the file.",
-			"inputSchema": obj(map[string]any{"job_id": str, "target": target}, "job_id")},
-		{"name": "chat_send", "description": "Send a chat message to another session (RFC-0013 §3). Write `message` like a git commit: a concise one-line summary, a blank line, then the details. clown delivers the summary as the wake notification the recipient sees immediately and the full text via chat_read. A single-line message (no body) is fine for something that fits in the summary; if you include details they MUST be separated from the summary by a blank line, or the call is rejected. target: session key / group-id group / '*' broadcast.",
-			"inputSchema": obj(map[string]any{"target": target,
+		{
+			"name": "job_start", "description": "Allocate a job and append its started record. Returns the job id.",
+			"inputSchema": obj(map[string]any{"target": target, "label": str, "source": str}),
+		},
+		{
+			"name": "job_progress", "description": "Append a journal-only progress record (never wakes).",
+			"inputSchema": obj(map[string]any{"job_id": str, "target": target, "message": str}, "job_id"),
+		},
+		{
+			"name": "job_done", "description": "Append the single terminal record and wake. state: succeeded|failed|cancelled|interrupted.",
+			"inputSchema": obj(map[string]any{"job_id": str, "state": str, "target": target, "message": str, "result_ref": str, "resources": resourceArr}, "job_id", "state"),
+		},
+		{
+			"name": "job_message", "description": "Emit a standalone waking message job to a session ('*' broadcasts).",
+			"inputSchema": obj(map[string]any{"target": target, "message": str, "from": str, "source": str, "result_ref": str, "resources": resourceArr}, "target", "message"),
+		},
+		{
+			"name": "job_read", "description": "Read a job's full record stream (job) or the channel's waking events (since/type filters). Returns a JSON array of records.",
+			"inputSchema": obj(map[string]any{"job": str, "target": target, "since": str, "type": map[string]any{"type": "array", "items": str}}),
+		},
+		{
+			"name": "job_status", "description": "Journal+spool-derived status of a job (state, elapsed, last_activity, spool_bytes, tail). Returns a JSON object.",
+			"inputSchema": obj(map[string]any{"job_id": str, "target": target, "tail": map[string]any{"type": "integer"}}, "job_id"),
+		},
+		{
+			"name": "job_wait", "description": "Block until a job reaches a terminal state (succeeded|failed|cancelled|interrupted), then return its status JSON (same payload as job_status). Returns immediately if already terminal; errors if the job is unknown. This is a blocking JOIN: subject to the MCP request timeout for the job's remaining duration, so call it when you have nothing else to do — the launch + wake-on-completion flow stays the right choice when there's other work to interleave. timeout_sec (>0) bounds the wait.",
+			"inputSchema": obj(map[string]any{"job_id": str, "target": target, "timeout_sec": map[string]any{"type": "integer"}, "tail": map[string]any{"type": "integer"}}, "job_id"),
+		},
+		{
+			"name": "job_spool_path", "description": "Resolve and return the absolute output-spool path for a job. Does not create the file.",
+			"inputSchema": obj(map[string]any{"job_id": str, "target": target}, "job_id"),
+		},
+		{
+			"name": "chat_send", "description": "Send a chat message to another session (RFC-0013 §3). Write `message` like a git commit: a concise one-line summary, a blank line, then the details. clown delivers the summary as the wake notification the recipient sees immediately and the full text via chat_read. A single-line message (no body) is fine for something that fits in the summary; if you include details they MUST be separated from the summary by a blank line, or the call is rejected. target: session key / group-id group / '*' broadcast.",
+			"inputSchema": obj(map[string]any{
+				"target":  target,
 				"message": map[string]any{"type": "string", "description": "git-commit format: a one-line summary, a blank line, then the body. The first line becomes the wake; the rest is the body recovered by chat_read."},
-				"from":    str, "source": str, "resources": resourceArr}, "target", "message")},
-		{"name": "chat_read", "description": "Read chat messages addressed to this session (own/group/broadcast) newer than the read cursor; advances the cursor unless peek. Returns a JSON array of {job,from,source,scope,subject,body,ts}.",
-			"inputSchema": obj(map[string]any{"peek": map[string]any{"type": "boolean"}})},
-		{"name": "chat_list", "description": "List live chat recipients (presence): each {sessionKey, channelId, decoration, description, lastSeen}, groupable by decoration. Replaces spinclass chat-list-sessions.",
-			"inputSchema": obj(map[string]any{})},
+				"from":    str, "source": str, "resources": resourceArr,
+			}, "target", "message"),
+		},
+		{
+			"name": "chat_read", "description": "Read chat messages addressed to this session (own/group/broadcast) newer than the read cursor; advances the cursor unless peek. Returns a JSON array of {job,from,source,scope,subject,body,ts}.",
+			"inputSchema": obj(map[string]any{"peek": map[string]any{"type": "boolean"}}),
+		},
+		{
+			"name": "chat_list", "description": "List live chat recipients (presence): each {sessionKey, channelId, decoration, description, lastSeen}, groupable by decoration. Replaces spinclass chat-list-sessions.",
+			"inputSchema": obj(map[string]any{}),
+		},
 	}
 	if surface == "" {
 		return all
@@ -281,7 +307,8 @@ func callJobTool(params json.RawMessage) map[string]any {
 	switch p.Name {
 	case "job_start":
 		id, err := jobwake.Start(jobwake.StartOpts{
-			Target: argStr(a, "target"), Label: argStr(a, "label"), Source: argStr(a, "source")})
+			Target: argStr(a, "target"), Label: argStr(a, "label"), Source: argStr(a, "source"),
+		})
 		return toolResult(id, err)
 	case "job_progress":
 		err := jobwake.Progress(argStr(a, "target"), argStr(a, "job_id"), argStr(a, "message"))

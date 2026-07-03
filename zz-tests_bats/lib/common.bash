@@ -20,7 +20,7 @@ bats_load_library bats-island
 # expected to assert on the file's contents and surface the failure.
 wait_for_file() {
   local file="$1" deadline="${2:-3}" elapsed=0
-  while [[ ! -s "$file" && $elapsed -lt $((deadline * 10)) ]]; do
+  while [[ ! -s $file && $elapsed -lt $((deadline * 10)) ]]; do
     sleep 0.1
     elapsed=$((elapsed + 1))
   done

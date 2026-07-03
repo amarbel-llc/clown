@@ -9,7 +9,10 @@
   "mcpServers": {
     "mock-mcp": {
       "command": "bin/mock-mcp-server",
-      "args": ["--mode", "stdio"]
+      "args": [
+        "--mode",
+        "stdio"
+      ]
     }
   }
 }

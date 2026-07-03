@@ -35,21 +35,21 @@ set -euo pipefail
 : "${TENT_CLAUDE_BIN:?TENT_CLAUDE_BIN must be set}"
 
 step() {
-    echo
-    echo "═══ $* ═══" >&2
+  echo
+  echo "═══ $* ═══" >&2
 }
 
 fail() {
-    echo "FAIL: $*" >&2
-    exit 1
+  echo "FAIL: $*" >&2
+  exit 1
 }
 
 # ─────────────────────────────────────────────────────────────────────
 step "1. preflight"
 
 command -v limactl >/dev/null || fail "limactl not on PATH"
-test -f "$LIMA_YAML"     || fail "lima yaml not found at $LIMA_YAML"
-test -e "$TENT_IMAGE"    || fail "tent image not found at $TENT_IMAGE"
+test -f "$LIMA_YAML" || fail "lima yaml not found at $LIMA_YAML"
+test -e "$TENT_IMAGE" || fail "tent image not found at $TENT_IMAGE"
 
 echo ">> limactl: $(command -v limactl)"
 echo ">> version: $(limactl --version | head -1)"
@@ -59,15 +59,15 @@ step "2. ensure $LIMA_INSTANCE is running"
 
 state="$(limactl list --json 2>/dev/null | jq -r --arg n "$LIMA_INSTANCE" 'select(.name == $n) | .status' || true)"
 
-if [[ -z "$state" ]]; then
-    echo ">> $LIMA_INSTANCE doesn't exist; creating from $LIMA_YAML"
-    limactl create --name="$LIMA_INSTANCE" --tty=false "$LIMA_YAML"
+if [[ -z $state ]]; then
+  echo ">> $LIMA_INSTANCE doesn't exist; creating from $LIMA_YAML"
+  limactl create --name="$LIMA_INSTANCE" --tty=false "$LIMA_YAML"
 fi
 
 state="$(limactl list --json 2>/dev/null | jq -r --arg n "$LIMA_INSTANCE" 'select(.name == $n) | .status' || true)"
-if [[ "$state" != "Running" ]]; then
-    echo ">> starting $LIMA_INSTANCE (current state: ${state:-unknown})"
-    limactl start --tty=false "$LIMA_INSTANCE"
+if [[ $state != "Running" ]]; then
+  echo ">> starting $LIMA_INSTANCE (current state: ${state:-unknown})"
+  limactl start --tty=false "$LIMA_INSTANCE"
 fi
 
 echo ">> $LIMA_INSTANCE is running"
@@ -84,7 +84,7 @@ echo ">> in-VM image path: $in_vm_image_path"
 
 # Verify the image is visible inside the VM via the /nix/store mount.
 if ! limactl shell "$LIMA_INSTANCE" -- test -e "$in_vm_image_path"; then
-    fail "in-VM /nix/store does not contain $in_vm_image_path"
+  fail "in-VM /nix/store does not contain $in_vm_image_path"
 fi
 
 # Load.
@@ -92,10 +92,10 @@ echo ">> loading via nerdctl..."
 limactl shell "$LIMA_INSTANCE" -- sudo nerdctl load -i "$in_vm_image_path"
 
 # Pull out the tag from nerdctl's image list (matches `clown-tent:*`).
-image_ref="$(limactl shell "$LIMA_INSTANCE" -- sudo nerdctl images --format '{{.Repository}}:{{.Tag}}' \
-              | grep '^clown-tent:' | head -1 || true)"
-if [[ -z "$image_ref" ]]; then
-    fail "clown-tent image not found in nerdctl image list after load"
+image_ref="$(limactl shell "$LIMA_INSTANCE" -- sudo nerdctl images --format '{{.Repository}}:{{.Tag}}' |
+  grep '^clown-tent:' | head -1 || true)"
+if [[ -z $image_ref ]]; then
+  fail "clown-tent image not found in nerdctl image list after load"
 fi
 echo ">> loaded: $image_ref"
 
@@ -115,7 +115,7 @@ step "4. verify in-container claude binary"
 # the wrong one alphabetically and produce `exec format error`.
 claude_bin="$TENT_CLAUDE_BIN"
 if ! limactl shell "$LIMA_INSTANCE" -- test -x "$claude_bin"; then
-    fail "$claude_bin is not executable inside the VM (check /nix/store mount)"
+  fail "$claude_bin is not executable inside the VM (check /nix/store mount)"
 fi
 echo ">> claude: $claude_bin"
 
@@ -129,15 +129,15 @@ ssh_in_vm="/run/host-services/ssh-auth.sock"
 
 set +e
 output="$(limactl shell "$LIMA_INSTANCE" -- sudo nerdctl run --rm -i \
-    -v /nix/store:/nix/store:ro \
-    -v "$HOME/.claude":"$HOME/.claude" \
-    -v "$HOME/.claude.json":"$HOME/.claude.json" \
-    -v "$ssh_in_vm:$ssh_in_vm" \
-    -e "HOME=$HOME" \
-    -e "USER=$USER" \
-    -e "SSH_AUTH_SOCK=$ssh_in_vm" \
-    "$image_ref" \
-    "$claude_bin" -p hello 2>&1)"
+  -v /nix/store:/nix/store:ro \
+  -v "$HOME/.claude":"$HOME/.claude" \
+  -v "$HOME/.claude.json":"$HOME/.claude.json" \
+  -v "$ssh_in_vm:$ssh_in_vm" \
+  -e "HOME=$HOME" \
+  -e "USER=$USER" \
+  -e "SSH_AUTH_SOCK=$ssh_in_vm" \
+  "$image_ref" \
+  "$claude_bin" -p hello 2>&1)"
 exit_code=$?
 set -e
 
@@ -147,13 +147,13 @@ echo "────────────────────────�
 echo ">> exit code: $exit_code"
 
 if [[ $exit_code -ne 0 ]]; then
-    fail "claude exited non-zero ($exit_code)"
+  fail "claude exited non-zero ($exit_code)"
 fi
-if [[ -z "$output" ]]; then
-    fail "claude produced no output"
+if [[ -z $output ]]; then
+  fail "claude produced no output"
 fi
 if echo "$output" | grep -qiE 'not logged in|please run /login'; then
-    fail "claude isn't authenticated; run \`just debug-extract-claude-credentials\` first"
+  fail "claude isn't authenticated; run \`just debug-extract-claude-credentials\` first"
 fi
 
 # ─────────────────────────────────────────────────────────────────────

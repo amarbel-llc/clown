@@ -28,7 +28,7 @@ setup() {
 }
 
 teardown() {
-  if [[ -n "${CJM_RUNTIME_DIR:-}" ]]; then
+  if [[ -n ${CJM_RUNTIME_DIR:-} ]]; then
     rm -rf "$CJM_RUNTIME_DIR"
   fi
 }
@@ -115,7 +115,7 @@ teardown() {
   run bash -c "printf '%s\n' '$start' | '$RINGMASTER_BIN' mcp"
   assert_success
   id="$(printf '%s' "$output" | jq -r '.result.content[0].text')"
-  [[ -n "$id" ]]
+  [[ -n $id ]]
 
   status="$(printf '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"job_status","arguments":{"job_id":"%s"}}}' "$id")"
   run bash -c "printf '%s\n' '$status' | '$RINGMASTER_BIN' mcp"
@@ -133,7 +133,7 @@ teardown() {
   run bash -c "printf '%s\n' '$start' | '$RINGMASTER_BIN' mcp"
   assert_success
   id="$(printf '%s' "$output" | jq -r '.result.content[0].text')"
-  [[ -n "$id" ]]
+  [[ -n $id ]]
 
   run "$RINGMASTER_BIN" done "$id" --state succeeded --message "ok"
   assert_success

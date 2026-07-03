@@ -8,9 +8,11 @@ import (
 )
 
 func TestRecordJSONRoundTrip(t *testing.T) {
-	r := Record{V: 1, Job: "b-1", Session: "repo/branch", Source: "moxy",
+	r := Record{
+		V: 1, Job: "b-1", Session: "repo/branch", Source: "moxy",
 		Type: TypeSucceeded, Seq: 2, TS: "2026-06-05T00:00:00Z", Message: "ok",
-		Resources: []Resource{{URI: "madder://blobs/abc", Digest: "abc", MediaType: "text/plain", Size: 42}}}
+		Resources: []Resource{{URI: "madder://blobs/abc", Digest: "abc", MediaType: "text/plain", Size: 42}},
+	}
 	b, err := json.Marshal(r)
 	if err != nil {
 		t.Fatal(err)
@@ -48,8 +50,10 @@ func TestWakePolicy(t *testing.T) {
 }
 
 func TestRecordFromOmittedWhenEmpty(t *testing.T) {
-	b, err := json.Marshal(Record{V: 1, Job: "j", Session: "k", Source: "s",
-		Type: TypeSucceeded, TS: "t"})
+	b, err := json.Marshal(Record{
+		V: 1, Job: "j", Session: "k", Source: "s",
+		Type: TypeSucceeded, TS: "t",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,8 +61,10 @@ func TestRecordFromOmittedWhenEmpty(t *testing.T) {
 		t.Fatalf("empty from must be omitted, got %s", b)
 	}
 
-	r := Record{V: 1, Job: "j", Session: "k", Source: "s", From: "other/sender",
-		Type: TypeMessage, TS: "t", Message: "hi"}
+	r := Record{
+		V: 1, Job: "j", Session: "k", Source: "s", From: "other/sender",
+		Type: TypeMessage, TS: "t", Message: "hi",
+	}
 	b, err = json.Marshal(r)
 	if err != nil {
 		t.Fatal(err)

@@ -33,16 +33,20 @@ type StopInstanceParams struct {
 
 // StopAllParams is empty by convention (no fields). Returns the
 // aliases that were stopped.
-type StopAllParams struct{}
-type StopAllResult struct {
-	Stopped []string `json:"stopped"`
-}
+type (
+	StopAllParams struct{}
+	StopAllResult struct {
+		Stopped []string `json:"stopped"`
+	}
+)
 
 // ListInstancesParams is empty.
-type ListInstancesParams struct{}
-type ListInstancesResult struct {
-	Instances []Instance `json:"instances"`
-}
+type (
+	ListInstancesParams struct{}
+	ListInstancesResult struct {
+		Instances []Instance `json:"instances"`
+	}
+)
 
 // GetInstanceParams looks up a single instance by alias.
 type GetInstanceParams struct {
@@ -53,10 +57,12 @@ type GetInstanceResult struct {
 }
 
 // ListAvailableModelsParams is empty.
-type ListAvailableModelsParams struct{}
-type ListAvailableModelsResult struct {
-	Models []AvailableModel `json:"models"`
-}
+type (
+	ListAvailableModelsParams struct{}
+	ListAvailableModelsResult struct {
+		Models []AvailableModel `json:"models"`
+	}
+)
 
 // DownloadModelParams identifies a model by registry name.
 type DownloadModelParams struct {

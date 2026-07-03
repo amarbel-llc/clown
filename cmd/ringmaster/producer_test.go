@@ -98,8 +98,10 @@ func TestNotificationLine(t *testing.T) {
 // The notification line carries a one-line resource-count hint (clown#112);
 // the URIs come from the pull side.
 func TestNotificationLineResources(t *testing.T) {
-	r := jobwake.Record{Source: "s", Job: "j", Type: jobwake.TypeMessage, Message: "hi",
-		Resources: []jobwake.Resource{{URI: "madder://blobs/x"}, {URI: "madder://blobs/y"}}}
+	r := jobwake.Record{
+		Source: "s", Job: "j", Type: jobwake.TypeMessage, Message: "hi",
+		Resources: []jobwake.Resource{{URI: "madder://blobs/x"}, {URI: "madder://blobs/y"}},
+	}
 	if line := notificationLine(r); !strings.Contains(line, "2 resource(s)") {
 		t.Fatalf("notification line must hint the resource count, got %q", line)
 	}

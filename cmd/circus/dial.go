@@ -45,7 +45,8 @@ func dialClient() (*rm.Client, error) {
 // fix-it message to stderr. Centralised so the missing-socket and
 // connection-refused branches stay byte-identical.
 func printNotRunningHint() {
-	fmt.Fprintf(os.Stderr,
+	fmt.Fprintf(
+		os.Stderr,
 		"circus: ringmaster is not running.\n"+
 			"  fix: enable it in your home-manager config:\n"+
 			"    programs.ringmaster.enable = true;\n"+

@@ -65,7 +65,12 @@ const respond = (id: Id, result: unknown) => {
   process.stdout.write(JSON.stringify(msg) + "\n");
 };
 
-const respondError = (id: Id, code: number, message: string, data?: unknown) => {
+const respondError = (
+  id: Id,
+  code: number,
+  message: string,
+  data?: unknown,
+) => {
   const msg: JsonRpcResponse = {
     jsonrpc: "2.0",
     id,

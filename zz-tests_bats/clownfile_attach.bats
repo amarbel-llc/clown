@@ -60,15 +60,15 @@ EOF
   run cat "$MUX_ARGV"
   [ "${lines[0]}" = "attach" ]
   [ "${lines[1]}" = "test-sess-id" ]
-  [[ "${lines[2]}" == *clown ]]            # clownExePath(), the spliced {entry}[0]
+  [[ ${lines[2]} == *clown ]] # clownExePath(), the spliced {entry}[0]
   [ "${lines[3]}" = "--clown-attach-id" ]
-  [ "${lines[4]}" = "test-sess-id" ]       # id pinned as an arg (clown#136 hygiene)
+  [ "${lines[4]}" = "test-sess-id" ] # id pinned as an arg (clown#136 hygiene)
   [ "${lines[5]}" = "--provider" ]
   [ "${lines[6]}" = "claude" ]
   [ "${lines[7]}" = "--" ]
   # forwarded tail: --session-id <uuid> --version (injected by decideClaudeSession)
   [ "${lines[8]}" = "--session-id" ]
-  [ -n "${lines[9]}" ]                     # the minted UUID (value not asserted)
+  [ -n "${lines[9]}" ] # the minted UUID (value not asserted)
   [ "${lines[10]}" = "--version" ]
 }
 
@@ -96,7 +96,7 @@ EOF
   [ "${lines[0]}" = "attach" ]
   [ "${lines[1]}" = "spawn-sess" ]
   [ "${lines[2]}" = "--detach" ]          # the spawn template, not start/resume
-  [[ "${lines[3]}" == *clown ]]            # the spliced {entry}[0]
+  [[ ${lines[3]} == *clown ]]             # the spliced {entry}[0]
   [ "${lines[4]}" = "--clown-attach-id" ] # loop guard pinned for the inner worker
   [ "${lines[5]}" = "spawn-sess" ]
 }
@@ -118,10 +118,10 @@ EOF
   run env CLOWN_ATTACH_FORCE=1 CLOWN_SESSION_ID=hint-sess \
     "$CLOWN_BIN" --provider claude -- --resume my-fixed-id
   [ "$status" -eq 0 ]
-  [ -f "$MUX_ARGV" ]   # the mux ran as a child (clown did not exec away)
+  [ -f "$MUX_ARGV" ] # the mux ran as a child (clown did not exec away)
   # The outer clown emitted the hint to stdout once the stub mux exited — outside
   # the mux, where the user can catch it.
-  [[ "$output" == *"clown resume clown://claude/my-fixed-id"* ]]
+  [[ $output == *"clown resume clown://claude/my-fixed-id"* ]]
 }
 
 # group-id is env-interpolated and exported as CLOWN_GROUP_ID (RFC-0014 §2), so
@@ -141,5 +141,5 @@ EOF
   [ -f "$MUX_GROUP" ]
 
   run cat "$MUX_GROUP"
-  [ "${lines[0]}" = "team-repo/branch" ]  # ${SPINCLASS_SESSION_ID} composed into group-id
+  [ "${lines[0]}" = "team-repo/branch" ] # ${SPINCLASS_SESSION_ID} composed into group-id
 }

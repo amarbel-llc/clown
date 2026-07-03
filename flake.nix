@@ -55,6 +55,13 @@
     bats.inputs.igloo.follows = "igloo";
     bats.inputs.nixpkgs-master.follows = "nixpkgs-master";
     bats.inputs.utils.follows = "utils";
+    llm-agents.inputs.bun2nix.follows = "igloo/bun2nix";
+    llm-agents.inputs.flake-parts.follows = "igloo/flake-parts";
+    llm-agents.inputs.systems.follows = "igloo/systems";
+    utils.inputs.systems.follows = "igloo/systems";
+    igloo.inputs.nixpkgs-master.follows = "nixpkgs-master";
+    bats.inputs.treefmt-nix.follows = "treefmt-nix";
+    igloo.inputs.treefmt-nix.follows = "treefmt-nix";
   };
 
   outputs =

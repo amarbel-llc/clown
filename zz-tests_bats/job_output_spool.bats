@@ -37,7 +37,7 @@ setup() {
 }
 
 teardown() {
-  if [[ -n "${CJW_RUNTIME_DIR:-}" ]]; then
+  if [[ -n ${CJW_RUNTIME_DIR:-} ]]; then
     rm -rf "$CJW_RUNTIME_DIR"
   fi
 }
@@ -49,9 +49,9 @@ teardown() {
   run "$RINGMASTER_BIN" spool-path "$id"
   assert_success
   assert_equal "$(wc -l <<<"$output")" "1"
-  [[ "$output" == /* ]]
-  [[ "$output" == *"/${id}.out" ]]
-  [[ ! -e "$output" ]]
+  [[ $output == /* ]]
+  [[ $output == *"/${id}.out" ]]
+  [[ ! -e $output ]]
 }
 
 # §2: disabled-channel signature — empty stdout, exit 0 (mirrors `job start`).
@@ -99,7 +99,7 @@ teardown() {
 @test "status surfaces the spool tail (bounded to --tail) and last_activity" {
   id="$("$RINGMASTER_BIN" start --source moxy --label build)"
   sp="$("$RINGMASTER_BIN" spool-path "$id")"
-  printf 'l1\nl2\nl3\nl4\n' > "$sp"
+  printf 'l1\nl2\nl3\nl4\n' >"$sp"
 
   run "$RINGMASTER_BIN" status "$id" --tail 2 --json
   assert_success
@@ -132,7 +132,7 @@ teardown() {
 @test "status human output has the one-line header and tail separator" {
   id="$("$RINGMASTER_BIN" start --source spinclass --label merge)"
   sp="$("$RINGMASTER_BIN" spool-path "$id")"
-  printf 'building\n' > "$sp"
+  printf 'building\n' >"$sp"
 
   run "$RINGMASTER_BIN" status "$id"
   assert_success

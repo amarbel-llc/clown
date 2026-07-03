@@ -126,7 +126,8 @@ func TestApplyClownfileProfile(t *testing.T) {
 		t.Setenv("CLOWNFILE_TEST_B", "ambient")
 		f := parsedFlags{}
 		applyClownfileProfile(&f, clownfile.Profile{Env: map[string]string{
-			"CLOWNFILE_TEST_A": "fromfile", "CLOWNFILE_TEST_B": "fromfile"}})
+			"CLOWNFILE_TEST_A": "fromfile", "CLOWNFILE_TEST_B": "fromfile",
+		}})
 		if got := os.Getenv("CLOWNFILE_TEST_A"); got != "fromfile" {
 			t.Errorf("unset env must be set from clownfile, got %q", got)
 		}
@@ -669,7 +670,8 @@ func TestPluginFragments_EndToEnd(t *testing.T) {
 	}
 	if err := os.WriteFile(
 		filepath.Join(clownBuiltin, "00-builtin.md"),
-		[]byte("BUILTIN"), 0o644); err != nil {
+		[]byte("BUILTIN"), 0o644,
+	); err != nil {
 		t.Fatal(err)
 	}
 
@@ -680,7 +682,8 @@ func TestPluginFragments_EndToEnd(t *testing.T) {
 	}
 	if err := os.WriteFile(
 		filepath.Join(pluginFragDir, "00-plugin.md"),
-		[]byte("PLUGIN"), 0o644); err != nil {
+		[]byte("PLUGIN"), 0o644,
+	); err != nil {
 		t.Fatal(err)
 	}
 
@@ -690,7 +693,8 @@ func TestPluginFragments_EndToEnd(t *testing.T) {
 	}
 	if err := os.WriteFile(
 		filepath.Join(metaDir, "plugin-fragment-dirs"),
-		[]byte(pluginFragDir+"\n"), 0o600); err != nil {
+		[]byte(pluginFragDir+"\n"), 0o600,
+	); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("CLOWN_PLUGIN_META", metaDir)
@@ -705,7 +709,8 @@ func TestPluginFragments_EndToEnd(t *testing.T) {
 	}
 	if err := os.WriteFile(
 		filepath.Join(userPromptD, "00-user.md"),
-		[]byte("USER"), 0o644); err != nil {
+		[]byte("USER"), 0o644,
+	); err != nil {
 		t.Fatal(err)
 	}
 

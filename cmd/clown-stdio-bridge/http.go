@@ -167,7 +167,8 @@ func (h *httpHandler) handlePost(w http.ResponseWriter, r *http.Request) {
 		label := metricLabel(probe.Method, body)
 		h.logger.Printf(
 			"clown-stdio-bridge: post start id=%s method=%q has_progressToken=%t body_size=%d",
-			idKey, probe.Method, hasToken, len(body))
+			idKey, probe.Method, hasToken, len(body),
+		)
 		if streaming, interval, fallback := heartbeatMode(); streaming {
 			h.handlePostStreaming(w, r, idKey, probe.ID, body, interval, fallback, started, label)
 			return
@@ -315,7 +316,8 @@ func (h *httpHandler) handlePostStreaming(
 			heartbeatKind = "progress"
 			notif := fmt.Sprintf(
 				`{"jsonrpc":"2.0","method":"notifications/progress","params":{"progressToken":%s,"progress":%d,"message":"clown-stdio-bridge: still waiting"}}`,
-				progressToken, seq)
+				progressToken, seq,
+			)
 			fmt.Fprintf(w, "data: %s\n\n", notif)
 		} else {
 			fmt.Fprintf(w, ": heartbeat %d\n\n", seq)

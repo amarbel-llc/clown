@@ -22,7 +22,7 @@ func parseSafetyEnv(t *testing.T, got string) map[string]string {
 // clown#163 + clown#164: with no user overrides, clown injects both safety
 // defaults (AFK auto-continue off, auto memory off) as a valid settings env block.
 func TestClaudeSafetySettingsJSON_InjectsBothWhenUnset(t *testing.T) {
-	t.Setenv("CLAUDE_AFK_TIMEOUT_MS", "")            // empty == unset for os.Getenv
+	t.Setenv("CLAUDE_AFK_TIMEOUT_MS", "") // empty == unset for os.Getenv
 	t.Setenv("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "")
 
 	env := parseSafetyEnv(t, claudeSafetySettingsJSON())

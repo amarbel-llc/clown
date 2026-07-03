@@ -128,7 +128,8 @@ func (s *ManagedServer) Start(ctx context.Context) error {
 		return err
 	}
 	s.handshake = hs
-	log.Info("handshake received",
+	log.Info(
+		"handshake received",
 		"core_version", hs.CoreVersion,
 		"app_version", hs.AppVersion,
 		"network_type", hs.NetworkType,

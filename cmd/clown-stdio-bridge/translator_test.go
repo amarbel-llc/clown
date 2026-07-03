@@ -252,7 +252,8 @@ func TestTranslator_ConcurrentMixedIDRequests(t *testing.T) {
 				time.Sleep(delay)
 				resp := fmt.Sprintf(
 					`{"jsonrpc":"2.0","id":%s,"result":{"echoedToken":%q}}`+"\n",
-					id, token)
+					id, token,
+				)
 				_, _ = stdoutW.Write([]byte(resp))
 			}()
 		}
@@ -274,7 +275,8 @@ func TestTranslator_ConcurrentMixedIDRequests(t *testing.T) {
 			token := fmt.Sprintf("tok-%d", i)
 			body := []byte(fmt.Sprintf(
 				`{"jsonrpc":"2.0","id":%d,"method":"echo","params":{"token":%q}}`,
-				i, token))
+				i, token,
+			))
 			reqCtx, reqCancel := context.WithTimeout(ctx, 5*time.Second)
 			defer reqCancel()
 			resp, err := tr.SendRequest(reqCtx, idKey, body)
@@ -368,10 +370,12 @@ func TestTranslator_BroadcastInterleavedWithRequests(t *testing.T) {
 				time.Sleep(time.Duration(notifIdx%5+1) * time.Millisecond)
 				notif := fmt.Sprintf(
 					`{"jsonrpc":"2.0","method":"notifications/progress","params":{"seq":%d}}`+"\n",
-					notifIdx)
+					notifIdx,
+				)
 				_, _ = stdoutW.Write([]byte(notif))
 				resp := fmt.Sprintf(
-					`{"jsonrpc":"2.0","id":%s,"result":{"ok":true}}`+"\n", id)
+					`{"jsonrpc":"2.0","id":%s,"result":{"ok":true}}`+"\n", id,
+				)
 				_, _ = stdoutW.Write([]byte(resp))
 			}()
 		}
@@ -386,7 +390,8 @@ func TestTranslator_BroadcastInterleavedWithRequests(t *testing.T) {
 			defer wg.Done()
 			idKey := strconv.Itoa(i)
 			body := []byte(fmt.Sprintf(
-				`{"jsonrpc":"2.0","id":%d,"method":"ping"}`, i))
+				`{"jsonrpc":"2.0","id":%d,"method":"ping"}`, i,
+			))
 			reqCtx, reqCancel := context.WithTimeout(ctx, 5*time.Second)
 			defer reqCancel()
 			resp, err := tr.SendRequest(reqCtx, idKey, body)

@@ -32,10 +32,10 @@ setup() {
   }
   export output
 
-  compiled_json="$(echo "$output" \
-    | sed -n '/COMPILED_PLUGIN_JSON_START/,/COMPILED_PLUGIN_JSON_END/p' \
-    | grep -v 'COMPILED_PLUGIN_JSON_')"
-  [[ -n "$compiled_json" ]] || {
+  compiled_json="$(echo "$output" |
+    sed -n '/COMPILED_PLUGIN_JSON_START/,/COMPILED_PLUGIN_JSON_END/p' |
+    grep -v 'COMPILED_PLUGIN_JSON_')"
+  [[ -n $compiled_json ]] || {
     echo "FAIL: could not extract compiled plugin.json from output" >&2
     echo "$output" >&2
     return 1

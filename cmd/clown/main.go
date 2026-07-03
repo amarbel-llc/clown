@@ -691,7 +691,8 @@ func runClaude(cliPath string, flags parsedFlags, prompts promptwalk.PromptResul
 			if flags.verbose {
 				fmt.Fprintf(os.Stderr, "clown: logging to %s\n", logPath)
 			}
-			tentLogger.Info("tent startup begin",
+			tentLogger.Info(
+				"tent startup begin",
 				"version", buildcfg.Version,
 				"commit", buildcfg.Commit,
 				"pid", os.Getpid(),
@@ -1073,7 +1074,8 @@ func runWithPluginHost(executor Executor, args []string, pluginDirs []string, fl
 		}
 	}
 
-	logger.Info("clown starting",
+	logger.Info(
+		"clown starting",
 		"version", buildcfg.Version,
 		"commit", buildcfg.Commit,
 		"pid", os.Getpid(),

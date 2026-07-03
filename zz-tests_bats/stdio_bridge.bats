@@ -33,7 +33,7 @@ setup() {
 
   wait_for_file "$handshake_file" 3
   handshake="$(head -n1 "$handshake_file")"
-  if [[ -z "$handshake" ]]; then
+  if [[ -z $handshake ]]; then
     echo "FAIL: bridge produced no handshake within 3s" >&2
     cat "$log_file" >&2
     return 1
@@ -83,7 +83,7 @@ teardown() {
     -H 'Content-Type: application/json' \
     -d '{"jsonrpc":"2.0","id":3,"method":"notify-broadcast"}' >/dev/null
 
-  deadline=$(( $(date +%s) + 3 ))
+  deadline=$(($(date +%s) + 3))
   while [[ $(date +%s) -lt $deadline ]]; do
     if grep -q 'tools/list_changed' "$sse_out" 2>/dev/null; then
       break
@@ -92,7 +92,7 @@ teardown() {
   done
 
   run grep -q 'tools/list_changed' "$sse_out"
-  if (( status != 0 )); then
+  if ((status != 0)); then
     echo "--- sse_out ---" >&2
     cat "$sse_out" >&2
     echo "--- bridge log ---" >&2

@@ -32,10 +32,10 @@ shopt -s dotglob nullglob
 for entry in "$WORKSPACE"/*; do
   base=$(basename "$entry")
   case "$base" in
-  .git | vendor | node_modules | result | result-*)
-    echo "agent.sh: skipping $base"
-    continue
-    ;;
+    .git | vendor | node_modules | result | result-*)
+      echo "agent.sh: skipping $base"
+      continue
+      ;;
   esac
   cp -a "$entry" "$OUT/"
 done

@@ -54,8 +54,10 @@ func troupeEnv(t *testing.T) {
 // sender's own channel, so ReadChat recovers both halves.
 func TestTroupeSendMessageSplitsGitCommit(t *testing.T) {
 	troupeEnv(t) // CLOWN_SESSION_ID = "repo/branch"
-	code := troupeSend([]string{"--target", "repo/branch",
-		"--message", "the summary\n\nbody one\nbody two"})
+	code := troupeSend([]string{
+		"--target", "repo/branch",
+		"--message", "the summary\n\nbody one\nbody two",
+	})
 	if code != 0 {
 		t.Fatalf("send --message exit = %d, want 0", code)
 	}
@@ -76,8 +78,10 @@ func TestTroupeSendMessageSplitsGitCommit(t *testing.T) {
 
 func TestTroupeSendMessageRejectsMissingBlankLine(t *testing.T) {
 	troupeEnv(t)
-	code := troupeSend([]string{"--target", "repo/branch",
-		"--message", "summary\nbody with no separator"})
+	code := troupeSend([]string{
+		"--target", "repo/branch",
+		"--message", "summary\nbody with no separator",
+	})
 	if code != 2 {
 		t.Fatalf("send with no blank separator exit = %d, want 2", code)
 	}
@@ -85,8 +89,10 @@ func TestTroupeSendMessageRejectsMissingBlankLine(t *testing.T) {
 
 func TestTroupeSendMessageMutuallyExclusiveWithSubject(t *testing.T) {
 	troupeEnv(t)
-	code := troupeSend([]string{"--target", "repo/branch",
-		"--message", "summary", "--subject", "also a subject"})
+	code := troupeSend([]string{
+		"--target", "repo/branch",
+		"--message", "summary", "--subject", "also a subject",
+	})
 	if code != 2 {
 		t.Fatalf("send --message + --subject exit = %d, want 2", code)
 	}
@@ -103,8 +109,10 @@ func TestTroupeSendRequiresMessageOrSubject(t *testing.T) {
 // The explicit --subject/--body pair still works (operators/scripts).
 func TestTroupeSendSubjectBodyStillWorks(t *testing.T) {
 	troupeEnv(t)
-	code := troupeSend([]string{"--target", "repo/branch",
-		"--subject", "explicit subject", "--body", "explicit body"})
+	code := troupeSend([]string{
+		"--target", "repo/branch",
+		"--subject", "explicit subject", "--body", "explicit body",
+	})
 	if code != 0 {
 		t.Fatalf("send --subject/--body exit = %d, want 0", code)
 	}
@@ -122,8 +130,10 @@ func TestTroupeSendSubjectBodyStillWorks(t *testing.T) {
 func TestTroupeMessagePrintsIDAndWritesSingleRecord(t *testing.T) {
 	troupeEnv(t)
 	out := captureStdout(t, func() {
-		troupeMessage([]string{"--target", "other-session", "--from", "repo/branch",
-			"--source", "spinclass", "--message", "ping"})
+		troupeMessage([]string{
+			"--target", "other-session", "--from", "repo/branch",
+			"--source", "spinclass", "--message", "ping",
+		})
 	})
 	id := trimTrailingNewline(out)
 	if !strings.HasPrefix(id, "msg-") {
@@ -142,8 +152,10 @@ func TestTroupeMessagePrintsIDAndWritesSingleRecord(t *testing.T) {
 func TestTroupeMessageBroadcastTarget(t *testing.T) {
 	troupeEnv(t)
 	out := captureStdout(t, func() {
-		troupeMessage([]string{"--target", "*", "--from", "repo/branch",
-			"--source", "spinclass", "--message", "to everyone"})
+		troupeMessage([]string{
+			"--target", "*", "--from", "repo/branch",
+			"--source", "spinclass", "--message", "to everyone",
+		})
 	})
 	id := trimTrailingNewline(out)
 	recs, err := jobwake.ReadJob(jobwake.ChannelID("*"), id)

@@ -31,9 +31,9 @@ setup() {
     # Fall back to the newest clown-tent image so a stale version.env
     # doesn't block the suite.
     TENT_IMAGE="$(podman image ls --filter reference='clown-tent*' \
-                    --format '{{.Repository}}:{{.Tag}}' | head -1)"
+      --format '{{.Repository}}:{{.Tag}}' | head -1)"
   fi
-  if [[ -z "$TENT_IMAGE" ]] || ! podman image exists "$TENT_IMAGE"; then
+  if [[ -z $TENT_IMAGE ]] || ! podman image exists "$TENT_IMAGE"; then
     skip "no clown-tent:* image loaded — run 'just build' first"
   fi
   export TENT_IMAGE
@@ -44,15 +44,15 @@ setup() {
   # ~/.gitconfig still runs the rest.
   RO_BINDS=()
   for p in \
-      /nix/var \
-      /etc/nix \
-      "$HOME/.nix-profile" \
-      "$HOME/.local/state/nix/profiles/profile" \
-      "$HOME/.gitconfig" \
-      "$HOME/.config/git" \
-      "$HOME/.config/nix" \
-      "$HOME/.config/ssh"; do
-    if [[ -e "$p" || -L "$p" ]]; then
+    /nix/var \
+    /etc/nix \
+    "$HOME/.nix-profile" \
+    "$HOME/.local/state/nix/profiles/profile" \
+    "$HOME/.gitconfig" \
+    "$HOME/.config/git" \
+    "$HOME/.config/nix" \
+    "$HOME/.config/ssh"; do
+    if [[ -e $p || -L $p ]]; then
       RO_BINDS+=("--volume" "$p:$p:ro")
     fi
   done
@@ -81,9 +81,9 @@ tent_run() {
   # internal/tent.RewritePathToNixStore but in bash so we're not
   # dependent on a separate helper binary.
   rewritten="$(printf '%s' "$PATH" | tr ':' '\n' | while read -r p; do
-    [[ -z "$p" ]] && continue
+    [[ -z $p ]] && continue
     real="$(readlink -f "$p" 2>/dev/null)" || continue
-    [[ "$real" == /nix/store/* ]] || continue
+    [[ $real == /nix/store/* ]] || continue
     printf '%s\n' "$real"
   done | paste -sd: -)"
 
@@ -92,16 +92,16 @@ tent_run() {
   # pass --env NAME with no value (podman would forward an empty
   # string, which differs from "var unset").
   local env_args=()
-  [[ -n "$rewritten" ]]              && env_args+=(--env "PATH=$rewritten")
-  [[ -n "${HOME-}" ]]                && env_args+=(--env "HOME=$HOME")
-  [[ -n "${USER-}" ]]                && env_args+=(--env "USER=$USER")
-  [[ -n "${TERM-}" ]]                && env_args+=(--env "TERM=$TERM")
-  [[ -n "${SSH_AUTH_SOCK-}" ]]       && env_args+=(--env "SSH_AUTH_SOCK=$SSH_AUTH_SOCK")
-  [[ -n "${SSH_HOME-}" ]]            && env_args+=(--env "SSH_HOME=$SSH_HOME")
-  [[ -n "${XDG_CONFIG_HOME-}" ]]     && env_args+=(--env "XDG_CONFIG_HOME=$XDG_CONFIG_HOME")
+  [[ -n $rewritten ]] && env_args+=(--env "PATH=$rewritten")
+  [[ -n ${HOME-} ]] && env_args+=(--env "HOME=$HOME")
+  [[ -n ${USER-} ]] && env_args+=(--env "USER=$USER")
+  [[ -n ${TERM-} ]] && env_args+=(--env "TERM=$TERM")
+  [[ -n ${SSH_AUTH_SOCK-} ]] && env_args+=(--env "SSH_AUTH_SOCK=$SSH_AUTH_SOCK")
+  [[ -n ${SSH_HOME-} ]] && env_args+=(--env "SSH_HOME=$SSH_HOME")
+  [[ -n ${XDG_CONFIG_HOME-} ]] && env_args+=(--env "XDG_CONFIG_HOME=$XDG_CONFIG_HOME")
 
   local sock_bind=()
-  [[ -n "${SSH_AUTH_SOCK-}" && -S "$SSH_AUTH_SOCK" ]] && \
+  [[ -n ${SSH_AUTH_SOCK-} && -S $SSH_AUTH_SOCK ]] &&
     sock_bind=(--volume "$SSH_AUTH_SOCK:$SSH_AUTH_SOCK")
 
   podman run --rm -i --userns=keep-id \
@@ -168,10 +168,10 @@ tent_run() {
 }
 
 @test "SSH_AUTH_SOCK forwarded — ssh -T git@github.com authenticates" {
-  if [[ "${CLOWN_TENT_NO_NETWORK:-}" == "1" ]]; then
+  if [[ ${CLOWN_TENT_NO_NETWORK:-} == "1" ]]; then
     skip "CLOWN_TENT_NO_NETWORK=1 — network-dependent test skipped"
   fi
-  if [[ -z "${SSH_AUTH_SOCK-}" || ! -S "${SSH_AUTH_SOCK-}" ]]; then
+  if [[ -z ${SSH_AUTH_SOCK-} || ! -S ${SSH_AUTH_SOCK-} ]]; then
     skip "no SSH_AUTH_SOCK on host (start ssh-agent / pivy-agent)"
   fi
 
