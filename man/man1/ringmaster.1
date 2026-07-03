@@ -567,6 +567,8 @@ The normative contracts are specified in
 (MCP tools), and
 .Pa docs/rfcs/0015-ringmaster-troupe-platform-binaries.md
 (the ringmaster/troupe binary surface), within the clown source repository.
+.Sh AUTHORS
+.An "amarbel, LLC"
 .Sh CAVEATS
 .Nm
 single-Wait contract: only one goroutine inside the daemon ever calls
@@ -592,5 +594,3 @@ A producer that has hard-crashed without writing a terminal record cannot be
 reaped by
 .Cm cancel ;
 its journal is garbage-collected after the retention window.
-.Sh AUTHORS
-.An "amarbel, LLC"

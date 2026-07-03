@@ -221,11 +221,13 @@ $ circus stop coder-32k
 circus: stopped coder-32k
 .Ed
 .Sh SEE ALSO
+.Xr clown 1 ,
+.Xr llama-server 1 ,
 .Xr ringmaster 1 ,
 .Xr ringmaster 7 ,
-.Xr ringmaster-testing 7 ,
-.Xr clown 1 ,
-.Xr llama-server 1
+.Xr ringmaster-testing 7
+.Sh AUTHORS
+.An "amarbel, LLC"
 .Sh CAVEATS
 The
 .Cm download
@@ -239,5 +241,3 @@ because the model registry and HTTP fetch are
 concerns that predate ringmaster.
 Clown-side automation (planned in FDR-0011 / plan 2) does use the RPC
 since clown is not terminal-attached.
-.Sh AUTHORS
-.An "amarbel, LLC"

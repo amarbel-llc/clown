@@ -276,28 +276,39 @@ build-man:
 render-man PAGE:
     nix shell nixpkgs#mandoc -c mandoc -Tutf8 {{PAGE}}
 
-# Lint mdoc(7) manpages with mandoc -Tlint. Operates on the built pages
-# so @MDOCDATE@ has already been substituted, meaning we lint what
-# actually ships.
+# Lint AND render mdoc(7) manpages with mandoc. Operates on the built pages
+# so @MDOCDATE@ has already been substituted, meaning we check what actually
+# ships.
 #
-# Scope: only clown-authored pages (clown*). Upstream pages we repackage
-# (claude-code*, codex*) carry other copyrights and have pre-existing
-# mandoc warnings that we don't own.
+# Scope: the clown-authored page set is read from the manifest the
+# clown-manpages derivation emits ($out/nix-support/clown-authored-manpages),
+# NOT a `clown*` glob — the glob silently dropped ringmaster/troupe/circus and
+# the *.7 pages (clown#162). Upstream pages we repackage (claude-code*, codex*)
+# carry other copyrights and pre-existing mandoc warnings we don't own, so they
+# stay out of the set by not being listed in clownAuthoredManPages.
+#
+# Each page is both linted (-Tlint -Wwarning, warnings fatal) and rendered
+# (-Tutf8, must produce output) so a rendering regression a pure lint misses
+# still fails the gate.
 [group("check")]
 check-lint-man: build-man
     #!/usr/bin/env bash
     set -euo pipefail
     out=$(readlink -f result-man)
-    pages=(
-        "$out"/share/man/man1/clown*.1
-        "$out"/share/man/man5/clown*.5
-        "$out"/share/man/man7/clown*.7
-    )
+    mapfile -t rels < "$out/nix-support/clown-authored-manpages"
+    pages=()
+    for rel in "${rels[@]}"; do
+        [[ -n "$rel" ]] && pages+=( "$out/share/man/$rel" )
+    done
     nix shell nixpkgs#mandoc -c bash -c '
         failed=0
         for page in "$@"; do
-            [[ -f "$page" ]] || continue
+            [[ -f "$page" ]] || { echo "missing page: $page" >&2; failed=1; continue; }
             if ! mandoc -Tlint -Wwarning "$page"; then
+                failed=1
+            fi
+            if ! mandoc -Tutf8 "$page" >/dev/null; then
+                echo "mandoc -Tutf8 render failed: $page" >&2
                 failed=1
             fi
         done

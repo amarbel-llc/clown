@@ -775,10 +775,33 @@
         # Clown-owned pages use the @MDOCDATE@ sentinel in .Dd; we stamp
         # them with mdocDate (derived from self.lastModifiedDate) at
         # build time. Codex vendored pages keep their upstream dates.
+        # The clown-authored man pages (paths relative to share/man/), as
+        # opposed to any vendored pages copied alongside them. This is the
+        # single source of truth for "which pages does clown own": the
+        # derivation both substitutes @MDOCDATE@ into exactly this set and
+        # emits it as a manifest ($out/nix-support/clown-authored-manpages)
+        # that `just check-lint-man` reads, so the lint/render gate covers the
+        # same set without a duplicated `clown*` glob that silently drops
+        # ringmaster/troupe/circus and the *.7 pages (clown#162).
+        clownAuthoredManPages = [
+          "man1/clown.1"
+          "man1/clown-presence.1"
+          "man1/clown-plugin-host.1"
+          "man1/clown-stdio-bridge.1"
+          "man1/circus.1"
+          "man1/ringmaster.1"
+          "man1/troupe.1"
+          "man5/clown-json.5"
+          "man5/clownfile.5"
+          "man7/clown-plugin-protocol.7"
+          "man7/ringmaster.7"
+          "man7/ringmaster-testing.7"
+        ];
         clown-manpages =
           pkgs.runCommand "clown-manpages"
             {
               inherit mdocDate;
+              authoredPages = lib.concatStringsSep " " clownAuthoredManPages;
             }
             ''
               for section in 1 5 7; do
@@ -788,25 +811,16 @@
               cp ${./man/man5}/*.5 $out/share/man/man5/
               cp ${./man/man7}/*.7 $out/share/man/man7/
               chmod -R u+w $out/share/man
-              for page in \
-                  $out/share/man/man1/clown.1 \
-                  $out/share/man/man1/clown-presence.1 \
-                  $out/share/man/man1/clown-plugin-host.1 \
-                  $out/share/man/man1/clown-stdio-bridge.1 \
-                  $out/share/man/man1/circus.1 \
-                  $out/share/man/man1/ringmaster.1 \
-                  $out/share/man/man1/troupe.1 \
-                  $out/share/man/man5/clown-json.5 \
-                  $out/share/man/man5/clownfile.5 \
-                  $out/share/man/man7/clown-plugin-protocol.7 \
-                  $out/share/man/man7/ringmaster.7 \
-                  $out/share/man/man7/ringmaster-testing.7; do
+              for rel in $authoredPages; do
+                  page="$out/share/man/$rel"
                   sed -i "s/@MDOCDATE@/$mdocDate/g" "$page"
                   if grep -q '@MDOCDATE@' "$page"; then
                       echo "clown-manpages: @MDOCDATE@ left unsubstituted in $page" >&2
                       exit 1
                   fi
               done
+              mkdir -p $out/nix-support
+              printf '%s\n' $authoredPages > $out/nix-support/clown-authored-manpages
             '';
 
         emptyPluginMeta = pkgs.runCommand "clown-empty-plugin-meta" { } ''
