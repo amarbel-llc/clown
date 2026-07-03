@@ -521,9 +521,11 @@ The flake produces a `symlinkJoin` of five components:
    design doc is at `docs/plans/2026-04-23-profiles-design.md` and the
    implementation plan at `docs/plans/2026-04-23-profiles.md`.
 
-   **Job-wakeup channel (`clown job` / `clown job-watch`).** A
-   clown-provided background-job + agent-wakeup facility (`cmd/clown/job.go`,
-   `cmd/clown/jobmonitor.go`, `internal/jobwake/`): a plugin defers a long task
+   **Job-wakeup channel (`ringmaster` producer verbs / `ringmaster monitor`).** A
+   clown-provided background-job + agent-wakeup facility (`cmd/ringmaster/producer.go`,
+   `cmd/clown/jobmonitor.go`, `internal/jobwake/`; RFC-0015 promoted the producer
+   and monitor surface from the former `clown job`/`clown job-watch` onto the
+   standalone `ringmaster` binary): a plugin defers a long task
    to the background and the originating (or a `--target`-ed) clown session is
    woken when it hits a terminal state. Two-layer design — a durable on-disk
    journal (`$XDG_STATE_HOME/clown/jobs/`, the at-least-once source of truth)
@@ -536,20 +538,20 @@ The flake produces a `symlinkJoin` of five components:
    spinclass session watches). clown threads the resolved key EXPLICITLY rather
    than stamping `CLOWN_SESSION_ID` on its own process env (clown#136): per-child
    injection into each plugin MCP server it spawns (`pluginhost.Host.BaseEnv`)
-   plus `clown job-watch --session <key>` baked into the synthesized monitor
+   plus `ringmaster monitor --session <key>` baked into the synthesized monitor
    command — so the claude subtree (every `Bash` call and subagent) no longer
    inherits the key. An exec-replacing provider (codex / `--naked`) is the
    exception: it becomes the agent, so it receives the value via its env. Plugins
-   consume it via the `clown job start|progress|done|read` producer/pull CLI;
-   clown registers the `clown job-watch` monitor for the session automatically
+   consume it via the `ringmaster start|progress|done|read` producer/pull CLI;
+   clown registers the `ringmaster monitor` monitor for the session automatically
    (synthesized `--plugin-dir`). `CLOWN_DISABLE_JOB_WAKEUP=1` is the kill switch. Contract:
    RFC-0009 (`docs/rfcs/0009-job-wakeup-channel.md`); feature treatment:
    FDR-0013 (`docs/features/0013-job-wakeup-channel.md`); man page:
-   `clown-job(1)`. Status: `testing` (FDR-0013) — live-proven 2026-06-06 by
+   `ringmaster(1)`. Status: `testing` (FDR-0013) — live-proven 2026-06-06 by
    two producers (moxy `get-hubbed.ci-watch`, spinclass async merge/check)
    plus cross-session directed and broadcast `message` wakes.
 
-   **Job output spool + status probe (`clown job spool-path` / `clown job
+   **Job output spool + status probe (`ringmaster spool-path` / `ringmaster
    status`).** An observability layer over the channel (RFC-0010,
    `docs/rfcs/0010-job-output-spool-and-status.md`; `internal/jobwake/status.go`):
    a producer-written, append-only `<job-id>.out` spool sibling to the journal,
@@ -564,26 +566,27 @@ The flake produces a `symlinkJoin` of five components:
    choke point as the rest of the channel (clown#123). moxy is the motivating
    consumer (its FDR-0005, moxy#341); impl tracked in clown#122.
 
-   **Job-platform MCP tools (`clown job-mcp`).** RFC-0011
-   (`docs/rfcs/0011-job-platform-mcp-tools.md`; `cmd/clown/jobmcp.go`) exposes
+   **Job-platform MCP tools (`ringmaster mcp` / `troupe mcp`).** RFC-0011
+   (`docs/rfcs/0011-job-platform-mcp-tools.md`; `internal/jobmcp`) exposes
    the platform to the agent directly as MCP tools — `job_start`,
    `job_progress`, `job_done`, `job_message`, `job_read`, `job_status`,
    `job_spool_path`, `job_wait` (the blocking join, clown#154) — each equivalent
-   to the matching `clown job` subcommand
-   (one `internal/jobwake` code path). `clown job-mcp` is a hand-rolled stdio
-   JSON-RPC server; clown injects it by adding `stdioServers` entries to the
-   synthesized `clown-builtin-jobs` plugin (alongside the job-watch monitor),
+   to the matching `ringmaster`/`troupe` subcommand
+   (one `internal/jobwake` code path). The server is a hand-rolled stdio
+   JSON-RPC server (`jobmcp.Serve`); clown injects it by adding `stdioServers` entries to the
+   synthesized `clown-builtin-jobs` plugin (alongside the `ringmaster monitor`),
    which `clown-stdio-bridge` wraps to streamable-HTTP and clown's own
    pluginhost manages — clown self-consuming RFC-0002, no privileged path. The
-   catalog is split (clown#144) into two intent-revealing servers via
-   `clown job-mcp --surface <name>`: `ringmaster` (job control —
+   catalog is split (clown#144, RFC-0015 §6) across two binaries:
+   `ringmaster mcp` (job control —
    `job_start`/`job_progress`/`job_done`/`job_read`/`job_status`/`job_spool_path`/`job_wait`,
-   and it carries the dynamic system-prompt fragment) and `troupe` (messaging —
+   and it carries the dynamic system-prompt fragment) and `troupe mcp` (messaging —
    `chat_send`/`chat_read`/`chat_list` and the standalone `job_message`). The
    tools surface as `plugin:clown-builtin-jobs:ringmaster` and
    `plugin:clown-builtin-jobs:troupe`; the auto-allow hook (clown#130) matches the
-   plugin segment so both auto-allow. Invoked without `--surface` (direct/dev)
-   the server exposes the whole catalog. Injected only for
+   plugin segment so both auto-allow. Each binary serves its fixed surface; the
+   whole-catalog mode (empty surface) is exercised only by the `internal/jobmcp`
+   Go tests. Injected only for
    `--plugin-dir` providers with the bridge available (nix builds); absent in
    dev builds and when `CLOWN_DISABLE_JOB_WAKEUP=1`. The CLI stays the producer
    front-end; the MCP tools are the agent-facing surface that plugin-private
@@ -604,19 +607,20 @@ The flake produces a `symlinkJoin` of five components:
    stdio server, `clown-stdio-bridge` serves `/clown/system-prompt` by issuing an
    MCP `prompts/get` for the `system-prompt-append` prompt to the wrapped child —
    so the fragment is *child-owned* and computed at request time. The
-   `clown-builtin-jobs` server is the dogfood: `clown job-mcp` exposes that prompt
-   (`jobSystemPromptFragment`), returning a live orientation fragment built from
+   `clown-builtin-jobs` server is the dogfood: `ringmaster mcp` exposes that prompt
+   (`jobmcp.jobSystemPromptFragment`), returning a live orientation fragment built from
    its own tool catalog plus the per-instance session key injected via
    `Host.BaseEnv` (clown#136) — runtime state the static path can't express.
    Scope: the claude family only (providers that run the plugin host and read an
    append file); exec-replacing providers are unaffected. Man page:
    `clown-json(5)` (`systemPromptPath`, `systemPrompt`).
 
-   **Cross-session chat (`clown chat`).** RFC-0013 §3 makes chat a clown
-   construct on the job channel (rescope companion to spinclass FDR-0017). A chat
+   **Cross-session chat (`troupe`).** RFC-0013 §3 makes chat a clown
+   construct on the job channel (rescope companion to spinclass FDR-0017); RFC-0015
+   moved the CLI onto the standalone `troupe` binary. A chat
    message is a `chat` record (a waking type distinct from `message`, so the
    own-channel reap leaves it) carrying the one-line subject in the record and
-   the full body in the message's RFC-0010 spool. `clown chat send|read|list`
+   the full body in the message's RFC-0010 spool. `troupe send|read|list`
    (CLI) and `chat_send`/`chat_read`/`chat_list` (the same `clown-builtin-jobs`
    server) are the surface. `chat_send`/`--message` take the message in
    **git-commit format** (a one-line summary, a blank line, then the body);
@@ -626,18 +630,21 @@ The flake produces a `symlinkJoin` of five components:
    observed summary-only/no-body failure. The CLI also still accepts
    an explicit `--subject`/`--body` pair. read aggregates the reader's
    own/group/broadcast channels with a per-clown cursor distinct from the wake ack; `list` reads a
-   presence index the job-watch monitor registers per session
+   presence index the `ringmaster monitor` registers per session
    (`$XDG_STATE_HOME/clown/presence/`, keyed by per-instance channel, refreshed
-   on a ticker, `SPINCLASS_DESCRIPTION` as the readable label). The spinclass
+   on a ticker, `SPINCLASS_DESCRIPTION` as the readable label). The `clown job message`
+   standalone waking message also moved to `troupe message` (RFC-0015 §3; messaging
+   by concept — #144 placed `job_message` in troupe). The spinclass
    chat surface (`internal/chat`, `chat-*`, `chatroom`) is deleted in a lockstep
-   hard-swap cutover (FDR-0017; accept-the-window). Man page: `clown-chat(1)`.
+   hard-swap cutover (FDR-0017; accept-the-window). Man page: `troupe(1)`.
 
    **Operator job control (`ringmaster ls|status|tail|cancel`).** The
    `ringmaster` binary (`cmd/ringmaster`, FDR-0010's llama-server
    control-plane daemon) doubles as the human-facing control surface for
    the job channel (clown#124, `cmd/ringmaster/jobs.go`): `ls` lists a
    channel's jobs (`--all` spans every channel on the host), `status`
-   mirrors `clown job status`, `tail [-f]` streams the output spool, and
+   is the shared status verb (one impl serves both the operator and producer
+   surfaces, RFC-0015 §2), `tail [-f]` streams the output spool, and
    `cancel` writes the terminal `cancelled` record. All four read/append
    the on-disk journal+spool directly (no daemon required) over the same
    single `internal/jobwake` code path (`ListJobs`/`ListAllJobs`,

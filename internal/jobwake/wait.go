@@ -36,7 +36,7 @@ const waitPollInterval = time.Second
 // blocking. ctx cancellation (deadline or caller abort) returns ctx.Err(). An
 // invalid job id wraps ErrInvalidJobID (via ReadJob).
 //
-// target selects the channel exactly as `clown job status --target` does (empty
+// target selects the channel exactly as `ringmaster status --target` does (empty
 // => current session). A standalone `message`/`chat` job has no terminal record
 // and so never satisfies WaitDone — it is for lifecycle jobs (started + a
 // terminal), the join surface moxy's async dispatch needs (clown#154).

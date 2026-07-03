@@ -1356,8 +1356,8 @@ debug-stdio-bridge-plugin PLUGIN_DIR=".tmp/stdio-bridge-plugin": build
 # Smoke the dynamic system-prompt fetch path (RFC-0002 §dynamic fragments)
 # locally with NO nix and NO claude: go-build clown + the stdio bridge (go
 # build sees the working tree, so untracked files compile), launch the bridge
-# wrapping the REAL `clown job-mcp`, then GET /clown/system-prompt and print the
-# live fragment. The fragment embeds CLOWN_SESSION_ID + job-mcp's own tool
+# wrapping the REAL `ringmaster mcp`, then GET /clown/system-prompt and print the
+# live fragment. The fragment embeds CLOWN_SESSION_ID + the mcp server's own tool
 # catalog, so it proves the bridge->prompts/get->HTTP dogfood end to end.
 [group("debug")]
 debug-system-prompt-fetch SESSION="local-smoke":
@@ -1366,10 +1366,10 @@ debug-system-prompt-fetch SESSION="local-smoke":
     tmp="$(mktemp -d)"
     bridge_pid=
     trap 'kill "${bridge_pid:-}" 2>/dev/null || true; rm -rf "$tmp"' EXIT
-    go build -o "$tmp/clown" ./cmd/clown
+    go build -o "$tmp/ringmaster" ./cmd/ringmaster
     go build -o "$tmp/clown-stdio-bridge" ./cmd/clown-stdio-bridge
     export CLOWN_SESSION_ID="{{SESSION}}"
-    "$tmp/clown-stdio-bridge" --command "$tmp/clown" -- job-mcp \
+    "$tmp/clown-stdio-bridge" --command "$tmp/ringmaster" -- mcp \
         >"$tmp/handshake" 2>"$tmp/bridge.log" &
     bridge_pid=$!
     for _ in $(seq 1 30); do [[ -s "$tmp/handshake" ]] && break; sleep 0.1; done

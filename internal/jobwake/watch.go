@@ -100,7 +100,7 @@ func Watch(ctx context.Context, sessionKey string, emit func(Record) error) erro
 // ReplayOnce emits every unacked waking event for the session's own channel
 // and the broadcast channel once, advancing the respective ack cursors, and
 // returns without binding the nudge socket or blocking. It backs
-// `clown job-watch --once` (the conformance suite and pull-style replay); the
+// `ringmaster monitor --once` (the conformance suite and pull-style replay); the
 // long-running monitor uses Watch.
 func ReplayOnce(sessionKey string, emit func(Record) error) error {
 	return serviceChannels(ChannelID(sessionKey), sessionKey, emit)

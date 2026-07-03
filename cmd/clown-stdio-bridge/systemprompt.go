@@ -22,7 +22,7 @@ const childPromptTimeout = 5 * time.Second
 // text of the returned messages. ok is false on any transport error,
 // JSON-RPC error, or unparseable/empty response — the caller maps that to a
 // 204 (no fragment). The request predates claude's own MCP initialize, which
-// is fine for stateless stdio servers (e.g. clown job-mcp); a child that
+// is fine for stateless stdio servers (e.g. ringmaster mcp); a child that
 // enforces initialize ordering would simply error and yield 204.
 func fetchChildSystemPrompt(ctx context.Context, tr *translator) (string, bool) {
 	ctx, cancel := context.WithTimeout(ctx, childPromptTimeout)

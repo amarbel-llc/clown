@@ -5,20 +5,51 @@
 .Os
 .Sh NAME
 .Nm ringmaster
-.Nd llama-server control-plane daemon and background-job control
+.Nd llama-server control-plane daemon and background-job platform
 .Sh SYNOPSIS
 .Nm
 .Cm daemon
 .Op Fl -socket Ar path
 .Nm
-.Cm ls
-.Op Fl -target Ar key
-.Op Fl -all
+.Cm start
+.Op Fl -target Ar session-key
+.Op Fl -label Ar label
+.Op Fl -source Ar source
+.Nm
+.Cm progress Ar job-id
+.Op Fl -message Ar message
+.Nm
+.Cm done Ar job-id
+.Fl -state Ar succeeded | failed | cancelled | interrupted
+.Op Fl -message Ar message
+.Op Fl -result-ref Ar ref
+.Op Fl -resource Ar uri
+.Nm
+.Cm read
+.Op Fl -job Ar job-id
+.Op Fl -since Ar ts
+.Op Fl -type Ar type
 .Op Fl -json
+.Nm
+.Cm spool-path Ar job-id
+.Op Fl -target Ar session-key
 .Nm
 .Cm status Ar job-id
 .Op Fl -target Ar key | Fl -channel Ar id
 .Op Fl -tail Ar n
+.Op Fl -json
+.Nm
+.Cm wait Ar job-id
+.Op Fl -target Ar session-key
+.Op Fl -timeout Ar dur
+.Op Fl -json
+.Nm
+.Cm whoami
+.Op Fl -json
+.Nm
+.Cm ls
+.Op Fl -target Ar key
+.Op Fl -all
 .Op Fl -json
 .Nm
 .Cm tail Ar job-id
@@ -29,73 +60,97 @@
 .Cm cancel Ar job-id
 .Op Fl -target Ar key | Fl -channel Ar id
 .Op Fl -message Ar text
+.Nm
+.Cm monitor
+.Op Fl -once
+.Op Fl -session Ar session-key
+.Nm
+.Cm mcp
 .Sh DESCRIPTION
 .Nm
-is a long-lived per-user daemon that spawns and supervises
+is clown's background-job platform (RFC-0015) and the control-plane daemon for
 .Xr llama-server 1
-processes on behalf of clients such as
+instances (FDR-0010).
+The two roles are one hat: a supervised
+.Xr llama-server 1
+is a specialized kind of job the platform runs.
+.Pp
+As the
+.Em daemon ,
+.Nm
+is a long-lived per-user process that spawns and supervises
+.Xr llama-server 1
+children on behalf of clients such as
 .Xr circus 1
 and
-.Xr clown 1 .
-Each
-.Xr llama-server 1
-child is identified by an alias and listed in an in-memory registry;
-ringmaster reaps the child when it exits, with or without a
-.Cm StopInstance
-request.
-.Pp
-Clients talk to
-.Nm
-over a Unix domain socket using newline-delimited JSON-RPC 2.0.
+.Xr clown 1 ,
+talking to them over a Unix domain socket using newline-delimited JSON-RPC 2.0.
 See
 .Xr ringmaster 7
-for the architecture and
-.Xr clown-plugin-protocol 7
-for unrelated background on the clown plugin protocol.
+for the architecture.
 .Pp
+As the
+.Em job platform ,
 .Nm
-additionally serves as the operator-facing control surface for clown's
-background jobs: the
+carries the producer/agent surface \(em
+.Cm start , progress , done , read , spool-path , wait ,
+and
+.Cm whoami
+\(em promoted from the former
+.Li clown job
+subcommands (RFC-0015), plus the operator surface \(em
 .Cm ls , status , tail ,
 and
 .Cm cancel
-subcommands list, inspect, follow, and cancel the long-running jobs that
-agents drive through the
-.Xr clown-job 1
-producer surface
-.Pq the job-wakeup channel and output spool .
-These subcommands need no running daemon; they read and append to the
-on-disk job journal directly.
+\(em for inspecting and cancelling jobs out of band, and the internal
+.Cm monitor
+and
+.Cm mcp
+entrypoints clown synthesizes.
+These need no running daemon; they read and append to the on-disk job journal
+directly.
+The messaging half of the platform (chat and the standalone waking message) is
+the separate
+.Xr troupe 1
+binary.
 .Pp
-A single job is addressed two ways.
+The wakeup channel has two layers so that
+.Em correctness
+.Pq never lose a wakeup
+comes from disk durability while
+.Em liveness
+.Pq sub-second latency
+comes from a best-effort socket free to drop: an append-only on-disk journal
+under
+.Pa $XDG_STATE_HOME/clown/jobs/
+is the at-least-once source of truth, and a lossy Unix-domain datagram nudge
+under
+.Pa $XDG_RUNTIME_DIR/clown/jobs/
+pokes the monitor to re-read it.
+The
+.Em waking
+events \(em those surfaced as a notification \(em are the four terminal types
+.Pq Li succeeded , failed , cancelled , interrupted
+plus the non-terminal
+.Li message
+type; the
+.Li started
+and
+.Li progress
+events are journal-only.
+.Pp
+A single job is addressed two ways for the operator subcommands.
 .Fl -target
-takes a session key the operator holds and hashes it to a channel
-.Pq resolved like Xr clown-job 1 .
+takes a session key the operator holds and hashes it to a channel (see
+.Sx SESSION KEY ) .
 .Fl -channel
 takes a raw channel id directly \(em the value
 .Cm ls Fl -all
-prints \(em so an operator can act on a job in a session whose key it does
-not hold; the channel id is a one-way hash of the session key, so
-.Fl -target
-cannot reach it.
+prints \(em so an operator can act on a job in a session whose key it does not
+hold; the channel id is a one-way hash of the session key.
 The two are mutually exclusive, and a
 .Fl -channel
 that is not lowercase hex is rejected as a usage error.
-.Pp
-.Nm
-is intended to run under
-.Xr launchd 8
-on macOS and
-.Xr systemd.user 5
-on Linux; the
-.Sx programs.ringmaster
-home-manager module configures the appropriate service unit on each
-platform.
-Single-instance only: one
-.Nm
-daemon per user manages every
-.Xr llama-server 1
-child.
 .Sh SUBCOMMANDS
 .Bl -tag -width Ds
 .It Cm daemon Op Fl -socket Ar path
@@ -107,32 +162,134 @@ when present, the
 environment variable when set, or
 .Pa $HOME/.local/state/circus/control.sock
 otherwise.
-Accepts connections until SIGTERM/SIGINT, at which point in-flight
-RPCs drain and the listener closes.
+Accepts connections until SIGTERM/SIGINT, at which point in-flight RPCs drain
+and the listener closes.
+.It Cm start Oo Fl -target Ar session-key Oc Oo Fl -label Ar label Oc Oo Fl -source Ar source Oc
+Allocate a job id, create the job's journal file, append the
+.Li started
+record, and print the job id.
+With
+.Fl -label
+the id is
+.Ar sanitized-label Ns Li - Ns Ar 8-hex .
+With
+.Fl -target
+the journal is created for another session's channel (the external-wakeup
+case).
+.Fl -source
+labels the emitting plugin and is carried verbatim in every record.
+.It Cm progress Ar job-id Oo Fl -message Ar message Oc
+Append a journal-only
+.Li progress
+record.
+Recorded and observable but never wakes the agent.
+.It Cm done Ar job-id Fl -state Ar state Oo Fl -message Ar message Oc Oo Fl -result-ref Ar ref Oc Oo Fl -resource Ar uri Oc
+Append the job's single terminal record and send the nudge.
+.Ar state
+must be one of
+.Li succeeded , failed , cancelled ,
+or
+.Li interrupted .
+Exits non-zero without appending if the job already has a terminal record.
+.Fl -result-ref
+is an opaque pointer surfaced to the agent as text.
+.Fl -resource
+attaches a resource reference (a
+.Li madder://blobs/ Ns Ar digest
+URI or any fetchable URI), repeatable (clown#112); clown carries the reference
+only and the consumer fetches each URI.
+.It Cm read Oo Fl -job Ar job-id Oc Oo Fl -since Ar ts Oc Oo Fl -type Ar type Oc Oo Fl -json Oc
+The pull / observability surface for this session's channel.
+With
+.Fl -job
+it prints that job's full record stream; without it, it scans the channel for
+waking events, optionally filtered by
+.Fl -since
+.Pq an exclusive RFC 3339 lower bound
+and repeatable
+.Fl -type .
+Each record prints as a notification line (see
+.Sx NOTIFICATION LINE ) ,
+or one JSON object per line with
+.Fl -json .
+.It Cm spool-path Ar job-id Oo Fl -target Ar session-key Oc
+Print the absolute path of the job's output spool \(em a producer-written,
+append-only side file at
+.Pa <job-id>.out
+.Pq RFC-0010 .
+The channel directory is created if absent, but the spool file itself is the
+producer's append.
+When the facility is disabled it prints nothing and exits
+.Li 0 .
+A malformed
+.Ar job-id
+is a usage error
+.Pq exit Li 2 .
+.It Cm status Ar job-id Oo Fl -target Ar key | Fl -channel Ar id Oc Oo Fl -tail Ar n Oc Oo Fl -json Oc
+Report one job's status, derived from its journal and spool alone: state,
+source, elapsed, last activity, spool bytes, newest progress message, and a
+bounded tail
+.Pq the last Ar n No lines, default 20 .
+A read-only pull, available regardless of
+.Ev CLOWN_DISABLE_JOB_WAKEUP .
+The single
+.Cm status
+verb serves both the producer/agent and operator surfaces (RFC-0015 section 2),
+so it accepts
+.Fl -channel
+as well as
+.Fl -target .
+With
+.Fl -json
+the status is one JSON object; otherwise a one-line header followed by the tail
+under a
+.Ql ---
+separator.
+A missing journal exits
+.Li 1 ;
+a malformed job id or channel id exits
+.Li 2 .
+.It Cm wait Ar job-id Oo Fl -target Ar session-key Oc Oo Fl -timeout Ar dur Oc Oo Fl -json Oc
+Block until the job reaches a terminal state, then print its status in exactly
+the form
+.Cm status
+uses \(em the synchronous
+.Em join
+(clown#154).
+It polls the journal rather than riding the nudge socket (a singleton owned by
+the live monitor).
+.Fl -timeout
+bounds the wait
+.Pq a Xr time 0 Ns -style duration; 0 blocks until terminal or Dv SIGINT Ns / Ns Dv SIGTERM .
+An unknown job or a timeout exits
+.Li 1 ;
+a malformed id exits
+.Li 2 ;
+a signal is a clean exit
+.Li 0 .
+.It Cm whoami Op Fl -json
+Print this clown instance's resolved identity: the per-instance session key, its
+derived channel id, the precedence
+.Em source
+that supplied the key (see
+.Sx SESSION KEY ) ,
+and, when grouped, the group decoration
+.Pq Ev CLOWN_GROUP_ID
+and its derived group channel.
+A pure read, available regardless of
+.Ev CLOWN_DISABLE_JOB_WAKEUP .
 .It Cm ls Oo Fl -target Ar key Oc Oo Fl -all Oc Oo Fl -json Oc
-List background jobs as a table of job id, source, state, elapsed time,
-and last activity.
-By default lists the jobs in the current session's channel
-.Pq resolved like Xr clown-job 1 ;
+List background jobs as a table of job id, source, state, elapsed time, and
+last activity.
+By default lists the current session's channel;
 .Fl -target
 selects another session key, and
 .Fl -all
-spans every channel on the host, prefixing each row with its full channel
-id \(em the exact value the action subcommands accept via
+spans every channel on the host, prefixing each row with its full channel id
+\(em the exact value the action subcommands accept via
 .Fl -channel .
 .Fl -json
-emits a JSON array instead.
-.It Cm status Ar job-id Oo Fl -target Ar key | Fl -channel Ar id Oc Oo Fl -tail Ar n Oc Oo Fl -json Oc
-Print one job's full status
-.Pq state, source, elapsed, last activity
-followed by the last
-.Ar n
-.Pq default 20
-lines of its output spool.
-Mirrors
-.Xr clown-job 1
-.Cm status .
-A malformed job id or channel id exits 2; a missing job exits 1.
+emits a JSON array.
 .It Cm tail Ar job-id Oo Fl -target Ar key | Fl -channel Ar id Oc Oo Fl f Oc Oo Fl n Ar lines Oc
 Print the last
 .Ar lines
@@ -140,24 +297,155 @@ Print the last
 lines of a job's output spool.
 With
 .Fl f ,
-follow the spool, streaming appended output until the job reaches a
-terminal state or the operator interrupts.
-The job must exist in the resolved channel: a malformed job id or channel id
-exits 2, and a job absent from the channel exits 1 rather than printing
-nothing.
-When an id from
+follow the spool until the job reaches a terminal state or the operator
+interrupts.
+A job absent from the resolved channel exits
+.Li 1 ;
+when an id from
 .Cm ls Fl -all
 names a job in another session, pass that row's
-.Fl -channel
-so the lookup reaches the owning channel.
+.Fl -channel .
 .It Cm cancel Ar job-id Oo Fl -target Ar key | Fl -channel Ar id Oc Oo Fl -message Ar text Oc
 Cooperatively cancel a job by writing its terminal
 .Sq cancelled
 record.
-This wakes the originating session's monitor and signals the owning
-producer to stop; see
+This wakes the originating session's monitor and signals the owning producer to
+stop; see
 .Sx CAVEATS .
-A missing job, or one that is already terminal, exits 1.
+A missing job, or one already terminal, exits
+.Li 1 .
+.It Cm monitor Op Fl -once Op Fl -session Ar session-key
+Run the per-session channel wake monitor (RFC-0015 section 6, formerly
+.Li clown job-watch ) .
+It resolves the session key, replays any unacked waking events from the journal,
+binds the nudge socket, then blocks, emitting one notification line per waking
+event until
+.Dv SIGINT Ns / Ns Dv SIGTERM
+(a clean exit
+.Li 0 ) .
+It is a per-channel singleton (clown#132) and deliberately ignores stdin
+(monitor hosts spawn it with an immediately-EOF stdin).
+With
+.Fl -once
+it replays unacked events and exits without binding \(em the deterministic
+conformance mode.
+.Fl -session
+overrides the resolved key with an explicit one;
+.Nm clown
+bakes it into the spawned monitor command (clown#136) so the key stays out of
+the agent provider's environment.
+Normally spawned by
+.Nm clown
+as a registered monitor, not run by hand.
+.It Cm mcp
+Serve the ringmaster tool surface of the job-platform MCP server (RFC-0011): a
+stdio JSON-RPC server exposing the job-control tools
+.Li job_start , job_progress , job_done , job_read , job_status , job_spool_path ,
+and
+.Li job_wait ,
+surfaced to the agent as
+.Li plugin:clown-builtin-jobs:ringmaster
+and carrying the dynamic system-prompt fragment.
+.Nm clown
+synthesizes it as a
+.Xr clown-json 5
+stdioServers entry which
+.Xr clown-stdio-bridge 1
+wraps to streamable-HTTP; the messaging half is
+.Xr troupe 1
+.Cm mcp .
+Not run by hand.
+.El
+.Sh SESSION KEY
+A
+.Em session key
+names the agent session a wakeup is delivered to.
+The active per-instance key is resolved in this order (RFC-0013 section 2.3):
+.Ev CLOWN_SESSION_ID
+if set and non-empty; otherwise
+.Ev CLAUDE_SESSION_ID
+if set and non-empty; otherwise a clown-generated UUIDv4.
+.Pp
+.Ev CLOWN_GROUP_ID
+is
+.Em not
+in this precedence: it is the group
+.Em decoration
+(the
+.Ar repo Ns Li / Ns Ar branch
+label) naming the group of clown instances that share a worktree.
+A message addressed to it fans out on the group channel
+.Pq Li ChannelID Ns Pq Ev CLOWN_GROUP_ID ,
+which every clown under that group also watches.
+The on-disk channel directory and nudge socket are named by a filesystem-safe
+.Em channel id
+derived from the session key \(em the first 16 bytes of its SHA-256 digest as 32
+hex digits.
+.Sh NOTIFICATION LINE
+Each waking event the monitor emits \(em and each record
+.Cm read
+prints without
+.Fl -json
+\(em is a single line with no embedded newline:
+.Pp
+.Dl [clown-job] <source> <job-id> <type>: <message>
+.Pp
+When the record carries a
+.Li from
+(the sender key on a
+.Li message
+event), the segment
+.Dq Li " from " <from>
+is inserted before the colon.
+The trailing
+.Dq Li ": " <message>
+is omitted when the record has no message.
+When
+.Li result_ref
+is present,
+.Dq Li " \(bu " <result_ref>
+is appended; when the record carries
+.Li resources
+(clown#112),
+.Dq Li " \(bu " <n> " resource(s)"
+is appended as a count hint, the URIs recovered on the pull side via
+.Cm read .
+Any newline is flattened to a space so the one-line-per-event contract holds.
+The channel guarantees each waking event is surfaced at least once, so consumers
+MUST treat wakeups as idempotent, deduplicating on
+.Pq Li job , Li type .
+.Sh RPC SURFACE
+The
+.Cm daemon
+implements seven JSON-RPC 2.0 methods:
+.Cm StartInstance , StopInstance , StopAll , ListInstances , GetInstance ,
+.Cm ListAvailableModels ,
+and
+.Cm DownloadModel .
+.Cm StartInstance
+spawns an
+.Xr llama-server 1
+child (resolving a bare model name to
+.Pa ~/.local/share/circus/models/<model>.gguf )
+and blocks until
+.Pa /health
+returns 200.
+See
+.Xr ringmaster 7
+for the full method schemas.
+.Sh SIGNALS
+.Bl -tag -width SIGINT
+.It Dv SIGTERM
+The daemon drains in-flight RPCs and exits cleanly; children are NOT killed and
+are re-adopted by the next
+.Nm
+process.
+The
+.Cm monitor
+exits cleanly.
+.It Dv SIGINT
+Same as
+.Dv SIGTERM .
 .El
 .Sh ENVIRONMENT
 .Bl -tag -width Ds
@@ -165,146 +453,143 @@ A missing job, or one that is already terminal, exits 1.
 Override the control socket path.
 Both
 .Nm
-itself and its clients
+and its clients
 .Pq Xr circus 1 , Xr clown 1
-read this variable, so setting it consistently in the user's
-environment is sufficient.
+read it.
+.It Ev CLOWN_DISABLE_JOB_WAKEUP
+When set to
+.Li 1 ,
+the whole wakeup facility is disabled.
+.Cm monitor
+exits
+.Li 0
+immediately without binding a socket, and the emit subcommands
+.Pq Cm start , progress , done
+behave as no-ops that still exit
+.Li 0 .
+.Cm spool-path
+prints nothing and exits
+.Li 0 .
+.Cm read , status , wait ,
+and
+.Cm whoami
+still work, since they are pulls rather than emits.
+.It Ev CLOWN_SESSION_ID
+The highest-priority session-key source (see
+.Sx SESSION KEY ) .
+.It Ev CLOWN_GROUP_ID
+The group decoration naming the group channel every clown under the group
+watches.
+.It Ev CLAUDE_SESSION_ID
+Consulted when
+.Ev CLOWN_SESSION_ID
+is unset.
+.It Ev XDG_STATE_HOME
+Base directory for the durable journal
+.Pq Pa clown/jobs/<channel-id>/ .
+.It Ev XDG_RUNTIME_DIR
+Base directory for the nudge socket.
 .It Ev XDG_LOG_HOME
-Resolves the canonical log directory.
-.Nm
-itself does not write a log file; the home-manager service units
-route stderr to systemd journal (Linux) or to
-.Pa $XDG_LOG_HOME/ringmaster.log
+Resolves the daemon's log directory on macOS
 .Pq Pa ~/.local/log/ringmaster.log
-when the variable is unset (macOS).
+when unset.
 .El
 .Sh FILES
-.Bl -tag -width "~/.local/state/circus/control.sock"
-.It Pa ~/.local/state/circus/control.sock
-Default control socket path.
-.It Pa ~/.local/log/ringmaster.log
-Default log file on macOS when
-.Ev XDG_LOG_HOME
-is unset.
-.It Pa ~/.local/share/circus/models
-Directory scanned for downloadable GGUF files by the
-.Cm ListAvailableModels
-RPC.
-.It Pa ~/.local/state/clown/jobs
-Per-channel background-job journals
-.Pq Pa <channel>/<job-id>.jsonl
-and output spools
-.Pq Pa <channel>/<job-id>.out
-read by
-.Cm ls , status ,
-and
-.Cm tail
-and appended to by
-.Cm cancel .
-Honors
-.Ev XDG_STATE_HOME .
-.El
-.Sh RPC SURFACE
-.Nm
-implements seven JSON-RPC 2.0 methods:
 .Bl -tag -width Ds
-.It Cm StartInstance Ar alias Ar model Op Ar bind Op Ar args
-Spawn a new
-.Xr llama-server 1
-child with the given
-.Fl -alias .
-The
-.Fl -model
-argument resolves to
-.Pa ~/.local/share/circus/models/<model>.gguf
-when not absolute.
-.Fl -bind
-defaults to
-.Sq 127.0.0.1 ;
-.Fl -args
-is passed through to llama-server.
-The call blocks until
-.Pa /health
-returns 200 (60-second timeout).
-.It Cm StopInstance Ar alias
-Send SIGTERM to the child's process group, wait up to five seconds,
-then SIGKILL if it didn't exit.
-Removes the entry from the registry.
-.It Cm StopAll
-Best-effort: snapshot the registry, call
-.Cm StopInstance
-for each alias.
-Returns the list of aliases that were stopped.
-.It Cm ListInstances
-Return every alias known to the registry along with its bind/port/PID
-and start time.
-.It Cm GetInstance Ar alias
-Same shape as
-.Cm ListInstances
-but for a single alias.
-Returns
-.Sy -32001
-when the alias is not registered.
-.It Cm ListAvailableModels
-Scan the on-disk models directory and return each
-.Pa *.gguf
-file's name, absolute path, and size.
-.It Cm DownloadModel Ar name
-Fetch a model from the embedded registry, verify its SHA-256, and
-move it atomically into the models directory.
-Synchronous (no progress events on the wire) — use
-.Xr circus 1
-.Cm download
-for the bubbletea progress UI.
+.It Pa ~/.local/state/circus/control.sock
+Default daemon control socket path.
+.It Pa ~/.local/share/circus/models
+Directory scanned for downloadable GGUF files.
+.It Pa $XDG_STATE_HOME/clown/jobs/<channel-id>/<job-id>.jsonl
+Per-job durable journal, one JSON record per line.
+.It Pa $XDG_STATE_HOME/clown/jobs/<channel-id>/<job-id>.out
+Per-job output spool: producer-written, append-only, best-effort live output.
+.It Pa $XDG_RUNTIME_DIR/clown/jobs/<channel-id>.sock
+Per-channel nudge datagram socket.
 .El
-.Sh SIGNALS
-.Bl -tag -width SIGINT
-.It Dv SIGTERM
-Drain in-flight RPCs and exit cleanly.
-Children are NOT killed; they continue running and will be re-adopted
-by the next
-.Nm
-process if it restarts before they exit.
-.It Dv SIGINT
-Same as
-.Dv SIGTERM .
+.Sh EXIT STATUS
+.Bl -tag -width Ds
+.It Li 0
+The subcommand succeeded, or the facility was disabled via
+.Ev CLOWN_DISABLE_JOB_WAKEUP ;
+.Cm monitor
+also exits
+.Li 0
+on a clean interrupt.
+.It Li 1
+A runtime failure (e.g. a journal write error,
+.Cm done
+on a job that already has a terminal record, or
+.Cm status
+for a job with no journal).
+.It Li 2
+A usage error: missing or unknown subcommand, a missing or malformed
+.Ar job-id ,
+a non-hex
+.Fl -channel ,
+or an invalid flag.
 .El
+.Sh EXAMPLES
+Background a long task and wake the originating session on completion:
+.Bd -literal -offset indent
+job=$(ringmaster start --source spinclass --label merge)
+# ... run the long pre-merge hook ...
+ringmaster done "$job" --state succeeded \e
+  --message "merge landed on master" \e
+  --result-ref "spinclass session-job-status"
+.Ed
+.Pp
+The idle agent receives one notification:
+.Bd -literal -offset indent
+[clown-job] spinclass merge-9f3c1a2b succeeded: merge landed on master \(bu spinclass session-job-status
+.Ed
+.Pp
+Inspect and follow another session's job by raw channel:
+.Bd -literal -offset indent
+ringmaster ls --all
+ringmaster tail -f build-3f2ab1c9 --channel <hex>
+.Ed
 .Sh SEE ALSO
 .Xr circus 1 ,
 .Xr clown 1 ,
-.Xr clown-job 1 ,
+.Xr troupe 1 ,
 .Xr llama-server 1 ,
+.Xr clown-json 5 ,
 .Xr ringmaster 7 ,
 .Xr ringmaster-testing 7
+.Pp
+The normative contracts are specified in
+.Pa docs/rfcs/0009-job-wakeup-channel.md
+(wakeup channel),
+.Pa docs/rfcs/0010-job-output-spool-and-status.md
+(spool and status),
+.Pa docs/rfcs/0011-job-platform-mcp-tools.md
+(MCP tools), and
+.Pa docs/rfcs/0015-ringmaster-troupe-platform-binaries.md
+(the ringmaster/troupe binary surface), within the clown source repository.
 .Sh CAVEATS
 .Nm
 single-Wait contract: only one goroutine inside the daemon ever calls
 .Xr exec.Cmd.Wait 3
-for each child.
-Both the
+for each child; both the
 .Cm StopInstance
 path and the unexpected-exit reaper read the same
 .Sq exited
-channel rather than reaping independently.
-If you embed
-.Nm Ap s
-launcher in your own code, preserve this invariant.
+channel.
 .Pp
 .Cm cancel
 is cooperative, not forceful.
 Background jobs are not spawned by
 .Nm
-and the job journal deliberately records no worker PID
-.Pq a PID is meaningless across the sessions and hosts a channel may span ,
-so
+and the journal deliberately records no worker PID, so
 .Cm cancel
 writes the terminal
 .Sq cancelled
-record rather than sending a signal to an operating-system process.
-The owning producer is responsible for observing the cancellation and
-tearing down its own process tree.
-A producer that has hard-crashed without writing a terminal record cannot
-be reaped by
+record rather than signalling a process.
+The owning producer observes the cancellation and tears down its own process
+tree.
+A producer that has hard-crashed without writing a terminal record cannot be
+reaped by
 .Cm cancel ;
 its journal is garbage-collected after the retention window.
 .Sh AUTHORS

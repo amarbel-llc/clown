@@ -84,7 +84,7 @@ func defaultSource(source string) string {
 
 // resolveSession picks the session key a producer operation writes to: the
 // explicit target when non-empty (so a cross-session producer started with
-// `clown job start --target <key>` keeps writing to that channel through
+// `ringmaster start --target <key>` keeps writing to that channel through
 // progress/done), else the resolved SessionKey() of the current session
 // (RFC-0009 §2, §8).
 func resolveSession(target string) string {

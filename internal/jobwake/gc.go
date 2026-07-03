@@ -133,7 +133,7 @@ func reapAckedTerminals(cid, ackPath string, restingCutoff time.Time) {
 
 // reapOrphanSpools removes <job-id>.out spools whose <job-id>.jsonl journal is
 // absent and whose own mtime is before cutoff (RFC-0010 §4). The age gate means
-// a spool created by `clown job spool-path` before its `started` journal is
+// a spool created by `ringmaster spool-path` before its `started` journal is
 // written is never reaped mid-setup. A spool whose journal still exists is left
 // to reapAgedJournals, which removes the pair together.
 func reapOrphanSpools(cid string, cutoff time.Time) {

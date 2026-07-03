@@ -3,8 +3,8 @@
 #
 # Exercises the two new reference subcommands through the real CLI:
 #
-#   clown job spool-path <id>   resolve/print the producer-written .out path
-#   clown job status <id>       derive state/elapsed/last_activity/tail
+#   ringmaster spool-path <id>  resolve/print the producer-written .out path
+#   ringmaster status <id>      derive state/elapsed/last_activity/tail
 #
 # Asserts: the one-line absolute spool path; the disabled-channel signature
 # (empty + exit 0) and traversal/grammar rejection (exit 2) for spool-path;
@@ -12,7 +12,7 @@
 # unknown-job exit 1, and the human one-line header + tail separator.
 #
 # GC coupling (§4 — reap spool with journal, age-gated orphan sweep) is NOT
-# exercised here: the sweep runs only in the blocking `clown job-watch`
+# exercised here: the sweep runs only in the blocking `ringmaster monitor`
 # monitor (not in `--once`), so it is covered deterministically by the Go
 # unit tests in internal/jobwake/status_test.go instead.
 #
@@ -25,7 +25,7 @@ setup() {
 
   setup_test_home
 
-  require_bin CLOWN_BIN clown
+  require_bin RINGMASTER_BIN ringmaster
 
   # Stable channel key so every emit and probe resolve the same channel.
   export CLOWN_SESSION_ID="test/chan"
@@ -45,8 +45,8 @@ teardown() {
 # §2: spool-path prints exactly one absolute path ending in <id>.out, and does
 # NOT create the file (that is the producer's append).
 @test "spool-path prints a single absolute path and does not create the file" {
-  id="$("$CLOWN_BIN" job start --source moxy --label build)"
-  run "$CLOWN_BIN" job spool-path "$id"
+  id="$("$RINGMASTER_BIN" start --source moxy --label build)"
+  run "$RINGMASTER_BIN" spool-path "$id"
   assert_success
   assert_equal "$(wc -l <<<"$output")" "1"
   [[ "$output" == /* ]]
@@ -56,7 +56,7 @@ teardown() {
 
 # §2: disabled-channel signature — empty stdout, exit 0 (mirrors `job start`).
 @test "spool-path is empty and exits 0 when CLOWN_DISABLE_JOB_WAKEUP=1" {
-  CLOWN_DISABLE_JOB_WAKEUP=1 run "$CLOWN_BIN" job spool-path some-job
+  CLOWN_DISABLE_JOB_WAKEUP=1 run "$RINGMASTER_BIN" spool-path some-job
   assert_success
   assert_output ""
 }
@@ -64,26 +64,26 @@ teardown() {
 # §1/§2: traversal and grammar-violating ids are usage errors (exit 2). The
 # real vector is "/"; "." and ".." are rejected explicitly (clown#123).
 @test "spool-path rejects '.', '..', and grammar-violating ids with exit 2" {
-  run "$CLOWN_BIN" job spool-path ..
+  run "$RINGMASTER_BIN" spool-path ..
   assert_failure 2
-  run "$CLOWN_BIN" job spool-path ../evil
+  run "$RINGMASTER_BIN" spool-path ../evil
   assert_failure 2
-  run "$CLOWN_BIN" job spool-path "a b"
+  run "$RINGMASTER_BIN" spool-path "a b"
   assert_failure 2
 }
 
 # §3: status derives state from the journal — running before, the terminal type
 # after, with `ended` and `source` populated.
 @test "status reports running, then the terminal state with ended/source" {
-  id="$("$CLOWN_BIN" job start --source moxy --label build)"
+  id="$("$RINGMASTER_BIN" start --source moxy --label build)"
 
-  run "$CLOWN_BIN" job status "$id" --json
+  run "$RINGMASTER_BIN" status "$id" --json
   assert_success
   run jq -r '.state' <<<"$output"
   assert_output "running"
 
-  "$CLOWN_BIN" job done "$id" --state succeeded --message ok
-  run "$CLOWN_BIN" job status "$id" --json
+  "$RINGMASTER_BIN" done "$id" --state succeeded --message ok
+  run "$RINGMASTER_BIN" status "$id" --json
   assert_success
   records="$output"
   run jq -r '.state' <<<"$records"
@@ -97,11 +97,11 @@ teardown() {
 # §3: with a spool present, status surfaces spool_bytes, a bounded tail, and a
 # last_activity field.
 @test "status surfaces the spool tail (bounded to --tail) and last_activity" {
-  id="$("$CLOWN_BIN" job start --source moxy --label build)"
-  sp="$("$CLOWN_BIN" job spool-path "$id")"
+  id="$("$RINGMASTER_BIN" start --source moxy --label build)"
+  sp="$("$RINGMASTER_BIN" spool-path "$id")"
   printf 'l1\nl2\nl3\nl4\n' > "$sp"
 
-  run "$CLOWN_BIN" job status "$id" --tail 2 --json
+  run "$RINGMASTER_BIN" status "$id" --tail 2 --json
   assert_success
   records="$output"
   run jq -r '.tail | join(",")' <<<"$records"
@@ -115,26 +115,26 @@ teardown() {
 # §3: no journal for the id => exit 1 (a status of nothing is not a valid
 # answer, unlike `job read --job` whose empty stream is).
 @test "status on an unknown job exits 1" {
-  run "$CLOWN_BIN" job status no-such-job-12345678
+  run "$RINGMASTER_BIN" status no-such-job-12345678
   assert_failure 1
 }
 
 # §1/§3: status applies the same id validation as spool-path (exit 2).
 @test "status rejects '.', '..', and grammar-violating ids with exit 2" {
-  run "$CLOWN_BIN" job status ..
+  run "$RINGMASTER_BIN" status ..
   assert_failure 2
-  run "$CLOWN_BIN" job status ../evil
+  run "$RINGMASTER_BIN" status ../evil
   assert_failure 2
 }
 
 # §3: the human (non-JSON) form is a one-line header followed by the tail under
 # a '---' separator.
 @test "status human output has the one-line header and tail separator" {
-  id="$("$CLOWN_BIN" job start --source spinclass --label merge)"
-  sp="$("$CLOWN_BIN" job spool-path "$id")"
+  id="$("$RINGMASTER_BIN" start --source spinclass --label merge)"
+  sp="$("$RINGMASTER_BIN" spool-path "$id")"
   printf 'building\n' > "$sp"
 
-  run "$CLOWN_BIN" job status "$id"
+  run "$RINGMASTER_BIN" status "$id"
   assert_success
   assert_line --partial "job ${id} (spinclass): running"
   assert_line "---"

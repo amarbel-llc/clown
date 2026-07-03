@@ -52,7 +52,7 @@ func TestGroupKeyAndGroupChannel(t *testing.T) {
 }
 
 // ResolveSessionKey reports both the key and which precedence branch supplied
-// it — the source label that backs `clown job whoami` (clown#135).
+// it — the source label that backs `ringmaster whoami` (clown#135).
 func TestResolveSessionKeySource(t *testing.T) {
 	cases := []struct {
 		name                string

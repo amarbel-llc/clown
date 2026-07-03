@@ -201,14 +201,6 @@ func run(rawArgs []string) int {
 			return runResume(rawArgs[1:])
 		case "sessions-complete":
 			return runSessionsComplete(rawArgs[1:])
-		case "job":
-			return runJob(rawArgs[1:])
-		case "job-watch":
-			return runJobWatch(rawArgs[1:])
-		case "job-mcp":
-			return runJobMCP(rawArgs[1:])
-		case "chat":
-			return runChat(rawArgs[1:])
 		case "presence":
 			return runPresence(rawArgs[1:])
 		case "pty-suspend":
@@ -288,7 +280,7 @@ func runWithFlags(flags parsedFlags) int {
 	// CLOWN_GROUP_DESCRIPTION. Unlike the per-instance key (threaded explicitly,
 	// clown#136), the group decoration SHOULD be shared, so it goes on clown's own
 	// env — jobwake (GroupKey), the producers, and the claude subtree's ad-hoc
-	// `clown chat`/`job` all inherit the same group. Empty ⇒ ungrouped, no export.
+	// `troupe`/`ringmaster` all inherit the same group. Empty ⇒ ungrouped, no export.
 	flags.groupID = clownfile.ResolveEnv(cf.Attach.GroupID)
 	if flags.groupID != "" {
 		_ = os.Setenv("CLOWN_GROUP_ID", flags.groupID)

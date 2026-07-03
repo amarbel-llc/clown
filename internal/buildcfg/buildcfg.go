@@ -27,6 +27,17 @@ var (
 	CodexVersion      string
 	CodexRev          string
 	LlamaServerPath   string
+	// RingmasterPath and TroupePath are the absolute paths to the ringmaster
+	// and troupe binaries in their own Nix store outputs, baked at build time
+	// (RFC-0015 §6). clown synthesizes the wake monitor as `ringmaster monitor`
+	// and the two job-platform MCP servers as `ringmaster mcp` / `troupe mcp`;
+	// because those commands leave clown's own argv, the binary paths must be
+	// resolved from build config rather than os.Executable(). Empty in dev
+	// builds (go build, go run): the monitor command then falls back to the bare
+	// `ringmaster`/`troupe` names (resolved via PATH) and MCP injection is
+	// skipped along with the stdio bridge.
+	RingmasterPath string
+	TroupePath     string
 	// StdioBridgePath is the absolute path to the clown-stdio-bridge
 	// binary in its own Nix store output, baked at build time. Used by
 	// pluginhost.Desugar to rewrite stdioServers entries into httpServers

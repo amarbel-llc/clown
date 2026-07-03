@@ -35,7 +35,7 @@ const (
 // SpoolPath validates the job id, ensures the channel journal directory exists,
 // and returns the absolute output-spool path for the job (RFC-0010 §2). It does
 // NOT create the spool file — that is the producer's append. target selects the
-// channel exactly as `clown job start --target` does (empty => current session).
+// channel exactly as `ringmaster start --target` does (empty => current session).
 func SpoolPath(target, jobID string) (string, error) {
 	if err := validateJobID(jobID); err != nil {
 		return "", err
@@ -74,7 +74,7 @@ func ResolveSpoolChannel(cid, jobID string) (string, error) {
 	return SpoolFile(cid, jobID), nil
 }
 
-// Header renders the one-line human status header shared by `clown job status`
+// Header renders the one-line human status header shared by `ringmaster status`
 // and `ringmaster status`: "job <id> (<source>): <state>, elapsed <d>" with an
 // optional ", last activity <ts>" suffix (RFC-0010 §3).
 func (s Status) Header(jobID string) string {

@@ -18,7 +18,7 @@ import (
 // The ringmaster binary doubles as the operator-facing control plane for the
 // clown job-wakeup channel (RFC-0009) and output spool (RFC-0010). These
 // subcommands surface, at the terminal, the same job state an agent drives
-// through the `clown job` MCP/CLI producer surface — list, inspect, follow, and
+// through the ringmaster/troupe MCP/CLI producer surface — list, inspect, follow, and
 // cancel long-running background jobs out-of-band (clown#124).
 //
 // Jobs can be addressed two ways. --target takes a session key the operator
@@ -137,8 +137,9 @@ func ringmasterLs(args []string) int {
 	return 0
 }
 
-// ringmasterStatus prints one job's full journal+spool-derived status, mirroring
-// `clown job status` so operators and agents read the same view (RFC-0010 §3).
+// ringmasterStatus prints one job's full journal+spool-derived status. It is the
+// single shared `status` verb for both the operator and producer surfaces
+// (RFC-0015 §2), so operators and agents read the same view (RFC-0010 §3).
 func ringmasterStatus(args []string) int {
 	jobID, rest, ok := jobwake.LeadingArg(args)
 	if !ok {

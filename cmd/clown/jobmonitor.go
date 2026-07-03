@@ -27,10 +27,16 @@ type jobMonitorEntry struct {
 	Description string `json:"description"`
 }
 
+// jobWakeupDisabled reports whether the job-wakeup facility is switched off via
+// CLOWN_DISABLE_JOB_WAKEUP=1 (RFC-0009 §8). When set, the synthesized monitor
+// plugin dir is not written so no monitor is registered.
+func jobWakeupDisabled() bool {
+	return os.Getenv("CLOWN_DISABLE_JOB_WAKEUP") == "1"
+}
+
 // clownExePath returns the absolute path to the running clown binary, or ""
-// if it cannot be resolved. It backs both the job-watch monitor command and
-// the CLOWN_BIN env var exported for plugin producers, so the two always name
-// the same binary.
+// if it cannot be resolved. It backs the CLOWN_BIN env var exported for plugin
+// producers and the attach re-exec path.
 func clownExePath() string {
 	if exe, err := os.Executable(); err == nil && exe != "" {
 		return exe
@@ -38,22 +44,23 @@ func clownExePath() string {
 	return ""
 }
 
-// jobWatchCommand returns the monitor command string Claude Code spawns.
-// Claude Code spawns monitors with the session PATH, on which `clown` may not
-// appear; an absolute path from clownExePath() makes the monitor run regardless
-// of PATH. When it cannot be resolved we fall back to the bare `clown
-// job-watch`, which still works wherever clown is on PATH.
+// monitorCommand returns the wake-monitor command string Claude Code spawns
+// (RFC-0015 §6, formerly `clown job-watch`). The monitor now lives on the
+// ringmaster binary — a separate Nix store output — so the path comes from
+// buildcfg.RingmasterPath (baked at build time), not clown's own
+// os.Executable(). Claude Code spawns monitors with the session PATH, on which
+// `ringmaster` may not appear; the absolute burned-in path makes it run
+// regardless of PATH. Dev builds leave RingmasterPath empty and fall back to the
+// bare `ringmaster monitor`, which works wherever ringmaster is on PATH.
 //
-// key is the resolved per-instance channel key (RFC-0009 §2). It is baked in as
+// key is the resolved per-instance channel key (RFC-0009 §2), baked in as
 // `--session <key>` so the monitor learns its channel explicitly rather than by
-// inheriting CLOWN_SESSION_ID from the ambient env (clown#136) — the same
-// "identity via a non-inheritable channel" pattern, which lets clown keep the
-// key out of the claude subtree. Empty key omits the flag (the monitor then
-// falls back to env resolution, e.g. dev builds / direct invocation).
-func jobWatchCommand(key string) string {
-	base := "clown job-watch"
-	if exe := clownExePath(); exe != "" {
-		base = exe + " job-watch"
+// inheriting CLOWN_SESSION_ID from the ambient env (clown#136). Empty key omits
+// the flag (the monitor then falls back to env resolution).
+func monitorCommand(key string) string {
+	base := "ringmaster monitor"
+	if buildcfg.RingmasterPath != "" {
+		base = buildcfg.RingmasterPath + " monitor"
 	}
 	if key != "" {
 		return base + " --session " + key
@@ -98,8 +105,8 @@ func synthJobMonitorPluginDir(sessionKey string) (string, error) {
 		Name:    "clown-builtin-jobs",
 		Version: "1",
 		Monitors: []jobMonitorEntry{{
-			Name:        "clown-job-watch",
-			Command:     jobWatchCommand(sessionKey),
+			Name:        "ringmaster-monitor",
+			Command:     monitorCommand(sessionKey),
 			Description: "clown job-wakeup channel: wakes this session when a background job finishes",
 		}},
 	}
@@ -115,37 +122,38 @@ func synthJobMonitorPluginDir(sessionKey string) (string, error) {
 
 	// When the stdio bridge is available (nix builds; empty in dev `go run`),
 	// the same built-in plugin also serves the job-platform MCP tools
-	// (RFC-0011): two clown.json stdioServers entries each run `clown job-mcp
-	// --surface <name>`, which clown's own pluginhost Desugars through
+	// (RFC-0011): two clown.json stdioServers entries run `ringmaster mcp` and
+	// `troupe mcp` (RFC-0015 §6), which clown's own pluginhost Desugars through
 	// clown-stdio-bridge to streamable-HTTP — clown self-consuming RFC-0002. The
 	// surface split (clown#144) gives the agent two intent-revealing tool groups:
 	// ringmaster (job control) and troupe (messaging), surfaced as
 	// plugin:clown-builtin-jobs:ringmaster / :troupe. Skipped in dev builds,
-	// where Desugar errors without a bridge path and would abort the launch;
-	// the monitor still works there. The command MUST be absolute (the
-	// synthesized plugin dir holds no clown binary for Desugar to resolve a
-	// relative command against), so a missing clownExePath() also skips it.
-	if exe := clownExePath(); exe != "" && buildcfg.StdioBridgePath != "" {
+	// where the binary paths are empty and Desugar would error without a bridge
+	// path and abort the launch; the monitor still works there. The commands MUST
+	// be absolute (the synthesized plugin dir holds no binary for Desugar to
+	// resolve a relative command against), which the burned-in RingmasterPath /
+	// TroupePath satisfy.
+	if buildcfg.RingmasterPath != "" && buildcfg.TroupePath != "" && buildcfg.StdioBridgePath != "" {
 		clownCfg := map[string]any{
 			"version": 1,
 			"stdioServers": map[string]any{
 				// ringmaster: job lifecycle + status (clown#144). It owns the
 				// dynamic system-prompt fragment, whose orientation covers the
 				// whole platform (both surfaces): the bridge serves
-				// /clown/system-prompt by issuing prompts/get to job-mcp, and clown
-				// folds the live fragment into claude's append prompt (RFC-0002
-				// §dynamic fragments). Only one surface carries it, so the prompt
-				// is appended once.
+				// /clown/system-prompt by issuing prompts/get to the ringmaster mcp
+				// server, and clown folds the live fragment into claude's append
+				// prompt (RFC-0002 §dynamic fragments). Only one surface carries it,
+				// so the prompt is appended once.
 				"ringmaster": map[string]any{
-					"command":      exe,
-					"args":         []string{"job-mcp", "--surface", "ringmaster"},
+					"command":      buildcfg.RingmasterPath,
+					"args":         []string{"mcp"},
 					"systemPrompt": true,
 				},
 				// troupe: messaging — chat + the standalone waking job_message
 				// (clown#144).
 				"troupe": map[string]any{
-					"command": exe,
-					"args":    []string{"job-mcp", "--surface", "troupe"},
+					"command": buildcfg.TroupePath,
+					"args":    []string{"mcp"},
 				},
 			},
 		}

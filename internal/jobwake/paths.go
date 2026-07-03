@@ -26,7 +26,7 @@ func SessionKey() string {
 // CLOWN_SESSION_ID, else CLAUDE_SESSION_ID, else a freshly generated UUIDv4
 // (source "generated"). The group decoration (CLOWN_GROUP_ID, see GroupKey) is
 // NOT in the routing precedence — it names a group, not the instance. The
-// source label backs `clown job whoami` (RFC-0012 §1): it lets a consumer tell a
+// source label backs `ringmaster whoami` (RFC-0012 §1): it lets a consumer tell a
 // leaked/inherited CLOWN_SESSION_ID from a freshly minted per-instance key.
 func ResolveSessionKey() (key, source string) {
 	if v := os.Getenv("CLOWN_SESSION_ID"); v != "" {

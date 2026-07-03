@@ -16,8 +16,8 @@
 queries the presence index \(em the clown\(->spinclass liveness seam (RFC-0014).
 Every live clown writes a presence record under
 .Pa $XDG_STATE_HOME/clown/presence/ ,
-its job-watch monitor (see
-.Xr clown-job 1 )
+its wake monitor (see
+.Xr ringmaster 1 )
 refreshes the record on a ticker, and a clean shutdown removes it; a stale
 record (one not refreshed within the freshness window) is pruned on read.
 This command is the stable query surface for that index: a consumer \(em notably
@@ -86,8 +86,8 @@ and
 .Sy 2
 on a usage error.
 .Sh SEE ALSO
-.Xr clown-chat 1 ,
-.Xr clown-job 1 ,
+.Xr ringmaster 1 ,
+.Xr troupe 1 ,
 .Xr clownfile 5
 .Sh STANDARDS
 RFC-0014 (clown\(enspinclass awareness seam: group-id and presence) and RFC-0013

@@ -1,11 +1,18 @@
-package main
+// Package jobmcp is the clown job-platform MCP server (RFC-0011): a hand-rolled,
+// line-delimited JSON-RPC 2.0 server on stdin/stdout (the MCP stdio transport)
+// exposing the job_* / chat_* tools over internal/jobwake. It is served by the
+// `ringmaster mcp` and `troupe mcp` subcommands (RFC-0015 §6), which clown
+// injects as stdioServers entries in the synthesized clown-builtin-jobs plugin
+// (cmd/clown/jobmonitor.go); clown-stdio-bridge wraps it to streamable-HTTP and
+// clown's own pluginhost manages it (clown self-consumes RFC-0002). Every tool
+// is equivalent to the matching ringmaster/troupe CLI subcommand.
+package jobmcp
 
 import (
 	"bufio"
 	"context"
 	_ "embed"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -17,29 +24,29 @@ import (
 )
 
 // Tool surfaces (clown#144): the two intent-revealing halves of the platform.
-// ringmaster is job control (lifecycle + status); troupe is messaging (chat +
+// Ringmaster is job control (lifecycle + status); Troupe is messaging (chat +
 // the standalone waking job_message). clown synthesizes one stdioServers entry
-// per surface; an empty surface exposes the whole catalog.
+// per surface; an empty surface exposes the whole catalog (dev / conformance).
 const (
-	surfaceRingmaster = "ringmaster"
-	surfaceTroupe     = "troupe"
+	SurfaceRingmaster = "ringmaster"
+	SurfaceTroupe     = "troupe"
 )
 
 // jobToolSurface classifies each tool into its split server (clown#144). It is
 // the single source of truth for the partition: jobToolList filters the catalog
 // against it, and the conformance tests assert the membership.
 var jobToolSurface = map[string]string{
-	"job_start":      surfaceRingmaster,
-	"job_progress":   surfaceRingmaster,
-	"job_done":       surfaceRingmaster,
-	"job_read":       surfaceRingmaster,
-	"job_status":     surfaceRingmaster,
-	"job_spool_path": surfaceRingmaster,
-	"job_wait":       surfaceRingmaster,
-	"job_message":    surfaceTroupe,
-	"chat_send":      surfaceTroupe,
-	"chat_read":      surfaceTroupe,
-	"chat_list":      surfaceTroupe,
+	"job_start":      SurfaceRingmaster,
+	"job_progress":   SurfaceRingmaster,
+	"job_done":       SurfaceRingmaster,
+	"job_read":       SurfaceRingmaster,
+	"job_status":     SurfaceRingmaster,
+	"job_spool_path": SurfaceRingmaster,
+	"job_wait":       SurfaceRingmaster,
+	"job_message":    SurfaceTroupe,
+	"chat_send":      SurfaceTroupe,
+	"chat_read":      SurfaceTroupe,
+	"chat_list":      SurfaceTroupe,
 }
 
 // jobServerName is the MCP serverInfo.name for a surface. Empty keeps the
@@ -51,37 +58,12 @@ func jobServerName(surface string) string {
 	return "clown-" + surface
 }
 
-// runJobMCP is clown's built-in job-platform MCP server (RFC-0011): a
-// hand-rolled, line-delimited JSON-RPC 2.0 server on stdin/stdout (the MCP
-// stdio transport) exposing the seven job_* tools over internal/jobwake. It is
-// not run by hand — clown injects it as a stdioServers entry in the synthesized
-// clown-builtin-jobs plugin (jobmonitor.go), which clown-stdio-bridge wraps to
-// streamable-HTTP and clown's own pluginhost manages (clown self-consumes
-// RFC-0002). Every tool is equivalent to the matching `clown job` subcommand.
-//
-// --surface (clown#144) selects which slice of the catalog this instance
-// exposes: "ringmaster" (job lifecycle + status), "troupe" (messaging: chat +
-// the standalone job_message), or empty for the whole platform. clown synthesizes
-// one stdioServers entry per surface so the two intent-revealing tool groups
-// surface under distinct server names (plugin:clown-builtin-jobs:troupe /
-// :ringmaster). Empty (direct invocation / dev / the conformance suite) keeps the
-// historical all-tools behavior.
-func runJobMCP(args []string) int {
-	fs := flag.NewFlagSet("job-mcp", flag.ContinueOnError)
-	surface := fs.String("surface", "", "tool surface to expose: ringmaster, troupe, or empty for all (clown#144)")
-	if err := fs.Parse(args); err != nil {
-		return 2
-	}
-	serveJobMCP(os.Stdin, os.Stdout, *surface)
-	return 0
-}
-
-// serveJobMCP runs the JSON-RPC loop against in/out, split from runJobMCP so
-// tests can drive it with in-memory streams. surface filters the advertised tool
-// catalog (clown#144); tool DISPATCH is left whole — the catalog is the surface
-// boundary the agent sees, and every job_* / chat_* op is the same harmless
-// jobwake call regardless of which server routed it.
-func serveJobMCP(in io.Reader, out io.Writer, surface string) {
+// Serve runs the JSON-RPC loop against in/out. surface filters the advertised
+// tool catalog (clown#144); tool DISPATCH is left whole — the catalog is the
+// surface boundary the agent sees, and every job_* / chat_* op is the same
+// harmless jobwake call regardless of which server routed it. surface "" exposes
+// the whole platform (dev / conformance).
+func Serve(in io.Reader, out io.Writer, surface string) {
 	sc := bufio.NewScanner(in)
 	sc.Buffer(make([]byte, 64*1024), 1<<20)
 	enc := json.NewEncoder(out)

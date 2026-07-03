@@ -634,6 +634,8 @@
               "-X github.com/amarbel-llc/clown/internal/buildcfg.ClownboxCliPath=${clownboxCliPath}"
               "-X github.com/amarbel-llc/clown/internal/buildcfg.StdioBridgePath=${clown-stdio-bridge}/bin/clown-stdio-bridge"
               "-X github.com/amarbel-llc/clown/internal/buildcfg.HookAllowPath=${clown-hook-allow}/bin/clown-hook-allow"
+              "-X github.com/amarbel-llc/clown/internal/buildcfg.RingmasterPath=${ringmaster-go}/bin/ringmaster"
+              "-X github.com/amarbel-llc/clown/internal/buildcfg.TroupePath=${troupe-go}/bin/troupe"
               "-X github.com/amarbel-llc/clown/internal/buildcfg.DefaultProvider=${defaultProvider}"
               "-X github.com/amarbel-llc/clown/internal/buildcfg.DefaultProfile=${defaultProfile}"
               "-X github.com/amarbel-llc/clown/internal/buildcfg.PodmanPath=${tentPodmanPath}"
@@ -683,6 +685,24 @@
             "-s"
             "-w"
             "-X github.com/amarbel-llc/clown/internal/buildcfg.LlamaServerPath=${llamaServerPath}"
+          ];
+        };
+
+        # troupe: the messaging surface of the job platform (RFC-0015).
+        # A standalone binary carrying cross-session chat + the standalone
+        # waking message, plus the troupe MCP tool surface. Self-contained
+        # (no burned-in paths): its verbs and `troupe mcp` speak only
+        # internal/jobwake. clown burns in TroupePath (below) so it can
+        # synthesize `troupe mcp` into the clown-builtin-jobs plugin.
+        troupe-go = buildGoApplication {
+          pname = "troupe";
+          version = clownVersion;
+          src = goSrc;
+          subPackages = [ "cmd/troupe" ];
+          modules = ./gomod2nix.toml;
+          ldflags = [
+            "-s"
+            "-w"
           ];
         };
 
@@ -770,13 +790,12 @@
               chmod -R u+w $out/share/man
               for page in \
                   $out/share/man/man1/clown.1 \
-                  $out/share/man/man1/clown-job.1 \
-                  $out/share/man/man1/clown-chat.1 \
                   $out/share/man/man1/clown-presence.1 \
                   $out/share/man/man1/clown-plugin-host.1 \
                   $out/share/man/man1/clown-stdio-bridge.1 \
                   $out/share/man/man1/circus.1 \
                   $out/share/man/man1/ringmaster.1 \
+                  $out/share/man/man1/troupe.1 \
                   $out/share/man/man5/clown-json.5 \
                   $out/share/man/man5/clownfile.5 \
                   $out/share/man/man7/clown-plugin-protocol.7 \
@@ -893,6 +912,7 @@
               clown-stdio-bridge
               circus-go
               ringmaster-go
+              troupe-go
               clown-completions
               clown-manpages
             ];
@@ -931,6 +951,7 @@
           # cmd/ringmaster/testdata/fake-llama-server — same source
           # the launcher_test.go and server_test.go fixtures use.
           ringmaster = ringmaster-go;
+          troupe = troupe-go;
           circus = circus-go;
           fake-llama-server = fake-llama-server-go;
         };
@@ -1278,6 +1299,9 @@
           # consumes this via its `package` option. Also bundled into
           # the default symlinkJoin so `nix build` ships the binary.
           ringmaster = ringmaster-go;
+          # troupe: standalone build of the messaging surface (RFC-0015).
+          # Bundled into the default symlinkJoin so `nix build` ships it.
+          troupe = troupe-go;
           # bats-libs surfaces the amarbel-llc/bats helper bundle
           # (bats-support, bats-assert, bats-emo, bats-island) under
           # share/bats. Already used by the sandboxed batsLane via

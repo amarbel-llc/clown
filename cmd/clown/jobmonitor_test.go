@@ -12,6 +12,11 @@ import (
 
 func TestJobMonitorPluginDirSynthesized(t *testing.T) {
 	t.Setenv("CLOWN_DISABLE_JOB_WAKEUP", "")
+	// The monitor command is built from buildcfg.RingmasterPath (RFC-0015 §6),
+	// which is empty in `go test`; set it so the absolute-path assertions hold.
+	origRM := buildcfg.RingmasterPath
+	buildcfg.RingmasterPath = "/nix/store/x/bin/ringmaster"
+	t.Cleanup(func() { buildcfg.RingmasterPath = origRM })
 	dir, err := synthJobMonitorPluginDir("sess-key-xyz")
 	if err != nil {
 		t.Fatal(err)
@@ -60,17 +65,17 @@ func TestJobMonitorPluginDirSynthesized(t *testing.T) {
 		t.Fatalf("want exactly one top-level monitor, got %d", len(m.Monitors))
 	}
 	mon := m.Monitors[0]
-	if mon.Name != "clown-job-watch" {
-		t.Fatalf("monitor name = %q, want clown-job-watch", mon.Name)
+	if mon.Name != "ringmaster-monitor" {
+		t.Fatalf("monitor name = %q, want ringmaster-monitor", mon.Name)
 	}
 	if mon.Description == "" {
 		t.Fatal("monitor description must be non-empty")
 	}
 	if !filepath.IsAbs(strings.Fields(mon.Command)[0]) {
-		t.Fatalf("monitor command = %q, want an absolute path (os.Executable resolves in go test)", mon.Command)
+		t.Fatalf("monitor command = %q, want an absolute path (buildcfg.RingmasterPath)", mon.Command)
 	}
-	if !strings.Contains(mon.Command, " job-watch ") {
-		t.Fatalf("monitor command = %q, want the job-watch subcommand", mon.Command)
+	if !strings.Contains(mon.Command, " monitor ") {
+		t.Fatalf("monitor command = %q, want the ringmaster monitor subcommand", mon.Command)
 	}
 	// clown#136: the resolved per-instance key is baked in as --session so the
 	// monitor watches the right channel without inheriting CLOWN_SESSION_ID.
@@ -79,24 +84,55 @@ func TestJobMonitorPluginDirSynthesized(t *testing.T) {
 	}
 }
 
-func TestJobMonitorCommandIsAbsoluteWhenResolvable(t *testing.T) {
-	t.Setenv("CLOWN_DISABLE_JOB_WAKEUP", "")
-	// os.Executable() resolves to the test binary in `go test`, so the
-	// command must be absolute in this environment.
-	exe, err := os.Executable()
-	if err != nil {
-		t.Skipf("os.Executable unavailable: %v", err)
-	}
-	cmd := jobWatchCommand("")
+func TestMonitorCommandUsesRingmasterPath(t *testing.T) {
+	// With RingmasterPath baked in (nix builds), the monitor command is that
+	// absolute path + the `monitor` subcommand (RFC-0015 §6).
+	orig := buildcfg.RingmasterPath
+	buildcfg.RingmasterPath = "/nix/store/x/bin/ringmaster"
+	t.Cleanup(func() { buildcfg.RingmasterPath = orig })
+
+	cmd := monitorCommand("")
 	if !filepath.IsAbs(strings.Fields(cmd)[0]) {
-		t.Fatalf("monitor command %q should start with an absolute path (os.Executable=%q)", cmd, exe)
+		t.Fatalf("monitor command %q should start with the absolute RingmasterPath", cmd)
 	}
-	if !strings.HasSuffix(cmd, " job-watch") {
-		t.Fatalf("monitor command %q should end with the job-watch subcommand (empty key omits --session)", cmd)
+	if !strings.HasSuffix(cmd, " monitor") {
+		t.Fatalf("monitor command %q should end with the monitor subcommand (empty key omits --session)", cmd)
 	}
 	// A non-empty key is appended as --session (clown#136).
-	if keyed := jobWatchCommand("k-1"); !strings.HasSuffix(keyed, " job-watch --session k-1") {
+	if keyed := monitorCommand("k-1"); !strings.HasSuffix(keyed, " monitor --session k-1") {
 		t.Fatalf("monitor command %q should bake --session for a non-empty key", keyed)
+	}
+}
+
+// In dev builds (empty RingmasterPath) the command falls back to the bare
+// `ringmaster monitor`, resolved via PATH (RFC-0015 §6).
+func TestMonitorCommandBareFallback(t *testing.T) {
+	orig := buildcfg.RingmasterPath
+	buildcfg.RingmasterPath = ""
+	t.Cleanup(func() { buildcfg.RingmasterPath = orig })
+	if cmd := monitorCommand(""); cmd != "ringmaster monitor" {
+		t.Fatalf("monitor command = %q, want bare `ringmaster monitor`", cmd)
+	}
+	if cmd := monitorCommand("k-1"); cmd != "ringmaster monitor --session k-1" {
+		t.Fatalf("monitor command = %q, want bare command with --session", cmd)
+	}
+}
+
+// providerUsesPluginDirs gates which providers get the synthesized job-monitor
+// plugin dir (only --plugin-dir subprocess providers).
+func TestProviderUsesPluginDirs(t *testing.T) {
+	uses := map[string]bool{
+		"claude":   true,
+		"clownbox": true,
+		"codex":    false,
+		"circus":   false,
+		"opencode": false,
+		"crush":    false,
+	}
+	for provider, want := range uses {
+		if got := providerUsesPluginDirs(provider); got != want {
+			t.Errorf("providerUsesPluginDirs(%q) = %v, want %v", provider, got, want)
+		}
 	}
 }
 
@@ -117,9 +153,15 @@ func TestJobMonitorDisabledReturnsEmpty(t *testing.T) {
 // (messaging) and ringmaster (job control) surfaces (RFC-0011 §1, clown#144).
 func TestJobMonitorPluginDirIncludesMCPWhenBridgeSet(t *testing.T) {
 	t.Setenv("CLOWN_DISABLE_JOB_WAKEUP", "")
-	orig := buildcfg.StdioBridgePath
+	// The MCP servers are synthesized only when the bridge AND both binary paths
+	// are baked in (RFC-0015 §6); set all three.
+	origBridge, origRM, origTroupe := buildcfg.StdioBridgePath, buildcfg.RingmasterPath, buildcfg.TroupePath
 	buildcfg.StdioBridgePath = "/nix/store/x/bin/clown-stdio-bridge"
-	t.Cleanup(func() { buildcfg.StdioBridgePath = orig })
+	buildcfg.RingmasterPath = "/nix/store/x/bin/ringmaster"
+	buildcfg.TroupePath = "/nix/store/x/bin/troupe"
+	t.Cleanup(func() {
+		buildcfg.StdioBridgePath, buildcfg.RingmasterPath, buildcfg.TroupePath = origBridge, origRM, origTroupe
+	})
 
 	dir, err := synthJobMonitorPluginDir("")
 	if err != nil {
@@ -149,13 +191,20 @@ func TestJobMonitorPluginDirIncludesMCPWhenBridgeSet(t *testing.T) {
 	if _, present := cfg.StdioServers["jobs"]; present {
 		t.Fatalf("clown.json must not declare the legacy 'jobs' server after the split; got %s", b)
 	}
-	for surface, wantArgs := range map[string][]string{
-		"ringmaster": {"job-mcp", "--surface", "ringmaster"},
-		"troupe":     {"job-mcp", "--surface", "troupe"},
+	for surface, want := range map[string]struct {
+		args    []string
+		command string
+	}{
+		"ringmaster": {args: []string{"mcp"}, command: buildcfg.RingmasterPath},
+		"troupe":     {args: []string{"mcp"}, command: buildcfg.TroupePath},
 	} {
+		wantArgs := want.args
 		srv, ok := cfg.StdioServers[surface]
 		if !ok {
 			t.Fatalf("clown.json missing stdioServers.%s; got %s", surface, b)
+		}
+		if srv.Command != want.command {
+			t.Fatalf("%s.command = %q, want the baked path %q", surface, srv.Command, want.command)
 		}
 		if !filepath.IsAbs(srv.Command) {
 			t.Fatalf("%s.command = %q, want an absolute path", surface, srv.Command)

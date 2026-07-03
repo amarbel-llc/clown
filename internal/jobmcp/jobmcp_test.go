@@ -1,4 +1,4 @@
-package main
+package jobmcp
 
 import (
 	"bytes"
@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// mcpCall drives serveJobMCP with a single JSON-RPC request and returns the
+// mcpCall drives Serve with a single JSON-RPC request and returns the
 // parsed response. The server is stateless (all state lives in jobwake's files
 // under XDG_STATE_HOME), so one call per request lets a test thread the job id
 // from job_start into later calls. An optional surface (clown#144) selects the
@@ -24,7 +24,7 @@ func mcpCall(t *testing.T, req map[string]any, surface ...string) map[string]any
 		s = surface[0]
 	}
 	var out bytes.Buffer
-	serveJobMCP(bytes.NewReader(append(b, '\n')), &out, s)
+	Serve(bytes.NewReader(append(b, '\n')), &out, s)
 	line := strings.TrimSpace(out.String())
 	if line == "" {
 		return nil // notification: no response

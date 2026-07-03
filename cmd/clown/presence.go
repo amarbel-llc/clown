@@ -43,7 +43,7 @@ func runPresence(args []string) int {
 // exit 1 if none (grep -q style), so a probe is
 // `clown presence list --group "$ID" --quiet`. --json emits one JSON record per
 // line (the jobwake.Presence schema). The default is a human listing grouped by
-// decoration, mirroring `clown chat list`.
+// decoration, mirroring `troupe list`.
 func presenceList(args []string) int {
 	fs := flag.NewFlagSet("clown presence list", flag.ContinueOnError)
 	group := fs.String("group", "", "only records whose decoration (group-id) equals this value")

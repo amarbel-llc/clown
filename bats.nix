@@ -33,6 +33,9 @@
   ringmaster,
   circus,
   fake-llama-server,
+  # The troupe binary (messaging surface, RFC-0015). Plumbed below as
+  # TROUPE_BIN; job_wakeup.bats / job_mcp.bats invoke `troupe send|read|mcp`.
+  troupe,
 }:
 let
   # Naming anchor for the lane derivation — only consulted for
@@ -55,9 +58,11 @@ let
       base = clownBatsBase;
       batsSrc = ./zz-tests_bats;
       binaries = {
-        # The clown Go binary (cmd/clown), the reference producer and
-        # monitor for the job-wakeup channel. job_wakeup.bats invokes it
-        # as `clown job …` / `clown job-watch` via require_bin CLOWN_BIN.
+        # The clown Go binary (cmd/clown). clownfile_attach.bats invokes it
+        # as `clown --provider …` via require_bin CLOWN_BIN. The job-wakeup
+        # producer/monitor surface moved to the ringmaster/troupe binaries
+        # (RFC-0015), which job_wakeup.bats / job_mcp.bats invoke via
+        # RINGMASTER_BIN / TROUPE_BIN below.
         # clownBatsBase is mkClownGo, whose pname is "clown", so its
         # $out/bin/clown is exactly the binary the suite expects.
         CLOWN_BIN = {
@@ -79,6 +84,10 @@ let
         RINGMASTER_BIN = {
           base = ringmaster;
           name = "ringmaster";
+        };
+        TROUPE_BIN = {
+          base = troupe;
+          name = "troupe";
         };
         CIRCUS_BIN = {
           base = circus;

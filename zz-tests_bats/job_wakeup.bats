@@ -1,7 +1,8 @@
 # Conformance suite for clown's job-wakeup channel (RFC-0009).
 #
-# Exercises the reference producer (`clown job
-# start|progress|done|message|read`) and monitor (`clown job-watch`)
+# Exercises the reference producer (`ringmaster
+# start|progress|done|read`, `troupe message`) and monitor
+# (`ringmaster monitor`, RFC-0015 §6)
 # through the real CLI, asserting the on-disk JSONL journal, the
 # terminal-once invariant, the wake policy (terminal events and
 # `message` wake), the §9 notification-line format (incl. the
@@ -37,7 +38,8 @@ setup() {
   # and XDG_RUNTIME_DIR) all under $BATS_TEST_TMPDIR.
   setup_test_home
 
-  require_bin CLOWN_BIN clown
+  require_bin RINGMASTER_BIN ringmaster
+  require_bin TROUPE_BIN troupe
 
   # Stable channel key so every emit and the monitor resolve the same
   # channel (RFC-0009 §2 resolution order: CLOWN_SESSION_ID wins).
@@ -57,7 +59,7 @@ teardown() {
 
 # §8: start prints a non-empty job id and exits 0.
 @test "job start prints a non-empty job id" {
-  run "$CLOWN_BIN" job start --source moxy --label build
+  run "$RINGMASTER_BIN" start --source moxy --label build
   assert_success
   [[ -n "$output" ]]
   # single line, no embedded newline
@@ -68,11 +70,11 @@ teardown() {
 # through `clown job read --job <id> --json` so we assert the records the
 # CLI itself reads back.
 @test "start/progress/done write JSONL records with seq 0,1,2" {
-  id="$("$CLOWN_BIN" job start --source moxy --label build)"
-  "$CLOWN_BIN" job progress "$id" --message "halfway"
-  "$CLOWN_BIN" job done "$id" --state succeeded --message "nix build ok"
+  id="$("$RINGMASTER_BIN" start --source moxy --label build)"
+  "$RINGMASTER_BIN" progress "$id" --message "halfway"
+  "$RINGMASTER_BIN" done "$id" --state succeeded --message "nix build ok"
 
-  run "$CLOWN_BIN" job read --job "$id" --json
+  run "$RINGMASTER_BIN" read --job "$id" --json
   assert_success
   # Each `run` clobbers $output, so snapshot the read result before the
   # jq calls below — otherwise the second jq would parse the first jq's
@@ -97,10 +99,10 @@ teardown() {
 
 # §4: result_ref rides through to the terminal record.
 @test "done --result-ref is recorded on the terminal event" {
-  id="$("$CLOWN_BIN" job start --source moxy)"
-  "$CLOWN_BIN" job done "$id" --state succeeded --message ok --result-ref "moxy job-read --job $id"
+  id="$("$RINGMASTER_BIN" start --source moxy)"
+  "$RINGMASTER_BIN" done "$id" --state succeeded --message ok --result-ref "moxy job-read --job $id"
 
-  run "$CLOWN_BIN" job read --job "$id" --json
+  run "$RINGMASTER_BIN" read --job "$id" --json
   assert_success
   run jq -s -r '.[-1].result_ref' <<<"$output"
   assert_output "moxy job-read --job $id"
@@ -108,30 +110,30 @@ teardown() {
 
 # §5: a second `done` on an already-terminal job exits non-zero.
 @test "second done on a terminal job fails" {
-  id="$("$CLOWN_BIN" job start --source s)"
-  run "$CLOWN_BIN" job done "$id" --state succeeded
+  id="$("$RINGMASTER_BIN" start --source s)"
+  run "$RINGMASTER_BIN" done "$id" --state succeeded
   assert_success
-  run "$CLOWN_BIN" job done "$id" --state failed
+  run "$RINGMASTER_BIN" done "$id" --state failed
   assert_failure
 }
 
 # §8/§5: an invalid terminal state exits non-zero.
 @test "done --state wat (invalid state) fails" {
-  id="$("$CLOWN_BIN" job start --source s)"
-  run "$CLOWN_BIN" job done "$id" --state wat
+  id="$("$RINGMASTER_BIN" start --source s)"
+  run "$RINGMASTER_BIN" done "$id" --state wat
   assert_failure
 }
 
 # §5 + §9: the monitor emits a line for the terminal event but NOT for
 # progress, and the line matches the §9 format incl. ` · <result_ref>`.
 @test "monitor wakes on terminal event only and formats the §9 line" {
-  id="$("$CLOWN_BIN" job start --source moxy --label build)"
-  "$CLOWN_BIN" job progress "$id" --message "halfway"
-  "$CLOWN_BIN" job done "$id" --state succeeded --message "nix build ok" --result-ref "ref-123"
+  id="$("$RINGMASTER_BIN" start --source moxy --label build)"
+  "$RINGMASTER_BIN" progress "$id" --message "halfway"
+  "$RINGMASTER_BIN" done "$id" --state succeeded --message "nix build ok" --result-ref "ref-123"
 
   # Gotcha 2: --once replays the unacked waking events deterministically,
   # then exits 0 without binding or blocking.
-  run "$CLOWN_BIN" job-watch --once
+  run "$RINGMASTER_BIN" monitor --once
   assert_success
 
   # Terminal event surfaces with the full §9 line: source job type,
@@ -146,10 +148,10 @@ teardown() {
 # §9: when message is absent the trailing ": " is omitted; when
 # result_ref is absent the " · " is omitted.
 @test "notification line omits ': ' and ' · ' when message/result_ref absent" {
-  id="$("$CLOWN_BIN" job start --source moxy --label bare)"
-  "$CLOWN_BIN" job done "$id" --state failed
+  id="$("$RINGMASTER_BIN" start --source moxy --label bare)"
+  "$RINGMASTER_BIN" done "$id" --state failed
 
-  run "$CLOWN_BIN" job-watch --once
+  run "$RINGMASTER_BIN" monitor --once
   assert_success
   assert_line "[clown-job] moxy ${id} failed"
 }
@@ -158,10 +160,10 @@ teardown() {
 # unacked terminal event. (Same mechanism as the wake test, asserted
 # explicitly against the requirements row.)
 @test "monitor started after done replays the unacked terminal event" {
-  id="$("$CLOWN_BIN" job start --source spinclass --label merge)"
-  "$CLOWN_BIN" job done "$id" --state succeeded --message "merged"
+  id="$("$RINGMASTER_BIN" start --source spinclass --label merge)"
+  "$RINGMASTER_BIN" done "$id" --state succeeded --message "merged"
 
-  run "$CLOWN_BIN" job-watch --once
+  run "$RINGMASTER_BIN" monitor --once
   assert_success
   assert_line "[clown-job] spinclass ${id} succeeded: merged"
 }
@@ -169,10 +171,10 @@ teardown() {
 # §9: at-least-once is bounded by the ack — a second monitor over the
 # same channel (ack now persisted) replays nothing.
 @test "a second monitor replays nothing once the event is acked" {
-  id="$("$CLOWN_BIN" job start --source spinclass --label merge)"
-  "$CLOWN_BIN" job done "$id" --state succeeded --message "merged"
+  id="$("$RINGMASTER_BIN" start --source spinclass --label merge)"
+  "$RINGMASTER_BIN" done "$id" --state succeeded --message "merged"
 
-  run "$CLOWN_BIN" job-watch --once
+  run "$RINGMASTER_BIN" monitor --once
   assert_success
   assert_line "[clown-job] spinclass ${id} succeeded: merged"
 
@@ -180,7 +182,7 @@ teardown() {
   # refute_output (not refute_line): on empty output the $lines array is
   # unset under `set -u`, so refute_line would error "lines: parameter
   # not set"; refute_output operates on the $output scalar.
-  run "$CLOWN_BIN" job-watch --once
+  run "$RINGMASTER_BIN" monitor --once
   assert_success
   refute_output --partial "[clown-job]"
 }
@@ -189,24 +191,24 @@ teardown() {
 # the monitor surfaces it with the §9 from-rendering, exactly once.
 @test "directed message wakes with the from-line" {
   export CLOWN_SESSION_ID="test/msg-directed"
-  id="$("$CLOWN_BIN" job message --target test/msg-directed \
+  id="$("$TROUPE_BIN" message --target test/msg-directed \
     --from test/msg-sender --source spinclass --message "ping")"
 
-  run "$CLOWN_BIN" job-watch --once
+  run "$RINGMASTER_BIN" monitor --once
   assert_success
   assert_line "[clown-job] spinclass ${id} message from test/msg-sender: ping"
 
   # acked thereafter: a second monitor pass emits nothing.
-  run "$CLOWN_BIN" job-watch --once
+  run "$RINGMASTER_BIN" monitor --once
   assert_success
   refute_output --partial "[clown-job]"
 }
 
 # §8: job message usage errors — --target and --message are required.
 @test "job message without --target or --message is a usage error (exit 2)" {
-  run "$CLOWN_BIN" job message --message hi
+  run "$TROUPE_BIN" message --message hi
   assert_failure 2
-  run "$CLOWN_BIN" job message --target test/chan
+  run "$TROUPE_BIN" message --target test/chan
   assert_failure 2
 }
 
@@ -218,24 +220,24 @@ teardown() {
   export CLOWN_SESSION_ID="test/bcast-reader"
 
   # Broadcast emitted before this reader ever attached.
-  "$CLOWN_BIN" job message --target '*' --from test/bcast-sender \
+  "$TROUPE_BIN" message --target '*' --from test/bcast-sender \
     --source spinclass --message "pre-attach"
 
   # First attach: init-at-end, nothing replayed.
-  run "$CLOWN_BIN" job-watch --once
+  run "$RINGMASTER_BIN" monitor --once
   assert_success
   refute_output --partial "pre-attach"
 
   # Broadcast after attach, monitor down.
-  id="$("$CLOWN_BIN" job message --target '*' --from test/bcast-sender \
+  id="$("$TROUPE_BIN" message --target '*' --from test/bcast-sender \
     --source spinclass --message "post-attach")"
 
-  run "$CLOWN_BIN" job-watch --once
+  run "$RINGMASTER_BIN" monitor --once
   assert_success
   assert_line "[clown-job] spinclass ${id} message from test/bcast-sender: post-attach"
 
   # Exactly once: the per-reader broadcast ack gates the replay.
-  run "$CLOWN_BIN" job-watch --once
+  run "$RINGMASTER_BIN" monitor --once
   assert_success
   refute_output --partial "post-attach"
 }
@@ -245,25 +247,25 @@ teardown() {
 # the broadcast IS woken. Origin-based, not "broadcasts never replay".
 @test "broadcast: sender's own monitor does not self-echo, peer is woken" {
   # Peer attaches first (init-at-end) so a later broadcast IS delivered to it.
-  CLOWN_SESSION_ID="test/echo-peer" run "$CLOWN_BIN" job-watch --once
+  CLOWN_SESSION_ID="test/echo-peer" run "$RINGMASTER_BIN" monitor --once
   assert_success
 
   # Sender attaches first too.
   export CLOWN_SESSION_ID="test/echo-sender"
-  run "$CLOWN_BIN" job-watch --once
+  run "$RINGMASTER_BIN" monitor --once
   assert_success
 
   # Sender broadcasts with from == its own session key.
-  id="$("$CLOWN_BIN" job message --target '*' --from test/echo-sender \
+  id="$("$TROUPE_BIN" message --target '*' --from test/echo-sender \
     --source spinclass --message "self hello")"
 
   # The sender's own monitor must NOT surface its own broadcast.
-  run "$CLOWN_BIN" job-watch --once
+  run "$RINGMASTER_BIN" monitor --once
   assert_success
   refute_output --partial "self hello"
 
   # The peer, attached before the broadcast, IS woken by it.
-  CLOWN_SESSION_ID="test/echo-peer" run "$CLOWN_BIN" job-watch --once
+  CLOWN_SESSION_ID="test/echo-peer" run "$RINGMASTER_BIN" monitor --once
   assert_success
   assert_line "[clown-job] spinclass ${id} message from test/echo-sender: self hello"
 }
@@ -271,24 +273,24 @@ teardown() {
 # §8: CLOWN_DISABLE_JOB_WAKEUP=1 — job-watch exits 0 immediately and the
 # emit subcommands are no-ops that still exit 0.
 @test "CLOWN_DISABLE_JOB_WAKEUP=1 makes job-watch exit 0 immediately" {
-  CLOWN_DISABLE_JOB_WAKEUP=1 run "$CLOWN_BIN" job-watch --once
+  CLOWN_DISABLE_JOB_WAKEUP=1 run "$RINGMASTER_BIN" monitor --once
   assert_success
   refute_output --partial "[clown-job]"
 }
 
 @test "CLOWN_DISABLE_JOB_WAKEUP=1 makes emit subcommands no-op (exit 0)" {
-  CLOWN_DISABLE_JOB_WAKEUP=1 run "$CLOWN_BIN" job start --source moxy --label build
+  CLOWN_DISABLE_JOB_WAKEUP=1 run "$RINGMASTER_BIN" start --source moxy --label build
   assert_success
-  CLOWN_DISABLE_JOB_WAKEUP=1 run "$CLOWN_BIN" job progress some-job --message hi
+  CLOWN_DISABLE_JOB_WAKEUP=1 run "$RINGMASTER_BIN" progress some-job --message hi
   assert_success
-  CLOWN_DISABLE_JOB_WAKEUP=1 run "$CLOWN_BIN" job done some-job --state succeeded
+  CLOWN_DISABLE_JOB_WAKEUP=1 run "$RINGMASTER_BIN" done some-job --state succeeded
   assert_success
-  CLOWN_DISABLE_JOB_WAKEUP=1 run "$CLOWN_BIN" job message --target '*' --message hi
+  CLOWN_DISABLE_JOB_WAKEUP=1 run "$TROUPE_BIN" message --target '*' --message hi
   assert_success
 
   # No journal was written for the channel (disabled start is a no-op,
   # so no records exist for any job).
-  run "$CLOWN_BIN" job read --json
+  run "$RINGMASTER_BIN" read --json
   assert_success
   refute_output --partial "[clown-job]"
   assert_equal "$output" ""
