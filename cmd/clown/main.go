@@ -663,6 +663,7 @@ func runClaude(cliPath string, flags parsedFlags, prompts promptwalk.PromptResul
 			DisallowedToolsFile: disallowedToolsFile,
 			SystemPromptFile:    prompts.SystemPromptFile,
 			AppendFragments:     prompts.AppendFragments,
+			SettingsJSON:        claudeSafetySettingsJSON(),
 		}, forwarded)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "clown: building claude args: %v\n", err)
@@ -1444,6 +1445,7 @@ func runClownbox(cliPath string, flags parsedFlags, prompts promptwalk.PromptRes
 		DisallowedToolsFile: buildcfg.DisallowedToolsFile,
 		SystemPromptFile:    prompts.SystemPromptFile,
 		AppendFragments:     prompts.AppendFragments,
+		SettingsJSON:        claudeSafetySettingsJSON(),
 	}, flags.forwarded)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown: building clownbox args: %v\n", err)

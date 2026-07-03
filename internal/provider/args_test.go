@@ -192,6 +192,66 @@ func TestBuildClaudeArgs_ForwardedArgs(t *testing.T) {
 	}
 }
 
+// clown#163: a non-empty SettingsJSON is emitted as --settings <json> so clown
+// can inject the AskUserQuestion AFK-timeout override through a path claude
+// actually reads (clown ships no managed-settings, clown#133).
+func TestBuildClaudeArgs_Settings(t *testing.T) {
+	settings := `{"env":{"CLAUDE_AFK_TIMEOUT_MS":"2147483647"}}`
+	args, _, cleanup, err := BuildClaudeArgs(ClaudeArgs{SettingsJSON: settings}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+
+	for i, a := range args {
+		if a == "--settings" && i+1 < len(args) {
+			if args[i+1] != settings {
+				t.Errorf("--settings value = %q, want %q", args[i+1], settings)
+			}
+			return
+		}
+	}
+	t.Error("--settings not found in args")
+}
+
+func TestBuildClaudeArgs_NoSettings(t *testing.T) {
+	args, _, cleanup, err := BuildClaudeArgs(ClaudeArgs{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+
+	for _, a := range args {
+		if a == "--settings" {
+			t.Error("no --settings should be emitted when SettingsJSON is empty")
+		}
+	}
+}
+
+// --settings must precede the forwarded user args so a user's own --settings
+// (passed after the `--`) wins on claude's last-flag precedence, preserving the
+// user's ability to override clown's safety default.
+func TestBuildClaudeArgs_SettingsBeforeForwarded(t *testing.T) {
+	args, _, cleanup, err := BuildClaudeArgs(ClaudeArgs{SettingsJSON: `{"env":{}}`}, []string{"--resume"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+
+	settingsIdx, fwdIdx := -1, -1
+	for i, a := range args {
+		switch a {
+		case "--settings":
+			settingsIdx = i
+		case "--resume":
+			fwdIdx = i
+		}
+	}
+	if settingsIdx == -1 || fwdIdx == -1 || settingsIdx > fwdIdx {
+		t.Errorf("--settings (idx %d) must precede forwarded --resume (idx %d)", settingsIdx, fwdIdx)
+	}
+}
+
 func TestBuildCodexArgs_SandboxWrite(t *testing.T) {
 	args, cleanup, err := BuildCodexArgs(CodexArgs{}, nil)
 	if err != nil {

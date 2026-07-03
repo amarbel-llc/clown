@@ -12,6 +12,13 @@ type ClaudeArgs struct {
 	DisallowedToolsFile string
 	SystemPromptFile    string
 	AppendFragments     string
+	// SettingsJSON, when non-empty, is emitted as `--settings <json>`: an inline
+	// settings source claude merges at the highest CLI precedence. clown ships no
+	// managed-settings (clown#133), so this flag is how clown injects settings
+	// claude actually reads — currently the AskUserQuestion AFK-timeout override
+	// (clown#163). It is placed before the forwarded user args so a user's own
+	// `--settings` (after the `--`) wins on last-flag precedence.
+	SettingsJSON string
 }
 
 // BuildClaudeArgs assembles the argument list for the claude provider CLI.
@@ -67,6 +74,10 @@ func BuildClaudeArgs(cfg ClaudeArgs, forwarded []string) ([]string, string, func
 		appendFile = f.Name()
 		cleanups = append(cleanups, f.Name())
 		args = append(args, "--append-system-prompt-file", f.Name())
+	}
+
+	if cfg.SettingsJSON != "" {
+		args = append(args, "--settings", cfg.SettingsJSON)
 	}
 
 	args = append(args, forwarded...)
