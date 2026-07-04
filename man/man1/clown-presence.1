@@ -62,6 +62,40 @@ when none do
 so a probe is
 .Dl clown presence list --group \(dq$ID\(dq --quiet
 .El
+.Sh SESSION KEY AND REATTACH
+The
+.Sy sessionKey
+field is the record's per-instance routing key (RFC-0013 §2).
+For a claude-family session it is the very same value as the
+.Ql posh
+multiplexer session the worker runs under, the claude
+.Fl -session-id ,
+and the
+.Ql session_id
+a SessionStart hook receives \(em all the one freshly minted UUID clown resolves
+per instance (RFC-0013 §2.1).
+.Pp
+That identity is what lets an orchestrator reattach a worker it launched
+detached \(em the spawn wire of RFC-0014 §5, e.g.\& spinclass's
+.Ic sc spawn .
+clown mints the id, names the detached
+.Ql posh
+session by it, and records it here, so the live session is addressable as
+.Sy sessionKey
+without the worker reporting anything back:
+.Dl name=$(clown presence list --group \(dq$GROUP\(dq --json | jq -r .sessionKey)
+.Dl posh attach \(dq$name\(dq
+.Pp
+When more than one live worker shares a
+.Ar group-id ,
+.Fl -group
+returns every member and a freshly spawned worker is not distinguishable from its
+siblings in the listing alone; the launcher must then correlate the spawn it made
+to a
+.Sy sessionKey
+by other means (for example the worker reporting its own
+.Ql session_id
+back at startup).
 .Sh ENVIRONMENT
 .Bl -tag -width Ds
 .It Ev XDG_STATE_HOME
