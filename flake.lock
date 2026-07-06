@@ -16,11 +16,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1783307757,
-        "narHash": "sha256-ywFYtlViQaA35WTmvs3W2GRPiGv1UcPvUs5GeyJk44w=",
+        "lastModified": 1783335885,
+        "narHash": "sha256-vMoGa9iHaNmUakjE4/GKJZV4AHQ12Wi/qFpKKNMrfYs=",
         "owner": "amarbel-llc",
         "repo": "bats",
-        "rev": "00045214b19eb7bcd7623ea9676b6d78257f2544",
+        "rev": "bef4c81409645d87a7fa7a2e9ac3ee811bb8ec8d",
         "type": "github"
       },
       "original": {
@@ -121,11 +121,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1783306174,
-        "narHash": "sha256-JbJSMwgy2P3NaSeqwVvwJJyXnSId0DXHoW/SeFgQuuA=",
+        "lastModified": 1783336065,
+        "narHash": "sha256-VXk37Xy6qo4Efb6PHP8qxRR2fkI+BrtrsSPQuwuy5iE=",
         "owner": "amarbel-llc",
         "repo": "igloo",
-        "rev": "e27cfa4e378a000899b36bc4715225adedd8a613",
+        "rev": "991d36f34fa7bc8a76933be166187f9db03e8c66",
         "type": "github"
       },
       "original": {
@@ -155,11 +155,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1783243767,
-        "narHash": "sha256-iiQL/IHgQlmnZgKgs4wBOiDA9+S3tRFsQPRxtYIhUYo=",
+        "lastModified": 1783335367,
+        "narHash": "sha256-TJ4+wYOJYYX+z//9C4psF0e1K8TgXrWRITnERhL/oP8=",
         "owner": "numtide",
         "repo": "llm-agents.nix",
-        "rev": "22f1080fb54a217bdda6cfd6eca5dbf9e7afddac",
+        "rev": "5dd40d7cef40fce5ac4f922b92d92373ef71daf2",
         "type": "github"
       },
       "original": {
@@ -264,11 +264,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1783306729,
-        "narHash": "sha256-HbYn4wlNp+4aatwgiMa7idkSEYkr6djyZ+wOhcQhkDg=",
+        "lastModified": 1783336935,
+        "narHash": "sha256-n8yL0P6kZNEHMaWJ+N0Dy2VldF404bHz1WRTtLHFw6g=",
         "ref": "refs/heads/master",
-        "rev": "ff58b5f60a2eb6db65dd3696d772936e04c431d5",
-        "revCount": 2,
+        "rev": "b86032c7cf6d93fd522cc5acbad01382e0527cf5",
+        "revCount": 3,
         "type": "git",
         "url": "https://forge.linenisgreat.com/amarbel-llc/ringmaster.git"
       },
