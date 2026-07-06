@@ -727,6 +727,32 @@
           ];
         };
 
+        # clown-go-test runs the whole Go unit suite (`go test ./...`) INSIDE
+        # a nix sandbox so the goFlakeInputs bridge is applied. The bridge's
+        # `replace` for the external ringmaster module exists only inside nix
+        # builds and the mkGoEnv devShell (igloo RFC-0001 "no go build
+        # outside Nix"); a bare `go test ./...` in the hermetic pre-merge hook
+        # has neither and fails with "inconsistent vendoring" on the bridged
+        # module. buildGoApplication (wrapped with goFlakeInputs above)
+        # materializes the merged go.mod in-sandbox, so the checkPhase's
+        # `go test ./...` resolves ringmaster. The `test-go` recipe builds
+        # this instead of invoking `go test` directly; `nix develop -c go
+        # test ./...` still works for local dev (the devShell mkGoEnv carries
+        # goFlakeInputs too). Modeled on madder/go/default.nix's checkPhase.
+        clown-go-test = buildGoApplication {
+          pname = "clown-go-test";
+          version = clownVersion;
+          src = goSrc;
+          subPackages = [ "cmd/clown" ];
+          modules = ./gomod2nix.toml;
+          doCheck = true;
+          checkPhase = ''
+            runHook preCheck
+            go test -p $NIX_BUILD_CORES ./...
+            runHook postCheck
+          '';
+        };
+
         # clown ships NO managed-settings (clown#133). The delivery strategy was
         # a binary path-redirect (perl -0777 substitution making claude read
         # $out/etc/claude instead of /etc/claude-code); it was non-viable —
@@ -1316,6 +1342,10 @@
           clown-manpages = clown-manpages;
           clown-race = clown-go-race;
           clown-cover = clown-cover;
+          # clown-go-test: the Go unit suite run inside a nix sandbox (so
+          # the goFlakeInputs bridge applies). The `test-go` recipe builds
+          # this instead of a bare `go test ./...`.
+          clown-go-test = clown-go-test;
           mock-stdio-mcp = mock-stdio-mcp;
           synthetic-plugin = synthetic-plugin;
           # ringmaster + troupe: re-exported from the external

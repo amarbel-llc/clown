@@ -21,15 +21,23 @@ fmt *ARGS:
 
 build: build-nix
 
-# Build Go binaries
+# Build Go binaries. Routed through `nix develop` because clown consumes
+# the external ringmaster module via igloo's goFlakeInputs bridge, whose
+# `replace` only exists inside nix builds and the devShell mkGoEnv — a
+# bare `go build ./cmd/...` outside the devShell can't resolve it
+# (igloo RFC-0001 "no go build outside Nix").
 [group("go")]
 build-go:
-    go build ./cmd/...
+    nix develop --command go build ./cmd/...
 
-# Run Go tests across the whole module (internal + cmd packages).
+# Run Go tests across the whole module (internal + cmd packages). Runs the
+# suite inside the clown-go-test nix derivation's checkPhase so the
+# goFlakeInputs bridge is applied — a bare `go test ./...` in the hermetic
+# hook hits "inconsistent vendoring" on the bridged ringmaster module. For
+# local iteration, `nix develop --command go test ./...` also works.
 [group("go")]
 test-go:
-    go test ./...
+    nix build .#clown-go-test --no-link --print-build-logs
 
 # Regenerate gomod2nix.toml after go.mod changes (uses the gomod2nix
 # binary from the devshell so the tool version matches the nix builder).
