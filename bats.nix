@@ -29,9 +29,9 @@
   inspectCompiledPatched,
   # Ringmaster e2e lane fixtures: the daemon, its CLI client, and a
   # http stand-in for llama-server. Plumbed into the binaries map
-  # below as RINGMASTER_BIN / CIRCUS_BIN / FAKE_LLAMA_SERVER_BIN.
+  # below as RINGMASTER_BIN / JUGGLER_BIN / FAKE_LLAMA_SERVER_BIN.
   ringmaster,
-  circus,
+  juggler,
   fake-llama-server,
   # The troupe binary (messaging surface, RFC-0015). Plumbed below as
   # TROUPE_BIN; job_wakeup.bats / job_mcp.bats invoke `troupe send|read|mcp`.
@@ -89,9 +89,9 @@ let
           base = troupe;
           name = "troupe";
         };
-        CIRCUS_BIN = {
-          base = circus;
-          name = "circus";
+        JUGGLER_BIN = {
+          base = juggler;
+          name = "juggler";
         };
         FAKE_LLAMA_SERVER_BIN = {
           base = fake-llama-server;

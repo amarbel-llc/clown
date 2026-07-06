@@ -125,7 +125,7 @@ func TestProviderUsesPluginDirs(t *testing.T) {
 		"claude":   true,
 		"clownbox": true,
 		"codex":    false,
-		"circus":   false,
+		"juggler":   false,
 		"opencode": false,
 		"crush":    false,
 	}

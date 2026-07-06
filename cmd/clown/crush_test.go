@@ -11,11 +11,11 @@ import (
 func TestReadCrushLocalConfig_ParsesURLAndToken(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
-	if err := os.MkdirAll(filepath.Join(dir, ".config", "circus"), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, ".config", "juggler"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	content := "url = \"https://example.com/v1\"\ntoken = \"secret\"\n"
-	if err := os.WriteFile(filepath.Join(dir, ".config", "circus", "crush.toml"), []byte(content), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, ".config", "juggler", "crush.toml"), []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := readCrushLocalConfig()
@@ -42,11 +42,11 @@ func TestReadCrushLocalConfig_MissingFile(t *testing.T) {
 func TestReadCrushLocalConfig_MissingURL(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
-	if err := os.MkdirAll(filepath.Join(dir, ".config", "circus"), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, ".config", "juggler"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	content := "token = \"secret\"\n"
-	if err := os.WriteFile(filepath.Join(dir, ".config", "circus", "crush.toml"), []byte(content), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, ".config", "juggler", "crush.toml"), []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	_, err := readCrushLocalConfig()

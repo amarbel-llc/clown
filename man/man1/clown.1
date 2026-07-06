@@ -30,7 +30,7 @@ By default,
 disables a configurable set of Claude built-in tools (see
 .Sx DISALLOWED TOOLS
 below) and auto-mode, injects hierarchical system prompts from
-.Pa .circus/
+.Pa .clown/
 directories, launches HTTP MCP servers declared in plugin
 .Xr clown-json 5
 manifests, and loads Claude Code plugins specified at build time.
@@ -98,18 +98,18 @@ walks from
 up to
 .Ev HOME ,
 collecting
-.Pa .circus/
+.Pa .clown/
 directories at each level.
 .Ss Replace mode
 If any directory contains
-.Pa .circus/system-prompt ,
+.Pa .clown/system-prompt ,
 the deepest one replaces Claude's system prompt entirely via
 .Fl -system-prompt-file .
 .Ss Append mode
 All
 .Pa *.md
 files found in
-.Pa .circus/system-prompt.d/
+.Pa .clown/system-prompt.d/
 directories are concatenated shallowest-first and appended to the
 system prompt via
 .Fl -append-system-prompt-file .
@@ -121,7 +121,7 @@ Plugins MAY contribute fragments by shipping
 files inside their plugin directory; those fragments are layered
 between the builtin and user fragments in plugin-list order, as
 the consumer wrote them in
-.Cm mkCircus .
+.Cm mkJuggler .
 Append-mode fragments still flow through even when replace mode is
 active: replace applies to the user-supplied prompt, not to
 plugin-shipped instructions.
@@ -129,7 +129,7 @@ plugin-shipped instructions.
 .Nm
 ships with zero default plugins.
 Consumers supply plugin flake inputs via
-.Fn mkCircus
+.Fn mkJuggler
 at build time (see
 .Sx NIX INTERFACE
 below).
@@ -164,11 +164,11 @@ and server-initiated requests.
 .Sh NIX INTERFACE
 .Nm
 exports
-.Fn lib.${system}.mkCircus
+.Fn lib.${system}.mkJuggler
 within its flake outputs.
 This function accepts a single attribute set:
 .Bd -literal -offset indent
-mkCircus {
+mkJuggler {
   plugins = [
     { flake = moxy; dirs = [ "share/purse-first/moxy" ]; }
     { flake = bob;  dirs = [ "share/purse-first/*" ]; }
@@ -217,14 +217,14 @@ Build-time validation tests.
   outputs = { clown, moxy, bob, ... }:
     let
       system = "aarch64-darwin";
-      circus = clown.lib.${system}.mkCircus {
+      juggler = clown.lib.${system}.mkJuggler {
         plugins = [
           { flake = moxy; dirs = [ "share/purse-first/moxy" ]; }
           { flake = bob;  dirs = [ "share/purse-first/*" ]; }
         ];
       };
     in {
-      packages.${system}.default = circus.packages.default;
+      packages.${system}.default = juggler.packages.default;
     };
 }
 .Ed
@@ -313,16 +313,16 @@ Set automatically by the Nix wrapper; not intended for manual use.
 .El
 .Sh FILES
 .Bl -tag -width Ds
-.It Pa .circus/system-prompt
+.It Pa .clown/system-prompt
 Replace-mode system prompt file (deepest wins).
-.It Pa .circus/system-prompt.d/*.md
+.It Pa .clown/system-prompt.d/*.md
 Append-mode prompt fragments (shallowest first).
 .It Pa <plugin>/.clown-plugin/system-prompt-append.d/*.md
 Plugin-shipped append-mode fragments.
 Picked up at
-.Cm mkCircus
+.Cm mkJuggler
 build time and layered between the builtin fragments and the user's
-.Pa .circus/system-prompt.d/ .
+.Pa .clown/system-prompt.d/ .
 .El
 .Sh SEE ALSO
 .Xr claude-code 1 ,

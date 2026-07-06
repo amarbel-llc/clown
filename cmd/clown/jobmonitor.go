@@ -73,7 +73,7 @@ func monitorCommand(key string) string {
 // synthesized job-watch monitor dir. claude and clownbox thread pluginDirs
 // into runWithPluginHost (cmd.Run, not syscall.Exec); codex/opencode/crush
 // never receive pluginDirs and codex/naked exec away, so a synthesized dir
-// would leak. circus is a stub that ignores pluginDirs entirely.
+// would leak. juggler is a stub that ignores pluginDirs entirely.
 func providerUsesPluginDirs(provider string) bool {
 	switch provider {
 	case "claude", "clownbox":

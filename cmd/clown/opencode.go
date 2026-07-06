@@ -22,13 +22,13 @@ type opencodeLocalConfig struct {
 	Token string
 }
 
-// opencodeLocalConfigPath returns ~/.config/circus/opencode.toml.
+// opencodeLocalConfigPath returns ~/.config/clown/opencode.toml.
 func opencodeLocalConfigPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("home dir: %w", err)
 	}
-	return filepath.Join(home, ".config", "circus", "opencode.toml"), nil
+	return filepath.Join(home, ".config", "juggler", "opencode.toml"), nil
 }
 
 func readOpencodeLocalConfig() (opencodeLocalConfig, error) {
@@ -74,7 +74,7 @@ func readOpencodeLocalConfig() (opencodeLocalConfig, error) {
 	return cfg, nil
 }
 
-// writeOpencodeLocalConfigFile writes a minimal ~/.config/circus/opencode.toml
+// writeOpencodeLocalConfigFile writes a minimal ~/.config/clown/opencode.toml
 // (url + token) to path, creating the parent directory at 0o700 if missing.
 // The token is double-quoted to survive any shell-significant characters when
 // users hand-edit it later. URL goes through the same treatment for symmetry.
@@ -90,7 +90,7 @@ func writeOpencodeLocalConfigFile(path, url, token string) error {
 }
 
 // promptOpencodeLocalConfig walks the user through creating a missing
-// ~/.config/circus/opencode.toml via huh, writes it on confirmation, and
+// ~/.config/clown/opencode.toml via huh, writes it on confirmation, and
 // returns the parsed values. The caller must have verified
 // pluginhost.IsInteractive() before invoking — huh requires a TTY for both
 // stdin and stderr.
@@ -223,28 +223,28 @@ func writeOpencodeConfigFile(path, url, token, model string) error {
 	return os.WriteFile(path, data, 0o600)
 }
 
-// readCircusPortfile reads the bare port number circus writes to
-// ~/.local/state/circus/llama-server.port and returns it as a
+// readJugglerPortfile reads the bare port number juggler writes to
+// ~/.local/state/juggler/llama-server.port and returns it as a
 // host:port address (127.0.0.1:<port>) suitable for prepending
-// "http://" + appending "/v1". circus writes the bound port only;
-// the daemon always binds 127.0.0.1 (cmd/circus/daemon.go).
+// "http://" + appending "/v1". juggler writes the bound port only;
+// the daemon always binds 127.0.0.1 (cmd/juggler/daemon.go).
 //
 // For backward compatibility, if the file contains a value that
 // already looks like a host:port pair (contains a colon), it's
 // returned as-is — older daemon builds wrote "127.0.0.1:<port>".
-func readCircusPortfile() (string, error) {
+func readJugglerPortfile() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("home dir: %w", err)
 	}
-	path := filepath.Join(home, ".local", "state", "circus", "llama-server.port")
+	path := filepath.Join(home, ".local", "state", "juggler", "llama-server.port")
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return "", fmt.Errorf("circus not running (no portfile at %s): %w", path, err)
+		return "", fmt.Errorf("juggler not running (no portfile at %s): %w", path, err)
 	}
 	val := strings.TrimSpace(string(data))
 	if val == "" {
-		return "", fmt.Errorf("circus portfile is empty")
+		return "", fmt.Errorf("juggler portfile is empty")
 	}
 	if strings.Contains(val, ":") {
 		return val, nil
@@ -288,7 +288,7 @@ func runOpencode(opencodePath string, args []string, prof *profile.Profile) int 
 	if prof != nil && prof.Backend == "gateway" {
 		url, token, model = prof.URL, prof.Token, prof.Model
 	} else if prof != nil && prof.Backend == "local" {
-		addr, err := readCircusPortfile()
+		addr, err := readJugglerPortfile()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "clown: opencode local backend: %v\n", err)
 			return 1

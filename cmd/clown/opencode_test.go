@@ -15,10 +15,10 @@ func TestReadOpencodeLocalConfig_ParsesURLAndToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("HOME", dir)
-	if err := os.MkdirAll(filepath.Join(dir, ".config", "circus"), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, ".config", "juggler"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, ".config", "circus", "opencode.toml"), []byte(content), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, ".config", "juggler", "opencode.toml"), []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := readOpencodeLocalConfig()
@@ -45,11 +45,11 @@ func TestReadOpencodeLocalConfig_MissingFile(t *testing.T) {
 func TestReadOpencodeLocalConfig_MissingURL(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
-	if err := os.MkdirAll(filepath.Join(dir, ".config", "circus"), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, ".config", "juggler"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	content := "token = \"secret\"\n"
-	if err := os.WriteFile(filepath.Join(dir, ".config", "circus", "opencode.toml"), []byte(content), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, ".config", "juggler", "opencode.toml"), []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	_, err := readOpencodeLocalConfig()
@@ -86,7 +86,7 @@ func TestWriteOpencodeLocalConfigFile_CreatesParentDir(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 
-	cfgDir := filepath.Join(dir, ".config", "circus")
+	cfgDir := filepath.Join(dir, ".config", "juggler")
 	if _, err := os.Stat(cfgDir); !os.IsNotExist(err) {
 		t.Fatalf("expected %s to be missing before write, got err=%v", cfgDir, err)
 	}

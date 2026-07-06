@@ -30,20 +30,20 @@ func TestWalkPrompts_BuiltinAppendOnly(t *testing.T) {
 	}
 }
 
-func TestWalkPrompts_CircusPromptDFragments(t *testing.T) {
+func TestWalkPrompts_JugglerPromptDFragments(t *testing.T) {
 	home := t.TempDir()
 	project := filepath.Join(home, "code", "myproject")
 	os.MkdirAll(project, 0o755)
 
-	homePromptD := filepath.Join(home, ".circus", "system-prompt.d")
+	homePromptD := filepath.Join(home, ".clown", "system-prompt.d")
 	os.MkdirAll(homePromptD, 0o755)
 	os.WriteFile(filepath.Join(homePromptD, "global.md"), []byte("global-fragment"), 0o644)
 
-	codePromptD := filepath.Join(home, "code", ".circus", "system-prompt.d")
+	codePromptD := filepath.Join(home, "code", ".clown", "system-prompt.d")
 	os.MkdirAll(codePromptD, 0o755)
 	os.WriteFile(filepath.Join(codePromptD, "code.md"), []byte("code-fragment"), 0o644)
 
-	projPromptD := filepath.Join(project, ".circus", "system-prompt.d")
+	projPromptD := filepath.Join(project, ".clown", "system-prompt.d")
 	os.MkdirAll(projPromptD, 0o755)
 	os.WriteFile(filepath.Join(projPromptD, "project.md"), []byte("project-fragment"), 0o644)
 
@@ -64,18 +64,18 @@ func TestWalkPrompts_SystemPromptFileDeepestWins(t *testing.T) {
 	project := filepath.Join(home, "code", "myproject")
 	os.MkdirAll(project, 0o755)
 
-	os.MkdirAll(filepath.Join(home, ".circus"), 0o755)
-	os.WriteFile(filepath.Join(home, ".circus", "system-prompt"), []byte("home-prompt"), 0o644)
+	os.MkdirAll(filepath.Join(home, ".clown"), 0o755)
+	os.WriteFile(filepath.Join(home, ".clown", "system-prompt"), []byte("home-prompt"), 0o644)
 
-	os.MkdirAll(filepath.Join(project, ".circus"), 0o755)
-	os.WriteFile(filepath.Join(project, ".circus", "system-prompt"), []byte("project-prompt"), 0o644)
+	os.MkdirAll(filepath.Join(project, ".clown"), 0o755)
+	os.WriteFile(filepath.Join(project, ".clown", "system-prompt"), []byte("project-prompt"), 0o644)
 
 	result, err := WalkPrompts(project, home, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	wantPath := filepath.Join(project, ".circus", "system-prompt")
+	wantPath := filepath.Join(project, ".clown", "system-prompt")
 	if result.SystemPromptFile != wantPath {
 		t.Errorf("SystemPromptFile = %q, want %q", result.SystemPromptFile, wantPath)
 	}
@@ -86,15 +86,15 @@ func TestWalkPrompts_SystemPromptFileFromAncestor(t *testing.T) {
 	project := filepath.Join(home, "code", "myproject")
 	os.MkdirAll(project, 0o755)
 
-	os.MkdirAll(filepath.Join(home, ".circus"), 0o755)
-	os.WriteFile(filepath.Join(home, ".circus", "system-prompt"), []byte("home-prompt"), 0o644)
+	os.MkdirAll(filepath.Join(home, ".clown"), 0o755)
+	os.WriteFile(filepath.Join(home, ".clown", "system-prompt"), []byte("home-prompt"), 0o644)
 
 	result, err := WalkPrompts(project, home, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	wantPath := filepath.Join(home, ".circus", "system-prompt")
+	wantPath := filepath.Join(home, ".clown", "system-prompt")
 	if result.SystemPromptFile != wantPath {
 		t.Errorf("SystemPromptFile = %q, want %q", result.SystemPromptFile, wantPath)
 	}
@@ -116,7 +116,7 @@ func TestWalkPrompts_EmptyFilesSkipped(t *testing.T) {
 	}
 }
 
-func TestWalkPrompts_NoCircusDirs(t *testing.T) {
+func TestWalkPrompts_NoJugglerDirs(t *testing.T) {
 	home := t.TempDir()
 	project := filepath.Join(home, "project")
 	os.MkdirAll(project, 0o755)
@@ -139,7 +139,7 @@ func TestWalkPrompts_BuiltinBeforeUserFragments(t *testing.T) {
 	os.MkdirAll(builtinDir, 0o755)
 	os.WriteFile(filepath.Join(builtinDir, "00-builtin.md"), []byte("BUILTIN"), 0o644)
 
-	homePromptD := filepath.Join(home, ".circus", "system-prompt.d")
+	homePromptD := filepath.Join(home, ".clown", "system-prompt.d")
 	os.MkdirAll(homePromptD, 0o755)
 	os.WriteFile(filepath.Join(homePromptD, "user.md"), []byte("USER"), 0o644)
 
@@ -212,7 +212,7 @@ func TestWalkPrompts_BuiltinDirsSkipsMissingAndEmpty(t *testing.T) {
 
 func TestWalkPrompts_FragmentsSortedWithinDir(t *testing.T) {
 	home := t.TempDir()
-	promptD := filepath.Join(home, ".circus", "system-prompt.d")
+	promptD := filepath.Join(home, ".clown", "system-prompt.d")
 	os.MkdirAll(promptD, 0o755)
 	os.WriteFile(filepath.Join(promptD, "02-second.md"), []byte("second"), 0o644)
 	os.WriteFile(filepath.Join(promptD, "01-first.md"), []byte("first"), 0o644)

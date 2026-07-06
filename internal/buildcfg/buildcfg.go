@@ -3,7 +3,7 @@ package buildcfg
 var (
 	ClaudeCliPath       string
 	CodexCliPath        string
-	CircusCliPath       string
+	JugglerCliPath       string
 	OpencodeCliPath     string
 	CrushCliPath        string
 	ClownboxCliPath     string
@@ -26,7 +26,9 @@ var (
 	ClaudeCodeRev     string
 	CodexVersion      string
 	CodexRev          string
-	LlamaServerPath   string
+	// LlamaServerPath moved to cmd/juggler (a juggler-owned build var) so the
+	// juggler subsystem imports nothing from clown's buildcfg — the clean
+	// perforation line for a future extraction. See cmd/juggler/buildcfg.go.
 	// RingmasterPath and TroupePath are the absolute paths to the ringmaster
 	// and troupe binaries in their own Nix store outputs, baked at build time
 	// (RFC-0015 §6). clown synthesizes the wake monitor as `ringmaster monitor`
@@ -77,7 +79,7 @@ var (
 	PodmanPath string
 	// PodmanMachineName is the podman connection name (= machine
 	// name) to target via `--connection <name>` on every podman
-	// invocation. Baked at build time by mkCircus / mkClownGo so a
+	// invocation. Baked at build time by mkJuggler / mkClownGo so a
 	// downstream consumer (notably packages.dev, which targets the
 	// local dev-loop machine) can bypass the user's eng-managed
 	// podman-machine-default. Empty (the default) means no
@@ -99,7 +101,7 @@ var (
 	//   - "lima"   — talk to Lima via `limactl shell <machine> --
 	//                sudo nerdctl ...` (LimactlPath +
 	//                PodmanMachineName)
-	// Baked at build time by mkCircus / mkClownGo's tentBackend
+	// Baked at build time by mkJuggler / mkClownGo's tentBackend
 	// param.
 	//
 	// A future TOML profile system (clown's planned --profile work,

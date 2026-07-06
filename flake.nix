@@ -455,7 +455,7 @@
         };
 
         # Build-time defaults baked into the standalone packages.default
-        # and into mkClownPkg / mkCircus when no override is given. Match
+        # and into mkClownPkg / mkJuggler when no override is given. Match
         # the historical hardcoded "claude" provider and the builtin
         # claude-anthropic profile (provider=claude, backend=anthropic).
         defaultDefaultProvider = "claude";
@@ -593,8 +593,8 @@
           }
           .${system};
         # The top-level `tentClaudeEnabled` above is the default; mkClownGo
-        # (and through it, mkClownPkg and mkCircus) takes an
-        # `enableTentClaude` parameter that overrides it per-circus. Callers
+        # (and through it, mkClownPkg and mkJuggler) takes an
+        # `enableTentClaude` parameter that overrides it per-juggler. Callers
         # that need to avoid the linux claude-code closure on a darwin
         # builder (e.g. CI without a Linux builder) pass false.
         mkClownGo =
@@ -605,7 +605,7 @@
             # podmanMachineName burns a `--connection <name>` flag into
             # every podman invocation made by `--tent`. Empty (the
             # default) means clown defers to podman's own configured
-            # default connection. Set this on per-circus builds that
+            # default connection. Set this on per-juggler builds that
             # want to target an isolated dev-loop machine instead of
             # the user's eng-managed podman-machine-default — see the
             # `dev-tent-machine-*` flake apps and `packages.dev`.
@@ -645,7 +645,7 @@
               "-w"
               "-X github.com/amarbel-llc/clown/internal/buildcfg.ClaudeCliPath=${claudeCliPath}"
               "-X github.com/amarbel-llc/clown/internal/buildcfg.CodexCliPath=${codexCliPath}"
-              "-X github.com/amarbel-llc/clown/internal/buildcfg.CircusCliPath=${circus-go}/bin/circus"
+              "-X github.com/amarbel-llc/clown/internal/buildcfg.JugglerCliPath=${juggler-go}/bin/juggler"
               "-X github.com/amarbel-llc/clown/internal/buildcfg.AgentsFile=${agents-file}"
               "-X github.com/amarbel-llc/clown/internal/buildcfg.DisallowedToolsFile=${disallowed-tools-file}"
               "-X github.com/amarbel-llc/clown/internal/buildcfg.SystemPromptAppendD=${./system-prompt-append.d}"
@@ -684,16 +684,22 @@
             ];
           };
 
-        circus-go = buildGoApplication {
-          pname = "circus";
+        # juggler: the llama-server control-plane binary (client + `juggler
+        # daemon`). A self-contained subsystem (cmd/juggler + internal/juggler +
+        # internal/jugglermodels) that imports nothing from clown, so its one
+        # build var — LlamaServerPath — is juggler-owned (cmd/juggler/buildcfg.go)
+        # rather than clown's internal/buildcfg. Clean perforation line for a
+        # future extraction into its own repo.
+        juggler-go = buildGoApplication {
+          pname = "juggler";
           version = clownVersion;
           src = goSrc;
-          subPackages = [ "cmd/circus" ];
+          subPackages = [ "cmd/juggler" ];
           modules = ./gomod2nix.toml;
           ldflags = [
             "-s"
             "-w"
-            "-X github.com/amarbel-llc/clown/internal/buildcfg.LlamaServerPath=${llamaServerPath}"
+            "-X github.com/amarbel-llc/clown/cmd/juggler.LlamaServerPath=${llamaServerPath}"
           ];
         };
 
@@ -701,7 +707,7 @@
         # github.com/amarbel-llc/ringmaster flake input (the job platform:
         # jobwake + jobmcp, ringmaster/troupe verbs, both MCP surfaces). The
         # llama-server control-plane daemon that used to share cmd/ringmaster
-        # re-homed into `circus daemon` (circus-go, above). The input's
+        # re-homed into `juggler daemon` (juggler-go, above). The input's
         # `default` output is a symlinkJoin exposing bin/ringmaster +
         # bin/troupe + share/man. clown burns in RingmasterPath/TroupePath
         # (mkClownGo ldflags) so it can synthesize `ringmaster monitor`,
@@ -714,12 +720,12 @@
         # too slow to spin up under bats — and we'd never run it
         # against a real GGUF inside the nix sandbox. This serves
         # /health (200 OK) and /v1/models, which is all the launcher
-        # waits on. Same source as cmd/circus/testdata/fake-llama-server.
+        # waits on. Same source as cmd/juggler/testdata/fake-llama-server.
         fake-llama-server-go = buildGoApplication {
           pname = "fake-llama-server";
           version = clownVersion;
           src = goSrc;
-          subPackages = [ "cmd/circus/testdata/fake-llama-server" ];
+          subPackages = [ "cmd/juggler/testdata/fake-llama-server" ];
           modules = ./gomod2nix.toml;
           ldflags = [
             "-s"
@@ -780,7 +786,7 @@
         # sandboxed managed-settings variant, and the ldflag below.
         clownboxCliPath = "";
 
-        # Thin wrapper: sets CLOWN_PLUGIN_META (varies per mkCircus) then
+        # Thin wrapper: sets CLOWN_PLUGIN_META (varies per mkJuggler) then
         # execs the Go binary. All flag parsing, provider routing, and
         # plugin-host orchestration live in cmd/clown. The wrapped Go
         # binary varies by (defaultProvider, defaultProfile) — those
@@ -811,13 +817,13 @@
         # emits it as a manifest ($out/nix-support/clown-authored-manpages)
         # that `just check-lint-man` reads, so the lint/render gate covers the
         # same set without a duplicated `clown*` glob that silently drops
-        # ringmaster/troupe/circus and the *.7 pages (clown#162).
+        # ringmaster/troupe/juggler and the *.7 pages (clown#162).
         clownAuthoredManPages = [
           "man1/clown.1"
           "man1/clown-presence.1"
           "man1/clown-plugin-host.1"
           "man1/clown-stdio-bridge.1"
-          "man1/circus.1"
+          "man1/juggler.1"
           "man5/clown-json.5"
           "man5/clownfile.5"
           "man7/clown-plugin-protocol.7"
@@ -825,10 +831,10 @@
           # ringmaster module (ringmasterPkg's share/man, merged into the
           # default symlinkJoin) — the job-platform CLI pages. But the man7
           # control-plane docs stay clown-side: they describe the
-          # internal/ringmaster subsystem + the daemon, which re-homed into
-          # `circus daemon` here (the external module dropped them).
-          "man7/ringmaster.7"
-          "man7/ringmaster-testing.7"
+          # internal/juggler subsystem + the daemon, which re-homed into
+          # `juggler daemon` here (the external module dropped them).
+          "man7/juggler.7"
+          "man7/juggler-testing.7"
         ];
         clown-manpages =
           pkgs.runCommand "clown-manpages"
@@ -957,7 +963,7 @@
               (mkClownBin { inherit pluginMeta clownGoBin; })
               clown-plugin-host
               clown-stdio-bridge
-              circus-go
+              juggler-go
               # ringmasterPkg is the external module's `default` symlinkJoin:
               # bin/ringmaster + bin/troupe + share/man in one output.
               ringmasterPkg
@@ -993,27 +999,27 @@
             ;
           batsLane = bats.lib.${system}.batsLane;
           bats-libs = batsLibs;
-          # The daemon e2e lane consumes circus (`circus daemon` — the
+          # The daemon e2e lane consumes juggler (`juggler daemon` — the
           # re-homed llama-server control plane) and a Go fake llama-server
           # (tiny http stand-in compiled from
-          # cmd/circus/testdata/fake-llama-server, same source the
+          # cmd/juggler/testdata/fake-llama-server, same source the
           # launcher_test.go / server_test.go fixtures use). ringmaster +
           # troupe are the external module's binaries for the job-platform
           # lanes (both live in ringmasterPkg's bin/).
           ringmaster = ringmasterPkg;
           troupe = ringmasterPkg;
-          circus = circus-go;
+          juggler = juggler-go;
           fake-llama-server = fake-llama-server-go;
         };
 
-        mkCircus =
+        mkJuggler =
           {
             plugins ? [ ],
             defaultProvider ? defaultDefaultProvider,
             defaultProfile ? defaultDefaultProfile,
             enableTentClaude ? tentClaudeEnabled,
             # See mkClownGo for the podmanMachineName contract.
-            # Downstream consumers building their own circus can set
+            # Downstream consumers building their own juggler can set
             # this to target a dev-loop machine.
             podmanMachineName ? "",
             # See mkClownGo for the tentBackend contract. Recognized:
@@ -1353,15 +1359,15 @@
           # both binaries + manpages live in its `default` symlinkJoin).
           # Bundled into clown's default symlinkJoin so `nix build` ships
           # them. The llama-server control-plane daemon no longer lives here
-          # — it re-homed into `circus daemon` (packages.default's circus-go),
-          # and homeManagerModules.ringmaster now runs that.
+          # — it re-homed into `juggler daemon` (packages.default's juggler-go),
+          # and homeManagerModules.juggler now runs that.
           ringmaster = ringmasterPkg;
           troupe = ringmasterPkg;
-          # circus: standalone build of the circus binary (llama-server
-          # control-plane client + the `circus daemon` server, re-homed from
-          # ringmaster). homeManagerModules.ringmaster consumes this via its
-          # `package` option; also the CircusCliPath burned into clown.
-          circus = circus-go;
+          # juggler: standalone build of the juggler binary (llama-server
+          # control-plane client + the `juggler daemon` server, re-homed from
+          # ringmaster). homeManagerModules.juggler consumes this via its
+          # `package` option; also the JugglerCliPath burned into clown.
+          juggler = juggler-go;
           # bats-libs surfaces the amarbel-llc/bats helper bundle
           # (bats-support, bats-assert, bats-emo, bats-island) under
           # share/bats. Already used by the sandboxed batsLane via
@@ -1414,7 +1420,7 @@
           ];
         };
 
-        lib.mkCircus = mkCircus;
+        lib.mkJuggler = mkJuggler;
 
         # Dev-loop apps. `nix run .#dev-tent-machine-{up,down,status}`
         # manages the isolated podman-machine that `nix build .#dev`
@@ -1449,15 +1455,15 @@
       # Cross-system outputs (modules, library) live outside the
       # eachDefaultSystem block because they're system-independent.
       #
-      # programs.ringmaster home-manager module — see FDR-0010 and
+      # programs.juggler home-manager module — see FDR-0010 and
       # docs/plans/2026-05-18-ringmaster-control-plane.md § Task 16/17.
       # The llama-server control-plane daemon re-homed from `ringmaster
-      # daemon` into `circus daemon` when the job platform was extracted, so
-      # this module now execs the circus binary. Consumes
-      # packages.<system>.circus as the daemon binary; users wire it via
-      #   programs.ringmaster.enable = true;
-      #   programs.ringmaster.package = clown.packages.${pkgs.system}.circus;
-      homeManagerModules.ringmaster = import ./nix/hm/ringmaster.nix;
+      # daemon` into `juggler daemon` when the job platform was extracted, so
+      # this module now execs the juggler binary. Consumes
+      # packages.<system>.juggler as the daemon binary; users wire it via
+      #   programs.juggler.enable = true;
+      #   programs.juggler.package = clown.packages.${pkgs.system}.juggler;
+      homeManagerModules.juggler = import ./nix/hm/juggler.nix;
 
       # services.tent-backend-lima home-manager module — see
       # nix/hm/tent-backend-lima.nix for the full design. Manages a

@@ -16,11 +16,11 @@ package main
 //     config to disable provider auto-update so we don't reach out to
 //     Catwalk on every launch.
 //   - gateway: OpenAI-compatible endpoint configured by the user in
-//     ~/.config/circus/crush.toml (parsed identically to opencode.toml).
+//     ~/.config/clown/crush.toml (parsed identically to opencode.toml).
 //     Clown writes a "custom" provider with type=openai-compat.
-//   - local: the circus-managed llama-server. The portfile at
-//     ~/.local/state/circus/llama-server.port gives us the bound port;
-//     readCircusPortfile() prefixes 127.0.0.1 to produce the host:port
+//   - local: the juggler-managed llama-server. The portfile at
+//     ~/.local/state/juggler/llama-server.port gives us the bound port;
+//     readJugglerPortfile() prefixes 127.0.0.1 to produce the host:port
 //     pair this code uses to build the openai-compat base_url.
 //
 // Safety defaults: crush already prompts for tool permissions by default.
@@ -52,13 +52,13 @@ type crushLocalConfig struct {
 	Token string
 }
 
-// crushLocalConfigPath returns ~/.config/circus/crush.toml.
+// crushLocalConfigPath returns ~/.config/clown/crush.toml.
 func crushLocalConfigPath() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("home dir: %w", err)
 	}
-	return filepath.Join(home, ".config", "circus", "crush.toml"), nil
+	return filepath.Join(home, ".config", "juggler", "crush.toml"), nil
 }
 
 func readCrushLocalConfig() (crushLocalConfig, error) {
@@ -314,7 +314,7 @@ func runCrush(crushPath string, args []string, prof *profile.Profile) int {
 		backend = crushBackendOpenAICompat
 		baseURL, apiKey, model = prof.URL, prof.Token, prof.Model
 	case prof != nil && prof.Backend == "local":
-		addr, err := readCircusPortfile()
+		addr, err := readJugglerPortfile()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "clown: crush local backend: %v\n", err)
 			return 1

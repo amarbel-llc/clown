@@ -1,36 +1,36 @@
 # Throwaway investigation recipes. Live here, not the root justfile, to
 # keep top-level `just --list` legible. Invoked as
-# `just explore <recipe>` (e.g. `just explore issue-35-mkcircus-plugin-closure`).
+# `just explore <recipe>` (e.g. `just explore issue-35-mkjuggler-plugin-closure`).
 
-# Smoke-test the new crush provider against the local circus llama-server.
-# Starts circus (idempotent — attaches to existing daemon), waits for the
+# Smoke-test the new crush provider against the local juggler llama-server.
+# Starts juggler (idempotent — attaches to existing daemon), waits for the
 # portfile, then execs `clown --profile crush-local`. Requires
-# `just build` to have produced ./result/bin/{clown,circus}. Exits if
-# circus fails to bring up llama-server (no model? port conflict?).
+# `just build` to have produced ./result/bin/{clown,juggler}. Exits if
+# juggler fails to bring up llama-server (no model? port conflict?).
 crush-local-smoke MODEL='':
     #!/usr/bin/env bash
     set -euo pipefail
     root=$(git rev-parse --show-toplevel)
     cd "$root"
 
-    if [[ ! -x ./result/bin/circus || ! -x ./result/bin/clown ]]; then
-        echo "FAIL: ./result/bin/{circus,clown} missing — run 'just build' first" >&2
+    if [[ ! -x ./result/bin/juggler || ! -x ./result/bin/clown ]]; then
+        echo "FAIL: ./result/bin/{juggler,clown} missing — run 'just build' first" >&2
         exit 2
     fi
 
-    portfile="$HOME/.local/state/circus/llama-server.port"
+    portfile="$HOME/.local/state/juggler/llama-server.port"
 
-    # When MODEL is given, stop any running daemon first — circus
+    # When MODEL is given, stop any running daemon first — juggler
     # silently ignores --model when attaching to an already-running
-    # llama-server (cmd/circus/daemon.go:attachOrStart).
+    # llama-server (cmd/juggler/daemon.go:attachOrStart).
     if [[ -n "{{MODEL}}" ]]; then
-        echo ">> circus stop (to honor --model {{MODEL}})"
-        ./result/bin/circus stop || true
-        echo ">> circus start --model {{MODEL}}"
-        ./result/bin/circus start --model "{{MODEL}}"
+        echo ">> juggler stop (to honor --model {{MODEL}})"
+        ./result/bin/juggler stop || true
+        echo ">> juggler start --model {{MODEL}}"
+        ./result/bin/juggler start --model "{{MODEL}}"
     else
-        echo ">> circus start"
-        ./result/bin/circus start
+        echo ">> juggler start"
+        ./result/bin/juggler start
     fi
 
     echo ">> waiting for portfile $portfile"
@@ -42,7 +42,7 @@ crush-local-smoke MODEL='':
     done
     if [[ ! -s "$portfile" ]]; then
         echo "FAIL: portfile never appeared at $portfile" >&2
-        ./result/bin/circus status >&2 || true
+        ./result/bin/juggler status >&2 || true
         exit 1
     fi
     echo "   port: $(cat "$portfile")"
@@ -53,12 +53,12 @@ crush-local-smoke MODEL='':
     echo
     exec ./result/bin/clown --profile crush-local
 
-# Stop the circus daemon started by crush-local-smoke.
+# Stop the juggler daemon started by crush-local-smoke.
 crush-local-stop:
     #!/usr/bin/env bash
     set -euo pipefail
     cd "$(git rev-parse --show-toplevel)"
-    ./result/bin/circus stop || echo "circus already stopped"
+    ./result/bin/juggler stop || echo "juggler already stopped"
 #
 # Submodule recipes run with CWD set to this directory by default; the
 # recipes below use absolute paths or `git rev-parse --show-toplevel`
@@ -396,24 +396,24 @@ allowtools-explore-rewrite-smoke:
     fi
 
 # Repro for issue #35 (closed as misdiagnosed 2026-04-29): verify whether
-# mkCircus preserves plugin store paths in the closure of
-# circus.packages.default. Builds a synthetic fake-flake plugin (a
+# mkJuggler preserves plugin store paths in the closure of
+# juggler.packages.default. Builds a synthetic fake-flake plugin (a
 # runCommand creating share/purse-first/issue35-test-plugin/), wires it
-# into mkCircus, then dumps the recursive closure and reports whether
+# into mkJuggler, then dumps the recursive closure and reports whether
 # the plugin's store path appears.
 #
 # Theory (confirmed by the repro): Nix reference scanning of
 # clown-plugin-meta picks up the literal /nix/store paths interpolated
 # into plugin-dirs, so the plugin is a transitive runtime dep and
-# survives GC as long as circus.packages.default is rooted.
-issue-35-mkcircus-plugin-closure:
+# survives GC as long as juggler.packages.default is rooted.
+issue-35-mkjuggler-plugin-closure:
     #!/usr/bin/env bash
     set -euo pipefail
     root=$(git rev-parse --show-toplevel)
     out_link=$(mktemp -d /tmp/clown-issue-35-XXXXXX)/result
     trap 'rm -rf "$(dirname "$out_link")"' EXIT
 
-    echo ">> building circus.packages.default with synthetic plugin"
+    echo ">> building juggler.packages.default with synthetic plugin"
     nix build --show-trace --impure --out-link "$out_link" --expr "
       let
         clown = builtins.getFlake \"path:$root\";
@@ -429,12 +429,12 @@ issue-35-mkcircus-plugin-closure:
           packages.\${system}.default = testPlugin;
           rev = \"issue35-test\";
         };
-        circus = clown.lib.\${system}.mkCircus {
+        juggler = clown.lib.\${system}.mkJuggler {
           plugins = [
             { flake = testPluginFlake; dirs = [ \"share/purse-first/issue35-test-plugin\" ]; }
           ];
         };
-      in circus.packages.default
+      in juggler.packages.default
     "
 
     echo
@@ -446,13 +446,13 @@ issue-35-mkcircus-plugin-closure:
     echo ">> recursive closure (filtered to issue-35-test-plugin entries):"
     if nix-store --query --requisites "$result_path" | grep issue-35-test-plugin; then
         echo
-        echo "VERDICT: plugin store path IS in the closure of circus.packages.default."
+        echo "VERDICT: plugin store path IS in the closure of juggler.packages.default."
         echo "         The bug as filed (#35) is misdiagnosed — Nix reference scanning"
         echo "         already keeps the plugin alive across GC."
     else
         echo
         echo "VERDICT: plugin store path is NOT in the closure."
-        echo "         Bug #35 is real: a consumer rooting only circus.packages.default"
+        echo "         Bug #35 is real: a consumer rooting only juggler.packages.default"
         echo "         would let the plugin be garbage-collected."
         exit 1
     fi

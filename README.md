@@ -12,7 +12,7 @@ Clown is a Nix flake. The bare wrapper (no plugins) can be run directly:
 nix run github:amarbel-llc/clown
 ```
 
-To build clown with plugins, use `mkCircus` from your own flake (see
+To build clown with plugins, use `mkJuggler` from your own flake (see
 [Plugins](#plugins) below).
 
 ## What it does
@@ -30,12 +30,12 @@ Clown wraps the `claude` binary with four additions:
    either feature through clown.
 
 3. **Hierarchical system prompt injection** — walks from `$PWD` up to `$HOME`,
-   collecting `.circus/` directories along the way:
+   collecting `.clown/` directories along the way:
 
-   - **Replace mode**: If any directory contains `.circus/system-prompt`, the
+   - **Replace mode**: If any directory contains `.clown/system-prompt`, the
      deepest one replaces Claude's system prompt entirely
      (`--system-prompt-file`).
-   - **Append mode**: All `.md` files found in `.circus/system-prompt.d/`
+   - **Append mode**: All `.md` files found in `.clown/system-prompt.d/`
      directories are concatenated shallowest-first and appended to the system
      prompt (`--append-system-prompt-file`). Builtin fragments (in
      `system-prompt-append.d/`) are always prepended before user fragments.
@@ -49,12 +49,12 @@ All other arguments are passed through to `claude` unchanged.
 ## Plugins
 
 Clown ships with zero default plugins. Consumers supply plugin flake inputs
-via `mkCircus`, which resolves plugin directories and burns `--plugin-dir`
+via `mkJuggler`, which resolves plugin directories and burns `--plugin-dir`
 flags into the wrapper at build time.
 
-### mkCircus
+### mkJuggler
 
-`clown.lib.${system}.mkCircus` accepts a single attribute set with a
+`clown.lib.${system}.mkJuggler` accepts a single attribute set with a
 `plugins` list. Each plugin definition has two fields:
 
 | Field | Type | Description |
@@ -80,14 +80,14 @@ It returns `{ packages.default, devShells.default, checks }`.
   outputs = { self, nixpkgs, clown, moxy, bob, ... }:
     let
       system = "aarch64-darwin";
-      circus = clown.lib.${system}.mkCircus {
+      juggler = clown.lib.${system}.mkJuggler {
         plugins = [
           { flake = moxy; dirs = [ "share/purse-first/moxy" ]; }
           { flake = bob;  dirs = [ "share/purse-first/*" ]; }
         ];
       };
     in {
-      packages.${system}.default = circus.packages.default;
+      packages.${system}.default = juggler.packages.default;
     };
 }
 ```
@@ -180,22 +180,22 @@ for both `clown.json` and the same plugin's `.claude-plugin/plugin.json` to
 declare a `monitors` key; pick one source. See `clown-json(5)` for the full
 schema and validation rules.
 
-## .circus directory
+## .clown directory
 
 Place prompt fragments anywhere in your directory hierarchy:
 
 ```
-~/.circus/system-prompt.d/
+~/.clown/system-prompt.d/
     00-global-rules.md        # applied everywhere
-~/projects/.circus/system-prompt.d/
+~/projects/.clown/system-prompt.d/
     00-coding-standards.md    # applied in ~/projects and below
-~/projects/myapp/.circus/system-prompt
+~/projects/myapp/.clown/system-prompt
                               # replaces system prompt entirely for myapp
 ```
 
-- Append fragments (`.circus/system-prompt.d/*.md`) stack from shallowest to
+- Append fragments (`.clown/system-prompt.d/*.md`) stack from shallowest to
   deepest — broader rules come first, project-specific ones last.
-- A replace file (`.circus/system-prompt`) short-circuits the default system
+- A replace file (`.clown/system-prompt`) short-circuits the default system
   prompt. Only the deepest one wins. Append fragments still apply on top.
 
 ## Building

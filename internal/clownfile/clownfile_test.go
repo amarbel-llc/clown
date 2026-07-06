@@ -146,14 +146,14 @@ func TestDiscoverXDGLayerPrecedence(t *testing.T) {
 	// XDG overrides provider, adds backend; model inherits from base.
 	writeFile(t, xdg, "[profile]\nprovider = \"codex\"\nbackend = \"lima\"\n")
 	// Ancestor ($HOME/clownfile) overrides provider again; backend + model inherit.
-	write(t, home, "[profile]\nprovider = \"circus\"\n")
+	write(t, home, "[profile]\nprovider = \"juggler\"\n")
 
 	cf, err := Discover(home, home, base, xdg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cf.Profile.Provider != "circus" {
-		t.Errorf("provider = %q, want circus (ancestor overrides XDG)", cf.Profile.Provider)
+	if cf.Profile.Provider != "juggler" {
+		t.Errorf("provider = %q, want juggler (ancestor overrides XDG)", cf.Profile.Provider)
 	}
 	if cf.Profile.Backend != "lima" {
 		t.Errorf("backend = %q, want lima (from XDG, un-overridden)", cf.Profile.Backend)

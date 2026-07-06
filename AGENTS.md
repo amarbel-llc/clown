@@ -6,23 +6,23 @@ including Codex and Claude Code.
 ## Overview
 
 Clown is a Nix-packaged wrapper around coding agents (Claude Code, Codex,
-local models via `circus`, OpenAI-compatible providers via `opencode`, and
+local models via `juggler`, OpenAI-compatible providers via `opencode`, and
 charmbracelet's crush) that injects custom system prompts, applies per-provider
 safety defaults, and provides fish shell completions and session management.
 A single `clown` binary dispatches to the selected provider via
-`--provider <claude|codex|circus|opencode|crush>` (default: `claude`; override
+`--provider <claude|codex|juggler|opencode|crush>` (default: `claude`; override
 with `CLOWN_PROVIDER` env var). Built entirely with Nix flakes; no standalone
 test suite (pre-merge validation via `just build`).
 
 ## Agent gotchas specific to this repo
 
-- **Skills vs `.circus/` are different things — don't confuse them.** Skills
+- **Skills vs `.clown/` are different things — don't confuse them.** Skills
   (`/eng:fdr`, `/eng:rfc`, `/init`, etc.) are listed in the session's
   available-skills system reminder and invoked via the `Skill` tool. Don't
-  go hunting for them on the filesystem under `.circus/skills/` — that path
-  doesn't exist. `.circus/` is exclusively for clown's system-prompt
-  injection: `.circus/system-prompt` (replace) and
-  `.circus/system-prompt.d/*.md` (append fragments). When asked to
+  go hunting for them on the filesystem under `.clown/skills/` — that path
+  doesn't exist. `.clown/` is exclusively for clown's system-prompt
+  injection: `.clown/system-prompt` (replace) and
+  `.clown/system-prompt.d/*.md` (append fragments). When asked to
   "create an FDR / ADR / RFC", invoke the matching skill rather than
   reverse-engineering the conventions by copying an existing doc.
 
@@ -39,11 +39,11 @@ Format: `nix fmt` (treefmt; config in `treefmt.nix`)
 
 ## Smoke recipes for local-model workflows
 
-While FDR-0011 phase 2 (`--backend=circus`, tracked by #87) is still
+While FDR-0011 phase 2 (`--backend=juggler`, tracked by #87) is still
 pending, the `justfile` carries a family of host-side recipes that
-drive circus + ringmaster + the harnesses (claude / opencode / crush)
+drive juggler + ringmaster + the harnesses (claude / opencode / crush)
 against a tailnet-exposed local model. They share a common shape:
-look up the running instance's port via `circus list`, resolve this
+look up the running instance's port via `juggler list`, resolve this
 host's MagicDNS name via `tailscale status --json`, then either probe
 the URL with curl or launch a harness pointed at it. Each fails fast
 with friendly errors if ringmaster isn't running, the alias isn't
@@ -53,7 +53,7 @@ Read the comment header on each recipe for the full mechanism — they
 spell out which dispatch path inside clown each one is exercising and
 the model-quality caveats. Quick map:
 
-- **`smoke-ringmaster-multi`** — multi-instance lifecycle against
+- **`smoke-juggler-multi`** — multi-instance lifecycle against
   real `llama-server` children (FDR-0010 criterion 2). Fake-server
   parity lives in `zz-tests_bats/ringmaster.bats`.
 - **`smoke-tailnet-url [alias]`** — compute the tailnet URL for a
@@ -66,7 +66,7 @@ the model-quality caveats. Quick map:
 - **`smoke-opencode-against-tailnet [alias]`** /
   **`smoke-crush-against-tailnet [alias]`** — launch opencode/crush
   via the bare-provider dispatch (no `--profile`). Backs up + writes
-  `~/.config/circus/<provider>.toml`, restores on EXIT via a bash
+  `~/.config/clown/<provider>.toml`, restores on EXIT via a bash
   trap. Talks to llama-server's OpenAI endpoint, so tool calls work
   if the model is OpenAI-function-call-trained.
 - **`download-ad-hoc <name> <url>`** — fetch a GGUF by URL (no SHA
@@ -78,7 +78,7 @@ the model-quality caveats. Quick map:
   tool calls through opencode/crush actually work.
 
 All these recipes will be replaced (or removed) once FDR-0011 phase 2
-ships `clown --backend=circus --circus-bind=…`. Until then they're
+ships `clown --backend=juggler --juggler-bind=…`. Until then they're
 the supported way to drive local models through clown.
 
 ## Dev loop for tent
@@ -250,7 +250,7 @@ Cross-references: `zz-pocs/tent-lima/` (the spike), clown#99
 ## Tent backend lever (podman ↔ lima)
 
 `clown --tent` picks its container runtime at build time via the
-`tentBackend` parameter on `mkClownGo` / `mkClownPkg` / `mkCircus` in
+`tentBackend` parameter on `mkClownGo` / `mkClownPkg` / `mkJuggler` in
 `flake.nix`. Two values are recognized:
 
 - `"podman"` (default) — talk to podman directly. Uses
@@ -392,10 +392,10 @@ The flake produces a `symlinkJoin` of five components:
 
 2. **`clown-go`** (`cmd/clown/main.go`, Go binary): The main entrypoint.
    Parses `--provider` and dispatches to Claude or Codex. Walks from `$PWD`
-   up to `$HOME` collecting `.circus/` directories for system prompt injection
-   (via `internal/circus`). Two prompt modes:
-   - **Replace**: Deepest `.circus/system-prompt` file wins
-   - **Append**: All `.md` files from `.circus/system-prompt.d/` directories,
+   up to `$HOME` collecting `.clown/` directories for system prompt injection
+   (via `internal/juggler`). Two prompt modes:
+   - **Replace**: Deepest `.clown/system-prompt` file wins
+   - **Append**: All `.md` files from `.clown/system-prompt.d/` directories,
      shallowest-first, plus builtin fragments from `system-prompt-append.d/`
    - Per-provider safety defaults (via `internal/provider`):
      - Claude: `--disallowed-tools 'Bash(*)'` (plus `WebFetch`, `WebSearch`,
@@ -471,29 +471,29 @@ The flake produces a `symlinkJoin` of five components:
    completions. Detects `--provider` on the command line (or `CLOWN_PROVIDER`
    env var) and offers Claude or Codex flags/subcommands accordingly.
 
-   **Circus provider.** `--provider circus` runs Claude Code against a local
-   `llama-server` daemon instead of Anthropic's API. `cmd/circus` manages the
-   daemon lifecycle (pidfile/portfile at `~/.local/state/circus/`, log at
-   `~/.local/state/circus/llama-server.log`). On start, if stdout is a pipe
-   (i.e., clown launched it), circus emits a clown-protocol handshake
+   **Juggler provider.** `--provider juggler` runs Claude Code against a local
+   `llama-server` daemon instead of Anthropic's API. `cmd/juggler` manages the
+   daemon lifecycle (pidfile/portfile at `~/.local/state/juggler/`, log at
+   `~/.local/state/juggler/llama-server.log`). On start, if stdout is a pipe
+   (i.e., clown launched it), juggler emits a clown-protocol handshake
    (`1|1|tcp|<addr>|streamable-http`) and blocks until stdin closes. Clown
    reads the handshake, sets `ANTHROPIC_BASE_URL` to the local server address,
    and sets `ANTHROPIC_CUSTOM_MODEL_OPTION` to bypass Claude Code's model
    validation. `--model <name-or-path>` selects the GGUF model: absolute paths
-   pass through; bare names are resolved from `~/.local/share/circus/models/<name>.gguf`.
-   When `--model` is omitted (and `CIRCUS_MODEL` is unset), `cmd/clown/circus.go
-   pickCircusModel` lists the models directory and either auto-picks (1 model),
+   pass through; bare names are resolved from `~/.local/share/juggler/models/<name>.gguf`.
+   When `--model` is omitted (and `JUGGLER_MODEL` is unset), `cmd/clown/juggler.go
+   pickJugglerModel` lists the models directory and either auto-picks (1 model),
    shows a `huh.NewSelect` picker (2+ models on a TTY), refuses with a hint to
-   run `circus download` (0 models), or refuses non-interactively (2+ models, no
+   run `juggler download` (0 models), or refuses non-interactively (2+ models, no
    TTY). The llama-server binary path is the only model-related ldflag burned
    in (`internal/buildcfg.LlamaServerPath`). A separate `nixpkgs-llama` flake
    input (pinned to nixpkgs master) provides a llama-cpp build with Anthropic
    Messages API support (`/v1/messages`), which predates the nixos-25.11 stable
    pin.
 
-   **Model management.** `circus models` lists installed models (from
-   `~/.local/share/circus/models/`). `circus download <name>` fetches a model
-   from the baked-in registry (`cmd/circus/registry.json`, embedded via
+   **Model management.** `juggler models` lists installed models (from
+   `~/.local/share/juggler/models/`). `juggler download <name>` fetches a model
+   from the baked-in registry (`cmd/juggler/registry.json`, embedded via
    `go:embed`), validates SHA256, and installs it atomically via temp-file +
    rename. A charmbracelet/bubbles progress bar renders during download. The
    registry ships with Qwen3 and Gemma3 variants; SHA256 digests in the current
@@ -501,7 +501,7 @@ The flake produces a `symlinkJoin` of five components:
 
    **Opencode provider.** `--provider opencode` runs the `opencode` TUI against
    any OpenAI-compatible backend. Configuration is read from
-   `~/.config/circus/opencode.toml` (fields: `url`, `token`), which is user-local
+   `~/.config/clown/opencode.toml` (fields: `url`, `token`), which is user-local
    and never committed to the repo. Clown writes a temporary `opencode.json`
    config (in a `mkdtemp` dir) and passes it to opencode via `XDG_CONFIG_HOME`,
    using the `@ai-sdk/openai-compatible` custom provider. The default model is
@@ -512,9 +512,9 @@ The flake produces a `symlinkJoin` of five components:
    one of three backends (parallel to opencode's split): the Anthropic API
    passthrough (uses crush's builtin Anthropic provider, authenticates via
    `ANTHROPIC_API_KEY`), an OpenAI-compatible gateway configured via
-   `~/.config/circus/crush.toml` (`url`, `token` — same TOML format as
-   `opencode.toml`), or the local circus llama-server discovered through
-   `~/.local/state/circus/portfile`. Clown writes a temporary `crush.json`
+   `~/.config/clown/crush.toml` (`url`, `token` — same TOML format as
+   `opencode.toml`), or the local juggler llama-server discovered through
+   `~/.local/state/juggler/portfile`. Clown writes a temporary `crush.json`
    to a `mkdtemp` dir and points crush at it via `CRUSH_GLOBAL_CONFIG`
    (the documented override env var). The config disables crush's Catwalk
    provider auto-update so launches are reproducible. The crush binary is
@@ -527,7 +527,7 @@ The flake produces a `symlinkJoin` of five components:
    **Profile system (planned).** A future `--profile <name>` flag (and
    `CLOWN_PROFILE` env var) will select named (provider, backend, model) tuples
    from `profiles/builtin.toml` (open, burned in) and
-   `~/.config/circus/profiles.toml` (user-local, may contain URLs/tokens). The
+   `~/.config/clown/profiles.toml` (user-local, may contain URLs/tokens). The
    design doc is at `docs/plans/2026-04-23-profiles-design.md` and the
    implementation plan at `docs/plans/2026-04-23-profiles.md`.
 
@@ -541,7 +541,7 @@ The flake produces a `symlinkJoin` of five components:
    `ringmaster.packages.<system>.default` and still synthesizes the
    `clown-builtin-jobs` plugin around those binaries (`cmd/clown/jobmonitor.go`
    stays). The **llama-server control-plane daemon** did NOT move — it re-homed
-   from `ringmaster daemon` into `circus daemon` (`cmd/circus`), and the
+   from `ringmaster daemon` into `juggler daemon` (`cmd/juggler`), and the
    on-disk namespace renamed `clown/jobs`→`ringmaster/jobs` and
    `clown/presence`→`ringmaster/presence`. `CLOWN_*` env-var names are
    unchanged. So in the descriptions below, `internal/jobwake`, `internal/jobmcp`,

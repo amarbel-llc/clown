@@ -51,7 +51,7 @@ func loadProfiles(additionalPath string) ([]profile.Profile, error) {
 		if err != nil {
 			return builtin, nil
 		}
-		additionalPath = filepath.Join(home, ".config", "circus", "profiles.toml")
+		additionalPath = filepath.Join(home, ".config", "juggler", "profiles.toml")
 	}
 
 	additional, err := profile.Load(additionalPath)
@@ -415,7 +415,7 @@ func runWithFlags(flags parsedFlags) int {
 
 	// Per FDR 0003, plugin-contributed system-prompt-append.d
 	// fragments are layered between clown's builtin fragments and
-	// the user's .circus/system-prompt.d/ fragments.
+	// the user's .clown/system-prompt.d/ fragments.
 	builtinAppendDirs := append([]string{buildcfg.SystemPromptAppendD}, readPluginFragmentDirs()...)
 
 	prompts, err := promptwalk.WalkPrompts(cwd, homeDir, builtinAppendDirs)
@@ -441,8 +441,8 @@ func runWithFlags(flags parsedFlags) int {
 		return runClaude(cliPath, flags, prompts, pluginDirs)
 	case "codex":
 		return runCodex(cliPath, flags, prompts)
-	case "circus":
-		return runCircus(cliPath, flags, prompts, pluginDirs)
+	case "juggler":
+		return runJuggler(cliPath, flags, prompts, pluginDirs)
 	case "opencode":
 		return runOpencode(cliPath, flags.forwarded, selectedProfile)
 	case "crush":
@@ -486,7 +486,7 @@ func applyClownfileProfile(flags *parsedFlags, p clownfile.Profile) {
 // registry), so a clownfile model default is not injected for them.
 func providerTakesModelFlag(provider string) bool {
 	switch provider {
-	case "claude", "circus", "clownbox":
+	case "claude", "juggler", "clownbox":
 		return true
 	}
 	return false
@@ -563,10 +563,10 @@ func newBackend(backend string) (tent.Backend, error) {
 		return tent.NewPodman(buildcfg.PodmanPath, buildcfg.PodmanMachineName), nil
 	case "lima":
 		if buildcfg.LimactlPath == "" {
-			return nil, fmt.Errorf("--tent (lima backend) requires a build with limactl wired in; this build has buildcfg.LimactlPath empty (try `nix build .#dev-lima` or set tentBackend=\"lima\" on mkCircus)")
+			return nil, fmt.Errorf("--tent (lima backend) requires a build with limactl wired in; this build has buildcfg.LimactlPath empty (try `nix build .#dev-lima` or set tentBackend=\"lima\" on mkJuggler)")
 		}
 		if buildcfg.PodmanMachineName == "" {
-			return nil, fmt.Errorf("--tent (lima backend) requires a machine name; this build has buildcfg.PodmanMachineName empty (set podmanMachineName on mkCircus)")
+			return nil, fmt.Errorf("--tent (lima backend) requires a machine name; this build has buildcfg.PodmanMachineName empty (set podmanMachineName on mkJuggler)")
 		}
 		return tent.NewLima(buildcfg.LimactlPath, buildcfg.PodmanMachineName), nil
 	default:
@@ -1381,27 +1381,27 @@ func runCodex(cliPath string, flags parsedFlags, prompts promptwalk.PromptResult
 	return 0 // unreachable
 }
 
-// runCircus is a stub. The `--provider=circus` path used to launch the
-// circus binary as a managed child and read a clown-protocol handshake
+// runJuggler is a stub. The `--provider=juggler` path used to launch the
+// juggler binary as a managed child and read a clown-protocol handshake
 // over its stdout to discover the llama-server URL. That codepath is
-// gone: circus is now a UDS client of ringmaster and no longer emits a
+// gone: juggler is now a UDS client of ringmaster and no longer emits a
 // handshake (see Task 13d of docs/plans/2026-05-18-ringmaster-control-plane.md).
 // The replacement — clown talking to ringmaster directly to discover
 // the llama-server URL — lives in plan 2 (FDR-0011, surfaced via
-// `--provider=claude --backend=circus`).
+// `--provider=claude --backend=juggler`).
 //
 // Until that lands, fail loudly with a pointer at what to do instead.
-// pickCircusModel and the rest of circus.go stay in the tree; plan 2
+// pickJugglerModel and the rest of juggler.go stay in the tree; plan 2
 // reuses the model picker.
-func runCircus(circusPath string, flags parsedFlags, prompts promptwalk.PromptResult, pluginDirs []string) int {
-	_, _, _, _ = circusPath, flags, prompts, pluginDirs
-	fmt.Fprintln(os.Stderr, "clown: --provider=circus is temporarily unavailable while the circus/ringmaster")
+func runJuggler(jugglerPath string, flags parsedFlags, prompts promptwalk.PromptResult, pluginDirs []string) int {
+	_, _, _, _ = jugglerPath, flags, prompts, pluginDirs
+	fmt.Fprintln(os.Stderr, "clown: --provider=juggler is temporarily unavailable while the juggler/ringmaster")
 	fmt.Fprintln(os.Stderr, "       migration completes. Enable ringmaster in your home-manager config and")
 	fmt.Fprintln(os.Stderr, "       start an instance manually:")
-	fmt.Fprintln(os.Stderr, "         programs.ringmaster.enable = true;   # then: home-manager switch")
-	fmt.Fprintln(os.Stderr, "         circus start <model>                  # spawn a llama-server instance")
-	fmt.Fprintln(os.Stderr, "       Then point your tools at the address printed by `circus status`. The")
-	fmt.Fprintln(os.Stderr, "       --provider=claude --backend=circus integration is tracked in FDR-0011.")
+	fmt.Fprintln(os.Stderr, "         programs.juggler.enable = true;   # then: home-manager switch")
+	fmt.Fprintln(os.Stderr, "         juggler start <model>                  # spawn a llama-server instance")
+	fmt.Fprintln(os.Stderr, "       Then point your tools at the address printed by `juggler status`. The")
+	fmt.Fprintln(os.Stderr, "       --provider=claude --backend=juggler integration is tracked in FDR-0011.")
 	return 1
 }
 
@@ -1499,8 +1499,8 @@ func resolveProvider(name string) (string, error) {
 		return buildcfg.ClaudeCliPath, nil
 	case "codex":
 		return buildcfg.CodexCliPath, nil
-	case "circus":
-		return buildcfg.CircusCliPath, nil
+	case "juggler":
+		return buildcfg.JugglerCliPath, nil
 	case "opencode":
 		return buildcfg.OpencodeCliPath, nil
 	case "crush":
@@ -1540,7 +1540,7 @@ func appendPromptFragments(path string, frags []string) error {
 
 // readPluginFragmentDirs returns the absolute paths to plugin-shipped
 // .clown-plugin/system-prompt-append.d/ directories, in plugin-list
-// order. Per FDR 0003, mkCircus's resolvePlugins step writes these to
+// order. Per FDR 0003, mkJuggler's resolvePlugins step writes these to
 // `$CLOWN_PLUGIN_META/plugin-fragment-dirs`; clown reads them at
 // runtime and layers them between builtin and user fragments.
 func readPluginFragmentDirs() []string {
@@ -1586,7 +1586,7 @@ func printHelp() {
 	fmt.Printf(`Usage: clown [clown-flags] -- [provider-args]
 
 Clown flags (must appear before --):
-  --provider <name>          Provider to use: claude, codex, circus, opencode (default: %s)
+  --provider <name>          Provider to use: claude, codex, juggler, opencode (default: %s)
   --profile <name>           Profile name; implies --provider from profile config%s
   --naked                    Pass through to provider without clown wrapping
   --skip-failed              Continue if plugin servers fail to start

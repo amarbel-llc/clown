@@ -13,7 +13,7 @@ type PromptResult struct {
 }
 
 // WalkPrompts walks from startDir up to homeDir (inclusive), collecting
-// .circus/ prompt fragments for system-prompt append mode and finding
+// .clown/ prompt fragments for system-prompt append mode and finding
 // the nearest system-prompt file for replace mode.
 //
 // builtinAppendDirs are read first, in order, for *.md files that are
@@ -24,12 +24,12 @@ type PromptResult struct {
 // directories in plugin-list order.
 //
 // Fragment collection order: builtin dirs (in argument order), then
-// .circus/system-prompt.d/*.md from shallowest ancestor to deepest
+// .clown/system-prompt.d/*.md from shallowest ancestor to deepest
 // (sorted within each directory). Each non-empty fragment is followed
 // by two newlines.
 //
 // The system-prompt file search walks deepest-first and returns the
-// first .circus/system-prompt found.
+// first .clown/system-prompt found.
 func WalkPrompts(startDir, homeDir string, builtinAppendDirs []string) (PromptResult, error) {
 	ancestors, err := walkAncestors(startDir, homeDir)
 	if err != nil {
@@ -53,7 +53,7 @@ func WalkPrompts(startDir, homeDir string, builtinAppendDirs []string) (PromptRe
 	}
 
 	for _, dir := range reversed {
-		promptD := filepath.Join(dir, ".circus", "system-prompt.d")
+		promptD := filepath.Join(dir, ".clown", "system-prompt.d")
 		if err := collectFragments(&b, promptD); err != nil && !os.IsNotExist(err) {
 			return PromptResult{}, err
 		}
@@ -61,7 +61,7 @@ func WalkPrompts(startDir, homeDir string, builtinAppendDirs []string) (PromptRe
 
 	var systemPromptFile string
 	for _, dir := range ancestors {
-		candidate := filepath.Join(dir, ".circus", "system-prompt")
+		candidate := filepath.Join(dir, ".clown", "system-prompt")
 		if fi, err := os.Stat(candidate); err == nil && !fi.IsDir() {
 			systemPromptFile = candidate
 			break
@@ -101,7 +101,7 @@ func walkAncestors(startDir, homeDir string) ([]string, error) {
 
 // Ancestors returns the directories from startDir up to homeDir (or /),
 // deepest-first, both endpoints included. It is the exported form of the
-// `.circus/` ascent, reused by the clownfile cascade (RFC-0013 §1.1).
+// `.clown/` ascent, reused by the clownfile cascade (RFC-0013 §1.1).
 func Ancestors(startDir, homeDir string) ([]string, error) {
 	return walkAncestors(startDir, homeDir)
 }

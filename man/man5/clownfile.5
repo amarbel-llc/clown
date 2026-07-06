@@ -59,7 +59,7 @@ The named-profile registry
 is a separate mechanism and wins over these defaults.
 .Bl -tag -width Ds
 .It Sy provider
-The provider (claude, codex, circus, opencode, crush).
+The provider (claude, codex, juggler, opencode, crush).
 Applied only when neither
 .Fl -provider
 nor
@@ -72,7 +72,7 @@ The tent container backend (podman or lima) used by
 The model.
 Injected as
 .Fl -model
-for the claude-family providers (claude, circus, clownbox) when the user has not
+for the claude-family providers (claude, juggler, clownbox) when the user has not
 already passed
 .Fl -model ;
 other providers source their model elsewhere.

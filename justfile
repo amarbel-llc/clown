@@ -153,7 +153,7 @@ cover-bats-html:
 # dir is derived as <prefix>/share/purse-first/moxy.
 #
 # Skipped unconditionally: moxy is a downstream consumer of clown
-# (consumers wire it via lib.mkCircus). Validating clown-plugin-host
+# (consumers wire it via lib.mkJuggler). Validating clown-plugin-host
 # against a downstream artifact is a layering violation. Set
 # CLOWN_RUN_DOWNSTREAM_TESTS=1 to opt back in for local debugging.
 [group("test")]
@@ -290,7 +290,7 @@ render-man PAGE:
 #
 # Scope: the clown-authored page set is read from the manifest the
 # clown-manpages derivation emits ($out/nix-support/clown-authored-manpages),
-# NOT a `clown*` glob — the glob silently dropped ringmaster/troupe/circus and
+# NOT a `clown*` glob — the glob silently dropped ringmaster/troupe/juggler and
 # the *.7 pages (clown#162). Upstream pages we repackage (claude-code*, codex*)
 # carry other copyrights and pre-existing mandoc warnings we don't own, so they
 # stay out of the set by not being listed in clownAuthoredManPages.
@@ -436,9 +436,9 @@ explore-skip-failed MODE: build
 clean:
     rm -rf result
 
-# Build clown with moxy + bob plugins via mkCircus, using the local worktree
+# Build clown with moxy + bob plugins via mkJuggler, using the local worktree
 # as the clown input. Only evaluates clown/moxy/bob — not the full eng flake.
-build-circus *ARGS:
+build-juggler *ARGS:
     #!/usr/bin/env bash
     set -euo pipefail
     root=$(git rev-parse --show-toplevel)
@@ -448,18 +448,18 @@ build-circus *ARGS:
         moxy  = builtins.getFlake \"github:amarbel-llc/moxy\";
         bob   = builtins.getFlake \"github:amarbel-llc/bob\";
         system = builtins.currentSystem;
-        circus = clown.lib.\${system}.mkCircus {
+        juggler = clown.lib.\${system}.mkJuggler {
           plugins = [
             { flake = moxy; dirs = [ \"share/purse-first/moxy\" ]; }
             { flake = bob;  dirs = [ \"share/purse-first/*\" ]; }
           ];
         };
-      in circus.packages.default
+      in juggler.packages.default
     "
 
-# Build and exec clown with plugins (mkCircus).
-run-circus *ARGS:
-    just build-circus
+# Build and exec clown with plugins (mkJuggler).
+run-juggler *ARGS:
+    just build-juggler
     exec ./result/bin/clown {{ARGS}}
 
 # Verify plugin agents appear in `claude agents list` using the in-repo
@@ -534,37 +534,37 @@ bump: && build
     nix flake update
 
 # End-to-end smoke against a real llama-server + a real GGUF.
-# Exercises the full ringmaster -> launcher -> llama-cpp -> circus
+# Exercises the full ringmaster -> launcher -> llama-cpp -> juggler
 # control path, plus a /v1/messages request to the spawned instance.
 # Refuses to run if a daemon is already up (we don't want to step
 # on the user's home-manager-managed daemon).
 #
-# Usage: just smoke-ringmaster [model-name]
-# Default model: gemma3-1b (smallest GGUF in ~/.local/share/circus/models)
+# Usage: just smoke-juggler [model-name]
+# Default model: gemma3-1b (smallest GGUF in ~/.local/share/juggler/models)
 [group("test")]
-smoke-ringmaster MODEL="gemma3-1b": build
+smoke-juggler MODEL="gemma3-1b": build
     #!/usr/bin/env bash
     set -euo pipefail
     model="{{MODEL}}"
-    gguf="$HOME/.local/share/circus/models/${model}.gguf"
+    gguf="$HOME/.local/share/juggler/models/${model}.gguf"
     if [[ ! -f "$gguf" ]]; then
         echo "FAIL: model not found at $gguf" >&2
         echo "      installed models:" >&2
-        ls "$HOME/.local/share/circus/models/" 2>/dev/null | sed 's/^/        /' >&2
+        ls "$HOME/.local/share/juggler/models/" 2>/dev/null | sed 's/^/        /' >&2
         exit 1
     fi
-    sock="$HOME/.local/state/circus/control.sock"
-    if [[ -S "$sock" ]] && ./result/bin/circus list >/dev/null 2>&1; then
-        echo "FAIL: a circus daemon is already running on $sock" >&2
+    sock="$HOME/.local/state/juggler/control.sock"
+    if [[ -S "$sock" ]] && ./result/bin/juggler list >/dev/null 2>&1; then
+        echo "FAIL: a juggler daemon is already running on $sock" >&2
         echo "      stop it first (launchctl unload / kill) so this smoke" >&2
         echo "      doesn't step on home-manager state" >&2
         exit 1
     fi
     rm -f "$sock"
     log=$(mktemp)
-    trap 'set +e; ./result/bin/circus stop "$model" >/dev/null 2>&1 || true; [[ -n "${rm_pid:-}" ]] && kill "$rm_pid" 2>/dev/null; wait 2>/dev/null; rm -f "$log"' EXIT
+    trap 'set +e; ./result/bin/juggler stop "$model" >/dev/null 2>&1 || true; [[ -n "${rm_pid:-}" ]] && kill "$rm_pid" 2>/dev/null; wait 2>/dev/null; rm -f "$log"' EXIT
     echo ">> launching ringmaster (log: $log)"
-    ./result/bin/circus daemon >"$log" 2>&1 &
+    ./result/bin/juggler daemon >"$log" 2>&1 &
     rm_pid=$!
     for i in $(seq 1 50); do
         [[ -S "$sock" ]] && break
@@ -577,24 +577,24 @@ smoke-ringmaster MODEL="gemma3-1b": build
     fi
     echo ">> ringmaster up"
     echo
-    echo "=== circus models ==="
-    ./result/bin/circus models
+    echo "=== juggler models ==="
+    ./result/bin/juggler models
     echo
-    echo "=== circus list (expect empty) ==="
-    ./result/bin/circus list
+    echo "=== juggler list (expect empty) ==="
+    ./result/bin/juggler list
     echo
-    echo "=== circus start $model (may take several seconds for llama-cpp to warm up) ==="
-    ./result/bin/circus start "$model"
+    echo "=== juggler start $model (may take several seconds for llama-cpp to warm up) ==="
+    ./result/bin/juggler start "$model"
     echo
-    echo "=== circus list (expect one row) ==="
-    ./result/bin/circus list
+    echo "=== juggler list (expect one row) ==="
+    ./result/bin/juggler list
     echo
-    echo "=== circus status $model ==="
-    ./result/bin/circus status "$model"
+    echo "=== juggler status $model ==="
+    ./result/bin/juggler status "$model"
     echo
-    port=$(./result/bin/circus list | awk -v a="$model" '$1==a {print $4}')
+    port=$(./result/bin/juggler list | awk -v a="$model" '$1==a {print $4}')
     if [[ -z "$port" ]]; then
-        echo "FAIL: could not parse port from circus list" >&2
+        echo "FAIL: could not parse port from juggler list" >&2
         exit 1
     fi
     echo "=== POST /v1/messages on 127.0.0.1:$port ==="
@@ -607,49 +607,49 @@ smoke-ringmaster MODEL="gemma3-1b": build
         exit 1
     fi
     echo
-    echo "=== circus stop $model ==="
-    ./result/bin/circus stop "$model"
+    echo "=== juggler stop $model ==="
+    ./result/bin/juggler stop "$model"
     echo
-    echo "=== circus list (expect empty again) ==="
-    ./result/bin/circus list
+    echo "=== juggler list (expect empty again) ==="
+    ./result/bin/juggler list
     echo
-    echo "OK: ringmaster + llama-server + circus round-trip succeeded"
+    echo "OK: ringmaster + llama-server + juggler round-trip succeeded"
 
 # Multi-instance live smoke for ringmaster (FDR-0010 criterion 2). Real
-# llama-server children, real circus CLI, real RPC. Two independent
+# llama-server children, real juggler CLI, real RPC. Two independent
 # aliases load two different GGUFs, both serve /v1/messages
 # concurrently on distinct ports, then both stop cleanly. Complements
 # the fake-llama-server bats coverage in zz-tests_bats/ringmaster.bats
 # by proving the same lifecycle survives a real, slow, multi-GB model
 # load.
 #
-# Usage: just smoke-ringmaster-multi [model-a] [model-b]
+# Usage: just smoke-juggler-multi [model-a] [model-b]
 # Defaults: gemma3-1b + qwen3-1.7b (both small, both already on disk).
 [group("test")]
-smoke-ringmaster-multi MODEL_A="gemma3-1b" MODEL_B="qwen3-1.7b": build
+smoke-juggler-multi MODEL_A="gemma3-1b" MODEL_B="qwen3-1.7b": build
     #!/usr/bin/env bash
     set -euo pipefail
     a="{{MODEL_A}}"
     b="{{MODEL_B}}"
     for m in "$a" "$b"; do
-        gguf="$HOME/.local/share/circus/models/${m}.gguf"
+        gguf="$HOME/.local/share/juggler/models/${m}.gguf"
         if [[ ! -f "$gguf" ]]; then
             echo "FAIL: model not found at $gguf" >&2
-            ls "$HOME/.local/share/circus/models/" 2>/dev/null | sed 's/^/        /' >&2
+            ls "$HOME/.local/share/juggler/models/" 2>/dev/null | sed 's/^/        /' >&2
             exit 1
         fi
     done
-    sock="$HOME/.local/state/circus/control.sock"
-    if [[ -S "$sock" ]] && ./result/bin/circus list >/dev/null 2>&1; then
-        echo "FAIL: a circus daemon is already running on $sock" >&2
+    sock="$HOME/.local/state/juggler/control.sock"
+    if [[ -S "$sock" ]] && ./result/bin/juggler list >/dev/null 2>&1; then
+        echo "FAIL: a juggler daemon is already running on $sock" >&2
         echo "      stop it first so this smoke doesn't step on home-manager state" >&2
         exit 1
     fi
     rm -f "$sock"
     log=$(mktemp)
-    trap 'set +e; ./result/bin/circus stop "$a" >/dev/null 2>&1 || true; ./result/bin/circus stop "$b" >/dev/null 2>&1 || true; [[ -n "${rm_pid:-}" ]] && kill "$rm_pid" 2>/dev/null; wait 2>/dev/null; rm -f "$log"' EXIT
+    trap 'set +e; ./result/bin/juggler stop "$a" >/dev/null 2>&1 || true; ./result/bin/juggler stop "$b" >/dev/null 2>&1 || true; [[ -n "${rm_pid:-}" ]] && kill "$rm_pid" 2>/dev/null; wait 2>/dev/null; rm -f "$log"' EXIT
     echo ">> launching ringmaster (log: $log)"
-    ./result/bin/circus daemon >"$log" 2>&1 &
+    ./result/bin/juggler daemon >"$log" 2>&1 &
     rm_pid=$!
     for i in $(seq 1 50); do
         [[ -S "$sock" ]] && break
@@ -662,19 +662,19 @@ smoke-ringmaster-multi MODEL_A="gemma3-1b" MODEL_B="qwen3-1.7b": build
     fi
     echo ">> ringmaster up"
     echo
-    echo "=== circus start $a ==="
-    ./result/bin/circus start "$a"
+    echo "=== juggler start $a ==="
+    ./result/bin/juggler start "$a"
     echo
-    echo "=== circus start $b ==="
-    ./result/bin/circus start "$b"
+    echo "=== juggler start $b ==="
+    ./result/bin/juggler start "$b"
     echo
-    echo "=== circus list (expect two rows) ==="
-    ./result/bin/circus list
+    echo "=== juggler list (expect two rows) ==="
+    ./result/bin/juggler list
     echo
-    port_a=$(./result/bin/circus list | awk -v alias="$a" '$1==alias {print $4}')
-    port_b=$(./result/bin/circus list | awk -v alias="$b" '$1==alias {print $4}')
+    port_a=$(./result/bin/juggler list | awk -v alias="$a" '$1==alias {print $4}')
+    port_b=$(./result/bin/juggler list | awk -v alias="$b" '$1==alias {print $4}')
     if [[ -z "$port_a" || -z "$port_b" ]]; then
-        echo "FAIL: could not parse both ports from circus list" >&2
+        echo "FAIL: could not parse both ports from juggler list" >&2
         exit 1
     fi
     if [[ "$port_a" == "$port_b" ]]; then
@@ -701,30 +701,30 @@ smoke-ringmaster-multi MODEL_A="gemma3-1b" MODEL_B="qwen3-1.7b": build
         fi
         echo
     done
-    echo "=== circus stop $a ==="
-    ./result/bin/circus stop "$a"
+    echo "=== juggler stop $a ==="
+    ./result/bin/juggler stop "$a"
     echo
-    echo "=== circus list (expect one row: $b only) ==="
-    ./result/bin/circus list
+    echo "=== juggler list (expect one row: $b only) ==="
+    ./result/bin/juggler list
     echo
-    if ./result/bin/circus list | awk '{print $1}' | grep -qx "$a"; then
+    if ./result/bin/juggler list | awk '{print $1}' | grep -qx "$a"; then
         echo "FAIL: $a still in list after stop" >&2
         exit 1
     fi
-    if ! ./result/bin/circus list | awk '{print $1}' | grep -qx "$b"; then
+    if ! ./result/bin/juggler list | awk '{print $1}' | grep -qx "$b"; then
         echo "FAIL: $b disappeared from list (should still be running)" >&2
         exit 1
     fi
-    echo "=== circus stop $b ==="
-    ./result/bin/circus stop "$b"
+    echo "=== juggler stop $b ==="
+    ./result/bin/juggler stop "$b"
     echo
-    echo "=== circus list (expect empty) ==="
-    ./result/bin/circus list
+    echo "=== juggler list (expect empty) ==="
+    ./result/bin/juggler list
     echo
     echo "OK: two concurrent ringmaster-managed llama-server instances round-tripped"
 
-# Compute and probe the tailnet URL for a running circus instance.
-# Resolves the alias to its port via `circus list`, the host to its
+# Compute and probe the tailnet URL for a running juggler instance.
+# Resolves the alias to its port via `juggler list`, the host to its
 # MagicDNS name via `tailscale status --json`, then POSTs a short
 # /v1/messages request (Anthropic-format — what claude-code talks to).
 # Accepts both "text" and "thinking" content as evidence the instance
@@ -743,7 +743,7 @@ smoke-ringmaster-multi MODEL_A="gemma3-1b" MODEL_B="qwen3-1.7b": build
 # for gemma3's known crush incompatibility).
 #
 # Pending FDR-0011 phase 2 (#87); will be replaced by `clown
-# --backend=circus --circus-bind=…` which does this resolution
+# --backend=juggler --juggler-bind=…` which does this resolution
 # internally.
 #
 # Usage: just smoke-tailnet-url [alias]
@@ -761,19 +761,19 @@ smoke-tailnet-url ALIAS="gemma3-12b": build
         echo "FAIL: jq not on PATH" >&2
         exit 1
     fi
-    sock="${RINGMASTER_SOCKET:-$HOME/.local/state/circus/control.sock}"
+    sock="${JUGGLER_SOCKET:-$HOME/.local/state/juggler/control.sock}"
     if [[ ! -S "$sock" ]]; then
         echo "FAIL: ringmaster socket not found at $sock" >&2
-        echo "      start the circus daemon first: ./result/bin/circus daemon &" >&2
+        echo "      start the juggler daemon first: ./result/bin/juggler daemon &" >&2
         exit 1
     fi
-    port=$(./result/bin/circus list | awk -v a="$alias" '$1==a {print $4}')
+    port=$(./result/bin/juggler list | awk -v a="$alias" '$1==a {print $4}')
     if [[ -z "$port" ]]; then
         echo "FAIL: alias \"$alias\" not registered with ringmaster" >&2
-        ./result/bin/circus list >&2
+        ./result/bin/juggler list >&2
         exit 1
     fi
-    bind=$(./result/bin/circus list | awk -v a="$alias" '$1==a {print $3}')
+    bind=$(./result/bin/juggler list | awk -v a="$alias" '$1==a {print $3}')
     if [[ "$bind" != "0.0.0.0" ]]; then
         echo "WARNING: alias \"$alias\" is bound to $bind, not 0.0.0.0 — tailnet reach not guaranteed" >&2
     fi
@@ -805,9 +805,9 @@ smoke-tailnet-url ALIAS="gemma3-12b": build
     echo "OK: tailnet URL is reachable and serving inference"
     echo "    URL: ${url}"
 
-# Launch clown pointed at a tailnet-exposed circus instance.
+# Launch clown pointed at a tailnet-exposed juggler instance.
 #
-# Mechanism: clown has no --backend=circus flag yet (FDR-0011 phase 2,
+# Mechanism: clown has no --backend=juggler flag yet (FDR-0011 phase 2,
 # tracked by #87), so this recipe sets the four env vars that
 # claude-code reads natively:
 #
@@ -853,16 +853,16 @@ smoke-clown-against-tailnet ALIAS="gemma3-12b" NAKED="1": build
         echo "FAIL: jq not on PATH" >&2
         exit 1
     fi
-    sock="${RINGMASTER_SOCKET:-$HOME/.local/state/circus/control.sock}"
+    sock="${JUGGLER_SOCKET:-$HOME/.local/state/juggler/control.sock}"
     if [[ ! -S "$sock" ]]; then
         echo "FAIL: ringmaster socket not found at $sock" >&2
-        echo "      start the circus daemon first: ./result/bin/circus daemon &" >&2
+        echo "      start the juggler daemon first: ./result/bin/juggler daemon &" >&2
         exit 1
     fi
-    port=$(./result/bin/circus list | awk -v a="$alias" '$1==a {print $4}')
+    port=$(./result/bin/juggler list | awk -v a="$alias" '$1==a {print $4}')
     if [[ -z "$port" ]]; then
         echo "FAIL: alias \"$alias\" not registered with ringmaster" >&2
-        ./result/bin/circus list >&2
+        ./result/bin/juggler list >&2
         exit 1
     fi
     host=$(tailscale status --self --json | jq -r '.Self.DNSName' | sed 's/\.$//')
@@ -884,19 +884,19 @@ smoke-clown-against-tailnet ALIAS="gemma3-12b" NAKED="1": build
         ANTHROPIC_CUSTOM_MODEL_OPTION='{"model":"'"$alias"'","max_tokens":2048}' \
         ./result/bin/clown $naked_flag -- --model "$alias"
 
-# Launch opencode pointed at a tailnet-exposed circus instance.
+# Launch opencode pointed at a tailnet-exposed juggler instance.
 #
 # Why the file dance: clown's runOpencode dispatch is (1) --profile
 # with backend=gateway → use prof.URL/Token, (2) --profile with
 # backend=local → read the (broken since FDR-0010) portfile, (3) no
-# --profile → read ~/.config/circus/opencode.toml for url+token.
+# --profile → read ~/.config/clown/opencode.toml for url+token.
 # Path 3 is the only one that works without code changes. Clown
 # transforms that URL into an `@ai-sdk/openai-compatible` provider
 # entry in a temp opencode.json and points opencode at it via
 # OPENCODE_CONFIG, so all opencode↔llama-server traffic goes through
 # /v1/chat/completions (OpenAI format).
 #
-# Lifecycle: backs up any existing ~/.config/circus/opencode.toml to
+# Lifecycle: backs up any existing ~/.config/clown/opencode.toml to
 # <file>.bak-$$, writes the synthesized one for this run, restores on
 # EXIT via a bash trap (including Ctrl-C / SIGINT). Two concurrent
 # invocations are racy because the backup name is PID-suffixed but
@@ -911,8 +911,8 @@ smoke-clown-against-tailnet ALIAS="gemma3-12b" NAKED="1": build
 # narrate them in prose.
 #
 # Pending FDR-0011 phase 2 (#87) + #86 (flexible registry): will be
-# replaced by `clown --provider=opencode --backend=circus
-# --circus-alias=<x> --circus-bind=…` which sources the URL from
+# replaced by `clown --provider=opencode --backend=juggler
+# --juggler-alias=<x> --juggler-bind=…` which sources the URL from
 # ringmaster RPC directly and doesn't touch the user's TOML.
 #
 # Usage: just smoke-opencode-against-tailnet [alias]
@@ -926,22 +926,22 @@ smoke-opencode-against-tailnet ALIAS="gemma3-12b": build
         echo "FAIL: tailscale or jq not on PATH" >&2
         exit 1
     fi
-    sock="${RINGMASTER_SOCKET:-$HOME/.local/state/circus/control.sock}"
+    sock="${JUGGLER_SOCKET:-$HOME/.local/state/juggler/control.sock}"
     if [[ ! -S "$sock" ]]; then
         echo "FAIL: ringmaster socket not found at $sock" >&2
         exit 1
     fi
-    port=$(./result/bin/circus list | awk -v a="$alias" '$1==a {print $4}')
+    port=$(./result/bin/juggler list | awk -v a="$alias" '$1==a {print $4}')
     if [[ -z "$port" ]]; then
         echo "FAIL: alias \"$alias\" not registered with ringmaster" >&2
-        ./result/bin/circus list >&2
+        ./result/bin/juggler list >&2
         exit 1
     fi
     host=$(tailscale status --self --json | jq -r '.Self.DNSName' | sed 's/\.$//')
     # llama-server's OpenAI-compatible endpoint is /v1/{chat/completions,models,...}
     # The TOML field is the base URL; opencode appends path segments itself.
     url="http://${host}:${port}/v1"
-    cfg="$HOME/.config/circus/opencode.toml"
+    cfg="$HOME/.config/clown/opencode.toml"
     cfg_dir="$(dirname "$cfg")"
     mkdir -p "$cfg_dir"
     bak=""
@@ -960,7 +960,7 @@ smoke-opencode-against-tailnet ALIAS="gemma3-12b": build
     ' EXIT
     {
         echo "# Synthesized by 'just smoke-opencode-against-tailnet'."
-        echo "# Pointing opencode at the tailnet-exposed circus instance."
+        echo "# Pointing opencode at the tailnet-exposed juggler instance."
         echo "url = \"${url}\""
         echo "token = \"local\""
     } >"$cfg"
@@ -970,11 +970,11 @@ smoke-opencode-against-tailnet ALIAS="gemma3-12b": build
     # Bare --provider, no --profile — falls through to readOpencodeLocalConfig.
     ./result/bin/clown --provider=opencode -- --model "$alias"
 
-# Launch crush pointed at a tailnet-exposed circus instance.
+# Launch crush pointed at a tailnet-exposed juggler instance.
 #
 # Same shape as smoke-opencode-against-tailnet but for crush:
 #
-#   - reads ~/.config/circus/crush.toml (not opencode.toml)
+#   - reads ~/.config/clown/crush.toml (not opencode.toml)
 #   - clown writes a CRUSH_GLOBAL_CONFIG dir with a synthesized
 #     crush.json containing one provider of type=openai-compat
 #     pointed at the tailnet URL
@@ -988,7 +988,7 @@ smoke-opencode-against-tailnet ALIAS="gemma3-12b": build
 # message-alternation pattern; see #57.
 #
 # Pending FDR-0011 phase 2 (#87): will be replaced by `clown
-# --provider=crush --backend=circus …`.
+# --provider=crush --backend=juggler …`.
 #
 # Usage: just smoke-crush-against-tailnet [alias]
 #   alias defaults to gemma3-12b
@@ -1001,20 +1001,20 @@ smoke-crush-against-tailnet ALIAS="gemma3-12b": build
         echo "FAIL: tailscale or jq not on PATH" >&2
         exit 1
     fi
-    sock="${RINGMASTER_SOCKET:-$HOME/.local/state/circus/control.sock}"
+    sock="${JUGGLER_SOCKET:-$HOME/.local/state/juggler/control.sock}"
     if [[ ! -S "$sock" ]]; then
         echo "FAIL: ringmaster socket not found at $sock" >&2
         exit 1
     fi
-    port=$(./result/bin/circus list | awk -v a="$alias" '$1==a {print $4}')
+    port=$(./result/bin/juggler list | awk -v a="$alias" '$1==a {print $4}')
     if [[ -z "$port" ]]; then
         echo "FAIL: alias \"$alias\" not registered with ringmaster" >&2
-        ./result/bin/circus list >&2
+        ./result/bin/juggler list >&2
         exit 1
     fi
     host=$(tailscale status --self --json | jq -r '.Self.DNSName' | sed 's/\.$//')
     url="http://${host}:${port}/v1"
-    cfg="$HOME/.config/circus/crush.toml"
+    cfg="$HOME/.config/clown/crush.toml"
     cfg_dir="$(dirname "$cfg")"
     mkdir -p "$cfg_dir"
     bak=""
@@ -1033,7 +1033,7 @@ smoke-crush-against-tailnet ALIAS="gemma3-12b": build
     ' EXIT
     {
         echo "# Synthesized by 'just smoke-crush-against-tailnet'."
-        echo "# Pointing crush at the tailnet-exposed circus instance."
+        echo "# Pointing crush at the tailnet-exposed juggler instance."
         echo "url = \"${url}\""
         echo "token = \"local\""
     } >"$cfg"
@@ -1120,16 +1120,16 @@ smoke-dev-tent DOWN="0":
 
 # Download a model by URL and emit a ready-to-paste registry entry.
 #
-# Uses `circus download <name> --url <url>` (the ad-hoc path added in
+# Uses `juggler download <name> --url <url>` (the ad-hoc path added in
 # commit a9a288e). The first fetch runs with no SHA verification —
 # this recipe computes the SHA-256 *after* download and prints the
 # JSON entry that can be appended to
-# internal/circusmodels/registry.json. Promoting an ad-hoc download
+# internal/jugglermodels/registry.json. Promoting an ad-hoc download
 # to a registry entry then needs:
 #
 #   1. Paste the printed JSON into the registry.json array.
 #   2. Fill in the "description" field (the printed value is "TODO").
-#   3. Bump the count in internal/circusmodels/registry_test.go's
+#   3. Bump the count in internal/jugglermodels/registry_test.go's
 #      TestRegistry_ContainsExpectedModels (current: 6) and add the
 #      new name to its expected-models slice.
 #   4. Rebuild and re-test.
@@ -1152,13 +1152,13 @@ download-ad-hoc NAME URL: build
         echo "usage: just download-ad-hoc <name> <url>" >&2
         exit 1
     fi
-    dest="$HOME/.local/share/circus/models/${name}.gguf"
+    dest="$HOME/.local/share/juggler/models/${name}.gguf"
     if [[ -f "$dest" ]]; then
         echo ">> already installed at $dest"
         echo ">> sha256:"
         shasum -a 256 "$dest" | awk '{print "   "$1}'
         echo
-        echo ">> to add to registry, append this entry to internal/circusmodels/registry.json:"
+        echo ">> to add to registry, append this entry to internal/jugglermodels/registry.json:"
         size=$(stat -f %z "$dest" 2>/dev/null || stat -c %s "$dest")
         sha=$(shasum -a 256 "$dest" | awk '{print $1}')
         printf '  {\n    "name": "%s",\n    "url": "%s",\n    "sha256": "%s",\n    "size": %s,\n    "description": "TODO"\n  }\n' "$name" "$url" "$sha" "$size"
@@ -1167,7 +1167,7 @@ download-ad-hoc NAME URL: build
     echo ">> downloading $name from $url"
     echo ">> integrity check will be SKIPPED on first fetch; we'll print the real SHA afterward."
     echo
-    ./result/bin/circus download "$name" --url "$url"
+    ./result/bin/juggler download "$name" --url "$url"
     if [[ ! -f "$dest" ]]; then
         echo "FAIL: download claimed success but $dest does not exist" >&2
         exit 1
@@ -1181,7 +1181,7 @@ download-ad-hoc NAME URL: build
     echo ">> sha256: $sha"
     echo ">> size:   $size bytes"
     echo
-    echo ">> to add to registry, append this entry to internal/circusmodels/registry.json:"
+    echo ">> to add to registry, append this entry to internal/jugglermodels/registry.json:"
     printf '  {\n    "name": "%s",\n    "url": "%s",\n    "sha256": "%s",\n    "size": %s,\n    "description": "TODO"\n  }\n' "$name" "$url" "$sha" "$size"
 
 # Download Qwen2.5-Coder-7B-Instruct (Q4_K_M, ~4.7GB).
@@ -1198,7 +1198,7 @@ download-ad-hoc NAME URL: build
 # After the download lands and you paste the printed JSON into the
 # registry (per download-ad-hoc), the working loop is:
 #
-#   ./result/bin/circus start qwen2.5-coder-7b --bind 0.0.0.0
+#   ./result/bin/juggler start qwen2.5-coder-7b --bind 0.0.0.0
 #   just smoke-opencode-against-tailnet qwen2.5-coder-7b
 #
 # Tool-call quality at 7B is ~70-85% on simple multi-step tasks.
@@ -1215,7 +1215,7 @@ download-qwen-coder: build
 # ringmaster's /health poll succeeds WITHOUT a GGUF? Times --version
 # exit latency, --help exit latency, and how long /health takes to
 # come up under various model-less invocations. Used as the source
-# of evidence behind cmd/circus/launcher_real_test.go and the
+# of evidence behind cmd/juggler/launcher_real_test.go and the
 # decision that option B is feasible. Re-run after nixpkgs-llama
 # bumps to confirm the behaviour still holds.
 #
@@ -1231,11 +1231,11 @@ download-qwen-coder: build
 debug-probe-real-llama-server:
     #!/usr/bin/env bash
     set -u
-    # Read the burned-in LlamaServerPath out of ./result/bin/circus
+    # Read the burned-in LlamaServerPath out of ./result/bin/juggler
     # — buildcfg.LlamaServerPath is a Go string literal, so it appears
     # verbatim in the binary's string table. (The daemon that reads it
-    # re-homed from ringmaster into `circus daemon`.)
-    LS=$(strings ./result/bin/circus \
+    # re-homed from ringmaster into `juggler daemon`.)
+    LS=$(strings ./result/bin/juggler \
         | grep -E '^/nix/store/[^/]+-llama-cpp[^/]*/bin/llama-server$' \
         | head -1)
     if [[ -z "$LS" || ! -x "$LS" ]]; then
@@ -1422,21 +1422,21 @@ debug-run-downstream-tests:
     CLOWN_RUN_DOWNSTREAM_TESTS=1 just test-plugin-host-moxy-disabled
 
 # Probe a running llama-server for /v1/models and a test /v1/messages call.
-# Restarts circus with the specified model (defaults to gemma3).
-# Usage: just debug-circus-api [model-store-path]
+# Restarts juggler with the specified model (defaults to gemma3).
+# Usage: just debug-juggler-api [model-store-path]
 [group("debug")]
-debug-circus-api model="":
+debug-juggler-api model="":
     #!/usr/bin/env bash
     set -euo pipefail
-    nix build --show-trace .#circus -o result-circus
-    echo "restarting circus..." >&2
-    ./result-circus/bin/circus stop 2>/dev/null || true
+    nix build --show-trace .#juggler -o result-juggler
+    echo "restarting juggler..." >&2
+    ./result-juggler/bin/juggler stop 2>/dev/null || true
     model_arg=""
     if [[ -n "{{model}}" ]]; then
         model_arg="--model {{model}}"
     fi
-    ./result-circus/bin/circus start $model_arg </dev/tty >/dev/tty
-    port_file="$HOME/.local/state/circus/llama-server.port"
+    ./result-juggler/bin/juggler start $model_arg </dev/tty >/dev/tty
+    port_file="$HOME/.local/state/juggler/llama-server.port"
     port=$(cat "$port_file")
     base="http://127.0.0.1:$port"
     echo "=== GET $base/v1/models ==="
