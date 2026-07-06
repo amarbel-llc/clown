@@ -24,16 +24,17 @@
 .Cm download Ar name Op Fl Fl url Ar url Op Fl Fl sha256 Ar hex Op Fl Fl size Ar bytes
 .Sh DESCRIPTION
 .Nm
-is a thin CLI client of
-.Xr juggler 1 .
+is a thin CLI client of the
+.Cm juggler daemon
+control plane.
 Every subcommand other than
 .Cm download
 issues a single JSON-RPC call over the juggler control socket and
 pretty-prints the result.
 .Pp
 A
-.Xr juggler 1
-daemon must be running before any
+.Cm juggler daemon
+must be running before any
 .Nm
 subcommand other than
 .Cm download
@@ -176,8 +177,8 @@ Override the control socket path
 .Pq Pa ~/.local/state/juggler/control.sock No by default .
 Read by both
 .Nm
-and
-.Xr juggler 1 ,
+and the
+.Cm juggler daemon ,
 so setting it consistently is sufficient.
 .El
 .Sh FILES
@@ -243,7 +244,6 @@ juggler: stopped coder-32k
 .Sh SEE ALSO
 .Xr clown 1 ,
 .Xr llama-server 1 ,
-.Xr juggler 1 ,
 .Xr juggler 7 ,
 .Xr juggler-testing 7
 .Sh AUTHORS
