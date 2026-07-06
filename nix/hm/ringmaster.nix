@@ -21,7 +21,13 @@ let
 
   cfg = config.programs.ringmaster;
 
-  binPath = "${cfg.package}/bin/ringmaster";
+  # The llama-server control-plane daemon re-homed from `ringmaster daemon`
+  # into `circus daemon` when clown's job platform was extracted into the
+  # standalone ringmaster module (ringmaster is now job-platform-only). The
+  # module keeps its `programs.ringmaster` name (the control-plane concept)
+  # but execs the circus binary; wire `package` to a clown output carrying
+  # `bin/circus` (e.g. clown.packages.<system>.circus).
+  binPath = "${cfg.package}/bin/circus";
 
   # Single launcher script used by both systemd and launchd. Resolves
   # XDG_STATE_HOME and XDG_LOG_HOME with their POSIX-default fallbacks,
@@ -47,9 +53,10 @@ in
     package = mkOption {
       type = types.package;
       description = ''
-        The ringmaster package to run. This must come from a flake that
-        provides a `ringmaster` derivation; the clown flake exposes one
-        as `packages.<system>.ringmaster`.
+        The package providing the `circus` binary whose `daemon` verb runs
+        the llama-server control plane. The clown flake exposes one as
+        `packages.<system>.circus` (the daemon re-homed from ringmaster into
+        `circus daemon`).
       '';
     };
   };

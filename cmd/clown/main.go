@@ -25,13 +25,13 @@ import (
 
 	"github.com/amarbel-llc/clown/internal/buildcfg"
 	"github.com/amarbel-llc/clown/internal/clownfile"
-	"github.com/amarbel-llc/clown/internal/jobwake"
 	"github.com/amarbel-llc/clown/internal/pluginhost"
 	"github.com/amarbel-llc/clown/internal/profile"
 	"github.com/amarbel-llc/clown/internal/promptwalk"
 	"github.com/amarbel-llc/clown/internal/provider"
 	"github.com/amarbel-llc/clown/internal/ptysuspend"
 	"github.com/amarbel-llc/clown/internal/tent"
+	"github.com/amarbel-llc/ringmaster/jobwake"
 )
 
 //go:embed profiles/builtin.toml

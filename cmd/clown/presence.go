@@ -8,13 +8,14 @@ import (
 	"sort"
 	"time"
 
-	"github.com/amarbel-llc/clown/internal/jobwake"
+	"github.com/amarbel-llc/ringmaster/jobwake"
 )
 
 // runPresence dispatches the `clown presence` subcommands. The presence index
-// (internal/jobwake/presence.go) is the clown→spinclass liveness seam (RFC-0014):
-// each live clown writes a record under $XDG_STATE_HOME/clown/presence/, its
-// job-watch monitor refreshes the lastSeen on a ticker, and a clean shutdown
+// (github.com/amarbel-llc/ringmaster/jobwake presence.go) is the clown→spinclass
+// liveness seam (RFC-0014): each live clown writes a record under
+// $XDG_STATE_HOME/ringmaster/presence/, its job-watch monitor refreshes the
+// lastSeen on a ticker, and a clean shutdown
 // removes the file (ListPresence also prunes records past the freshness window).
 // This CLI is the stable query surface a consumer — notably spinclass's
 // liveness probe (spinclass#201) — uses instead of reading the on-disk JSON

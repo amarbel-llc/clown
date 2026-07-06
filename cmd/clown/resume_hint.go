@@ -5,7 +5,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/amarbel-llc/clown/internal/jobwake"
+	"github.com/amarbel-llc/ringmaster/jobwake"
 )
 
 // decideClaudeSession inspects the user's forwarded args plus the resolved base

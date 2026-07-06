@@ -62,6 +62,17 @@
     igloo.inputs.nixpkgs-master.follows = "nixpkgs-master";
     bats.inputs.treefmt-nix.follows = "treefmt-nix";
     igloo.inputs.treefmt-nix.follows = "treefmt-nix";
+    # ringmaster: the extracted job platform (jobwake + jobmcp packages,
+    # ringmaster + troupe binaries). Forge-hosted; consumed as a Go module
+    # via igloo's goFlakeInputs bridge (see gomod.nix). The flake input is
+    # the single source of truth for the pinned rev. follows-align the
+    # shared amarbel inputs so the closure doesn't carry a second igloo /
+    # nixpkgs-master / utils / bats evaluation.
+    ringmaster.url = "git+https://forge.linenisgreat.com/amarbel-llc/ringmaster.git";
+    ringmaster.inputs.igloo.follows = "igloo";
+    ringmaster.inputs.nixpkgs-master.follows = "nixpkgs-master";
+    ringmaster.inputs.utils.follows = "utils";
+    ringmaster.inputs.bats.follows = "bats";
   };
 
   outputs =
@@ -76,6 +87,7 @@
       treefmt-nix,
       utils,
       bats,
+      ringmaster,
     }:
     (utils.lib.eachDefaultSystem (
       system:
@@ -204,7 +216,16 @@
         };
         mdocDate = "${monthNames.${flakeMonth}} ${toString (lib.toIntBase10 flakeDay)}, ${flakeYear}";
 
-        buildGoApplication = pkgs.buildGoApplication;
+        # igloo flake-input-go_mod bridge (igloo RFC-0001): routes the
+        # github.com/amarbel-llc/ringmaster require onto the ringmaster flake
+        # input's go-pkgs output. See gomod.nix. Wrapping buildGoApplication
+        # and mkGoEnv threads the same goFlakeInputs into EVERY call site
+        # (all ~dozen Go builders + both devshell envs) — the protocol
+        # requires identical goFlakeInputs on every builder and the devshell,
+        # or go.mod/vendor drift between build and `nix develop`.
+        goFlakeInputs = import ./gomod.nix { inherit ringmaster system; };
+        buildGoApplication = args: pkgs.buildGoApplication (args // { inherit goFlakeInputs; });
+        mkGoEnv = args: pkgs.mkGoEnv (args // { inherit goFlakeInputs; });
 
         goSrc = lib.fileset.toSource {
           root = ./.;
@@ -641,8 +662,8 @@
               "-X github.com/amarbel-llc/clown/internal/buildcfg.ClownboxCliPath=${clownboxCliPath}"
               "-X github.com/amarbel-llc/clown/internal/buildcfg.StdioBridgePath=${clown-stdio-bridge}/bin/clown-stdio-bridge"
               "-X github.com/amarbel-llc/clown/internal/buildcfg.HookAllowPath=${clown-hook-allow}/bin/clown-hook-allow"
-              "-X github.com/amarbel-llc/clown/internal/buildcfg.RingmasterPath=${ringmaster-go}/bin/ringmaster"
-              "-X github.com/amarbel-llc/clown/internal/buildcfg.TroupePath=${troupe-go}/bin/troupe"
+              "-X github.com/amarbel-llc/clown/internal/buildcfg.RingmasterPath=${ringmasterPkg}/bin/ringmaster"
+              "-X github.com/amarbel-llc/clown/internal/buildcfg.TroupePath=${ringmasterPkg}/bin/troupe"
               "-X github.com/amarbel-llc/clown/internal/buildcfg.DefaultProvider=${defaultProvider}"
               "-X github.com/amarbel-llc/clown/internal/buildcfg.DefaultProfile=${defaultProfile}"
               "-X github.com/amarbel-llc/clown/internal/buildcfg.PodmanPath=${tentPodmanPath}"
@@ -676,54 +697,29 @@
           ];
         };
 
-        # ringmaster: control-plane daemon for llama-server instances.
-        # See FDR-0010. circus is its CLI client; clown will be one too
-        # (FDR-0011 / plan 2). LlamaServerPath is burned in so the
-        # daemon knows what binary to exec when StartInstance fires —
-        # symmetric to circus-go above. Without this the dispatch
-        # returns "launcher not configured" for any start/stop call.
-        ringmaster-go = buildGoApplication {
-          pname = "ringmaster";
-          version = clownVersion;
-          src = goSrc;
-          subPackages = [ "cmd/ringmaster" ];
-          modules = ./gomod2nix.toml;
-          ldflags = [
-            "-s"
-            "-w"
-            "-X github.com/amarbel-llc/clown/internal/buildcfg.LlamaServerPath=${llamaServerPath}"
-          ];
-        };
-
-        # troupe: the messaging surface of the job platform (RFC-0015).
-        # A standalone binary carrying cross-session chat + the standalone
-        # waking message, plus the troupe MCP tool surface. Self-contained
-        # (no burned-in paths): its verbs and `troupe mcp` speak only
-        # internal/jobwake. clown burns in TroupePath (below) so it can
-        # synthesize `troupe mcp` into the clown-builtin-jobs plugin.
-        troupe-go = buildGoApplication {
-          pname = "troupe";
-          version = clownVersion;
-          src = goSrc;
-          subPackages = [ "cmd/troupe" ];
-          modules = ./gomod2nix.toml;
-          ldflags = [
-            "-s"
-            "-w"
-          ];
-        };
+        # ringmaster + troupe binaries now come from the extracted
+        # github.com/amarbel-llc/ringmaster flake input (the job platform:
+        # jobwake + jobmcp, ringmaster/troupe verbs, both MCP surfaces). The
+        # llama-server control-plane daemon that used to share cmd/ringmaster
+        # re-homed into `circus daemon` (circus-go, above). The input's
+        # `default` output is a symlinkJoin exposing bin/ringmaster +
+        # bin/troupe + share/man. clown burns in RingmasterPath/TroupePath
+        # (mkClownGo ldflags) so it can synthesize `ringmaster monitor`,
+        # `ringmaster mcp`, and `troupe mcp` into the clown-builtin-jobs
+        # plugin, and bundles the binaries + manpages into its symlinkJoin.
+        ringmasterPkg = ringmaster.packages.${system}.default;
 
         # fake-llama-server: a stand-in for llama-server used by the
         # ringmaster bats e2e lane. Real llama-cpp is too heavy and
         # too slow to spin up under bats — and we'd never run it
         # against a real GGUF inside the nix sandbox. This serves
         # /health (200 OK) and /v1/models, which is all the launcher
-        # waits on. Same source as cmd/ringmaster/testdata/fake-llama-server.
+        # waits on. Same source as cmd/circus/testdata/fake-llama-server.
         fake-llama-server-go = buildGoApplication {
           pname = "fake-llama-server";
           version = clownVersion;
           src = goSrc;
-          subPackages = [ "cmd/ringmaster/testdata/fake-llama-server" ];
+          subPackages = [ "cmd/circus/testdata/fake-llama-server" ];
           modules = ./gomod2nix.toml;
           ldflags = [
             "-s"
@@ -796,11 +792,15 @@
           "man1/clown-plugin-host.1"
           "man1/clown-stdio-bridge.1"
           "man1/circus.1"
-          "man1/ringmaster.1"
-          "man1/troupe.1"
           "man5/clown-json.5"
           "man5/clownfile.5"
           "man7/clown-plugin-protocol.7"
+          # man1/ringmaster.1 + man1/troupe.1 ship from the external
+          # ringmaster module (ringmasterPkg's share/man, merged into the
+          # default symlinkJoin) — the job-platform CLI pages. But the man7
+          # control-plane docs stay clown-side: they describe the
+          # internal/ringmaster subsystem + the daemon, which re-homed into
+          # `circus daemon` here (the external module dropped them).
           "man7/ringmaster.7"
           "man7/ringmaster-testing.7"
         ];
@@ -932,8 +932,9 @@
               clown-plugin-host
               clown-stdio-bridge
               circus-go
-              ringmaster-go
-              troupe-go
+              # ringmasterPkg is the external module's `default` symlinkJoin:
+              # bin/ringmaster + bin/troupe + share/man in one output.
+              ringmasterPkg
               clown-completions
               clown-manpages
             ];
@@ -966,13 +967,15 @@
             ;
           batsLane = bats.lib.${system}.batsLane;
           bats-libs = batsLibs;
-          # ringmaster e2e lane consumes the daemon, the circus
-          # client, and a Go fake llama-server. The fake is a
-          # tiny http server stand-in compiled from
-          # cmd/ringmaster/testdata/fake-llama-server — same source
-          # the launcher_test.go and server_test.go fixtures use.
-          ringmaster = ringmaster-go;
-          troupe = troupe-go;
+          # The daemon e2e lane consumes circus (`circus daemon` — the
+          # re-homed llama-server control plane) and a Go fake llama-server
+          # (tiny http stand-in compiled from
+          # cmd/circus/testdata/fake-llama-server, same source the
+          # launcher_test.go / server_test.go fixtures use). ringmaster +
+          # troupe are the external module's binaries for the job-platform
+          # lanes (both live in ringmasterPkg's bin/).
+          ringmaster = ringmasterPkg;
+          troupe = ringmasterPkg;
           circus = circus-go;
           fake-llama-server = fake-llama-server-go;
         };
@@ -1007,7 +1010,7 @@
             };
             devShells.default = pkgs.mkShell {
               packages = [
-                (pkgs.mkGoEnv { pwd = ./.; })
+                (mkGoEnv { pwd = ./.; })
                 pkgs-master.just
                 pkgs.fish
                 pkgs-llm-agents.claude-code
@@ -1315,14 +1318,20 @@
           clown-cover = clown-cover;
           mock-stdio-mcp = mock-stdio-mcp;
           synthetic-plugin = synthetic-plugin;
-          # ringmaster: standalone build of the control-plane daemon.
-          # The home-manager module at homeManagerModules.ringmaster
-          # consumes this via its `package` option. Also bundled into
-          # the default symlinkJoin so `nix build` ships the binary.
-          ringmaster = ringmaster-go;
-          # troupe: standalone build of the messaging surface (RFC-0015).
-          # Bundled into the default symlinkJoin so `nix build` ships it.
-          troupe = troupe-go;
+          # ringmaster + troupe: re-exported from the external
+          # github.com/amarbel-llc/ringmaster flake input (the job platform;
+          # both binaries + manpages live in its `default` symlinkJoin).
+          # Bundled into clown's default symlinkJoin so `nix build` ships
+          # them. The llama-server control-plane daemon no longer lives here
+          # — it re-homed into `circus daemon` (packages.default's circus-go),
+          # and homeManagerModules.ringmaster now runs that.
+          ringmaster = ringmasterPkg;
+          troupe = ringmasterPkg;
+          # circus: standalone build of the circus binary (llama-server
+          # control-plane client + the `circus daemon` server, re-homed from
+          # ringmaster). homeManagerModules.ringmaster consumes this via its
+          # `package` option; also the CircusCliPath burned into clown.
+          circus = circus-go;
           # bats-libs surfaces the amarbel-llc/bats helper bundle
           # (bats-support, bats-assert, bats-emo, bats-island) under
           # share/bats. Already used by the sandboxed batsLane via
@@ -1362,7 +1371,7 @@
             # devshell resolves modules through the same nix-built
             # vendor closure as buildGoApplication does, instead of
             # reaching out to GOPROXY for every fresh checkout.
-            (pkgs.mkGoEnv { pwd = ./.; })
+            (mkGoEnv { pwd = ./.; })
             pkgs-master.just
             pkgs.fish
             pkgs-llm-agents.claude-code
@@ -1412,10 +1421,12 @@
       #
       # programs.ringmaster home-manager module — see FDR-0010 and
       # docs/plans/2026-05-18-ringmaster-control-plane.md § Task 16/17.
-      # Consumes packages.<system>.ringmaster as the daemon binary;
-      # users wire it in their home-manager config via
+      # The llama-server control-plane daemon re-homed from `ringmaster
+      # daemon` into `circus daemon` when the job platform was extracted, so
+      # this module now execs the circus binary. Consumes
+      # packages.<system>.circus as the daemon binary; users wire it via
       #   programs.ringmaster.enable = true;
-      #   programs.ringmaster.package = clown.packages.${pkgs.system}.ringmaster;
+      #   programs.ringmaster.package = clown.packages.${pkgs.system}.circus;
       homeManagerModules.ringmaster = import ./nix/hm/ringmaster.nix;
 
       # services.tent-backend-lima home-manager module — see

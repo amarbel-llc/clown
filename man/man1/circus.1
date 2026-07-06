@@ -42,7 +42,7 @@ The
 .Sx programs.ringmaster
 home-manager module starts and supervises it; users without
 home-manager must invoke
-.Cm ringmaster daemon
+.Cm circus daemon
 themselves.
 .Pp
 If the control socket is missing or refuses connections,
@@ -51,8 +51,27 @@ prints a one-paragraph hint pointing at the home-manager module before
 returning a non-zero exit code.
 .Sh SUBCOMMANDS
 .Bl -tag -width Ds
+.It Cm daemon Op Fl -socket Ar path Op Fl -llama-server Ar path
+Run the llama-server control-plane daemon that every other subcommand
+dials.
+Binds the control socket
+.Pq Pa ~/.local/state/circus/control.sock ,
+overridable with
+.Fl -socket ,
+and exec's the build-time
+.Pa llama-server
+binary,
+overridable with
+.Fl -llama-server .
+This is the server end of the control plane; it re-homed from the former
+.Cm ringmaster daemon
+verb when the job platform was extracted into the standalone ringmaster
+module.
+Normally started by the
+.Sx programs.ringmaster
+home-manager module rather than by hand.
 .It Cm start Ar model Op Fl -alias Ar name Op Fl -bind Ar addr Op Cm -- Ar passthrough\&...
-Spawn a new llama-server child via ringmaster.
+Spawn a new llama-server child via the control-plane daemon.
 The required positional
 .Ar model
 is the bare name of a

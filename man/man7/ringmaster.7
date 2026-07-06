@@ -16,14 +16,19 @@ exposes an RPC surface to its clients.
 .Pp
 This page documents the control-plane architecture and the JSON-RPC
 wire format.
-For the daemon's CLI surface see
-.Xr ringmaster 1 ;
-for the CLI client that drives it from a terminal see
+The daemon is invoked as
+.Cm circus daemon
+(re-homed from the former
+.Cm ringmaster daemon
+verb when the job platform was extracted into the standalone ringmaster
+module; the internal control-plane subsystem is still named ringmaster).
+For the daemon's CLI surface and the client that drives it from a terminal
+see
 .Xr circus 1 .
 .Sh ARCHITECTURE
 The system is three processes:
 .Bl -tag -width "ringmaster"
-.It Nm ringmaster Pq Xr ringmaster 1
+.It Cm circus daemon Pq Xr circus 1
 The daemon.
 Listens on a Unix domain socket
 .Pq see Sx CONTROL SOCKET ,
@@ -37,7 +42,7 @@ under the
 .Sq programs.ringmaster
 home-manager module.
 .It Xr circus 1
-The CLI client.
+The CLI client (same binary as the daemon, different subcommand).
 Thin wrapper around the JSON-RPC client SDK.
 Every subcommand
 .Pq Cm start , stop , status , list , models
@@ -72,7 +77,7 @@ binds the path resolved from:
 The
 .Fl -socket
 flag on
-.Cm ringmaster daemon
+.Cm circus daemon
 when present.
 .It
 The

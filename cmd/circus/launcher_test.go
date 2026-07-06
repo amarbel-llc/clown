@@ -10,7 +10,7 @@ import (
 	rm "github.com/amarbel-llc/clown/internal/ringmaster"
 )
 
-// buildFakeLlamaServer compiles cmd/ringmaster/testdata/fake-llama-server
+// buildFakeLlamaServer compiles cmd/circus/testdata/fake-llama-server
 // into a tempfile and returns its absolute path. The binary is reused
 // across tests in the package via TestMain (kept simple here — rebuilt per test).
 func buildFakeLlamaServer(t *testing.T) string {

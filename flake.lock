@@ -248,6 +248,35 @@
         "type": "github"
       }
     },
+    "ringmaster": {
+      "inputs": {
+        "bats": [
+          "bats"
+        ],
+        "igloo": [
+          "igloo"
+        ],
+        "nixpkgs-master": [
+          "nixpkgs-master"
+        ],
+        "utils": [
+          "utils"
+        ]
+      },
+      "locked": {
+        "lastModified": 1783306729,
+        "narHash": "sha256-HbYn4wlNp+4aatwgiMa7idkSEYkr6djyZ+wOhcQhkDg=",
+        "ref": "refs/heads/master",
+        "rev": "ff58b5f60a2eb6db65dd3696d772936e04c431d5",
+        "revCount": 2,
+        "type": "git",
+        "url": "https://forge.linenisgreat.com/amarbel-llc/ringmaster.git"
+      },
+      "original": {
+        "type": "git",
+        "url": "https://forge.linenisgreat.com/amarbel-llc/ringmaster.git"
+      }
+    },
     "root": {
       "inputs": {
         "bats": "bats",
@@ -257,6 +286,7 @@
         "nixpkgs-codex": "nixpkgs-codex",
         "nixpkgs-llama": "nixpkgs-llama",
         "nixpkgs-master": "nixpkgs-master",
+        "ringmaster": "ringmaster",
         "treefmt-nix": "treefmt-nix",
         "utils": "utils"
       }

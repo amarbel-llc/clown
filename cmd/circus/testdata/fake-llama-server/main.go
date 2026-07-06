@@ -1,6 +1,6 @@
 // Command fake-llama-server is a minimal stand-in for llama-server
-// used in cmd/ringmaster's Launcher tests. It binds an HTTP server on
-// the requested port and serves only the two endpoints ringmaster
+// used in cmd/circus's Launcher tests. It binds an HTTP server on
+// the requested port and serves only the two endpoints the launcher
 // probes: /health (used by Launcher.waitHealthy) and /v1/models
 // (used by future model-identity sanity checks).
 package main

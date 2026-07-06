@@ -531,14 +531,32 @@ The flake produces a `symlinkJoin` of five components:
    design doc is at `docs/plans/2026-04-23-profiles-design.md` and the
    implementation plan at `docs/plans/2026-04-23-profiles.md`.
 
+   **⚠ EXTRACTED — the job platform is now the external
+   `github.com/amarbel-llc/ringmaster` module.** The whole platform below
+   (`internal/jobwake`, `internal/jobmcp`, and the `cmd/ringmaster`/`cmd/troupe`
+   verbs — producer/monitor/operator job control, the two MCP surfaces, and
+   cross-session chat) was lifted out of clown into a standalone forge-hosted
+   Go module and is consumed as a dependency via igloo's `goFlakeInputs` bridge
+   (`gomod.nix`). clown burns in `RingmasterPath`/`TroupePath` from
+   `ringmaster.packages.<system>.default` and still synthesizes the
+   `clown-builtin-jobs` plugin around those binaries (`cmd/clown/jobmonitor.go`
+   stays). The **llama-server control-plane daemon** did NOT move — it re-homed
+   from `ringmaster daemon` into `circus daemon` (`cmd/circus`), and the
+   on-disk namespace renamed `clown/jobs`→`ringmaster/jobs` and
+   `clown/presence`→`ringmaster/presence`. `CLOWN_*` env-var names are
+   unchanged. So in the descriptions below, `internal/jobwake`, `internal/jobmcp`,
+   and `cmd/ringmaster`/`cmd/troupe` paths now live in the external module; the
+   behaviour and contracts are otherwise as written.
+
    **Job-wakeup channel (`ringmaster` producer verbs / `ringmaster monitor`).** A
-   clown-provided background-job + agent-wakeup facility (`cmd/ringmaster/producer.go`,
-   `cmd/clown/jobmonitor.go`, `internal/jobwake/`; RFC-0015 promoted the producer
-   and monitor surface from the former `clown job`/`clown job-watch` onto the
-   standalone `ringmaster` binary): a plugin defers a long task
+   background-job + agent-wakeup facility (external `ringmaster` module's
+   producer verbs, `cmd/clown/jobmonitor.go`, the external `jobwake` package;
+   RFC-0015 promoted the producer and monitor surface from the former `clown
+   job`/`clown job-watch` onto the standalone `ringmaster` binary): a plugin
+   defers a long task
    to the background and the originating (or a `--target`-ed) clown session is
    woken when it hits a terminal state. Two-layer design — a durable on-disk
-   journal (`$XDG_STATE_HOME/clown/jobs/`, the at-least-once source of truth)
+   journal (`$XDG_STATE_HOME/ringmaster/jobs/`, the at-least-once source of truth)
    plus a lossy UDS-datagram nudge for sub-second latency; only terminal events
    (`succeeded`/`failed`/`cancelled`/`interrupted`) wake, `started`/`progress`
    are journal-only. The per-instance session key resolves `CLOWN_SESSION_ID` →
@@ -641,7 +659,7 @@ The flake produces a `symlinkJoin` of five components:
    an explicit `--subject`/`--body` pair. read aggregates the reader's
    own/group/broadcast channels with a per-clown cursor distinct from the wake ack; `list` reads a
    presence index the `ringmaster monitor` registers per session
-   (`$XDG_STATE_HOME/clown/presence/`, keyed by per-instance channel, refreshed
+   (`$XDG_STATE_HOME/ringmaster/presence/`, keyed by per-instance channel, refreshed
    on a ticker, `SPINCLASS_DESCRIPTION` as the readable label). The `clown job message`
    standalone waking message also moved to `troupe message` (RFC-0015 §3; messaging
    by concept — #144 placed `job_message` in troupe). The spinclass

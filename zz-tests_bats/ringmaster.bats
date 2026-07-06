@@ -1,9 +1,11 @@
 # End-to-end smoke test for the ringmaster control plane.
 #
-# Boots the ringmaster daemon on a temp Unix socket, points it at
-# the Go fake-llama-server fixture via --llama-server, then drives
-# the surface through the circus CLI client (start / list / status
-# / stop). The fake-llama-server only serves /health and
+# Boots the control-plane daemon (`circus daemon`, re-homed from
+# `ringmaster daemon` when the job platform was extracted) on a temp
+# Unix socket, points it at the Go fake-llama-server fixture via
+# --llama-server, then drives the surface through the circus CLI client
+# (start / list / status / stop). The fake-llama-server only serves
+# /health and
 # /v1/models — same source as the launcher_test.go fixture — so
 # nothing here exercises real llama-cpp.
 #
@@ -15,7 +17,7 @@
 setup_file() {
   load 'lib/common.bash'
 
-  # All tests share one ringmaster daemon and act on the same
+  # All tests share one control-plane daemon and act on the same
   # registry, so they must run in order — list must observe a start
   # the previous test fired, stop must follow the start that ran
   # before it. bats's default parallel-within-file scheduler would
@@ -23,7 +25,9 @@ setup_file() {
   # run in parallel across the lane.
   export BATS_NO_PARALLELIZE_WITHIN_FILE=true
 
-  require_bin RINGMASTER_BIN ringmaster
+  # The daemon (`circus daemon`) and the circus CLI client are the same
+  # binary now; the extracted RINGMASTER_BIN carries only the job
+  # platform, so this lane no longer needs it.
   require_bin CIRCUS_BIN circus
   require_bin FAKE_LLAMA_SERVER_BIN fake-llama-server
 
@@ -38,7 +42,7 @@ setup_file() {
   # Spawn the daemon. --llama-server overrides the build-time
   # buildcfg.LlamaServerPath so the launcher exec's our fake. Stderr
   # is captured into rm.log for post-mortems on failed tests.
-  "$RINGMASTER_BIN" daemon \
+  "$CIRCUS_BIN" daemon \
     --socket "$RINGMASTER_SOCKET" \
     --llama-server "$FAKE_LLAMA_SERVER_BIN" \
     >"$RM_DIR/rm.log" 2>&1 &
@@ -53,7 +57,7 @@ setup_file() {
     elapsed=$((elapsed + 1))
   done
   if [[ ! -S $RINGMASTER_SOCKET ]]; then
-    echo "ringmaster never bound socket; log:" >&2
+    echo "circus daemon never bound socket; log:" >&2
     cat "$RM_DIR/rm.log" >&2
     return 1
   fi

@@ -1,7 +1,8 @@
 // Package ringmaster defines the wire types and helpers for the
-// ringmaster control plane. Both cmd/ringmaster (the daemon) and
-// cmd/circus (the CLI client) depend on this package; clown will
-// too in a later plan.
+// llama-server control plane. cmd/circus depends on this package for
+// both roles: `circus daemon` (the server, re-homed from the former
+// cmd/ringmaster) and the `circus` CLI client. Distinct from the
+// extracted github.com/amarbel-llc/ringmaster job-platform module.
 package ringmaster
 
 import "time"

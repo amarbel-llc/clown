@@ -14,8 +14,8 @@ import (
 	rm "github.com/amarbel-llc/clown/internal/ringmaster"
 )
 
-// server is the ringmaster daemon's RPC dispatcher. It owns the
-// registry and (later) the llama-server launcher.
+// server is the control-plane daemon's RPC dispatcher (the `circus
+// daemon` verb). It owns the registry and the llama-server launcher.
 type server struct {
 	registry  *rm.Registry
 	launcher  Launcher // nil-safe; methods check before use

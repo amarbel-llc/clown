@@ -17,8 +17,8 @@ import (
 // shortTempSocket returns a unix-socket path that fits inside macOS's
 // 104-byte sun_path limit. The default t.TempDir() can produce paths
 // that exceed the limit when nested under deep TMPDIR roots. The
-// helper is copied from the equivalent in cmd/ringmaster/server_test.go
-// (different package main, so it can't be imported).
+// helper mirrors shortTempDir in server_test.go (now the same package
+// after the daemon re-home; the two could be deduped in a followup).
 func shortTempSocket(t *testing.T) string {
 	t.Helper()
 	dir, err := os.MkdirTemp("/tmp", "circus-list-test-")

@@ -547,7 +547,7 @@ smoke-ringmaster MODEL="gemma3-1b": build
     fi
     sock="$HOME/.local/state/circus/control.sock"
     if [[ -S "$sock" ]] && ./result/bin/circus list >/dev/null 2>&1; then
-        echo "FAIL: a ringmaster daemon is already running on $sock" >&2
+        echo "FAIL: a circus daemon is already running on $sock" >&2
         echo "      stop it first (launchctl unload / kill) so this smoke" >&2
         echo "      doesn't step on home-manager state" >&2
         exit 1
@@ -556,7 +556,7 @@ smoke-ringmaster MODEL="gemma3-1b": build
     log=$(mktemp)
     trap 'set +e; ./result/bin/circus stop "$model" >/dev/null 2>&1 || true; [[ -n "${rm_pid:-}" ]] && kill "$rm_pid" 2>/dev/null; wait 2>/dev/null; rm -f "$log"' EXIT
     echo ">> launching ringmaster (log: $log)"
-    ./result/bin/ringmaster daemon >"$log" 2>&1 &
+    ./result/bin/circus daemon >"$log" 2>&1 &
     rm_pid=$!
     for i in $(seq 1 50); do
         [[ -S "$sock" ]] && break
@@ -633,7 +633,7 @@ smoke-ringmaster-multi MODEL_A="gemma3-1b" MODEL_B="qwen3-1.7b": build
     done
     sock="$HOME/.local/state/circus/control.sock"
     if [[ -S "$sock" ]] && ./result/bin/circus list >/dev/null 2>&1; then
-        echo "FAIL: a ringmaster daemon is already running on $sock" >&2
+        echo "FAIL: a circus daemon is already running on $sock" >&2
         echo "      stop it first so this smoke doesn't step on home-manager state" >&2
         exit 1
     fi
@@ -641,7 +641,7 @@ smoke-ringmaster-multi MODEL_A="gemma3-1b" MODEL_B="qwen3-1.7b": build
     log=$(mktemp)
     trap 'set +e; ./result/bin/circus stop "$a" >/dev/null 2>&1 || true; ./result/bin/circus stop "$b" >/dev/null 2>&1 || true; [[ -n "${rm_pid:-}" ]] && kill "$rm_pid" 2>/dev/null; wait 2>/dev/null; rm -f "$log"' EXIT
     echo ">> launching ringmaster (log: $log)"
-    ./result/bin/ringmaster daemon >"$log" 2>&1 &
+    ./result/bin/circus daemon >"$log" 2>&1 &
     rm_pid=$!
     for i in $(seq 1 50); do
         [[ -S "$sock" ]] && break
@@ -756,7 +756,7 @@ smoke-tailnet-url ALIAS="gemma3-12b": build
     sock="${RINGMASTER_SOCKET:-$HOME/.local/state/circus/control.sock}"
     if [[ ! -S "$sock" ]]; then
         echo "FAIL: ringmaster socket not found at $sock" >&2
-        echo "      start ringmaster first: ./result/bin/ringmaster daemon &" >&2
+        echo "      start the circus daemon first: ./result/bin/circus daemon &" >&2
         exit 1
     fi
     port=$(./result/bin/circus list | awk -v a="$alias" '$1==a {print $4}')
@@ -848,7 +848,7 @@ smoke-clown-against-tailnet ALIAS="gemma3-12b" NAKED="1": build
     sock="${RINGMASTER_SOCKET:-$HOME/.local/state/circus/control.sock}"
     if [[ ! -S "$sock" ]]; then
         echo "FAIL: ringmaster socket not found at $sock" >&2
-        echo "      start ringmaster first: ./result/bin/ringmaster daemon &" >&2
+        echo "      start the circus daemon first: ./result/bin/circus daemon &" >&2
         exit 1
     fi
     port=$(./result/bin/circus list | awk -v a="$alias" '$1==a {print $4}')
@@ -1207,7 +1207,7 @@ download-qwen-coder: build
 # ringmaster's /health poll succeeds WITHOUT a GGUF? Times --version
 # exit latency, --help exit latency, and how long /health takes to
 # come up under various model-less invocations. Used as the source
-# of evidence behind cmd/ringmaster/launcher_real_test.go and the
+# of evidence behind cmd/circus/launcher_real_test.go and the
 # decision that option B is feasible. Re-run after nixpkgs-llama
 # bumps to confirm the behaviour still holds.
 #
@@ -1223,10 +1223,11 @@ download-qwen-coder: build
 debug-probe-real-llama-server:
     #!/usr/bin/env bash
     set -u
-    # Read the burned-in LlamaServerPath out of ./result/bin/ringmaster
+    # Read the burned-in LlamaServerPath out of ./result/bin/circus
     # — buildcfg.LlamaServerPath is a Go string literal, so it appears
-    # verbatim in the binary's string table.
-    LS=$(strings ./result/bin/ringmaster \
+    # verbatim in the binary's string table. (The daemon that reads it
+    # re-homed from ringmaster into `circus daemon`.)
+    LS=$(strings ./result/bin/circus \
         | grep -E '^/nix/store/[^/]+-llama-cpp[^/]*/bin/llama-server$' \
         | head -1)
     if [[ -z "$LS" || ! -x "$LS" ]]; then
@@ -1377,7 +1378,12 @@ debug-system-prompt-fetch SESSION="local-smoke":
     tmp="$(mktemp -d)"
     bridge_pid=
     trap 'kill "${bridge_pid:-}" 2>/dev/null || true; rm -rf "$tmp"' EXIT
-    go build -o "$tmp/ringmaster" ./cmd/ringmaster
+    # `ringmaster mcp` now ships from the external ringmaster module, so
+    # build it via nix rather than `go build ./cmd/ringmaster` (deleted).
+    # Requires `just build` to have produced ./result/bin/ringmaster.
+    ringmaster_bin="$PWD/result/bin/ringmaster"
+    [[ -x "$ringmaster_bin" ]] || { echo "FAIL: run 'just build' first ($ringmaster_bin missing)" >&2; exit 1; }
+    cp "$ringmaster_bin" "$tmp/ringmaster"
     go build -o "$tmp/clown-stdio-bridge" ./cmd/clown-stdio-bridge
     export CLOWN_SESSION_ID="{{SESSION}}"
     "$tmp/clown-stdio-bridge" --command "$tmp/ringmaster" -- mcp \

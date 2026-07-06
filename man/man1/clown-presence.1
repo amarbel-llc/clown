@@ -15,7 +15,7 @@
 .Nm clown presence
 queries the presence index \(em the clown\(->spinclass liveness seam (RFC-0014).
 Every live clown writes a presence record under
-.Pa $XDG_STATE_HOME/clown/presence/ ,
+.Pa $XDG_STATE_HOME/ringmaster/presence/ ,
 its wake monitor (see
 .Xr ringmaster 1 )
 refreshes the record on a ticker, and a clean shutdown removes it; a stale
@@ -100,7 +100,7 @@ back at startup).
 .Bl -tag -width Ds
 .It Ev XDG_STATE_HOME
 Root of the presence directory
-.Pq Pa $XDG_STATE_HOME/clown/presence/ .
+.Pq Pa $XDG_STATE_HOME/ringmaster/presence/ .
 .It Ev CLOWN_GROUP_ID
 The group-id a live clown records as its
 .Sy decoration ;
