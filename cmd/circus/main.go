@@ -17,11 +17,17 @@ func main() {
 
 func run(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: circus <start|stop|status|list|models|download> [args]")
+		fmt.Fprintln(os.Stderr, "usage: circus <daemon|start|stop|status|list|models|download> [args]")
 		return 1
 	}
 
 	switch args[0] {
+	case "daemon":
+		// The llama-server control-plane daemon (FDR-0010). Runs the
+		// server the other verbs dial via withClient. Re-homed here from
+		// `ringmaster daemon` when the job platform was extracted into the
+		// standalone ringmaster module.
+		return runDaemon(args[1:])
 	case "start":
 		return withClient(func(cli *rm.Client) int { return cmdStart(cli, args[1:]) })
 	case "stop":
