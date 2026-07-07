@@ -321,14 +321,25 @@ func (h *Host) FetchToolCatalog(ctx context.Context, srv *ManagedServer) ([]Tool
 }
 
 // postJSONRPC POSTs a single JSON-RPC request body to url and returns the
-// raw response body, bounded by maxToolCatalogBytes. A non-200 status is
-// treated as an error.
+// extracted JSON-RPC message body, bounded by maxToolCatalogBytes. A
+// non-200 status is treated as an error.
+//
+// The MCP streamable-HTTP transport lets a server answer a POST with either
+// a plain application/json body or a text/event-stream response framing
+// the same JSON-RPC message as one or more "data: <json>\n\n" events
+// (clown-stdio-bridge defaults to the latter — see heartbeatMode in
+// cmd/clown-stdio-bridge/http.go, which streams unless
+// CLOWN_BRIDGE_HEARTBEAT_INTERVAL=0 is set on that server). Response
+// Content-Type decides which framing to parse; clown doesn't control that
+// env var per-fetch, so both must be handled here rather than assuming
+// plain JSON.
 func (h *Host) postJSONRPC(ctx context.Context, url, body string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader([]byte(body)))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
@@ -337,7 +348,35 @@ func (h *Host) postJSONRPC(ctx context.Context, url, body string) ([]byte, error
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("unexpected status %d", resp.StatusCode)
 	}
-	return io.ReadAll(io.LimitReader(resp.Body, maxToolCatalogBytes))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxToolCatalogBytes))
+	if err != nil {
+		return nil, err
+	}
+	if strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
+		return extractSSEData(raw)
+	}
+	return raw, nil
+}
+
+// extractSSEData returns the payload of the last "data: <payload>" event
+// in an SSE stream body. handlePostStreaming (cmd/clown-stdio-bridge)
+// emits zero or more heartbeat/progress events before exactly one final
+// event carrying the actual JSON-RPC response or error — the last "data:"
+// line is always that final message.
+func extractSSEData(raw []byte) ([]byte, error) {
+	var last []byte
+	for _, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimRight(line, "\r")
+		if data, ok := strings.CutPrefix(line, "data: "); ok {
+			last = []byte(data)
+		} else if data, ok := strings.CutPrefix(line, "data:"); ok {
+			last = []byte(strings.TrimPrefix(data, " "))
+		}
+	}
+	if last == nil {
+		return nil, fmt.Errorf("no data: event found in SSE response")
+	}
+	return last, nil
 }
 
 func (h *Host) logToolCatalogSkip(srv *ManagedServer, err error) {

@@ -1251,7 +1251,7 @@ func runWithPluginHost(executor Executor, args []string, pluginDirs []string, fl
 
 	// allDiscoveredDirs is the pre-filter set of dirs that own at least one
 	// clown.json server, used below to detect dirs --cheap-context dropped
-	// entirely (cmd/clown#175).
+	// entirely.
 	allDiscoveredDirs := pluginDirSet(discovered)
 	cheapContextActive := flags.cheapContext
 
@@ -1504,10 +1504,13 @@ func runManaged(
 	// decided this session). Now that servers are healthy, fetch each one's
 	// tool catalog, run the picker, then apply the result: a fully-deselected
 	// server is stopped and dropped from discovered (so it flows into the
-	// existing clown#175 dir-exclusion logic below); a partially-deselected
-	// server's excluded tool names are pushed into its ALREADY-RUNNING bridge
-	// via POST /clown/exclude-tools (cmd/clown-stdio-bridge/http.go) before
-	// claude's own discovery-time tools/list call.
+	// dir-exclusion logic below); a partially-deselected server's excluded
+	// tool names are pushed into its ALREADY-RUNNING bridge via POST
+	// /clown/exclude-tools (cmd/clown-stdio-bridge/http.go) before claude's
+	// own discovery-time tools/list call. Note: this filtering only reaches
+	// bridged (stdioServers-declared) plugins — a native httpServers plugin
+	// like moxy has no clown-owned proxy in its request path at all, so its
+	// per-tool selection currently has no effect (clown#175).
 	if cheapContextActive {
 		filtered, err := applyCheapContextSelection(ctx, host, discovered, report.Started, logger)
 		if err != nil {
@@ -1530,7 +1533,7 @@ func runManaged(
 		return 1
 	}
 
-	// --cheap-context (clown#175): a dir that owned a clown.json server
+	// --cheap-context: a dir that owned a clown.json server
 	// before selection but has no compiled entry after it was deselected
 	// (and carries no monitors — CompileForClaude/pluginDirOrder already
 	// keeps monitor-only dirs in dirMap) must be dropped from pluginDirs
@@ -1671,7 +1674,7 @@ func runClownbox(cliPath string, flags parsedFlags, prompts promptwalk.PromptRes
 // pluginDirSet returns the deduplicated set of plugin dirs referenced by
 // discovered — every dir that owns at least one clown.json server, prior to
 // any --cheap-context filtering. Used to detect which dirs a selection
-// dropped entirely (cmd/clown#175).
+// dropped entirely.
 func pluginDirSet(discovered []pluginhost.DiscoveredServer) map[string]bool {
 	set := make(map[string]bool, len(discovered))
 	for _, d := range discovered {
