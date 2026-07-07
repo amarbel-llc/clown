@@ -1249,13 +1249,20 @@ func runWithPluginHost(executor Executor, args []string, pluginDirs []string, fl
 		return 1
 	}
 
-	if flags.cheapContext {
-		discovered, err = selectServers(discovered)
+	// allDiscoveredDirs is the pre-filter set of dirs that own at least one
+	// clown.json server, used below to detect dirs --cheap-context dropped
+	// entirely (cmd/clown#175).
+	allDiscoveredDirs := pluginDirSet(discovered)
+
+	cheapContextActive := flags.cheapContext
+	if cheapContextActive {
+		filtered, err := selectServers(discovered)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "clown: %v\n", err)
 			logger.Error("cheap-context selection failed", "err", err)
 			return 1
 		}
+		discovered = filtered
 		logger.Info("cheap-context selection applied", "selected", len(discovered))
 	}
 
@@ -1265,7 +1272,7 @@ func runWithPluginHost(executor Executor, args []string, pluginDirs []string, fl
 		return runProvider(executor, fullArgs, logger, flags.ptyOpts)
 	}
 
-	return runManaged(host, discovered, executor, args, pluginDirs, skipFailed, verbose, logger, appendFile, flags.ptyOpts)
+	return runManaged(host, discovered, executor, args, pluginDirs, skipFailed, verbose, logger, appendFile, flags.ptyOpts, cheapContextActive, allDiscoveredDirs)
 }
 
 // runProvider executes a provider as a subprocess, forwarding stdio
@@ -1438,6 +1445,8 @@ func runManaged(
 	logger *slog.Logger,
 	appendFile string,
 	ptyOpts ptysuspend.Options,
+	cheapContextActive bool,
+	allDiscoveredDirs map[string]bool,
 ) int {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1496,6 +1505,27 @@ func runManaged(
 		fmt.Fprintf(os.Stderr, "clown: compiling plugin manifests: %v\n", err)
 		logger.Error("compiling plugin manifests failed", "err", err)
 		return 1
+	}
+
+	// --cheap-context (clown#175): a dir that owned a clown.json server
+	// before selection but has no compiled entry after it was deselected
+	// (and carries no monitors — CompileForClaude/pluginDirOrder already
+	// keeps monitor-only dirs in dirMap) must be dropped from pluginDirs
+	// entirely. Otherwise prependPluginDirs' fallback for a dir absent from
+	// dirMap — pass it through unmodified — hands claude the dir's ORIGINAL
+	// plugin.json, whose own mcpServers block still declares the tools the
+	// user just opted out of, silently reintroducing them.
+	if cheapContextActive {
+		excluded := make(map[string]bool, len(allDiscoveredDirs))
+		for dir := range allDiscoveredDirs {
+			if _, compiled := dirMap[dir]; !compiled {
+				excluded[dir] = true
+			}
+		}
+		if len(excluded) > 0 {
+			pluginDirs = dropExcludedDirs(pluginDirs, excluded)
+			logger.Info("cheap-context excluded plugin dirs", "count", len(excluded))
+		}
 	}
 
 	// Dynamic system-prompt contribution (RFC-0002 §dynamic fragments): now
@@ -1613,6 +1643,36 @@ func runClownbox(cliPath string, flags parsedFlags, prompts promptwalk.PromptRes
 	defer cleanup()
 
 	return runWithPluginHost(&passthroughExecutor{cliPath: cliPath}, args, pluginDirs, flags, nil, appendFile)
+}
+
+// pluginDirSet returns the deduplicated set of plugin dirs referenced by
+// discovered — every dir that owns at least one clown.json server, prior to
+// any --cheap-context filtering. Used to detect which dirs a selection
+// dropped entirely (cmd/clown#175).
+func pluginDirSet(discovered []pluginhost.DiscoveredServer) map[string]bool {
+	set := make(map[string]bool, len(discovered))
+	for _, d := range discovered {
+		set[d.PluginDir] = true
+	}
+	return set
+}
+
+// dropExcludedDirs returns pluginDirs with every dir in excluded removed,
+// preserving order. Used by --cheap-context to keep a fully-deselected
+// plugin dir out of the --plugin-dir set entirely, rather than letting it
+// pass through prependPluginDirs' compiled-or-original fallback (which would
+// hand claude the dir's original, unfiltered plugin.json).
+func dropExcludedDirs(pluginDirs []string, excluded map[string]bool) []string {
+	if len(excluded) == 0 {
+		return pluginDirs
+	}
+	result := make([]string, 0, len(pluginDirs))
+	for _, dir := range pluginDirs {
+		if !excluded[dir] {
+			result = append(result, dir)
+		}
+	}
+	return result
 }
 
 // prependPluginDirs inserts --plugin-dir flags at the start of args,
