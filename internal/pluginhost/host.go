@@ -1,7 +1,9 @@
 package pluginhost
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -23,6 +25,18 @@ const promptFetchBudget = 3 * time.Second
 // maxPromptFragmentBytes bounds a single fragment body so a misbehaving
 // server cannot balloon the prompt.
 const maxPromptFragmentBytes = 64 * 1024
+
+// toolCatalogFetchBudget caps how long FetchToolCatalog will block per
+// server while fetching its tool list for --cheap-context's picker. Not
+// load-bearing for the session booting (a fetch failure just means that
+// server's picker entry has no per-tool grouping, per FetchToolCatalog's
+// doc comment) so this stays short like promptFetchBudget.
+const toolCatalogFetchBudget = 3 * time.Second
+
+// maxToolCatalogBytes bounds a tools/list response body so a misbehaving
+// or very large server cannot balloon memory while --cheap-context is
+// building its picker.
+const maxToolCatalogBytes = 1024 * 1024
 
 type DiscoveredServer struct {
 	PluginDir  string
@@ -254,6 +268,81 @@ func (h *Host) fetchOnePromptFragment(ctx context.Context, srv *ManagedServer, p
 func (h *Host) logPromptSkip(srv *ManagedServer, err error) {
 	if h.Logger != nil {
 		h.Logger.Info("skipping dynamic system-prompt fragment", "server", srv.Name, "err", err)
+	}
+}
+
+// ToolInfo is the subset of an MCP tools/list entry --cheap-context's
+// picker needs: enough to group and label a tool, not the full inputSchema.
+type ToolInfo struct {
+	Name        string
+	Description string
+}
+
+// FetchToolCatalog issues a minimal MCP handshake (initialize, then
+// tools/list) against srv and returns its tool catalog. Modeled on
+// FetchPromptFragments/fetchOnePromptFragment: bounded by
+// toolCatalogFetchBudget, and any failure (transport error, non-200,
+// malformed JSON-RPC) degrades to (nil, false) rather than blocking the
+// --cheap-context picker — a server whose catalog can't be fetched just
+// falls back to v1's flat per-server selection instead of per-tool
+// grouping (cmd/clown/cheapcontext.go).
+//
+// Call this after StartAll (so the handshake address is resolved) and
+// before compiling plugin manifests, mirroring FetchPromptFragments'
+// ordering constraint.
+func (h *Host) FetchToolCatalog(ctx context.Context, srv *ManagedServer) ([]ToolInfo, bool) {
+	reqCtx, cancel := context.WithTimeout(ctx, toolCatalogFetchBudget)
+	defer cancel()
+
+	url := srv.Handshake().URL()
+	// initialize is required by the MCP spec before tools/list is valid on
+	// a fresh session; the response body is unused, only success matters.
+	if _, err := h.postJSONRPC(reqCtx, url, `{"jsonrpc":"2.0","id":"cheap-context-init","method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"clown-cheap-context","version":"1"}}}`); err != nil {
+		h.logToolCatalogSkip(srv, err)
+		return nil, false
+	}
+
+	body, err := h.postJSONRPC(reqCtx, url, `{"jsonrpc":"2.0","id":"cheap-context-tools","method":"tools/list","params":{}}`)
+	if err != nil {
+		h.logToolCatalogSkip(srv, err)
+		return nil, false
+	}
+
+	var parsed struct {
+		Result struct {
+			Tools []ToolInfo `json:"tools"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		h.logToolCatalogSkip(srv, err)
+		return nil, false
+	}
+	return parsed.Result.Tools, true
+}
+
+// postJSONRPC POSTs a single JSON-RPC request body to url and returns the
+// raw response body, bounded by maxToolCatalogBytes. A non-200 status is
+// treated as an error.
+func (h *Host) postJSONRPC(ctx context.Context, url, body string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader([]byte(body)))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status %d", resp.StatusCode)
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, maxToolCatalogBytes))
+}
+
+func (h *Host) logToolCatalogSkip(srv *ManagedServer, err error) {
+	if h.Logger != nil {
+		h.Logger.Info("skipping tool catalog fetch", "server", srv.Name, "err", err)
 	}
 }
 

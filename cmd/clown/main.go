@@ -1253,18 +1253,16 @@ func runWithPluginHost(executor Executor, args []string, pluginDirs []string, fl
 	// clown.json server, used below to detect dirs --cheap-context dropped
 	// entirely (cmd/clown#175).
 	allDiscoveredDirs := pluginDirSet(discovered)
-
 	cheapContextActive := flags.cheapContext
-	if cheapContextActive {
-		filtered, err := selectServers(discovered)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "clown: %v\n", err)
-			logger.Error("cheap-context selection failed", "err", err)
-			return 1
-		}
-		discovered = filtered
-		logger.Info("cheap-context selection applied", "selected", len(discovered))
-	}
+
+	// v2 (unlike v1): the --cheap-context picker no longer runs here, before
+	// any server starts. Fetching a per-tool catalog for grouping requires a
+	// resolved handshake address, so every discovered server is started
+	// unconditionally (as if --cheap-context were unset) and the picker runs
+	// inside runManaged, after StartAll, once catalogs can be fetched. A
+	// fully-deselected server is then stopped and dropped rather than never
+	// started — an accepted v1 regression (decided this session) in exchange
+	// for per-tool/per-group selection.
 
 	if len(discovered) == 0 {
 		logger.Info("no plugin servers discovered; passing plugin dirs through")
@@ -1499,6 +1497,31 @@ func runManaged(
 		return runProvider(executor, fullArgs, logger, ptyOpts)
 	}
 	defer host.Shutdown()
+
+	// --cheap-context v2: every discovered server was started unconditionally
+	// above (fetching a per-tool catalog needs a resolved handshake address,
+	// so the picker can't run before StartAll — an accepted v1 regression,
+	// decided this session). Now that servers are healthy, fetch each one's
+	// tool catalog, run the picker, then apply the result: a fully-deselected
+	// server is stopped and dropped from discovered (so it flows into the
+	// existing clown#175 dir-exclusion logic below); a partially-deselected
+	// server's excluded tool names are pushed into its ALREADY-RUNNING bridge
+	// via POST /clown/exclude-tools (cmd/clown-stdio-bridge/http.go) before
+	// claude's own discovery-time tools/list call.
+	if cheapContextActive {
+		filtered, err := applyCheapContextSelection(ctx, host, discovered, report.Started, logger)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "clown: %v\n", err)
+			logger.Error("cheap-context selection failed", "err", err)
+			return 1
+		}
+		discovered = filtered
+		if len(discovered) == 0 {
+			logger.Info("cheap-context: every server deselected; falling back to original plugin dirs")
+			fullArgs := prependPluginDirs(baseArgs, pluginDirs, nil)
+			return runProvider(executor, fullArgs, logger, ptyOpts)
+		}
+	}
 
 	dirMap, err := host.CompileForClaude(discovered)
 	if err != nil {

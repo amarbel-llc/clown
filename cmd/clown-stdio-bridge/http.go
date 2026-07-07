@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -99,6 +100,97 @@ type httpHandler struct {
 	// stats emits per-request duration + outcome metrics to statsd
 	// (stats-me). Nil disables emission (see statsd.go).
 	stats *statsdClient
+
+	// excludeTools backs --cheap-context v2's per-tool filtering
+	// (cmd/clown/cheapcontext.go): a set of MCP tool names that handlePost
+	// strips from every tools/list response before writing it out, so a
+	// deselected tool never reaches claude's discovery at all. Empty by
+	// default (no filtering). Set via POST /clown/exclude-tools, which
+	// REPLACES the set wholesale — one picker decision per launch, no
+	// incremental add/remove. Guarded by excludeMu since it's written from
+	// the HTTP handler goroutine handling that POST and read from every
+	// concurrent tools/list request.
+	excludeMu    sync.RWMutex
+	excludeTools map[string]bool
+}
+
+// setExcludeTools replaces the handler's tool-exclusion set wholesale.
+func (h *httpHandler) setExcludeTools(names []string) {
+	set := make(map[string]bool, len(names))
+	for _, n := range names {
+		set[n] = true
+	}
+	h.excludeMu.Lock()
+	h.excludeTools = set
+	h.excludeMu.Unlock()
+}
+
+// filterToolsListResponse drops entries from a tools/list JSON-RPC response
+// body whose name is in the current exclude set. Returns the body
+// unmodified (including on any parse error — fail open, since a malformed
+// response is the wrapped server's problem, not this filter's to surface)
+// when the exclude set is empty or the body isn't a tools/list result
+// shape.
+func (h *httpHandler) filterToolsListResponse(body json.RawMessage) json.RawMessage {
+	h.excludeMu.RLock()
+	exclude := h.excludeTools
+	h.excludeMu.RUnlock()
+	if len(exclude) == 0 {
+		return body
+	}
+
+	var parsed struct {
+		Result struct {
+			Tools []json.RawMessage `json:"tools"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return body
+	}
+	if len(parsed.Result.Tools) == 0 {
+		return body
+	}
+
+	filtered := make([]json.RawMessage, 0, len(parsed.Result.Tools))
+	for _, raw := range parsed.Result.Tools {
+		var probe struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(raw, &probe); err != nil {
+			filtered = append(filtered, raw) // fail open per-entry too
+			continue
+		}
+		if !exclude[probe.Name] {
+			filtered = append(filtered, raw)
+		}
+	}
+
+	// Re-marshal by patching just the tools array back into the original
+	// structure via a generic map, so any other result fields (e.g. a future
+	// nextCursor) survive untouched.
+	var generic map[string]json.RawMessage
+	if err := json.Unmarshal(body, &generic); err != nil {
+		return body
+	}
+	var resultGeneric map[string]json.RawMessage
+	if err := json.Unmarshal(generic["result"], &resultGeneric); err != nil {
+		return body
+	}
+	toolsJSON, err := json.Marshal(filtered)
+	if err != nil {
+		return body
+	}
+	resultGeneric["tools"] = toolsJSON
+	resultBytes, err := json.Marshal(resultGeneric)
+	if err != nil {
+		return body
+	}
+	generic["result"] = resultBytes
+	out, err := json.Marshal(generic)
+	if err != nil {
+		return body
+	}
+	return out
 }
 
 // jsonRPCError mirrors the JSON-RPC 2.0 error response shape.
@@ -170,7 +262,7 @@ func (h *httpHandler) handlePost(w http.ResponseWriter, r *http.Request) {
 			idKey, probe.Method, hasToken, len(body),
 		)
 		if streaming, interval, fallback := heartbeatMode(); streaming {
-			h.handlePostStreaming(w, r, idKey, probe.ID, body, interval, fallback, started, label)
+			h.handlePostStreaming(w, r, idKey, probe.ID, probe.Method, body, interval, fallback, started, label)
 			return
 		}
 		// Synchronous JSON response (streaming disabled).
@@ -203,6 +295,9 @@ func (h *httpHandler) handlePost(w http.ResponseWriter, r *http.Request) {
 		h.logger.Printf("clown-stdio-bridge: post end id=%s outcome=response_sent elapsed_ms=%d transport=json",
 			idKey, time.Since(started).Milliseconds())
 		h.stats.emitOutcome(label, started, responseOutcome(resp))
+		if probe.Method == "tools/list" {
+			resp = h.filterToolsListResponse(resp)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(resp)
 	case hasMethod && !hasID:
@@ -239,6 +334,7 @@ func (h *httpHandler) handlePostStreaming(
 	r *http.Request,
 	idKey string,
 	id json.RawMessage,
+	method string,
 	body []byte,
 	interval time.Duration,
 	fallback bool,
@@ -366,7 +462,11 @@ func (h *httpHandler) handlePostStreaming(
 			h.logger.Printf("clown-stdio-bridge: post end id=%s outcome=response_sent elapsed_ms=%d transport=sse heartbeats=%d",
 				idKey, time.Since(started).Milliseconds(), seq)
 			h.stats.emitOutcome(label, started, responseOutcome(res.resp))
-			fmt.Fprintf(w, "data: %s\n\n", res.resp)
+			resp := res.resp
+			if method == "tools/list" {
+				resp = h.filterToolsListResponse(resp)
+			}
+			fmt.Fprintf(w, "data: %s\n\n", resp)
 			flusher.Flush()
 			return
 		case <-activity:

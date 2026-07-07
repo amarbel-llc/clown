@@ -1386,10 +1386,16 @@ debug-clown-with-stdio-plugin PLUGIN_DIR=".tmp/chrest-plugin": build
 # plugin (via build-juggler/mkJuggler, resolved through the moxy flake —
 # NOT a `command -v moxy` PATH guess, which silently breaks whenever moxy
 # on $PATH isn't a nix-store install with a sibling share/purse-first/moxy,
-# e.g. a homebrew moxy), so the multi-select picker has more than one
-# server to choose between. Interactive by design (unlike
-# test-plugin-host-moxy, which drives clown-plugin-host non-interactively)
-# — --cheap-context requires a real TTY and errors otherwise.
+# e.g. a homebrew moxy). moxy's ~170 tools across ~17 moxin child processes
+# give the v2 picker a real multi-group server to exercise: every
+# discovered server (moxy included) starts unconditionally first — fetching
+# a per-tool catalog for grouping needs a resolved handshake address, so
+# the picker can't run before start — then clown fetches each one's tool
+# catalog and shows a per-group sub-section for moxy (one row per moxin,
+# e.g. "moxy/moxy: folio (16 tools)") alongside the flat per-server rows
+# for everything else. Interactive by design (unlike test-plugin-host-moxy,
+# which drives clown-plugin-host non-interactively) — --cheap-context
+# requires a real TTY and errors otherwise.
 #
 # Deliberately launches a real, persistent claude session (no ARGS = no
 # forwarded flags) rather than `-- --version`: claude exits near-instantly
