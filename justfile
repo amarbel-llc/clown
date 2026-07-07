@@ -1382,30 +1382,20 @@ debug-clown-with-stdio-plugin PLUGIN_DIR=".tmp/chrest-plugin": build
     echo "Launching ./result/bin/clown --verbose --plugin-dir $plugin_dir"
     exec ./result/bin/clown --verbose --plugin-dir "$plugin_dir"
 
-# Launch ./result/bin/clown --cheap-context with the real moxy MCP server
-# wired in as a plugin, so the multi-select picker has more than one
-# server to choose between. moxy's plugin dir is derived the same way as
-# test-plugin-host-moxy: <prefix>/share/purse-first/moxy from `command -v
-# moxy`. Interactive by design (unlike test-plugin-host-moxy, which drives
-# clown-plugin-host non-interactively) — --cheap-context requires a real
-# TTY and errors otherwise. ARGS forwards to the provider after `--` (e.g.
-# `--version` for a cheap smoke run instead of a full session).
+# Launch clown --cheap-context with the real moxy MCP server wired in as a
+# plugin (via build-juggler/mkJuggler, resolved through the moxy flake —
+# NOT a `command -v moxy` PATH guess, which silently breaks whenever moxy
+# on $PATH isn't a nix-store install with a sibling share/purse-first/moxy,
+# e.g. a homebrew moxy), so the multi-select picker has more than one
+# server to choose between. Interactive by design (unlike
+# test-plugin-host-moxy, which drives clown-plugin-host non-interactively)
+# — --cheap-context requires a real TTY and errors otherwise. ARGS forwards
+# to the provider after `--` (e.g. `--version` for a cheap smoke run
+# instead of a full session).
 [group("debug")]
-debug-cheap-context-moxy *ARGS="--version": build
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if ! moxy_bin=$(command -v moxy 2>/dev/null); then
-        echo "ERROR: moxy not found on PATH" >&2
-        exit 1
-    fi
-    moxy_prefix=$(dirname "$(dirname "$moxy_bin")")
-    plugin_dir="$moxy_prefix/share/purse-first/moxy"
-    if [[ ! -f "$plugin_dir/clown.json" ]]; then
-        echo "ERROR: $plugin_dir/clown.json not found (moxy on PATH is too old?)" >&2
-        exit 1
-    fi
-    echo "Using moxy plugin dir: $plugin_dir"
-    exec ./result/bin/clown --verbose --cheap-context --plugin-dir "$plugin_dir" -- {{ARGS}}
+debug-cheap-context-moxy *ARGS="--version":
+    just build-juggler
+    exec ./result/bin/clown --verbose --cheap-context -- {{ARGS}}
 
 # Manually exercise the stdio bridge against a real stdio MCP. Expects
 # a plugin directory at $PLUGIN_DIR (default .tmp/stdio-bridge-plugin)
