@@ -73,6 +73,18 @@
     ringmaster.inputs.nixpkgs-master.follows = "nixpkgs-master";
     ringmaster.inputs.utils.follows = "utils";
     ringmaster.inputs.bats.follows = "bats";
+    # troupe: the messaging binary (chat + `troupe agent` XMPP receiver + the
+    # troupe MCP surface). clown's 2nd extracted dep — but BINARY-only: clown
+    # runs the troupe binary and does NOT import its Go (jobwake comes from
+    # ringmaster), so no goFlakeInputs bridge / go.mod require, just the input +
+    # a burned-in TroupePath. troupe's own inputs (nixpkgs=igloo, utils,
+    # treefmt-nix, ringmaster) follow clown's so the closure shares one eval —
+    # notably troupe's ringmaster follows clown's, aligning the jobwake pin.
+    troupe.url = "git+https://forge.linenisgreat.com/amarbel-llc/troupe.git";
+    troupe.inputs.nixpkgs.follows = "igloo";
+    troupe.inputs.utils.follows = "utils";
+    troupe.inputs.treefmt-nix.follows = "treefmt-nix";
+    troupe.inputs.ringmaster.follows = "ringmaster";
   };
 
   outputs =
@@ -88,6 +100,7 @@
       utils,
       bats,
       ringmaster,
+      troupe,
     }:
     (utils.lib.eachDefaultSystem (
       system:
@@ -663,7 +676,7 @@
               "-X github.com/amarbel-llc/clown/internal/buildcfg.StdioBridgePath=${clown-stdio-bridge}/bin/clown-stdio-bridge"
               "-X github.com/amarbel-llc/clown/internal/buildcfg.HookAllowPath=${clown-hook-allow}/bin/clown-hook-allow"
               "-X github.com/amarbel-llc/clown/internal/buildcfg.RingmasterPath=${ringmasterPkg}/bin/ringmaster"
-              "-X github.com/amarbel-llc/clown/internal/buildcfg.TroupePath=${ringmasterPkg}/bin/troupe"
+              "-X github.com/amarbel-llc/clown/internal/buildcfg.TroupePath=${troupePkg}/bin/troupe"
               "-X github.com/amarbel-llc/clown/internal/buildcfg.DefaultProvider=${defaultProvider}"
               "-X github.com/amarbel-llc/clown/internal/buildcfg.DefaultProfile=${defaultProfile}"
               "-X github.com/amarbel-llc/clown/internal/buildcfg.PodmanPath=${tentPodmanPath}"
@@ -713,7 +726,35 @@
         # (mkClownGo ldflags) so it can synthesize `ringmaster monitor`,
         # `ringmaster mcp`, and `troupe mcp` into the clown-builtin-jobs
         # plugin, and bundles the binaries + manpages into its symlinkJoin.
+        # NOTE (B.3, troupe Interim-B): the `troupe` binary now comes from the
+        # troupe input (troupePkg), NOT ringmasterPkg — see jobPlatformBins. The
+        # ringmaster `default` still SHIPS bin/troupe additively until B.4
+        # (ringmaster sheds its chat funcs, gated on this landing).
         ringmasterPkg = ringmaster.packages.${system}.default;
+
+        # troupePkg is the troupe binary (bin/troupe + troupe manpages) from the
+        # troupe flake input — the messaging surface's own extracted output. It
+        # carries the chat verbs + the `troupe agent` XMPP receiver + the troupe
+        # MCP surface (troupe RFC-0001). clown burns TroupePath from it and
+        # synthesizes `troupe mcp` + `troupe agent` against it.
+        troupePkg = troupe.packages.${system}.troupe;
+
+        # jobPlatformBins bundles the ringmaster + troupe binaries for clown's
+        # symlinkJoin. Both the ringmaster `default` and troupePkg carry
+        # bin/troupe (+ troupe manpages) during the B.3→B.4 window (ringmaster
+        # sheds its troupe last, gated on this landing), so a plain join would
+        # collide. troupePkg is listed FIRST with ignoreCollisions so the
+        # troupe-owned binary + pages win the overlap and ringmaster contributes
+        # bin/ringmaster + its own pages; after B.4 there is no overlap and the
+        # ignoreCollisions becomes a no-op.
+        jobPlatformBins = pkgs.symlinkJoin {
+          name = "clown-job-platform-bins";
+          paths = [
+            troupePkg
+            ringmasterPkg
+          ];
+          ignoreCollisions = true;
+        };
 
         # fake-llama-server: a stand-in for llama-server used by the
         # ringmaster bats e2e lane. Real llama-cpp is too heavy and
@@ -964,9 +1005,10 @@
               clown-plugin-host
               clown-stdio-bridge
               juggler-go
-              # ringmasterPkg is the external module's `default` symlinkJoin:
-              # bin/ringmaster + bin/troupe + share/man in one output.
-              ringmasterPkg
+              # jobPlatformBins = bin/ringmaster (from the ringmaster input) +
+              # bin/troupe (from the troupe input) + their manpages, collision-
+              # resolved (troupe wins the transitional bin/troupe overlap).
+              jobPlatformBins
               clown-completions
               clown-manpages
             ];
@@ -1003,11 +1045,11 @@
           # re-homed llama-server control plane) and a Go fake llama-server
           # (tiny http stand-in compiled from
           # cmd/juggler/testdata/fake-llama-server, same source the
-          # launcher_test.go / server_test.go fixtures use). ringmaster +
-          # troupe are the external module's binaries for the job-platform
-          # lanes (both live in ringmasterPkg's bin/).
+          # launcher_test.go / server_test.go fixtures use). ringmaster is the
+          # ringmaster input's binary; troupe is the troupe input's binary (its
+          # own extracted output) — the job-platform bats lanes drive both.
           ringmaster = ringmasterPkg;
-          troupe = ringmasterPkg;
+          troupe = troupePkg;
           juggler = juggler-go;
           fake-llama-server = fake-llama-server-go;
         };
@@ -1354,15 +1396,15 @@
           clown-go-test = clown-go-test;
           mock-stdio-mcp = mock-stdio-mcp;
           synthetic-plugin = synthetic-plugin;
-          # ringmaster + troupe: re-exported from the external
-          # github.com/amarbel-llc/ringmaster flake input (the job platform;
-          # both binaries + manpages live in its `default` symlinkJoin).
-          # Bundled into clown's default symlinkJoin so `nix build` ships
-          # them. The llama-server control-plane daemon no longer lives here
-          # — it re-homed into `juggler daemon` (packages.default's juggler-go),
-          # and homeManagerModules.juggler now runs that.
+          # ringmaster + troupe: re-exported from their respective extracted
+          # flake inputs (ringmaster = the job platform; troupe = the messaging
+          # binary, clown's 2nd extracted dep). Bundled into clown's default
+          # symlinkJoin (via jobPlatformBins) so `nix build` ships them. The
+          # llama-server control-plane daemon no longer lives here — it re-homed
+          # into `juggler daemon` (packages.default's juggler-go), and
+          # homeManagerModules.juggler now runs that.
           ringmaster = ringmasterPkg;
-          troupe = ringmasterPkg;
+          troupe = troupePkg;
           # juggler: standalone build of the juggler binary (llama-server
           # control-plane client + the `juggler daemon` server, re-homed from
           # ringmaster). homeManagerModules.juggler consumes this via its

@@ -68,6 +68,33 @@ func monitorCommand(key string) string {
 	return base
 }
 
+// troupeAgentCommand returns the `troupe agent` command string for the
+// persistent per-session XMPP receiver, registered as a monitor when the
+// session opts into the troupe xmpp transport (troupe RFC-0001 §2/§6). It is the
+// RECEIVE half of the xmpp backend: it joins this session's MUC rooms and
+// delivers inbound cross-host chat onto this host's local journal, then nudges
+// this session's channel so the ringmaster monitor emits the wake.
+//
+// The absolute buildcfg.TroupePath is used for the same PATH-independence reason
+// as the ringmaster monitor. The agent resolves its session key from
+// CLOWN_SESSION_ID (jobwake.SessionKey()), which clown does NOT export ambiently
+// (clown#136) and which `troupe agent` takes no flag for; it is threaded here as
+// a SCOPED env prefix so the agent's own-channel nudge targets THIS session's
+// channel (matching the ringmaster monitor's --session key) without polluting
+// the claude subtree env. The transport coordinates (TROUPE_TRANSPORT +
+// TROUPE_XMPP_*) and CLOWN_GROUP_ID are ambient (os.Setenv'd from the clownfile
+// [messaging] table) and inherited.
+func troupeAgentCommand(key string) string {
+	base := "troupe agent"
+	if buildcfg.TroupePath != "" {
+		base = buildcfg.TroupePath + " agent"
+	}
+	if key != "" {
+		base = "env CLOWN_SESSION_ID=" + key + " " + base
+	}
+	return base
+}
+
 // providerUsesPluginDirs reports whether the provider consumes --plugin-dir
 // (and runs as a subprocess so deferred cleanup fires). Only those need the
 // synthesized job-watch monitor dir. claude and clownbox thread pluginDirs
@@ -101,14 +128,28 @@ func synthJobMonitorPluginDir(sessionKey string) (string, error) {
 		_ = os.RemoveAll(dir)
 		return "", err
 	}
+	monitors := []jobMonitorEntry{{
+		Name:        "ringmaster-monitor",
+		Command:     monitorCommand(sessionKey),
+		Description: "clown job-wakeup channel: wakes this session when a background job finishes",
+	}}
+	// When the session opts into the troupe xmpp transport (clownfile
+	// [messaging], exported as TROUPE_TRANSPORT=xmpp), also run the per-session
+	// `troupe agent`: the persistent XMPP receiver that delivers cross-host chat
+	// onto this host's local journal + nudges this session's channel (troupe
+	// RFC-0001 §2/§6). It needs the troupe binary (nix builds); dev builds (empty
+	// TroupePath) skip it, as they do the MCP servers below.
+	if os.Getenv("TROUPE_TRANSPORT") == "xmpp" && buildcfg.TroupePath != "" {
+		monitors = append(monitors, jobMonitorEntry{
+			Name:        "troupe-agent",
+			Command:     troupeAgentCommand(sessionKey),
+			Description: "troupe XMPP messaging receiver: delivers cross-host chat into this session",
+		})
+	}
 	manifest := jobMonitorPlugin{
-		Name:    "clown-builtin-jobs",
-		Version: "1",
-		Monitors: []jobMonitorEntry{{
-			Name:        "ringmaster-monitor",
-			Command:     monitorCommand(sessionKey),
-			Description: "clown job-wakeup channel: wakes this session when a background job finishes",
-		}},
+		Name:     "clown-builtin-jobs",
+		Version:  "1",
+		Monitors: monitors,
 	}
 	b, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {

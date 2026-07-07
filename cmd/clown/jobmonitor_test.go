@@ -118,6 +118,88 @@ func TestMonitorCommandBareFallback(t *testing.T) {
 	}
 }
 
+func TestTroupeAgentCommand(t *testing.T) {
+	orig := buildcfg.TroupePath
+	t.Cleanup(func() { buildcfg.TroupePath = orig })
+
+	// Nix builds: absolute TroupePath + `agent`, with the session key threaded as
+	// a scoped env prefix (clown#136-style: `troupe agent` reads
+	// CLOWN_SESSION_ID, which clown does not export ambiently and takes no flag
+	// for).
+	buildcfg.TroupePath = "/nix/store/x/bin/troupe"
+	cmd := troupeAgentCommand("k-1")
+	if !strings.HasSuffix(cmd, "/nix/store/x/bin/troupe agent") {
+		t.Fatalf("agent command = %q, want it to end with the absolute troupe agent subcommand", cmd)
+	}
+	if !strings.HasPrefix(cmd, "env CLOWN_SESSION_ID=k-1 ") {
+		t.Fatalf("agent command = %q, want the scoped CLOWN_SESSION_ID env prefix", cmd)
+	}
+	// An empty key omits the prefix.
+	if cmd := troupeAgentCommand(""); cmd != "/nix/store/x/bin/troupe agent" {
+		t.Fatalf("agent command = %q, want the bare absolute agent command for an empty key", cmd)
+	}
+	// Dev build (empty TroupePath) falls back to the bare `troupe agent`.
+	buildcfg.TroupePath = ""
+	if cmd := troupeAgentCommand("k-1"); cmd != "env CLOWN_SESSION_ID=k-1 troupe agent" {
+		t.Fatalf("agent command = %q, want the bare `troupe agent` with env prefix", cmd)
+	}
+}
+
+// The troupe-agent monitor is registered only when the session opts into the
+// xmpp transport (TROUPE_TRANSPORT=xmpp) and the troupe binary is available.
+func TestJobMonitorTroupeAgentGatedOnXMPP(t *testing.T) {
+	t.Setenv("CLOWN_DISABLE_JOB_WAKEUP", "")
+	origRM, origTroupe := buildcfg.RingmasterPath, buildcfg.TroupePath
+	buildcfg.RingmasterPath = "/nix/store/x/bin/ringmaster"
+	buildcfg.TroupePath = "/nix/store/x/bin/troupe"
+	t.Cleanup(func() { buildcfg.RingmasterPath, buildcfg.TroupePath = origRM, origTroupe })
+
+	monitorNames := func(t *testing.T) []string {
+		t.Helper()
+		dir, err := synthJobMonitorPluginDir("sess-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.RemoveAll(dir) })
+		b, err := os.ReadFile(filepath.Join(dir, ".claude-plugin", "plugin.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var m struct {
+			Monitors []struct {
+				Name string `json:"name"`
+			} `json:"monitors"`
+		}
+		if err := json.Unmarshal(b, &m); err != nil {
+			t.Fatal(err)
+		}
+		names := make([]string, len(m.Monitors))
+		for i, mon := range m.Monitors {
+			names[i] = mon.Name
+		}
+		return names
+	}
+
+	// Local (default): only the ringmaster monitor.
+	t.Setenv("TROUPE_TRANSPORT", "local")
+	if names := monitorNames(t); len(names) != 1 || names[0] != "ringmaster-monitor" {
+		t.Fatalf("local transport monitors = %v, want just [ringmaster-monitor]", names)
+	}
+
+	// xmpp: the troupe agent is registered alongside the ringmaster monitor.
+	t.Setenv("TROUPE_TRANSPORT", "xmpp")
+	names := monitorNames(t)
+	found := false
+	for _, n := range names {
+		if n == "troupe-agent" {
+			found = true
+		}
+	}
+	if len(names) != 2 || !found {
+		t.Fatalf("xmpp transport monitors = %v, want ringmaster-monitor + troupe-agent", names)
+	}
+}
+
 // providerUsesPluginDirs gates which providers get the synthesized job-monitor
 // plugin dir (only --plugin-dir subprocess providers).
 func TestProviderUsesPluginDirs(t *testing.T) {

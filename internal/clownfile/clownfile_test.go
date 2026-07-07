@@ -238,3 +238,79 @@ func TestXDGPath(t *testing.T) {
 		t.Errorf("XDGPath(\"\") with no env = %q, want empty", got)
 	}
 }
+
+func TestMessagingEnv(t *testing.T) {
+	tru := true
+	// local / unset emits nothing.
+	for _, transport := range []string{"", "local"} {
+		env, err := Messaging{Transport: transport}.Env()
+		if err != nil {
+			t.Fatalf("transport %q: unexpected error %v", transport, err)
+		}
+		if len(env) != 0 {
+			t.Errorf("transport %q: want empty env, got %v", transport, env)
+		}
+	}
+
+	// Unknown transport is an error.
+	if _, err := (Messaging{Transport: "carrier-pigeon"}).Env(); err == nil {
+		t.Error("unknown transport: want error, got nil")
+	}
+
+	// xmpp without the required vars fails fast.
+	if _, err := (Messaging{Transport: "xmpp", XMPPDomain: "x"}).Env(); err == nil {
+		t.Error("xmpp missing muc-domain: want error, got nil")
+	}
+	if _, err := (Messaging{Transport: "xmpp", XMPPMUCDomain: "x"}).Env(); err == nil {
+		t.Error("xmpp missing domain: want error, got nil")
+	}
+
+	// xmpp with only the required vars: emits transport + domain + muc, no optionals.
+	env, err := Messaging{
+		Transport:     "xmpp",
+		XMPPDomain:    "clown.local",
+		XMPPMUCDomain: "muc.clown.local",
+	}.Env()
+	if err != nil {
+		t.Fatalf("minimal xmpp: %v", err)
+	}
+	want := map[string]string{
+		"TROUPE_TRANSPORT":       "xmpp",
+		"TROUPE_XMPP_DOMAIN":     "clown.local",
+		"TROUPE_XMPP_MUC_DOMAIN": "muc.clown.local",
+	}
+	if !reflect.DeepEqual(env, want) {
+		t.Errorf("minimal xmpp env = %v, want %v", env, want)
+	}
+
+	// Full xmpp incl. authenticated + credential-by-reference (env-interpolated).
+	t.Setenv("MSG_TEST_SECRET_DIR", "/run/secrets")
+	env, err = Messaging{
+		Transport:        "xmpp",
+		XMPPHost:         "127.0.0.1",
+		XMPPPort:         5223,
+		XMPPDomain:       "clown.local",
+		XMPPMUCDomain:    "muc.clown.local",
+		XMPPNick:         "sharp-hickory",
+		XMPPInsecure:     &tru,
+		XMPPUser:         "clown-dev",
+		XMPPPasswordFile: "${MSG_TEST_SECRET_DIR}/troupe.pass",
+	}.Env()
+	if err != nil {
+		t.Fatalf("full xmpp: %v", err)
+	}
+	want = map[string]string{
+		"TROUPE_TRANSPORT":          "xmpp",
+		"TROUPE_XMPP_HOST":          "127.0.0.1",
+		"TROUPE_XMPP_PORT":          "5223",
+		"TROUPE_XMPP_DOMAIN":        "clown.local",
+		"TROUPE_XMPP_MUC_DOMAIN":    "muc.clown.local",
+		"TROUPE_XMPP_NICK":          "sharp-hickory",
+		"TROUPE_XMPP_INSECURE":      "1",
+		"TROUPE_XMPP_USER":          "clown-dev",
+		"TROUPE_XMPP_PASSWORD_FILE": "/run/secrets/troupe.pass",
+	}
+	if !reflect.DeepEqual(env, want) {
+		t.Errorf("full xmpp env = %v, want %v", env, want)
+	}
+}

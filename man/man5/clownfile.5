@@ -263,6 +263,62 @@ defaults (FDR-0017 Piece 1);
 and
 .Sy resume
 are clown-native (spinclass had no baked interactive template).
+.Ss [messaging]
+The
+.Sy [messaging]
+table opts the session into troupe's XMPP messaging transport (troupe
+RFC-0001), so chat reaches sessions on other hosts.
+It cascades like the other tables.
+clown resolves it and exports the
+.Ev TROUPE_TRANSPORT
+and
+.Ev TROUPE_XMPP_*
+environment troupe's
+.Ic mcp
+tools and its per-session
+.Ic agent
+receiver read.
+The default is the local single-host journal; the transport is inert until a
+clownfile opts in.
+.Bl -tag -width Ds
+.It Sy transport
+.Sy local
+(default) or
+.Sy xmpp .
+Anything else is an error.
+.It Sy xmpp-domain
+The c2s vhost.
+.Sy REQUIRED
+when
+.Sy transport = "xmpp" .
+.It Sy xmpp-muc-domain
+The base MUC domain rooms are addressed under.
+.Sy REQUIRED
+when
+.Sy transport = "xmpp" .
+.It Sy xmpp-host , xmpp-port , xmpp-nick , xmpp-insecure
+Optional connection parameters (troupe defaults: DNS-resolve the domain, 5222,
+the clown-name, and TLS-verify on).
+Emitted only when set.
+.It Sy xmpp-user
+The authenticated-mode c2s localpart, used only when
+.Sy xmpp-password-file
+is set (troupe defaults it to the nick).
+Omit for the v0 anonymous path.
+.It Sy xmpp-password-file
+A credential
+.Em reference :
+a file PATH (environment-interpolated), never the password itself.
+clown emits only the path; the secret never enters clown's configuration or a
+process environment.
+Present only when an authenticated mechanism is used.
+.El
+.Pp
+When
+.Sy transport = "xmpp"
+and a required coordinate is missing, clown errors at launch
+.Pq the config layer ,
+rather than letting the failure surface opaquely inside the troupe child.
 .Sh FILES
 .Bl -tag -width Ds
 .It Pa $XDG_CONFIG_HOME/clown/clownfile

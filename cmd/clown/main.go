@@ -289,6 +289,24 @@ func runWithFlags(flags parsedFlags) int {
 		_ = os.Setenv("CLOWN_GROUP_DESCRIPTION", desc)
 	}
 
+	// clownfile [messaging] (troupe RFC-0001 §1/§8): resolve the XMPP transport
+	// opt-in into the TROUPE_* env and export it on clown's own env so every
+	// troupe invocation in this session — the troupe mcp chat tools, the
+	// synthesized `troupe agent` receiver, and any ad-hoc `troupe` in the claude
+	// subtree — uses the same backend (same rationale as CLOWN_GROUP_ID above).
+	// Default (local) emits nothing: the run stays on the local journal. An
+	// xmpp transport fails fast HERE at the config layer if a required coordinate
+	// is missing, rather than opaquely inside the troupe child; the credential is
+	// a file reference (§1) so only the path, never the secret, enters the env.
+	msgEnv, err := cf.Messaging.Env()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
+		return 1
+	}
+	for k, v := range msgEnv {
+		_ = os.Setenv(k, v)
+	}
+
 	profiles, err := loadProfiles("")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown: loading profiles: %v\n", err)

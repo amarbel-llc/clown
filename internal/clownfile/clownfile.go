@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -173,10 +174,81 @@ func (a Attach) Title(id, group string) string {
 	return strings.ReplaceAll(t, "{id}", id)
 }
 
+// Messaging is the clownfile [messaging] table: clown's opt-in for troupe's
+// XMPP messaging transport (troupe RFC-0001 §8). It cascades like
+// [profile]/[attach]. When Transport is "xmpp", clown resolves it (via Env)
+// into the TROUPE_* environment troupe's `agent` + `mcp` children read
+// (RFC-0001 §1) and injects that env into those children. The default (local)
+// emits no TROUPE_XMPP_* vars, so the run stays on the local journal
+// single-host — the transport is inert until a clownfile opts in.
+type Messaging struct {
+	Transport        string `toml:"transport"`         // "local" (default) | "xmpp"
+	XMPPHost         string `toml:"xmpp-host"`         // connect addr, env-interpolated; troupe defaults to DNS-resolving xmpp-domain
+	XMPPPort         int    `toml:"xmpp-port"`         // c2s port; troupe defaults to 5222
+	XMPPDomain       string `toml:"xmpp-domain"`       // c2s vhost; REQUIRED when transport=xmpp
+	XMPPMUCDomain    string `toml:"xmpp-muc-domain"`   // base MUC domain rooms are addressed under; REQUIRED when transport=xmpp
+	XMPPNick         string `toml:"xmpp-nick"`         // MUC nick; troupe defaults to the clown-name
+	XMPPInsecure     *bool  `toml:"xmpp-insecure"`     // skip TLS verify (loopback/testing only). *bool so a deeper clownfile can override an enabled default
+	XMPPUser         string `toml:"xmpp-user"`         // authenticated-mode c2s localpart; used only when xmpp-password-file is set (troupe defaults it to the nick)
+	XMPPPasswordFile string `toml:"xmpp-password-file"` // credential REFERENCE: a file path (env-interpolated), NEVER the secret. Only-if-authenticated.
+}
+
+// Env resolves the [messaging] table into the TROUPE_* environment for troupe's
+// `agent` + `mcp` children (troupe RFC-0001 §1/§8). Transport "" or "local"
+// returns an empty map (the default: local journal, no XMPP vars emitted).
+// Transport "xmpp" emits TROUPE_TRANSPORT=xmpp plus the coordinate vars, and
+// FAILS FAST (error) when a required var (xmpp-domain, xmpp-muc-domain) is
+// missing — so the diagnostic lands at clown's config layer, not opaquely
+// inside the troupe child. Optional vars are emitted only when set. The
+// credential is emitted BY REFERENCE (the file path only, env-interpolated) —
+// never inline — satisfying §1's credential-by-reference MUST. Any transport
+// other than ""/"local"/"xmpp" is an error.
+func (m Messaging) Env() (map[string]string, error) {
+	switch m.Transport {
+	case "", "local":
+		return map[string]string{}, nil
+	case "xmpp":
+		// resolved below
+	default:
+		return nil, fmt.Errorf("clownfile [messaging]: transport must be \"local\" or \"xmpp\", got %q", m.Transport)
+	}
+	if m.XMPPDomain == "" || m.XMPPMUCDomain == "" {
+		return nil, fmt.Errorf("clownfile [messaging]: transport=xmpp requires xmpp-domain and xmpp-muc-domain")
+	}
+	env := map[string]string{
+		"TROUPE_TRANSPORT":       "xmpp",
+		"TROUPE_XMPP_DOMAIN":     m.XMPPDomain,
+		"TROUPE_XMPP_MUC_DOMAIN": m.XMPPMUCDomain,
+	}
+	if m.XMPPHost != "" {
+		env["TROUPE_XMPP_HOST"] = ResolveEnv(m.XMPPHost)
+	}
+	if m.XMPPPort != 0 {
+		env["TROUPE_XMPP_PORT"] = strconv.Itoa(m.XMPPPort)
+	}
+	if m.XMPPNick != "" {
+		env["TROUPE_XMPP_NICK"] = m.XMPPNick
+	}
+	if m.XMPPInsecure != nil && *m.XMPPInsecure {
+		env["TROUPE_XMPP_INSECURE"] = "1"
+	}
+	if m.XMPPUser != "" {
+		env["TROUPE_XMPP_USER"] = m.XMPPUser
+	}
+	if m.XMPPPasswordFile != "" {
+		// Credential by reference: emit the PATH only, env-interpolated so a
+		// runtime-provisioned secret path (e.g. ${XDG_RUNTIME_DIR}/troupe.pass)
+		// resolves at launch and never sits in the committed clownfile.
+		env["TROUPE_XMPP_PASSWORD_FILE"] = ResolveEnv(m.XMPPPasswordFile)
+	}
+	return env, nil
+}
+
 // Clownfile is one parsed clownfile.
 type Clownfile struct {
-	Profile Profile `toml:"profile"`
-	Attach  Attach  `toml:"attach"`
+	Profile   Profile   `toml:"profile"`
+	Attach    Attach    `toml:"attach"`
+	Messaging Messaging `toml:"messaging"`
 }
 
 // Load parses a single clownfile from disk.
@@ -305,5 +377,35 @@ func mergeInto(dst *Clownfile, src Clownfile) {
 	}
 	if src.Attach.EscapeCommand != nil {
 		dst.Attach.EscapeCommand = src.Attach.EscapeCommand
+	}
+
+	// [messaging]: scalars replace when non-empty; *bool overrides when set;
+	// int replaces when non-zero.
+	if src.Messaging.Transport != "" {
+		dst.Messaging.Transport = src.Messaging.Transport
+	}
+	if src.Messaging.XMPPHost != "" {
+		dst.Messaging.XMPPHost = src.Messaging.XMPPHost
+	}
+	if src.Messaging.XMPPPort != 0 {
+		dst.Messaging.XMPPPort = src.Messaging.XMPPPort
+	}
+	if src.Messaging.XMPPDomain != "" {
+		dst.Messaging.XMPPDomain = src.Messaging.XMPPDomain
+	}
+	if src.Messaging.XMPPMUCDomain != "" {
+		dst.Messaging.XMPPMUCDomain = src.Messaging.XMPPMUCDomain
+	}
+	if src.Messaging.XMPPNick != "" {
+		dst.Messaging.XMPPNick = src.Messaging.XMPPNick
+	}
+	if src.Messaging.XMPPInsecure != nil {
+		dst.Messaging.XMPPInsecure = src.Messaging.XMPPInsecure
+	}
+	if src.Messaging.XMPPUser != "" {
+		dst.Messaging.XMPPUser = src.Messaging.XMPPUser
+	}
+	if src.Messaging.XMPPPasswordFile != "" {
+		dst.Messaging.XMPPPasswordFile = src.Messaging.XMPPPasswordFile
 	}
 }

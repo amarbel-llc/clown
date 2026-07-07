@@ -288,6 +288,7 @@
         "nixpkgs-master": "nixpkgs-master",
         "ringmaster": "ringmaster",
         "treefmt-nix": "treefmt-nix",
+        "troupe": "troupe",
         "utils": "utils"
       }
     },
@@ -324,6 +325,35 @@
         "owner": "numtide",
         "repo": "treefmt-nix",
         "type": "github"
+      }
+    },
+    "troupe": {
+      "inputs": {
+        "nixpkgs": [
+          "igloo"
+        ],
+        "ringmaster": [
+          "ringmaster"
+        ],
+        "treefmt-nix": [
+          "treefmt-nix"
+        ],
+        "utils": [
+          "utils"
+        ]
+      },
+      "locked": {
+        "lastModified": 1783392102,
+        "narHash": "sha256-bg2dbBA9iOlA1p+x8rx5OZAA2k3qfQ0MRfJ+pDgDi8I=",
+        "ref": "refs/heads/master",
+        "rev": "eb0663926acbdb86b577b98f6b13e8333bf35e1a",
+        "revCount": 17,
+        "type": "git",
+        "url": "https://forge.linenisgreat.com/amarbel-llc/troupe.git"
+      },
+      "original": {
+        "type": "git",
+        "url": "https://forge.linenisgreat.com/amarbel-llc/troupe.git"
       }
     },
     "utils": {

@@ -301,6 +301,22 @@ now reads (falling back to `buildcfg.TentBackend`), `[profile].model` is
 injected as `--model` for the claude family, and `[profile.env]` is
 exported only-if-unset (ambient wins). The named-profile registry
 (`--profile`) is a separate mechanism that wins over clownfile defaults.
+The `[messaging]` table (`clownfile.Messaging`, troupe RFC-0001 §8) is the
+opt-in for troupe's XMPP messaging transport: `transport = "xmpp"` (default
+`local`) plus `xmpp-domain`/`xmpp-muc-domain` (required) and optional
+`xmpp-host`/`xmpp-port`/`xmpp-nick`/`xmpp-insecure`/`xmpp-user`/
+`xmpp-password-file`. `Messaging.Env()` resolves it to the `TROUPE_TRANSPORT`
++ `TROUPE_XMPP_*` env (credential by *file reference* only — the path, never
+the secret; env-interpolated), fails fast at clown launch if a required
+coordinate is missing, and clown `os.Setenv`s it (ambient, like `CLOWN_GROUP_ID`)
+so the `troupe mcp` chat tools, the synthesized `troupe agent` receiver, and any
+ad-hoc `troupe` in the session all use the same backend. Default `local` emits
+nothing (single-host journal). **troupe is now clown's 2nd extracted flake
+dependency** alongside ringmaster — but BINARY-only (clown runs the troupe
+binary, does not import its Go), so `TroupePath` burns from the troupe input
+(`troupePkg`) and clown synthesizes `troupe mcp` + (when `transport=xmpp`) the
+per-session `troupe agent` XMPP receiver into the clown-builtin-jobs plugin
+(`cmd/clown/jobmonitor.go`).
 The `[attach]` table (RFC-0013 §1.3, clown#145) is the multiplexer
 self-wrap layer: when `multiplexer` is `posh` or `zmx` (not `none`), clown wraps
 itself under the configured `start`/`resume` template on boot
