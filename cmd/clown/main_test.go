@@ -10,6 +10,7 @@ import (
 
 	"github.com/amarbel-llc/clown/internal/buildcfg"
 	"github.com/amarbel-llc/clown/internal/clownfile"
+	"github.com/amarbel-llc/clown/internal/profile"
 	"github.com/amarbel-llc/clown/internal/promptwalk"
 	"github.com/amarbel-llc/clown/internal/tent"
 )
@@ -135,6 +136,73 @@ func TestApplyClownfileProfile(t *testing.T) {
 			t.Errorf("ambient env must win, got %q", got)
 		}
 	})
+}
+
+func TestApplyNamedProfileGatewayEnvAuthoritative(t *testing.T) {
+	t.Setenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "old")
+	t.Setenv("ANTHROPIC_API_KEY", "real-key")
+	t.Setenv("OPENROUTER_API_KEY", "sk-or-test")
+	flags := parsedFlags{provider: "claude"}
+	p := profile.Profile{Name: "or", Provider: "claude", Backend: "gateway",
+		URL: "https://openrouter.ai/api", Token: "${OPENROUTER_API_KEY}"}
+	if err := applyNamedProfile(&flags, p); err != nil {
+		t.Fatal(err)
+	}
+	if got := os.Getenv("ANTHROPIC_BASE_URL"); got != "https://openrouter.ai/api" {
+		t.Errorf("base url = %q", got)
+	}
+	if got := os.Getenv("ANTHROPIC_AUTH_TOKEN"); got != "sk-or-test" {
+		t.Errorf("auth token = %q", got)
+	}
+	v, set := os.LookupEnv("ANTHROPIC_API_KEY")
+	if !set || v != "" {
+		t.Errorf("ANTHROPIC_API_KEY must be present-but-empty, got set=%v v=%q", set, v)
+	}
+}
+
+func TestApplyNamedProfileEmptyTokenRef(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "")
+	flags := parsedFlags{provider: "claude"}
+	p := profile.Profile{Name: "or", Provider: "claude", Backend: "gateway",
+		URL: "https://openrouter.ai/api", Token: "${OPENROUTER_API_KEY}"}
+	err := applyNamedProfile(&flags, p)
+	if err == nil || !strings.Contains(err.Error(), "OPENROUTER_API_KEY") {
+		t.Fatalf("want error naming the env var, got %v", err)
+	}
+}
+
+func TestApplyNamedProfileModelInjection(t *testing.T) {
+	flags := parsedFlags{provider: "claude", forwarded: []string{"-p", "hi"}}
+	if err := applyNamedProfile(&flags, profile.Profile{Provider: "claude", Backend: "anthropic", Model: "m1"}); err != nil {
+		t.Fatal(err)
+	}
+	if flags.forwarded[0] != "--model" || flags.forwarded[1] != "m1" {
+		t.Fatalf("forwarded = %v", flags.forwarded)
+	}
+	// user-passed --model wins
+	flags2 := parsedFlags{provider: "claude", forwarded: []string{"--model", "user"}}
+	_ = applyNamedProfile(&flags2, profile.Profile{Provider: "claude", Backend: "anthropic", Model: "m1"})
+	if len(flags2.forwarded) != 2 {
+		t.Fatalf("must not double-inject: %v", flags2.forwarded)
+	}
+}
+
+func TestApplyNamedProfileEnvMapOnlyIfUnset(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_SUBAGENT_MODEL", "ambient")
+	t.Setenv("ANTHROPIC_DEFAULT_HAIKU_MODEL", "")
+	flags := parsedFlags{provider: "claude"}
+	p := profile.Profile{Provider: "claude", Backend: "anthropic",
+		Env: map[string]string{"CLAUDE_CODE_SUBAGENT_MODEL": "p", "ANTHROPIC_DEFAULT_HAIKU_MODEL": "p"}}
+	if err := applyNamedProfile(&flags, p); err != nil {
+		t.Fatal(err)
+	}
+	if os.Getenv("CLAUDE_CODE_SUBAGENT_MODEL") != "ambient" {
+		t.Error("ambient env must win over profile env map")
+	}
+	if os.Getenv("ANTHROPIC_DEFAULT_HAIKU_MODEL") != "p" {
+		t.Error("unset env must be filled from profile env map")
+	}
 }
 
 func TestParseFlags(t *testing.T) {

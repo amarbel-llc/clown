@@ -354,6 +354,13 @@ func runWithFlags(flags parsedFlags) int {
 		flags.profile = selectedProfile.Name
 	}
 
+	if selectedProfile != nil {
+		if err := applyNamedProfile(&flags, *selectedProfile); err != nil {
+			fmt.Fprintf(os.Stderr, "clown: %v\n", err)
+			return 1
+		}
+	}
+
 	cliPath, err := resolveProvider(flags.provider)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
@@ -496,6 +503,41 @@ func applyClownfileProfile(flags *parsedFlags, p clownfile.Profile) {
 			_ = os.Setenv(k, v)
 		}
 	}
+}
+
+// applyNamedProfile applies a selected named profile (--profile, the clownfile
+// pin, or the interactive picker) to the run. Unlike the clownfile [profile]
+// defaults layer (applyClownfileProfile, only-if-unset), a named profile is an
+// explicit user selection, so its gateway env is authoritative: picking
+// claude-openrouter must mean OpenRouter even when the shell exports
+// ANTHROPIC_* for something else. The generic Env map stays only-if-unset.
+// Deliberately does not touch flags.backend — that is the tent container
+// backend (podman|lima), a different axis from the profile's API backend.
+func applyNamedProfile(flags *parsedFlags, p profile.Profile) error {
+	if p.Model != "" && providerTakesModelFlag(flags.provider) && claudeFlagValue(flags.forwarded, "--model") == "" {
+		flags.forwarded = append([]string{"--model", p.Model}, flags.forwarded...)
+	}
+	if p.Provider == "claude" && p.Backend == "gateway" {
+		url := clownfile.ResolveEnv(p.URL)
+		token := clownfile.ResolveEnv(p.Token)
+		if url == "" {
+			return fmt.Errorf("profile %q: url %q resolved empty", p.Name, p.URL)
+		}
+		if token == "" {
+			return fmt.Errorf("profile %q: token %q resolved empty (is the referenced variable exported?)", p.Name, p.Token)
+		}
+		_ = os.Setenv("ANTHROPIC_BASE_URL", url)
+		_ = os.Setenv("ANTHROPIC_AUTH_TOKEN", token)
+		// Present-but-empty is the gateway contract: unset makes claude fall
+		// back to Anthropic auth and conflict with the auth token.
+		_ = os.Setenv("ANTHROPIC_API_KEY", "")
+	}
+	for k, v := range p.Env {
+		if os.Getenv(k) == "" {
+			_ = os.Setenv(k, clownfile.ResolveEnv(v))
+		}
+	}
+	return nil
 }
 
 // providerTakesModelFlag reports whether a provider accepts a passthrough

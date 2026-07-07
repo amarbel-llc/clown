@@ -60,7 +60,11 @@ picker paths), applying the profile uniformly to all providers:
 
 - `model` → prepend `--model` to forwarded args unless the user passed
   one (same guard as `applyClownfileProfile`).
-- `backend` → `flags.backend` if unset (feeds `newBackend()`).
+- `backend` → NOT applied to `flags.backend`: that field is the tent
+  container backend (podman|lima), a different axis from the profile
+  registry's API backend (anthropic|gateway|local). The profile
+  `Backend` only selects the claude gateway-env behavior below, or is
+  consumed inside `runOpencode`/`runCrush` (as today).
 - claude + `gateway` → set **authoritatively** (plain `os.Setenv`,
   ambient does NOT win): `ANTHROPIC_BASE_URL=<url>`,
   `ANTHROPIC_AUTH_TOKEN=<resolved token>`, `ANTHROPIC_API_KEY=""`.
