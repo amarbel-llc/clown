@@ -9,16 +9,13 @@ import (
 
 func TestReadOpencodeLocalConfig_ParsesURLAndToken(t *testing.T) {
 	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "opencode.toml")
-	content := "url = \"https://example.com/v1\"\ntoken = \"secret\"\n"
-	if err := os.WriteFile(cfgPath, []byte(content), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("HOME", dir)
-	if err := os.MkdirAll(filepath.Join(dir, ".config", "juggler"), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, ".config", "clown"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, ".config", "juggler", "opencode.toml"), []byte(content), 0o600); err != nil {
+	content := "url = \"https://example.com/v1\"\ntoken = \"secret\"\n"
+	if err := os.WriteFile(filepath.Join(dir, ".config", "clown", "opencode.toml"), []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := readOpencodeLocalConfig()
@@ -33,8 +30,29 @@ func TestReadOpencodeLocalConfig_ParsesURLAndToken(t *testing.T) {
 	}
 }
 
+func TestReadOpencodeLocalConfig_LegacyFallback(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("HOME", dir)
+	if err := os.MkdirAll(filepath.Join(dir, ".config", "juggler"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	content := "url = \"https://legacy.example.com/v1\"\ntoken = \"secret\"\n"
+	if err := os.WriteFile(filepath.Join(dir, ".config", "juggler", "opencode.toml"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := readOpencodeLocalConfig()
+	if err != nil {
+		t.Fatalf("legacy fallback read: %v", err)
+	}
+	if cfg.URL != "https://legacy.example.com/v1" {
+		t.Errorf("url: got %q", cfg.URL)
+	}
+}
+
 func TestReadOpencodeLocalConfig_MissingFile(t *testing.T) {
 	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("HOME", dir)
 	_, err := readOpencodeLocalConfig()
 	if err == nil {
@@ -44,12 +62,13 @@ func TestReadOpencodeLocalConfig_MissingFile(t *testing.T) {
 
 func TestReadOpencodeLocalConfig_MissingURL(t *testing.T) {
 	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("HOME", dir)
-	if err := os.MkdirAll(filepath.Join(dir, ".config", "juggler"), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, ".config", "clown"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	content := "token = \"secret\"\n"
-	if err := os.WriteFile(filepath.Join(dir, ".config", "juggler", "opencode.toml"), []byte(content), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, ".config", "clown", "opencode.toml"), []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	_, err := readOpencodeLocalConfig()
@@ -60,9 +79,10 @@ func TestReadOpencodeLocalConfig_MissingURL(t *testing.T) {
 
 func TestWriteOpencodeLocalConfigFile_RoundTrip(t *testing.T) {
 	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("HOME", dir)
 
-	path, err := opencodeLocalConfigPath()
+	path, err := userConfigWritePath("opencode.toml")
 	if err != nil {
 		t.Fatalf("path: %v", err)
 	}
@@ -84,14 +104,15 @@ func TestWriteOpencodeLocalConfigFile_RoundTrip(t *testing.T) {
 
 func TestWriteOpencodeLocalConfigFile_CreatesParentDir(t *testing.T) {
 	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("HOME", dir)
 
-	cfgDir := filepath.Join(dir, ".config", "juggler")
+	cfgDir := filepath.Join(dir, ".config", "clown")
 	if _, err := os.Stat(cfgDir); !os.IsNotExist(err) {
 		t.Fatalf("expected %s to be missing before write, got err=%v", cfgDir, err)
 	}
 
-	path, err := opencodeLocalConfigPath()
+	path, err := userConfigWritePath("opencode.toml")
 	if err != nil {
 		t.Fatalf("path: %v", err)
 	}
@@ -105,9 +126,10 @@ func TestWriteOpencodeLocalConfigFile_CreatesParentDir(t *testing.T) {
 
 func TestWriteOpencodeLocalConfigFile_QuotesAreEscaped(t *testing.T) {
 	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("HOME", dir)
 
-	path, err := opencodeLocalConfigPath()
+	path, err := userConfigWritePath("opencode.toml")
 	if err != nil {
 		t.Fatalf("path: %v", err)
 	}

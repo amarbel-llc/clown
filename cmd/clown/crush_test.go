@@ -10,12 +10,13 @@ import (
 
 func TestReadCrushLocalConfig_ParsesURLAndToken(t *testing.T) {
 	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("HOME", dir)
-	if err := os.MkdirAll(filepath.Join(dir, ".config", "juggler"), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, ".config", "clown"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	content := "url = \"https://example.com/v1\"\ntoken = \"secret\"\n"
-	if err := os.WriteFile(filepath.Join(dir, ".config", "juggler", "crush.toml"), []byte(content), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, ".config", "clown", "crush.toml"), []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := readCrushLocalConfig()
@@ -30,8 +31,29 @@ func TestReadCrushLocalConfig_ParsesURLAndToken(t *testing.T) {
 	}
 }
 
+func TestReadCrushLocalConfig_LegacyFallback(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("HOME", dir)
+	if err := os.MkdirAll(filepath.Join(dir, ".config", "juggler"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	content := "url = \"https://legacy.example.com/v1\"\ntoken = \"secret\"\n"
+	if err := os.WriteFile(filepath.Join(dir, ".config", "juggler", "crush.toml"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := readCrushLocalConfig()
+	if err != nil {
+		t.Fatalf("legacy fallback read: %v", err)
+	}
+	if cfg.URL != "https://legacy.example.com/v1" {
+		t.Errorf("url: got %q", cfg.URL)
+	}
+}
+
 func TestReadCrushLocalConfig_MissingFile(t *testing.T) {
 	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("HOME", dir)
 	_, err := readCrushLocalConfig()
 	if err == nil {
@@ -41,12 +63,13 @@ func TestReadCrushLocalConfig_MissingFile(t *testing.T) {
 
 func TestReadCrushLocalConfig_MissingURL(t *testing.T) {
 	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("HOME", dir)
-	if err := os.MkdirAll(filepath.Join(dir, ".config", "juggler"), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, ".config", "clown"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	content := "token = \"secret\"\n"
-	if err := os.WriteFile(filepath.Join(dir, ".config", "juggler", "crush.toml"), []byte(content), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, ".config", "clown", "crush.toml"), []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	_, err := readCrushLocalConfig()
@@ -57,9 +80,10 @@ func TestReadCrushLocalConfig_MissingURL(t *testing.T) {
 
 func TestWriteCrushLocalConfigFile_RoundTrip(t *testing.T) {
 	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("HOME", dir)
 
-	path, err := crushLocalConfigPath()
+	path, err := userConfigWritePath("crush.toml")
 	if err != nil {
 		t.Fatalf("path: %v", err)
 	}

@@ -22,17 +22,11 @@ type opencodeLocalConfig struct {
 	Token string
 }
 
-// opencodeLocalConfigPath returns ~/.config/clown/opencode.toml.
-func opencodeLocalConfigPath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("home dir: %w", err)
-	}
-	return filepath.Join(home, ".config", "juggler", "opencode.toml"), nil
-}
-
+// readOpencodeLocalConfig reads the user's opencode gateway config from the
+// canonical ~/.config/clown/opencode.toml (legacy ~/.config/juggler/ read
+// fallback with a warning; see userConfigPath).
 func readOpencodeLocalConfig() (opencodeLocalConfig, error) {
-	path, err := opencodeLocalConfigPath()
+	path, legacy, err := userConfigPath("opencode.toml")
 	if err != nil {
 		return opencodeLocalConfig{}, err
 	}
@@ -70,6 +64,9 @@ func readOpencodeLocalConfig() (opencodeLocalConfig, error) {
 	}
 	if cfg.Token == "" {
 		return opencodeLocalConfig{}, fmt.Errorf("%s: token is required", path)
+	}
+	if legacy {
+		warnLegacyConfig(path)
 	}
 	return cfg, nil
 }
@@ -300,7 +297,7 @@ func runOpencode(opencodePath string, args []string, prof *profile.Profile) int 
 		localCfg, err := readOpencodeLocalConfig()
 		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) && pluginhost.IsInteractive() {
-				path, perr := opencodeLocalConfigPath()
+				path, perr := userConfigWritePath("opencode.toml")
 				if perr != nil {
 					fmt.Fprintf(os.Stderr, "clown: opencode config: %v\n", perr)
 					return 1
@@ -314,7 +311,7 @@ func runOpencode(opencodePath string, args []string, prof *profile.Profile) int 
 			} else {
 				fmt.Fprintf(os.Stderr, "clown: opencode config: %v\n", err)
 				if errors.Is(err, fs.ErrNotExist) {
-					path, _ := opencodeLocalConfigPath()
+					path, _ := userConfigWritePath("opencode.toml")
 					fmt.Fprintf(os.Stderr, "  create %s with:\n    url = \"https://your-endpoint/v1\"\n    token = \"your-api-key\"\n  or run clown interactively to be prompted.\n", path)
 				}
 				return 1

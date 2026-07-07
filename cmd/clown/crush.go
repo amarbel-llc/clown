@@ -52,17 +52,11 @@ type crushLocalConfig struct {
 	Token string
 }
 
-// crushLocalConfigPath returns ~/.config/clown/crush.toml.
-func crushLocalConfigPath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("home dir: %w", err)
-	}
-	return filepath.Join(home, ".config", "juggler", "crush.toml"), nil
-}
-
+// readCrushLocalConfig reads the user's crush gateway config from the
+// canonical ~/.config/clown/crush.toml (legacy ~/.config/juggler/ read
+// fallback with a warning; see userConfigPath).
 func readCrushLocalConfig() (crushLocalConfig, error) {
-	path, err := crushLocalConfigPath()
+	path, legacy, err := userConfigPath("crush.toml")
 	if err != nil {
 		return crushLocalConfig{}, err
 	}
@@ -100,6 +94,9 @@ func readCrushLocalConfig() (crushLocalConfig, error) {
 	}
 	if cfg.Token == "" {
 		return crushLocalConfig{}, fmt.Errorf("%s: token is required", path)
+	}
+	if legacy {
+		warnLegacyConfig(path)
 	}
 	return cfg, nil
 }
@@ -329,7 +326,7 @@ func runCrush(crushPath string, args []string, prof *profile.Profile) int {
 		localCfg, err := readCrushLocalConfig()
 		if err != nil {
 			if errors.Is(err, fs.ErrNotExist) && pluginhost.IsInteractive() {
-				path, perr := crushLocalConfigPath()
+				path, perr := userConfigWritePath("crush.toml")
 				if perr != nil {
 					fmt.Fprintf(os.Stderr, "clown: crush config: %v\n", perr)
 					return 1
@@ -343,7 +340,7 @@ func runCrush(crushPath string, args []string, prof *profile.Profile) int {
 			} else {
 				fmt.Fprintf(os.Stderr, "clown: crush config: %v\n", err)
 				if errors.Is(err, fs.ErrNotExist) {
-					path, _ := crushLocalConfigPath()
+					path, _ := userConfigWritePath("crush.toml")
 					fmt.Fprintf(os.Stderr, "  create %s with:\n    url = \"https://your-endpoint/v1\"\n    token = \"your-api-key\"\n  or run clown interactively to be prompted.\n", path)
 				}
 				return 1

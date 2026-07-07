@@ -46,12 +46,13 @@ func loadProfiles(additionalPath string) ([]profile.Profile, error) {
 	}
 	builtin := f.Profile
 
+	var legacy bool
 	if additionalPath == "" {
-		home, err := os.UserHomeDir()
+		path, isLegacy, err := userConfigPath("profiles.toml")
 		if err != nil {
 			return builtin, nil
 		}
-		additionalPath = filepath.Join(home, ".config", "juggler", "profiles.toml")
+		additionalPath, legacy = path, isLegacy
 	}
 
 	additional, err := profile.Load(additionalPath)
@@ -60,6 +61,9 @@ func loadProfiles(additionalPath string) ([]profile.Profile, error) {
 			return builtin, nil
 		}
 		return nil, fmt.Errorf("additional profiles: %w", err)
+	}
+	if legacy {
+		warnLegacyConfig(additionalPath)
 	}
 	return profile.Merge(builtin, additional), nil
 }
