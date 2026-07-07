@@ -232,9 +232,6 @@ func profileAddInteractive() (*profile.Profile, error) {
 // builtin creates a user override (editOriginal stays empty — the name is
 // not in the user set, so the uniqueness check passes and Upsert appends).
 func profileEditInteractive(name string) (*profile.Profile, error) {
-	if !pluginhost.IsInteractive() {
-		return nil, fmt.Errorf("profile edit needs an interactive TTY")
-	}
 	builtin, user, _, err := loadProfileSets("")
 	if err != nil {
 		return nil, err
@@ -253,6 +250,12 @@ func profileEditInteractive(name string) (*profile.Profile, error) {
 			names = append(names, p.Name)
 		}
 		return nil, fmt.Errorf("no profile named %q (available: %s)", name, strings.Join(names, ", "))
+	}
+	// The name-lookup error above is useful without a TTY (e.g. a typo check
+	// from a script); the TTY gate only matters once we know we'd actually
+	// render the form.
+	if !pluginhost.IsInteractive() {
+		return nil, fmt.Errorf("profile edit needs an interactive TTY")
 	}
 	destPath, err := userConfigWritePath("profiles.toml")
 	if err != nil {
