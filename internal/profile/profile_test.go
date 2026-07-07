@@ -3,8 +3,11 @@ package profile_test
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/BurntSushi/toml"
 
 	"github.com/amarbel-llc/clown/internal/profile"
 )
@@ -144,4 +147,44 @@ func TestValidate_InvalidCombos(t *testing.T) {
 			t.Fatal("Validate(bad4): expected error, got nil")
 		}
 	})
+}
+
+func TestValidateClaudeGateway(t *testing.T) {
+	ok := profile.Profile{Name: "or", Provider: "claude", Backend: "gateway",
+		URL: "https://openrouter.ai/api", Token: "${OPENROUTER_API_KEY}"}
+	if err := profile.Validate(ok); err != nil {
+		t.Fatalf("claude+gateway with url+token should validate: %v", err)
+	}
+	for _, p := range []profile.Profile{
+		{Name: "no-url", Provider: "claude", Backend: "gateway", Token: "x"},
+		{Name: "no-token", Provider: "claude", Backend: "gateway", URL: "x"},
+	} {
+		if err := profile.Validate(p); err == nil {
+			t.Errorf("profile %q should fail validation", p.Name)
+		}
+	}
+}
+
+func TestBackendsForProvider(t *testing.T) {
+	got := profile.Backends("claude")
+	want := []string{"anthropic", "gateway", "local"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Backends(claude) = %v, want %v", got, want)
+	}
+	if profile.Backends("nope") != nil {
+		t.Fatal("unknown provider should return nil")
+	}
+}
+
+func TestEnvDecodes(t *testing.T) {
+	var f struct {
+		Profile []profile.Profile `toml:"profile"`
+	}
+	src := "[[profile]]\nname = \"x\"\n[profile.env]\nANTHROPIC_DEFAULT_HAIKU_MODEL = \"m\"\n"
+	if _, err := toml.Decode(src, &f); err != nil {
+		t.Fatal(err)
+	}
+	if f.Profile[0].Env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] != "m" {
+		t.Fatalf("env not decoded: %#v", f.Profile[0])
+	}
 }
