@@ -540,12 +540,45 @@ The flake produces a `symlinkJoin` of five components:
    `crush-anthropic`, `crush-local` (builtin); `crush-gateway` is
    user-defined because it requires URL/token. See `cmd/clown/crush.go`.
 
-   **Profile system (planned).** A future `--profile <name>` flag (and
-   `CLOWN_PROFILE` env var) will select named (provider, backend, model) tuples
-   from `profiles/builtin.toml` (open, burned in) and
-   `~/.config/clown/profiles.toml` (user-local, may contain URLs/tokens). The
-   design doc is at `docs/plans/2026-04-23-profiles-design.md` and the
-   implementation plan at `docs/plans/2026-04-23-profiles.md`.
+   **Profile system.** `--profile <name>` (and `CLOWN_PROFILE`) selects a
+   named (provider, backend, model, env) tuple from the merged registry:
+   builtin entries embedded from `cmd/clown/profiles/builtin.toml` (`go:embed`),
+   overridden/extended by the user's `profiles.toml`
+   (`~/.config/clown/profiles.toml`, or `$XDG_CONFIG_HOME/clown/profiles.toml`;
+   falls back to reading the legacy `~/.config/juggler/profiles.toml` with a
+   one-line warning if the canonical path is absent — `cmd/clown/configpath.go`).
+   A clownfile `[profile].profile` key pins a named profile the same way
+   `--profile` would; resolution order is explicit `--profile` flag > the pin >
+   `buildcfg.DefaultProfile`, and an explicit `--provider` suppresses the pin
+   and build-default (but never an explicit `--profile`) —
+   `resolveProfileName` in `cmd/clown/main.go`. Picking a profile is an
+   authoritative selection, not a default: `applyNamedProfile` injects
+   `--model` (if unset on the command line), and for `claude`+`gateway`
+   profiles sets `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN` (resolving
+   `${VAR}` references against the ambient environment) and forces
+   `ANTHROPIC_API_KEY=""` so a cached Anthropic key can't leak into a
+   gateway session; the profile's generic `Env` map fills in only vars the
+   shell hasn't already set. `claude`/`opencode`/`crush` all support the
+   `anthropic`/`gateway`/`local` backend matrix (`internal/profile.Backends`);
+   the OpenRouter use case is a `claude`+`gateway` profile pointed at
+   `https://openrouter.ai/api` with a `${OPENROUTER_API_KEY}` token
+   reference — no builtin ships this (builtins stay secrets-free by design),
+   so `clown profile add` with the `openrouter` template is the delivery
+   vehicle.
+
+   **`clown profile` subcommand and picker hook.** `clown profile
+   <list|add|edit <name>|remove <name>>` (`cmd/clown/profilecmd.go`,
+   `cmd/clown/profileform.go`) manages the user registry: `list` prints
+   name/display/provider-backend/source (`builtin`, `user`, or `user
+   override` when a user entry shadows a builtin name); `add`/`edit` run a
+   `charmbracelet/huh` form (provider select drives a dynamic backend
+   `OptionsFunc`, so only valid combos are offered) seeded from one of four
+   templates (openrouter/gateway/anthropic/local) or the existing merged
+   entry; `remove` refuses to delete a builtin (only a user override can go)
+   and confirms interactively. All three interactive verbs require a TTY.
+   The startup picker (when no `--profile`/pin/explicit `--provider`
+   resolved one) gets a trailing `+ add profile…` item that runs the same
+   add flow and continues the launch with the freshly saved profile.
 
    **⚠ EXTRACTED — the job platform is now the external
    `github.com/amarbel-llc/ringmaster` module.** The whole platform below

@@ -79,6 +79,23 @@ other providers source their model elsewhere.
 .It Sy [profile.env]
 A table of environment variables exported into the provider and its plugin
 servers, set only when not already present (the ambient environment wins).
+.It Sy profile
+Pins a named registry profile
+.Pq Fl -profile
+by name.
+Unlike the other
+.Sy [profile]
+keys (only-if-unset defaults), a pin resolves exactly as if
+.Fl -profile Ar name
+had been passed \(em it suppresses the interactive picker and its
+selection is authoritative, not a default.
+Resolution order is an explicit
+.Fl -profile
+flag, then this pin, then clown's burned-in default profile;
+an explicit
+.Fl -provider
+suppresses the pin (and the burned-in default) but never an explicit
+.Fl -profile .
 .El
 .Ss [attach]
 The

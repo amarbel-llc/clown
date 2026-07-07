@@ -87,15 +87,16 @@ same spirit as spinclass's sweatfile.
 
 #### 1.2 The `[profile]` table
 
-The `[profile]` table is the home of the configuration previously planned as
-`--profile` / `profiles.toml`; that work folds into the clownfile rather than
-existing as a second config system.
+The `[profile]` table carries only-if-unset scalar run defaults
+(provider/backend/model/env), layered beneath explicit CLI flags and
+environment variables.
 
 ```toml
 [profile]
 provider = "claude"          # claude | codex | circus | opencode | crush
 backend  = "podman"          # tent backend, when applicable: podman | lima
 model    = "claude-sonnet-4-6"
+profile  = "claude-openrouter"  # pins a named registry profile (point 3 below)
 [profile.env]                # injected into the provider process environment
 ANTHROPIC_LOG = "info"
 ```
@@ -104,9 +105,24 @@ ANTHROPIC_LOG = "info"
    value MUST be rejected with a diagnostic.
 2. `backend`, `model`, and `[profile.env]` keys are OPTIONAL; each MUST default
    to clown's existing built-in behavior when absent.
-3. A `--profile <name>` flag or `CLOWN_PROFILE` env var, if later introduced,
-   MUST resolve a named `[profile.<name>]` sub-table; explicit CLI flags
-   (`--provider`, `--model`) MUST override the resolved profile.
+3. **Amended (docs/plans/2026-07-06-openrouter-profiles-design.md).** `--profile
+   <name>` / `CLOWN_PROFILE` do NOT resolve a `[profile.<name>]` sub-table of
+   the clownfile — that design was superseded before implementation. Instead
+   clown ships a separate named-profile registry (`internal/profile`): a
+   builtin set embedded from `cmd/clown/profiles/builtin.toml` merged with a
+   user set at `$XDG_CONFIG_HOME/clown/profiles.toml` (managed by the `clown
+   profile` subcommand and the startup picker's `+ add profile…` hook, not by
+   hand-editing the clownfile). The `profile` key in `[profile]` above is a
+   *pin*: it names an entry in that registry, resolving exactly as if
+   `--profile <name>` had been passed. Resolution order is explicit
+   `--profile` flag > this pin > clown's burned-in default profile; an
+   explicit `--provider` suppresses the pin and the burned-in default but
+   never an explicit `--profile`. A profile selection (flag, pin, or picker)
+   is authoritative over ambient environment for the fields it sets (e.g. a
+   claude+gateway profile's `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN`),
+   unlike the only-if-unset scalars above it in this same table. See
+   `clownfile(5)` and AGENTS.md's "Profile system" section for the full
+   mechanism.
 
 #### 1.3 The `[attach]` table
 
@@ -440,8 +456,13 @@ This RFC extends RFC-0012 and amends RFC-0009 §2 (§2.3). Migration:
   tools, and the `chatroom/` store; the RFC-0009-era assumption of a
   spinclass-local chat store is removed. FDR-0009 (spinclass) is superseded by
   FDR-0017 for the chat-store role.
-- **profiles.toml.** The planned `--profile` / `profiles.toml` design folds into
-  the clownfile `[profile]` table (§1.2); no separate profiles config ships.
+- **profiles.toml.** Superseded: the fold-into-clownfile plan quoted below was
+  itself superseded before implementation — see the amendment at §1.2 point 3
+  (docs/plans/2026-07-06-openrouter-profiles-design.md). A
+  separate named-profile registry (`internal/profile`, builtin + user
+  `profiles.toml`) DOES ship; the clownfile only pins a name into it. ~~The
+  planned `--profile` / `profiles.toml` design folds into the clownfile
+  `[profile]` table (§1.2); no separate profiles config ships.~~
 - **`--profile`/clownfile rollout.** The clownfile is additive: absent
   clownfile ⇒ built-in defaults (§1.1), so existing launches are unaffected
   until a clownfile is introduced.
