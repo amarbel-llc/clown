@@ -37,35 +37,47 @@ import (
 //go:embed profiles/builtin.toml
 var builtinProfilesTOML []byte
 
-func loadProfiles(additionalPath string) ([]profile.Profile, error) {
+// loadProfileSets loads the builtin and user profile sets separately —
+// `clown profile list` needs per-source labels that the merged view erases.
+// userPath is where the user set was read from (or would be read from when
+// the file is absent); additionalPath overrides the discovery for tests.
+func loadProfileSets(additionalPath string) (builtin, user []profile.Profile, userPath string, err error) {
 	var f struct {
 		Profile []profile.Profile `toml:"profile"`
 	}
 	if _, err := toml.Decode(string(builtinProfilesTOML), &f); err != nil {
-		return nil, fmt.Errorf("builtin profiles: %w", err)
+		return nil, nil, "", fmt.Errorf("builtin profiles: %w", err)
 	}
-	builtin := f.Profile
+	builtin = f.Profile
 
 	var legacy bool
 	if additionalPath == "" {
-		path, isLegacy, err := userConfigPath("profiles.toml")
-		if err != nil {
-			return builtin, nil
+		path, isLegacy, pathErr := userConfigPath("profiles.toml")
+		if pathErr != nil {
+			return builtin, nil, "", nil
 		}
 		additionalPath, legacy = path, isLegacy
 	}
 
-	additional, err := profile.Load(additionalPath)
+	user, err = profile.Load(additionalPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return builtin, nil
+			return builtin, nil, additionalPath, nil
 		}
-		return nil, fmt.Errorf("additional profiles: %w", err)
+		return nil, nil, "", fmt.Errorf("additional profiles: %w", err)
 	}
 	if legacy {
 		warnLegacyConfig(additionalPath)
 	}
-	return profile.Merge(builtin, additional), nil
+	return builtin, user, additionalPath, nil
+}
+
+func loadProfiles(additionalPath string) ([]profile.Profile, error) {
+	builtin, user, _, err := loadProfileSets(additionalPath)
+	if err != nil {
+		return nil, err
+	}
+	return profile.Merge(builtin, user), nil
 }
 
 type profileItem struct{ p profile.Profile }
@@ -207,6 +219,8 @@ func run(rawArgs []string) int {
 			return runSessionsComplete(rawArgs[1:])
 		case "presence":
 			return runPresence(rawArgs[1:])
+		case "profile":
+			return runProfileCmd(rawArgs[1:])
 		case "pty-suspend":
 			return runPtySuspend(rawArgs[1:])
 		}
@@ -1674,7 +1688,9 @@ func printHelp() {
 
 Clown flags (must appear before --):
   --provider <name>          Provider to use: claude, codex, juggler, opencode (default: %s)
-  --profile <name>           Profile name; implies --provider from profile config%s
+  --profile <name>           Named registry profile; implies --provider and applies
+                             the profile's backend/model/env (clownfile
+                             [profile].profile pins one)%s
   --naked                    Pass through to provider without clown wrapping
   --skip-failed              Continue if plugin servers fail to start
   --disable-clown-protocol   Disable clown plugin-host protocol
@@ -1689,6 +1705,8 @@ Clown flags (must appear before --):
   --help, -h                 Show this help text
   version                    Print version information (first argument only)
   resume                     Pick a resumable session in $PWD (claude only)
+  profile <list|add|edit <name>|remove <name>>
+                             Manage the named-profile registry (user profiles.toml)
   sessions-complete          Emit fish-completion lines for sessions
   job <start|progress|done|read>
                              Job-wakeup channel producer/read surface (RFC-0009)
