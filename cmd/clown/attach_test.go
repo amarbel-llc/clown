@@ -281,6 +281,19 @@ func TestReexecArgv(t *testing.T) {
 			},
 			want: []string{"--provider", "codex", "--tent", "--verbose", "--plugin-dir", "/a", "--plugin-dir", "/b"},
 		},
+		{
+			// --cheap-context must survive the re-exec: the default posh
+			// multiplexer wrap re-launches the inner clown from reexecArgv,
+			// not raw os.Args, so a flag missing here is silently dropped
+			// for every interactive session (caught live: the picker never
+			// rendered under the default [attach] wrap).
+			name: "cheap-context survives",
+			in: parsedFlags{
+				provider:     "claude",
+				cheapContext: true,
+			},
+			want: []string{"--provider", "claude", "--cheap-context"},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

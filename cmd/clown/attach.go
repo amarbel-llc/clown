@@ -273,6 +273,9 @@ func (p parsedFlags) reexecArgv() []string {
 	if p.skipFailed {
 		argv = append(argv, "--skip-failed")
 	}
+	if p.cheapContext {
+		argv = append(argv, "--cheap-context")
+	}
 	if p.disableClownProtocol {
 		argv = append(argv, "--disable-clown-protocol")
 	}
