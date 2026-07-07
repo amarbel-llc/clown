@@ -42,10 +42,14 @@ func XDGPath(homeDir string) string {
 // (RFC-0013 §1.2). It is a default layer beneath explicit flags/env; the
 // named-profile registry (`--profile`) is a separate mechanism.
 type Profile struct {
-	Provider string            `toml:"provider"`
-	Backend  string            `toml:"backend"`
-	Model    string            `toml:"model"`
-	Env      map[string]string `toml:"env"`
+	Provider string `toml:"provider"`
+	Backend  string `toml:"backend"`
+	Model    string `toml:"model"`
+	// ProfileName pins a named registry profile: the run resolves it exactly
+	// as if --profile <name> were passed — beneath an explicit --profile flag,
+	// above buildcfg.DefaultProfile — and it suppresses the interactive picker.
+	ProfileName string            `toml:"profile"`
+	Env         map[string]string `toml:"env"`
 }
 
 // Attach is the clownfile [attach] table: the clown-owned multiplexer/attach
@@ -330,6 +334,9 @@ func mergeInto(dst *Clownfile, src Clownfile) {
 	}
 	if src.Profile.Model != "" {
 		dst.Profile.Model = src.Profile.Model
+	}
+	if src.Profile.ProfileName != "" {
+		dst.Profile.ProfileName = src.Profile.ProfileName
 	}
 	for k, v := range src.Profile.Env {
 		if dst.Profile.Env == nil {

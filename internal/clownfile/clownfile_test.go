@@ -53,6 +53,35 @@ func TestDiscoverCascadeDeeperOverrides(t *testing.T) {
 	}
 }
 
+// [profile].profile pins a named registry profile: a deeper clownfile's pin
+// overrides a shallower one; absent everywhere leaves it "".
+func TestDiscoverProfilePin(t *testing.T) {
+	home := t.TempDir()
+	repo := filepath.Join(home, "repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, home, "[profile]\nprofile = \"shallow-pin\"\n")
+	write(t, repo, "[profile]\nprofile = \"deep-pin\"\n")
+
+	cf, err := Discover(repo, home, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cf.Profile.ProfileName != "deep-pin" {
+		t.Errorf("profile pin = %q, want deep-pin (deeper overrides)", cf.Profile.ProfileName)
+	}
+
+	home2 := t.TempDir()
+	cf2, err := Discover(home2, home2, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cf2.Profile.ProfileName != "" {
+		t.Errorf("profile pin = %q, want empty when unset", cf2.Profile.ProfileName)
+	}
+}
+
 func TestDiscoverAbsentIsZero(t *testing.T) {
 	home := t.TempDir()
 	cf, err := Discover(home, home, "", "")

@@ -274,6 +274,12 @@ func runWithFlags(flags parsedFlags) int {
 	}
 	applyClownfileProfile(&flags, cf.Profile)
 
+	// Resolve the named-profile source order here (not in parseFlags) so every
+	// runWithFlags path — the resume subcommand included — gets the clownfile
+	// pin and the build-time default. A resolved name makes selectedProfile
+	// non-nil below, which is what suppresses the interactive picker.
+	flags.profile = resolveProfileName(flags.profile, flags.providerExplicit, cf.Profile.ProfileName, buildcfg.DefaultProfile)
+
 	// clownfile [attach] escape-to-shell pty proxy: resolve the enable bit + key +
 	// command here so runProvider (deep in the plugin-host path) can gate on it
 	// without re-reading the clownfile.
@@ -507,6 +513,23 @@ func applyClownfileProfile(flags *parsedFlags, p clownfile.Profile) {
 			_ = os.Setenv(k, v)
 		}
 	}
+}
+
+// resolveProfileName orders the named-profile sources: explicit --profile
+// flag > clownfile [profile].profile pin > buildcfg.DefaultProfile. An
+// explicit --provider suppresses profile *defaulting* (pin and build default)
+// but never an explicit --profile.
+func resolveProfileName(flagProfile string, providerExplicit bool, pin, buildDefault string) string {
+	if flagProfile != "" {
+		return flagProfile
+	}
+	if providerExplicit {
+		return ""
+	}
+	if pin != "" {
+		return pin
+	}
+	return buildDefault
 }
 
 // applyNamedProfile applies a selected named profile (--profile, the clownfile
@@ -1824,10 +1847,9 @@ parse:
 			if i+1 < len(args) {
 				p.forwarded = args[i+1:]
 			}
-			// Stop parsing but fall through to the default-profile
-			// fallback below — an early return here skipped it and
-			// tipped runWithFlags into the interactive provider
-			// selector for `clown -- <args>` (clown#80).
+			// Stop parsing; profile defaulting (clownfile pin, build-time
+			// default) happens in runWithFlags via resolveProfileName, so
+			// the `--` path needs no special casing (clown#80).
 			break parse
 		case args[i] == "version" && i == 0:
 			p.version = true
@@ -1878,12 +1900,6 @@ parse:
 		default:
 			return p, fmt.Errorf("unknown flag %q (use -- to pass arguments to the provider)", args[i])
 		}
-	}
-	// Apply the build-time default profile only when the caller did
-	// not pin a profile (flag/env) or pin an explicit provider — an
-	// explicit --provider opts out of the profile-driven flow.
-	if p.profile == "" && !p.providerExplicit && buildcfg.DefaultProfile != "" {
-		p.profile = buildcfg.DefaultProfile
 	}
 	return p, nil
 }

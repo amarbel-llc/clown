@@ -526,89 +526,45 @@ func TestParseFlags_DefaultProviderEnvOverridesBuildcfg(t *testing.T) {
 	}
 }
 
-func TestParseFlags_DefaultProfileFromBuildcfg(t *testing.T) {
-	withBuildcfgString(t, &buildcfg.DefaultProfile, "claude-anthropic")
-	got, err := parseFlags(nil)
-	if err != nil {
-		t.Fatalf("parseFlags: %v", err)
+// Named-profile source ordering (Task 6): explicit --profile/env > clownfile
+// pin > build default; an explicit provider suppresses defaulting only.
+// Supersedes the former parseFlags-level DefaultProfile tests (the defaulting
+// moved to runWithFlags, so the resume subcommand path gains it too).
+func TestResolveProfileName(t *testing.T) {
+	cases := []struct {
+		flag             string
+		providerExplicit bool
+		pin, def, want   string
+	}{
+		{"flag", false, "pin", "def", "flag"},
+		{"", false, "pin", "def", "pin"},
+		{"", false, "", "def", "def"},
+		{"", true, "pin", "def", ""},         // explicit --provider suppresses defaulting
+		{"flag", true, "pin", "def", "flag"}, // explicit --profile always wins
+		{"", false, "", "", ""},
 	}
-	if got.profile != "claude-anthropic" {
-		t.Errorf("profile = %q, want claude-anthropic", got.profile)
+	for _, c := range cases {
+		got := resolveProfileName(c.flag, c.providerExplicit, c.pin, c.def)
+		if got != c.want {
+			t.Errorf("resolveProfileName(%q,%v,%q,%q) = %q, want %q",
+				c.flag, c.providerExplicit, c.pin, c.def, got, c.want)
+		}
 	}
 }
 
-// clown#80: a bare `--` end-of-flags early-returned out of parseFlags
-// before the build-time default-profile fallback was applied, so
-// `clown -- --version` tipped runWithFlags into the interactive
-// provider selector instead of forwarding to the default provider.
-func TestParseFlags_DefaultProfileAppliesAfterDoubleDash(t *testing.T) {
-	withBuildcfgString(t, &buildcfg.DefaultProfile, "claude-anthropic")
+// clown#80 regression coverage: a bare `--` must not early-return out of
+// parseFlags with the forwarded args lost (the default-profile fallback that
+// motivated the original fix now lives in runWithFlags/resolveProfileName).
+func TestParseFlags_DoubleDashForwards(t *testing.T) {
 	got, err := parseFlags([]string{"--", "--version"})
 	if err != nil {
 		t.Fatalf("parseFlags: %v", err)
-	}
-	if got.profile != "claude-anthropic" {
-		t.Errorf("profile = %q, want default profile applied on the -- path", got.profile)
 	}
 	if !reflect.DeepEqual(got.forwarded, []string{"--version"}) {
 		t.Errorf("forwarded = %v, want [--version]", got.forwarded)
 	}
 	if got.providerExplicit {
 		t.Error("providerExplicit should be false for bare --")
-	}
-}
-
-func TestParseFlags_DefaultProfileAppliesAfterTentDoubleDash(t *testing.T) {
-	withBuildcfgString(t, &buildcfg.DefaultProfile, "claude-anthropic")
-	got, err := parseFlags([]string{"--tent", "--", "--version"})
-	if err != nil {
-		t.Fatalf("parseFlags: %v", err)
-	}
-	if !got.tent {
-		t.Error("tent should be true")
-	}
-	if got.profile != "claude-anthropic" {
-		t.Errorf("profile = %q, want default profile applied on the --tent -- path", got.profile)
-	}
-	if !reflect.DeepEqual(got.forwarded, []string{"--version"}) {
-		t.Errorf("forwarded = %v, want [--version]", got.forwarded)
-	}
-}
-
-func TestParseFlags_DefaultProfileSuppressedByExplicitProvider(t *testing.T) {
-	withBuildcfgString(t, &buildcfg.DefaultProfile, "claude-anthropic")
-	got, err := parseFlags([]string{"--provider", "codex"})
-	if err != nil {
-		t.Fatalf("parseFlags: %v", err)
-	}
-	if got.profile != "" {
-		t.Errorf("profile = %q, want empty (explicit --provider should suppress build-time default profile)", got.profile)
-	}
-	if got.provider != "codex" {
-		t.Errorf("provider = %q, want codex", got.provider)
-	}
-}
-
-func TestParseFlags_DefaultProfileSuppressedByExplicitProfile(t *testing.T) {
-	withBuildcfgString(t, &buildcfg.DefaultProfile, "claude-anthropic")
-	got, err := parseFlags([]string{"--profile", "claude-local"})
-	if err != nil {
-		t.Fatalf("parseFlags: %v", err)
-	}
-	if got.profile != "claude-local" {
-		t.Errorf("profile = %q, want claude-local", got.profile)
-	}
-}
-
-func TestParseFlags_DefaultProfileSuppressedByEnvProfile(t *testing.T) {
-	withBuildcfgString(t, &buildcfg.DefaultProfile, "claude-anthropic")
-	t.Setenv("CLOWN_PROFILE", "claude-local")
-	got, err := parseFlags(nil)
-	if err != nil {
-		t.Fatalf("parseFlags: %v", err)
-	}
-	if got.profile != "claude-local" {
-		t.Errorf("profile = %q, want claude-local", got.profile)
 	}
 }
 
