@@ -264,17 +264,17 @@
         ]
       },
       "locked": {
-        "lastModified": 1783343940,
-        "narHash": "sha256-FMzCD14mNy3V/5VVzLPmkI6lGgvPNeK0yI7UVOa+SCE=",
+        "lastModified": 1783422127,
+        "narHash": "sha256-jyRhUP9Roq0I4ix5U97fABa/hyzEguFaF0JkXuq4URs=",
         "ref": "refs/heads/master",
-        "rev": "aecb15d87e5f47b2a799f9474dec9aff0d733e33",
-        "revCount": 5,
+        "rev": "1949cc3d35aa68dda3bf3ea5c1a6a824a38300ca",
+        "revCount": 6,
         "type": "git",
-        "url": "https://forge.linenisgreat.com/amarbel-llc/ringmaster.git"
+        "url": "https://code.linenisgreat.com/ringmaster.git"
       },
       "original": {
         "type": "git",
-        "url": "https://forge.linenisgreat.com/amarbel-llc/ringmaster.git"
+        "url": "https://code.linenisgreat.com/ringmaster.git"
       }
     },
     "root": {
@@ -343,17 +343,17 @@
         ]
       },
       "locked": {
-        "lastModified": 1783392102,
-        "narHash": "sha256-bg2dbBA9iOlA1p+x8rx5OZAA2k3qfQ0MRfJ+pDgDi8I=",
+        "lastModified": 1783395680,
+        "narHash": "sha256-ij94bKNBgTa/CUG/0VQkFoLBF8Ie219ElKfgsa08N1g=",
         "ref": "refs/heads/master",
-        "rev": "eb0663926acbdb86b577b98f6b13e8333bf35e1a",
-        "revCount": 17,
+        "rev": "2b2fa5e5e47faabb3a6965f3ba9d9e79170e24fa",
+        "revCount": 18,
         "type": "git",
-        "url": "https://forge.linenisgreat.com/amarbel-llc/troupe.git"
+        "url": "https://code.linenisgreat.com/troupe.git"
       },
       "original": {
         "type": "git",
-        "url": "https://forge.linenisgreat.com/amarbel-llc/troupe.git"
+        "url": "https://code.linenisgreat.com/troupe.git"
       }
     },
     "utils": {

@@ -68,7 +68,7 @@
     # the single source of truth for the pinned rev. follows-align the
     # shared amarbel inputs so the closure doesn't carry a second igloo /
     # nixpkgs-master / utils / bats evaluation.
-    ringmaster.url = "git+https://forge.linenisgreat.com/amarbel-llc/ringmaster.git";
+    ringmaster.url = "git+https://code.linenisgreat.com/ringmaster.git";
     ringmaster.inputs.igloo.follows = "igloo";
     ringmaster.inputs.nixpkgs-master.follows = "nixpkgs-master";
     ringmaster.inputs.utils.follows = "utils";
@@ -80,7 +80,7 @@
     # a burned-in TroupePath. troupe's own inputs (nixpkgs=igloo, utils,
     # treefmt-nix, ringmaster) follow clown's so the closure shares one eval —
     # notably troupe's ringmaster follows clown's, aligning the jobwake pin.
-    troupe.url = "git+https://forge.linenisgreat.com/amarbel-llc/troupe.git";
+    troupe.url = "git+https://code.linenisgreat.com/troupe.git";
     troupe.inputs.nixpkgs.follows = "igloo";
     troupe.inputs.utils.follows = "utils";
     troupe.inputs.treefmt-nix.follows = "treefmt-nix";
