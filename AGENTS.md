@@ -581,7 +581,7 @@ The flake produces a `symlinkJoin` of five components:
    add flow and continues the launch with the freshly saved profile.
 
    **⚠ EXTRACTED — the job platform is now the external
-   `github.com/amarbel-llc/ringmaster` module.** The whole platform below
+   `code.linenisgreat.com/ringmaster` module.** The whole platform below
    (`internal/jobwake`, `internal/jobmcp`, and the `cmd/ringmaster`/`cmd/troupe`
    verbs — producer/monitor/operator job control, the two MCP surfaces, and
    cross-session chat) was lifted out of clown into a standalone forge-hosted

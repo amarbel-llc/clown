@@ -230,7 +230,7 @@
         mdocDate = "${monthNames.${flakeMonth}} ${toString (lib.toIntBase10 flakeDay)}, ${flakeYear}";
 
         # igloo flake-input-go_mod bridge (igloo RFC-0001): routes the
-        # github.com/amarbel-llc/ringmaster require onto the ringmaster flake
+        # code.linenisgreat.com/ringmaster require onto the ringmaster flake
         # input's go-pkgs output. See gomod.nix. Wrapping buildGoApplication
         # and mkGoEnv threads the same goFlakeInputs into EVERY call site
         # (all ~dozen Go builders + both devshell envs) — the protocol
@@ -717,7 +717,7 @@
         };
 
         # ringmaster + troupe binaries now come from the extracted
-        # github.com/amarbel-llc/ringmaster flake input (the job platform:
+        # code.linenisgreat.com/ringmaster flake input (the job platform:
         # jobwake + jobmcp, ringmaster/troupe verbs, both MCP surfaces). The
         # llama-server control-plane daemon that used to share cmd/ringmaster
         # re-homed into `juggler daemon` (juggler-go, above). The input's

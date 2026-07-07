@@ -8,11 +8,11 @@ import (
 	"sort"
 	"time"
 
-	"github.com/amarbel-llc/ringmaster/jobwake"
+	"code.linenisgreat.com/ringmaster/jobwake"
 )
 
 // runPresence dispatches the `clown presence` subcommands. The presence index
-// (github.com/amarbel-llc/ringmaster/jobwake presence.go) is the clown→spinclass
+// (code.linenisgreat.com/ringmaster/jobwake presence.go) is the clown→spinclass
 // liveness seam (RFC-0014): each live clown writes a record under
 // $XDG_STATE_HOME/ringmaster/presence/, its job-watch monitor refreshes the
 // lastSeen on a ticker, and a clean shutdown

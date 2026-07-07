@@ -16,7 +16,7 @@ import (
 // runDaemon runs the llama-server control-plane daemon (FDR-0010), invoked as
 // `juggler daemon`. The daemon stays clown-side; the job platform it once
 // shared a binary with (jobwake + jobmcp) was extracted into the standalone
-// github.com/amarbel-llc/ringmaster module. args are the arguments following
+// code.linenisgreat.com/ringmaster module. args are the arguments following
 // the `daemon` subcommand.
 func runDaemon(args []string) int {
 	socket := ""

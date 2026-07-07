@@ -26,7 +26,7 @@ func run(args []string) int {
 		// The llama-server control-plane daemon (FDR-0010). Runs the
 		// server the other verbs dial via withClient. The daemon stays
 		// clown-side; the job platform it once shared a binary with was
-		// extracted into the standalone github.com/amarbel-llc/ringmaster
+		// extracted into the standalone code.linenisgreat.com/ringmaster
 		// module.
 		return runDaemon(args[1:])
 	case "start":

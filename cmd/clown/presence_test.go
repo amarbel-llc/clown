@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/amarbel-llc/ringmaster/jobwake"
+	"code.linenisgreat.com/ringmaster/jobwake"
 )
 
 // registerPresenceFixture writes one presence record with the given key, group,

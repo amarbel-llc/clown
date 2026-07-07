@@ -31,7 +31,7 @@ import (
 	"github.com/amarbel-llc/clown/internal/provider"
 	"github.com/amarbel-llc/clown/internal/ptysuspend"
 	"github.com/amarbel-llc/clown/internal/tent"
-	"github.com/amarbel-llc/ringmaster/jobwake"
+	"code.linenisgreat.com/ringmaster/jobwake"
 )
 
 //go:embed profiles/builtin.toml

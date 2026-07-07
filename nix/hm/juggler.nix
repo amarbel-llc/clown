@@ -23,7 +23,7 @@ let
 
   # The llama-server control-plane daemon, invoked as `juggler daemon`. The
   # daemon stays clown-side; the job platform it once shared a binary with was
-  # extracted into the standalone github.com/amarbel-llc/ringmaster module.
+  # extracted into the standalone code.linenisgreat.com/ringmaster module.
   # Wire `package` to a clown output carrying `bin/juggler` (e.g.
   # clown.packages.<system>.juggler).
   binPath = "${cfg.package}/bin/juggler";
