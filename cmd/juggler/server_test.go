@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/amarbel-llc/clown/internal/jugglermodels"
 	rm "github.com/amarbel-llc/clown/internal/juggler"
+	"github.com/amarbel-llc/clown/internal/jugglermodels"
 )
 
 // shortTempDir returns a short-path tmpdir. macOS imposes a ~104-char

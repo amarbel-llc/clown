@@ -3,7 +3,7 @@ package buildcfg
 var (
 	ClaudeCliPath       string
 	CodexCliPath        string
-	JugglerCliPath       string
+	JugglerCliPath      string
 	OpencodeCliPath     string
 	CrushCliPath        string
 	ClownboxCliPath     string
