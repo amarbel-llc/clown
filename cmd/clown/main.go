@@ -1249,6 +1249,16 @@ func runWithPluginHost(executor Executor, args []string, pluginDirs []string, fl
 		return 1
 	}
 
+	if flags.cheapContext {
+		discovered, err = selectServers(discovered)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "clown: %v\n", err)
+			logger.Error("cheap-context selection failed", "err", err)
+			return 1
+		}
+		logger.Info("cheap-context selection applied", "selected", len(discovered))
+	}
+
 	if len(discovered) == 0 {
 		logger.Info("no plugin servers discovered; passing plugin dirs through")
 		fullArgs := prependPluginDirs(args, pluginDirs, nil)
@@ -1739,6 +1749,8 @@ Clown flags (must appear before --):
                              [profile].profile pins one)%s
   --naked                    Pass through to provider without clown wrapping
   --skip-failed              Continue if plugin servers fail to start
+  --cheap-context            Interactively pick which plugin MCP servers to load
+                             (huh multi-select, defaults to all); requires a TTY
   --disable-clown-protocol   Disable clown plugin-host protocol
   --tent                     Run the provider inside a podman container (claude only; FDR-0007)
   --tent-pass-devshell       Force host $PATH passthrough into tent (PATH entries
@@ -1839,7 +1851,14 @@ type parsedFlags struct {
 	naked                bool
 	skipFailed           bool
 	disableClownProtocol bool
-	tent                 bool
+	// cheapContext requests the interactive MCP-server picker (huh
+	// multi-select) before plugin servers are started, so the user can trim
+	// which servers' tool catalogs get registered for this session. Requires
+	// an interactive TTY (cmd/clown/cheapcontext.go); no env-var mirror by
+	// design — a non-interactive default would just create a second code
+	// path to reject.
+	cheapContext bool
+	tent         bool
 	// ptyOpts is the resolved escape-to-shell pty proxy config from the clownfile
 	// [attach] table (pty-suspend / escape-key / escape-command). Sourced in
 	// runWithFlags; no flag/env source yet.
@@ -1943,6 +1962,8 @@ parse:
 			p.naked = true
 		case args[i] == "--skip-failed":
 			p.skipFailed = true
+		case args[i] == "--cheap-context":
+			p.cheapContext = true
 		case args[i] == "--disable-clown-protocol":
 			p.disableClownProtocol = true
 		case args[i] == "--tent":
