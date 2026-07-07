@@ -1389,11 +1389,18 @@ debug-clown-with-stdio-plugin PLUGIN_DIR=".tmp/chrest-plugin": build
 # e.g. a homebrew moxy), so the multi-select picker has more than one
 # server to choose between. Interactive by design (unlike
 # test-plugin-host-moxy, which drives clown-plugin-host non-interactively)
-# — --cheap-context requires a real TTY and errors otherwise. ARGS forwards
-# to the provider after `--` (e.g. `--version` for a cheap smoke run
-# instead of a full session).
+# — --cheap-context requires a real TTY and errors otherwise.
+#
+# Deliberately launches a real, persistent claude session (no ARGS = no
+# forwarded flags) rather than `-- --version`: claude exits near-instantly
+# on --version, which raced past the picker before it could be seen or
+# interacted with, and clown's default posh multiplexer self-wrap
+# (clownfile [attach].multiplexer) means a quick exit tears the mux pane
+# down before there's anything to observe. ARGS forwards to the provider
+# after `--` if you need to override (e.g. `just debug-cheap-context-moxy
+# --version` for a non-interactive smoke check instead).
 [group("debug")]
-debug-cheap-context-moxy *ARGS="--version":
+debug-cheap-context-moxy *ARGS="":
     just build-juggler
     exec ./result/bin/clown --verbose --cheap-context -- {{ARGS}}
 
