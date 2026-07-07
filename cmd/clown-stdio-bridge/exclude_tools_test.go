@@ -156,3 +156,68 @@ func TestHTTP_ExcludeToolsEndpointFiltersToolsList(t *testing.T) {
 		t.Errorf("tools/list response = %+v, want only grit_status", parsed.Result.Tools)
 	}
 }
+
+// TestHandleExcludeTools_Contract verifies GET/POST /clown/exclude-tools
+// against the contract clown-stdio-bridge now shares with moxy's
+// independently-shipped endpoint (amarbel-llc/moxy#399): body key
+// "exclude", 200 status, both methods echo back the resulting set.
+func TestHandleExcludeTools_Contract(t *testing.T) {
+	h := &httpHandler{logger: nullLogger{}}
+	srv := httptest.NewServer(http.HandlerFunc(h.handleExcludeTools))
+	defer srv.Close()
+
+	// GET with nothing excluded yet.
+	resp, err := http.Get(srv.URL)
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	var body struct {
+		Exclude []string `json:"exclude"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode GET response: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("GET status = %d, want 200", resp.StatusCode)
+	}
+	if len(body.Exclude) != 0 {
+		t.Errorf("GET exclude = %v, want empty", body.Exclude)
+	}
+
+	// POST replaces the set and echoes it back.
+	reqBody := `{"exclude":["folio","grit_status"]}`
+	resp, err = http.Post(srv.URL, "application/json", strings.NewReader(reqBody))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("POST status = %d, want 200", resp.StatusCode)
+	}
+	body.Exclude = nil
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode POST response: %v", err)
+	}
+	resp.Body.Close()
+	got := map[string]bool{}
+	for _, n := range body.Exclude {
+		got[n] = true
+	}
+	if !got["folio"] || !got["grit_status"] || len(got) != 2 {
+		t.Errorf("POST echoed exclude = %v, want [folio grit_status]", body.Exclude)
+	}
+
+	// GET now reflects the POSTed set.
+	resp, err = http.Get(srv.URL)
+	if err != nil {
+		t.Fatalf("GET after POST: %v", err)
+	}
+	body.Exclude = nil
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode second GET response: %v", err)
+	}
+	resp.Body.Close()
+	if len(body.Exclude) != 2 {
+		t.Errorf("GET after POST exclude = %v, want 2 entries", body.Exclude)
+	}
+}

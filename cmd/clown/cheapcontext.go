@@ -86,13 +86,13 @@ type serverCatalog struct {
 }
 
 // selectionResult is selectServers' v2 return value: which servers survive
-// at all, plus which tool names (if any) survive within each kept,
+// at all, plus which groups (if any) were deselected within each kept,
 // multi-group server. A server present in kept but absent from
-// excludedTools was either not multi-group (v1-style all-or-nothing) or had
+// excludedGroups was either not multi-group (v1-style all-or-nothing) or had
 // every group kept.
 type selectionResult struct {
-	kept          []pluginhost.DiscoveredServer
-	excludedTools map[string][]string // keyed by DiscoveredServer.Name()
+	kept           []pluginhost.DiscoveredServer
+	excludedGroups map[string][]toolGroup // keyed by DiscoveredServer.Name()
 }
 
 // selectServers renders --cheap-context's picker: a flat per-server row for
@@ -193,7 +193,7 @@ func selectServers(catalogs []serverCatalog) (selectionResult, error) {
 		groupSelected[sel.serverName] = sel.selected
 	}
 
-	result := selectionResult{excludedTools: map[string][]string{}}
+	result := selectionResult{excludedGroups: map[string][]toolGroup{}}
 	for _, c := range catalogs {
 		name := c.server.Name()
 		if !isMultiGroup(c.groups) {
@@ -207,14 +207,14 @@ func selectServers(catalogs []serverCatalog) (selectionResult, error) {
 		for _, key := range groupSelected[name] {
 			chosenKeys[key] = true
 		}
-		var excluded []string
+		var excluded []toolGroup
 		anyKept := false
 		for _, g := range c.groups {
 			key := name + "\x00" + g.name
 			if chosenKeys[key] {
 				anyKept = true
 			} else {
-				excluded = append(excluded, g.tools...)
+				excluded = append(excluded, g)
 			}
 		}
 		if !anyKept {
@@ -222,7 +222,7 @@ func selectServers(catalogs []serverCatalog) (selectionResult, error) {
 		}
 		result.kept = append(result.kept, c.server)
 		if len(excluded) > 0 {
-			result.excludedTools[name] = excluded
+			result.excludedGroups[name] = excluded
 		}
 	}
 	return result, nil
@@ -238,12 +238,14 @@ const excludeToolsPushBudget = 3 * time.Second
 // runs the --cheap-context picker, and applies the result: a
 // fully-deselected server is stopped (host.Servers/report.Started both
 // still reference it, but it no longer answers) and dropped from the
-// returned slice; a partially-deselected server's exclusions are pushed
-// into its running clown-stdio-bridge via POST /clown/exclude-tools.
-// Non-bridged (native httpServers) plugins are unaffected by exclusions —
-// only the bridge understands the endpoint — but CAN still be fully
-// deselected (stopped and dropped) since that path doesn't need the bridge
-// at all.
+// returned slice; a partially-deselected server's exclusions are pushed via
+// POST /clown/exclude-tools to whatever process is answering that server's
+// URL — clown-stdio-bridge for a bridged plugin, or the plugin's own HTTP
+// server directly for a native httpServers plugin that implements the route
+// itself (e.g. moxy, amarbel-llc/moxy#399). A plugin that implements
+// neither 404s the push, which is logged and treated as "exclusions not
+// applied" rather than a launch failure — v1's whole-server deselection
+// still works regardless.
 func applyCheapContextSelection(
 	ctx context.Context,
 	host *pluginhost.Host,
@@ -288,37 +290,68 @@ func applyCheapContextSelection(
 		}
 	}
 
-	for name, excluded := range result.excludedTools {
+	for name, excludedGroups := range result.excludedGroups {
 		srv, ok := serversByName[name]
 		if !ok {
 			continue
 		}
-		if err := pushExcludeTools(ctx, srv, excluded); err != nil {
+		names := excludeToolsPayload(excludedGroups)
+		if err := pushExcludeTools(ctx, srv, names); err != nil {
 			// Best-effort: a push failure means this server's deselected
 			// tools stay visible, not that the launch fails.
 			logger.Warn("cheap-context: failed to push tool exclusions; server keeps its full catalog",
 				"server", name, "err", err)
 		} else {
-			logger.Info("cheap-context: excluded tools from server", "server", name, "count", len(excluded))
+			logger.Info("cheap-context: excluded groups from server", "server", name, "groups", len(excludedGroups))
 		}
 	}
 
 	return result.kept, nil
 }
 
-// pushExcludeTools POSTs the exclusion list to a running bridge's
-// /clown/exclude-tools endpoint (cmd/clown-stdio-bridge/http.go). Only
-// meaningful for bridged (stdio-desugared) servers; POSTing to a native
-// httpServers entry that never registered this route will simply 404,
-// which the caller logs and treats as "exclusions not applied" rather than
-// a launch failure.
-func pushExcludeTools(ctx context.Context, srv *pluginhost.ManagedServer, tools []string) error {
+// excludeToolsPayload flattens excluded groups into the flat name list
+// /clown/exclude-tools expects, sending BOTH representations so the same
+// payload works against either endpoint shape without clown needing to know
+// which one it's talking to:
+//   - the bare group name (e.g. "folio") — what moxy's dotted/bare-name
+//     convention (amarbel-llc/moxy#399, internal/toolexclude.Parse) expects
+//     to exclude a whole moxin; a no-op entry for clown-stdio-bridge, which
+//     only matches exact tool names.
+//   - every individual mangled tool name in the group (e.g.
+//     "mcp__plugin_moxy_moxy__folio_read") — what clown-stdio-bridge's
+//     exact-match filterToolsListResponse expects; harmless extra entries
+//     for moxy, which only recognizes its own bare/dotted names.
+//
+// The ungrouped bucket (group name "") contributes only its tool names,
+// since an empty string is never a meaningful exclusion entry on either
+// side.
+func excludeToolsPayload(groups []toolGroup) []string {
+	var names []string
+	for _, g := range groups {
+		if g.name != "" {
+			names = append(names, g.name)
+		}
+		names = append(names, g.tools...)
+	}
+	return names
+}
+
+// pushExcludeTools POSTs the exclusion list to a running server's
+// /clown/exclude-tools endpoint — either clown-stdio-bridge
+// (cmd/clown-stdio-bridge/http.go) for a bridged plugin, or the plugin's own
+// HTTP server for a native httpServers plugin that implements the route
+// itself (e.g. moxy, amarbel-llc/moxy#399; both share one wire contract:
+// body {"exclude": [...]}, 200 response echoing the resulting set). A
+// plugin that implements neither the bridge nor its own version of this
+// route 404s, which the caller logs and treats as "exclusions not applied"
+// rather than a launch failure.
+func pushExcludeTools(ctx context.Context, srv *pluginhost.ManagedServer, names []string) error {
 	reqCtx, cancel := context.WithTimeout(ctx, excludeToolsPushBudget)
 	defer cancel()
 
 	body, err := json.Marshal(struct {
-		Tools []string `json:"tools"`
-	}{Tools: tools})
+		Exclude []string `json:"exclude"`
+	}{Exclude: names})
 	if err != nil {
 		return err
 	}
@@ -334,7 +367,7 @@ func pushExcludeTools(ctx context.Context, srv *pluginhost.ManagedServer, tools 
 		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusNoContent {
+	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("unexpected status %d", resp.StatusCode)
 	}
 	return nil

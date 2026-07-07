@@ -6,7 +6,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -144,32 +143,14 @@ func run(p parsedArgs) int {
 		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 		_, _ = io.WriteString(w, text)
 	})
-	// --cheap-context v2 (cmd/clown/cheapcontext.go): clown POSTs the set of
-	// tool names to exclude from every subsequent tools/list response, after
-	// the user's picker selection is known. Loopback-only per
+	// --cheap-context v2 (cmd/clown/cheapcontext.go): clown GETs/POSTs the set
+	// of tool names to exclude from every subsequent tools/list response,
+	// after the user's picker selection is known. Loopback-only per
 	// validateOrigin, like every other /clown/* control endpoint on this
 	// bridge — this is a clown-internal control surface, not part of MCP.
-	// Body: {"tools": ["name1", ...]}, REPLACES the current set wholesale.
-	mux.HandleFunc("/clown/exclude-tools", func(w http.ResponseWriter, r *http.Request) {
-		if !validateOrigin(r) {
-			http.Error(w, "origin not permitted", http.StatusForbidden)
-			return
-		}
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		var req struct {
-			Tools []string `json:"tools"`
-		}
-		if err := json.NewDecoder(io.LimitReader(r.Body, 64*1024)).Decode(&req); err != nil {
-			http.Error(w, "invalid JSON body: "+err.Error(), http.StatusBadRequest)
-			return
-		}
-		handler.setExcludeTools(req.Tools)
-		stdLogger.Printf("clown-stdio-bridge: exclude-tools set to %d tool(s)", len(req.Tools))
-		w.WriteHeader(http.StatusNoContent)
-	})
+	// Contract matches moxy's independently-shipped /clown/exclude-tools
+	// (amarbel-llc/moxy#399): see httpHandler.handleExcludeTools.
+	mux.HandleFunc("/clown/exclude-tools", handler.handleExcludeTools)
 
 	srv := &http.Server{Handler: mux}
 	serveErr := make(chan error, 1)

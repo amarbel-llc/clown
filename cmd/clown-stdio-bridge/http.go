@@ -110,8 +110,24 @@ type httpHandler struct {
 	// incremental add/remove. Guarded by excludeMu since it's written from
 	// the HTTP handler goroutine handling that POST and read from every
 	// concurrent tools/list request.
+	//
+	// Wire contract matches moxy's independently-shipped
+	// /clown/exclude-tools (amarbel-llc/moxy#399,
+	// docs/features/0010-tool-exclude-endpoint.md in that repo): body key
+	// "exclude", GET/POST both echo back the resulting set with 200 — so
+	// clown's client (cmd/clown/cheapcontext.go pushExcludeTools) has one
+	// contract regardless of whether the target is this bridge or a native
+	// httpServers plugin like moxy that implements the route itself.
 	excludeMu    sync.RWMutex
 	excludeTools map[string]bool
+}
+
+// excludeToolsBody is the JSON shape of both the POST request and the
+// GET/POST response for /clown/exclude-tools, matching moxy's
+// independently-shipped contract (amarbel-llc/moxy#399) exactly so clown's
+// client needs only one code path.
+type excludeToolsBody struct {
+	Exclude []string `json:"exclude"`
 }
 
 // setExcludeTools replaces the handler's tool-exclusion set wholesale.
@@ -123,6 +139,57 @@ func (h *httpHandler) setExcludeTools(names []string) {
 	h.excludeMu.Lock()
 	h.excludeTools = set
 	h.excludeMu.Unlock()
+}
+
+// excludedToolNames returns the current exclusion set as a sorted-by-nothing
+// flat list, for the GET/POST readback response.
+func (h *httpHandler) excludedToolNames() []string {
+	h.excludeMu.RLock()
+	defer h.excludeMu.RUnlock()
+	if len(h.excludeTools) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(h.excludeTools))
+	for n := range h.excludeTools {
+		names = append(names, n)
+	}
+	return names
+}
+
+// handleExcludeTools implements GET/POST /clown/exclude-tools, matching
+// moxy's independently-shipped contract (amarbel-llc/moxy#399): GET reads
+// back the current excluded set, POST replaces it wholesale and echoes the
+// resulting set — both respond 200 with excludeToolsBody.
+func (h *httpHandler) handleExcludeTools(w http.ResponseWriter, r *http.Request) {
+	if !validateOrigin(r) {
+		http.Error(w, "origin not permitted", http.StatusForbidden)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(excludeToolsBody{Exclude: h.excludedToolNames()})
+	case http.MethodPost:
+		body, err := io.ReadAll(io.LimitReader(r.Body, 64*1024))
+		if err != nil {
+			http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		var req excludeToolsBody
+		if len(body) > 0 {
+			if err := json.Unmarshal(body, &req); err != nil {
+				http.Error(w, "invalid JSON body: "+err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
+		h.setExcludeTools(req.Exclude)
+		h.logger.Printf("clown-stdio-bridge: exclude-tools set to %d tool(s)", len(req.Exclude))
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(excludeToolsBody{Exclude: h.excludedToolNames()})
+	default:
+		w.Header().Set("Allow", "GET, POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 // filterToolsListResponse drops entries from a tools/list JSON-RPC response
