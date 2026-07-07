@@ -24,27 +24,41 @@ type toolGroup struct {
 }
 
 // groupToolsByPrefix splits a server's fetched tool catalog into groups by
-// parsing the tool-name-prefix convention clown's own MCP client-facing
-// names follow: "mcp__plugin_<plugin>_<server>__<group>_<rest>" (observed
-// live against moxy: "mcp__plugin_moxy_moxy__folio_read" -> group "folio").
-// This is a client-side convention, not an MCP protocol field (confirmed by
-// research: tools/list carries no grouping metadata) — a formal
-// clown-plugin-protocol toolGroups declaration is deferred to a follow-up
-// issue rather than built here.
+// parsing a tool-name-prefix convention. host.FetchToolCatalog talks
+// directly to the plugin's own /mcp endpoint (not through Claude Code), so
+// names arrive in whatever form the plugin itself renders — NOT the
+// "mcp__plugin_<plugin>_<server>__<rest>" mangling Claude Code's harness
+// applies afterward. Two conventions are recognized, tried in order:
 //
-// Names that don't start with the expected "mcp__plugin_<plugin>_<server>__"
-// prefix for this DiscoveredServer, or have no further "_"-delimited segment
-// after it, fall into the ungrouped bucket (group name ""). Group order is
-// first-seen in tools' order; within a group, tool order is preserved.
+//  1. moxy's own rendering (internal/naming.Template, amarbel-llc/moxy):
+//     "<group>.<tool>", dot-separated (e.g. "folio.read" -> group "folio").
+//     This is the form actually observed from moxy's tools/list (confirmed
+//     live: a 198-tool catalog grouped to 1 bucket under the old
+//     mangled-prefix check, since moxy never emits that mangled form
+//     itself).
+//  2. The mangled "mcp__plugin_<plugin>_<server>__<group>_<rest>" form, kept
+//     as a fallback in case some other server's own /mcp responses happen
+//     to already carry that shape (defensive; not known to occur today).
+//
+// Neither is an MCP protocol field — tools/list carries no grouping
+// metadata (confirmed by research) — so this stays a client-side
+// heuristic; a formal clown-plugin-protocol toolGroups declaration is
+// deferred to a follow-up issue rather than built here.
+//
+// A name matching neither convention falls into the ungrouped bucket
+// (group name ""). Group order is first-seen in tools' order; within a
+// group, tool order is preserved.
 func groupToolsByPrefix(d pluginhost.DiscoveredServer, tools []pluginhost.ToolInfo) []toolGroup {
-	prefix := fmt.Sprintf("mcp__plugin_%s_%s__", d.PluginName, d.ServerName)
+	mangledPrefix := fmt.Sprintf("mcp__plugin_%s_%s__", d.PluginName, d.ServerName)
 
 	order := make([]string, 0, 4)
 	byGroup := make(map[string][]string, 4)
 	for _, t := range tools {
 		group := ""
-		rest, ok := strings.CutPrefix(t.Name, prefix)
-		if ok {
+		if idx := strings.Index(t.Name, "."); idx > 0 {
+			// moxy's own "<group>.<tool>" rendering.
+			group = t.Name[:idx]
+		} else if rest, ok := strings.CutPrefix(t.Name, mangledPrefix); ok {
 			if idx := strings.Index(rest, "_"); idx > 0 {
 				group = rest[:idx]
 			}

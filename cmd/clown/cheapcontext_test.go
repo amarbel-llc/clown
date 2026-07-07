@@ -16,7 +16,28 @@ func TestGroupToolsByPrefix(t *testing.T) {
 		want  []toolGroup
 	}{
 		{
-			name: "moxy-style multi-group",
+			// moxy's ACTUAL rendering (internal/naming.Template,
+			// amarbel-llc/moxy): dot-separated "<group>.<tool>". Confirmed
+			// live against a real moxy instance (198-tool catalog) — this is
+			// the primary case, not the mangled-prefix fallback below, since
+			// FetchToolCatalog talks to moxy's own /mcp endpoint directly,
+			// bypassing Claude Code's tool-name mangling entirely.
+			name: "moxy-style multi-group (dotted rendering)",
+			tools: []pluginhost.ToolInfo{
+				{Name: "folio.read"},
+				{Name: "folio.glob"},
+				{Name: "grit.status"},
+			},
+			want: []toolGroup{
+				{name: "folio", tools: []string{"folio.read", "folio.glob"}},
+				{name: "grit", tools: []string{"grit.status"}},
+			},
+		},
+		{
+			// Fallback case: a server whose /mcp responses happen to already
+			// carry Claude Code's mangled prefix form (not known to occur
+			// today, but handled defensively).
+			name: "mangled-prefix fallback",
 			tools: []pluginhost.ToolInfo{
 				{Name: "mcp__plugin_moxy_moxy__folio_read"},
 				{Name: "mcp__plugin_moxy_moxy__folio_glob"},
