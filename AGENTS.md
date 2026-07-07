@@ -32,12 +32,29 @@ override with `CLOWN_PROVIDER` env var, or pin one per-directory via a
   for their implementation in this repo; `cmd/clown/jobmonitor.go` is just
   the synthesis point that wires those binaries into the
   `clown-builtin-jobs` plugin.
+- **`just build` is the only fully-trustworthy build check — `just
+  build-go` and `just gomod2nix` can fail/hang for reasons unrelated to
+  your change (clown#174).** clown consumes the external `ringmaster` Go
+  module via a Nix-injected `replace` (igloo's `goFlakeInputs` bridge,
+  `gomod.nix`); that replace only exists inside `nix build` and the
+  `mkGoEnv` devShell. If `vendor/`/`gomod2nix.toml` drift from `go.mod`
+  for that bridged require, `build-go` fails with "inconsistent
+  vendoring" and `gomod2nix generate` can hang indefinitely trying to
+  resolve the module over the network — neither is a signal about your
+  code. When either misbehaves, confirm against `just build` before
+  concluding anything is broken.
+- **New untracked files are invisible to `nix build` (and hence `just
+  build`).** `nix build` reads the git-tracked snapshot, not the working
+  tree — a new `.go` file (or new directory) that hasn't been `git add`ed
+  will compile fine under `go build` but fail `nix build` with a
+  misleading "undefined: X" or "cannot find package" error. `git add` the
+  new path before building (staging is enough; no commit needed).
 
 ## Build commands
 
 ```sh
-just build       # Default: nix build --show-trace
-just build-go    # Build Go binaries (clown, clown-plugin-host)
+just build       # Default: nix build --show-trace — the authoritative check
+just build-go    # Build Go binaries; UNRELIABLE on bridged-dep drift, see above
 just test-go     # Run Go unit tests
 just clean       # rm -rf result
 ```

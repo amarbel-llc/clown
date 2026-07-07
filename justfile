@@ -26,6 +26,14 @@ build: build-nix
 # `replace` only exists inside nix builds and the devShell mkGoEnv — a
 # bare `go build ./cmd/...` outside the devShell can't resolve it
 # (igloo RFC-0001 "no go build outside Nix").
+#
+# KNOWN UNRELIABLE (clown#174): if vendor/modules.txt drifts from go.mod
+# for the bridged ringmaster require (as happened after the 1b16421
+# module-path rename), this fails with "inconsistent vendoring" for
+# reasons UNRELATED to your change. `just build` (full nix build) is the
+# only build check that reliably threads goFlakeInputs everywhere — treat
+# a build-go failure as suspect and confirm against `just build` before
+# concluding your code is broken.
 [group("go")]
 build-go:
     nix develop --command go build ./cmd/...
@@ -41,6 +49,13 @@ test-go:
 
 # Regenerate gomod2nix.toml after go.mod changes (uses the gomod2nix
 # binary from the devshell so the tool version matches the nix builder).
+#
+# KNOWN UNRELIABLE (clown#174): observed hanging indefinitely (300s+, no
+# output) when go.mod carries the bridged code.linenisgreat.com/ringmaster
+# require — gomod2nix appears to attempt normal network/proxy resolution
+# of a module the goFlakeInputs bridge deliberately keeps proxy-unreachable.
+# Don't block on this recipe finishing; `just build` doesn't depend on it
+# and remains the authoritative check after a go.mod change.
 [group("go")]
 gomod2nix:
     gomod2nix generate
