@@ -331,6 +331,9 @@ func (h *Host) FetchToolCatalog(ctx context.Context, srv *ManagedServer) ([]Tool
 		h.logToolCatalogSkip(srv, err)
 		return nil, false
 	}
+	if h.Logger != nil {
+		h.Logger.Info("fetched tool catalog", "server", srv.Name, "tool_count", len(parsed.Result.Tools))
+	}
 	return parsed.Result.Tools, true
 }
 

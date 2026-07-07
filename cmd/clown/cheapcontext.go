@@ -104,12 +104,18 @@ type selectionResult struct {
 // (fetched via host.FetchToolCatalog in runManaged, after StartAll — see
 // cheapcontext design notes); a nil/empty groups field degrades that
 // server to a flat row.
-func selectServers(catalogs []serverCatalog) (selectionResult, error) {
+func selectServers(catalogs []serverCatalog, logger *slog.Logger) (selectionResult, error) {
 	if !pluginhost.IsInteractive() {
 		return selectionResult{}, fmt.Errorf("--cheap-context requires an interactive TTY")
 	}
 	if len(catalogs) == 0 {
 		return selectionResult{}, nil
+	}
+	if logger != nil {
+		for _, c := range catalogs {
+			logger.Info("cheap-context: server catalog", "server", c.server.Name(),
+				"groups", len(c.groups), "multi_group", isMultiGroup(c.groups))
+		}
 	}
 
 	var groups []*huh.Group
@@ -179,8 +185,15 @@ func selectServers(catalogs []serverCatalog) (selectionResult, error) {
 		return selectionResult{}, nil
 	}
 
+	if logger != nil {
+		logger.Info("cheap-context: rendering picker form", "sections", len(groups))
+	}
 	form := huh.NewForm(groups...)
-	if err := form.Run(); err != nil {
+	err := form.Run()
+	if logger != nil {
+		logger.Info("cheap-context: picker form returned", "err", err)
+	}
+	if err != nil {
 		return selectionResult{}, fmt.Errorf("cheap-context prompt: %w", err)
 	}
 
@@ -258,6 +271,7 @@ func applyCheapContextSelection(
 		byName[d.Name()] = d
 	}
 
+	logger.Info("cheap-context: fetching tool catalogs", "server_count", len(started))
 	catalogs := make([]serverCatalog, 0, len(started))
 	serversByName := make(map[string]*pluginhost.ManagedServer, len(started))
 	for _, srv := range started {
@@ -273,8 +287,10 @@ func applyCheapContextSelection(
 		}
 		catalogs = append(catalogs, serverCatalog{server: d, groups: groups})
 	}
+	logger.Info("cheap-context: catalogs fetched; entering picker", "catalog_count", len(catalogs))
 
-	result, err := selectServers(catalogs)
+	result, err := selectServers(catalogs, logger)
+	logger.Info("cheap-context: picker returned", "err", err)
 	if err != nil {
 		return nil, err
 	}
