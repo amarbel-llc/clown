@@ -552,6 +552,14 @@ func TestResolveProfileName(t *testing.T) {
 	}
 }
 
+func TestPickerItemsIncludeAddSentinel(t *testing.T) {
+	items := pickerItems([]profile.Profile{{Name: "a", Display: "A"}})
+	last := items[len(items)-1].(profileItem)
+	if !last.add || last.Title() != "+ add profile…" {
+		t.Fatalf("last item must be the add sentinel: %#v", last)
+	}
+}
+
 // clown#80 regression coverage: a bare `--` must not early-return out of
 // parseFlags with the forwarded args lost (the default-profile fallback that
 // motivated the original fix now lives in runWithFlags/resolveProfileName).

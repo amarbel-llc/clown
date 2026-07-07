@@ -80,16 +80,50 @@ func loadProfiles(additionalPath string) ([]profile.Profile, error) {
 	return profile.Merge(builtin, user), nil
 }
 
-type profileItem struct{ p profile.Profile }
+// profileItem is a picker row: either a real profile, or (add == true) the
+// trailing "+ add profile…" sentinel that launches profileAddInteractive.
+type profileItem struct {
+	p   profile.Profile
+	add bool
+}
 
-func (i profileItem) Title() string       { return i.p.Display }
-func (i profileItem) Description() string { return i.p.Provider + " / " + i.p.Backend }
-func (i profileItem) FilterValue() string { return i.p.Name + " " + i.p.Display }
+func (i profileItem) Title() string {
+	if i.add {
+		return "+ add profile…"
+	}
+	return i.p.Display
+}
+
+func (i profileItem) Description() string {
+	if i.add {
+		return "create a new profile"
+	}
+	return i.p.Provider + " / " + i.p.Backend
+}
+
+func (i profileItem) FilterValue() string {
+	if i.add {
+		return "add profile"
+	}
+	return i.p.Name + " " + i.p.Display
+}
+
+// pickerItems renders profiles as list items with the add sentinel appended
+// last, so it always sits at the bottom of the picker.
+func pickerItems(profiles []profile.Profile) []list.Item {
+	items := make([]list.Item, len(profiles)+1)
+	for i, p := range profiles {
+		items[i] = profileItem{p: p}
+	}
+	items[len(profiles)] = profileItem{add: true}
+	return items
+}
 
 type pickerModel struct {
-	list   list.Model
-	chosen *profile.Profile
-	quit   bool
+	list         list.Model
+	chosen       *profile.Profile
+	quit         bool
+	addRequested bool
 }
 
 func (m pickerModel) Init() tea.Cmd { return nil }
@@ -100,8 +134,12 @@ func (m pickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "enter":
 			if i, ok := m.list.SelectedItem().(profileItem); ok {
-				p := i.p
-				m.chosen = &p
+				if i.add {
+					m.addRequested = true
+				} else {
+					p := i.p
+					m.chosen = &p
+				}
 			}
 			return m, tea.Quit
 		case "q", "ctrl+c", "esc":
@@ -119,24 +157,24 @@ func (m pickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m pickerModel) View() string { return m.list.View() }
 
-func pickProfile(profiles []profile.Profile) (*profile.Profile, error) {
-	items := make([]list.Item, len(profiles))
-	for i, p := range profiles {
-		items[i] = profileItem{p}
-	}
-	l := list.New(items, list.NewDefaultDelegate(), 40, 14)
+// pickProfile runs the picker and returns the chosen profile, or
+// addRequested == true when the user selected the "+ add profile…" sentinel
+// (the caller is expected to run profileAddInteractive and continue the
+// launch with its result).
+func pickProfile(profiles []profile.Profile) (chosen *profile.Profile, addRequested bool, err error) {
+	l := list.New(pickerItems(profiles), list.NewDefaultDelegate(), 40, 14)
 	l.Title = "Select a profile"
 	l.SetShowStatusBar(false)
 	l.SetFilteringEnabled(true)
 	m, err := tea.NewProgram(pickerModel{list: l}, tea.WithAltScreen()).Run()
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	pm := m.(pickerModel)
 	if pm.quit {
-		return nil, nil
+		return nil, false, nil
 	}
-	return pm.chosen, nil
+	return pm.chosen, pm.addRequested, nil
 }
 
 func main() {
@@ -361,10 +399,18 @@ func runWithFlags(flags parsedFlags) int {
 	}
 
 	if selectedProfile == nil && !flags.version && !flags.naked && !flags.providerExplicit && term.IsTerminal(int(os.Stdin.Fd())) {
-		chosen, err := pickProfile(profiles)
+		chosen, addRequested, err := pickProfile(profiles)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "clown: profile picker: %v\n", err)
 			return 1
+		}
+		if addRequested {
+			created, err := profileAddInteractive()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "clown: %v\n", err)
+				return 1
+			}
+			chosen = created
 		}
 		if chosen == nil {
 			return 0
