@@ -179,22 +179,25 @@ func synthJobMonitorPluginDir(sessionKey string) (string, error) {
 			"version": 1,
 			"stdioServers": map[string]any{
 				// ringmaster: job lifecycle + status (clown#144). It owns the
-				// dynamic system-prompt fragment, whose orientation covers the
-				// whole platform (both surfaces): the bridge serves
-				// /clown/system-prompt by issuing prompts/get to the ringmaster mcp
-				// server, and clown folds the live fragment into claude's append
-				// prompt (RFC-0002 §dynamic fragments). Only one surface carries it,
-				// so the prompt is appended once.
+				// dynamic system-prompt fragment covering the job platform: the
+				// bridge serves /clown/system-prompt by issuing prompts/get to the
+				// ringmaster mcp server, and clown folds the live fragment into
+				// claude's append prompt (RFC-0002 §dynamic fragments).
 				"ringmaster": map[string]any{
 					"command":      buildcfg.RingmasterPath,
 					"args":         []string{"mcp"},
 					"systemPrompt": true,
 				},
 				// troupe: messaging — chat + the standalone waking job_message
-				// (clown#144).
+				// (clown#144). Also owns a dynamic system-prompt fragment (its own
+				// prompts/get, wire-identical to ringmaster's) covering chat
+				// orientation, which ringmaster's fragment stopped carrying once it
+				// shed its chat funcs (B.4). FetchPromptFragments collects from every
+				// opted-in server, so both fragments are appended.
 				"troupe": map[string]any{
-					"command": buildcfg.TroupePath,
-					"args":    []string{"mcp"},
+					"command":      buildcfg.TroupePath,
+					"args":         []string{"mcp"},
+					"systemPrompt": true,
 				},
 			},
 		}

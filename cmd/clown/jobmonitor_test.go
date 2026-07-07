@@ -300,13 +300,15 @@ func TestJobMonitorPluginDirIncludesMCPWhenBridgeSet(t *testing.T) {
 			}
 		}
 	}
-	// Exactly one surface owns the dynamic system-prompt fragment (appended
-	// once); it is ringmaster, the job-control core.
+	// Both surfaces own a dynamic system-prompt fragment: ringmaster (job
+	// platform) and troupe (messaging, since B.4 dropped ringmaster's chat
+	// coverage). FetchPromptFragments collects from every opted-in server, so
+	// both are appended.
 	if !cfg.StdioServers["ringmaster"].SystemPrompt {
 		t.Fatalf("ringmaster server must set systemPrompt:true; got %s", b)
 	}
-	if cfg.StdioServers["troupe"].SystemPrompt {
-		t.Fatalf("troupe server must not set systemPrompt (the fragment is appended once); got %s", b)
+	if !cfg.StdioServers["troupe"].SystemPrompt {
+		t.Fatalf("troupe server must set systemPrompt:true; got %s", b)
 	}
 }
 

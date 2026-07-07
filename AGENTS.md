@@ -683,11 +683,17 @@ The flake produces a `symlinkJoin` of five components:
    append-file path now returned by `provider.BuildClaudeArgs`). For a bridged
    stdio server, `clown-stdio-bridge` serves `/clown/system-prompt` by issuing an
    MCP `prompts/get` for the `system-prompt-append` prompt to the wrapped child —
-   so the fragment is *child-owned* and computed at request time. The
-   `clown-builtin-jobs` server is the dogfood: `ringmaster mcp` exposes that prompt
-   (`jobmcp.jobSystemPromptFragment`), returning a live orientation fragment built from
-   its own tool catalog plus the per-instance session key injected via
-   `Host.BaseEnv` (clown#136) — runtime state the static path can't express.
+   so the fragment is *child-owned* and computed at request time.
+   `FetchPromptFragments` collects from every opted-in server, so multiple
+   fragments concatenate rather than being capped at one. The
+   `clown-builtin-jobs` server carries two dogfood surfaces: `ringmaster mcp`
+   exposes that prompt (`jobmcp.jobSystemPromptFragment`) for the job-platform
+   orientation, and — since ringmaster's B.4 chat-func removal left no surface
+   describing chat — `troupe mcp` exposes the same prompt (wire-identical
+   shape) for the messaging orientation (chat_send/chat_read/chat_list/
+   message). Both return a live fragment built from their own tool catalog
+   plus the per-instance session key injected via `Host.BaseEnv` (clown#136)
+   — runtime state the static path can't express.
    Scope: the claude family only (providers that run the plugin host and read an
    append file); exec-replacing providers are unaffected. Man page:
    `clown-json(5)` (`systemPromptPath`, `systemPrompt`).

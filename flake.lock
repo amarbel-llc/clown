@@ -343,11 +343,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1783395680,
-        "narHash": "sha256-ij94bKNBgTa/CUG/0VQkFoLBF8Ie219ElKfgsa08N1g=",
+        "lastModified": 1783427245,
+        "narHash": "sha256-E6NeKphx6PSQPcgwv17S+CdHZK+b/p8gf5DjCvJYFcI=",
         "ref": "refs/heads/master",
-        "rev": "2b2fa5e5e47faabb3a6965f3ba9d9e79170e24fa",
-        "revCount": 18,
+        "rev": "24f36c616959c7ecb1c898813b1ff42666b3a762",
+        "revCount": 21,
         "type": "git",
         "url": "https://code.linenisgreat.com/troupe.git"
       },
