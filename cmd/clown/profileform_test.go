@@ -1,0 +1,58 @@
+package main
+
+import (
+	"testing"
+
+	"github.com/amarbel-llc/clown/internal/profile"
+)
+
+func templateByName(t *testing.T, key string) profile.Profile {
+	t.Helper()
+	for _, tpl := range profileTemplates {
+		if tpl.key == key {
+			return tpl.p
+		}
+	}
+	t.Fatalf("no template %q", key)
+	return profile.Profile{}
+}
+
+func TestProfileTemplates(t *testing.T) {
+	or := templateByName(t, "openrouter")
+	if or.URL != "https://openrouter.ai/api" {
+		t.Errorf("openrouter url = %q (must be /api, NOT /api/v1)", or.URL)
+	}
+	if or.Token != "${OPENROUTER_API_KEY}" || or.Model != "" || or.Backend != "gateway" {
+		t.Errorf("openrouter template: %#v", or)
+	}
+}
+
+func TestValidateProfileNameField(t *testing.T) {
+	existing := map[string]bool{"taken": true}
+	v := validateProfileName(existing, "")
+	if v("taken") == nil {
+		t.Error("duplicate must be rejected on add")
+	}
+	if v("") == nil || v("has space") == nil {
+		t.Error("empty / spaced names must be rejected")
+	}
+	if v("claude-openrouter2") != nil {
+		t.Error("plain kebab name must pass")
+	}
+	// edit mode: own original name allowed
+	if validateProfileName(existing, "taken")("taken") != nil {
+		t.Error("edit may keep its own name")
+	}
+}
+
+func TestFormValuesToProfile(t *testing.T) {
+	v := profileFormValues{Name: " or ", Display: "X", Provider: "claude",
+		Backend: "gateway", URL: " https://openrouter.ai/api ", Token: "${OPENROUTER_API_KEY}"}
+	p := v.toProfile()
+	if p.Name != "or" || p.URL != "https://openrouter.ai/api" {
+		t.Errorf("fields must be trimmed: %#v", p)
+	}
+	if err := profile.Validate(p); err != nil {
+		t.Fatal(err)
+	}
+}

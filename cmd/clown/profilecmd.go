@@ -83,16 +83,20 @@ func runProfileList() int {
 	return 0
 }
 
-// runProfileAdd and runProfileEdit are filled by the profile form work
-// (plan Task 8); stubs keep `clown profile` dispatch complete until then.
 func runProfileAdd() int {
-	fmt.Fprintln(os.Stderr, "clown: profile add: not implemented")
-	return 1
+	if _, err := profileAddInteractive(); err != nil {
+		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
+		return 1
+	}
+	return 0
 }
 
 func runProfileEdit(name string) int {
-	fmt.Fprintf(os.Stderr, "clown: profile edit %q: not implemented\n", name)
-	return 1
+	if _, err := profileEditInteractive(name); err != nil {
+		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
+		return 1
+	}
+	return 0
 }
 
 func runProfileRemove(name string) int {
