@@ -884,6 +884,20 @@ smoke-clown-against-tailnet ALIAS="gemma3-12b" NAKED="1": build
         ANTHROPIC_CUSTOM_MODEL_OPTION='{"model":"'"$alias"'","max_tokens":2048}' \
         ./result/bin/clown $naked_flag -- --model "$alias"
 
+# Launch claude-code against openrouter.ai via the claude+gateway profile
+# (design: docs/plans/2026-07-06-openrouter-profiles-design.md). Requires
+# OPENROUTER_API_KEY exported and a claude-openrouter profile
+# (`clown profile add`, openrouter template). Diagnostic paved path.
+[group("test")]
+smoke-clown-against-openrouter *args="--version": build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ -z "${OPENROUTER_API_KEY:-}" ]]; then
+        echo "FAIL: OPENROUTER_API_KEY is not exported" >&2
+        exit 1
+    fi
+    exec ./result/bin/clown --profile claude-openrouter -- {{ args }}
+
 # Launch opencode pointed at a tailnet-exposed juggler instance.
 #
 # Why the file dance: clown's runOpencode dispatch is (1) --profile
