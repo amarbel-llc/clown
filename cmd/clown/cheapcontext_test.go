@@ -116,6 +116,24 @@ func TestCheapContextShouldActivate(t *testing.T) {
 	}
 }
 
+// TestPromptSaveSelection_EmptyKeptRefusesWithoutPrompting guards the fix
+// for a real data-loss bug: profile.Profile.ContextServers uses
+// `toml:"...,omitempty"`, and BurntSushi/toml's omitempty drops ANY
+// zero-length slice (nil or not) on write. Without this guard, saving a
+// selection where every server was deselected would silently produce a
+// profile indistinguishable on disk from one with no saved selection at
+// all — the opposite of the user's saved intent, with no error.
+//
+// This must return an error WITHOUT running the interactive huh confirm
+// form at all (the test process has no TTY) — proving the empty check is a
+// guard clause ahead of any prompting, not just documentation.
+func TestPromptSaveSelection_EmptyKeptRefusesWithoutPrompting(t *testing.T) {
+	err := promptSaveSelection(selectionResult{excludedTools: map[string][]string{}})
+	if err == nil {
+		t.Fatal("expected an error for a selection with zero kept servers")
+	}
+}
+
 func TestSelectionFromSavedProfile(t *testing.T) {
 	moxy := pluginhost.DiscoveredServer{PluginName: "moxy", ServerName: "moxy"}
 	caldav := pluginhost.DiscoveredServer{PluginName: "bob", ServerName: "caldav"}

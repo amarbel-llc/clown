@@ -488,6 +488,19 @@ func selectionContextFields(result selectionResult) ([]string, map[string][]stri
 // selectServers) — a user declining to save, or a save failure, must never
 // fail the launch that already has a valid, applied selection.
 func promptSaveSelection(result selectionResult) error {
+	if len(result.kept) == 0 {
+		// A profile.Profile.ContextServers of length zero is indistinguishable
+		// on disk from "no saved selection at all": BurntSushi/toml's
+		// omitempty drops any zero-length slice on write (nil or not), so a
+		// saved "everything deselected" choice would silently vanish and
+		// read back as unset on the next launch — the opposite of what was
+		// saved, with no error. Refuse up front rather than write a profile
+		// that can never round-trip its own intent. Deselecting every server
+		// also has no meaningful "replay" semantics anyway: there would be
+		// nothing left to apply the exclusion list to.
+		return fmt.Errorf("nothing to save: every server was deselected")
+	}
+
 	var wantSave bool
 	if err := huh.NewForm(huh.NewGroup(
 		huh.NewConfirm().
