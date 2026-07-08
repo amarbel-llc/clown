@@ -10,8 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/huh"
-
 	"github.com/amarbel-llc/clown/internal/pluginhost"
 )
 
@@ -109,22 +107,39 @@ type selectionResult struct {
 	excludedTools map[string][]string // keyed by DiscoveredServer.Name()
 }
 
-// allRowKey is the option value for a multi-group server's top "(all)" row:
+// rowKey builds a globally-unique option value for one picker row: server
+// name plus a row id, NUL-separated so it can never collide with a real
+// server or tool name. allRowSuffix identifies a server's whole-server
+// on/off row; any other suffix is a literal tool name.
+func rowKey(serverName, rowID string) string {
+	return serverName + "\x00" + rowID
+}
+
+// allRowSuffix is the row id for a multi-group server's top "(all)" row:
 // unchecking it means "drop this whole server," independent of which
 // individual tool rows are checked (mirrors v1's whole-server semantics).
-const allRowKey = "\x00all"
+const allRowSuffix = "\x00all"
 
-// selectServers renders --cheap-context's picker as ONE screen: a single
-// huh.Group whose body is one huh.MultiSelect per server. A server with no
-// fetched catalog or a single tool group gets a bare on/off row (v1
-// behavior). A multi-group server (v2; moxy's ~170 tools) gets its own
-// MultiSelect with a top "(all N tools)" row plus one indented row per
-// individual tool — unchecking the top row drops the whole server;
-// unchecking specific tool rows (with the top row still checked) excludes
-// just those tools. Everything renders on one page — no huh.Form group
-// pagination — per user feedback that a separate page per multi-group
-// server ("staged on a second screen") was confusing. A true collapsible
-// outline/tree (per-moxin expand/collapse) is deferred to clown#176.
+// selectServers renders --cheap-context's picker as ONE screen and ONE
+// continuously-scrollable list: a bare bubbles/list program
+// (cmd/clown/cheapcontext_picker.go), not a huh.Form. Two huh limitations
+// ruled it out: (1) a huh.MultiSelect's Up/Down cursor clamps at that
+// field's own boundary and only crosses to the next field on Enter/Tab, so
+// one field per server made j/k/arrow navigation stop dead at each
+// section; (2) huh.MultiSelect exposes no hook to intercept a toggle and
+// cascade it to other rows, which live "toggling a server also toggles its
+// tools" needs. bubbles/list's ItemDelegate.Update runs BEFORE the list
+// consumes a keypress, which is exactly that hook — see
+// checklistDelegate.Update.
+//
+// A server with no fetched catalog or a single tool group gets a single
+// bare on/off row (v1 behavior). A multi-group server (v2; moxy's ~170
+// tools) gets a "<server> (N tools)" parent row plus one indented child
+// row per individual tool — toggling the parent row live-cascades to every
+// child (checklistDelegate.Update); toggling a child row independently
+// excludes just that tool while the parent stays checked. A true
+// collapsible outline/tree (per-moxin expand/collapse, so ~170 rows aren't
+// always all visible) is deferred to clown#176.
 //
 // Requires an interactive TTY — mirrors the TTY gate in
 // profileAddInteractive/profileEditInteractive (cmd/clown/profileform.go).
@@ -145,110 +160,81 @@ func selectServers(catalogs []serverCatalog, logger *slog.Logger) (selectionResu
 		}
 	}
 
-	// Each MultiSelect needs its own addressable *[]string for
-	// huh.MultiSelect.Value, so use a slice of pointers rather than a map (a
-	// map-index expression isn't addressable in Go).
-	type fieldSelection struct {
-		serverName string
-		multiGroup bool
-		selected   []string
-	}
-	var fields []*fieldSelection
-	var multiSelects []*huh.MultiSelect[string]
-
+	var rows []checklistRow
 	for _, c := range catalogs {
 		name := c.server.Name()
 		if !isMultiGroup(c.groups) {
-			sel := &fieldSelection{serverName: name, selected: []string{name}}
-			fields = append(fields, sel)
-			multiSelects = append(multiSelects, huh.NewMultiSelect[string]().
-				Title("Servers").
-				Options(huh.NewOption(name, name).Selected(true)).
-				Value(&sel.selected))
+			rows = append(rows, checklistRow{Key: rowKey(name, allRowSuffix), Label: name, Checked: true})
 			continue
 		}
 
 		totalTools := 0
-		var opts []huh.Option[string]
-		sel := &fieldSelection{serverName: name, multiGroup: true, selected: []string{allRowKey}}
-		opts = append(opts, huh.NewOption(name, allRowKey).Selected(true))
+		for _, g := range c.groups {
+			totalTools += len(g.tools)
+		}
+		parentKey := rowKey(name, allRowSuffix)
+		rows = append(rows, checklistRow{
+			Key:      parentKey,
+			Label:    fmt.Sprintf("%s (%d tools)", name, totalTools),
+			Checked:  true,
+			IsParent: true,
+		})
 		for _, g := range c.groups {
 			for _, toolName := range g.tools {
-				totalTools++
-				label := "    " + toolName // indent under the server's "(all)" row
-				opts = append(opts, huh.NewOption(label, toolName).Selected(true))
-				sel.selected = append(sel.selected, toolName)
+				rows = append(rows, checklistRow{
+					Key:       rowKey(name, toolName),
+					Label:     toolName,
+					Checked:   true,
+					ParentKey: parentKey,
+				})
 			}
 		}
-		fields = append(fields, sel)
-		multiSelects = append(multiSelects, huh.NewMultiSelect[string]().
-			Title(fmt.Sprintf("%s (%d tools)", name, totalTools)).
-			Options(opts...).
-			Value(&sel.selected))
 	}
 
-	if len(fields) == 0 {
+	if len(rows) == 0 {
 		return selectionResult{}, nil
 	}
 
-	fieldsAny := make([]huh.Field, len(multiSelects))
-	for i, ms := range multiSelects {
-		fieldsAny[i] = ms
-	}
-	form := huh.NewForm(huh.NewGroup(fieldsAny...).
-		Title("Select MCP servers/tools to load for this session").
-		Description("Deselect a row to keep it out of the agent's context"))
-
 	if logger != nil {
-		logger.Info("cheap-context: rendering picker form", "fields", len(fields))
+		logger.Info("cheap-context: rendering picker", "rows", len(rows))
 	}
-	err := form.Run()
+	chosen, ok, err := runChecklistPicker("Select MCP servers/tools to load for this session", rows)
 	if logger != nil {
-		logger.Info("cheap-context: picker form returned", "err", err)
+		logger.Info("cheap-context: picker returned", "ok", ok, "err", err)
 	}
 	if err != nil {
 		return selectionResult{}, fmt.Errorf("cheap-context prompt: %w", err)
 	}
+	if !ok {
+		// User cancelled (q/ctrl+c/esc): treat as if --cheap-context had not
+		// been passed rather than silently dropping every server.
+		result := selectionResult{excludedTools: map[string][]string{}}
+		for _, c := range catalogs {
+			result.kept = append(result.kept, c.server)
+		}
+		return result, nil
+	}
 
 	result := selectionResult{excludedTools: map[string][]string{}}
-	for _, sel := range fields {
-		chosen := make(map[string]bool, len(sel.selected))
-		for _, v := range sel.selected {
-			chosen[v] = true
+	for _, c := range catalogs {
+		name := c.server.Name()
+		if !chosen[rowKey(name, allRowSuffix)] {
+			continue // whole-server row deselected: drop it entirely
 		}
-
-		if !sel.multiGroup {
-			if chosen[sel.serverName] {
-				for _, c := range catalogs {
-					if c.server.Name() == sel.serverName {
-						result.kept = append(result.kept, c.server)
-						break
-					}
-				}
-			}
+		result.kept = append(result.kept, c.server)
+		if !isMultiGroup(c.groups) {
 			continue
 		}
-
-		if !chosen[allRowKey] {
-			continue // top row deselected: drop the whole server
-		}
 		var excluded []string
-		for _, c := range catalogs {
-			if c.server.Name() != sel.serverName {
-				continue
-			}
-			result.kept = append(result.kept, c.server)
-			for _, g := range c.groups {
-				for _, toolName := range g.tools {
-					if !chosen[toolName] {
-						excluded = append(excluded, toolName)
-					}
+		for _, g := range c.groups {
+			for _, toolName := range g.tools {
+				if !chosen[rowKey(name, toolName)] {
+					excluded = append(excluded, toolName)
 				}
 			}
-			break
 		}
 		if len(excluded) > 0 {
-			result.excludedTools[sel.serverName] = excluded
+			result.excludedTools[name] = excluded
 		}
 	}
 	return result, nil
