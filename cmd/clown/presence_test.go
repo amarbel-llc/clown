@@ -13,9 +13,18 @@ import (
 // XDG_STATE_HOME must already point at a temp dir.
 func registerPresenceFixture(t *testing.T, key, group, desc string) {
 	t.Helper()
+	registerPresenceFixtureNamed(t, key, group, desc, "")
+}
+
+// registerPresenceFixtureNamed is registerPresenceFixture plus CLOWN_NAME
+// (clown#169/clown#179) — split out so the many existing callers that don't
+// care about the name stay unchanged.
+func registerPresenceFixtureNamed(t *testing.T, key, group, desc, clownName string) {
+	t.Helper()
 	t.Setenv("CLOWN_SESSION_ID", key)
 	t.Setenv("CLOWN_GROUP_ID", group)
 	t.Setenv("CLOWN_GROUP_DESCRIPTION", desc)
+	t.Setenv("CLOWN_NAME", clownName)
 	if err := jobwake.RegisterPresence(time.Now()); err != nil {
 		t.Fatal(err)
 	}
@@ -74,6 +83,24 @@ func TestPresenceListEmptyGroupSelectsUngrouped(t *testing.T) {
 	all := captureStdout(t, func() int { return presenceList([]string{"--json"}) })
 	if !strings.Contains(all, "inst-bare") || !strings.Contains(all, "inst-grouped") {
 		t.Fatalf("no --group must list all records: %q", all)
+	}
+}
+
+// The human listing (no --json/--quiet) shows "<name> (<sessionKey>)" when a
+// record carries a ClownName (clown#169/clown#179), and falls back to the
+// bare sessionKey — exactly the pre-clown#169 output — when it doesn't, so
+// an older ringmaster build or a pre-allocator session degrades gracefully.
+func TestPresenceListHumanListingShowsClownName(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	registerPresenceFixtureNamed(t, "inst-named", "repo/feature", "has a name", "bozo")
+	registerPresenceFixture(t, "inst-bare", "repo/feature", "no name yet")
+
+	out := captureStdout(t, func() int { return presenceList(nil) })
+	if !strings.Contains(out, "bozo (inst-named)") {
+		t.Fatalf("human listing missing clown-name-prefixed row: %q", out)
+	}
+	if !strings.Contains(out, "  inst-bare  ") {
+		t.Fatalf("human listing missing bare-sessionKey fallback row: %q", out)
 	}
 }
 

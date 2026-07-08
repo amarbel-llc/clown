@@ -25,6 +25,7 @@ import (
 
 	"github.com/amarbel-llc/clown/internal/buildcfg"
 	"github.com/amarbel-llc/clown/internal/clownfile"
+	"github.com/amarbel-llc/clown/internal/clownname"
 	"github.com/amarbel-llc/clown/internal/pluginhost"
 	"github.com/amarbel-llc/clown/internal/profile"
 	"github.com/amarbel-llc/clown/internal/promptwalk"
@@ -257,6 +258,8 @@ func run(rawArgs []string) int {
 			return runSessionsComplete(rawArgs[1:])
 		case "presence":
 			return runPresence(rawArgs[1:])
+		case "list":
+			return runList(rawArgs[1:])
 		case "profile":
 			return runProfileCmd(rawArgs[1:])
 		case "pty-suspend":
@@ -350,6 +353,16 @@ func runWithFlags(flags parsedFlags) int {
 	if desc := clownfile.ResolveEnv(cf.Attach.Description); desc != "" {
 		_ = os.Setenv("CLOWN_GROUP_DESCRIPTION", desc)
 	}
+
+	// clown#169: claim a human-ergonomic clown name (Bozo, Krusty, ...) for
+	// this session, exported the same way as CLOWN_GROUP_DESCRIPTION above so
+	// the presence-registration path (jobwake.RegisterPresence, clown#179)
+	// picks it up with no further threading. The allocator
+	// (internal/clownname) is entirely clown-owned and best-effort: a
+	// locking or presence-read failure still returns a name (see Claim's
+	// doc comment), so this can never fail the launch.
+	flags.clownName = clownname.Claim()
+	_ = os.Setenv("CLOWN_NAME", flags.clownName)
 
 	// clownfile [messaging] (troupe RFC-0001 §1/§8): resolve the XMPP transport
 	// opt-in into the TROUPE_* env and export it on clown's own env so every
@@ -1863,6 +1876,7 @@ Clown flags (must appear before --):
   profile <list|add|edit <name>|remove <name>>
                              Manage the named-profile registry (user profiles.toml)
   sessions-complete          Emit fish-completion lines for sessions
+  list [--json]              List live clown sessions (spinclass-list-shaped table)
   job <start|progress|done|read>
                              Job-wakeup channel producer/read surface (RFC-0009)
   job-watch                  Run the job-wakeup monitor for this session
@@ -2009,6 +2023,13 @@ type parsedFlags struct {
 	// RFC-0014 §2), used for the {group} resume title. Exported as CLOWN_GROUP_ID
 	// so jobwake + the claude subtree resolve the same group; "" ⇒ ungrouped.
 	groupID string
+	// clownName is this session's allocated human-ergonomic name (clown#169,
+	// internal/clownname), used for the {id}-in-title name-aware resolution
+	// (clownfile.Attach.Title's caller). Exported as CLOWN_NAME so
+	// jobwake.RegisterPresence persists it (clown#179) the same way
+	// groupID/CLOWN_GROUP_ID already work. Never empty — Claim always
+	// returns a name.
+	clownName string
 	// resumeHintID is the claude session id to print as the post-exit
 	// `clown resume` hint (RFC-0013 §2.1). Set by decideClaudeSession via
 	// runWithFlags for the claude provider; empty means no hint.

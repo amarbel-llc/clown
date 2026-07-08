@@ -115,7 +115,16 @@ func presenceList(args []string) int {
 			if desc == "" {
 				desc = "-"
 			}
-			fmt.Printf("  %s  %s\n", p.SessionKey, desc)
+			// ClownName (clown#169/clown#179) is shown when present; an older
+			// ringmaster build that hasn't shipped the field yet, or a
+			// session that predates the allocator, simply has "" here — the
+			// SessionKey column alone is still fully informative, matching
+			// this command's pre-clown#169 output exactly.
+			if p.ClownName != "" {
+				fmt.Printf("  %s (%s)  %s\n", p.ClownName, p.SessionKey, desc)
+			} else {
+				fmt.Printf("  %s  %s\n", p.SessionKey, desc)
+			}
 		}
 	}
 	return 0

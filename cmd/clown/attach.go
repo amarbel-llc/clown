@@ -96,6 +96,17 @@ func stringsCutPrefix(s, prefix string) (string, bool) {
 	return "", false
 }
 
+// shouldEmitTitle reports whether maybeReexecMultiplexer should emit the
+// OSC-2 window title for mode (clown#169): both a fresh start and a
+// reattach identify the session to the terminal, so a title is worth
+// setting whenever one begins. ModeSpawn is excluded — it is a
+// non-interactive detached-worker launch (RFC-0014 §5.1) with no terminal
+// to title. Split out as a pure predicate so the mode-gating decision is
+// unit-testable without exec'ing a real multiplexer.
+func shouldEmitTitle(mode clownfile.AttachMode) bool {
+	return mode == clownfile.ModeStart || mode == clownfile.ModeResume
+}
+
 // maybeReexecMultiplexer wraps clown in the configured multiplexer per the
 // clownfile [attach] table (RFC-0013 §1.3). It returns nil when no wrap applies
 // (so the caller proceeds inline); on a successful wrap it runs the multiplexer
@@ -154,8 +165,19 @@ func maybeReexecMultiplexer(cf clownfile.Clownfile, flags parsedFlags, mode clow
 		return err
 	}
 
-	if mode == clownfile.ModeResume {
-		if title := cf.Attach.Title(id, flags.groupID); title != "" {
+	if shouldEmitTitle(mode) {
+		// {id} in the title prefers the human-ergonomic clown-name
+		// (clown#169) over the raw per-instance UUID — readability is the
+		// entire point of naming sessions. The mux session name/routing key
+		// above (id, used for Resolve/attachIDFlag) is UNAFFECTED: this
+		// titleID substitution is display-only. flags.clownName is always
+		// non-empty (Claim never returns ""), so this never degrades to an
+		// empty title.
+		titleID := flags.clownName
+		if titleID == "" {
+			titleID = id
+		}
+		if title := cf.Attach.Title(titleID, flags.groupID); title != "" {
 			// OSC-2 window title; best-effort, before handing the terminal to the mux.
 			fmt.Fprintf(os.Stderr, "\033]2;%s\007", title)
 		}

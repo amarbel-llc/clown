@@ -1,10 +1,12 @@
 package main
 
 import (
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/amarbel-llc/clown/internal/clownfile"
@@ -164,6 +166,67 @@ func TestMaybeReexecSpawnBypassesTTYGate(t *testing.T) {
 	// error. That error IS the proof the gate was passed.
 	if err := maybeReexecMultiplexer(cf, parsedFlags{}, clownfile.ModeSpawn); err == nil {
 		t.Fatal("ModeSpawn no-TTY: want the Resolve error (gate bypassed), got nil (gated out)")
+	}
+}
+
+// The OSC-2 title fires on both a fresh start and a reattach (clown#169) —
+// previously resume-only, which meant a fresh `clown` launch inside a
+// spinclass session never got a title at all. ModeSpawn stays excluded (a
+// detached worker has no terminal to title).
+func TestShouldEmitTitle(t *testing.T) {
+	cases := []struct {
+		mode clownfile.AttachMode
+		want bool
+	}{
+		{clownfile.ModeStart, true},
+		{clownfile.ModeResume, true},
+		{clownfile.ModeSpawn, false},
+	}
+	for _, tc := range cases {
+		if got := shouldEmitTitle(tc.mode); got != tc.want {
+			t.Errorf("shouldEmitTitle(%v) = %v, want %v", tc.mode, got, tc.want)
+		}
+	}
+}
+
+// clown-name preference (clown#169): the OSC-2 title's {id} should resolve to
+// the human-ergonomic clown-name rather than the raw per-instance UUID.
+// maybeReexecMultiplexer writes the title to os.Stderr right before the
+// mux-absent degrade returns nil, so redirecting os.Stderr around the call
+// captures the REAL emitted escape sequence — not a re-derivation of the
+// production logic — proving titleID's preference actually ran.
+func TestMaybeReexecPrefersClownNameForTitle(t *testing.T) {
+	prev := attachedID
+	attachedID = ""
+	t.Cleanup(func() { attachedID = prev })
+	t.Setenv("CLOWN_ATTACH_FORCE", "1")
+
+	cf := clownfile.Clownfile{Attach: clownfile.Attach{
+		Multiplexer: "zmx",
+		Start:       []string{"clown-nonexistent-mux-xyz-do-not-install", "{id}", "{entry}"},
+		ResumeTitle: "{id}",
+	}}
+	flags := parsedFlags{clownName: "bozo", identity: sessionIdentity{Key: "raw-uuid-1234"}}
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	origStderr := os.Stderr
+	os.Stderr = w
+	reexecErr := maybeReexecMultiplexer(cf, flags, clownfile.ModeStart)
+	os.Stderr = origStderr
+	w.Close()
+	captured, _ := io.ReadAll(r)
+
+	if reexecErr != nil {
+		t.Fatalf("mux-absent degrade: want nil, got %v", reexecErr)
+	}
+	if !strings.Contains(string(captured), "\033]2;bozo\007") {
+		t.Fatalf("emitted title = %q, want the OSC-2 sequence for the clown-name %q, not the raw UUID", captured, "bozo")
+	}
+	if strings.Contains(string(captured), "raw-uuid-1234") {
+		t.Fatalf("emitted title leaked the raw UUID instead of preferring the clown-name: %q", captured)
 	}
 }
 
