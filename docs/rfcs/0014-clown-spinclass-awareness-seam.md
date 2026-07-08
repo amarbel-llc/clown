@@ -175,6 +175,25 @@ orchestrator session key:
   only group-bearing surface clown emits); a surviving `{group}` in an argv
   template MUST be rejected as today (RFC-0013 §1.3 rule 2).
 
+##### 3.1.1 Amendment: `sc/{group}/{id}` and clown-name-preferred `{id}` (clown#169)
+
+- The burned-in default `resume-title` is further amended to
+  `"sc/{group}/{id}"` — a literal `sc/` prefix (identifying the session as
+  spinclass-owned) followed by the group and per-instance placeholders, e.g.
+  `sc/clown/deft-elm/bozo` under a spinclass session, or `sc/bozo` for a bare
+  clown (via `{group}`'s existing `{id}` fallback, §3.1).
+- `{id}` in `resume-title` now prefers a resolved human-ergonomic clown-name
+  (clown#169's mutex-allocated name pool, `internal/clownname`) over the raw
+  per-instance UUID when one is allocated for the session, falling back to
+  the UUID otherwise (e.g. for `--naked`, which skips allocation entirely).
+  This preference is a caller-side substitution (`cmd/clown/attach.go`), not
+  a change to `Attach.Title`'s own `{group}`/`{id}` substitution contract —
+  `Title` remains a pure function over whatever strings it is given.
+- This is purely a *display* change: the substituted value never affects the
+  per-instance routing key, the mux session name, or `Resolve`'s `{id}`
+  substitution in argv templates (RFC-0013 §1.3), which continue to use the
+  raw UUID.
+
 ### 4. Presence index (clown → orchestrator)
 
 clown publishes a presence index that the orchestrator consumes for session
@@ -399,7 +418,16 @@ Tests use binary injection via `bats-emo`:
   changes from `"{id}"` (clown#146) to `"{group}"` (§3.1) with `{id}` fallback;
   this is backward-compatible for bare clown (the fallback yields the prior
   value) and an improvement under an orchestrator (human-readable title instead
-  of a minted UUID).
+  of a minted UUID). Amended a second time (§3.1.1, clown#169) to
+  `"sc/{group}/{id}"`, with `{id}` additionally preferring a resolved
+  clown-name over the raw UUID — both changes are display-only and
+  backward-compatible (a session with no allocated name falls back to the
+  prior UUID behavior).
+- **`resume-title` firing condition widened (clown#169).** RFC-0013 §1.3
+  originally specified `resume-title` as emitted "immediately before a
+  `resume` attach" only; it now also fires before a fresh `start` attach, so
+  a new interactive session gets a terminal title too, not only a reattach.
+  RFC-0013 §1.3's field description is updated to match.
 
 ## References
 

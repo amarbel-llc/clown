@@ -169,7 +169,8 @@ flip and the `"posh"` value were amended post-acceptance; spinclass#201.)
 - `resume` — argv template clown re-execs into for a **reattach** (a forwarded
   `--resume`/`-r`/`--session-id`, or `clown resume`).
 - `resume-title` — a string clown emits as an OSC-2 terminal title immediately
-  before a `resume` attach.
+  before a `start` or `resume` attach (amended, clown#169: originally
+  `resume`-only; a fresh launch identifies its session to the terminal too).
 - `spawn` — argv template for launching a **detached** worker session.
 - `spawn-entry` — the harness argv a spawned worker boots as its `{entry}`.
 - `spawn-window` — a fire-and-forget terminal-window opener for a spawned worker.
