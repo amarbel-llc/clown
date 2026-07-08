@@ -49,6 +49,27 @@ override with `CLOWN_PROVIDER` env var, or pin one per-directory via a
   will compile fine under `go build` but fail `nix build` with a
   misleading "undefined: X" or "cannot find package" error. `git add` the
   new path before building (staging is enough; no commit needed).
+- **`huh` (`charmbracelet/huh`) can't do live cross-field cascades or
+  seamless multi-field arrow-key scrolling — reach for a bare
+  `charmbracelet/bubbles/list` program instead.** `huh.MultiSelect`'s
+  Up/Down cursor clamps at that field's own option-list boundary and only
+  crosses to the next field on Enter/Tab (`field_multiselect.go`'s
+  `Up`/`Down` cases call `max(cursor-1, 0)`/`min(cursor+1, len-1)`, no
+  wraparound signal), so packing several `MultiSelect` fields into one
+  `huh.Group` makes j/k/arrows stop dead at each field instead of
+  scrolling through everything. `huh` also exposes no `onChange`/`onToggle`
+  hook — only a post-submit `Validate` — so "toggling this checkbox should
+  immediately flip these other checkboxes" (a parent/children cascade) is
+  not expressible with `huh` at all. `cmd/clown/cheapcontext_picker.go`'s
+  `--cheap-context` picker hit both limits and was rewritten as a bare
+  `bubbles/list` program: a custom `list.Item` type carries whatever extra
+  state you need (checked, parent/child links), and a custom
+  `list.ItemDelegate.Update` runs *before* the list consumes a keypress —
+  that's the interception point `huh` doesn't have. Keep using `huh` for
+  simple, single-interaction forms (confirm prompts, the profile add/edit
+  form in `cmd/clown/profileform.go`); reach for `bubbles/list` the moment
+  a picker needs cross-row side effects or one continuously-scrollable
+  list spanning what would otherwise be several `huh` fields.
 
 ## Build commands
 
