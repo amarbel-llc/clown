@@ -41,7 +41,7 @@ type toolGroup struct {
 // Neither is an MCP protocol field — tools/list carries no grouping
 // metadata (confirmed by research) — so this stays a client-side
 // heuristic; a formal clown-plugin-protocol toolGroups declaration is
-// deferred to a follow-up issue rather than built here.
+// deferred to clown#175 rather than built here.
 //
 // A name matching neither convention falls into the ungrouped bucket
 // (group name ""). Group order is first-seen in tools' order; within a
@@ -161,12 +161,6 @@ func selectServers(catalogs []serverCatalog, logger *slog.Logger) (selectionResu
 	if len(catalogs) == 0 {
 		return selectionResult{}, nil
 	}
-	if logger != nil {
-		for _, c := range catalogs {
-			logger.Info("cheap-context: server catalog", "server", c.server.Name(),
-				"groups", len(c.groups), "multi_group", isMultiGroup(c.groups))
-		}
-	}
 
 	var rows []checklistRow
 	for _, c := range catalogs {
@@ -218,13 +212,7 @@ func selectServers(catalogs []serverCatalog, logger *slog.Logger) (selectionResu
 		return selectionResult{}, nil
 	}
 
-	if logger != nil {
-		logger.Info("cheap-context: rendering picker", "rows", len(rows))
-	}
 	chosen, ok, err := runChecklistPicker("Select MCP servers/tools to load for this session", rows)
-	if logger != nil {
-		logger.Info("cheap-context: picker returned", "ok", ok, "err", err)
-	}
 	if err != nil {
 		return selectionResult{}, fmt.Errorf("cheap-context prompt: %w", err)
 	}
@@ -293,7 +281,6 @@ func applyCheapContextSelection(
 		byName[d.Name()] = d
 	}
 
-	logger.Info("cheap-context: fetching tool catalogs", "server_count", len(started))
 	catalogs := make([]serverCatalog, 0, len(started))
 	serversByName := make(map[string]*pluginhost.ManagedServer, len(started))
 	for _, srv := range started {
@@ -309,10 +296,8 @@ func applyCheapContextSelection(
 		}
 		catalogs = append(catalogs, serverCatalog{server: d, groups: groups})
 	}
-	logger.Info("cheap-context: catalogs fetched; entering picker", "catalog_count", len(catalogs))
 
 	result, err := selectServers(catalogs, logger)
-	logger.Info("cheap-context: picker returned", "err", err)
 	if err != nil {
 		return nil, err
 	}
@@ -321,13 +306,15 @@ func applyCheapContextSelection(
 	for _, d := range result.kept {
 		keptNames[d.Name()] = true
 	}
+	stopped := 0
 	for name, srv := range serversByName {
 		if !keptNames[name] {
-			logger.Info("cheap-context: stopping deselected server", "server", name)
 			srv.Stop()
+			stopped++
 		}
 	}
 
+	pushedExclusions, pushFailures := 0, 0
 	for name, excludedTools := range result.excludedTools {
 		srv, ok := serversByName[name]
 		if !ok {
@@ -338,11 +325,15 @@ func applyCheapContextSelection(
 			// tools stay visible, not that the launch fails.
 			logger.Warn("cheap-context: failed to push tool exclusions; server keeps its full catalog",
 				"server", name, "err", err)
+			pushFailures++
 		} else {
-			logger.Info("cheap-context: excluded tools from server", "server", name, "count", len(excludedTools))
+			pushedExclusions++
 		}
 	}
 
+	logger.Info("cheap-context: selection applied",
+		"catalogs_fetched", len(catalogs), "servers_stopped", stopped,
+		"servers_with_exclusions", pushedExclusions, "exclusion_push_failures", pushFailures)
 	return result.kept, nil
 }
 
