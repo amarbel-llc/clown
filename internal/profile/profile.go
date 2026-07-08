@@ -87,6 +87,17 @@ func Validate(p Profile) error {
 			return fmt.Errorf("profile %q: backend gateway requires token", p.Name)
 		}
 	}
+	// ContextServers of length zero (as opposed to nil) is a value that can
+	// never round-trip through Save/Load: the "context_servers,omitempty"
+	// tag makes BurntSushi/toml drop ANY zero-length slice on write, nil or
+	// not, so it would come back as nil on the next Load — silently
+	// indistinguishable from "no saved --cheap-context selection at all."
+	// Reject it here, at the one place every caller that constructs or
+	// mutates a Profile is expected to pass through, rather than requiring
+	// each call site to remember this hazard individually.
+	if p.ContextServers != nil && len(p.ContextServers) == 0 {
+		return fmt.Errorf("profile %q: context_servers must be nil or non-empty, not an empty list (an empty saved selection can never be told apart from no saved selection)", p.Name)
+	}
 	return nil
 }
 

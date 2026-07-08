@@ -165,6 +165,34 @@ func TestValidateClaudeGateway(t *testing.T) {
 	}
 }
 
+func TestValidate_RejectsEmptyButNonNilContextServers(t *testing.T) {
+	// An empty (len==0), non-nil ContextServers can never round-trip through
+	// Save/Load: BurntSushi/toml's "context_servers,omitempty" tag drops ANY
+	// zero-length slice on write, so it would silently come back as nil on
+	// the next Load — indistinguishable from "no saved selection." Validate
+	// is the one place every caller constructing/mutating a Profile is
+	// expected to pass through, so this rejection protects every caller,
+	// not just cmd/clown/cheapcontext.go's promptSaveSelection.
+	p := profile.Profile{Name: "empty", Provider: "claude", Backend: "anthropic", ContextServers: []string{}}
+	if err := profile.Validate(p); err == nil {
+		t.Fatal("expected an error for empty-but-non-nil ContextServers")
+	}
+}
+
+func TestValidate_NilContextServersIsFine(t *testing.T) {
+	p := profile.Profile{Name: "plain", Provider: "claude", Backend: "anthropic"}
+	if err := profile.Validate(p); err != nil {
+		t.Fatalf("nil ContextServers (no saved selection) should validate: %v", err)
+	}
+}
+
+func TestValidate_NonEmptyContextServersIsFine(t *testing.T) {
+	p := profile.Profile{Name: "trimmed", Provider: "claude", Backend: "anthropic", ContextServers: []string{"moxy/moxy"}}
+	if err := profile.Validate(p); err != nil {
+		t.Fatalf("non-empty ContextServers should validate: %v", err)
+	}
+}
+
 func TestBackendsForProvider(t *testing.T) {
 	got := profile.Backends("claude")
 	want := []string{"anthropic", "gateway", "local"}

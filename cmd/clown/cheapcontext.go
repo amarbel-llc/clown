@@ -463,19 +463,6 @@ func pushExcludeTools(ctx context.Context, srv *pluginhost.ManagedServer, names 
 	return nil
 }
 
-// selectionContextFields converts a confirmed selectionResult into the two
-// profile.Profile fields that persist it: ContextServers (every kept
-// server's Name()) and ContextExcluded (copied as-is — already keyed the
-// same way). Shared by promptSaveSelection so the "what does 'save this
-// selection' mean as profile fields" logic lives in one place.
-func selectionContextFields(result selectionResult) ([]string, map[string][]string) {
-	servers := make([]string, len(result.kept))
-	for i, d := range result.kept {
-		servers[i] = d.Name()
-	}
-	return servers, result.excludedTools
-}
-
 // promptSaveSelection offers to persist a freshly-confirmed --cheap-context
 // selection into a named profile, so a later `--cheap-context --profile
 // <name>` launch can replay it via selectionFromSavedProfile instead of
@@ -489,15 +476,13 @@ func selectionContextFields(result selectionResult) ([]string, map[string][]stri
 // fail the launch that already has a valid, applied selection.
 func promptSaveSelection(result selectionResult) error {
 	if len(result.kept) == 0 {
-		// A profile.Profile.ContextServers of length zero is indistinguishable
-		// on disk from "no saved selection at all": BurntSushi/toml's
-		// omitempty drops any zero-length slice on write (nil or not), so a
-		// saved "everything deselected" choice would silently vanish and
-		// read back as unset on the next launch — the opposite of what was
-		// saved, with no error. Refuse up front rather than write a profile
-		// that can never round-trip its own intent. Deselecting every server
-		// also has no meaningful "replay" semantics anyway: there would be
-		// nothing left to apply the exclusion list to.
+		// Fail fast, before either interactive prompt below runs: an empty
+		// ContextServers can never round-trip through Save/Load (see
+		// profile.Validate's matching check, the durable backstop for every
+		// caller — this early return is purely so the user doesn't answer
+		// two prompts before hitting that same rejection). Deselecting every
+		// server also has no meaningful "replay" semantics anyway: there
+		// would be nothing left to apply an exclusion list to.
 		return fmt.Errorf("nothing to save: every server was deselected")
 	}
 
@@ -534,7 +519,10 @@ func promptSaveSelection(result selectionResult) error {
 	}
 	name = strings.TrimSpace(name)
 
-	servers, excluded := selectionContextFields(result)
+	servers := make([]string, len(result.kept))
+	for i, d := range result.kept {
+		servers[i] = d.Name()
+	}
 
 	var target profile.Profile
 	for _, p := range merged {
@@ -553,18 +541,22 @@ func promptSaveSelection(result selectionResult) error {
 		target = profile.Profile{Name: name, Provider: "claude", Backend: "anthropic"}
 	}
 	target.ContextServers = servers
-	target.ContextExcluded = excluded
+	target.ContextExcluded = result.excludedTools
 
-	if err := profile.Validate(target); err != nil {
-		return fmt.Errorf("profile %q: %w", name, err)
-	}
-	if err := profile.Save(destPath, profile.Upsert(user, target)); err != nil {
-		return err
+	// Reuse saveProfileForm's Validate -> Upsert -> Save -> print sequence
+	// (cmd/clown/profileform.go) rather than re-deriving it here — v.Confirm
+	// is forced true since the earlier huh.Confirm in this function already
+	// captured that decision; editOriginal is empty because this path never
+	// renames a profile (name IS both the lookup key and the saved name).
+	v := valuesFromProfile(target)
+	v.Confirm = true
+	if _, err := saveProfileForm(v, user, "", destPath); err != nil {
+		return fmt.Errorf("cheap-context: %w", err)
 	}
 	if !existingNames[name] {
-		fmt.Printf("cheap-context: saved selection to new profile %q (%s)\n", name, destPath)
+		fmt.Printf("cheap-context: saved selection to new profile %q\n", name)
 	} else {
-		fmt.Printf("cheap-context: saved selection to profile %q (%s)\n", name, destPath)
+		fmt.Printf("cheap-context: saved selection to profile %q\n", name)
 	}
 	return nil
 }
