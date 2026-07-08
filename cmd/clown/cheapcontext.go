@@ -120,6 +120,14 @@ func rowKey(serverName, rowID string) string {
 // individual tool rows are checked (mirrors v1's whole-server semantics).
 const allRowSuffix = "\x00all"
 
+// groupRowKey builds the row key for an intermediate moxin/group row nested
+// under a server (Depth 1, between the server row and its individual tool
+// rows). Prefixed with "\x00group\x00" so a group named e.g. "all" can
+// never collide with allRowSuffix or a same-named tool.
+func groupRowKey(serverName, groupName string) string {
+	return rowKey(serverName, "\x00group\x00"+groupName)
+}
+
 // selectServers renders --cheap-context's picker as ONE screen and ONE
 // continuously-scrollable list: a bare bubbles/list program
 // (cmd/clown/cheapcontext_picker.go), not a huh.Form. Two huh limitations
@@ -172,20 +180,35 @@ func selectServers(catalogs []serverCatalog, logger *slog.Logger) (selectionResu
 		for _, g := range c.groups {
 			totalTools += len(g.tools)
 		}
-		parentKey := rowKey(name, allRowSuffix)
+		serverKey := rowKey(name, allRowSuffix)
 		rows = append(rows, checklistRow{
-			Key:      parentKey,
+			Key:      serverKey,
 			Label:    fmt.Sprintf("%s (%d tools)", name, totalTools),
 			Checked:  true,
 			IsParent: true,
+			Depth:    0,
 		})
 		for _, g := range c.groups {
+			groupLabel := g.name
+			if groupLabel == "" {
+				groupLabel = "(ungrouped)"
+			}
+			groupKey := groupRowKey(name, g.name)
+			rows = append(rows, checklistRow{
+				Key:       groupKey,
+				Label:     fmt.Sprintf("%s (%d tools)", groupLabel, len(g.tools)),
+				Checked:   true,
+				IsParent:  true,
+				ParentKey: serverKey,
+				Depth:     1,
+			})
 			for _, toolName := range g.tools {
 				rows = append(rows, checklistRow{
 					Key:       rowKey(name, toolName),
 					Label:     toolName,
 					Checked:   true,
-					ParentKey: parentKey,
+					ParentKey: groupKey,
+					Depth:     2,
 				})
 			}
 		}

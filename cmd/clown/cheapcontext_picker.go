@@ -10,10 +10,11 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// checklistRow is one row of the --cheap-context picker: either a
-// whole-server "parent" row (IsParent true, ParentKey empty) or an
-// individual-tool "child" row nested under a parent (IsParent false,
-// ParentKey set to its parent's Key). Checked is the row's own live
+// checklistRow is one row of the --cheap-context picker, at any depth: a
+// whole-server row (Depth 0), a moxin/group row nested under it (Depth 1),
+// or an individual-tool row nested under a group (Depth 2). IsParent marks
+// a row that owns children (server and group rows); ParentKey is the
+// immediate parent's Key, empty at the root. Checked is the row's own live
 // checkbox state, mutated in place by checklistDelegate.Update — this is
 // the state a huh.MultiSelect can't expose a hook to mutate, which is why
 // this picker is a bare bubbles/list program instead of a huh.Form.
@@ -22,15 +23,16 @@ type checklistRow struct {
 	Label     string
 	Checked   bool
 	IsParent  bool
-	ParentKey string // empty for a parent or an ungrouped flat row
+	ParentKey string // empty at the root (a server row, or an ungrouped flat row)
+	Depth     int    // 0 = server, 1 = group, 2 = individual tool
 }
 
 func (r checklistRow) FilterValue() string { return r.Label }
 
-// checklistDelegate renders one row per line (checkbox + label, indented
-// for a child row) and intercepts the toggle key itself — the actual
-// parent/child cascade lives here, not in bubbles/list's own Update, since
-// list has no notion of parent/child rows.
+// checklistDelegate renders one row per line (checkbox + label, indented by
+// Depth) and intercepts the toggle key itself — the actual cascade lives
+// here, not in bubbles/list's own Update, since list has no notion of
+// parent/child rows.
 type checklistDelegate struct{}
 
 func (checklistDelegate) Height() int  { return 1 }
@@ -50,10 +52,7 @@ func (checklistDelegate) Render(w io.Writer, m list.Model, index int, item list.
 	if row.Checked {
 		box = "[x]"
 	}
-	indent := ""
-	if row.ParentKey != "" {
-		indent = "    "
-	}
+	indent := strings.Repeat("    ", row.Depth)
 	line := fmt.Sprintf("%s%s %s", indent, box, row.Label)
 	if index == m.Index() {
 		line = checklistSelectedStyle.Render("> " + line)
@@ -88,18 +87,28 @@ func (checklistDelegate) Update(msg tea.Msg, m *list.Model) tea.Cmd {
 	_ = m.SetItem(index, row)
 
 	if row.IsParent {
-		// Cascade: every child of this parent flips to the parent's new
-		// state, live, so the user sees the whole section toggle together.
-		for i, it := range items {
-			child, ok := it.(checklistRow)
-			if !ok || child.ParentKey != row.Key {
-				continue
-			}
-			child.Checked = row.Checked
-			_ = m.SetItem(i, child)
-		}
+		cascadeChecklistState(m, items, row.Key, row.Checked)
 	}
 	return nil
+}
+
+// cascadeChecklistState recursively flips every descendant of parentKey to
+// checked, live, so toggling a server or an intermediate group cascades all
+// the way down to individual tools (not just its immediate children) —
+// e.g. unchecking "moxy" flips every moxin group AND every tool under
+// every group, in one keypress.
+func cascadeChecklistState(m *list.Model, items []list.Item, parentKey string, checked bool) {
+	for i, it := range items {
+		child, ok := it.(checklistRow)
+		if !ok || child.ParentKey != parentKey {
+			continue
+		}
+		child.Checked = checked
+		_ = m.SetItem(i, child)
+		if child.IsParent {
+			cascadeChecklistState(m, items, child.Key, checked)
+		}
+	}
 }
 
 // checklistModel is the bare bubbletea program wrapping list.Model for the

@@ -109,3 +109,64 @@ func TestChecklistDelegate_TogglePlainRowDoesNotCascade(t *testing.T) {
 		t.Errorf("plain row should be unchecked after toggle")
 	}
 }
+
+// threeLevelRows builds a server -> group -> tool tree matching what
+// selectServers now produces for a multi-group server (moxy): the server
+// row (Depth 0), one group row per moxin (Depth 1), and individual tool
+// rows under each group (Depth 2).
+func threeLevelRows() []checklistRow {
+	serverKey := "moxy\x00all"
+	folioKey := "moxy\x00\x00group\x00folio"
+	gritKey := "moxy\x00\x00group\x00grit"
+	return []checklistRow{
+		{Key: serverKey, Label: "moxy (3 tools)", Checked: true, IsParent: true, Depth: 0},
+		{Key: folioKey, Label: "folio (2 tools)", Checked: true, IsParent: true, ParentKey: serverKey, Depth: 1},
+		{Key: "moxy\x00folio.read", Label: "folio.read", Checked: true, ParentKey: folioKey, Depth: 2},
+		{Key: "moxy\x00folio.glob", Label: "folio.glob", Checked: true, ParentKey: folioKey, Depth: 2},
+		{Key: gritKey, Label: "grit (1 tools)", Checked: true, IsParent: true, ParentKey: serverKey, Depth: 1},
+		{Key: "moxy\x00grit.status", Label: "grit.status", Checked: true, ParentKey: gritKey, Depth: 2},
+	}
+}
+
+func TestChecklistDelegate_ToggleServerCascadesThroughGroupsToTools(t *testing.T) {
+	m := newTestChecklist(threeLevelRows())
+
+	toggleAt(t, &m, 0) // uncheck the server row
+
+	for _, r := range rowsOf(m) {
+		if r.Checked {
+			t.Errorf("row %q still checked after server-level toggle off, want fully cascaded off", r.Key)
+		}
+	}
+
+	toggleAt(t, &m, 0) // re-check the server row
+
+	for _, r := range rowsOf(m) {
+		if !r.Checked {
+			t.Errorf("row %q still unchecked after server-level toggle on, want fully cascaded on", r.Key)
+		}
+	}
+}
+
+func TestChecklistDelegate_ToggleGroupCascadesToItsToolsOnly(t *testing.T) {
+	m := newTestChecklist(threeLevelRows())
+
+	toggleAt(t, &m, 1) // uncheck the "folio" group row
+
+	rows := rowsOf(m)
+	if !rows[0].Checked {
+		t.Errorf("server row should stay checked when only one group is toggled")
+	}
+	if rows[1].Checked {
+		t.Errorf("toggled group row should be unchecked")
+	}
+	if rows[2].Checked || rows[3].Checked {
+		t.Errorf("folio's tools should cascade off with their group: got %+v, %+v", rows[2], rows[3])
+	}
+	if !rows[4].Checked {
+		t.Errorf("untouched sibling group (grit) should remain checked")
+	}
+	if !rows[5].Checked {
+		t.Errorf("grit's tool should be unaffected by folio's toggle")
+	}
+}
