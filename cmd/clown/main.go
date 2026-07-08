@@ -429,6 +429,16 @@ func runWithFlags(flags parsedFlags) int {
 			fmt.Fprintf(os.Stderr, "clown: %v\n", err)
 			return 1
 		}
+		// Unlike applyNamedProfile's env/--model injection (pure launch-time
+		// input, applied here before any plugin discovery), a saved
+		// --cheap-context selection is applied much later — inside
+		// runManaged, after the MCP servers it references are actually
+		// running and their live tool catalogs are known. Carry the
+		// resolved profile itself through flags (already threaded down the
+		// full runClaude -> runWithPluginHost -> runManaged chain) so that
+		// later application point can reach it without re-resolving
+		// --profile from scratch.
+		flags.cheapContextProfile = selectedProfile
 	}
 
 	cliPath, err := resolveProvider(flags.provider)
@@ -1270,7 +1280,7 @@ func runWithPluginHost(executor Executor, args []string, pluginDirs []string, fl
 		return runProvider(executor, fullArgs, logger, flags.ptyOpts)
 	}
 
-	return runManaged(host, discovered, executor, args, pluginDirs, skipFailed, verbose, logger, appendFile, flags.ptyOpts, cheapContextActive, allDiscoveredDirs)
+	return runManaged(host, discovered, executor, args, pluginDirs, skipFailed, verbose, logger, appendFile, flags.ptyOpts, cheapContextActive, allDiscoveredDirs, flags.cheapContextProfile)
 }
 
 // runProvider executes a provider as a subprocess, forwarding stdio
@@ -1445,6 +1455,7 @@ func runManaged(
 	ptyOpts ptysuspend.Options,
 	cheapContextActive bool,
 	allDiscoveredDirs map[string]bool,
+	cheapContextProfile *profile.Profile,
 ) int {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1512,7 +1523,7 @@ func runManaged(
 	// like moxy has no clown-owned proxy in its request path at all, so its
 	// per-tool selection currently has no effect (clown#175).
 	if cheapContextActive {
-		filtered, err := applyCheapContextSelection(ctx, host, discovered, report.Started, logger)
+		filtered, err := applyCheapContextSelection(ctx, host, discovered, report.Started, logger, cheapContextProfile)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "clown: %v\n", err)
 			logger.Error("cheap-context selection failed", "err", err)
@@ -1944,6 +1955,15 @@ type parsedFlags struct {
 	// design — a non-interactive default would just create a second code
 	// path to reject.
 	cheapContext bool
+	// cheapContextProfile is the resolved --profile (or clownfile pin /
+	// interactive profile picker choice), set in run() alongside
+	// applyNamedProfile. When it carries a saved selection
+	// (profile.ContextServers/ContextExcluded), applyCheapContextSelection
+	// applies that selection directly instead of showing the interactive
+	// picker — see cmd/clown/cheapcontext.go. nil when no profile was
+	// resolved, or when the resolved profile has no saved selection (in
+	// which case cheapContext still shows the picker as before).
+	cheapContextProfile *profile.Profile
 	tent         bool
 	// ptyOpts is the resolved escape-to-shell pty proxy config from the clownfile
 	// [attach] table (pty-suspend / escape-key / escape-command). Sourced in

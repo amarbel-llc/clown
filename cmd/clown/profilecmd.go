@@ -58,7 +58,7 @@ func formatProfileList(builtin, user []profile.Profile) string {
 	}
 	var buf strings.Builder
 	w := tabwriter.NewWriter(&buf, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "NAME\tDISPLAY\tPROVIDER / BACKEND\tSOURCE")
+	fmt.Fprintln(w, "NAME\tDISPLAY\tPROVIDER / BACKEND\tSOURCE\tCONTEXT")
 	for _, p := range profile.Merge(builtin, user) {
 		source := "builtin"
 		switch {
@@ -67,7 +67,11 @@ func formatProfileList(builtin, user []profile.Profile) string {
 		case userNames[p.Name]:
 			source = "user"
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s / %s\t%s\n", p.Name, p.Display, p.Provider, p.Backend, source)
+		context := "-"
+		if p.ContextServers != nil {
+			context = fmt.Sprintf("%d server(s)", len(p.ContextServers))
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s / %s\t%s\t%s\n", p.Name, p.Display, p.Provider, p.Backend, source, context)
 	}
 	_ = w.Flush()
 	return buf.String()

@@ -12,7 +12,12 @@ import (
 )
 
 // profileFormValues holds the huh field bindings for the add/edit form;
-// toProfile trims every field into the stored profile.
+// toProfile trims every field into the stored profile. Env, ContextServers,
+// and ContextExcluded are not editable through this form (no field prompts
+// for them) but are carried through as opaque passthrough values so that
+// editing a profile's name/provider/model/etc. via `clown profile edit`
+// does not silently wipe a --cheap-context selection (or an Env map)
+// someone set another way (--cheap-context's save prompt, or by hand).
 type profileFormValues struct {
 	Name     string
 	Display  string
@@ -22,29 +27,39 @@ type profileFormValues struct {
 	URL      string
 	Token    string
 	Confirm  bool
+
+	env             map[string]string
+	contextServers  []string
+	contextExcluded map[string][]string
 }
 
 func (v profileFormValues) toProfile() profile.Profile {
 	return profile.Profile{
-		Name:     strings.TrimSpace(v.Name),
-		Display:  strings.TrimSpace(v.Display),
-		Provider: strings.TrimSpace(v.Provider),
-		Backend:  strings.TrimSpace(v.Backend),
-		Model:    strings.TrimSpace(v.Model),
-		URL:      strings.TrimSpace(v.URL),
-		Token:    strings.TrimSpace(v.Token),
+		Name:            strings.TrimSpace(v.Name),
+		Display:         strings.TrimSpace(v.Display),
+		Provider:        strings.TrimSpace(v.Provider),
+		Backend:         strings.TrimSpace(v.Backend),
+		Model:           strings.TrimSpace(v.Model),
+		URL:             strings.TrimSpace(v.URL),
+		Token:           strings.TrimSpace(v.Token),
+		Env:             v.env,
+		ContextServers:  v.contextServers,
+		ContextExcluded: v.contextExcluded,
 	}
 }
 
 func valuesFromProfile(p profile.Profile) profileFormValues {
 	return profileFormValues{
-		Name:     p.Name,
-		Display:  p.Display,
-		Provider: p.Provider,
-		Backend:  p.Backend,
-		Model:    p.Model,
-		URL:      p.URL,
-		Token:    p.Token,
+		Name:            p.Name,
+		Display:         p.Display,
+		Provider:        p.Provider,
+		Backend:         p.Backend,
+		Model:           p.Model,
+		URL:             p.URL,
+		Token:           p.Token,
+		env:             p.Env,
+		contextServers:  p.ContextServers,
+		contextExcluded: p.ContextExcluded,
 	}
 }
 

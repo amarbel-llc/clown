@@ -56,3 +56,33 @@ func TestFormValuesToProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestEditRoundTripPreservesUneditableFields guards against the exact
+// failure mode profileFormValues.toProfile/valuesFromProfile must avoid:
+// editing a profile's form-visible fields (name/provider/model/etc.) via
+// `clown profile edit` silently wiping Env or a saved --cheap-context
+// selection, since the huh form has no field for either.
+func TestEditRoundTripPreservesUneditableFields(t *testing.T) {
+	original := profile.Profile{
+		Name: "trimmed", Provider: "claude", Backend: "anthropic",
+		Env:             map[string]string{"FOO": "bar"},
+		ContextServers:  []string{"moxy/moxy"},
+		ContextExcluded: map[string][]string{"moxy/moxy": {"grit.status"}},
+	}
+	v := valuesFromProfile(original)
+	// Simulate the form editing only Display (the form has no Env/Context
+	// fields at all, so v's env/contextServers/contextExcluded are left
+	// exactly as valuesFromProfile set them).
+	v.Display = "Trimmed (edited)"
+	got := v.toProfile()
+
+	if got.Env["FOO"] != "bar" {
+		t.Errorf("Env dropped across edit round trip: %#v", got.Env)
+	}
+	if len(got.ContextServers) != 1 || got.ContextServers[0] != "moxy/moxy" {
+		t.Errorf("ContextServers dropped across edit round trip: %#v", got.ContextServers)
+	}
+	if len(got.ContextExcluded["moxy/moxy"]) != 1 || got.ContextExcluded["moxy/moxy"][0] != "grit.status" {
+		t.Errorf("ContextExcluded dropped across edit round trip: %#v", got.ContextExcluded)
+	}
+}

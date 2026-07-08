@@ -20,3 +20,28 @@ func TestFormatProfileList(t *testing.T) {
 		}
 	}
 }
+
+func TestFormatProfileList_ContextColumn(t *testing.T) {
+	user := []profile.Profile{
+		{Name: "plain", Provider: "claude", Backend: "anthropic"},
+		{Name: "trimmed", Provider: "claude", Backend: "anthropic",
+			ContextServers: []string{"moxy/moxy", "bob/caldav"}},
+	}
+	out := formatProfileList(nil, user)
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	var plainLine, trimmedLine string
+	for _, l := range lines {
+		if strings.HasPrefix(l, "plain\t") || strings.Contains(l, "plain ") {
+			plainLine = l
+		}
+		if strings.HasPrefix(l, "trimmed\t") || strings.Contains(l, "trimmed ") {
+			trimmedLine = l
+		}
+	}
+	if !strings.Contains(plainLine, "-") {
+		t.Errorf("profile with no saved selection should show '-' in CONTEXT column: %q", plainLine)
+	}
+	if !strings.Contains(trimmedLine, "2 server(s)") {
+		t.Errorf("profile with a saved selection should show its server count: %q", trimmedLine)
+	}
+}

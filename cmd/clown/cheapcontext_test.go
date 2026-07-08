@@ -1,10 +1,12 @@
 package main
 
 import (
+	"log/slog"
 	"reflect"
 	"testing"
 
 	"github.com/amarbel-llc/clown/internal/pluginhost"
+	"github.com/amarbel-llc/clown/internal/profile"
 )
 
 func TestGroupToolsByPrefix(t *testing.T) {
@@ -83,6 +85,106 @@ func TestGroupToolsByPrefix(t *testing.T) {
 				t.Errorf("groupToolsByPrefix() = %#v, want %#v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestSelectionFromSavedProfile(t *testing.T) {
+	moxy := pluginhost.DiscoveredServer{PluginName: "moxy", ServerName: "moxy"}
+	caldav := pluginhost.DiscoveredServer{PluginName: "bob", ServerName: "caldav"}
+	catalogs := []serverCatalog{
+		{server: moxy, groups: []toolGroup{
+			{name: "folio", tools: []string{"folio.read", "folio.glob"}},
+			{name: "grit", tools: []string{"grit.status"}},
+		}},
+		{server: caldav, groups: nil},
+	}
+
+	t.Run("nil profile falls back to picker", func(t *testing.T) {
+		_, ok := selectionFromSavedProfile(nil, catalogs)
+		if ok {
+			t.Fatal("nil profile should report ok=false (fall back to interactive picker)")
+		}
+	})
+
+	t.Run("profile with no saved selection falls back to picker", func(t *testing.T) {
+		_, ok := selectionFromSavedProfile(&profile.Profile{Name: "plain"}, catalogs)
+		if ok {
+			t.Fatal("profile with nil ContextServers should report ok=false")
+		}
+	})
+
+	t.Run("keeps only saved servers, drops the rest", func(t *testing.T) {
+		saved := &profile.Profile{Name: "trimmed", ContextServers: []string{"moxy/moxy"}}
+		result, ok := selectionFromSavedProfile(saved, catalogs)
+		if !ok {
+			t.Fatal("expected ok=true for a profile with a saved selection")
+		}
+		if len(result.kept) != 1 || result.kept[0].Name() != "moxy/moxy" {
+			t.Fatalf("kept = %#v, want just moxy/moxy", result.kept)
+		}
+	})
+
+	t.Run("applies exclusions for tools present in the live catalog", func(t *testing.T) {
+		saved := &profile.Profile{
+			Name:            "trimmed",
+			ContextServers:  []string{"moxy/moxy"},
+			ContextExcluded: map[string][]string{"moxy/moxy": {"grit.status"}},
+		}
+		result, ok := selectionFromSavedProfile(saved, catalogs)
+		if !ok {
+			t.Fatal("expected ok=true")
+		}
+		if !reflect.DeepEqual(result.excludedTools["moxy/moxy"], []string{"grit.status"}) {
+			t.Errorf("excludedTools = %#v, want [grit.status]", result.excludedTools)
+		}
+	})
+
+	t.Run("silently drops a saved tool name no longer in the live catalog", func(t *testing.T) {
+		saved := &profile.Profile{
+			Name:           "trimmed",
+			ContextServers: []string{"moxy/moxy"},
+			ContextExcluded: map[string][]string{
+				"moxy/moxy": {"grit.status", "folio.renamed_or_removed"},
+			},
+		}
+		result, ok := selectionFromSavedProfile(saved, catalogs)
+		if !ok {
+			t.Fatal("expected ok=true")
+		}
+		if !reflect.DeepEqual(result.excludedTools["moxy/moxy"], []string{"grit.status"}) {
+			t.Errorf("excludedTools = %#v, want only [grit.status] (stale name silently dropped)", result.excludedTools)
+		}
+	})
+
+	t.Run("silently drops a saved server no longer discovered", func(t *testing.T) {
+		saved := &profile.Profile{
+			Name:           "trimmed",
+			ContextServers: []string{"moxy/moxy", "removed/server"},
+		}
+		result, ok := selectionFromSavedProfile(saved, catalogs)
+		if !ok {
+			t.Fatal("expected ok=true")
+		}
+		if len(result.kept) != 1 || result.kept[0].Name() != "moxy/moxy" {
+			t.Fatalf("kept = %#v, want just moxy/moxy (removed/server silently dropped)", result.kept)
+		}
+	})
+}
+
+func TestSelectServers_SavedSelectionSkipsPickerAndTTYRequirement(t *testing.T) {
+	// selectServers normally requires an interactive TTY (pluginhost.IsInteractive).
+	// A saved-selection replay must work even when that's false, since test
+	// processes are never interactive — this exercises exactly that path.
+	moxy := pluginhost.DiscoveredServer{PluginName: "moxy", ServerName: "moxy"}
+	catalogs := []serverCatalog{{server: moxy, groups: []toolGroup{{name: "folio", tools: []string{"folio.read"}}}}}
+	saved := &profile.Profile{Name: "trimmed", ContextServers: []string{"moxy/moxy"}}
+
+	result, err := selectServers(catalogs, slog.Default(), saved)
+	if err != nil {
+		t.Fatalf("selectServers with a saved selection should not require a TTY: %v", err)
+	}
+	if len(result.kept) != 1 || result.kept[0].Name() != "moxy/moxy" {
+		t.Fatalf("kept = %#v, want just moxy/moxy", result.kept)
 	}
 }
 

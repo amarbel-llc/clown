@@ -188,3 +188,26 @@ func TestEnvDecodes(t *testing.T) {
 		t.Fatalf("env not decoded: %#v", f.Profile[0])
 	}
 }
+
+func TestContextSelectionDecodes(t *testing.T) {
+	var f struct {
+		Profile []profile.Profile `toml:"profile"`
+	}
+	src := `
+[[profile]]
+name = "trimmed"
+context_servers = ["moxy", "caldav"]
+[profile.context_excluded]
+moxy = ["folio.read", "grit.status"]
+`
+	if _, err := toml.Decode(src, &f); err != nil {
+		t.Fatal(err)
+	}
+	p := f.Profile[0]
+	if !reflect.DeepEqual(p.ContextServers, []string{"moxy", "caldav"}) {
+		t.Errorf("context_servers not decoded: %#v", p.ContextServers)
+	}
+	if !reflect.DeepEqual(p.ContextExcluded["moxy"], []string{"folio.read", "grit.status"}) {
+		t.Errorf("context_excluded not decoded: %#v", p.ContextExcluded)
+	}
+}

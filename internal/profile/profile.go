@@ -16,6 +16,24 @@ type Profile struct {
 	URL      string            `toml:"url,omitempty"`
 	Token    string            `toml:"token,omitempty"`
 	Env      map[string]string `toml:"env,omitempty"`
+
+	// ContextServers and ContextExcluded are a saved --cheap-context
+	// selection (cmd/clown/cheapcontext.go): ContextServers is the exact
+	// set of MCP server names to keep — everything else discovered at
+	// launch is dropped, mirroring the picker's whole-server semantics —
+	// and ContextExcluded, keyed by a kept server's name, lists the tool
+	// names to additionally exclude from that server, mirroring the
+	// picker's per-tool semantics. Both are nil on a profile with no saved
+	// selection (omitempty keeps such profiles free of empty TOML arrays).
+	//
+	// A server or tool name here that no longer exists in a later launch's
+	// discovered/fetched catalog is silently skipped when applying the
+	// selection — the live catalog is the source of truth, this saved data
+	// is best-effort intent, not a hard requirement (matches
+	// applyCheapContextSelection's existing best-effort posture elsewhere,
+	// e.g. a failed exclude-tools push is logged and skipped, not fatal).
+	ContextServers  []string            `toml:"context_servers,omitempty"`
+	ContextExcluded map[string][]string `toml:"context_excluded,omitempty"`
 }
 
 type file struct {

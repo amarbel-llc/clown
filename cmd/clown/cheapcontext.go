@@ -10,7 +10,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/huh"
+
 	"github.com/amarbel-llc/clown/internal/pluginhost"
+	"github.com/amarbel-llc/clown/internal/profile"
 )
 
 // toolGroup is one row of a multi-group server's picker section: a set of
@@ -128,6 +131,59 @@ func groupRowKey(serverName, groupName string) string {
 	return rowKey(serverName, "\x00group\x00"+groupName)
 }
 
+// selectionFromSavedProfile builds a selectionResult directly from a
+// profile's saved --cheap-context selection (profile.ContextServers /
+// profile.ContextExcluded), filtered against catalogs — the CURRENT
+// launch's live, fetched tool data. A saved server or tool name absent from
+// catalogs is silently dropped rather than erroring: the catalog is the
+// source of truth (a plugin set or a server's tool names can differ across
+// directories/launches/versions), the saved selection is best-effort intent
+// to replay, not a hard requirement. ok is false when saved has no
+// ContextServers at all (an empty/legacy profile), signaling the caller to
+// fall back to the interactive picker instead.
+func selectionFromSavedProfile(saved *profile.Profile, catalogs []serverCatalog) (selectionResult, bool) {
+	if saved == nil || saved.ContextServers == nil {
+		return selectionResult{}, false
+	}
+
+	keepNames := make(map[string]bool, len(saved.ContextServers))
+	for _, name := range saved.ContextServers {
+		keepNames[name] = true
+	}
+
+	result := selectionResult{excludedTools: map[string][]string{}}
+	for _, c := range catalogs {
+		name := c.server.Name()
+		if !keepNames[name] {
+			continue // not in the saved keep-set: drop, same as v1 whole-server deselection
+		}
+		result.kept = append(result.kept, c.server)
+
+		savedExcluded, hasExclusions := saved.ContextExcluded[name]
+		if !hasExclusions {
+			continue
+		}
+		liveTools := make(map[string]bool, len(savedExcluded))
+		for _, g := range c.groups {
+			for _, toolName := range g.tools {
+				liveTools[toolName] = true
+			}
+		}
+		var excluded []string
+		for _, toolName := range savedExcluded {
+			if liveTools[toolName] {
+				excluded = append(excluded, toolName)
+			}
+			// A saved tool name absent from the live catalog is silently
+			// dropped — it no longer exists, so there is nothing to exclude.
+		}
+		if len(excluded) > 0 {
+			result.excludedTools[name] = excluded
+		}
+	}
+	return result, true
+}
+
 // selectServers renders --cheap-context's picker as ONE screen and ONE
 // continuously-scrollable list: a bare bubbles/list program
 // (cmd/clown/cheapcontext_picker.go), not a huh.Form. Two huh limitations
@@ -154,7 +210,20 @@ func groupRowKey(serverName, groupName string) string {
 // catalogs must cover every started server (fetched via
 // host.FetchToolCatalog in runManaged, after StartAll); a nil/empty groups
 // field degrades that server to a bare on/off row.
-func selectServers(catalogs []serverCatalog, logger *slog.Logger) (selectionResult, error) {
+//
+// When saved carries a saved --cheap-context selection (profile.Profile's
+// ContextServers is non-nil), the picker is skipped entirely and the
+// selection is replayed via selectionFromSavedProfile instead — this is the
+// one case where selectServers works WITHOUT an interactive TTY, since
+// there is nothing left to prompt for. saved may be nil (no --profile
+// resolved, or the resolved profile has no saved selection), in which case
+// behavior is unchanged from before persistence existed.
+func selectServers(catalogs []serverCatalog, logger *slog.Logger, saved *profile.Profile) (selectionResult, error) {
+	if result, ok := selectionFromSavedProfile(saved, catalogs); ok {
+		logger.Info("cheap-context: replaying saved selection from profile", "profile", saved.Name)
+		return result, nil
+	}
+
 	if !pluginhost.IsInteractive() {
 		return selectionResult{}, fmt.Errorf("--cheap-context requires an interactive TTY")
 	}
@@ -248,6 +317,13 @@ func selectServers(catalogs []serverCatalog, logger *slog.Logger) (selectionResu
 			result.excludedTools[name] = excluded
 		}
 	}
+
+	if err := promptSaveSelection(result); err != nil {
+		// A save failure (bad name, write error, user aborts the save
+		// sub-prompt) never fails the launch — the selection still applies
+		// for this session, it just isn't persisted.
+		logger.Warn("cheap-context: selection not saved", "err", err)
+	}
 	return result, nil
 }
 
@@ -275,6 +351,7 @@ func applyCheapContextSelection(
 	discovered []pluginhost.DiscoveredServer,
 	started []*pluginhost.ManagedServer,
 	logger *slog.Logger,
+	savedProfile *profile.Profile,
 ) ([]pluginhost.DiscoveredServer, error) {
 	byName := make(map[string]pluginhost.DiscoveredServer, len(discovered))
 	for _, d := range discovered {
@@ -297,7 +374,7 @@ func applyCheapContextSelection(
 		catalogs = append(catalogs, serverCatalog{server: d, groups: groups})
 	}
 
-	result, err := selectServers(catalogs, logger)
+	result, err := selectServers(catalogs, logger, savedProfile)
 	if err != nil {
 		return nil, err
 	}
@@ -370,6 +447,99 @@ func pushExcludeTools(ctx context.Context, srv *pluginhost.ManagedServer, names 
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("unexpected status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// selectionContextFields converts a confirmed selectionResult into the two
+// profile.Profile fields that persist it: ContextServers (every kept
+// server's Name()) and ContextExcluded (copied as-is — already keyed the
+// same way). Shared by promptSaveSelection so the "what does 'save this
+// selection' mean as profile fields" logic lives in one place.
+func selectionContextFields(result selectionResult) ([]string, map[string][]string) {
+	servers := make([]string, len(result.kept))
+	for i, d := range result.kept {
+		servers[i] = d.Name()
+	}
+	return servers, result.excludedTools
+}
+
+// promptSaveSelection offers to persist a freshly-confirmed --cheap-context
+// selection into a named profile, so a later `--cheap-context --profile
+// <name>` launch can replay it via selectionFromSavedProfile instead of
+// showing the picker again. Called only after a real (non-cancelled,
+// non-replayed) picker confirmation — selectServers' cancel path and its
+// saved-selection replay path both skip this, since there is nothing new to
+// save in either case.
+//
+// Errors here are the caller's responsibility to treat as non-fatal (see
+// selectServers) — a user declining to save, or a save failure, must never
+// fail the launch that already has a valid, applied selection.
+func promptSaveSelection(result selectionResult) error {
+	var wantSave bool
+	if err := huh.NewForm(huh.NewGroup(
+		huh.NewConfirm().
+			Title("Save this --cheap-context selection for reuse?").
+			Affirmative("Save").
+			Negative("Skip").
+			Value(&wantSave),
+	)).Run(); err != nil {
+		return fmt.Errorf("save prompt: %w", err)
+	}
+	if !wantSave {
+		return nil
+	}
+
+	builtin, user, destPath, err := loadProfileSets("")
+	if err != nil {
+		return err
+	}
+	merged := profile.Merge(builtin, user)
+	existingNames := userNameSet(user)
+
+	var name string
+	if err := huh.NewForm(huh.NewGroup(
+		huh.NewInput().
+			Title("Save as which profile name?").
+			Description("an existing name updates that profile's saved selection; a new name creates a minimal profile").
+			Value(&name).
+			Validate(validateProfileName(map[string]bool{}, "")), // any existing name (user or builtin) is a valid target here, unlike profile add's uniqueness check
+	)).Run(); err != nil {
+		return fmt.Errorf("save prompt: %w", err)
+	}
+	name = strings.TrimSpace(name)
+
+	servers, excluded := selectionContextFields(result)
+
+	var target profile.Profile
+	for _, p := range merged {
+		if p.Name == name {
+			target = p
+			break
+		}
+	}
+	if target.Name == "" {
+		// New profile: minimal viable record. Provider defaults to "claude"
+		// (cheap-context's own current scope — moxy/clown.json MCP servers
+		// are launched under the claude provider path) since there is no
+		// launch-time provider context available at this call site to
+		// thread through; a user who wants a different provider on this
+		// profile can adjust it afterward via `clown profile edit`.
+		target = profile.Profile{Name: name, Provider: "claude", Backend: "anthropic"}
+	}
+	target.ContextServers = servers
+	target.ContextExcluded = excluded
+
+	if err := profile.Validate(target); err != nil {
+		return fmt.Errorf("profile %q: %w", name, err)
+	}
+	if err := profile.Save(destPath, profile.Upsert(user, target)); err != nil {
+		return err
+	}
+	if !existingNames[name] {
+		fmt.Printf("cheap-context: saved selection to new profile %q (%s)\n", name, destPath)
+	} else {
+		fmt.Printf("cheap-context: saved selection to profile %q (%s)\n", name, destPath)
 	}
 	return nil
 }

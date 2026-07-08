@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -27,6 +28,47 @@ func TestSaveRoundTrip(t *testing.T) {
 	}
 	if !reflect.DeepEqual(in, out) {
 		t.Fatalf("round trip: %#v != %#v", in, out)
+	}
+}
+
+func TestSaveRoundTrip_ContextSelection(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "profiles.toml")
+	in := []Profile{{
+		Name: "trimmed", Provider: "claude", Backend: "anthropic",
+		ContextServers:  []string{"moxy", "caldav"},
+		ContextExcluded: map[string][]string{"moxy": {"folio.read", "grit.status"}},
+	}}
+	if err := Save(path, in); err != nil {
+		t.Fatal(err)
+	}
+	out, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(in, out) {
+		t.Fatalf("round trip: %#v != %#v", in, out)
+	}
+}
+
+func TestSaveRoundTrip_NoContextSelectionOmitsFields(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "profiles.toml")
+	in := []Profile{{Name: "plain", Provider: "claude", Backend: "anthropic"}}
+	if err := Save(path, in); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "context_servers") || strings.Contains(string(raw), "context_excluded") {
+		t.Errorf("omitempty failed; wrote context fields for a profile with no saved selection:\n%s", raw)
+	}
+	out, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out[0].ContextServers != nil || out[0].ContextExcluded != nil {
+		t.Errorf("expected nil Context fields after round trip, got %#v", out[0])
 	}
 }
 
