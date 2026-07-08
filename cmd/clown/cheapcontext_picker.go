@@ -167,6 +167,12 @@ func runChecklistPicker(title string, rows []checklistRow) (checked map[string]b
 	l.SetShowStatusBar(false)
 	l.SetShowHelp(false)
 	l.SetFilteringEnabled(false)
+	// less-style paging, additive to bubbles/list's defaults
+	// (left/h/pgup/b/u and right/l/pgdown/f/d) — SetKeys replaces the whole
+	// key list, so read-then-append rather than overwrite the existing
+	// bindings.
+	l.KeyMap.PrevPage.SetKeys(append(l.KeyMap.PrevPage.Keys(), "ctrl+b")...)
+	l.KeyMap.NextPage.SetKeys(append(l.KeyMap.NextPage.Keys(), "ctrl+f")...)
 
 	m, err := tea.NewProgram(checklistModel{list: l}, tea.WithAltScreen()).Run()
 	if err != nil {
