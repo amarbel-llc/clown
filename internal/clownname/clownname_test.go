@@ -60,15 +60,3 @@ func TestPoolIsNonEmpty(t *testing.T) {
 		t.Fatal("Pool must not be empty — Allocate has no fallback for an empty pool beyond a degenerate clown-1")
 	}
 }
-
-func TestSortedPoolIsSortedAndSameElements(t *testing.T) {
-	sorted := SortedPool()
-	if len(sorted) != len(Pool) {
-		t.Fatalf("SortedPool() length = %d, want %d", len(sorted), len(Pool))
-	}
-	for i := 1; i < len(sorted); i++ {
-		if sorted[i-1] > sorted[i] {
-			t.Fatalf("SortedPool() not sorted at index %d: %q > %q", i, sorted[i-1], sorted[i])
-		}
-	}
-}

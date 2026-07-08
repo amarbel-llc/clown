@@ -170,9 +170,11 @@ func maybeReexecMultiplexer(cf clownfile.Clownfile, flags parsedFlags, mode clow
 		// (clown#169) over the raw per-instance UUID — readability is the
 		// entire point of naming sessions. The mux session name/routing key
 		// above (id, used for Resolve/attachIDFlag) is UNAFFECTED: this
-		// titleID substitution is display-only. flags.clownName is always
-		// non-empty (Claim never returns ""), so this never degrades to an
-		// empty title.
+		// titleID substitution is display-only. flags.clownName is normally
+		// non-empty (Claim never returns ""), but is deliberately left unset
+		// for --naked (runWithFlags skips the Claim call there, since a
+		// naked launch's monitor/presence path never consumes it) — the
+		// fallback below covers that case with the pre-clown#169 behavior.
 		titleID := flags.clownName
 		if titleID == "" {
 			titleID = id

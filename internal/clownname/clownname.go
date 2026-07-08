@@ -17,7 +17,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 )
 
 // Pool is the curated list of famous clown names, tried in this order. It is
@@ -64,15 +63,6 @@ func Allocate(liveNames map[string]bool) string {
 			return candidate
 		}
 	}
-}
-
-// SortedPool returns a stable-sorted copy of Pool, for tests/debugging that
-// want deterministic iteration independent of Pool's declared order.
-func SortedPool() []string {
-	out := make([]string, len(Pool))
-	copy(out, Pool)
-	sort.Strings(out)
-	return out
 }
 
 // lockPath resolves the allocator's flock file: $XDG_STATE_HOME/clown/names.lock,

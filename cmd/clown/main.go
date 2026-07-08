@@ -361,8 +361,17 @@ func runWithFlags(flags parsedFlags) int {
 	// (internal/clownname) is entirely clown-owned and best-effort: a
 	// locking or presence-read failure still returns a name (see Claim's
 	// doc comment), so this can never fail the launch.
-	flags.clownName = clownname.Claim()
-	_ = os.Setenv("CLOWN_NAME", flags.clownName)
+	//
+	// Skipped for --naked: a naked launch bypasses clown's plugin-host and
+	// job-watch monitor entirely (flags.naked gates synthJobMonitorPluginDir
+	// below), so CLOWN_NAME would never be consumed by anything — Claim's
+	// flock-guarded presence-directory read is real filesystem I/O
+	// (found by /simplify's efficiency review) not worth paying for a value
+	// nothing downstream reads.
+	if !flags.naked {
+		flags.clownName = clownname.Claim()
+		_ = os.Setenv("CLOWN_NAME", flags.clownName)
+	}
 
 	// clownfile [messaging] (troupe RFC-0001 §1/§8): resolve the XMPP transport
 	// opt-in into the TROUPE_* env and export it on clown's own env so every
