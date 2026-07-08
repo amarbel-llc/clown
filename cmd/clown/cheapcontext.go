@@ -91,33 +91,46 @@ func isMultiGroup(groups []toolGroup) bool {
 }
 
 // serverCatalog pairs a started server with its fetched tool groups (v2) so
-// the picker can decide, per server, whether to offer a flat row (v1
-// fallback: fetch failed, or the catalog isn't multi-group) or a per-group
-// sub-section (moxy's case).
+// the picker can decide, per server, whether to offer a bare on/off row (v1
+// fallback: fetch failed, or the catalog isn't multi-group) or an
+// on/off-plus-individual-tools section (moxy's case).
 type serverCatalog struct {
 	server pluginhost.DiscoveredServer
 	groups []toolGroup // nil/empty when the catalog fetch failed
 }
 
 // selectionResult is selectServers' v2 return value: which servers survive
-// at all, plus which groups (if any) were deselected within each kept,
-// multi-group server. A server present in kept but absent from
-// excludedGroups was either not multi-group (v1-style all-or-nothing) or had
-// every group kept.
+// at all, plus which individual tool names (if any) were deselected within
+// each kept, multi-group server. A server present in kept but absent from
+// excludedTools was either not multi-group (v1-style all-or-nothing) or had
+// every tool kept.
 type selectionResult struct {
-	kept           []pluginhost.DiscoveredServer
-	excludedGroups map[string][]toolGroup // keyed by DiscoveredServer.Name()
+	kept          []pluginhost.DiscoveredServer
+	excludedTools map[string][]string // keyed by DiscoveredServer.Name()
 }
 
-// selectServers renders --cheap-context's picker: a flat per-server row for
-// servers with no fetched catalog or a single tool group (v1 behavior), and
-// a per-group sub-section for a multi-group server (v2; moxy's ~170 tools
-// split into ~17 moxin groups). Requires an interactive TTY — mirrors the
-// TTY gate in profileAddInteractive/profileEditInteractive
-// (cmd/clown/profileform.go). catalogs must cover every started server
-// (fetched via host.FetchToolCatalog in runManaged, after StartAll — see
-// cheapcontext design notes); a nil/empty groups field degrades that
-// server to a flat row.
+// allRowKey is the option value for a multi-group server's top "(all)" row:
+// unchecking it means "drop this whole server," independent of which
+// individual tool rows are checked (mirrors v1's whole-server semantics).
+const allRowKey = "\x00all"
+
+// selectServers renders --cheap-context's picker as ONE screen: a single
+// huh.Group whose body is one huh.MultiSelect per server. A server with no
+// fetched catalog or a single tool group gets a bare on/off row (v1
+// behavior). A multi-group server (v2; moxy's ~170 tools) gets its own
+// MultiSelect with a top "(all N tools)" row plus one indented row per
+// individual tool — unchecking the top row drops the whole server;
+// unchecking specific tool rows (with the top row still checked) excludes
+// just those tools. Everything renders on one page — no huh.Form group
+// pagination — per user feedback that a separate page per multi-group
+// server ("staged on a second screen") was confusing. A true collapsible
+// outline/tree (per-moxin expand/collapse) is deferred to clown#176.
+//
+// Requires an interactive TTY — mirrors the TTY gate in
+// profileAddInteractive/profileEditInteractive (cmd/clown/profileform.go).
+// catalogs must cover every started server (fetched via
+// host.FetchToolCatalog in runManaged, after StartAll); a nil/empty groups
+// field degrades that server to a bare on/off row.
 func selectServers(catalogs []serverCatalog, logger *slog.Logger) (selectionResult, error) {
 	if !pluginhost.IsInteractive() {
 		return selectionResult{}, fmt.Errorf("--cheap-context requires an interactive TTY")
@@ -132,77 +145,63 @@ func selectServers(catalogs []serverCatalog, logger *slog.Logger) (selectionResu
 		}
 	}
 
-	var groups []*huh.Group
-
-	// Flat per-server row, one huh.MultiSelect covering every server with no
-	// per-group breakdown (v1 behavior). serverSelected backs its Value.
-	var flatOptions []huh.Option[string]
-	serverSelected := make([]string, 0, len(catalogs))
-	for _, c := range catalogs {
-		if isMultiGroup(c.groups) {
-			continue
-		}
-		name := c.server.Name()
-		flatOptions = append(flatOptions, huh.NewOption(name, name).Selected(true))
-		serverSelected = append(serverSelected, name)
-	}
-	if len(flatOptions) > 0 {
-		groups = append(groups, huh.NewGroup(
-			huh.NewMultiSelect[string]().
-				Title("Select MCP servers to load for this session").
-				Description("Deselect a server to keep its tools out of the agent's context").
-				Options(flatOptions...).
-				Value(&serverSelected),
-		))
-	}
-
-	// One MultiSelect per multi-group server: a row per group, keyed by
-	// "<server-name>\x00<group-name>" so different servers' identically
-	// named groups (unlikely, but not impossible) never collide. Each
-	// server's selection needs its own addressable *[]string for
-	// huh.MultiSelect.Value, so use a slice of pointers rather than a map
-	// (a map-index expression isn't addressable in Go).
-	type groupSelection struct {
+	// Each MultiSelect needs its own addressable *[]string for
+	// huh.MultiSelect.Value, so use a slice of pointers rather than a map (a
+	// map-index expression isn't addressable in Go).
+	type fieldSelection struct {
 		serverName string
+		multiGroup bool
 		selected   []string
 	}
-	var groupSelections []*groupSelection
+	var fields []*fieldSelection
+	var multiSelects []*huh.MultiSelect[string]
+
 	for _, c := range catalogs {
+		name := c.server.Name()
 		if !isMultiGroup(c.groups) {
+			sel := &fieldSelection{serverName: name, selected: []string{name}}
+			fields = append(fields, sel)
+			multiSelects = append(multiSelects, huh.NewMultiSelect[string]().
+				Title("Servers").
+				Options(huh.NewOption(name, name).Selected(true)).
+				Value(&sel.selected))
 			continue
 		}
-		name := c.server.Name()
+
+		totalTools := 0
 		var opts []huh.Option[string]
-		sel := &groupSelection{serverName: name}
+		sel := &fieldSelection{serverName: name, multiGroup: true, selected: []string{allRowKey}}
+		opts = append(opts, huh.NewOption(name, allRowKey).Selected(true))
 		for _, g := range c.groups {
-			label := g.name
-			if label == "" {
-				label = "(ungrouped)"
+			for _, toolName := range g.tools {
+				totalTools++
+				label := "    " + toolName // indent under the server's "(all)" row
+				opts = append(opts, huh.NewOption(label, toolName).Selected(true))
+				sel.selected = append(sel.selected, toolName)
 			}
-			key := name + "\x00" + g.name
-			opts = append(opts, huh.NewOption(fmt.Sprintf("%s: %s (%d tools)", name, label, len(g.tools)), key).Selected(true))
-			sel.selected = append(sel.selected, key)
 		}
-		groupSelections = append(groupSelections, sel)
-		groups = append(groups, huh.NewGroup(
-			huh.NewMultiSelect[string]().
-				Title(fmt.Sprintf("%s: select tool groups to load", name)).
-				Description("Deselect a group to keep its tools out of the agent's context").
-				Options(opts...).
-				Value(&sel.selected),
-		))
+		fields = append(fields, sel)
+		multiSelects = append(multiSelects, huh.NewMultiSelect[string]().
+			Title(fmt.Sprintf("%s (%d tools)", name, totalTools)).
+			Options(opts...).
+			Value(&sel.selected))
 	}
 
-	if len(groups) == 0 {
-		// Every server was somehow neither flat nor multi-group (empty
-		// catalogs slice already handled above); nothing to ask.
+	if len(fields) == 0 {
 		return selectionResult{}, nil
 	}
 
-	if logger != nil {
-		logger.Info("cheap-context: rendering picker form", "sections", len(groups))
+	fieldsAny := make([]huh.Field, len(multiSelects))
+	for i, ms := range multiSelects {
+		fieldsAny[i] = ms
 	}
-	form := huh.NewForm(groups...)
+	form := huh.NewForm(huh.NewGroup(fieldsAny...).
+		Title("Select MCP servers/tools to load for this session").
+		Description("Deselect a row to keep it out of the agent's context"))
+
+	if logger != nil {
+		logger.Info("cheap-context: rendering picker form", "fields", len(fields))
+	}
 	err := form.Run()
 	if logger != nil {
 		logger.Info("cheap-context: picker form returned", "err", err)
@@ -211,45 +210,45 @@ func selectServers(catalogs []serverCatalog, logger *slog.Logger) (selectionResu
 		return selectionResult{}, fmt.Errorf("cheap-context prompt: %w", err)
 	}
 
-	flatChosen := make(map[string]bool, len(serverSelected))
-	for _, name := range serverSelected {
-		flatChosen[name] = true
-	}
-	groupSelected := make(map[string][]string, len(groupSelections))
-	for _, sel := range groupSelections {
-		groupSelected[sel.serverName] = sel.selected
-	}
+	result := selectionResult{excludedTools: map[string][]string{}}
+	for _, sel := range fields {
+		chosen := make(map[string]bool, len(sel.selected))
+		for _, v := range sel.selected {
+			chosen[v] = true
+		}
 
-	result := selectionResult{excludedGroups: map[string][]toolGroup{}}
-	for _, c := range catalogs {
-		name := c.server.Name()
-		if !isMultiGroup(c.groups) {
-			if flatChosen[name] {
-				result.kept = append(result.kept, c.server)
+		if !sel.multiGroup {
+			if chosen[sel.serverName] {
+				for _, c := range catalogs {
+					if c.server.Name() == sel.serverName {
+						result.kept = append(result.kept, c.server)
+						break
+					}
+				}
 			}
 			continue
 		}
 
-		chosenKeys := make(map[string]bool, len(groupSelected[name]))
-		for _, key := range groupSelected[name] {
-			chosenKeys[key] = true
+		if !chosen[allRowKey] {
+			continue // top row deselected: drop the whole server
 		}
-		var excluded []toolGroup
-		anyKept := false
-		for _, g := range c.groups {
-			key := name + "\x00" + g.name
-			if chosenKeys[key] {
-				anyKept = true
-			} else {
-				excluded = append(excluded, g)
+		var excluded []string
+		for _, c := range catalogs {
+			if c.server.Name() != sel.serverName {
+				continue
 			}
+			result.kept = append(result.kept, c.server)
+			for _, g := range c.groups {
+				for _, toolName := range g.tools {
+					if !chosen[toolName] {
+						excluded = append(excluded, toolName)
+					}
+				}
+			}
+			break
 		}
-		if !anyKept {
-			continue // every group deselected: drop the whole server
-		}
-		result.kept = append(result.kept, c.server)
 		if len(excluded) > 0 {
-			result.excludedGroups[name] = excluded
+			result.excludedTools[sel.serverName] = excluded
 		}
 	}
 	return result, nil
@@ -320,50 +319,22 @@ func applyCheapContextSelection(
 		}
 	}
 
-	for name, excludedGroups := range result.excludedGroups {
+	for name, excludedTools := range result.excludedTools {
 		srv, ok := serversByName[name]
 		if !ok {
 			continue
 		}
-		names := excludeToolsPayload(excludedGroups)
-		if err := pushExcludeTools(ctx, srv, names); err != nil {
+		if err := pushExcludeTools(ctx, srv, excludedTools); err != nil {
 			// Best-effort: a push failure means this server's deselected
 			// tools stay visible, not that the launch fails.
 			logger.Warn("cheap-context: failed to push tool exclusions; server keeps its full catalog",
 				"server", name, "err", err)
 		} else {
-			logger.Info("cheap-context: excluded groups from server", "server", name, "groups", len(excludedGroups))
+			logger.Info("cheap-context: excluded tools from server", "server", name, "count", len(excludedTools))
 		}
 	}
 
 	return result.kept, nil
-}
-
-// excludeToolsPayload flattens excluded groups into the flat name list
-// /clown/exclude-tools expects, sending BOTH representations so the same
-// payload works against either endpoint shape without clown needing to know
-// which one it's talking to:
-//   - the bare group name (e.g. "folio") — what moxy's dotted/bare-name
-//     convention (amarbel-llc/moxy#399, internal/toolexclude.Parse) expects
-//     to exclude a whole moxin; a no-op entry for clown-stdio-bridge, which
-//     only matches exact tool names.
-//   - every individual mangled tool name in the group (e.g.
-//     "mcp__plugin_moxy_moxy__folio_read") — what clown-stdio-bridge's
-//     exact-match filterToolsListResponse expects; harmless extra entries
-//     for moxy, which only recognizes its own bare/dotted names.
-//
-// The ungrouped bucket (group name "") contributes only its tool names,
-// since an empty string is never a meaningful exclusion entry on either
-// side.
-func excludeToolsPayload(groups []toolGroup) []string {
-	var names []string
-	for _, g := range groups {
-		if g.name != "" {
-			names = append(names, g.name)
-		}
-		names = append(names, g.tools...)
-	}
-	return names
 }
 
 // pushExcludeTools POSTs the exclusion list to a running server's
