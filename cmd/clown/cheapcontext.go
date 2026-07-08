@@ -131,6 +131,18 @@ func groupRowKey(serverName, groupName string) string {
 	return rowKey(serverName, "\x00group\x00"+groupName)
 }
 
+// cheapContextShouldActivate decides whether runManaged's --cheap-context
+// selection-application path (applyCheapContextSelection) runs at all.
+// --cheap-context's only remaining job, once a profile carries a saved
+// selection, is "show the interactive picker" — applying an already-saved
+// selection must not additionally require the flag, or a saved profile
+// would be dead weight without also re-passing --cheap-context every
+// launch. A resolved --profile with a non-nil ContextServers is sufficient
+// on its own to activate the (picker-skipping) selection-application path.
+func cheapContextShouldActivate(cheapContextFlag bool, resolvedProfile *profile.Profile) bool {
+	return cheapContextFlag || (resolvedProfile != nil && resolvedProfile.ContextServers != nil)
+}
+
 // selectionFromSavedProfile builds a selectionResult directly from a
 // profile's saved --cheap-context selection (profile.ContextServers /
 // profile.ContextExcluded), filtered against catalogs — the CURRENT

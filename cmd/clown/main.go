@@ -1263,7 +1263,7 @@ func runWithPluginHost(executor Executor, args []string, pluginDirs []string, fl
 	// clown.json server, used below to detect dirs --cheap-context dropped
 	// entirely.
 	allDiscoveredDirs := pluginDirSet(discovered)
-	cheapContextActive := flags.cheapContext
+	cheapContextActive := cheapContextShouldActivate(flags.cheapContext, flags.cheapContextProfile)
 
 	// v2 (unlike v1): the --cheap-context picker no longer runs here, before
 	// any server starts. Fetching a per-tool catalog for grouping requires a
@@ -1948,12 +1948,19 @@ type parsedFlags struct {
 	naked                bool
 	skipFailed           bool
 	disableClownProtocol bool
-	// cheapContext requests the interactive MCP-server picker (huh
-	// multi-select) before plugin servers are started, so the user can trim
-	// which servers' tool catalogs get registered for this session. Requires
-	// an interactive TTY (cmd/clown/cheapcontext.go); no env-var mirror by
-	// design — a non-interactive default would just create a second code
-	// path to reject.
+	// cheapContext requests the interactive MCP-server/tool picker
+	// (cmd/clown/cheapcontext_picker.go, a bare bubbles/list program) before
+	// plugin servers are started, so the user can trim which servers' tool
+	// catalogs get registered for this session. Requires an interactive TTY.
+	// No env-var mirror by design — a non-interactive default would just
+	// create a second code path to reject.
+	//
+	// This flag is NOT required to apply an already-saved selection: a
+	// resolved --profile carrying profile.Profile.ContextServers activates
+	// the (picker-skipping) selection-application path in runManaged on its
+	// own — see cheapContextActive in runWithPluginHost. cheapContext's only
+	// remaining job, once a selection is saved, is showing the picker again
+	// (e.g. to change the selection or save it under a different profile).
 	cheapContext bool
 	// cheapContextProfile is the resolved --profile (or clownfile pin /
 	// interactive profile picker choice), set in run() alongside

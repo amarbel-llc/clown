@@ -88,6 +88,34 @@ func TestGroupToolsByPrefix(t *testing.T) {
 	}
 }
 
+func TestCheapContextShouldActivate(t *testing.T) {
+	cases := []struct {
+		name  string
+		flag  bool
+		saved *profile.Profile
+		want  bool
+	}{
+		{"flag alone activates (interactive picker)", true, nil, true},
+		{"no flag, no profile: inactive", false, nil, false},
+		{"no flag, profile with no saved selection: inactive", false, &profile.Profile{Name: "plain"}, false},
+		{
+			"no flag, profile WITH a saved selection: activates without the flag",
+			false, &profile.Profile{Name: "trimmed", ContextServers: []string{"moxy/moxy"}}, true,
+		},
+		{
+			"flag AND a saved selection: still activates",
+			true, &profile.Profile{Name: "trimmed", ContextServers: []string{"moxy/moxy"}}, true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := cheapContextShouldActivate(tc.flag, tc.saved); got != tc.want {
+				t.Errorf("cheapContextShouldActivate(%v, %+v) = %v, want %v", tc.flag, tc.saved, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestSelectionFromSavedProfile(t *testing.T) {
 	moxy := pluginhost.DiscoveredServer{PluginName: "moxy", ServerName: "moxy"}
 	caldav := pluginhost.DiscoveredServer{PluginName: "bob", ServerName: "caldav"}
