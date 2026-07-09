@@ -264,11 +264,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1783532202,
-        "narHash": "sha256-LTXKXlw5LSKE0LC23oM3svaw0w6EgsprAF63o+IUQk0=",
+        "lastModified": 1783593443,
+        "narHash": "sha256-MWR2jbq005VZ/CFk2v68Ks4svLu6S+Z0DfZG0c0c4oI=",
         "ref": "refs/heads/master",
-        "rev": "c2476c1f5afd8bb98d353c0683de0fda4d7c50bf",
-        "revCount": 8,
+        "rev": "01649e68610b542f458da5d354e27df273a4fc9b",
+        "revCount": 10,
         "type": "git",
         "url": "https://code.linenisgreat.com/ringmaster.git"
       },

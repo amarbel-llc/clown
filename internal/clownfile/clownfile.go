@@ -167,15 +167,29 @@ func (a Attach) Resolve(mode AttachMode, id string, entry []string) ([]string, e
 // Title renders ResumeTitle for emission as an OSC-2 terminal title before a
 // resume attach (RFC-0013 §1.3 rule 4, RFC-0014 §3.1). {group} resolves to the
 // group key, falling back to the per-instance id when the group is empty (so a
-// bare clown shows its key, never a literal "{group}"); {id} resolves to the
-// per-instance id. Empty when no title is configured.
-func (a Attach) Title(id, group string) string {
+// bare clown shows its key, never a literal "{group}").
+//
+// showID controls the SEPARATE {id} placeholder (the burned-in default
+// combines both: "sc/{group}/{id}"). It exists to avoid showing the same
+// clown-name twice when {group}'s own fallback already displays it — the
+// caller (cmd/clown/attach.go) passes showID=false whenever id would be
+// redundant: group is empty (its fallback already shows id via {group}), or
+// group is non-empty but this is the only live session in that group (the id
+// would add no disambiguating information). When showID is false, the LITERAL
+// "/{id}" is dropped (not substituted with ""), so a trailing separator never
+// survives; a template with a bare {id} (no leading slash) drops just the
+// placeholder. Empty when no title is configured.
+func (a Attach) Title(id, group string, showID bool) string {
 	g := group
 	if g == "" {
 		g = id
 	}
 	t := strings.ReplaceAll(a.ResumeTitle, "{group}", g)
-	return strings.ReplaceAll(t, "{id}", id)
+	if showID {
+		return strings.ReplaceAll(t, "{id}", id)
+	}
+	t = strings.ReplaceAll(t, "/{id}", "")
+	return strings.ReplaceAll(t, "{id}", "")
 }
 
 // Messaging is the clownfile [messaging] table: clown's opt-in for troupe's

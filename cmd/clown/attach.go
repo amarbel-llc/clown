@@ -5,8 +5,12 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
+	"time"
 
+	"code.linenisgreat.com/ringmaster/jobwake"
 	"github.com/amarbel-llc/clown/internal/clownfile"
 )
 
@@ -107,6 +111,56 @@ func shouldEmitTitle(mode clownfile.AttachMode) bool {
 	return mode == clownfile.ModeStart || mode == clownfile.ModeResume
 }
 
+// gitRepoAndBranch best-effort resolves "<repo-basename>/<branch>" for the
+// current working directory, for OSC-2 TITLE DISPLAY ONLY (clown#180): it is
+// never fed into flags.groupID / CLOWN_GROUP_ID / presence Decoration, so it
+// cannot silently group two unrelated bare clowns that happen to share a repo.
+// Returns "" on any failure (not a git repo, git missing). A detached HEAD (no
+// current branch) yields just "<repo-basename>". Failing silent mirrors
+// internal/clownname.Claim's never-fail-the-launch contract for cosmetic data.
+func gitRepoAndBranch() string {
+	top, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		return ""
+	}
+	repo := filepath.Base(strings.TrimSpace(string(top)))
+	if repo == "" || repo == "." || repo == string(filepath.Separator) {
+		return ""
+	}
+	// --show-current is empty on a detached HEAD; that is fine — we degrade to
+	// just the repo name rather than failing.
+	branch, err := exec.Command("git", "branch", "--show-current").Output()
+	if err != nil {
+		return repo
+	}
+	if b := strings.TrimSpace(string(branch)); b != "" {
+		return repo + "/" + b
+	}
+	return repo
+}
+
+// titleDisambiguationNeeded reports whether the clown-name ({id}) should appear
+// in the OSC-2 title — true when 2+ live clown sessions match sameScope, so the
+// name distinguishes them (clown#180, FDR-0015). The caller supplies the scope
+// predicate because the two title tiers key on different presence fields: the
+// git-fallback tier compares Cwd (the git-derived group is never written to
+// Decoration), a real spinclass group compares Decoration. Best-effort: a
+// presence-read failure degrades to true (show the id rather than silently hide
+// information on a read failure).
+func titleDisambiguationNeeded(sameScope func(jobwake.Presence) bool) bool {
+	ps, err := jobwake.ListPresence(time.Now())
+	if err != nil {
+		return true
+	}
+	count := 0
+	for _, p := range ps {
+		if sameScope(p) {
+			count++
+		}
+	}
+	return count >= 2
+}
+
 // maybeReexecMultiplexer wraps clown in the configured multiplexer per the
 // clownfile [attach] table (RFC-0013 §1.3). It returns nil when no wrap applies
 // (so the caller proceeds inline); on a successful wrap it runs the multiplexer
@@ -179,7 +233,43 @@ func maybeReexecMultiplexer(cf clownfile.Clownfile, flags parsedFlags, mode clow
 		if titleID == "" {
 			titleID = id
 		}
-		if title := cf.Attach.Title(titleID, flags.groupID); title != "" {
+
+		// {group} resolves through a three-tier cascade (clown#180, FDR-0015):
+		//   1. the spinclass group-id (flags.groupID) when non-empty;
+		//   2. else a best-effort git "<repo>/<branch>" of the cwd, so a bare
+		//      clown outside spinclass still shows repo context. This is
+		//      TITLE-DISPLAY ONLY — it is never written to flags.groupID /
+		//      CLOWN_GROUP_ID / presence Decoration, so two unrelated bare
+		//      clowns in one repo do NOT become chat/presence-grouped;
+		//   3. else "" (not spinclass, not a git repo).
+		titleGroup := flags.groupID
+		usingGitFallback := false
+		if titleGroup == "" {
+			if g := gitRepoAndBranch(); g != "" {
+				titleGroup = g
+				usingGitFallback = true
+			}
+		}
+
+		// The clown-name ({id}) is shown only when it disambiguates. In the
+		// true no-group case (tier 3) it is the only identifying info, so it
+		// is always shown; under a real group or the git fallback it is shown
+		// only when 2+ live sessions share that group/cwd. The scope predicate
+		// keys on Cwd for the git fallback (its group is never in Decoration)
+		// and Decoration for a real spinclass group; a Getwd failure in the
+		// fallback path degrades to always-show-id.
+		showID := true
+		if titleGroup != "" {
+			if usingGitFallback {
+				if cwd, err := os.Getwd(); err == nil {
+					showID = titleDisambiguationNeeded(func(p jobwake.Presence) bool { return p.Cwd == cwd })
+				}
+			} else {
+				showID = titleDisambiguationNeeded(func(p jobwake.Presence) bool { return p.Decoration == titleGroup })
+			}
+		}
+
+		if title := cf.Attach.Title(titleID, titleGroup, showID); title != "" {
 			// OSC-2 window title; best-effort, before handing the terminal to the mux.
 			fmt.Fprintf(os.Stderr, "\033]2;%s\007", title)
 		}

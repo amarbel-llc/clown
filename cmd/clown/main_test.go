@@ -81,6 +81,44 @@ func TestSessionIdentityEnvMapOmitsEmpty(t *testing.T) {
 	}
 }
 
+// TestResolveClownNameInnerProcessReusesInheritedName covers the [attach]
+// inner-process case: the outer already claimed a name and exported it as
+// CLOWN_NAME, which this (multiplexer child) process inherited via normal env
+// inheritance. resolveClownName must reuse it rather than calling Claim()
+// again, which could independently pick a DIFFERENT name and desync the OSC
+// title (baked from the outer's claim) from the presence record this process
+// goes on to register.
+func TestResolveClownNameInnerProcessReusesInheritedName(t *testing.T) {
+	if got := resolveClownName("pinned-attach-id", "krusty"); got != "krusty" {
+		t.Fatalf("resolveClownName = %q, want the inherited name reused, not a fresh Claim()", got)
+	}
+}
+
+// TestResolveClownNameOuterProcessClaims covers the un-wrapped / outer case
+// (attachedID == ""): resolveClownName must call Claim() rather than trusting
+// inheritedName, since an outer process is never "inside" someone else's
+// claim. XDG_STATE_HOME is redirected to an empty temp dir so Claim() sees no
+// live presence and deterministically returns the pool's first name.
+func TestResolveClownNameOuterProcessClaims(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	got := resolveClownName("", "stale-inherited-value")
+	if got == "" || got == "stale-inherited-value" {
+		t.Fatalf("resolveClownName = %q, want a fresh Claim() result, not the inherited value", got)
+	}
+}
+
+// TestResolveClownNameInnerProcessFallsBackWhenNoInheritedName covers the
+// defensive case: an [attach] inner process (attachedID set) that somehow
+// inherited no CLOWN_NAME still gets a real name via Claim(), rather than
+// silently returning "".
+func TestResolveClownNameInnerProcessFallsBackWhenNoInheritedName(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	got := resolveClownName("pinned-attach-id", "")
+	if got == "" {
+		t.Fatal("resolveClownName = \"\", want a fresh Claim() fallback")
+	}
+}
+
 func TestApplyClownfileProfile(t *testing.T) {
 	t.Run("provider applied when not explicit, then marked explicit", func(t *testing.T) {
 		f := parsedFlags{provider: "claude"}

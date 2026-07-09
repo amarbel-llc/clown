@@ -142,10 +142,10 @@ func TestAttachPoshMultiplexer(t *testing.T) {
 }
 
 func TestAttachTitleSubstitutesID(t *testing.T) {
-	if got := (Attach{ResumeTitle: "clown {id}"}).Title("abc", ""); got != "clown abc" {
+	if got := (Attach{ResumeTitle: "clown {id}"}).Title("abc", "", true); got != "clown abc" {
 		t.Fatalf("Title = %q, want \"clown abc\"", got)
 	}
-	if got := (Attach{}).Title("abc", ""); got != "" {
+	if got := (Attach{}).Title("abc", "", true); got != "" {
 		t.Fatalf("empty ResumeTitle must yield empty Title, got %q", got)
 	}
 }
@@ -154,15 +154,45 @@ func TestAttachTitleSubstitutesID(t *testing.T) {
 // empty (never emitting a literal "{group}") — RFC-0014 §3.1.
 func TestAttachTitleGroupAndFallback(t *testing.T) {
 	a := Attach{ResumeTitle: "{group}"}
-	if got := a.Title("inst-1", "repo/branch"); got != "repo/branch" {
+	if got := a.Title("inst-1", "repo/branch", true); got != "repo/branch" {
 		t.Fatalf("Title {group} = %q, want repo/branch", got)
 	}
-	if got := a.Title("inst-1", ""); got != "inst-1" {
+	if got := a.Title("inst-1", "", true); got != "inst-1" {
 		t.Fatalf("Title {group} empty-group = %q, want {id} fallback inst-1", got)
 	}
 	// Mixed: both placeholders present.
-	if got := (Attach{ResumeTitle: "{group}:{id}"}).Title("inst-1", "g"); got != "g:inst-1" {
+	if got := (Attach{ResumeTitle: "{group}:{id}"}).Title("inst-1", "g", true); got != "g:inst-1" {
 		t.Fatalf("Title mixed = %q, want g:inst-1", got)
+	}
+}
+
+// TestAttachTitleShowIDFalseCollapsesRedundantID pins clown#180's fix: the
+// burned-in default combines both placeholders ("sc/{group}/{id}"), so a
+// bare clown (group=="") previously showed the clown-name TWICE — once via
+// {group}'s fallback, once via the separate {id} substitution ("sc/bozo/bozo").
+// showID=false drops the literal "/{id}" suffix (not just the placeholder)
+// so no dangling separator survives, whether or not {group} itself needed the
+// id fallback.
+func TestAttachTitleShowIDFalseCollapsesRedundantID(t *testing.T) {
+	a := Attach{ResumeTitle: "sc/{group}/{id}"}
+	// group=="" case (the original bug report): {group} falls back to id,
+	// and the redundant /{id} must collapse rather than duplicate it.
+	if got := a.Title("bozo", "", false); got != "sc/bozo" {
+		t.Fatalf("Title = %q, want %q", got, "sc/bozo")
+	}
+	// group!="" case (a resolved group, solo session — no disambiguation
+	// needed): {group} shows the real group, and /{id} still collapses.
+	if got := a.Title("bozo", "clown/brave-banyan", false); got != "sc/clown/brave-banyan" {
+		t.Fatalf("Title = %q, want %q", got, "sc/clown/brave-banyan")
+	}
+	// group!="" with showID=true (2+ live sessions sharing the group):
+	// both segments survive, disambiguating the two sessions.
+	if got := a.Title("bozo", "clown/brave-banyan", true); got != "sc/clown/brave-banyan/bozo" {
+		t.Fatalf("Title = %q, want %q", got, "sc/clown/brave-banyan/bozo")
+	}
+	// A template with a bare {id} (no leading slash) still drops cleanly.
+	if got := (Attach{ResumeTitle: "{id}"}).Title("bozo", "", false); got != "" {
+		t.Fatalf("Title = %q, want empty (bare {id} dropped)", got)
 	}
 }
 

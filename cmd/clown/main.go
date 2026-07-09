@@ -214,6 +214,31 @@ func resolveSessionIdentity() sessionIdentity {
 	return sessionIdentity{Key: key, Bin: bin}
 }
 
+// resolveClownName decides this process's clown#169 human-ergonomic name.
+// attachedID is the package-level [attach] re-exec id (non-empty only in the
+// INNER process of an [attach] wrap, RFC-0013 §1.3); inheritedName is
+// whatever CLOWN_NAME this process's env already carries.
+//
+// When attachedID is non-empty, this is the multiplexer child of an outer
+// clown that already ran clownname.Claim() and exported the result as
+// CLOWN_NAME before re-execing (maybeReexecMultiplexer runs the mux as a
+// CHILD, not an exec-replace, so this process inherits that env). Reusing
+// inheritedName there avoids a second, independent Claim() call that could
+// silently pick a DIFFERENT name than the one already baked into the OSC
+// title (maybeReexecMultiplexer's titleID, chosen before the re-exec) and
+// than the one this process would otherwise register as its own presence.
+//
+// Falls through to a fresh Claim() whenever attachedID is empty (the
+// un-wrapped / outer case) or inheritedName is empty (defensive: an
+// [attach]-inner process that somehow did not inherit CLOWN_NAME, e.g. a
+// future caller that scrubs env across the re-exec).
+func resolveClownName(attachedID, inheritedName string) string {
+	if attachedID != "" && inheritedName != "" {
+		return inheritedName
+	}
+	return clownname.Claim()
+}
+
 // envMap renders the identity as the env clown injects into a child that needs
 // it (a pluginhost producer, or a provider clown execs into). Empty fields are
 // omitted so a child never sees an empty-valued override.
@@ -356,20 +381,15 @@ func runWithFlags(flags parsedFlags) int {
 
 	// clown#169: claim a human-ergonomic clown name (Bozo, Krusty, ...) for
 	// this session, exported the same way as CLOWN_GROUP_DESCRIPTION above so
-	// the presence-registration path (jobwake.RegisterPresence, clown#179)
+	// the presence-registration path (jobwake.RegisterPresenceKey, below)
 	// picks it up with no further threading. The allocator
 	// (internal/clownname) is entirely clown-owned and best-effort: a
 	// locking or presence-read failure still returns a name (see Claim's
-	// doc comment), so this can never fail the launch.
-	//
-	// Skipped for --naked: a naked launch bypasses clown's plugin-host and
-	// job-watch monitor entirely (flags.naked gates synthJobMonitorPluginDir
-	// below), so CLOWN_NAME would never be consumed by anything — Claim's
-	// flock-guarded presence-directory read is real filesystem I/O
-	// (found by /simplify's efficiency review) not worth paying for a value
-	// nothing downstream reads.
+	// doc comment), so this can never fail the launch. See
+	// resolveClownName's doc comment for the --naked and [attach]-inner-
+	// process skip conditions.
 	if !flags.naked {
-		flags.clownName = clownname.Claim()
+		flags.clownName = resolveClownName(attachedID, os.Getenv("CLOWN_NAME"))
 		_ = os.Setenv("CLOWN_NAME", flags.clownName)
 	}
 
@@ -505,6 +525,25 @@ func runWithFlags(flags parsedFlags) int {
 	if err := maybeReexecMultiplexer(cf, flags, attachMode); err != nil {
 		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
 		return 1
+	}
+
+	// Synchronously self-register presence under the FINAL identity key,
+	// right after it settles (decideClaudeSession above, and any [attach]
+	// re-exec has already either replaced this process or confirmed it is
+	// the one proceeding). This closes the race where Claim() above only
+	// sees names OTHER sessions have registered: without this, a name only
+	// becomes visible to sibling Claim() calls once the async ringmaster
+	// job-watch monitor gets around to its own first RegisterPresence —
+	// which happens well into Claude's own startup, seconds after this
+	// process already committed to a name. Two clowns launched within that
+	// window would both see an empty/stale presence set and collide on the
+	// same base name with no generation bump. Best-effort (matches
+	// RegisterPresence's own contract): a failure here must never break the
+	// launch, and the monitor's later refresh keeps the record alive either
+	// way. Skipped for --naked (no CLOWN_NAME, no monitor to hand off to)
+	// and when job-wakeup is disabled (no presence dir is meant to exist).
+	if !flags.naked && !jobWakeupDisabled() {
+		_ = jobwake.RegisterPresenceKey(flags.identity.Key, time.Now())
 	}
 
 	if flags.naked {

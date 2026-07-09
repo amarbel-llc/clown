@@ -188,11 +188,52 @@ orchestrator session key:
   the UUID otherwise (e.g. for `--naked`, which skips allocation entirely).
   This preference is a caller-side substitution (`cmd/clown/attach.go`), not
   a change to `Attach.Title`'s own `{group}`/`{id}` substitution contract —
-  `Title` remains a pure function over whatever strings it is given.
+  `Title` remains a pure function over whatever strings it is given. (§3.1.2
+  supersedes this last clause: `Title` later gained a `showID` parameter.)
 - This is purely a *display* change: the substituted value never affects the
   per-instance routing key, the mux session name, or `Resolve`'s `{id}`
   substitution in argv templates (RFC-0013 §1.3), which continue to use the
   raw UUID.
+
+##### 3.1.2 Amendment: git repo/branch `{group}` fallback + disambiguation-only `{id}` (clown#180)
+
+Two corrections/extensions to §3.1/§3.1.1, all **title-display only** (none
+affect the routing key, mux session name, presence `decoration`, or group
+chat). Design record: `docs/features/0015-title-repo-fallback-and-id-dedup.md`.
+
+- **Erratum to §3.1.1.** The old `Attach.Title` substituted the separate
+  `{id}` placeholder in addition to `{group}`'s empty-group `{id}` fallback,
+  so the burned-in `"sc/{group}/{id}"` produced a *duplicated* clown-name
+  (`sc/bozo/bozo`) for a bare clown, not the `sc/bozo` §3.1.1 line describes.
+  This is now fixed.
+- **`{group}` gains a git fallback tier.** §3.1's rule ("when `group-id` is
+  empty, `{group}` falls back to `{id}`") is refined into a three-tier
+  cascade evaluated once per interactive `[attach]` wrap:
+  1. the resolved `group-id` when non-empty (unchanged);
+  2. else a best-effort `git rev-parse --show-toplevel` + `git branch
+     --show-current` rendered as `<repo-basename>/<branch>` (or just
+     `<repo-basename>` on a detached HEAD). This value is **title-display
+     only** — it MUST NOT be written to `group-id`/`CLOWN_GROUP_ID`, the
+     presence `decoration`, or any chat/group scope, so §2/§8's "empty
+     outside spinclass ⇒ ungrouped" contract is unchanged and two unrelated
+     bare clowns in one git repo do not become grouped;
+  3. else empty (not spinclass, not a git repo) — falls back to `{id}` as
+     before.
+- **`{id}` is shown only when it disambiguates.** In the true no-group case
+  (tier 3) `{id}` is always shown (it is the only identifying info). Under a
+  real group (tier 1) or the git fallback (tier 2), `{id}` is shown only when
+  2+ live sessions share that scope — counted over the presence index (§4) by
+  `decoration` for tier 1, or by a new title-only `cwd` presence field for
+  tier 2 (the git-fallback group is never in `decoration`). A solo session
+  omits `{id}` and the `/{id}` separator it would introduce.
+- **`Attach.Title` contract change.** `Title(id, group string, showID bool)`
+  grew the `showID` parameter (superseding §3.1.1's "pure function, unchanged
+  contract" clause). When `showID` is false the literal substring `"/{id}"`
+  is dropped (not merely substituted empty), so no dangling separator
+  survives; the `{group}` fallback and value substitution are otherwise as
+  §3.1/§3.1.1. It remains a pure function of its arguments; the caller
+  (`cmd/clown/attach.go`) computes `showID` from the presence-based
+  disambiguation count.
 
 ### 4. Presence index (clown → orchestrator)
 
@@ -428,6 +469,13 @@ Tests use binary injection via `bats-emo`:
   `resume` attach" only; it now also fires before a fresh `start` attach, so
   a new interactive session gets a terminal title too, not only a reattach.
   RFC-0013 §1.3's field description is updated to match.
+- **`{group}` git fallback + disambiguation-only `{id}` (clown#180, §3.1.2).**
+  A bare clown in a git repo now shows `sc/<repo>/<branch>` instead of just
+  the clown-name, and the clown-name is shown only when 2+ live sessions share
+  the scope. Backward-compatible and display-only: a session outside any git
+  repo falls back to the prior `{id}` behavior, and none of it touches the
+  routing key, `decoration`, or grouping. Also fixes the `sc/bozo/bozo`
+  duplicate the pre-fix `Attach.Title` emitted for a bare clown.
 
 ## References
 

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"code.linenisgreat.com/ringmaster/jobwake"
 	"github.com/amarbel-llc/clown/internal/clownfile"
 )
 
@@ -230,6 +231,60 @@ func TestMaybeReexecPrefersClownNameForTitle(t *testing.T) {
 	}
 }
 
+// End-to-end title emission through the real maybeReexecMultiplexer, using the
+// default-shaped "sc/{group}/{id}" template and the git-repo/branch fallback
+// (clown#180, FDR-0015). Outside spinclass (empty groupID) and with no sibling
+// presence records, the title collapses to "sc/<repo>/<branch>" — the git
+// context with the redundant clown-name dropped. Captures the actual OSC-2
+// bytes from os.Stderr rather than re-deriving the logic.
+func TestMaybeReexecTitleGitFallbackSolo(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skipf("git not on PATH: %v", err)
+	}
+	repoBranch := gitRepoAndBranch()
+	if repoBranch == "" {
+		t.Skip("not inside a git worktree; git-fallback path not exercisable here")
+	}
+
+	prev := attachedID
+	attachedID = ""
+	t.Cleanup(func() { attachedID = prev })
+	t.Setenv("CLOWN_ATTACH_FORCE", "1")
+	// Isolate presence so the solo-dedup count is deterministic (no sibling
+	// sessions from the ambient state dir), and ensure no group-id is set.
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+
+	cf := clownfile.Clownfile{Attach: clownfile.Attach{
+		Multiplexer: "zmx",
+		Start:       []string{"clown-nonexistent-mux-xyz-do-not-install", "{id}", "{entry}"},
+		ResumeTitle: "sc/{group}/{id}",
+	}}
+	// groupID empty → git fallback; clownName present but solo → dropped.
+	flags := parsedFlags{clownName: "bozo", identity: sessionIdentity{Key: "raw-uuid"}}
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	origStderr := os.Stderr
+	os.Stderr = w
+	reexecErr := maybeReexecMultiplexer(cf, flags, clownfile.ModeStart)
+	os.Stderr = origStderr
+	w.Close()
+	captured, _ := io.ReadAll(r)
+
+	if reexecErr != nil {
+		t.Fatalf("mux-absent degrade: want nil, got %v", reexecErr)
+	}
+	want := "\033]2;sc/" + repoBranch + "\007"
+	if !strings.Contains(string(captured), want) {
+		t.Fatalf("emitted title = %q, want it to contain %q (git fallback, solo id dropped)", captured, want)
+	}
+	if strings.Contains(string(captured), "/bozo\007") {
+		t.Fatalf("solo session leaked the redundant clown-name: %q", captured)
+	}
+}
+
 // runMultiplexer runs the mux as a child (not syscall.Exec), so clown survives
 // to print the resume hint outside the mux. It must forward argv[1:] to the child
 // (argv[0] is the ignored template name) and propagate the child's exit code.
@@ -365,5 +420,92 @@ func TestReexecArgv(t *testing.T) {
 				t.Errorf("reexecArgv() = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// gitRepoAndBranch resolves "<repo>/<branch>" for the OSC-2 title fallback
+// (clown#180). Inside a real git worktree (this test's own repo) it returns a
+// non-empty "<repo>/<branch>"; inside a non-git directory it returns "" so the
+// title degrades to the true no-group tier. It reads the PROCESS cwd, so the
+// non-git case chdir's into a bare temp dir.
+func TestGitRepoAndBranch(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skipf("git not on PATH: %v", err)
+	}
+
+	// This test binary runs inside the clown git worktree, so the helper must
+	// resolve a repo, and (unless HEAD is detached) a "<repo>/<branch>".
+	if got := gitRepoAndBranch(); got == "" {
+		t.Error("gitRepoAndBranch() inside a git worktree = \"\", want a non-empty repo(/branch)")
+	} else if !strings.Contains(got, "/") {
+		// A detached HEAD legitimately yields just "<repo>"; a normal checkout
+		// has a branch. The test worktree is on a branch, so expect the slash.
+		t.Logf("gitRepoAndBranch() = %q (no branch segment — detached HEAD?)", got)
+	}
+
+	// A directory with no .git anywhere above it resolves to "". t.TempDir under
+	// macOS lives beneath /private/var/folders, outside any repo.
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+	tmp := t.TempDir()
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatal(err)
+	}
+	if got := gitRepoAndBranch(); got != "" {
+		t.Errorf("gitRepoAndBranch() in a non-git dir = %q, want \"\"", got)
+	}
+}
+
+// titleDisambiguationNeeded decides whether the clown-name {id} appears in the
+// title: only when 2+ live sessions match the caller's scope predicate
+// (clown#180). The non-git tier keys on presence Decoration (the real group-id).
+func TestTitleDisambiguationNeededByDecoration(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	byGroup := func(g string) func(jobwake.Presence) bool {
+		return func(p jobwake.Presence) bool { return p.Decoration == g }
+	}
+
+	// One session in the group → the name adds nothing → no dedup needed.
+	registerPresenceFixture(t, "inst-a", "repo/feature", "A")
+	if titleDisambiguationNeeded(byGroup("repo/feature")) {
+		t.Error("single session in group: want false (no disambiguation needed)")
+	}
+	// A group with no matching session at all → still false.
+	if titleDisambiguationNeeded(byGroup("repo/absent")) {
+		t.Error("no session in group: want false")
+	}
+
+	// A second session in the SAME group → the name now disambiguates.
+	registerPresenceFixture(t, "inst-b", "repo/feature", "B")
+	if !titleDisambiguationNeeded(byGroup("repo/feature")) {
+		t.Error("two sessions in group: want true (disambiguation needed)")
+	}
+}
+
+// The git-fallback tier keys on presence Cwd instead of Decoration, since the
+// git-derived group is never written to Decoration. The fixtures all register
+// from this test process's cwd, so two of them share a Cwd and trip the dedup.
+func TestTitleDisambiguationNeededByCwd(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	byCwd := func(p jobwake.Presence) bool { return p.Cwd == wd }
+
+	// One session in this cwd (group-id empty — the bare-clown case) → false.
+	registerPresenceFixture(t, "inst-a", "", "A")
+	if titleDisambiguationNeeded(byCwd) {
+		t.Error("single session in cwd: want false")
+	}
+
+	// A second session registered from the same cwd → true.
+	registerPresenceFixture(t, "inst-b", "", "B")
+	if !titleDisambiguationNeeded(byCwd) {
+		t.Error("two sessions sharing a cwd: want true")
 	}
 }
