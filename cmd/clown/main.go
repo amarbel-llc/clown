@@ -580,6 +580,20 @@ func runWithFlags(flags parsedFlags) int {
 		}
 	}
 
+	// Register clown's built-in juggler-prompt tool the same way as the
+	// job-watch monitor above, so subagent delegation to local models is
+	// available under --plugin-dir providers (docs/plans/2026-07-11-
+	// juggler-subagent-tool-design.md). Gated by CLOWN_DISABLE_JUGGLER_MCP
+	// and an empty buildcfg.JugglerCliPath (returns "" when disabled).
+	if providerUsesPluginDirs(flags.provider) && !flags.naked {
+		if jugglerDir, err := synthJugglerPluginDir(); err != nil {
+			fmt.Fprintf(os.Stderr, "clown: registering juggler-prompt tool: %v\n", err)
+		} else if jugglerDir != "" {
+			defer os.RemoveAll(jugglerDir)
+			pluginDirs = append(pluginDirs, jugglerDir)
+		}
+	}
+
 	// Per FDR 0003, plugin-contributed system-prompt-append.d
 	// fragments are layered between clown's builtin fragments and
 	// the user's .clown/system-prompt.d/ fragments.
