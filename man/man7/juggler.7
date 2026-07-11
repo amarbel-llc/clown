@@ -121,11 +121,67 @@ Methods:
 .It Sy MethodGetInstance
 .It Sy MethodListAvailableModels
 .It Sy MethodDownloadModel
+.It Sy MethodListModels
+.It Sy MethodAddRemoteModel
+.It Sy MethodRemoveRemoteModel
+.It Sy MethodResolveModel
 .El
 .Pp
 See
 .Xr juggler 1
 for the per-method semantics.
+.Sh MODEL REGISTRY
+.Nm
+tracks two kinds of model:
+.Sy local
+.Pq a GGUF file spawned as a Xr llama-server 1 child, the pre-existing kind
+and
+.Sy remote
+.Pq a registered, process-less gateway endpoint, e.g. OpenRouter .
+.Cm ListModels
+returns the union of both, each entry tagged with its
+.Sq Kind .
+.Pp
+The remote registry is a small TOML file at
+.Pa ~/.local/share/juggler/models.toml ,
+overridable via
+.Ev JUGGLER_MODELS_PATH .
+.Cm AddRemoteModel
+and
+.Cm RemoveRemoteModel
+upsert and delete entries in that file by name; see
+.Xr juggler 1
+for the
+.Cm model
+CLI that drives them.
+.Pp
+.Cm ResolveModel
+turns a bare model name into a runnable endpoint, checking in order:
+.Bl -enum -compact -offset indent
+.It
+the remote registry
+.Po
+an exact name match returns its registered
+.Sy style No unchanged and its
+.Sy url No / Sy token
+with any
+.Ql ${VAR}
+references expanded against the daemon's environment
+.Pc \&;
+.It
+an already-running local instance of that name
+.Pq reused, not restarted ;
+.It
+a local GGUF file under
+.Pa ~/.local/share/juggler/models ,
+started fresh via the same path as
+.Cm StartInstance .
+.El
+.Pp
+If none match,
+.Cm ResolveModel
+returns
+.Sy -32001 .
 .Sh JSON-RPC ERROR CODES
 Codes follow JSON-RPC 2.0 §5.1.
 .Nm
@@ -149,9 +205,15 @@ for general application errors
 .Pq launcher not configured, download failure, etc.
 and
 .Sy -32001
-for
+for a
+.Sq not found
+condition, reused across methods with a method-specific message:
 .Cm GetInstance
-alias-not-found.
+alias-not-found,
+.Cm RemoveRemoteModel
+unknown remote-model name, and
+.Cm ResolveModel
+no local or remote match.
 .El
 .Sh INSTANCE LIFECYCLE
 On

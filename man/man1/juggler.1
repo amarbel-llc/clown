@@ -21,6 +21,12 @@
 .Nm
 .Cm models
 .Nm
+.Cm model list
+.Nm
+.Cm model add Ar name Fl -style Ar style Fl -url Ar url Fl -token Ar token
+.Nm
+.Cm model remove Ar name
+.Nm
 .Cm download Ar name Op Fl Fl url Ar url Op Fl Fl sha256 Ar hex Op Fl Fl size Ar bytes
 .Sh DESCRIPTION
 .Nm
@@ -141,6 +147,59 @@ one per line.
 Backed by juggler's
 .Cm ListAvailableModels
 RPC so the same file is seen by both juggler and clown.
+.It Cm model Cm list , Cm add Ar name , No or Cm remove Ar name
+Manage the unified model registry
+.Pq local and remote; see Xr juggler 7 Sx MODEL REGISTRY .
+Deliberately a separate command from
+.Cm models
+.Pq plural, above, which stays local-GGUF-only, one name per line
+for back-compat with existing scripts.
+.Bl -tag -width Ds
+.It Cm list
+Print a
+.Sq NAME KIND STYLE
+table of every local and remote model, backed by juggler's
+.Cm ListModels
+RPC.
+.Sy KIND
+is
+.Sq local
+or
+.Sq remote ;
+.Sy STYLE
+is populated only for remote entries.
+.It Cm add Ar name Fl -style Ar style Fl -url Ar url Fl -token Ar token
+Register
+.Pq or replace
+a remote model in the registry via the
+.Cm AddRemoteModel
+RPC.
+.Ar style
+is
+.Sq anthropic
+or
+.Sq openai-compat .
+The CLI does not itself enforce this enum; all three flags are required.
+Both
+.Sq Fl -style Ar value
+and
+.Sq Fl -style Ns = Ns Ar value
+forms parse, matching
+.Cm start Ns 's
+.Fl -alias
+convention.
+On success prints
+.Sq juggler: registered remote model "<name>" .
+.It Cm remove Ar name
+Delete the named remote model via the
+.Cm RemoveRemoteModel
+RPC.
+Errors if
+.Ar name
+is not a registered remote model.
+On success prints
+.Sq juggler: removed remote model "<name>" .
+.El
 .It Cm download Ar name Op Fl Fl url Ar url Op Fl Fl sha256 Ar hex Op Fl Fl size Ar bytes
 Fetch a model with a bubbletea progress UI.
 When
@@ -240,6 +299,17 @@ Stop one:
 .Bd -literal -offset indent
 $ juggler stop coder-32k
 juggler: stopped coder-32k
+.Ed
+.Pp
+Register a process-less gateway endpoint and confirm it in the unified
+registry:
+.Bd -literal -offset indent
+$ juggler model add openrouter-kimi --style openai-compat --url https://openrouter.ai/api/v1 --token "$OPENROUTER_API_KEY"
+juggler: registered remote model "openrouter-kimi"
+$ juggler model list
+NAME               KIND    STYLE
+qwen3-coder        local
+openrouter-kimi    remote  openai-compat
 .Ed
 .Sh SEE ALSO
 .Xr clown 1 ,

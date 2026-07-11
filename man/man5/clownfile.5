@@ -76,6 +76,19 @@ for the claude-family providers (claude, juggler, clownbox) when the user has no
 already passed
 .Fl -model ;
 other providers source their model elsewhere.
+For a
+.Fl -profile
+named-registry entry
+.Pq a separate mechanism from this table's only-if-unset defaults ,
+a
+.Sy claude Ns -provider
+profile with a
+.Sy gateway
+or
+.Sy local
+backend and no inline URL instead resolves its model through juggler's
+model registry; see
+.Xr juggler 7 Sx MODEL REGISTRY .
 .It Sy [profile.env]
 A table of environment variables exported into the provider and its plugin
 servers, set only when not already present (the ambient environment wins).
@@ -388,7 +401,8 @@ spawn-entry = ["clown", "--", "{prompt}"]
 .Sh SEE ALSO
 .Xr clown-presence 1 ,
 .Xr ringmaster 1 ,
-.Xr troupe 1
+.Xr troupe 1 ,
+.Xr juggler 7
 .Sh STANDARDS
 RFC-0013 (clownfile, per-instance identity, and clown-owned chat);
 RFC-0014 (clown-spinclass awareness seam: group-id and presence).
