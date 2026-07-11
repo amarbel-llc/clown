@@ -44,6 +44,8 @@ func TestRPC_RoundTrip(t *testing.T) {
 		Path: "/home/user/.local/share/juggler/models/qwen3-coder.gguf",
 		Size: 4_700_000_000,
 	}
+	localModel := Model{Name: "qwen3-coder-local", Kind: ModelKindLocal}
+	remoteModel := Model{Name: "claude-openrouter", Kind: ModelKindRemote, Style: "openrouter"}
 
 	cases := []struct {
 		name     string
@@ -123,6 +125,54 @@ func TestRPC_RoundTrip(t *testing.T) {
 			wantJSON: `{"model":{"name":"qwen3-coder","path":"/home/user/.local/share/juggler/models/qwen3-coder.gguf","size":4700000000}}`,
 			into:     new(DownloadModelResult),
 		},
+		{
+			name:     "ListModelsParams_empty",
+			value:    ListModelsParams{},
+			wantJSON: `{}`,
+			into:     new(ListModelsParams),
+		},
+		{
+			name:     "ListModelsResult",
+			value:    ListModelsResult{Models: []Model{localModel, remoteModel}},
+			wantJSON: `{"models":[{"name":"qwen3-coder-local","kind":"local"},{"name":"claude-openrouter","kind":"remote","style":"openrouter"}]}`,
+			into:     new(ListModelsResult),
+		},
+		{
+			name:     "AddRemoteModelParams",
+			value:    AddRemoteModelParams{Name: "claude-openrouter", Style: "openrouter", URL: "https://openrouter.ai/api", Token: "${OPENROUTER_API_KEY}"},
+			wantJSON: `{"name":"claude-openrouter","style":"openrouter","url":"https://openrouter.ai/api","token":"${OPENROUTER_API_KEY}"}`,
+			into:     new(AddRemoteModelParams),
+		},
+		{
+			name:     "AddRemoteModelResult_empty",
+			value:    AddRemoteModelResult{},
+			wantJSON: `{}`,
+			into:     new(AddRemoteModelResult),
+		},
+		{
+			name:     "RemoveRemoteModelParams",
+			value:    RemoveRemoteModelParams{Name: "claude-openrouter"},
+			wantJSON: `{"name":"claude-openrouter"}`,
+			into:     new(RemoveRemoteModelParams),
+		},
+		{
+			name:     "ResolveModelParams",
+			value:    ResolveModelParams{Name: "claude-openrouter"},
+			wantJSON: `{"name":"claude-openrouter"}`,
+			into:     new(ResolveModelParams),
+		},
+		{
+			name:     "ResolveModelResult_remote",
+			value:    ResolveModelResult{Kind: ModelKindRemote, URL: "https://openrouter.ai/api", Token: "sk-resolved-secret", Style: "openrouter"},
+			wantJSON: `{"kind":"remote","url":"https://openrouter.ai/api","token":"sk-resolved-secret","style":"openrouter"}`,
+			into:     new(ResolveModelResult),
+		},
+		{
+			name:     "ResolveModelResult_local",
+			value:    ResolveModelResult{Kind: ModelKindLocal, URL: "http://127.0.0.1:43219"},
+			wantJSON: `{"kind":"local","url":"http://127.0.0.1:43219"}`,
+			into:     new(ResolveModelResult),
+		},
 	}
 
 	for _, tc := range cases {
@@ -156,6 +206,10 @@ func TestMethodConstants(t *testing.T) {
 		MethodGetInstance:         "GetInstance",
 		MethodListAvailableModels: "ListAvailableModels",
 		MethodDownloadModel:       "DownloadModel",
+		MethodListModels:          "ListModels",
+		MethodAddRemoteModel:      "AddRemoteModel",
+		MethodRemoveRemoteModel:   "RemoveRemoteModel",
+		MethodResolveModel:        "ResolveModel",
 	}
 	for got, want := range cases {
 		if got != want {
