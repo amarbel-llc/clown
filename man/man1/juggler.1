@@ -31,6 +31,8 @@
 .Op Fl -max-tokens Ar n
 .Nm
 .Cm download Ar name Op Fl Fl url Ar url Op Fl Fl sha256 Ar hex Op Fl Fl size Ar bytes
+.Nm
+.Cm mcp
 .Sh DESCRIPTION
 .Nm
 is a thin CLI client of the
@@ -280,6 +282,42 @@ right surface for a terminal-attached invocation.
 The downloaded file lands in
 .Pa ~/.local/share/juggler/models
 where every other subcommand can see it.
+.It Cm mcp
+Run a stdio MCP server exposing a single tool,
+.Sq juggler-prompt ,
+taking
+.Sq model ,
+.Sq task ,
+and an optional
+.Sq max_tokens
+and returning the model's text reply.
+Normally spawned by Claude Code itself as the
+.Cm clown-builtin-juggler
+plugin's
+.Sq stdioServers
+entry
+.Pq Sq juggler mcp ,
+not invoked directly by a human.
+Each
+.Sq tools/call
+resolves
+.Ar model
+and sends
+.Ar task
+through the same
+.Cm ResolveModel
+resolution and HTTP dispatch machinery
+.Cm prompt
+uses, under the same 120-second budget.
+.Ar max_tokens
+defaults to 1024 when omitted, higher than
+.Cm prompt Ns 's
+256-token CLI default since this tool is for real delegated work
+rather than a smoke test.
+This tool makes real, and for remote models potentially paid,
+third-party API calls, so the plugin ships no auto-allow hook for it;
+every call defers to Claude Code's own permission prompt
+.Pq see Pa docs/plans/2026-07-11-juggler-subagent-tool-design.md for the reasoning .
 .El
 .Sh ENVIRONMENT
 .Bl -tag -width Ds
@@ -389,3 +427,17 @@ because the model registry and HTTP fetch are
 concerns that predate juggler.
 Clown-side automation (planned in FDR-0011 / plan 2) does use the RPC
 since clown is not terminal-attached.
+.Pp
+The
+.Cm mcp
+subcommand is likewise not meant for interactive human invocation: it
+runs a long-lived stdio server that Claude Code spawns itself via the
+.Cm clown-builtin-juggler
+plugin's
+.Sq stdioServers
+entry, not something a person types at a shell prompt.
+It deliberately ships no auto-allow hook, so every
+.Sq juggler-prompt
+call defers to Claude Code's native permission prompt; see
+.Pa docs/plans/2026-07-11-juggler-subagent-tool-design.md
+for the reasoning.
