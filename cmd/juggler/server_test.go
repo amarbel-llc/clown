@@ -5,11 +5,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -386,6 +388,64 @@ func TestDispatchAddRemoteModel_ThenListModels(t *testing.T) {
 	}
 	if len(onDisk) != 1 || onDisk[0].Name != "gw" || onDisk[0].Token != "${GW_TOKEN}" {
 		t.Fatalf("on-disk models = %+v", onDisk)
+	}
+}
+
+func TestDispatchAddRemoteModel_ConcurrentWritesDontLoseUpdates(t *testing.T) {
+	// Regression test for issue #182: AddRemoteModel's load->mutate->save
+	// sequence had no mutex, so two concurrent callers could each read the
+	// same on-disk snapshot and one write would clobber the other's
+	// addition (a lost update). Fire enough concurrent adds for distinct
+	// names that, without serialization, at least one is very likely to
+	// be dropped; with the mutex in place every add is fully serialized so
+	// all of them must survive.
+	s := newServer(rm.NewRegistry(), nil)
+	s.modelsDir = shortTempDir(t)
+	s.remoteModelsPath = filepath.Join(shortTempDir(t), "models.toml")
+
+	const n = 25
+	var wg sync.WaitGroup
+	errs := make(chan string, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			name := fmt.Sprintf("gw-%02d", i)
+			resp := s.dispatch(rm.Envelope{
+				JSONRPC: "2.0",
+				ID:      json.Number(fmt.Sprintf("%d", i)),
+				Method:  rm.MethodAddRemoteModel,
+				Params: mustJSON(t, rm.AddRemoteModelParams{
+					Name: name, Style: "openai-compat", URL: "https://example.com",
+				}),
+			})
+			if resp.Error != nil {
+				errs <- fmt.Sprintf("AddRemoteModel(%s): %+v", name, resp.Error)
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for e := range errs {
+		t.Error(e)
+	}
+
+	onDisk, err := rm.LoadRemoteModels(s.remoteModelsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(onDisk) != n {
+		t.Fatalf("expected %d remote models on disk, got %d: %+v", n, len(onDisk), onDisk)
+	}
+	seen := make(map[string]bool, n)
+	for _, m := range onDisk {
+		seen[m.Name] = true
+	}
+	for i := 0; i < n; i++ {
+		name := fmt.Sprintf("gw-%02d", i)
+		if !seen[name] {
+			t.Errorf("missing %s in final registry — lost update", name)
+		}
 	}
 }
 

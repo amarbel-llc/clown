@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"sync"
 	"time"
 
 	rm "github.com/amarbel-llc/clown/internal/juggler"
@@ -30,6 +31,14 @@ type server struct {
 	// Empty in zero-value servers used by tests that don't exercise the
 	// new methods; newServer sets it via rm.RemoteModelsPath().
 	remoteModelsPath string
+	// remoteModelsMu serializes the load->mutate->save sequence in
+	// AddRemoteModel/RemoveRemoteModel. Each connection is handled on its
+	// own goroutine (see Serve), and SaveRemoteModels's atomic
+	// temp-file+rename only guards against a corrupted file, not against
+	// two concurrent handlers each reading the same stale snapshot and one
+	// clobbering the other's change (a lost update). Zero-value sync.Mutex
+	// is ready to use — newServer doesn't need to initialize it.
+	remoteModelsMu sync.Mutex
 }
 
 // Launcher abstracts how new llama-server instances are spawned. The
@@ -238,6 +247,8 @@ func (s *server) dispatch(req rm.Envelope) rm.Envelope {
 		if err := json.Unmarshal(req.Params, &p); err != nil {
 			return rpcError(req.ID, -32602, fmt.Sprintf("invalid params: %v", err))
 		}
+		s.remoteModelsMu.Lock()
+		defer s.remoteModelsMu.Unlock()
 		remote, err := rm.LoadRemoteModels(s.remoteModelsPath)
 		if err != nil {
 			return rpcError(req.ID, -32000, fmt.Sprintf("load remote models: %v", err))
@@ -255,6 +266,8 @@ func (s *server) dispatch(req rm.Envelope) rm.Envelope {
 		if err := json.Unmarshal(req.Params, &p); err != nil {
 			return rpcError(req.ID, -32602, fmt.Sprintf("invalid params: %v", err))
 		}
+		s.remoteModelsMu.Lock()
+		defer s.remoteModelsMu.Unlock()
 		remote, err := rm.LoadRemoteModels(s.remoteModelsPath)
 		if err != nil {
 			return rpcError(req.ID, -32000, fmt.Sprintf("load remote models: %v", err))
