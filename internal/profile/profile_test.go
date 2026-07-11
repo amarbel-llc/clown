@@ -165,6 +165,58 @@ func TestValidateClaudeGateway(t *testing.T) {
 	}
 }
 
+func TestValidateGatewayViaJugglerModel(t *testing.T) {
+	// A gateway profile with no inline URL/Token, resolving instead through
+	// juggler by Model (applyNamedProfile's juggler-fallback branch) must
+	// validate — this is the shape the juggler model registry feature
+	// depends on being reachable through --profile / clown profile add.
+	p := profile.Profile{Name: "juggler-gw", Provider: "claude", Backend: "gateway", Model: "remote-model-a"}
+	if err := profile.Validate(p); err != nil {
+		t.Fatalf("gateway+model (no url) should validate: %v", err)
+	}
+}
+
+func TestValidateGatewayNeitherURLNorModelErrors(t *testing.T) {
+	p := profile.Profile{Name: "empty-gw", Provider: "claude", Backend: "gateway"}
+	err := profile.Validate(p)
+	if err == nil {
+		t.Fatal("gateway with neither url nor model should fail validation")
+	}
+	if !strings.Contains(err.Error(), "url") || !strings.Contains(err.Error(), "model") {
+		t.Errorf("error should mention both url and model, got: %v", err)
+	}
+}
+
+func TestValidateGatewayViaJugglerModelOnlyForClaude(t *testing.T) {
+	// opencode/crush have no juggler-resolution fallback (cmd/clown's
+	// runOpencode/runCrush read prof.URL/prof.Token directly for the
+	// gateway case) — a Model must not exempt them from the pre-existing
+	// url+token requirement, or they'd silently launch with an empty base
+	// URL/API key.
+	for _, prov := range []string{"opencode", "crush"} {
+		p := profile.Profile{Name: "juggler-gw-" + prov, Provider: prov, Backend: "gateway", Model: "remote-model-a"}
+		err := profile.Validate(p)
+		if err == nil {
+			t.Errorf("%s+gateway+model (no url/token): expected error, got nil", prov)
+			continue
+		}
+		if !strings.Contains(err.Error(), "url") {
+			t.Errorf("%s: error should mention url, got: %v", prov, err)
+		}
+	}
+}
+
+func TestValidateGatewayURLWithoutTokenStillErrors(t *testing.T) {
+	// A Model being present must not exempt an inline URL from also
+	// requiring a Token — the "URL present" branch is unconditional.
+	p := profile.Profile{Name: "url-no-token", Provider: "claude", Backend: "gateway",
+		URL: "https://example.com", Model: "some-model"}
+	err := profile.Validate(p)
+	if err == nil || !strings.Contains(err.Error(), "token") {
+		t.Fatalf("gateway with url but no token should fail validation naming token, got: %v", err)
+	}
+}
+
 func TestValidate_RejectsEmptyButNonNilContextServers(t *testing.T) {
 	// An empty (len==0), non-nil ContextServers can never round-trip through
 	// Save/Load: BurntSushi/toml's "context_servers,omitempty" tag drops ANY

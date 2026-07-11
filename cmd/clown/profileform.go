@@ -144,21 +144,46 @@ func buildProfileForm(v *profileFormValues, existingUserNames map[string]bool, e
 				Value(&v.Model),
 			huh.NewInput().
 				Title("URL").
-				Description("gateway base URL (required for the gateway backend)").
+				Description("gateway base URL (required for the gateway backend; for claude, a Model that resolves via juggler is an alternative)").
 				Value(&v.URL).
 				Validate(func(s string) error {
-					if v.Backend == "gateway" && strings.TrimSpace(s) == "" {
+					if v.Backend != "gateway" {
+						return nil
+					}
+					url := strings.TrimSpace(s)
+					if v.Provider == "claude" {
+						// claude has the juggler-fallback branch (applyNamedProfile):
+						// url-or-model satisfies the gateway backend.
+						if url == "" && strings.TrimSpace(v.Model) == "" {
+							return fmt.Errorf("url is required for the gateway backend (or set Model to resolve via juggler)")
+						}
+						return nil
+					}
+					// opencode/crush have no juggler-resolution fallback yet
+					// (runOpencode/runCrush read URL/Token directly) — url is
+					// unconditionally required.
+					if url == "" {
 						return fmt.Errorf("url is required for the gateway backend")
 					}
 					return nil
 				}),
 			huh.NewInput().
 				Title("Token").
-				Description("literal or ${VAR} reference (required for the gateway backend)").
+				Description("literal or ${VAR} reference (required for the gateway backend when URL is set)").
 				EchoMode(huh.EchoModePassword).
 				Value(&v.Token).
 				Validate(func(s string) error {
-					if v.Backend == "gateway" && strings.TrimSpace(s) == "" {
+					if v.Backend != "gateway" {
+						return nil
+					}
+					token := strings.TrimSpace(s)
+					if v.Provider == "claude" {
+						if strings.TrimSpace(v.URL) != "" && token == "" {
+							return fmt.Errorf("token is required for the gateway backend when url is set")
+						}
+						return nil
+					}
+					if token == "" {
 						return fmt.Errorf("token is required for the gateway backend")
 					}
 					return nil

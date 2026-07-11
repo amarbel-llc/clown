@@ -80,11 +80,30 @@ func Validate(p Profile) error {
 		return fmt.Errorf("profile %q: provider %q does not support backend %q", p.Name, p.Provider, p.Backend)
 	}
 	if p.Backend == "gateway" {
-		if p.URL == "" {
-			return fmt.Errorf("profile %q: backend gateway requires url", p.Name)
-		}
-		if p.Token == "" {
-			return fmt.Errorf("profile %q: backend gateway requires token", p.Name)
+		if p.Provider == "claude" {
+			// Either an inline URL (with its required Token) or a Model that
+			// resolves via juggler (cmd/clown's applyNamedProfile juggler-
+			// fallback branch, only wired up for the claude family so far —
+			// docs/plans/2026-07-07-juggler-model-registry-design.md)
+			// satisfies the gateway backend — a juggler-resolved remote
+			// model gets its token from the registry, not the profile.
+			if p.URL == "" && p.Model == "" {
+				return fmt.Errorf("profile %q: backend gateway requires url or model (model resolves via juggler)", p.Name)
+			}
+			if p.URL != "" && p.Token == "" {
+				return fmt.Errorf("profile %q: backend gateway requires token when url is set", p.Name)
+			}
+		} else {
+			// opencode/crush have no juggler-resolution fallback yet
+			// (cmd/clown's runOpencode/runCrush read prof.URL/prof.Token
+			// directly for the gateway case) — keep requiring an inline
+			// url+token unconditionally.
+			if p.URL == "" {
+				return fmt.Errorf("profile %q: backend gateway requires url", p.Name)
+			}
+			if p.Token == "" {
+				return fmt.Errorf("profile %q: backend gateway requires token", p.Name)
+			}
 		}
 	}
 	// ContextServers of length zero (as opposed to nil) is a value that can

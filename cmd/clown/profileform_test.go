@@ -57,6 +57,38 @@ func TestFormValuesToProfile(t *testing.T) {
 	}
 }
 
+// TestFormValuesToProfile_GatewayViaJugglerModel guards the shape the
+// juggler model registry feature depends on: a gateway profile with no
+// inline URL/Token, built through `clown profile add`/`edit`, must produce
+// a Profile that passes profile.Validate — mirroring the profile.go-level
+// TestValidateGatewayViaJugglerModel, but exercised through the form's own
+// toProfile() path.
+func TestFormValuesToProfile_GatewayViaJugglerModel(t *testing.T) {
+	v := profileFormValues{Name: "juggler-gw", Provider: "claude",
+		Backend: "gateway", Model: "remote-model-a"}
+	p := v.toProfile()
+	if err := profile.Validate(p); err != nil {
+		t.Fatalf("gateway+model (no url) built via the form should validate: %v", err)
+	}
+}
+
+// TestFormValuesToProfile_GatewayViaJugglerModelOnlyForClaude guards the
+// other half of that gate: opencode/crush have no juggler-resolution
+// fallback, so a Model must not exempt them from the form's url+token
+// requirement either — mirrors profile.go's
+// TestValidateGatewayViaJugglerModelOnlyForClaude via the form's toProfile()
+// path.
+func TestFormValuesToProfile_GatewayViaJugglerModelOnlyForClaude(t *testing.T) {
+	for _, prov := range []string{"opencode", "crush"} {
+		v := profileFormValues{Name: "juggler-gw-" + prov, Provider: prov,
+			Backend: "gateway", Model: "remote-model-a"}
+		p := v.toProfile()
+		if err := profile.Validate(p); err == nil {
+			t.Errorf("%s+gateway+model (no url/token) built via the form should still fail validation", prov)
+		}
+	}
+}
+
 // TestEditRoundTripPreservesUneditableFields guards against the exact
 // failure mode profileFormValues.toProfile/valuesFromProfile must avoid:
 // editing a profile's form-visible fields (name/provider/model/etc.) via
