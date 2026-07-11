@@ -33,3 +33,17 @@ func LogPath() (string, error) {
 	}
 	return filepath.Join(home, ".local", "log", "juggler.log"), nil
 }
+
+// RemoteModelsPath returns the remote-model registry file location:
+// ~/.local/share/juggler/models.toml (sibling to the GGUF models/ dir
+// jugglermodels.Dir() resolves). JUGGLER_MODELS_PATH overrides it (tests).
+func RemoteModelsPath() (string, error) {
+	if v := os.Getenv("JUGGLER_MODELS_PATH"); v != "" {
+		return v, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("home dir: %w", err)
+	}
+	return filepath.Join(home, ".local", "share", "juggler", "models.toml"), nil
+}
