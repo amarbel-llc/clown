@@ -53,6 +53,35 @@ type anthropicResponse struct {
 	Content []anthropicContentBlock `json:"content"`
 }
 
+// openAICompatMessage is one entry in an OpenAI Chat Completions request's
+// or response's "messages"/"message" field.
+type openAICompatMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+// openAICompatRequest is the request body sent to POST /chat/completions.
+type openAICompatRequest struct {
+	Model     string                `json:"model"`
+	MaxTokens int                   `json:"max_tokens"`
+	Messages  []openAICompatMessage `json:"messages"`
+}
+
+// openAICompatChoice is one entry in a Chat Completions response's
+// "choices" array. Message.Content is null on a tool-call-only response;
+// json.Unmarshal leaves the (already zero-value) string field as "" in
+// that case rather than erroring, which is the behavior this command wants.
+type openAICompatChoice struct {
+	Message      openAICompatMessage `json:"message"`
+	FinishReason string              `json:"finish_reason"`
+}
+
+// openAICompatResponse is the subset of the Chat Completions response
+// shape this command cares about.
+type openAICompatResponse struct {
+	Choices []openAICompatChoice `json:"choices"`
+}
+
 // cmdPrompt resolves modelName via the juggler daemon's ResolveModel RPC
 // and sends it a single prompt, printing the reply and exiting — a
 // `claude -p`-shaped direct smoke path that exercises juggler's
@@ -132,23 +161,33 @@ func cmdPrompt(cli *rm.Client, args []string) int {
 	return 0
 }
 
-// sendPrompt issues a single Anthropic Messages API completion request
-// against the resolved endpoint and returns the concatenated text of the
-// reply's "text"-type content blocks. Kept separate from cmdPrompt so it
-// is unit-testable against an httptest.Server without a real juggler
-// daemon in the loop.
+// sendPrompt dispatches to the protocol-specific sender for the resolved
+// endpoint and returns the reply text. Kept separate from cmdPrompt so
+// the dispatch itself is unit-testable against an httptest.Server
+// without a real juggler daemon in the loop.
 //
-// v1 scope: anthropic-style only. A local result is always
-// Anthropic-Messages-shaped by construction (llama-cpp with /v1/messages
-// support) and never sets Style; a remote result carrying any Style
-// other than "anthropic" (notably "openai-compat") is rejected before
-// any HTTP call is attempted — sending an OpenAI-compat endpoint an
-// Anthropic-shaped request would silently misbehave rather than error.
+// A local result is always Anthropic-Messages-shaped by construction
+// (llama-cpp with /v1/messages support) and never sets Style, so it
+// always takes the Anthropic path regardless of Style's zero value. A
+// remote result's Style picks the protocol: "anthropic" or
+// "openai-compat" are both supported; anything else is rejected before
+// any HTTP call is attempted — sending an unrecognized-shape endpoint a
+// guessed request would silently misbehave rather than error.
 func sendPrompt(ctx context.Context, httpClient *http.Client, resolved rm.ResolveModelResult, modelName, prompt string, maxTokens int) (string, error) {
-	if resolved.Kind == rm.ModelKindRemote && resolved.Style != "anthropic" {
+	switch {
+	case resolved.Kind == rm.ModelKindLocal || resolved.Style == "anthropic":
+		return sendAnthropicPrompt(ctx, httpClient, resolved, modelName, prompt, maxTokens)
+	case resolved.Style == "openai-compat":
+		return sendOpenAICompatPrompt(ctx, httpClient, resolved, modelName, prompt, maxTokens)
+	default:
 		return "", fmt.Errorf("style %q not yet supported (only anthropic-compatible endpoints)", resolved.Style)
 	}
+}
 
+// sendAnthropicPrompt issues a single Anthropic Messages API completion
+// request against the resolved endpoint and returns the concatenated
+// text of the reply's "text"-type content blocks.
+func sendAnthropicPrompt(ctx context.Context, httpClient *http.Client, resolved rm.ResolveModelResult, modelName, prompt string, maxTokens int) (string, error) {
 	// x-api-key mirrors applyNamedProfile's local-instance dummy-auth
 	// convention (cmd/clown/main.go): a local llama-server instance
 	// doesn't check the key, but the header must still be present.
@@ -201,4 +240,58 @@ func sendPrompt(ctx context.Context, httpClient *http.Client, resolved rm.Resolv
 		}
 	}
 	return sb.String(), nil
+}
+
+// sendOpenAICompatPrompt issues a single OpenAI Chat Completions request
+// against the resolved endpoint and returns the first choice's message
+// content. Only reachable for a remote result (a local result is always
+// Anthropic-shaped and never reaches this function), so resolved.Token
+// is used directly rather than falling back to a dummy value.
+//
+// resolved.URL is stored including the "/v1" suffix for openai-compat
+// entries (matching the OpenAI SDK's baseURL convention, e.g.
+// "https://openrouter.ai/api/v1"), so this function appends only
+// "/chat/completions" — unlike sendAnthropicPrompt, whose stored URL
+// excludes "/v1" and appends "/v1/messages".
+func sendOpenAICompatPrompt(ctx context.Context, httpClient *http.Client, resolved rm.ResolveModelResult, modelName, prompt string, maxTokens int) (string, error) {
+	reqBody := openAICompatRequest{
+		Model:     modelName,
+		MaxTokens: maxTokens,
+		Messages:  []openAICompatMessage{{Role: "user", Content: prompt}},
+	}
+	payload, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", fmt.Errorf("marshal request: %w", err)
+	}
+
+	url := strings.TrimRight(resolved.URL, "/") + "/chat/completions"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
+	if err != nil {
+		return "", fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("content-type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+resolved.Token)
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("request to %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("reading response body from %s: %w", url, err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("%s returned status %d: %s", url, resp.StatusCode, string(body))
+	}
+
+	var out openAICompatResponse
+	if err := json.Unmarshal(body, &out); err != nil {
+		return "", fmt.Errorf("parsing response from %s: %w", url, err)
+	}
+	if len(out.Choices) == 0 {
+		return "", fmt.Errorf("no choices in response from %s", url)
+	}
+	return out.Choices[0].Message.Content, nil
 }

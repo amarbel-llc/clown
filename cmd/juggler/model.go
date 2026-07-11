@@ -63,7 +63,9 @@ func cmdModelList(cli *rm.Client) int {
 // cmdModelAdd parses argv for `juggler model add <name> --style <style>
 // --url <url> --token <token>` and issues an AddRemoteModel RPC. All
 // three flags are required; both space and `--flag=value` forms are
-// accepted (matching cmdStart's --alias/--bind convention).
+// accepted (matching cmdStart's --alias/--bind convention). style is
+// validated against the "anthropic"/"openai-compat" enum before any RPC
+// call is attempted.
 func cmdModelAdd(cli *rm.Client, args []string) int {
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, modelUsage)
@@ -110,6 +112,10 @@ func cmdModelAdd(cli *rm.Client, args []string) int {
 	}
 	if style == "" || url == "" || token == "" {
 		fmt.Fprintln(os.Stderr, modelUsage)
+		return 1
+	}
+	if style != "anthropic" && style != "openai-compat" {
+		fmt.Fprintf(os.Stderr, "juggler: --style must be \"anthropic\" or \"openai-compat\", got %q\n", style)
 		return 1
 	}
 

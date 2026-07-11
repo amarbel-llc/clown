@@ -270,6 +270,33 @@ func TestCmdModelAdd_EqualsForms(t *testing.T) {
 	}
 }
 
+// TestCmdModelAdd_InvalidStyle exercises cmdModelAdd's --style enum
+// validation: a style that is neither "anthropic" nor "openai-compat"
+// should be a usage error, no RPC call. Passing a nil client makes "no
+// call attempted" explicit, same as TestCmdModelAddRequiresURLAndToken.
+func TestCmdModelAdd_InvalidStyle(t *testing.T) {
+	oldStderr := os.Stderr
+	r, w, _ := os.Pipe()
+	os.Stderr = w
+
+	rc := cmdModelAdd(nil, []string{
+		"my-model", "--style", "bogus-style",
+		"--url", "https://example.test", "--token", "tok",
+	})
+
+	os.Stderr = oldStderr
+	w.Close()
+
+	if rc == 0 {
+		t.Errorf("expected nonzero rc")
+	}
+	var buf bytes.Buffer
+	_, _ = io.Copy(&buf, r)
+	if !strings.Contains(buf.String(), "bogus-style") {
+		t.Errorf("stderr should mention the invalid style: %s", buf.String())
+	}
+}
+
 // TestCmdModelAdd_UnknownFlag exercises cmdModelAdd's unrecognized-flag
 // rejection: an unknown flag (e.g. --bogus) alongside otherwise-complete
 // required flags should still be rejected before any RPC call is made.

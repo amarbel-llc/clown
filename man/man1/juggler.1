@@ -181,8 +181,9 @@ RPC.
 is
 .Sq anthropic
 or
-.Sq openai-compat .
-The CLI does not itself enforce this enum; all three flags are required.
+.Sq openai-compat ;
+any other value is rejected before any RPC call is attempted.
+All three flags are required.
 Both
 .Sq Fl -style Ar value
 and
@@ -235,18 +236,22 @@ A single 120-second budget covers both the
 call
 .Pq which may block starting a local instance
 and the completion request itself.
-The request is always sent Anthropic-Messages-shaped
-.Pq Sq POST Pa /v1/messages ,
-.Sq anthropic-version: 2023-06-01 .
 A local result always resolves to an Anthropic-Messages-shaped endpoint
+.Pq Sq POST Pa /v1/messages ,
+.Sq anthropic-version: 2023-06-01
 and authenticates with
-.Sq x-api-key: dummy ;
-a remote result authenticates with its registered token.
-Only remote entries with style
+.Sq x-api-key: dummy .
+A remote result's registered style picks the protocol:
 .Sq anthropic
-are supported; a remote entry registered with style
+sends the same Anthropic-Messages-shaped request, authenticating with
+.Sq x-api-key
+set to the registered token;
 .Sq openai-compat
-errors cleanly before any HTTP call is attempted.
+sends an OpenAI Chat Completions-shaped request
+.Pq Sq POST Pa /chat/completions ,
+authenticating with
+.Sq Authorization: Bearer <token> .
+Any other style errors cleanly before any HTTP call is attempted.
 .It Cm download Ar name Op Fl Fl url Ar url Op Fl Fl sha256 Ar hex Op Fl Fl size Ar bytes
 Fetch a model with a bubbletea progress UI.
 When

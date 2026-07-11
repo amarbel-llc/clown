@@ -146,12 +146,12 @@ func TestSendPrompt_LocalUsesDummyToken(t *testing.T) {
 	}
 }
 
-// TestSendPrompt_OpenAICompatStyleRejected verifies a remote result with
-// Style "openai-compat" is rejected with a clear error and, critically,
-// no HTTP call is ever attempted — asserted via an atomic counter on the
-// handler, matching this session's other concurrency/no-call-attempted
-// proving pattern.
-func TestSendPrompt_OpenAICompatStyleRejected(t *testing.T) {
+// TestSendPrompt_UnknownStyleRejected verifies a remote result with a
+// genuinely unsupported Style (neither "anthropic" nor "openai-compat")
+// is rejected with a clear error and, critically, no HTTP call is ever
+// attempted — asserted via an atomic counter on the handler, matching
+// this session's other concurrency/no-call-attempted proving pattern.
+func TestSendPrompt_UnknownStyleRejected(t *testing.T) {
 	var called int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&called, 1)
@@ -159,16 +159,128 @@ func TestSendPrompt_OpenAICompatStyleRejected(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	resolved := rm.ResolveModelResult{Kind: rm.ModelKindRemote, URL: srv.URL, Token: "t", Style: "openai-compat"}
+	resolved := rm.ResolveModelResult{Kind: rm.ModelKindRemote, URL: srv.URL, Token: "t", Style: "bogus-style"}
 	_, err := sendPrompt(context.Background(), srv.Client(), resolved, "m", "p", 256)
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !strings.Contains(err.Error(), "openai-compat") || !strings.Contains(err.Error(), "not yet supported") {
+	if !strings.Contains(err.Error(), "bogus-style") || !strings.Contains(err.Error(), "not yet supported") {
 		t.Errorf("error = %v", err)
 	}
 	if atomic.LoadInt32(&called) != 0 {
 		t.Errorf("HTTP handler should never have been invoked, called %d times", called)
+	}
+}
+
+// --- sendOpenAICompatPrompt unit tests (no juggler daemon involved) ---
+
+// TestSendOpenAICompatPrompt_RequestShapeAndResponse verifies the
+// outgoing request shape (method, path, Authorization header, JSON body)
+// and single-choice text extraction for the OpenAI Chat Completions path.
+func TestSendOpenAICompatPrompt_RequestShapeAndResponse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("method = %s, want POST", r.Method)
+		}
+		if r.URL.Path != "/chat/completions" {
+			t.Errorf("path = %s, want /chat/completions", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer sekret" {
+			t.Errorf("Authorization = %q, want Bearer sekret", got)
+		}
+		if got := r.Header.Get("content-type"); got != "application/json" {
+			t.Errorf("content-type = %q, want application/json", got)
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var req openAICompatRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			t.Fatalf("unmarshal request body: %v", err)
+		}
+		if req.Model != "my-model" {
+			t.Errorf("model = %q, want my-model", req.Model)
+		}
+		if req.MaxTokens != 512 {
+			t.Errorf("max_tokens = %d, want 512", req.MaxTokens)
+		}
+		if len(req.Messages) != 1 || req.Messages[0].Role != "user" || req.Messages[0].Content != "hello there" {
+			t.Errorf("messages = %+v", req.Messages)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"hi back"},"finish_reason":"stop"}]}`))
+	}))
+	defer srv.Close()
+
+	resolved := rm.ResolveModelResult{Kind: rm.ModelKindRemote, URL: srv.URL, Token: "sekret", Style: "openai-compat"}
+	got, err := sendOpenAICompatPrompt(context.Background(), srv.Client(), resolved, "my-model", "hello there", 512)
+	if err != nil {
+		t.Fatalf("sendOpenAICompatPrompt: %v", err)
+	}
+	if got != "hi back" {
+		t.Errorf("got %q, want %q", got, "hi back")
+	}
+}
+
+// TestSendOpenAICompatPrompt_NonSuccessStatus verifies a non-2xx response
+// is surfaced as an error mentioning both the status code and the raw
+// body, mirroring TestSendPrompt_NonSuccessStatus's assertion for the
+// Anthropic path.
+func TestSendOpenAICompatPrompt_NonSuccessStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":"boom"}`))
+	}))
+	defer srv.Close()
+
+	resolved := rm.ResolveModelResult{Kind: rm.ModelKindRemote, URL: srv.URL, Token: "t", Style: "openai-compat"}
+	_, err := sendOpenAICompatPrompt(context.Background(), srv.Client(), resolved, "m", "p", 256)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "500") || !strings.Contains(err.Error(), "boom") {
+		t.Errorf("error should mention status code + body: %v", err)
+	}
+}
+
+// TestSendOpenAICompatPrompt_NullContent verifies a response whose
+// message content is JSON null (e.g. a tool-call-only response) is
+// treated as an empty string, not an error.
+func TestSendOpenAICompatPrompt_NullContent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":null},"finish_reason":"tool_calls"}]}`))
+	}))
+	defer srv.Close()
+
+	resolved := rm.ResolveModelResult{Kind: rm.ModelKindRemote, URL: srv.URL, Token: "t", Style: "openai-compat"}
+	got, err := sendOpenAICompatPrompt(context.Background(), srv.Client(), resolved, "m", "p", 256)
+	if err != nil {
+		t.Fatalf("sendOpenAICompatPrompt: %v", err)
+	}
+	if got != "" {
+		t.Errorf("got %q, want empty string", got)
+	}
+}
+
+// TestSendOpenAICompatPrompt_EmptyChoicesErrors verifies an empty
+// "choices" array is a clear error rather than a silent empty string or
+// panic.
+func TestSendOpenAICompatPrompt_EmptyChoicesErrors(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"choices":[]}`))
+	}))
+	defer srv.Close()
+
+	resolved := rm.ResolveModelResult{Kind: rm.ModelKindRemote, URL: srv.URL, Token: "t", Style: "openai-compat"}
+	_, err := sendOpenAICompatPrompt(context.Background(), srv.Client(), resolved, "m", "p", 256)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "no choices") {
+		t.Errorf("error = %v, want mention of no choices", err)
 	}
 }
 
@@ -317,7 +429,7 @@ func TestCmdPrompt_MaxTokensFlagBeforeModelName(t *testing.T) {
 }
 
 // TestCmdPrompt_StyleNotSupported exercises a registered remote model
-// with Style "openai-compat": cmdPrompt should error clearly and the
+// with an unsupported Style: cmdPrompt should error clearly and the
 // httptest server's handler must never be invoked.
 func TestCmdPrompt_StyleNotSupported(t *testing.T) {
 	var called int32
@@ -331,7 +443,7 @@ func TestCmdPrompt_StyleNotSupported(t *testing.T) {
 		Kind:  rm.ModelKindRemote,
 		URL:   remoteSrv.URL,
 		Token: "sekret",
-		Style: "openai-compat",
+		Style: "bogus-style",
 	})
 
 	oldStderr := os.Stderr
@@ -353,11 +465,73 @@ func TestCmdPrompt_StyleNotSupported(t *testing.T) {
 	}
 	var buf bytes.Buffer
 	_, _ = io.Copy(&buf, r)
-	if !strings.Contains(buf.String(), "openai-compat") || !strings.Contains(buf.String(), "not yet supported") {
+	if !strings.Contains(buf.String(), "bogus-style") || !strings.Contains(buf.String(), "not yet supported") {
 		t.Errorf("stderr = %q", buf.String())
 	}
 	if atomic.LoadInt32(&called) != 0 {
 		t.Errorf("httptest handler should never have been invoked, called %d times", called)
+	}
+}
+
+// TestCmdPrompt_OpenAICompat exercises the full flow for a remote model
+// registered with Style "openai-compat": arg parsing -> resolve via the
+// fake UDS daemon -> send an OpenAI Chat Completions-shaped request via
+// the httptest server -> print the extracted choice text.
+func TestCmdPrompt_OpenAICompat(t *testing.T) {
+	var gotPath string
+	var gotAuth string
+	var gotPrompt string
+	remoteSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		body, _ := io.ReadAll(r.Body)
+		var req openAICompatRequest
+		_ = json.Unmarshal(body, &req)
+		if len(req.Messages) == 1 {
+			gotPrompt = req.Messages[0].Content
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"hello from openai-compat model"},"finish_reason":"stop"}]}`))
+	}))
+	defer remoteSrv.Close()
+
+	fakeResolveModelDaemon(t, rm.ResolveModelResult{
+		Kind:  rm.ModelKindRemote,
+		URL:   remoteSrv.URL,
+		Token: "sekret",
+		Style: "openai-compat",
+	})
+
+	oldStdout := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	cli, err := dialClient()
+	if err != nil {
+		os.Stdout = oldStdout
+		t.Fatalf("dialClient: %v", err)
+	}
+	rc := cmdPrompt(cli, []string{"my-model", "hello", "there"})
+	cli.Close()
+	os.Stdout = oldStdout
+	w.Close()
+
+	if rc != 0 {
+		t.Errorf("rc=%d", rc)
+	}
+	var buf bytes.Buffer
+	_, _ = io.Copy(&buf, r)
+	if strings.TrimSpace(buf.String()) != "hello from openai-compat model" {
+		t.Errorf("stdout = %q", buf.String())
+	}
+	if gotPath != "/chat/completions" {
+		t.Errorf("path = %q, want /chat/completions", gotPath)
+	}
+	if gotAuth != "Bearer sekret" {
+		t.Errorf("Authorization = %q, want Bearer sekret", gotAuth)
+	}
+	if gotPrompt != "hello there" {
+		t.Errorf("prompt sent to model = %q, want %q", gotPrompt, "hello there")
 	}
 }
 
