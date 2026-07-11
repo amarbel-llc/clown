@@ -2,6 +2,26 @@
 # keep top-level `just --list` legible. Invoked as
 # `just explore <recipe>` (e.g. `just explore issue-35-mkjuggler-plugin-closure`).
 
+# Run go unit tests for specific packages in the ambient devshell (agent
+# dev-loop for per-package TDD iteration; the sandboxed `just test-go`
+# remains the full-suite lane). Plain `go test` fails: the bridged
+# ringmaster module (gomod.nix, igloo RFC-0001) is absent from vendor/,
+# so vendor mode aborts with "inconsistent vendoring" and -mod=mod alone
+# hits the network for the proxy-unreachable forge module. Mirror the
+# bridge with a throwaway modfile carrying the store replace (same path
+# the merged-go.mod derivation bakes in; re-derive it from a fresh
+# `nix develop` if the ringmaster input gets bumped).
+go-test *PKGS='./...':
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "$(git rev-parse --show-toplevel)"
+    tmp=.tmp/go-test-bridge
+    mkdir -p "$tmp"
+    cp go.mod "$tmp/merged.mod" && chmod +w "$tmp/merged.mod"
+    cp go.sum "$tmp/merged.sum" && chmod +w "$tmp/merged.sum"
+    printf '\nreplace github.com/amarbel-llc/ringmaster => /nix/store/3jgf8faxm08sh3260rjcxar0ig2ls7ga-ringmaster-go-pkgs\n' >> "$tmp/merged.mod"
+    go test -mod=mod -modfile="$tmp/merged.mod" {{PKGS}}
+
 # Smoke-test the new crush provider against the local juggler llama-server.
 # Starts juggler (idempotent — attaches to existing daemon), waits for the
 # portfile, then execs `clown --profile crush-local`. Requires
