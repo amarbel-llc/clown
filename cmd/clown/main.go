@@ -26,6 +26,7 @@ import (
 	"github.com/amarbel-llc/clown/internal/buildcfg"
 	"github.com/amarbel-llc/clown/internal/clownfile"
 	"github.com/amarbel-llc/clown/internal/clownname"
+	"github.com/amarbel-llc/clown/internal/juggler"
 	"github.com/amarbel-llc/clown/internal/pluginhost"
 	"github.com/amarbel-llc/clown/internal/profile"
 	"github.com/amarbel-llc/clown/internal/promptwalk"
@@ -671,31 +672,104 @@ func resolveProfileName(flagProfile string, providerExplicit bool, pin, buildDef
 // ANTHROPIC_* for something else. The generic Env map stays only-if-unset.
 // Deliberately does not touch flags.backend — that is the tent container
 // backend (podman|lima), a different axis from the profile's API backend.
+//
+// Resolution order for claude+gateway/local profiles: inline URL/Token
+// first (unchanged, zero-migration path — docs/plans/2026-07-07-juggler-
+// model-registry-design.md's rollback story), then juggler resolution via
+// profile.Model when there's no inline URL/Token.
 func applyNamedProfile(flags *parsedFlags, p profile.Profile) error {
 	if p.Model != "" && providerTakesModelFlag(flags.provider) && claudeFlagValue(flags.forwarded, "--model") == "" {
 		flags.forwarded = append([]string{"--model", p.Model}, flags.forwarded...)
 	}
-	if p.Provider == "claude" && p.Backend == "gateway" {
-		url := clownfile.ResolveEnv(p.URL)
-		token := clownfile.ResolveEnv(p.Token)
-		if url == "" {
-			return fmt.Errorf("profile %q: url %q resolved empty", p.Name, p.URL)
+	if p.Provider == "claude" {
+		switch {
+		case p.Backend == "gateway" && p.URL != "":
+			url := clownfile.ResolveEnv(p.URL)
+			token := clownfile.ResolveEnv(p.Token)
+			if url == "" {
+				return fmt.Errorf("profile %q: url %q resolved empty", p.Name, p.URL)
+			}
+			if token == "" {
+				return fmt.Errorf("profile %q: token %q resolved empty (is the referenced variable exported?)", p.Name, p.Token)
+			}
+			_ = os.Setenv("ANTHROPIC_BASE_URL", url)
+			_ = os.Setenv("ANTHROPIC_AUTH_TOKEN", token)
+			// Present-but-empty is the gateway contract: unset makes claude fall
+			// back to Anthropic auth and conflict with the auth token.
+			_ = os.Setenv("ANTHROPIC_API_KEY", "")
+		case (p.Backend == "gateway" || p.Backend == "local") && p.Model != "":
+			resolved, err := resolveViaJuggler(p.Model)
+			if err != nil {
+				return fmt.Errorf("profile %q: %w", p.Name, err)
+			}
+			if resolved.Kind == juggler.ModelKindRemote {
+				if resolved.URL == "" || resolved.Token == "" {
+					return fmt.Errorf("profile %q: juggler model %q resolved with an empty url or token", p.Name, p.Model)
+				}
+				_ = os.Setenv("ANTHROPIC_BASE_URL", resolved.URL)
+				_ = os.Setenv("ANTHROPIC_AUTH_TOKEN", resolved.Token)
+				_ = os.Setenv("ANTHROPIC_API_KEY", "")
+			} else { // local
+				_ = os.Setenv("ANTHROPIC_BASE_URL", resolved.URL)
+				_ = os.Setenv("ANTHROPIC_AUTH_TOKEN", "dummy")
+				_ = os.Setenv("ANTHROPIC_API_KEY", "dummy")
+				_ = os.Setenv("ANTHROPIC_CUSTOM_MODEL_OPTION",
+					fmt.Sprintf(`{"model":%q,"max_tokens":2048}`, p.Model))
+			}
 		}
-		if token == "" {
-			return fmt.Errorf("profile %q: token %q resolved empty (is the referenced variable exported?)", p.Name, p.Token)
-		}
-		_ = os.Setenv("ANTHROPIC_BASE_URL", url)
-		_ = os.Setenv("ANTHROPIC_AUTH_TOKEN", token)
-		// Present-but-empty is the gateway contract: unset makes claude fall
-		// back to Anthropic auth and conflict with the auth token.
-		_ = os.Setenv("ANTHROPIC_API_KEY", "")
+	}
+	mainURL := os.Getenv("ANTHROPIC_BASE_URL")
+	if mainURL == "" {
+		// clown never sets ANTHROPIC_BASE_URL for a pure-Anthropic profile
+		// (Backend == "anthropic", or no claude+gateway/local switch branch
+		// fired above), but that's still a real, well-known endpoint — treat
+		// it as such rather than comparing against "" below, which would
+		// both render a confusing error message and false-positive against
+		// a juggler remote entry that happens to point at the same host.
+		mainURL = "https://api.anthropic.com"
 	}
 	for k, v := range p.Env {
-		if os.Getenv(k) == "" {
-			_ = os.Setenv(k, clownfile.ResolveEnv(v))
+		if os.Getenv(k) != "" {
+			continue
 		}
+		value := v
+		// The juggler-aware endpoint check only makes sense for the claude
+		// family — isSubagentModelKey's four vars are Claude-Code-specific,
+		// and mainURL is meaningless for other providers. A non-claude
+		// profile falls straight through to the plain literal-set below.
+		if p.Provider == "claude" && isSubagentModelKey(k) {
+			if _, known := jugglerModelKind(v); known {
+				resolved, err := resolveViaJuggler(v)
+				if err != nil {
+					return fmt.Errorf("%s=%q: %w", k, v, err)
+				}
+				if resolved.URL != mainURL {
+					return fmt.Errorf(
+						"%s=%q resolves to a different endpoint (%s) than the main model (%s) — "+
+							"Claude Code shares one ANTHROPIC_BASE_URL per process, so this pairing can't "+
+							"launch yet (see docs/plans/2026-07-07-juggler-model-registry-design.md)",
+						k, v, resolved.URL, mainURL)
+				}
+			}
+			// unknown to jugglerModelKind (no daemon, or not registered): treat
+			// as a literal model slug, same as before this feature existed.
+		}
+		_ = os.Setenv(k, clownfile.ResolveEnv(value))
 	}
 	return nil
+}
+
+// isSubagentModelKey reports whether k is one of the env vars that select
+// a subagent/tier model (docs: man/man7/claude-code-env.7 § MODEL SELECTION).
+func isSubagentModelKey(k string) bool {
+	switch k {
+	case "CLAUDE_CODE_SUBAGENT_MODEL",
+		"ANTHROPIC_DEFAULT_OPUS_MODEL",
+		"ANTHROPIC_DEFAULT_SONNET_MODEL",
+		"ANTHROPIC_DEFAULT_HAIKU_MODEL":
+		return true
+	}
+	return false
 }
 
 // providerTakesModelFlag reports whether a provider accepts a passthrough

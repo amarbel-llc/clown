@@ -1,15 +1,19 @@
 package main
 
 import (
+	"bufio"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/amarbel-llc/clown/internal/buildcfg"
 	"github.com/amarbel-llc/clown/internal/clownfile"
+	"github.com/amarbel-llc/clown/internal/juggler"
 	"github.com/amarbel-llc/clown/internal/profile"
 	"github.com/amarbel-llc/clown/internal/promptwalk"
 	"github.com/amarbel-llc/clown/internal/tent"
@@ -240,6 +244,282 @@ func TestApplyNamedProfileEnvMapOnlyIfUnset(t *testing.T) {
 	}
 	if os.Getenv("ANTHROPIC_DEFAULT_HAIKU_MODEL") != "p" {
 		t.Error("unset env must be filled from profile env map")
+	}
+}
+
+// fakeJugglerServerMulti is like fakeJugglerServer (jugglerresolve_test.go)
+// but answers every connection it receives instead of exactly one — needed
+// here because a single applyNamedProfile call can make two separate
+// juggler round trips (a side-effect-free jugglerModelKind lookup followed
+// by a resolveViaJuggler call), each opening its own connection.
+func fakeJugglerServerMulti(t *testing.T, handle func(conn net.Conn, req juggler.Envelope)) string {
+	t.Helper()
+	sock := filepath.Join(shortTempDir(t), "control.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				req, err := juggler.ReadFrame(bufio.NewReader(c))
+				if err != nil {
+					return
+				}
+				handle(c, req)
+			}(conn)
+		}
+	}()
+
+	return sock
+}
+
+func TestApplyNamedProfileJugglerRemoteFallback(t *testing.T) {
+	sock := fakeJugglerServerMulti(t, func(conn net.Conn, req juggler.Envelope) {
+		if req.Method != juggler.MethodResolveModel {
+			_ = juggler.WriteFrame(conn, juggler.Envelope{
+				JSONRPC: "2.0", ID: req.ID,
+				Error: &juggler.Error{Code: -32601, Message: "unexpected method: " + req.Method},
+			})
+			return
+		}
+		_ = juggler.WriteFrame(conn, juggler.Envelope{
+			JSONRPC: "2.0", ID: req.ID,
+			Result: []byte(`{"kind":"remote","url":"https://remote.example.com","token":"remote-tok","style":"anthropic"}`),
+		})
+	})
+	t.Setenv("JUGGLER_SOCKET", sock)
+	t.Setenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "old")
+	t.Setenv("ANTHROPIC_API_KEY", "real-key")
+
+	flags := parsedFlags{provider: "claude"}
+	p := profile.Profile{Name: "remote-p", Provider: "claude", Backend: "gateway", Model: "remote-model-a"}
+	if err := applyNamedProfile(&flags, p); err != nil {
+		t.Fatal(err)
+	}
+	if got := os.Getenv("ANTHROPIC_BASE_URL"); got != "https://remote.example.com" {
+		t.Errorf("base url = %q", got)
+	}
+	if got := os.Getenv("ANTHROPIC_AUTH_TOKEN"); got != "remote-tok" {
+		t.Errorf("auth token = %q", got)
+	}
+	v, set := os.LookupEnv("ANTHROPIC_API_KEY")
+	if !set || v != "" {
+		t.Errorf("ANTHROPIC_API_KEY must be present-but-empty, got set=%v v=%q", set, v)
+	}
+}
+
+func TestApplyNamedProfileJugglerLocalFallback(t *testing.T) {
+	sock := fakeJugglerServerMulti(t, func(conn net.Conn, req juggler.Envelope) {
+		if req.Method != juggler.MethodResolveModel {
+			_ = juggler.WriteFrame(conn, juggler.Envelope{
+				JSONRPC: "2.0", ID: req.ID,
+				Error: &juggler.Error{Code: -32601, Message: "unexpected method: " + req.Method},
+			})
+			return
+		}
+		_ = juggler.WriteFrame(conn, juggler.Envelope{
+			JSONRPC: "2.0", ID: req.ID,
+			Result: []byte(`{"kind":"local","url":"http://127.0.0.1:8080"}`),
+		})
+	})
+	t.Setenv("JUGGLER_SOCKET", sock)
+
+	flags := parsedFlags{provider: "claude"}
+	p := profile.Profile{Name: "local-p", Provider: "claude", Backend: "local", Model: "local-alias-a"}
+	if err := applyNamedProfile(&flags, p); err != nil {
+		t.Fatal(err)
+	}
+	if got := os.Getenv("ANTHROPIC_BASE_URL"); got != "http://127.0.0.1:8080" {
+		t.Errorf("base url = %q", got)
+	}
+	if got := os.Getenv("ANTHROPIC_AUTH_TOKEN"); got != "dummy" {
+		t.Errorf("auth token = %q", got)
+	}
+	if got := os.Getenv("ANTHROPIC_API_KEY"); got != "dummy" {
+		t.Errorf("api key = %q", got)
+	}
+	if got := os.Getenv("ANTHROPIC_CUSTOM_MODEL_OPTION"); !strings.Contains(got, "local-alias-a") {
+		t.Errorf("custom model option = %q, want it to contain the model name", got)
+	}
+}
+
+func TestApplyNamedProfileSubagentModelSameEndpointOK(t *testing.T) {
+	sock := fakeJugglerServerMulti(t, func(conn net.Conn, req juggler.Envelope) {
+		switch req.Method {
+		case juggler.MethodListModels:
+			_ = juggler.WriteFrame(conn, juggler.Envelope{
+				JSONRPC: "2.0", ID: req.ID,
+				Result: []byte(`{"models":[{"name":"remote-sub","kind":"remote","style":"anthropic"}]}`),
+			})
+		case juggler.MethodResolveModel:
+			_ = juggler.WriteFrame(conn, juggler.Envelope{
+				JSONRPC: "2.0", ID: req.ID,
+				Result: []byte(`{"kind":"remote","url":"https://main.example.com","token":"sub-tok","style":"anthropic"}`),
+			})
+		default:
+			_ = juggler.WriteFrame(conn, juggler.Envelope{
+				JSONRPC: "2.0", ID: req.ID,
+				Error: &juggler.Error{Code: -32601, Message: "unexpected method: " + req.Method},
+			})
+		}
+	})
+	t.Setenv("JUGGLER_SOCKET", sock)
+	t.Setenv("CLAUDE_CODE_SUBAGENT_MODEL", "")
+
+	// Main profile resolves inline (no juggler round trip for the main
+	// endpoint), landing on https://main.example.com.
+	flags := parsedFlags{provider: "claude"}
+	p := profile.Profile{
+		Name: "main-p", Provider: "claude", Backend: "gateway",
+		URL: "https://main.example.com", Token: "main-tok",
+		Env: map[string]string{"CLAUDE_CODE_SUBAGENT_MODEL": "remote-sub"},
+	}
+	if err := applyNamedProfile(&flags, p); err != nil {
+		t.Fatal(err)
+	}
+	if got := os.Getenv("CLAUDE_CODE_SUBAGENT_MODEL"); got != "remote-sub" {
+		t.Errorf("CLAUDE_CODE_SUBAGENT_MODEL = %q", got)
+	}
+}
+
+func TestApplyNamedProfileSubagentModelDifferentEndpointErrors(t *testing.T) {
+	sock := fakeJugglerServerMulti(t, func(conn net.Conn, req juggler.Envelope) {
+		switch req.Method {
+		case juggler.MethodListModels:
+			_ = juggler.WriteFrame(conn, juggler.Envelope{
+				JSONRPC: "2.0", ID: req.ID,
+				Result: []byte(`{"models":[{"name":"remote-sub-y","kind":"remote","style":"anthropic"}]}`),
+			})
+		case juggler.MethodResolveModel:
+			_ = juggler.WriteFrame(conn, juggler.Envelope{
+				JSONRPC: "2.0", ID: req.ID,
+				Result: []byte(`{"kind":"remote","url":"https://other.example.com","token":"sub-tok","style":"anthropic"}`),
+			})
+		default:
+			_ = juggler.WriteFrame(conn, juggler.Envelope{
+				JSONRPC: "2.0", ID: req.ID,
+				Error: &juggler.Error{Code: -32601, Message: "unexpected method: " + req.Method},
+			})
+		}
+	})
+	t.Setenv("JUGGLER_SOCKET", sock)
+	t.Setenv("CLAUDE_CODE_SUBAGENT_MODEL", "")
+
+	flags := parsedFlags{provider: "claude"}
+	p := profile.Profile{
+		Name: "main-p", Provider: "claude", Backend: "gateway",
+		URL: "https://main.example.com", Token: "main-tok",
+		Env: map[string]string{"CLAUDE_CODE_SUBAGENT_MODEL": "remote-sub-y"},
+	}
+	err := applyNamedProfile(&flags, p)
+	if err == nil {
+		t.Fatal("expected an error for mismatched endpoints")
+	}
+	if !strings.Contains(err.Error(), "https://main.example.com") || !strings.Contains(err.Error(), "https://other.example.com") {
+		t.Errorf("error should mention both endpoints, got: %v", err)
+	}
+}
+
+func TestApplyNamedProfileSubagentModelLiteralUnaffected(t *testing.T) {
+	// No juggler daemon reachable at all: jugglerModelKind must silently
+	// fall through (known=false), so a plain literal model string is set
+	// verbatim with no error and no attempt to resolve/start anything.
+	t.Setenv("JUGGLER_SOCKET", filepath.Join(t.TempDir(), "no-such.sock"))
+	t.Setenv("CLAUDE_CODE_SUBAGENT_MODEL", "")
+
+	flags := parsedFlags{provider: "claude"}
+	p := profile.Profile{
+		Name: "anthropic-p", Provider: "claude", Backend: "anthropic",
+		Env: map[string]string{"CLAUDE_CODE_SUBAGENT_MODEL": "claude-haiku-4-5"},
+	}
+	if err := applyNamedProfile(&flags, p); err != nil {
+		t.Fatal(err)
+	}
+	if got := os.Getenv("CLAUDE_CODE_SUBAGENT_MODEL"); got != "claude-haiku-4-5" {
+		t.Errorf("CLAUDE_CODE_SUBAGENT_MODEL = %q", got)
+	}
+}
+
+func TestApplyNamedProfileSubagentModelDefaultAnthropicEndpointOK(t *testing.T) {
+	// Backend "anthropic": no URL/juggler switch branch fires for the main
+	// model, so mainURL must default to https://api.anthropic.com rather
+	// than "" — a subagent-model juggler entry resolving to that same
+	// well-known endpoint must be accepted, not flagged as a mismatch.
+	sock := fakeJugglerServerMulti(t, func(conn net.Conn, req juggler.Envelope) {
+		switch req.Method {
+		case juggler.MethodListModels:
+			_ = juggler.WriteFrame(conn, juggler.Envelope{
+				JSONRPC: "2.0", ID: req.ID,
+				Result: []byte(`{"models":[{"name":"anthropic-sub","kind":"remote","style":"anthropic"}]}`),
+			})
+		case juggler.MethodResolveModel:
+			_ = juggler.WriteFrame(conn, juggler.Envelope{
+				JSONRPC: "2.0", ID: req.ID,
+				Result: []byte(`{"kind":"remote","url":"https://api.anthropic.com","token":"sub-tok","style":"anthropic"}`),
+			})
+		default:
+			_ = juggler.WriteFrame(conn, juggler.Envelope{
+				JSONRPC: "2.0", ID: req.ID,
+				Error: &juggler.Error{Code: -32601, Message: "unexpected method: " + req.Method},
+			})
+		}
+	})
+	t.Setenv("JUGGLER_SOCKET", sock)
+	t.Setenv("CLAUDE_CODE_SUBAGENT_MODEL", "")
+	t.Setenv("ANTHROPIC_BASE_URL", "")
+
+	flags := parsedFlags{provider: "claude"}
+	p := profile.Profile{
+		Name: "anthropic-p", Provider: "claude", Backend: "anthropic",
+		Env: map[string]string{"CLAUDE_CODE_SUBAGENT_MODEL": "anthropic-sub"},
+	}
+	if err := applyNamedProfile(&flags, p); err != nil {
+		t.Fatal(err)
+	}
+	if got := os.Getenv("CLAUDE_CODE_SUBAGENT_MODEL"); got != "anthropic-sub" {
+		t.Errorf("CLAUDE_CODE_SUBAGENT_MODEL = %q", got)
+	}
+}
+
+func TestApplyNamedProfileNonClaudeProviderSkipsSubagentCheck(t *testing.T) {
+	// The juggler-aware subagent-model check is Claude-Code-specific
+	// (isSubagentModelKey's vars and mainURL only mean anything for the
+	// claude family). A non-claude provider carrying one of those keys
+	// must never trigger a juggler round trip at all — assert the fake
+	// daemon is never even contacted.
+	var reached atomic.Bool
+	sock := fakeJugglerServerMulti(t, func(conn net.Conn, req juggler.Envelope) {
+		reached.Store(true)
+		_ = juggler.WriteFrame(conn, juggler.Envelope{
+			JSONRPC: "2.0", ID: req.ID,
+			Error: &juggler.Error{Code: -32601, Message: "should not be called"},
+		})
+	})
+	t.Setenv("JUGGLER_SOCKET", sock)
+	t.Setenv("CLAUDE_CODE_SUBAGENT_MODEL", "")
+
+	flags := parsedFlags{provider: "opencode"}
+	p := profile.Profile{
+		Name: "oc-p", Provider: "opencode", Backend: "anthropic",
+		Env: map[string]string{"CLAUDE_CODE_SUBAGENT_MODEL": "remote-sub-y"},
+	}
+	if err := applyNamedProfile(&flags, p); err != nil {
+		t.Fatal(err)
+	}
+	if got := os.Getenv("CLAUDE_CODE_SUBAGENT_MODEL"); got != "remote-sub-y" {
+		t.Errorf("CLAUDE_CODE_SUBAGENT_MODEL = %q", got)
+	}
+	if reached.Load() {
+		t.Error("juggler daemon must not be contacted for a non-claude provider")
 	}
 }
 
