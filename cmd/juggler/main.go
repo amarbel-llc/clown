@@ -17,7 +17,7 @@ func main() {
 
 func run(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: juggler <daemon|start|stop|status|list|models|model|prompt|download> [args]")
+		fmt.Fprintln(os.Stderr, "usage: juggler <daemon|start|stop|status|list|models|model|prompt|mcp|download> [args]")
 		return 1
 	}
 
@@ -43,6 +43,20 @@ func run(args []string) int {
 		return withClient(func(cli *rm.Client) int { return cmdModel(cli, args[1:]) })
 	case "prompt":
 		return withClient(func(cli *rm.Client) int { return cmdPrompt(cli, args[1:]) })
+	case "mcp":
+		// Deliberately bypasses withClient's fail-fast semantics: Serve
+		// is designed to run with a nil cli (see mcp.go), degrading every
+		// tools/call to a graceful per-call isError response instead of
+		// exiting before the JSON-RPC loop even starts. clown's plugin
+		// host spawns this as a long-lived stdio server for the whole
+		// session, so a daemon that isn't up yet (e.g. started mid-
+		// session) must not prevent initialize/tools/list from working.
+		cli, _ := dialClient()
+		if cli != nil {
+			defer cli.Close()
+		}
+		Serve(os.Stdin, os.Stdout, cli)
+		return 0
 	case "download":
 		return cmdDownload(args[1:])
 	default:
