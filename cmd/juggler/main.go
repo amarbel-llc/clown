@@ -17,7 +17,7 @@ func main() {
 
 func run(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: juggler <daemon|start|stop|status|list|models|model|download> [args]")
+		fmt.Fprintln(os.Stderr, "usage: juggler <daemon|start|stop|status|list|models|model|prompt|download> [args]")
 		return 1
 	}
 
@@ -41,6 +41,8 @@ func run(args []string) int {
 		return withClient(func(cli *rm.Client) int { return cmdModels(cli) })
 	case "model":
 		return withClient(func(cli *rm.Client) int { return cmdModel(cli, args[1:]) })
+	case "prompt":
+		return withClient(func(cli *rm.Client) int { return cmdPrompt(cli, args[1:]) })
 	case "download":
 		return cmdDownload(args[1:])
 	default:

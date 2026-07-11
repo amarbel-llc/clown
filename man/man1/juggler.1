@@ -27,6 +27,9 @@
 .Nm
 .Cm model remove Ar name
 .Nm
+.Cm prompt Ar model Op Ar prompt-text\&...
+.Op Fl -max-tokens Ar n
+.Nm
 .Cm download Ar name Op Fl Fl url Ar url Op Fl Fl sha256 Ar hex Op Fl Fl size Ar bytes
 .Sh DESCRIPTION
 .Nm
@@ -200,6 +203,50 @@ is not a registered remote model.
 On success prints
 .Sq juggler: removed remote model "<name>" .
 .El
+.It Cm prompt Ar model Op Ar prompt-text\&... Op Fl -max-tokens Ar n
+Resolve
+.Ar model
+through the
+.Cm ResolveModel
+RPC
+.Pq the same resolution juggler-backed profiles use: remote registry first, then an already-running local instance, then a freshly started local GGUF instance
+and send it a single prompt, printing the reply to stdout and exiting.
+A
+.Sq Cm claude Fl p
+-shaped direct smoke path: nothing but juggler's own resolution and
+HTTP-call machinery is exercised, no clown or claude-code in the loop.
+.Bl -tag -width Ds
+.It Ar prompt-text\&...
+Remaining positional arguments are joined with a single space to form
+the prompt.
+When omitted entirely, the prompt is read from stdin instead
+.Pq trailing newline trimmed .
+.It Fl -max-tokens Ar n
+Maximum tokens to generate.
+Defaults to 256.
+Both
+.Sq Fl -max-tokens Ar n
+and
+.Sq Fl -max-tokens Ns = Ns Ar n
+forms parse.
+.El
+A single 120-second budget covers both the
+.Cm ResolveModel
+call
+.Pq which may block starting a local instance
+and the completion request itself.
+The request is always sent Anthropic-Messages-shaped
+.Pq Sq POST Pa /v1/messages ,
+.Sq anthropic-version: 2023-06-01 .
+A local result always resolves to an Anthropic-Messages-shaped endpoint
+and authenticates with
+.Sq x-api-key: dummy ;
+a remote result authenticates with its registered token.
+Only remote entries with style
+.Sq anthropic
+are supported; a remote entry registered with style
+.Sq openai-compat
+errors cleanly before any HTTP call is attempted.
 .It Cm download Ar name Op Fl Fl url Ar url Op Fl Fl sha256 Ar hex Op Fl Fl size Ar bytes
 Fetch a model with a bubbletea progress UI.
 When
@@ -310,6 +357,12 @@ $ juggler model list
 NAME               KIND    STYLE
 qwen3-coder        local
 openrouter-kimi    remote  openai-compat
+.Ed
+.Pp
+Send a single prompt directly, bypassing clown and claude-code entirely:
+.Bd -literal -offset indent
+$ juggler prompt qwen3-coder "hello"
+Hello! How can I help you today?
 .Ed
 .Sh SEE ALSO
 .Xr clown 1 ,
