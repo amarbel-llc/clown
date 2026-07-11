@@ -54,6 +54,20 @@ const nixStorePrefix = "/nix/store/"
 // so every tool in the set is auto-allowed (clown#130).
 const jobToolPrefix = "mcp__plugin_clown-builtin-jobs_"
 
+// clown-builtin-juggler's tools (the juggler-prompt subagent-delegation
+// tool, docs/plans/2026-07-11-juggler-subagent-tool-design.md — named
+// mcp__plugin_clown-builtin-juggler_juggler__juggler-prompt at the wire
+// level) are deliberately NOT added to any allow-list here, unlike
+// jobToolPrefix above. Unlike clown-builtin-jobs (inert local job-channel
+// plumbing), this tool makes live calls to potentially-paid third-party
+// APIs on the agent's own initiative — it falls through to the default
+// `return nil // defer` path at the end of evaluate(), so every call gets
+// Claude Code's normal per-tool-call permission prompt. Revisit only if
+// that friction proves excessive in practice (a scoped allow-list of
+// specific pre-registered model names, not a blanket allow, would be the
+// next step — see the design doc's Tuning Levers). This comment is the
+// reference cmd/clown/jugglermonitor.go's synthJugglerPluginDir points at.
+
 // Subagent-rewrite constants. Claude Code launches subagents through the Agent
 // tool (named "Agent" in this build's tool schema; "Task" in older/other
 // builds). We match both names so the rewrite is robust to that naming — the

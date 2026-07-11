@@ -78,13 +78,11 @@ func synthJugglerPluginDir() (string, error) {
 	// agent's own initiative, so it must NOT auto-allow. clown-builtin-jobs'
 	// own hooks.json (matcher ".*") already runs clown-hook-allow for every
 	// tool call in the session including this plugin's, and clown-hook-allow
-	// currently only recognizes clown-builtin-jobs' own tool prefix — this
-	// plugin's tools (mcp__plugin_clown-builtin-juggler_...) don't match it,
-	// so they fall through to the existing defer-to-native-prompt path with
-	// zero new hook code today. A later task in this plan adds an explicit
-	// comment in cmd/clown-hook-allow/main.go documenting that omission by
-	// name; until then this is the only place the reasoning is written down.
-	// If clown-builtin-jobs is ever disabled independently
+	// deliberately does not list this plugin's tool prefix in its allow-map
+	// (see the comment following jobToolPrefix in cmd/clown-hook-allow/main.go)
+	// — this plugin's tools (mcp__plugin_clown-builtin-juggler_...) fall
+	// through to the existing defer-to-native-prompt path with zero new
+	// hook code. If clown-builtin-jobs is ever disabled independently
 	// (CLOWN_DISABLE_JOB_WAKEUP=1) while this plugin stays enabled, no hook
 	// runs at all for this tool either — which still means "defer to Claude
 	// Code's native prompt," the same outcome, just via a different path.
