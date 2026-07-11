@@ -39,6 +39,13 @@ setup_file() {
   mkdir -p "$RM_DIR"
   export JUGGLER_SOCKET="$RM_DIR/control.sock"
 
+  # Remote-model registry scratch file. cmd/juggler/server.go's newServer()
+  # resolves rm.RemoteModelsPath() (which reads this env var) exactly once,
+  # at daemon-start time below — so this MUST be exported before the
+  # daemon is spawned, not per-@test. Keeps `juggler model add/list/remove`
+  # coverage from ever touching the real ~/.local/share/juggler/models.toml.
+  export JUGGLER_MODELS_PATH="$RM_DIR/models.toml"
+
   # Spawn the daemon. --llama-server overrides the build-time
   # buildcfg.LlamaServerPath so the launcher exec's our fake. Stderr
   # is captured into rm.log for post-mortems on failed tests.
@@ -189,4 +196,37 @@ setup() {
   run "$JUGGLER_BIN" list
   assert_success
   assert_output ""
+}
+
+# --- Model registry ---
+#
+# `juggler model list|add|remove` — the unified (local + remote) model
+# registry surface (distinct from the legacy `juggler models`, GGUF-only).
+# Like start/list/status above, these are real RPC calls dispatched by the
+# same shared control-plane daemon started in setup_file; JUGGLER_MODELS_PATH
+# (exported there, before the daemon was spawned) keeps the remote-model
+# registry file scoped to this suite's scratch dir.
+
+@test "juggler model add then list shows the remote entry" {
+  run "$JUGGLER_BIN" model add test-remote --style anthropic --url https://example.test/api --token sk-test
+  assert_success
+
+  run "$JUGGLER_BIN" model list
+  assert_success
+  # Anchored to the row shape (not a bare substring match) since the model's
+  # own name already contains "remote" — a plain `assert_output --partial
+  # "remote"` would pass even if the KIND column were blank or wrong.
+  assert_line --regexp '^test-remote *remote *anthropic$'
+}
+
+@test "juggler model remove deletes the entry" {
+  run "$JUGGLER_BIN" model add to-remove --style anthropic --url https://example.test --token x
+  assert_success
+
+  run "$JUGGLER_BIN" model remove to-remove
+  assert_success
+
+  run "$JUGGLER_BIN" model list
+  assert_success
+  refute_output --partial "to-remove"
 }
