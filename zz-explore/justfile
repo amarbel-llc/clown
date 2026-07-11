@@ -19,7 +19,7 @@ go-test *PKGS='./...':
     mkdir -p "$tmp"
     cp go.mod "$tmp/merged.mod" && chmod +w "$tmp/merged.mod"
     cp go.sum "$tmp/merged.sum" && chmod +w "$tmp/merged.sum"
-    printf '\nreplace github.com/amarbel-llc/ringmaster => /nix/store/3jgf8faxm08sh3260rjcxar0ig2ls7ga-ringmaster-go-pkgs\n' >> "$tmp/merged.mod"
+    printf '\nreplace code.linenisgreat.com/ringmaster => /nix/store/j1nxw2brqq239qi0jcb4p2q2inqykbqk-ringmaster-go-pkgs\n' >> "$tmp/merged.mod"
     go test -mod=mod -modfile="$tmp/merged.mod" {{PKGS}}
 
 # Smoke-test the new crush provider against the local juggler llama-server.
