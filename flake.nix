@@ -712,7 +712,7 @@
           ldflags = [
             "-s"
             "-w"
-            "-X github.com/amarbel-llc/clown/cmd/juggler.LlamaServerPath=${llamaServerPath}"
+            "-X main.LlamaServerPath=${llamaServerPath}"
           ];
         };
 
