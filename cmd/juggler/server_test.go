@@ -513,6 +513,44 @@ func TestDispatchResolveModel_LocalGGUFStartsInstance(t *testing.T) {
 	t.Cleanup(func() { _ = l.Stop(context.Background(), "local-model") })
 }
 
+func TestDispatchResolveModel_RemoteWinsOnCollision(t *testing.T) {
+	// A name registered in BOTH the remote registry and as a local .gguf
+	// file must resolve to the remote entry — the dispatch checks remote
+	// first and returns before ever consulting the local list. Regression
+	// test for issue #181 (no prior test constructed a genuine name
+	// collision across both sources).
+	modelsDir := shortTempDir(t)
+	if err := os.WriteFile(filepath.Join(modelsDir, "shared-name.gguf"), []byte("fake"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	remotePath := filepath.Join(shortTempDir(t), "models.toml")
+	if err := rm.SaveRemoteModels(remotePath, []rm.RemoteModel{
+		{Name: "shared-name", Style: "anthropic", URL: "https://gw.example.com", Token: "tok"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// nil launcher: if dispatch fell through to the local-start path
+	// instead of returning the remote entry, calling Start on a nil
+	// Launcher would panic — this proves the remote branch wins.
+	s := newServer(rm.NewRegistry(), nil)
+	s.modelsDir = modelsDir
+	s.remoteModelsPath = remotePath
+
+	resp := s.dispatch(rm.Envelope{JSONRPC: "2.0", ID: "1", Method: rm.MethodResolveModel,
+		Params: mustJSON(t, rm.ResolveModelParams{Name: "shared-name"})})
+	if resp.Error != nil {
+		t.Fatalf("ResolveModel error: %+v", resp.Error)
+	}
+	var res rm.ResolveModelResult
+	if err := json.Unmarshal(resp.Result, &res); err != nil {
+		t.Fatal(err)
+	}
+	if res.Kind != rm.ModelKindRemote || res.URL != "https://gw.example.com" || res.Style != "anthropic" {
+		t.Fatalf("res = %+v, want remote entry to win", res)
+	}
+}
+
 func TestDispatchResolveModelUnknown(t *testing.T) {
 	s := newServer(rm.NewRegistry(), nil)
 	s.modelsDir = shortTempDir(t)
