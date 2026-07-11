@@ -115,3 +115,21 @@ func (c *Client) DownloadModel(ctx context.Context, p DownloadModelParams) (Down
 	var r DownloadModelResult
 	return r, c.call(ctx, MethodDownloadModel, p, &r)
 }
+
+func (c *Client) ListModels(ctx context.Context) (ListModelsResult, error) {
+	var r ListModelsResult
+	return r, c.call(ctx, MethodListModels, ListModelsParams{}, &r)
+}
+
+func (c *Client) AddRemoteModel(ctx context.Context, p AddRemoteModelParams) error {
+	return c.call(ctx, MethodAddRemoteModel, p, nil)
+}
+
+func (c *Client) RemoveRemoteModel(ctx context.Context, p RemoveRemoteModelParams) error {
+	return c.call(ctx, MethodRemoveRemoteModel, p, nil)
+}
+
+func (c *Client) ResolveModel(ctx context.Context, p ResolveModelParams) (ResolveModelResult, error) {
+	var r ResolveModelResult
+	return r, c.call(ctx, MethodResolveModel, p, &r)
+}
