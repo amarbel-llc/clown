@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,17 @@ import (
 	rm "github.com/amarbel-llc/clown/internal/juggler"
 	"github.com/amarbel-llc/clown/internal/jugglermodels"
 )
+
+// mustJSON marshals v for use as an rm.Envelope's Params field in tests
+// that call s.dispatch directly (bypassing the socket/Client roundtrip).
+func mustJSON(t *testing.T, v any) json.RawMessage {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
 
 // shortTempDir returns a short-path tmpdir. macOS imposes a ~104-char
 // limit on Unix domain socket paths (sun_path), and the project's
@@ -292,5 +304,223 @@ func TestServer_StartListStop(t *testing.T) {
 	}
 	if len(list2.Instances) != 0 {
 		t.Errorf("after stop list=%+v", list2)
+	}
+}
+
+func TestDispatchListModels_MergesLocalAndRemote(t *testing.T) {
+	modelsDir := shortTempDir(t)
+	if err := os.WriteFile(filepath.Join(modelsDir, "local-model.gguf"), []byte("fake"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	remotePath := filepath.Join(shortTempDir(t), "models.toml")
+	if err := rm.SaveRemoteModels(remotePath, []rm.RemoteModel{
+		{Name: "remote-model", Style: "anthropic", URL: "https://example.com", Token: "tok"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	s := newServer(rm.NewRegistry(), nil)
+	s.modelsDir = modelsDir
+	s.remoteModelsPath = remotePath
+
+	resp := s.dispatch(rm.Envelope{JSONRPC: "2.0", ID: "1", Method: rm.MethodListModels})
+	if resp.Error != nil {
+		t.Fatalf("unexpected error: %+v", resp.Error)
+	}
+	var res rm.ListModelsResult
+	if err := json.Unmarshal(resp.Result, &res); err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Models) != 2 {
+		t.Fatalf("expected 2 models, got %d: %+v", len(res.Models), res.Models)
+	}
+	var gotLocal, gotRemote bool
+	for _, m := range res.Models {
+		switch m.Name {
+		case "local-model":
+			gotLocal = true
+			if m.Kind != rm.ModelKindLocal {
+				t.Errorf("local-model kind = %q, want local", m.Kind)
+			}
+		case "remote-model":
+			gotRemote = true
+			if m.Kind != rm.ModelKindRemote || m.Style != "anthropic" {
+				t.Errorf("remote-model = %+v", m)
+			}
+		}
+	}
+	if !gotLocal || !gotRemote {
+		t.Fatalf("missing entries: %+v", res.Models)
+	}
+}
+
+func TestDispatchAddRemoteModel_ThenListModels(t *testing.T) {
+	s := newServer(rm.NewRegistry(), nil)
+	s.modelsDir = shortTempDir(t)
+	s.remoteModelsPath = filepath.Join(shortTempDir(t), "models.toml")
+
+	addResp := s.dispatch(rm.Envelope{JSONRPC: "2.0", ID: "1", Method: rm.MethodAddRemoteModel,
+		Params: mustJSON(t, rm.AddRemoteModelParams{
+			Name: "gw", Style: "openai-compat", URL: "https://gw.example.com", Token: "${GW_TOKEN}",
+		})})
+	if addResp.Error != nil {
+		t.Fatalf("AddRemoteModel error: %+v", addResp.Error)
+	}
+
+	listResp := s.dispatch(rm.Envelope{JSONRPC: "2.0", ID: "2", Method: rm.MethodListModels})
+	if listResp.Error != nil {
+		t.Fatalf("ListModels error: %+v", listResp.Error)
+	}
+	var res rm.ListModelsResult
+	if err := json.Unmarshal(listResp.Result, &res); err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Models) != 1 || res.Models[0].Name != "gw" || res.Models[0].Kind != rm.ModelKindRemote {
+		t.Fatalf("models = %+v", res.Models)
+	}
+
+	// Confirm it round-tripped to disk (not just an in-memory cache).
+	onDisk, err := rm.LoadRemoteModels(s.remoteModelsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(onDisk) != 1 || onDisk[0].Name != "gw" || onDisk[0].Token != "${GW_TOKEN}" {
+		t.Fatalf("on-disk models = %+v", onDisk)
+	}
+}
+
+func TestDispatchRemoveRemoteModel_ThenListModels(t *testing.T) {
+	remotePath := filepath.Join(shortTempDir(t), "models.toml")
+	if err := rm.SaveRemoteModels(remotePath, []rm.RemoteModel{
+		{Name: "gw", URL: "https://gw.example.com"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s := newServer(rm.NewRegistry(), nil)
+	s.modelsDir = shortTempDir(t)
+	s.remoteModelsPath = remotePath
+
+	removeResp := s.dispatch(rm.Envelope{JSONRPC: "2.0", ID: "1", Method: rm.MethodRemoveRemoteModel,
+		Params: mustJSON(t, rm.RemoveRemoteModelParams{Name: "gw"})})
+	if removeResp.Error != nil {
+		t.Fatalf("RemoveRemoteModel error: %+v", removeResp.Error)
+	}
+
+	listResp := s.dispatch(rm.Envelope{JSONRPC: "2.0", ID: "2", Method: rm.MethodListModels})
+	if listResp.Error != nil {
+		t.Fatalf("ListModels error: %+v", listResp.Error)
+	}
+	var res rm.ListModelsResult
+	if err := json.Unmarshal(listResp.Result, &res); err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Models) != 0 {
+		t.Fatalf("expected empty after remove, got %+v", res.Models)
+	}
+}
+
+func TestDispatchRemoveRemoteModel_NotFound(t *testing.T) {
+	s := newServer(rm.NewRegistry(), nil)
+	s.modelsDir = shortTempDir(t)
+	s.remoteModelsPath = filepath.Join(shortTempDir(t), "models.toml")
+
+	resp := s.dispatch(rm.Envelope{JSONRPC: "2.0", ID: "1", Method: rm.MethodRemoveRemoteModel,
+		Params: mustJSON(t, rm.RemoveRemoteModelParams{Name: "nope"})})
+	if resp.Error == nil || resp.Error.Code != -32001 {
+		t.Fatalf("resp = %#v, want -32001", resp)
+	}
+}
+
+func TestDispatchResolveModel_Remote(t *testing.T) {
+	t.Setenv("JUGGLER_TEST_TOKEN", "resolved-secret")
+	remotePath := filepath.Join(shortTempDir(t), "models.toml")
+	if err := rm.SaveRemoteModels(remotePath, []rm.RemoteModel{
+		{Name: "gw", Style: "anthropic", URL: "https://gw.example.com", Token: "${JUGGLER_TEST_TOKEN}"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s := newServer(rm.NewRegistry(), nil)
+	s.modelsDir = shortTempDir(t)
+	s.remoteModelsPath = remotePath
+
+	resp := s.dispatch(rm.Envelope{JSONRPC: "2.0", ID: "1", Method: rm.MethodResolveModel,
+		Params: mustJSON(t, rm.ResolveModelParams{Name: "gw"})})
+	if resp.Error != nil {
+		t.Fatalf("ResolveModel error: %+v", resp.Error)
+	}
+	var res rm.ResolveModelResult
+	if err := json.Unmarshal(resp.Result, &res); err != nil {
+		t.Fatal(err)
+	}
+	if res.Kind != rm.ModelKindRemote || res.URL != "https://gw.example.com" || res.Token != "resolved-secret" || res.Style != "anthropic" {
+		t.Fatalf("res = %+v", res)
+	}
+}
+
+func TestDispatchResolveModel_AlreadyRunningLocal(t *testing.T) {
+	reg := rm.NewRegistry()
+	if err := reg.Add(rm.Instance{Alias: "running-model", Bind: "127.0.0.1", Port: 4242}); err != nil {
+		t.Fatal(err)
+	}
+	// nil launcher: if the dispatch code took the "start a new instance"
+	// path instead of reusing the registry entry, calling Start on a nil
+	// Launcher would panic — this proves the reuse branch is taken.
+	s := newServer(reg, nil)
+	s.modelsDir = shortTempDir(t)
+	s.remoteModelsPath = filepath.Join(shortTempDir(t), "models.toml")
+
+	resp := s.dispatch(rm.Envelope{JSONRPC: "2.0", ID: "1", Method: rm.MethodResolveModel,
+		Params: mustJSON(t, rm.ResolveModelParams{Name: "running-model"})})
+	if resp.Error != nil {
+		t.Fatalf("ResolveModel error: %+v", resp.Error)
+	}
+	var res rm.ResolveModelResult
+	if err := json.Unmarshal(resp.Result, &res); err != nil {
+		t.Fatal(err)
+	}
+	if res.Kind != rm.ModelKindLocal || res.URL != "http://127.0.0.1:4242" {
+		t.Fatalf("res = %+v", res)
+	}
+}
+
+func TestDispatchResolveModel_LocalGGUFStartsInstance(t *testing.T) {
+	bin := buildFakeLlamaServer(t)
+	modelsDir := shortTempDir(t)
+	if err := os.WriteFile(filepath.Join(modelsDir, "local-model.gguf"), []byte("fake"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reg := rm.NewRegistry()
+	l := newLauncher(bin, reg, modelsDir)
+	s := newServer(reg, l)
+	s.modelsDir = modelsDir
+	s.remoteModelsPath = filepath.Join(shortTempDir(t), "models.toml")
+
+	resp := s.dispatch(rm.Envelope{JSONRPC: "2.0", ID: "1", Method: rm.MethodResolveModel,
+		Params: mustJSON(t, rm.ResolveModelParams{Name: "local-model"})})
+	if resp.Error != nil {
+		t.Fatalf("ResolveModel error: %+v", resp.Error)
+	}
+	var res rm.ResolveModelResult
+	if err := json.Unmarshal(resp.Result, &res); err != nil {
+		t.Fatal(err)
+	}
+	if res.Kind != rm.ModelKindLocal || res.URL == "" {
+		t.Fatalf("res = %+v", res)
+	}
+	if _, ok := reg.Get("local-model"); !ok {
+		t.Errorf("expected instance registered after ResolveModel start")
+	}
+	t.Cleanup(func() { _ = l.Stop(context.Background(), "local-model") })
+}
+
+func TestDispatchResolveModelUnknown(t *testing.T) {
+	s := newServer(rm.NewRegistry(), nil)
+	s.modelsDir = shortTempDir(t)
+	s.remoteModelsPath = filepath.Join(shortTempDir(t), "models.toml")
+
+	resp := s.dispatch(rm.Envelope{JSONRPC: "2.0", ID: "1", Method: rm.MethodResolveModel,
+		Params: mustJSON(t, rm.ResolveModelParams{Name: "nope"})})
+	if resp.Error == nil || resp.Error.Code != -32001 {
+		t.Fatalf("resp = %#v, want -32001", resp)
 	}
 }
