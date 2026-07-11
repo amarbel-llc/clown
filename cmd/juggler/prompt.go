@@ -65,20 +65,21 @@ func cmdPrompt(cli *rm.Client, args []string) int {
 		fmt.Fprintln(os.Stderr, promptUsage)
 		return 1
 	}
-	modelName := args[0]
-	rest := args[1:]
 
+	// --max-tokens is recognized in any position (before or after the model
+	// name/prompt text), not just after the model name — a flag shouldn't
+	// require a specific position relative to positional args.
 	maxTokens := 256
-	var promptWords []string
-	for i := 0; i < len(rest); i++ {
-		a := rest[i]
+	var positional []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
 		switch {
 		case a == "--max-tokens":
-			if i+1 >= len(rest) {
+			if i+1 >= len(args) {
 				fmt.Fprintln(os.Stderr, "juggler: --max-tokens requires an argument")
 				return 1
 			}
-			n, err := strconv.Atoi(rest[i+1])
+			n, err := strconv.Atoi(args[i+1])
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "juggler: --max-tokens: %v\n", err)
 				return 1
@@ -93,9 +94,15 @@ func cmdPrompt(cli *rm.Client, args []string) int {
 			}
 			maxTokens = n
 		default:
-			promptWords = append(promptWords, a)
+			positional = append(positional, a)
 		}
 	}
+	if len(positional) == 0 {
+		fmt.Fprintln(os.Stderr, promptUsage)
+		return 1
+	}
+	modelName := positional[0]
+	promptWords := positional[1:]
 
 	prompt := strings.Join(promptWords, " ")
 	if prompt == "" {

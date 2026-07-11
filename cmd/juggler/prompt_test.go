@@ -257,6 +257,65 @@ func TestCmdPrompt_HappyPath(t *testing.T) {
 	}
 }
 
+// TestCmdPrompt_MaxTokensFlagBeforeModelName verifies --max-tokens is
+// recognized regardless of position — placed before the model name here,
+// unlike TestCmdPrompt_HappyPath which places it (implicitly, by omission)
+// after. A prior bug treated "--max-tokens" itself as the model name when
+// it appeared first, since cmdPrompt used to take args[0] unconditionally
+// as the model name before scanning the rest for flags.
+func TestCmdPrompt_MaxTokensFlagBeforeModelName(t *testing.T) {
+	var gotMaxTokens int
+	var gotPrompt string
+	remoteSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req anthropicRequest
+		_ = json.Unmarshal(body, &req)
+		gotMaxTokens = req.MaxTokens
+		if len(req.Messages) == 1 {
+			gotPrompt = req.Messages[0].Content
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"hello from model"}]}`))
+	}))
+	defer remoteSrv.Close()
+
+	fakeResolveModelDaemon(t, rm.ResolveModelResult{
+		Kind:  rm.ModelKindRemote,
+		URL:   remoteSrv.URL,
+		Token: "sekret",
+		Style: "anthropic",
+	})
+
+	oldStdout := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	cli, err := dialClient()
+	if err != nil {
+		os.Stdout = oldStdout
+		t.Fatalf("dialClient: %v", err)
+	}
+	rc := cmdPrompt(cli, []string{"--max-tokens", "999", "my-model", "hello", "there"})
+	cli.Close()
+	os.Stdout = oldStdout
+	w.Close()
+
+	if rc != 0 {
+		t.Errorf("rc=%d", rc)
+	}
+	var buf bytes.Buffer
+	_, _ = io.Copy(&buf, r)
+	if strings.TrimSpace(buf.String()) != "hello from model" {
+		t.Errorf("stdout = %q", buf.String())
+	}
+	if gotPrompt != "hello there" {
+		t.Errorf("prompt sent to model = %q, want %q", gotPrompt, "hello there")
+	}
+	if gotMaxTokens != 999 {
+		t.Errorf("max_tokens sent = %d, want 999", gotMaxTokens)
+	}
+}
+
 // TestCmdPrompt_StyleNotSupported exercises a registered remote model
 // with Style "openai-compat": cmdPrompt should error clearly and the
 // httptest server's handler must never be invoked.
