@@ -203,6 +203,24 @@ func TestMaybeReexecPrefersClownNameForTitle(t *testing.T) {
 	t.Cleanup(func() { attachedID = prev })
 	t.Setenv("CLOWN_ATTACH_FORCE", "1")
 
+	// Run outside any git repo so gitRepoAndBranch() (below) returns "" and
+	// titleGroup stays empty — the tier-3 "always show id" case (see the
+	// showID doc comment on maybeReexecMultiplexer). This test's flags carry
+	// no groupID, so without this the git-fallback tier would activate (this
+	// test binary's cwd is always inside the clown repo) and suppress {id}
+	// via titleDisambiguationNeeded's LIVE jobwake presence lookup — making
+	// the assertion below depend on ambient presence state (how many other
+	// clown sessions happen to share this cwd right now) rather than this
+	// test's own inputs (clown#186).
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+	if err := os.Chdir(hostTempDir(t)); err != nil {
+		t.Fatal(err)
+	}
+
 	cf := clownfile.Clownfile{Attach: clownfile.Attach{
 		Multiplexer: "zmx",
 		Start:       []string{"clown-nonexistent-mux-xyz-do-not-install", "{id}", "{entry}"},
@@ -454,6 +472,29 @@ func TestReexecArgv(t *testing.T) {
 	}
 }
 
+// hostTempDir returns a fresh directory guaranteed to sit outside any git
+// repository, on both linux and darwin — unlike t.TempDir(), which honors
+// $TMPDIR and so can resolve INSIDE a repo when $TMPDIR itself is nested
+// under one. A spinclass worktree session sets $TMPDIR to exactly that kind
+// of path (deep inside the worktree itself), which defeats any test that
+// needs a genuinely repo-free directory (clown#185, clown#186; the same
+// "don't trust the inherited $TMPDIR" lesson as poshEnv's clown#158 fix,
+// above).
+//
+// /tmp is a real, world-writable directory on both platforms regardless of
+// $TMPDIR: stable on linux, and on darwin a symlink to /private/tmp — distinct
+// from the per-process $TMPDIR under /private/var/folders/.../T/ that
+// t.TempDir() would otherwise honor.
+func hostTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "clown-test-*")
+	if err != nil {
+		t.Skipf("cannot create a scratch dir under /tmp: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
 // gitRepoAndBranch resolves "<repo>/<branch>" for the OSC-2 title fallback
 // (clown#180). Inside a real git worktree (this test's own repo) it returns a
 // non-empty "<repo>/<branch>"; inside a non-git directory it returns "" so the
@@ -474,15 +515,13 @@ func TestGitRepoAndBranch(t *testing.T) {
 		t.Logf("gitRepoAndBranch() = %q (no branch segment — detached HEAD?)", got)
 	}
 
-	// A directory with no .git anywhere above it resolves to "". t.TempDir under
-	// macOS lives beneath /private/var/folders, outside any repo.
+	// A directory with no .git anywhere above it resolves to "".
 	orig, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chdir(orig) })
-	tmp := t.TempDir()
-	if err := os.Chdir(tmp); err != nil {
+	if err := os.Chdir(hostTempDir(t)); err != nil {
 		t.Fatal(err)
 	}
 	if got := gitRepoAndBranch(); got != "" {
