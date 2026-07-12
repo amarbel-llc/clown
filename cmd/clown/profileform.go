@@ -71,12 +71,16 @@ type profileTemplate struct {
 }
 
 var profileTemplates = []profileTemplate{
-	{key: "openrouter", display: "OpenRouter", p: profile.Profile{Name: "claude-openrouter",
-		Display: "Claude (OpenRouter)", Provider: "claude", Backend: "gateway",
-		URL: "https://openrouter.ai/api", Token: "${OPENROUTER_API_KEY}"},
+	{
+		key: "openrouter", display: "OpenRouter", p: profile.Profile{
+			Name:    "claude-openrouter",
+			Display: "Claude (OpenRouter)", Provider: "claude", Backend: "gateway",
+			URL: "https://openrouter.ai/api", Token: "${OPENROUTER_API_KEY}",
+		},
 		// Model deliberately empty: claude's own defaults flow through and
 		// OpenRouter's Anthropic Skin maps them (tuning lever, design doc).
-		note: "If claude was previously logged in with an Anthropic account, run /logout once inside claude (cached-login conflict)."},
+		note: "If claude was previously logged in with an Anthropic account, run /logout once inside claude (cached-login conflict).",
+	},
 	{key: "gateway", display: "Custom gateway", p: profile.Profile{Provider: "claude", Backend: "gateway"}},
 	{key: "anthropic", display: "Anthropic", p: profile.Profile{Provider: "claude", Backend: "anthropic"}},
 	{key: "local", display: "Local (juggler)", p: profile.Profile{Provider: "claude", Backend: "local"}},

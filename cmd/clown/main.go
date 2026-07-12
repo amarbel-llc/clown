@@ -768,7 +768,8 @@ func applyNamedProfile(flags *parsedFlags, p profile.Profile) error {
 						"%s=%q resolves to a different endpoint (%s) than the main model (%s) — "+
 							"Claude Code shares one ANTHROPIC_BASE_URL per process, so this pairing can't "+
 							"launch yet (see docs/plans/2026-07-07-juggler-model-registry-design.md)",
-						k, v, resolved.URL, mainURL)
+						k, v, resolved.URL, mainURL,
+					)
 				}
 			}
 			// unknown to jugglerModelKind (no daemon, or not registered): treat

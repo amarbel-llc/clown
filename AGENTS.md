@@ -33,7 +33,7 @@ override with `CLOWN_PROVIDER` env var, or pin one per-directory via a
   the synthesis point that wires those binaries into the
   `clown-builtin-jobs` plugin.
 - **`just build` is the only fully-trustworthy build check — `just
-  build-go` and `just gomod2nix` can fail/hang for reasons unrelated to
+  build-go` and `just update-gomod2nix` can fail/hang for reasons unrelated to
   your change (clown#174).** clown consumes the external `ringmaster` Go
   module via a Nix-injected `replace` (igloo's `goFlakeInputs` bridge,
   `gomod.nix`); that replace only exists inside `nix build` and the
@@ -77,10 +77,10 @@ override with `CLOWN_PROVIDER` env var, or pin one per-directory via a
 just build       # Default: nix build --show-trace — the authoritative check
 just build-go    # Build Go binaries; UNRELIABLE on bridged-dep drift, see above
 just test-go     # Run Go unit tests
-just clean       # rm -rf result
+just clean-result  # delete result symlinks
 ```
 
-Format: `nix fmt` (treefmt; config in `treefmt.nix`).
+Format: `nix fmt` (conformist; overlay in `conformist.nix`, wired via `flake.nix`).
 
 ## Architecture at a glance
 

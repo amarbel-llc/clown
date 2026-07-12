@@ -1,6 +1,6 @@
 # Throwaway investigation recipes. Live here, not the root justfile, to
 # keep top-level `just --list` legible. Invoked as
-# `just explore <recipe>` (e.g. `just explore issue-35-mkjuggler-plugin-closure`).
+# `just explore <recipe>` (e.g. `just explore verify-issue-35-mkjuggler-closure`).
 
 # Run go unit tests for specific packages in the ambient devshell (agent
 # dev-loop for per-package TDD iteration; the sandboxed `just test-go`
@@ -11,7 +11,7 @@
 # bridge with a throwaway modfile carrying the store replace (same path
 # the merged-go.mod derivation bakes in; re-derive it from a fresh
 # `nix develop` if the ringmaster input gets bumped).
-go-test *PKGS='./...':
+run-go-test *PKGS='./...':
     #!/usr/bin/env bash
     set -euo pipefail
     cd "$(git rev-parse --show-toplevel)"
@@ -27,7 +27,7 @@ go-test *PKGS='./...':
 # portfile, then execs `clown --profile crush-local`. Requires
 # `just build` to have produced ./result/bin/{clown,juggler}. Exits if
 # juggler fails to bring up llama-server (no model? port conflict?).
-crush-local-smoke MODEL='':
+verify-crush-local MODEL='':
     #!/usr/bin/env bash
     set -euo pipefail
     root=$(git rev-parse --show-toplevel)
@@ -73,8 +73,8 @@ crush-local-smoke MODEL='':
     echo
     exec ./result/bin/clown --profile crush-local
 
-# Stop the juggler daemon started by crush-local-smoke.
-crush-local-stop:
+# Stop the juggler daemon started by verify-crush-local.
+run-crush-local-stop:
     #!/usr/bin/env bash
     set -euo pipefail
     cd "$(git rev-parse --show-toplevel)"
@@ -87,7 +87,7 @@ crush-local-stop:
 # Direct invocation of the built clown-hook-allow binary to confirm
 # its output schema. No API spend; just feeds sample stdin and prints
 # the JSON the binary emits.
-allowtools-hook-direct:
+run-allowtools-hook-direct:
     #!/usr/bin/env bash
     set -euo pipefail
     root=$(git rev-parse --show-toplevel)
@@ -123,7 +123,7 @@ allowtools-hook-direct:
 #
 # This recipe is kept around as documentation of the variants; not
 # expected to be run routinely.
-allowtools-hook-output-forms:
+run-allowtools-hook-forms:
     #!/usr/bin/env bash
     set -euo pipefail
     root=$(git rev-parse --show-toplevel)
@@ -288,7 +288,7 @@ allowtools-hook-output-forms:
 # /nix/store paths. The recipe captures the stream-json transcript
 # and reports pass/fail per tool by inspecting tool_result entries
 # for is_error. Requires `just build` to have produced ./result/bin/clown.
-allowtools-nix-store-smoke:
+verify-allowtools-nix-store:
     #!/usr/bin/env bash
     set -euo pipefail
     root=$(git rev-parse --show-toplevel)
@@ -365,7 +365,7 @@ allowtools-nix-store-smoke:
 #     hookSpecificOutput.updatedInput.subagent_type is "Discover".
 #   - "=== Agent tool_use inputs ===" shows what subagent_type the model
 #     emitted (Explore); the rewrite happens in the hook, after that.
-allowtools-explore-rewrite-smoke:
+verify-allowtools-explore-rewrite:
     #!/usr/bin/env bash
     set -euo pipefail
     root=$(git rev-parse --show-toplevel)
@@ -426,7 +426,7 @@ allowtools-explore-rewrite-smoke:
 # clown-plugin-meta picks up the literal /nix/store paths interpolated
 # into plugin-dirs, so the plugin is a transitive runtime dep and
 # survives GC as long as juggler.packages.default is rooted.
-issue-35-mkjuggler-plugin-closure:
+verify-issue-35-mkjuggler-closure:
     #!/usr/bin/env bash
     set -euo pipefail
     root=$(git rev-parse --show-toplevel)
@@ -497,7 +497,7 @@ issue-35-mkjuggler-plugin-closure:
 # Pass criteria:
 #   - PARENT_WRITE_OK             (writable bind works as advertised)
 #   - CHILD_WRITE_BLOCKED         (inner :ro bind shadows parent)
-tent-mount-precedence:
+verify-tent-mount-precedence:
     #!/usr/bin/env bash
     set -euo pipefail
     work=$(mktemp -d)
@@ -546,7 +546,7 @@ tent-mount-precedence:
 #
 # Usage: just zz-explore/tent-cold-start
 #        just zz-explore/tent-cold-start ITERS=5
-tent-cold-start ITERS='3':
+debug-tent-cold-start ITERS='3':
     #!/usr/bin/env bash
     set -euo pipefail
     root=$(git rev-parse --show-toplevel)
@@ -651,7 +651,7 @@ tent-cold-start ITERS='3':
 # strace sample on the deepest descendant (usually claude inside the
 # container). Defaults to 0 (no strace, snapshot is instant).
 #   just zz-explore/tent-hang-snapshot PID=12345 STRACE=3
-tent-hang-snapshot PID='' STRACE='0':
+debug-tent-hang-snapshot PID='' STRACE='0':
     #!/usr/bin/env bash
     set -uo pipefail   # NOT -e: we want partial info on errors
     root=$(git rev-parse --show-toplevel)
@@ -835,7 +835,7 @@ tent-hang-snapshot PID='' STRACE='0':
 # the user decides whether to keep waiting or SIGINT.
 #
 # Usage: just zz-explore/tent-hang-followup PID
-tent-hang-followup PID:
+debug-tent-hang-followup PID:
     #!/usr/bin/env bash
     set -uo pipefail
     pid="{{PID}}"
@@ -926,7 +926,7 @@ tent-hang-followup PID:
 # Read-only: does NOT touch the hung process tree.
 #
 # Usage: just zz-explore/tent-hang-container-dive CONMON_PID [STRACE]
-tent-hang-container-dive CONMON_PID STRACE='0':
+debug-tent-hang-container-dive CONMON_PID STRACE='0':
     #!/usr/bin/env bash
     set -uo pipefail
     conmon="{{CONMON_PID}}"
@@ -1055,7 +1055,7 @@ tent-hang-container-dive CONMON_PID STRACE='0':
 # Read-only. Safe to run on a live hung process.
 #
 # Usage: just zz-explore/tent-hang-tty-state CLAUDE_PID
-tent-hang-tty-state CLAUDE_PID:
+debug-tent-hang-tty-state CLAUDE_PID:
     #!/usr/bin/env bash
     set -uo pipefail
     pid="{{CLAUDE_PID}}"
@@ -1158,7 +1158,7 @@ tent-hang-tty-state CLAUDE_PID:
 # Reuses the `stty -a -F /proc/<pid>/fd/<n>` TCGETS technique from
 # tent-hang-tty-state. Read-only (TCGETS + /proc reads; no writes, no signals).
 # Usage: just explore ctrlz-tty-probe
-ctrlz-tty-probe:
+debug-ctrlz-tty:
     #!/usr/bin/env bash
     set -uo pipefail
     me="$(id -un)"
@@ -1222,7 +1222,7 @@ ctrlz-tty-probe:
 # (This is a shell-out, not a job-control suspend, so it works the same inline or
 # under a multiplexer.) Requires a built clown (./result/bin/clown) or `go run`.
 # Usage: just explore pty-suspend-demo
-pty-suspend-demo:
+run-pty-suspend-demo:
     #!/usr/bin/env bash
     set -uo pipefail
     cd "$(git rev-parse --show-toplevel)"
@@ -1278,12 +1278,12 @@ pty-suspend-demo:
 # Dump every clown-tent image currently in the local podman store.
 # Useful before running tent-probe to confirm which tag to target —
 # the user may have an older tent image loaded from a prior build.
-tent-images:
+list-tent-images:
     #!/usr/bin/env bash
     set -euo pipefail
     /usr/bin/podman image ls --filter reference='clown-tent*'
 
-tent-probe CMD USERNS='keep-id' IMAGE='' EXTRA_MOUNTS='' PASS_DEVSHELL='0':
+run-tent-probe CMD USERNS='keep-id' IMAGE='' EXTRA_MOUNTS='' PASS_DEVSHELL='0':
     #!/usr/bin/env bash
     set -euo pipefail
 
@@ -1379,7 +1379,7 @@ tent-probe CMD USERNS='keep-id' IMAGE='' EXTRA_MOUNTS='' PASS_DEVSHELL='0':
 # Usage (positional — `KEY=value` style does NOT work in just):
 #   just zz-explore/zmx-depth        # walks $PPID
 #   just zz-explore/zmx-depth 12345  # walks an arbitrary pid
-zmx-depth PID='':
+debug-zmx-depth PID='':
     #!/usr/bin/env bash
     set -uo pipefail
     pid="{{PID}}"
@@ -1458,7 +1458,7 @@ zmx-depth PID='':
 # #83 hang.
 #
 # Usage: just zz-explore/wedge-syscall-probe PID
-wedge-syscall-probe PID:
+debug-wedge-syscall PID:
     #!/usr/bin/env bash
     set -uo pipefail
     pid="{{PID}}"
@@ -1545,7 +1545,7 @@ wedge-syscall-probe PID:
 # Read-only. Works on any pid, not just podman.
 #
 # Usage: just zz-explore/socket-queue-probe PID
-socket-queue-probe PID:
+debug-socket-queue PID:
     #!/usr/bin/env bash
     set -uo pipefail
     pid="{{PID}}"
@@ -1639,7 +1639,7 @@ socket-queue-probe PID:
 #   CID can be the full 64-hex container id or any unique prefix.
 #   Find it via `podman ps -aq` or from conmon's `-c <id>` argument
 #   (visible in `pgrep -a conmon`).
-tent-container-journal CID:
+debug-tent-container-journal CID:
     #!/usr/bin/env bash
     set -uo pipefail
     cid="{{CID}}"
@@ -1714,7 +1714,7 @@ tent-container-journal CID:
 #
 # Usage:
 #   just zz-explore/io-probe "3001701 3001716 3001721 2989810 2989812"
-io-probe PIDS:
+debug-io-probe PIDS:
     #!/usr/bin/env bash
     set -uo pipefail
     pids="{{PIDS}}"
@@ -1763,7 +1763,7 @@ io-probe PIDS:
 # Usage (positional — `KEY=value` style does NOT work in just):
 #   just zz-explore/tent-claude-version /nix/store/.../claude-code-2.1.111/bin/claude
 #   just zz-explore/tent-claude-version /nix/store/.../bin/claude clown-tent:0.3.2
-tent-claude-version CLAUDE_BIN IMAGE='':
+debug-tent-claude-version CLAUDE_BIN IMAGE='':
     #!/usr/bin/env bash
     set -uo pipefail
 
@@ -1816,7 +1816,7 @@ tent-claude-version CLAUDE_BIN IMAGE='':
 # would touch on startup.
 #
 # Usage: just zz-explore/tent-claude-writeability
-tent-claude-writeability:
+verify-tent-claude-writeability:
     #!/usr/bin/env bash
     set -uo pipefail
     /usr/bin/podman run --rm -i --userns=keep-id \
@@ -1874,7 +1874,7 @@ tent-claude-writeability:
 # Usage (positional — `KEY=value` style does NOT work in just):
 #   just zz-explore/tent-claude-with-debug
 #   just zz-explore/tent-claude-with-debug 20  # 20-second timeout
-tent-claude-with-debug DURATION='10':
+debug-tent-claude DURATION='10':
     #!/usr/bin/env bash
     set -uo pipefail
     secs="{{DURATION}}"
@@ -2006,7 +2006,7 @@ tent-claude-with-debug DURATION='10':
 #   just zz-explore/tent-claude-with-debug-tty \
 #     /nix/store/dii6cpbdqzjcjqcy18x6n56cql0fmdg9-claude-code-2.1.111/bin/claude \
 #     '--plugin-dir /nix/store/m4yalh23h3dfxg95mw7vrymlx6w7mi60-eng-plugin/share/purse-first/eng'
-tent-claude-with-debug-tty CLAUDE_BIN='/nix/store/dii6cpbdqzjcjqcy18x6n56cql0fmdg9-claude-code-2.1.111/bin/claude' EXTRA_ARGS='':
+debug-tent-claude-tty CLAUDE_BIN='/nix/store/dii6cpbdqzjcjqcy18x6n56cql0fmdg9-claude-code-2.1.111/bin/claude' EXTRA_ARGS='':
     #!/usr/bin/env bash
     set -uo pipefail
 

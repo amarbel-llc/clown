@@ -8,9 +8,7 @@
         "nixpkgs-master": [
           "nixpkgs-master"
         ],
-        "treefmt-nix": [
-          "treefmt-nix"
-        ],
+        "treefmt-nix": "treefmt-nix",
         "utils": [
           "utils"
         ]
@@ -87,6 +85,32 @@
         "type": "github"
       }
     },
+    "conformist": {
+      "inputs": {
+        "igloo": [
+          "igloo"
+        ],
+        "nixpkgs-master": [
+          "nixpkgs-master"
+        ],
+        "utils": [
+          "utils"
+        ]
+      },
+      "locked": {
+        "lastModified": 1783882300,
+        "narHash": "sha256-aK0LVzftd/E7LR8tgjTsnEkLSyZecMqjtqyq4VDeHEc=",
+        "ref": "refs/heads/master",
+        "rev": "275968632782fd978b9db60926990fc38f3715bb",
+        "revCount": 144,
+        "type": "git",
+        "url": "https://code.linenisgreat.com/conformist.git"
+      },
+      "original": {
+        "type": "git",
+        "url": "https://code.linenisgreat.com/conformist.git"
+      }
+    },
     "flake-parts": {
       "inputs": {
         "nixpkgs-lib": [
@@ -117,6 +141,7 @@
         ],
         "systems": "systems",
         "treefmt-nix": [
+          "bats",
           "treefmt-nix"
         ]
       },
@@ -151,6 +176,7 @@
           "systems"
         ],
         "treefmt-nix": [
+          "bats",
           "treefmt-nix"
         ]
       },
@@ -280,6 +306,7 @@
     "root": {
       "inputs": {
         "bats": "bats",
+        "conformist": "conformist",
         "igloo": "igloo",
         "llm-agents": "llm-agents",
         "nixpkgs-claude-code": "nixpkgs-claude-code",
@@ -287,7 +314,6 @@
         "nixpkgs-llama": "nixpkgs-llama",
         "nixpkgs-master": "nixpkgs-master",
         "ringmaster": "ringmaster",
-        "treefmt-nix": "treefmt-nix",
         "troupe": "troupe",
         "utils": "utils"
       }
@@ -310,6 +336,7 @@
     "treefmt-nix": {
       "inputs": {
         "nixpkgs": [
+          "bats",
           "igloo"
         ]
       },
@@ -336,6 +363,7 @@
           "ringmaster"
         ],
         "treefmt-nix": [
+          "bats",
           "treefmt-nix"
         ],
         "utils": [

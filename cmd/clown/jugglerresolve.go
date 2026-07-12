@@ -20,7 +20,8 @@ func resolveViaJuggler(modelName string) (juggler.ResolveModelResult, error) {
 	cli, err := juggler.NewClient(socket)
 	if err != nil {
 		return juggler.ResolveModelResult{}, fmt.Errorf(
-			"juggler daemon unreachable (socket %s): %w — start it: juggler daemon", socket, err)
+			"juggler daemon unreachable (socket %s): %w — start it: juggler daemon", socket, err,
+		)
 	}
 	defer cli.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)

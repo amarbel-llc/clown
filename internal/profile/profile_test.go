@@ -150,8 +150,10 @@ func TestValidate_InvalidCombos(t *testing.T) {
 }
 
 func TestValidateClaudeGateway(t *testing.T) {
-	ok := profile.Profile{Name: "or", Provider: "claude", Backend: "gateway",
-		URL: "https://openrouter.ai/api", Token: "${OPENROUTER_API_KEY}"}
+	ok := profile.Profile{
+		Name: "or", Provider: "claude", Backend: "gateway",
+		URL: "https://openrouter.ai/api", Token: "${OPENROUTER_API_KEY}",
+	}
 	if err := profile.Validate(ok); err != nil {
 		t.Fatalf("claude+gateway with url+token should validate: %v", err)
 	}
@@ -209,8 +211,10 @@ func TestValidateGatewayViaJugglerModelOnlyForClaude(t *testing.T) {
 func TestValidateGatewayURLWithoutTokenStillErrors(t *testing.T) {
 	// A Model being present must not exempt an inline URL from also
 	// requiring a Token — the "URL present" branch is unconditional.
-	p := profile.Profile{Name: "url-no-token", Provider: "claude", Backend: "gateway",
-		URL: "https://example.com", Model: "some-model"}
+	p := profile.Profile{
+		Name: "url-no-token", Provider: "claude", Backend: "gateway",
+		URL: "https://example.com", Model: "some-model",
+	}
 	err := profile.Validate(p)
 	if err == nil || !strings.Contains(err.Error(), "token") {
 		t.Fatalf("gateway with url but no token should fail validation naming token, got: %v", err)

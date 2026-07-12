@@ -10,8 +10,10 @@ import (
 
 func TestSaveRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sub", "profiles.toml")
-	in := []Profile{{Name: "or", Display: "Claude (OpenRouter)", Provider: "claude",
-		Backend: "gateway", URL: "https://openrouter.ai/api", Token: "${OPENROUTER_API_KEY}"}}
+	in := []Profile{{
+		Name: "or", Display: "Claude (OpenRouter)", Provider: "claude",
+		Backend: "gateway", URL: "https://openrouter.ai/api", Token: "${OPENROUTER_API_KEY}",
+	}}
 	if err := Save(path, in); err != nil {
 		t.Fatal(err)
 	}

@@ -135,6 +135,7 @@ teardown() {
   id="$(printf '%s' "$output" | jq -r '.result.content[0].text')"
   [[ -n $id ]]
 
+  # shellcheck disable=SC1010
   run "$RINGMASTER_BIN" done "$id" --state succeeded --message "ok"
   assert_success
 

@@ -43,9 +43,13 @@
     # own locked nixpkgs costs a second nixpkgs evaluation in the closure but
     # keeps the package set self-consistent.
     llm-agents.url = "github:numtide/llm-agents.nix";
-    llm-agents.inputs.treefmt-nix.follows = "treefmt-nix";
-    treefmt-nix.url = "github:numtide/treefmt-nix";
-    treefmt-nix.inputs.nixpkgs.follows = "igloo";
+    llm-agents.inputs.treefmt-nix.follows = "bats/treefmt-nix";
+    # conformist: formatter/linter orchestrator replacing treefmt-nix.
+    # Forge-hosted; aligns shared inputs so the closure shares one igloo eval.
+    conformist.url = "git+https://code.linenisgreat.com/conformist.git";
+    conformist.inputs.igloo.follows = "igloo";
+    conformist.inputs.nixpkgs-master.follows = "nixpkgs-master";
+    conformist.inputs.utils.follows = "utils";
     # amarbel-llc/bats provides the batsLane build helper (formerly
     # pkgs.testers.batsLane in the full-fork era) and the bats-libs
     # bundle (bats-support, bats-assert, bats-emo, bats-island). The
@@ -60,8 +64,7 @@
     llm-agents.inputs.systems.follows = "igloo/systems";
     utils.inputs.systems.follows = "igloo/systems";
     igloo.inputs.nixpkgs-master.follows = "nixpkgs-master";
-    bats.inputs.treefmt-nix.follows = "treefmt-nix";
-    igloo.inputs.treefmt-nix.follows = "treefmt-nix";
+    igloo.inputs.treefmt-nix.follows = "bats/treefmt-nix";
     # ringmaster: the extracted job platform (jobwake + jobmcp packages,
     # ringmaster + troupe binaries). Forge-hosted; consumed as a Go module
     # via igloo's goFlakeInputs bridge (see gomod.nix). The flake input is
@@ -83,7 +86,7 @@
     troupe.url = "git+https://code.linenisgreat.com/troupe.git";
     troupe.inputs.nixpkgs.follows = "igloo";
     troupe.inputs.utils.follows = "utils";
-    troupe.inputs.treefmt-nix.follows = "treefmt-nix";
+    troupe.inputs.treefmt-nix.follows = "bats/treefmt-nix";
     troupe.inputs.ringmaster.follows = "ringmaster";
   };
 
@@ -96,7 +99,7 @@
       nixpkgs-codex,
       nixpkgs-llama,
       llm-agents,
-      treefmt-nix,
+      conformist,
       utils,
       bats,
       ringmaster,
@@ -135,8 +138,26 @@
         # its newer pin — e.g. ones needing electron_42 — resolve correctly,
         # at the cost of a second nixpkgs evaluation.
         pkgs-llm-agents = llm-agents.packages.${system};
-        # `nix fmt` entry point. Config lives in ./treefmt.nix.
-        treefmtEval = treefmt-nix.lib.evalModule pkgs ./treefmt.nix;
+        # `nix fmt` entry point. Repo overlay lives in ./conformist.nix;
+        # eng + eng-go presets add eng-convention linters and the
+        # canonical goimports → gofumpt chain.
+        conformistPkg = conformist.packages.${system}.default;
+        conformistEval = conformist.lib.evalModule pkgs {
+          imports = [
+            conformist.lib.presets.eng
+            conformist.lib.presets.eng-go
+            ./conformist.nix
+          ];
+          package = conformistPkg;
+        };
+        conformistImpureEval = conformist.lib.evalModule pkgs {
+          imports = [
+            conformist.lib.presets.eng-impure
+            ./conformist-impure.nix
+          ];
+          package = conformistPkg;
+          projectRootFile = "flake.nix";
+        };
       in
       let
         lib = pkgs.lib;
@@ -1436,6 +1457,11 @@
           # can resolve `bats_load_library` without going through the
           # external bats flake (which would re-pin and drift).
           bats-libs = batsLibs;
+          # conformist tooling: pre-commit hook, in-place repair, and
+          # impure config file for lint-worktree (git-state checks).
+          conformist-pre-commit = conformistEval.config.build.preCommit;
+          conformist-repair = conformistEval.config.build.repair;
+          conformist-impure-config = conformistImpureEval.config.build.configFile;
         }
         // batsLaneOutputs
         # Expose the tent container image as a named package on linux
@@ -1457,6 +1483,7 @@
           # for the tag history and the conditions that would
           # warrant reintroducing one.
           bats-default = batsLaneOutputs.bats-default;
+          formatting = conformistEval.config.build.check self;
         };
 
         devShells.default = pkgs.mkShell {
@@ -1477,6 +1504,9 @@
             pkgs.bun
             pkgs.mitmproxy
             pkgs.gomod2nix
+            conformistPkg
+            conformistEval.config.build.preCommit
+            conformistEval.config.build.repair
           ];
         };
 
@@ -1508,7 +1538,7 @@
           program = "${devTentSSHForward}/bin/dev-tent-ssh-forward";
         };
 
-        formatter = treefmtEval.config.build.wrapper;
+        formatter = conformistEval.config.build.wrapper;
       }
     ))
     // {

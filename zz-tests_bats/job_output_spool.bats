@@ -82,6 +82,7 @@ teardown() {
   run jq -r '.state' <<<"$output"
   assert_output "running"
 
+  # shellcheck disable=SC1010
   "$RINGMASTER_BIN" done "$id" --state succeeded --message ok
   run "$RINGMASTER_BIN" status "$id" --json
   assert_success

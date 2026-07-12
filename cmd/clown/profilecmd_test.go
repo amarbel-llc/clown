@@ -24,8 +24,10 @@ func TestFormatProfileList(t *testing.T) {
 func TestFormatProfileList_ContextColumn(t *testing.T) {
 	user := []profile.Profile{
 		{Name: "plain", Provider: "claude", Backend: "anthropic"},
-		{Name: "trimmed", Provider: "claude", Backend: "anthropic",
-			ContextServers: []string{"moxy/moxy", "bob/caldav"}},
+		{
+			Name: "trimmed", Provider: "claude", Backend: "anthropic",
+			ContextServers: []string{"moxy/moxy", "bob/caldav"},
+		},
 	}
 	out := formatProfileList(nil, user)
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")

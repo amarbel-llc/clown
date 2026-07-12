@@ -46,8 +46,10 @@ func TestValidateProfileNameField(t *testing.T) {
 }
 
 func TestFormValuesToProfile(t *testing.T) {
-	v := profileFormValues{Name: " or ", Display: "X", Provider: "claude",
-		Backend: "gateway", URL: " https://openrouter.ai/api ", Token: "${OPENROUTER_API_KEY}"}
+	v := profileFormValues{
+		Name: " or ", Display: "X", Provider: "claude",
+		Backend: "gateway", URL: " https://openrouter.ai/api ", Token: "${OPENROUTER_API_KEY}",
+	}
 	p := v.toProfile()
 	if p.Name != "or" || p.URL != "https://openrouter.ai/api" {
 		t.Errorf("fields must be trimmed: %#v", p)
@@ -64,8 +66,10 @@ func TestFormValuesToProfile(t *testing.T) {
 // TestValidateGatewayViaJugglerModel, but exercised through the form's own
 // toProfile() path.
 func TestFormValuesToProfile_GatewayViaJugglerModel(t *testing.T) {
-	v := profileFormValues{Name: "juggler-gw", Provider: "claude",
-		Backend: "gateway", Model: "remote-model-a"}
+	v := profileFormValues{
+		Name: "juggler-gw", Provider: "claude",
+		Backend: "gateway", Model: "remote-model-a",
+	}
 	p := v.toProfile()
 	if err := profile.Validate(p); err != nil {
 		t.Fatalf("gateway+model (no url) built via the form should validate: %v", err)
@@ -80,8 +84,10 @@ func TestFormValuesToProfile_GatewayViaJugglerModel(t *testing.T) {
 // path.
 func TestFormValuesToProfile_GatewayViaJugglerModelOnlyForClaude(t *testing.T) {
 	for _, prov := range []string{"opencode", "crush"} {
-		v := profileFormValues{Name: "juggler-gw-" + prov, Provider: prov,
-			Backend: "gateway", Model: "remote-model-a"}
+		v := profileFormValues{
+			Name: "juggler-gw-" + prov, Provider: prov,
+			Backend: "gateway", Model: "remote-model-a",
+		}
 		p := v.toProfile()
 		if err := profile.Validate(p); err == nil {
 			t.Errorf("%s+gateway+model (no url/token) built via the form should still fail validation", prov)

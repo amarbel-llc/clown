@@ -1,4 +1,5 @@
 # vim: set ft=toml
 
 [hooks]
+pre-commit = "conformist-pre-commit"
 pre-merge = "just"

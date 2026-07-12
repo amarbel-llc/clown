@@ -72,6 +72,7 @@ teardown() {
 @test "start/progress/done write JSONL records with seq 0,1,2" {
   id="$("$RINGMASTER_BIN" start --source moxy --label build)"
   "$RINGMASTER_BIN" progress "$id" --message "halfway"
+  # shellcheck disable=SC1010
   "$RINGMASTER_BIN" done "$id" --state succeeded --message "nix build ok"
 
   run "$RINGMASTER_BIN" read --job "$id" --json
@@ -100,6 +101,7 @@ teardown() {
 # §4: result_ref rides through to the terminal record.
 @test "done --result-ref is recorded on the terminal event" {
   id="$("$RINGMASTER_BIN" start --source moxy)"
+  # shellcheck disable=SC1010
   "$RINGMASTER_BIN" done "$id" --state succeeded --message ok --result-ref "moxy job-read --job $id"
 
   run "$RINGMASTER_BIN" read --job "$id" --json
@@ -111,8 +113,10 @@ teardown() {
 # §5: a second `done` on an already-terminal job exits non-zero.
 @test "second done on a terminal job fails" {
   id="$("$RINGMASTER_BIN" start --source s)"
+  # shellcheck disable=SC1010
   run "$RINGMASTER_BIN" done "$id" --state succeeded
   assert_success
+  # shellcheck disable=SC1010
   run "$RINGMASTER_BIN" done "$id" --state failed
   assert_failure
 }
@@ -120,6 +124,7 @@ teardown() {
 # §8/§5: an invalid terminal state exits non-zero.
 @test "done --state wat (invalid state) fails" {
   id="$("$RINGMASTER_BIN" start --source s)"
+  # shellcheck disable=SC1010
   run "$RINGMASTER_BIN" done "$id" --state wat
   assert_failure
 }
@@ -129,6 +134,7 @@ teardown() {
 @test "monitor wakes on terminal event only and formats the §9 line" {
   id="$("$RINGMASTER_BIN" start --source moxy --label build)"
   "$RINGMASTER_BIN" progress "$id" --message "halfway"
+  # shellcheck disable=SC1010
   "$RINGMASTER_BIN" done "$id" --state succeeded --message "nix build ok" --result-ref "ref-123"
 
   # Gotcha 2: --once replays the unacked waking events deterministically,
@@ -149,6 +155,7 @@ teardown() {
 # result_ref is absent the " · " is omitted.
 @test "notification line omits ': ' and ' · ' when message/result_ref absent" {
   id="$("$RINGMASTER_BIN" start --source moxy --label bare)"
+  # shellcheck disable=SC1010
   "$RINGMASTER_BIN" done "$id" --state failed
 
   run "$RINGMASTER_BIN" monitor --once
@@ -161,6 +168,7 @@ teardown() {
 # explicitly against the requirements row.)
 @test "monitor started after done replays the unacked terminal event" {
   id="$("$RINGMASTER_BIN" start --source spinclass --label merge)"
+  # shellcheck disable=SC1010
   "$RINGMASTER_BIN" done "$id" --state succeeded --message "merged"
 
   run "$RINGMASTER_BIN" monitor --once
@@ -172,6 +180,7 @@ teardown() {
 # same channel (ack now persisted) replays nothing.
 @test "a second monitor replays nothing once the event is acked" {
   id="$("$RINGMASTER_BIN" start --source spinclass --label merge)"
+  # shellcheck disable=SC1010
   "$RINGMASTER_BIN" done "$id" --state succeeded --message "merged"
 
   run "$RINGMASTER_BIN" monitor --once
@@ -283,6 +292,7 @@ teardown() {
   assert_success
   CLOWN_DISABLE_JOB_WAKEUP=1 run "$RINGMASTER_BIN" progress some-job --message hi
   assert_success
+  # shellcheck disable=SC1010
   CLOWN_DISABLE_JOB_WAKEUP=1 run "$RINGMASTER_BIN" done some-job --state succeeded
   assert_success
   CLOWN_DISABLE_JOB_WAKEUP=1 run "$TROUPE_BIN" message --target '*' --message hi

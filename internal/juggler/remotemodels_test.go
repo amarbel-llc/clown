@@ -9,8 +9,10 @@ import (
 
 func TestSaveLoadRemoteModelsRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sub", "models.toml")
-	in := []RemoteModel{{Name: "claude-openrouter", Style: "anthropic",
-		URL: "https://openrouter.ai/api", Token: "${OPENROUTER_API_KEY}"}}
+	in := []RemoteModel{{
+		Name: "claude-openrouter", Style: "anthropic",
+		URL: "https://openrouter.ai/api", Token: "${OPENROUTER_API_KEY}",
+	}}
 	if err := SaveRemoteModels(path, in); err != nil {
 		t.Fatal(err)
 	}

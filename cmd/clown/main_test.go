@@ -186,8 +186,10 @@ func TestApplyNamedProfileGatewayEnvAuthoritative(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "real-key")
 	t.Setenv("OPENROUTER_API_KEY", "sk-or-test")
 	flags := parsedFlags{provider: "claude"}
-	p := profile.Profile{Name: "or", Provider: "claude", Backend: "gateway",
-		URL: "https://openrouter.ai/api", Token: "${OPENROUTER_API_KEY}"}
+	p := profile.Profile{
+		Name: "or", Provider: "claude", Backend: "gateway",
+		URL: "https://openrouter.ai/api", Token: "${OPENROUTER_API_KEY}",
+	}
 	if err := applyNamedProfile(&flags, p); err != nil {
 		t.Fatal(err)
 	}
@@ -206,8 +208,10 @@ func TestApplyNamedProfileGatewayEnvAuthoritative(t *testing.T) {
 func TestApplyNamedProfileEmptyTokenRef(t *testing.T) {
 	t.Setenv("OPENROUTER_API_KEY", "")
 	flags := parsedFlags{provider: "claude"}
-	p := profile.Profile{Name: "or", Provider: "claude", Backend: "gateway",
-		URL: "https://openrouter.ai/api", Token: "${OPENROUTER_API_KEY}"}
+	p := profile.Profile{
+		Name: "or", Provider: "claude", Backend: "gateway",
+		URL: "https://openrouter.ai/api", Token: "${OPENROUTER_API_KEY}",
+	}
 	err := applyNamedProfile(&flags, p)
 	if err == nil || !strings.Contains(err.Error(), "OPENROUTER_API_KEY") {
 		t.Fatalf("want error naming the env var, got %v", err)
@@ -234,8 +238,10 @@ func TestApplyNamedProfileEnvMapOnlyIfUnset(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_SUBAGENT_MODEL", "ambient")
 	t.Setenv("ANTHROPIC_DEFAULT_HAIKU_MODEL", "")
 	flags := parsedFlags{provider: "claude"}
-	p := profile.Profile{Provider: "claude", Backend: "anthropic",
-		Env: map[string]string{"CLAUDE_CODE_SUBAGENT_MODEL": "p", "ANTHROPIC_DEFAULT_HAIKU_MODEL": "p"}}
+	p := profile.Profile{
+		Provider: "claude", Backend: "anthropic",
+		Env: map[string]string{"CLAUDE_CODE_SUBAGENT_MODEL": "p", "ANTHROPIC_DEFAULT_HAIKU_MODEL": "p"},
+	}
 	if err := applyNamedProfile(&flags, p); err != nil {
 		t.Fatal(err)
 	}
