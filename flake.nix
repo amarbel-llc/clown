@@ -275,8 +275,11 @@
             "-w"
             "-X main.version=${clownVersion}"
             "-X main.commit=${clownRev}"
-            "-X github.com/amarbel-llc/clown/internal/buildcfg.StdioBridgePath=${clown-stdio-bridge}/bin/clown-stdio-bridge"
           ];
+          ldflagsX = {
+            "github.com/amarbel-llc/clown/internal/buildcfg.StdioBridgePath" =
+              "${clown-stdio-bridge}/bin/clown-stdio-bridge";
+          };
         };
 
         clown-stdio-bridge = buildGoApplication {
@@ -656,32 +659,39 @@
             ldflags = [
               "-s"
               "-w"
-              "-X github.com/amarbel-llc/clown/internal/buildcfg.ClaudeCliPath=${claudeCliPath}"
-              "-X github.com/amarbel-llc/clown/internal/buildcfg.CodexCliPath=${codexCliPath}"
-              "-X github.com/amarbel-llc/clown/internal/buildcfg.JugglerCliPath=${juggler-go}/bin/juggler"
-              "-X github.com/amarbel-llc/clown/internal/buildcfg.AgentsFile=${agents-file}"
-              "-X github.com/amarbel-llc/clown/internal/buildcfg.DisallowedToolsFile=${disallowed-tools-file}"
-              "-X github.com/amarbel-llc/clown/internal/buildcfg.SystemPromptAppendD=${./system-prompt-append.d}"
-              "-X github.com/amarbel-llc/clown/internal/buildcfg.DefaultClownfilePath=${./default-clownfile}"
-              "-X github.com/amarbel-llc/clown/internal/buildcfg.Version=${clownVersion}"
-              "-X github.com/amarbel-llc/clown/internal/buildcfg.Commit=${clownRev}"
-              "-X github.com/amarbel-llc/clown/internal/buildcfg.ShortSha=${clownShortRev}"
-              "-X github.com/amarbel-llc/clown/internal/buildcfg.ClaudeCodeVersion=${claudeCodeVersion}"
-              "-X github.com/amarbel-llc/clown/internal/buildcfg.ClaudeCodeRev=${claudeCodeRev}"
-              "-X github.com/amarbel-llc/clown/internal/buildcfg.CodexVersion=${codexVersion}"
-              "-X github.com/amarbel-llc/clown/internal/buildcfg.CodexRev=${codexRev}"
-              "-X github.com/amarbel-llc/clown/internal/buildcfg.OpencodeCliPath=${pkgs.opencode}/bin/opencode"
-              "-X github.com/amarbel-llc/clown/internal/buildcfg.CrushCliPath=${pkgs-llm-agents.crush}/bin/crush"
-              "-X github.com/amarbel-llc/clown/internal/buildcfg.ClownboxCliPath=${clownboxCliPath}"
-              "-X github.com/amarbel-llc/clown/internal/buildcfg.StdioBridgePath=${clown-stdio-bridge}/bin/clown-stdio-bridge"
-              "-X github.com/amarbel-llc/clown/internal/buildcfg.HookAllowPath=${clown-hook-allow}/bin/clown-hook-allow"
-              "-X github.com/amarbel-llc/clown/internal/buildcfg.RingmasterPath=${ringmasterPkg}/bin/ringmaster"
-              "-X github.com/amarbel-llc/clown/internal/buildcfg.TroupePath=${troupePkg}/bin/troupe"
-              "-X github.com/amarbel-llc/clown/internal/buildcfg.DefaultProvider=${defaultProvider}"
-              "-X github.com/amarbel-llc/clown/internal/buildcfg.DefaultProfile=${defaultProfile}"
-              "-X github.com/amarbel-llc/clown/internal/buildcfg.PodmanPath=${tentPodmanPath}"
-              "-X github.com/amarbel-llc/clown/internal/buildcfg.TentImageRef=${tentImageRef}"
-              "-X github.com/amarbel-llc/clown/internal/buildcfg.TentImageTarball=${tentImageTarball}"
+            ];
+            ldflagsX = {
+              "github.com/amarbel-llc/clown/internal/buildcfg.ClaudeCliPath" = claudeCliPath;
+              "github.com/amarbel-llc/clown/internal/buildcfg.CodexCliPath" = codexCliPath;
+              "github.com/amarbel-llc/clown/internal/buildcfg.JugglerCliPath" = "${juggler-go}/bin/juggler";
+              "github.com/amarbel-llc/clown/internal/buildcfg.AgentsFile" = agents-file;
+              "github.com/amarbel-llc/clown/internal/buildcfg.DisallowedToolsFile" = disallowed-tools-file;
+              "github.com/amarbel-llc/clown/internal/buildcfg.SystemPromptAppendD" = "${
+                ./system-prompt-append.d
+              }";
+              "github.com/amarbel-llc/clown/internal/buildcfg.DefaultClownfilePath" = "${./default-clownfile}";
+              "github.com/amarbel-llc/clown/internal/buildcfg.Version" = clownVersion;
+              "github.com/amarbel-llc/clown/internal/buildcfg.Commit" = clownRev;
+              "github.com/amarbel-llc/clown/internal/buildcfg.ShortSha" = clownShortRev;
+              "github.com/amarbel-llc/clown/internal/buildcfg.ClaudeCodeVersion" = claudeCodeVersion;
+              "github.com/amarbel-llc/clown/internal/buildcfg.ClaudeCodeRev" = claudeCodeRev;
+              "github.com/amarbel-llc/clown/internal/buildcfg.CodexVersion" = codexVersion;
+              "github.com/amarbel-llc/clown/internal/buildcfg.CodexRev" = codexRev;
+              "github.com/amarbel-llc/clown/internal/buildcfg.OpencodeCliPath" = "${pkgs.opencode}/bin/opencode";
+              "github.com/amarbel-llc/clown/internal/buildcfg.CrushCliPath" =
+                "${pkgs-llm-agents.crush}/bin/crush";
+              "github.com/amarbel-llc/clown/internal/buildcfg.ClownboxCliPath" = clownboxCliPath;
+              "github.com/amarbel-llc/clown/internal/buildcfg.StdioBridgePath" =
+                "${clown-stdio-bridge}/bin/clown-stdio-bridge";
+              "github.com/amarbel-llc/clown/internal/buildcfg.HookAllowPath" =
+                "${clown-hook-allow}/bin/clown-hook-allow";
+              "github.com/amarbel-llc/clown/internal/buildcfg.RingmasterPath" = "${ringmasterPkg}/bin/ringmaster";
+              "github.com/amarbel-llc/clown/internal/buildcfg.TroupePath" = "${troupePkg}/bin/troupe";
+              "github.com/amarbel-llc/clown/internal/buildcfg.DefaultProvider" = defaultProvider;
+              "github.com/amarbel-llc/clown/internal/buildcfg.DefaultProfile" = defaultProfile;
+              "github.com/amarbel-llc/clown/internal/buildcfg.PodmanPath" = tentPodmanPath;
+              "github.com/amarbel-llc/clown/internal/buildcfg.TentImageRef" = tentImageRef;
+              "github.com/amarbel-llc/clown/internal/buildcfg.TentImageTarball" = tentImageTarball;
               # ${self} interpolates the source-tree store path captured
               # by the flake. Used at runtime as the flake-uri for
               # `nix build <self>#packages.<linux-system>.tent-image`
@@ -689,12 +699,12 @@
               # the tag and no tarball was baked in (darwin, or future
               # profiles). The dependency keeps the source tree alive
               # in /nix/store as long as the clown derivation is.
-              "-X github.com/amarbel-llc/clown/internal/buildcfg.TentImageFlakeRef=${self}"
-              "-X github.com/amarbel-llc/clown/internal/buildcfg.ClaudeTentCliPath=${tentClaudeCliPath}"
-              "-X github.com/amarbel-llc/clown/internal/buildcfg.PodmanMachineName=${podmanMachineName}"
-              "-X github.com/amarbel-llc/clown/internal/buildcfg.TentBackend=${tentBackend}"
-              "-X github.com/amarbel-llc/clown/internal/buildcfg.LimactlPath=${limactlPath}"
-            ];
+              "github.com/amarbel-llc/clown/internal/buildcfg.TentImageFlakeRef" = "${self}";
+              "github.com/amarbel-llc/clown/internal/buildcfg.ClaudeTentCliPath" = tentClaudeCliPath;
+              "github.com/amarbel-llc/clown/internal/buildcfg.PodmanMachineName" = podmanMachineName;
+              "github.com/amarbel-llc/clown/internal/buildcfg.TentBackend" = tentBackend;
+              "github.com/amarbel-llc/clown/internal/buildcfg.LimactlPath" = limactlPath;
+            };
           };
 
         # juggler: the llama-server control-plane binary (client + `juggler
@@ -712,8 +722,10 @@
           ldflags = [
             "-s"
             "-w"
-            "-X main.LlamaServerPath=${llamaServerPath}"
           ];
+          ldflagsX = {
+            "main.LlamaServerPath" = llamaServerPath;
+          };
         };
 
         # ringmaster + troupe binaries now come from the extracted
