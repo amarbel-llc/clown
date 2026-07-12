@@ -200,14 +200,14 @@ func (a Attach) Title(id, group string, showID bool) string {
 // emits no TROUPE_XMPP_* vars, so the run stays on the local journal
 // single-host — the transport is inert until a clownfile opts in.
 type Messaging struct {
-	Transport        string `toml:"transport"`         // "local" (default) | "xmpp"
-	XMPPHost         string `toml:"xmpp-host"`         // connect addr, env-interpolated; troupe defaults to DNS-resolving xmpp-domain
-	XMPPPort         int    `toml:"xmpp-port"`         // c2s port; troupe defaults to 5222
-	XMPPDomain       string `toml:"xmpp-domain"`       // c2s vhost; REQUIRED when transport=xmpp
-	XMPPMUCDomain    string `toml:"xmpp-muc-domain"`   // base MUC domain rooms are addressed under; REQUIRED when transport=xmpp
-	XMPPNick         string `toml:"xmpp-nick"`         // MUC nick; troupe defaults to the clown-name
-	XMPPInsecure     *bool  `toml:"xmpp-insecure"`     // skip TLS verify (loopback/testing only). *bool so a deeper clownfile can override an enabled default
-	XMPPUser         string `toml:"xmpp-user"`         // authenticated-mode c2s localpart; used only when xmpp-password-file is set (troupe defaults it to the nick)
+	Transport        string `toml:"transport"`          // "local" (default) | "xmpp"
+	XMPPHost         string `toml:"xmpp-host"`          // connect addr, env-interpolated; troupe defaults to DNS-resolving xmpp-domain
+	XMPPPort         int    `toml:"xmpp-port"`          // c2s port; troupe defaults to 5222
+	XMPPDomain       string `toml:"xmpp-domain"`        // c2s vhost; REQUIRED when transport=xmpp
+	XMPPMUCDomain    string `toml:"xmpp-muc-domain"`    // base MUC domain rooms are addressed under; REQUIRED when transport=xmpp
+	XMPPNick         string `toml:"xmpp-nick"`          // MUC nick; troupe defaults to the clown-name
+	XMPPInsecure     *bool  `toml:"xmpp-insecure"`      // skip TLS verify (loopback/testing only). *bool so a deeper clownfile can override an enabled default
+	XMPPUser         string `toml:"xmpp-user"`          // authenticated-mode c2s localpart; used only when xmpp-password-file is set (troupe defaults it to the nick)
 	XMPPPasswordFile string `toml:"xmpp-password-file"` // credential REFERENCE: a file path (env-interpolated), NEVER the secret. Only-if-authenticated.
 }
 
