@@ -528,6 +528,12 @@
                 pkgs.cacert
                 pkgs.iana-etc
               ];
+              # FHS programs assume /tmp exists and is world-writable
+              # (mktemp, shell idioms like `cp x /tmp/y`). buildLayeredImage
+              # doesn't create it by default (clown#92) — extraCommands runs
+              # in the image's own root during layer assembly, so a relative
+              # path here is "/tmp" in the finished image.
+              extraCommands = "mkdir -m 1777 -p tmp";
               config = {
                 Env = [
                   "SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt"
