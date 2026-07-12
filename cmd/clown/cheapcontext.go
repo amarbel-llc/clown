@@ -16,6 +16,17 @@ import (
 	"github.com/amarbel-llc/clown/internal/profile"
 )
 
+// cheapContextSaveContext carries the profile data run() already loaded once
+// (builtin+user merged, the raw user set, and the user set's file path)
+// through to promptSaveSelection, so a --cheap-context save prompt doesn't
+// re-read and re-parse profiles.toml a second time in the same launch
+// (clown#178).
+type cheapContextSaveContext struct {
+	merged []profile.Profile
+	user   []profile.Profile
+	path   string
+}
+
 // toolGroup is one row of a multi-group server's picker section: a set of
 // tool names that share a name-prefix group (e.g. all of moxy's "folio"
 // tools), or the catch-all "ungrouped" bucket for names that don't parse.
@@ -230,7 +241,7 @@ func selectionFromSavedProfile(saved *profile.Profile, catalogs []serverCatalog)
 // there is nothing left to prompt for. saved may be nil (no --profile
 // resolved, or the resolved profile has no saved selection), in which case
 // behavior is unchanged from before persistence existed.
-func selectServers(catalogs []serverCatalog, logger *slog.Logger, saved *profile.Profile) (selectionResult, error) {
+func selectServers(catalogs []serverCatalog, logger *slog.Logger, saved *profile.Profile, saveCtx cheapContextSaveContext) (selectionResult, error) {
 	if result, ok := selectionFromSavedProfile(saved, catalogs); ok {
 		logger.Info("cheap-context: replaying saved selection from profile", "profile", saved.Name)
 		return result, nil
@@ -330,7 +341,7 @@ func selectServers(catalogs []serverCatalog, logger *slog.Logger, saved *profile
 		}
 	}
 
-	if err := promptSaveSelection(result); err != nil {
+	if err := promptSaveSelection(result, saveCtx); err != nil {
 		// A save failure (bad name, write error, user aborts the save
 		// sub-prompt) never fails the launch — the selection still applies
 		// for this session, it just isn't persisted.
@@ -364,6 +375,7 @@ func applyCheapContextSelection(
 	started []*pluginhost.ManagedServer,
 	logger *slog.Logger,
 	savedProfile *profile.Profile,
+	saveCtx cheapContextSaveContext,
 ) ([]pluginhost.DiscoveredServer, error) {
 	byName := make(map[string]pluginhost.DiscoveredServer, len(discovered))
 	for _, d := range discovered {
@@ -386,7 +398,7 @@ func applyCheapContextSelection(
 		catalogs = append(catalogs, serverCatalog{server: d, groups: groups})
 	}
 
-	result, err := selectServers(catalogs, logger, savedProfile)
+	result, err := selectServers(catalogs, logger, savedProfile, saveCtx)
 	if err != nil {
 		return nil, err
 	}
@@ -473,8 +485,11 @@ func pushExcludeTools(ctx context.Context, srv *pluginhost.ManagedServer, names 
 //
 // Errors here are the caller's responsibility to treat as non-fatal (see
 // selectServers) — a user declining to save, or a save failure, must never
-// fail the launch that already has a valid, applied selection.
-func promptSaveSelection(result selectionResult) error {
+// fail the launch that already has a valid, applied selection. saveCtx
+// carries the profile data run() already loaded once for --profile
+// resolution/the profile picker, so this function doesn't re-read
+// profiles.toml a second time in the same launch (clown#178).
+func promptSaveSelection(result selectionResult, saveCtx cheapContextSaveContext) error {
 	if len(result.kept) == 0 {
 		// Fail fast, before either interactive prompt below runs: an empty
 		// ContextServers can never round-trip through Save/Load (see
@@ -500,11 +515,7 @@ func promptSaveSelection(result selectionResult) error {
 		return nil
 	}
 
-	builtin, user, destPath, err := loadProfileSets("")
-	if err != nil {
-		return err
-	}
-	merged := profile.Merge(builtin, user)
+	merged, user, destPath := saveCtx.merged, saveCtx.user, saveCtx.path
 	existingNames := userNameSet(user)
 
 	var name string

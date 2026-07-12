@@ -23,6 +23,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"golang.org/x/term"
 
+	"code.linenisgreat.com/ringmaster/jobwake"
 	"github.com/amarbel-llc/clown/internal/buildcfg"
 	"github.com/amarbel-llc/clown/internal/clownfile"
 	"github.com/amarbel-llc/clown/internal/clownname"
@@ -33,7 +34,6 @@ import (
 	"github.com/amarbel-llc/clown/internal/provider"
 	"github.com/amarbel-llc/clown/internal/ptysuspend"
 	"github.com/amarbel-llc/clown/internal/tent"
-	"code.linenisgreat.com/ringmaster/jobwake"
 )
 
 //go:embed profiles/builtin.toml
@@ -412,11 +412,17 @@ func runWithFlags(flags parsedFlags) int {
 		_ = os.Setenv(k, v)
 	}
 
-	profiles, err := loadProfiles("")
+	builtinProfiles, userProfiles, profilesPath, err := loadProfileSets("")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown: loading profiles: %v\n", err)
 		return 1
 	}
+	profiles := profile.Merge(builtinProfiles, userProfiles)
+	// Captured once, here, so a later --cheap-context save prompt
+	// (promptSaveSelection, applied deep inside runManaged) doesn't have to
+	// re-read and re-parse profiles.toml a second time in the same launch
+	// (clown#178).
+	flags.cheapContextSave = cheapContextSaveContext{merged: profiles, user: userProfiles, path: profilesPath}
 
 	var selectedProfile *profile.Profile
 	if flags.profile != "" {
@@ -1429,7 +1435,7 @@ func runWithPluginHost(executor Executor, args []string, pluginDirs []string, fl
 		return runProvider(executor, fullArgs, logger, flags.ptyOpts)
 	}
 
-	return runManaged(host, discovered, executor, args, pluginDirs, skipFailed, verbose, logger, appendFile, flags.ptyOpts, cheapContextActive, allDiscoveredDirs, flags.cheapContextProfile)
+	return runManaged(host, discovered, executor, args, pluginDirs, skipFailed, verbose, logger, appendFile, flags.ptyOpts, cheapContextActive, allDiscoveredDirs, flags.cheapContextProfile, flags.cheapContextSave)
 }
 
 // runProvider executes a provider as a subprocess, forwarding stdio
@@ -1605,6 +1611,7 @@ func runManaged(
 	cheapContextActive bool,
 	allDiscoveredDirs map[string]bool,
 	cheapContextProfile *profile.Profile,
+	cheapContextSave cheapContextSaveContext,
 ) int {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1672,7 +1679,7 @@ func runManaged(
 	// like moxy has no clown-owned proxy in its request path at all, so its
 	// per-tool selection currently has no effect (clown#175).
 	if cheapContextActive {
-		filtered, err := applyCheapContextSelection(ctx, host, discovered, report.Started, logger, cheapContextProfile)
+		filtered, err := applyCheapContextSelection(ctx, host, discovered, report.Started, logger, cheapContextProfile, cheapContextSave)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "clown: %v\n", err)
 			logger.Error("cheap-context selection failed", "err", err)
@@ -2121,7 +2128,12 @@ type parsedFlags struct {
 	// resolved, or when the resolved profile has no saved selection (in
 	// which case cheapContext still shows the picker as before).
 	cheapContextProfile *profile.Profile
-	tent         bool
+	// cheapContextSave carries the profile data run() already loaded once
+	// (builtin+user merged, the raw user set, and its file path) through to
+	// promptSaveSelection, so a --cheap-context save prompt doesn't re-read
+	// and re-parse profiles.toml a second time in the same launch (clown#178).
+	cheapContextSave cheapContextSaveContext
+	tent             bool
 	// ptyOpts is the resolved escape-to-shell pty proxy config from the clownfile
 	// [attach] table (pty-suspend / escape-key / escape-command). Sourced in
 	// runWithFlags; no flag/env source yet.

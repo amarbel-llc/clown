@@ -128,7 +128,7 @@ func TestCheapContextShouldActivate(t *testing.T) {
 // form at all (the test process has no TTY) — proving the empty check is a
 // guard clause ahead of any prompting, not just documentation.
 func TestPromptSaveSelection_EmptyKeptRefusesWithoutPrompting(t *testing.T) {
-	err := promptSaveSelection(selectionResult{excludedTools: map[string][]string{}})
+	err := promptSaveSelection(selectionResult{excludedTools: map[string][]string{}}, cheapContextSaveContext{})
 	if err == nil {
 		t.Fatal("expected an error for a selection with zero kept servers")
 	}
@@ -225,7 +225,7 @@ func TestSelectServers_SavedSelectionSkipsPickerAndTTYRequirement(t *testing.T) 
 	catalogs := []serverCatalog{{server: moxy, groups: []toolGroup{{name: "folio", tools: []string{"folio.read"}}}}}
 	saved := &profile.Profile{Name: "trimmed", ContextServers: []string{"moxy/moxy"}}
 
-	result, err := selectServers(catalogs, slog.Default(), saved)
+	result, err := selectServers(catalogs, slog.Default(), saved, cheapContextSaveContext{})
 	if err != nil {
 		t.Fatalf("selectServers with a saved selection should not require a TTY: %v", err)
 	}
@@ -263,4 +263,3 @@ func TestIsMultiGroup(t *testing.T) {
 		})
 	}
 }
-
