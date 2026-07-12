@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -317,6 +318,36 @@ func TestRunMultiplexer(t *testing.T) {
 	if want := "attach\nsess\n"; string(got) != want {
 		t.Errorf("child argv = %q, want %q (argv[1:] forwarded, argv[0] dropped)", got, want)
 	}
+}
+
+// poshEnv forces POSH_DIR to a short, TMPDIR-independent base when the
+// resolved multiplexer is posh, so its socket path stays under the 107-byte
+// sun_path limit regardless of how deep an inherited $TMPDIR is (clown#158).
+func TestPoshEnv(t *testing.T) {
+	t.Run("posh with no POSH_DIR set gets one appended", func(t *testing.T) {
+		env := []string{"PATH=/bin", "TMPDIR=/very/deep/worktree/.tmp"}
+		got := poshEnv("/nix/store/xyz-posh/bin/posh", env)
+		want := fmt.Sprintf("POSH_DIR=/tmp/posh-%d", os.Getuid())
+		if len(got) != len(env)+1 || got[len(got)-1] != want {
+			t.Errorf("poshEnv() = %v, want %v appended with %q", got, env, want)
+		}
+	})
+
+	t.Run("posh with POSH_DIR already set is left alone", func(t *testing.T) {
+		env := []string{"PATH=/bin", "POSH_DIR=/custom/posh"}
+		got := poshEnv("posh", env)
+		if !reflect.DeepEqual(got, env) {
+			t.Errorf("poshEnv() = %v, want unchanged %v (caller's POSH_DIR wins)", got, env)
+		}
+	})
+
+	t.Run("non-posh multiplexer is left alone", func(t *testing.T) {
+		env := []string{"PATH=/bin", "TMPDIR=/very/deep/worktree/.tmp"}
+		got := poshEnv("/usr/bin/tmux", env)
+		if !reflect.DeepEqual(got, env) {
+			t.Errorf("poshEnv() = %v, want unchanged %v (only posh is affected)", got, env)
+		}
+	})
 }
 
 // A binary that cannot be started surfaces the error (and code 1), rather than

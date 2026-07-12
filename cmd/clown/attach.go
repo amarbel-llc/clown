@@ -319,12 +319,36 @@ func maybeReexecMultiplexer(cf clownfile.Clownfile, flags parsedFlags, mode clow
 // with no double-delivery. SIGWINCH is intentionally left alone: its default
 // disposition is ignore, and the kernel already delivers it to the child as the
 // terminal's foreground process group, which repaints itself.
+// poshEnv returns env with POSH_DIR appended when muxBin is posh and the
+// caller hasn't already set POSH_DIR themselves. posh resolves its UNIX
+// socket base as POSH_DIR > XDG_RUNTIME_DIR/posh > $TMPDIR/posh-<uid> >
+// /tmp/posh-<uid>, then builds <base>/<group>/<session-name> and rejects the
+// result once it exceeds the 107-byte sun_path limit. A spinclass worktree
+// session sets $TMPDIR to a path deep inside the worktree itself, which —
+// combined with clown's 36-char per-instance UUID as the session name — can
+// push the total past that limit (clown#158). Forcing POSH_DIR to the same
+// short, TMPDIR-independent base posh would pick if NONE of POSH_DIR,
+// XDG_RUNTIME_DIR, or TMPDIR were set avoids the overflow regardless of how
+// deep the inherited TMPDIR is. A no-op for every other configured
+// multiplexer, and for a user who already set POSH_DIR explicitly.
+func poshEnv(muxBin string, env []string) []string {
+	if filepath.Base(muxBin) != "posh" {
+		return env
+	}
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "POSH_DIR=") {
+			return env
+		}
+	}
+	return append(env, fmt.Sprintf("POSH_DIR=/tmp/posh-%d", os.Getuid()))
+}
+
 func runMultiplexer(muxBin string, argv []string) (int, error) {
 	cmd := exec.Command(muxBin, argv[1:]...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	cmd.Env = os.Environ()
+	cmd.Env = poshEnv(muxBin, os.Environ())
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
