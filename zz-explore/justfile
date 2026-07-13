@@ -73,7 +73,7 @@ explore-crush-local MODEL='':
     echo
     exec ./result/bin/clown --profile crush-local
 
-# Stop the juggler daemon started by verify-crush-local.
+# Stop the juggler daemon started by explore-crush-local.
 run-crush-local-stop:
     #!/usr/bin/env bash
     set -euo pipefail
