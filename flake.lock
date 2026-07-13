@@ -14,11 +14,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1783893072,
-        "narHash": "sha256-UFn61ewHKrs08oODsaJRjQr7xRBFdE4On+O3am809BM=",
+        "lastModified": 1783950360,
+        "narHash": "sha256-hy3/twnNG7CcNH8+0cV4GVwwGkytIAVbG9XDKEFdr40=",
         "owner": "amarbel-llc",
         "repo": "bats",
-        "rev": "ea3ac3da8c52a4ef4b5d208c6c67affd137a1232",
+        "rev": "99b2c2b95e11b5e04a193ef0e54d759706851efb",
         "type": "github"
       },
       "original": {
@@ -121,11 +121,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1783872533,
-        "narHash": "sha256-ox9+6hg/q4YAwfbiVc/29UW7/UjvmVyawtbojoXfnIU=",
+        "lastModified": 1783896868,
+        "narHash": "sha256-pN9WzpM9sBz6DmQIlALLhAKIC9yrbY9rLa+qrYr8Ph8=",
         "owner": "amarbel-llc",
         "repo": "igloo",
-        "rev": "0dab67443b30e15aa314c1c72a2cd22b6d1f2a23",
+        "rev": "e04bba9f87552e4161ebec00c528361316d36d3c",
         "type": "github"
       },
       "original": {
@@ -155,11 +155,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1783893801,
-        "narHash": "sha256-1OxO5VEqvewfIt4hPN+v7l5vrU/qd4k3nAb3VK8kxSI=",
+        "lastModified": 1783984346,
+        "narHash": "sha256-Y+OzASjAU+9ni5VqYcIIn24PncAaPAm4afKE/+V/DCs=",
         "owner": "numtide",
         "repo": "llm-agents.nix",
-        "rev": "449e34425cb726941ffe5f1c6b921ce8f581a82e",
+        "rev": "9f3a69970a0a908e04db853537a284bb885bd55b",
         "type": "github"
       },
       "original": {
@@ -345,11 +345,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1783428551,
-        "narHash": "sha256-v5xl/DMfA0+p1Y39juY33jf6TgTCn2DHcEKtpg8FB1Q=",
+        "lastModified": 1783950659,
+        "narHash": "sha256-lS8dUIjMaHy3SZYM3nyvC9BdcoJjfOoYTy9YEC7Hyoo=",
         "ref": "refs/heads/master",
-        "rev": "b85c063dcc851b28f49259b0fe3752761cd83df8",
-        "revCount": 22,
+        "rev": "82cb8666713ca9fddc76636d6225df16e2f2c30b",
+        "revCount": 23,
         "type": "git",
         "url": "https://code.linenisgreat.com/troupe.git"
       },
