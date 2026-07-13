@@ -69,7 +69,7 @@ explore-crush-local MODEL='':
 
     echo
     echo ">> launching clown --profile crush-local"
-    echo "   (Ctrl-C to exit; 'just explore crush-local-stop' to kill the daemon)"
+    echo "   (Ctrl-C to exit; 'just explore run-crush-local-stop' to kill the daemon)"
     echo
     exec ./result/bin/clown --profile crush-local
 
