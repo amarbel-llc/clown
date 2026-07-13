@@ -10,7 +10,7 @@ import (
 // clownRepoURL is the canonical repository the agent links to when it signs
 // off as Clown. The build-identity fragment extends this with a /commit/<sha>
 // suffix so each sign-off pins the exact build it came from.
-const clownRepoURL = "https://github.com/amarbel-llc/clown"
+const clownRepoURL = "https://code.linenisgreat.com/clown"
 
 // buildIdentityFragment renders a system-prompt append fragment that tells the
 // agent which clown build it is running, so it stamps the version+shortSha and
