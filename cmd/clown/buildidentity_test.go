@@ -48,7 +48,7 @@ func TestBuildIdentityFragment(t *testing.T) {
 		setBuildcfg(t, "0.3.10", "a1b2c3d", fullSha)
 		got := buildIdentityFragment()
 		mustContain(t, got, "clown 0.3.10+a1b2c3d")
-		mustContain(t, got, "https://code.linenisgreat.com/clown/commit/"+fullSha)
+		mustContain(t, got, clownRepoURL+"/commit/"+fullSha)
 	})
 
 	t.Run("version only degrades without a link", func(t *testing.T) {
