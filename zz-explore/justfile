@@ -1,6 +1,6 @@
 # Throwaway investigation recipes. Live here, not the root justfile, to
 # keep top-level `just --list` legible. Invoked as
-# `just explore <recipe>` (e.g. `just explore verify-issue-35-mkjuggler-closure`).
+# `just explore <recipe>` (e.g. `just explore run-go-test`).
 
 # Run go unit tests for specific packages in the ambient devshell (agent
 # dev-loop for per-package TDD iteration; the sandboxed `just test-go`
@@ -27,7 +27,7 @@ run-go-test *PKGS='./...':
 # portfile, then execs `clown --profile crush-local`. Requires
 # `just build` to have produced ./result/bin/{clown,juggler}. Exits if
 # juggler fails to bring up llama-server (no model? port conflict?).
-verify-crush-local MODEL='':
+explore-crush-local MODEL='':
     #!/usr/bin/env bash
     set -euo pipefail
     root=$(git rev-parse --show-toplevel)
@@ -288,7 +288,7 @@ run-allowtools-hook-forms:
 # /nix/store paths. The recipe captures the stream-json transcript
 # and reports pass/fail per tool by inspecting tool_result entries
 # for is_error. Requires `just build` to have produced ./result/bin/clown.
-verify-allowtools-nix-store:
+explore-allowtools-nix-store:
     #!/usr/bin/env bash
     set -euo pipefail
     root=$(git rev-parse --show-toplevel)
@@ -365,7 +365,7 @@ verify-allowtools-nix-store:
 #     hookSpecificOutput.updatedInput.subagent_type is "Discover".
 #   - "=== Agent tool_use inputs ===" shows what subagent_type the model
 #     emitted (Explore); the rewrite happens in the hook, after that.
-verify-allowtools-explore-rewrite:
+explore-allowtools-explore-rewrite:
     #!/usr/bin/env bash
     set -euo pipefail
     root=$(git rev-parse --show-toplevel)
@@ -426,7 +426,7 @@ verify-allowtools-explore-rewrite:
 # clown-plugin-meta picks up the literal /nix/store paths interpolated
 # into plugin-dirs, so the plugin is a transitive runtime dep and
 # survives GC as long as juggler.packages.default is rooted.
-verify-issue-35-mkjuggler-closure:
+explore-issue-35-mkjuggler-closure:
     #!/usr/bin/env bash
     set -euo pipefail
     root=$(git rev-parse --show-toplevel)
@@ -497,7 +497,7 @@ verify-issue-35-mkjuggler-closure:
 # Pass criteria:
 #   - PARENT_WRITE_OK             (writable bind works as advertised)
 #   - CHILD_WRITE_BLOCKED         (inner :ro bind shadows parent)
-verify-tent-mount-precedence:
+explore-tent-mount-precedence:
     #!/usr/bin/env bash
     set -euo pipefail
     work=$(mktemp -d)
@@ -1815,8 +1815,8 @@ debug-tent-claude-version CLAUDE_BIN IMAGE='':
 # Doesn't run claude — just exercises the same FS surface claude
 # would touch on startup.
 #
-# Usage: just zz-explore/tent-claude-writeability
-verify-tent-claude-writeability:
+# Usage: just explore explore-tent-claude-writeability
+explore-tent-claude-writeability:
     #!/usr/bin/env bash
     set -uo pipefail
     /usr/bin/podman run --rm -i --userns=keep-id \

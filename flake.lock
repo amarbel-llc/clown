@@ -73,11 +73,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1783882300,
-        "narHash": "sha256-aK0LVzftd/E7LR8tgjTsnEkLSyZecMqjtqyq4VDeHEc=",
+        "lastModified": 1783949730,
+        "narHash": "sha256-ilEJ9Wp+yrc1/3CK7NRQDdmJ0PTB+xJoS8Grslo7itg=",
         "ref": "refs/heads/master",
-        "rev": "275968632782fd978b9db60926990fc38f3715bb",
-        "revCount": 144,
+        "rev": "1985c0c5fd4197ae944526ea9700caed259e1fe8",
+        "revCount": 153,
         "type": "git",
         "url": "https://code.linenisgreat.com/conformist.git"
       },
