@@ -6,7 +6,7 @@
     # overlays.default contributes buildGoApplication, mkGoEnv,
     # gomod2nix (CLI), fetchGgufModel, and other amarbel-packages
     # additions to pkgs. See overlays/amarbel-packages.nix in the fork.
-    igloo.url = "github:amarbel-llc/igloo";
+    igloo.url = "git+https://code.linenisgreat.com/igloo.git";
     # Secondary pinned views — same SHAs we used against upstream, just
     # served by the fork. Each fork commit upstream's master, so these
     # SHAs are reachable. The overlay is *not* applied to these because
@@ -55,7 +55,7 @@
     # bundle (bats-support, bats-assert, bats-emo, bats-island). The
     # fork's thin-overlay master no longer ships the testers helper,
     # so the bats flake is the canonical source.
-    bats.url = "github:amarbel-llc/bats";
+    bats.url = "git+https://code.linenisgreat.com/bats.git";
     bats.inputs.igloo.follows = "igloo";
     bats.inputs.nixpkgs-master.follows = "nixpkgs-master";
     bats.inputs.utils.follows = "utils";

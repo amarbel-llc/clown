@@ -14,17 +14,17 @@
         ]
       },
       "locked": {
-        "lastModified": 1783992495,
-        "narHash": "sha256-Ur6JvfN6m3GBFpZ7QXuN0tClhij8pi0xvD9iwDzyg+w=",
-        "owner": "amarbel-llc",
-        "repo": "bats",
-        "rev": "cd0e74302b4535fccf3be6c3a37493d487d4e1da",
-        "type": "github"
+        "lastModified": 1784038869,
+        "narHash": "sha256-tXWylXtCnosOyuwFvRKlDOUql9GBX6CkD056B2lGc64=",
+        "ref": "refs/heads/master",
+        "rev": "5a5ed04052e2525080e474a3d2dabbea4367d2af",
+        "revCount": 2072,
+        "type": "git",
+        "url": "https://code.linenisgreat.com/bats.git"
       },
       "original": {
-        "owner": "amarbel-llc",
-        "repo": "bats",
-        "type": "github"
+        "type": "git",
+        "url": "https://code.linenisgreat.com/bats.git"
       }
     },
     "bun2nix": {
@@ -73,11 +73,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1783949730,
-        "narHash": "sha256-ilEJ9Wp+yrc1/3CK7NRQDdmJ0PTB+xJoS8Grslo7itg=",
+        "lastModified": 1784038233,
+        "narHash": "sha256-S/zksNggY2sHwNWQUJ7zqATCXnWSClhDt4LYdsPv+lg=",
         "ref": "refs/heads/master",
-        "rev": "1985c0c5fd4197ae944526ea9700caed259e1fe8",
-        "revCount": 153,
+        "rev": "ffaed59c883667056c2f5fa9a3f0d3077e89347d",
+        "revCount": 154,
         "type": "git",
         "url": "https://code.linenisgreat.com/conformist.git"
       },
@@ -123,15 +123,15 @@
       "locked": {
         "lastModified": 1783896868,
         "narHash": "sha256-pN9WzpM9sBz6DmQIlALLhAKIC9yrbY9rLa+qrYr8Ph8=",
-        "owner": "amarbel-llc",
-        "repo": "igloo",
+        "ref": "refs/heads/master",
         "rev": "e04bba9f87552e4161ebec00c528361316d36d3c",
-        "type": "github"
+        "revCount": 73,
+        "type": "git",
+        "url": "https://code.linenisgreat.com/igloo.git"
       },
       "original": {
-        "owner": "amarbel-llc",
-        "repo": "igloo",
-        "type": "github"
+        "type": "git",
+        "url": "https://code.linenisgreat.com/igloo.git"
       }
     },
     "llm-agents": {
@@ -155,11 +155,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1783998605,
-        "narHash": "sha256-FZa9vA21dkvLerk20uOt5Gn87VND4GBwXoPBk8JSobw=",
+        "lastModified": 1784012825,
+        "narHash": "sha256-lbdkOH57StVOFMEpFASzEmi+GlK3iX6Uu7Y2zGUgVFE=",
         "owner": "numtide",
         "repo": "llm-agents.nix",
-        "rev": "9e2dbe1e09a619318696da505dd183c4d36f3048",
+        "rev": "5c73869318afcf796a7a465b4b5e31b27f0819d4",
         "type": "github"
       },
       "original": {
