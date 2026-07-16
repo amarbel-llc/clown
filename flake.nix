@@ -6,7 +6,7 @@
     # overlays.default contributes buildGoApplication, mkGoEnv,
     # gomod2nix (CLI), fetchGgufModel, and other amarbel-packages
     # additions to pkgs. See overlays/amarbel-packages.nix in the fork.
-    igloo.url = "git+https://github.com/amarbel-llc/igloo.git";
+    igloo.url = "git+https://code.linenisgreat.com/igloo.git";
     # Secondary pinned views — same SHAs we used against upstream, just
     # served by the fork. Each fork commit upstream's master, so these
     # SHAs are reachable. The overlay is *not* applied to these because
@@ -46,7 +46,7 @@
     llm-agents.inputs.treefmt-nix.follows = "bats/treefmt-nix";
     # conformist: formatter/linter orchestrator replacing treefmt-nix.
     # Forge-hosted; aligns shared inputs so the closure shares one igloo eval.
-    conformist.url = "git+https://github.com/amarbel-llc/conformist.git";
+    conformist.url = "git+https://code.linenisgreat.com/conformist.git";
     conformist.inputs.igloo.follows = "igloo";
     conformist.inputs.nixpkgs-master.follows = "nixpkgs-master";
     conformist.inputs.utils.follows = "utils";
