@@ -1533,7 +1533,7 @@ debug-juggler-api model="":
 # Cut a release (eng-versioning(7)): refuse off the default branch,
 # assemble the changelog BEFORE bumping (so the release commit isn't in its
 # own notes), bump CLOWN_VERSION in version.env, commit, sign+push the tag,
-# and create the GitHub Release. The bump+commit is skipped when version.env
+# and create the Forgejo release. The bump+commit is skipped when version.env
 # already holds the target (a prior commit may have pre-bumped it). The "v"
 # prefix is added for you. Usage: just release 0.5.0
 [group("maintenance")]
@@ -1562,4 +1562,4 @@ release new_version:
         git commit -m "release v{{new_version}}"
     fi
     just tag "$notes"
-    gh release create "v{{new_version}}" --title "v{{new_version}}" --notes "$notes"
+    fj release create "v{{new_version}}" --tag "v{{new_version}}" --body "$notes"
