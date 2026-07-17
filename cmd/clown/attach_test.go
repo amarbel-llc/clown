@@ -338,11 +338,20 @@ func TestRunMultiplexer(t *testing.T) {
 	}
 }
 
-// poshEnv forces POSH_DIR to a short, TMPDIR-independent base when the
-// resolved multiplexer is posh, so its socket path stays under the 107-byte
-// sun_path limit regardless of how deep an inherited $TMPDIR is (clown#158).
+// poshEnv forces POSH_DIR to match posh's own tier-2 resolution: XDG_RUNTIME_DIR/posh
+// when XDG_RUNTIME_DIR is set (always on Linux), /tmp/posh-<uid> otherwise (clown#158,
+// clown#190). The value is read from the env SLICE, not os.Getenv.
 func TestPoshEnv(t *testing.T) {
-	t.Run("posh with no POSH_DIR set gets one appended", func(t *testing.T) {
+	t.Run("posh with XDG_RUNTIME_DIR set gets XDG-based POSH_DIR", func(t *testing.T) {
+		env := []string{"PATH=/bin", "XDG_RUNTIME_DIR=/run/user/1000", "TMPDIR=/very/deep/worktree/.tmp"}
+		got := poshEnv("/nix/store/xyz-posh/bin/posh", env)
+		want := "POSH_DIR=/run/user/1000/posh"
+		if len(got) != len(env)+1 || got[len(got)-1] != want {
+			t.Errorf("poshEnv() = %v, want %v appended with %q", got, env, want)
+		}
+	})
+
+	t.Run("posh with no POSH_DIR and no XDG_RUNTIME_DIR falls back to /tmp/posh-<uid>", func(t *testing.T) {
 		env := []string{"PATH=/bin", "TMPDIR=/very/deep/worktree/.tmp"}
 		got := poshEnv("/nix/store/xyz-posh/bin/posh", env)
 		want := fmt.Sprintf("POSH_DIR=/tmp/posh-%d", os.Getuid())

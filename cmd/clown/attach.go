@@ -326,19 +326,30 @@ func maybeReexecMultiplexer(cf clownfile.Clownfile, flags parsedFlags, mode clow
 // result once it exceeds the 107-byte sun_path limit. A spinclass worktree
 // session sets $TMPDIR to a path deep inside the worktree itself, which —
 // combined with clown's 36-char per-instance UUID as the session name — can
-// push the total past that limit (clown#158). Forcing POSH_DIR to the same
-// short, TMPDIR-independent base posh would pick if NONE of POSH_DIR,
-// XDG_RUNTIME_DIR, or TMPDIR were set avoids the overflow regardless of how
-// deep the inherited TMPDIR is. A no-op for every other configured
-// multiplexer, and for a user who already set POSH_DIR explicitly.
+// push the total past that limit (clown#158). We force POSH_DIR to match
+// posh's own tier-2 resolution: $XDG_RUNTIME_DIR/posh when XDG_RUNTIME_DIR is
+// set and non-empty (always true on Linux; short, tmpfs-backed, safely under
+// the sun_path limit), falling back to /tmp/posh-<uid> only when it isn't (the
+// darwin deep-TMPDIR case #158 originally targeted). This keeps clown and bare
+// posh list/attach on the same socket base with no env plumbing required
+// (clown#190). A no-op for every other configured multiplexer, and for a user
+// who already set POSH_DIR explicitly.
 func poshEnv(muxBin string, env []string) []string {
 	if filepath.Base(muxBin) != "posh" {
 		return env
 	}
+	var xdg string
 	for _, kv := range env {
-		if strings.HasPrefix(kv, "POSH_DIR=") {
+		key, val, _ := strings.Cut(kv, "=")
+		switch key {
+		case "POSH_DIR":
 			return env
+		case "XDG_RUNTIME_DIR":
+			xdg = val
 		}
+	}
+	if xdg != "" {
+		return append(env, "POSH_DIR="+xdg+"/posh")
 	}
 	return append(env, fmt.Sprintf("POSH_DIR=/tmp/posh-%d", os.Getuid()))
 }
