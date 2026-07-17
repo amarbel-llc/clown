@@ -43,7 +43,7 @@
     # own locked nixpkgs costs a second nixpkgs evaluation in the closure but
     # keeps the package set self-consistent.
     llm-agents.url = "github:numtide/llm-agents.nix";
-    llm-agents.inputs.treefmt-nix.follows = "bats/treefmt-nix";
+    llm-agents.inputs.treefmt-nix.follows = "igloo/treefmt-nix";
     # conformist: formatter/linter orchestrator replacing treefmt-nix.
     # Forge-hosted; aligns shared inputs so the closure shares one igloo eval.
     conformist.url = "https://code.linenisgreat.com/conformist/archive/master.tar.gz";
@@ -64,7 +64,6 @@
     llm-agents.inputs.systems.follows = "igloo/systems";
     utils.inputs.systems.follows = "igloo/systems";
     igloo.inputs.nixpkgs-master.follows = "nixpkgs-master";
-    igloo.inputs.treefmt-nix.follows = "bats/treefmt-nix";
     # ringmaster: the extracted job platform (jobwake + jobmcp packages,
     # ringmaster + troupe binaries). Forge-hosted; consumed as a Go module
     # via igloo's goFlakeInputs bridge (see gomod.nix). The flake input is
@@ -86,7 +85,7 @@
     troupe.url = "https://code.linenisgreat.com/troupe/archive/master.tar.gz";
     troupe.inputs.nixpkgs.follows = "igloo";
     troupe.inputs.utils.follows = "utils";
-    troupe.inputs.treefmt-nix.follows = "bats/treefmt-nix";
+    troupe.inputs.treefmt-nix.follows = "igloo/treefmt-nix";
     troupe.inputs.ringmaster.follows = "ringmaster";
   };
 
