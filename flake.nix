@@ -87,6 +87,7 @@
     troupe.inputs.utils.follows = "utils";
     troupe.inputs.treefmt-nix.follows = "igloo/treefmt-nix";
     troupe.inputs.ringmaster.follows = "ringmaster";
+    bats.inputs.conformist.follows = "conformist";
   };
 
   outputs =
