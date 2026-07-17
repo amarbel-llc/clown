@@ -6,7 +6,7 @@
     # overlays.default contributes buildGoApplication, mkGoEnv,
     # gomod2nix (CLI), fetchGgufModel, and other amarbel-packages
     # additions to pkgs. See overlays/amarbel-packages.nix in the fork.
-    igloo.url = "git+https://code.linenisgreat.com/igloo.git";
+    igloo.url = "https://code.linenisgreat.com/igloo/archive/master.tar.gz";
     # Secondary pinned views — same SHAs we used against upstream, just
     # served by the fork. Each fork commit upstream's master, so these
     # SHAs are reachable. The overlay is *not* applied to these because
@@ -46,7 +46,7 @@
     llm-agents.inputs.treefmt-nix.follows = "bats/treefmt-nix";
     # conformist: formatter/linter orchestrator replacing treefmt-nix.
     # Forge-hosted; aligns shared inputs so the closure shares one igloo eval.
-    conformist.url = "git+https://code.linenisgreat.com/conformist.git";
+    conformist.url = "https://code.linenisgreat.com/conformist/archive/master.tar.gz";
     conformist.inputs.igloo.follows = "igloo";
     conformist.inputs.nixpkgs-master.follows = "nixpkgs-master";
     conformist.inputs.utils.follows = "utils";
@@ -55,7 +55,7 @@
     # bundle (bats-support, bats-assert, bats-emo, bats-island). The
     # fork's thin-overlay master no longer ships the testers helper,
     # so the bats flake is the canonical source.
-    bats.url = "git+https://code.linenisgreat.com/bats.git";
+    bats.url = "https://code.linenisgreat.com/bats/archive/master.tar.gz";
     bats.inputs.igloo.follows = "igloo";
     bats.inputs.nixpkgs-master.follows = "nixpkgs-master";
     bats.inputs.utils.follows = "utils";
@@ -71,7 +71,7 @@
     # the single source of truth for the pinned rev. follows-align the
     # shared amarbel inputs so the closure doesn't carry a second igloo /
     # nixpkgs-master / utils / bats evaluation.
-    ringmaster.url = "git+https://code.linenisgreat.com/ringmaster.git";
+    ringmaster.url = "https://code.linenisgreat.com/ringmaster/archive/master.tar.gz";
     ringmaster.inputs.igloo.follows = "igloo";
     ringmaster.inputs.nixpkgs-master.follows = "nixpkgs-master";
     ringmaster.inputs.utils.follows = "utils";
@@ -83,7 +83,7 @@
     # a burned-in TroupePath. troupe's own inputs (nixpkgs=igloo, utils,
     # treefmt-nix, ringmaster) follow clown's so the closure shares one eval —
     # notably troupe's ringmaster follows clown's, aligning the jobwake pin.
-    troupe.url = "git+https://code.linenisgreat.com/troupe.git";
+    troupe.url = "https://code.linenisgreat.com/troupe/archive/master.tar.gz";
     troupe.inputs.nixpkgs.follows = "igloo";
     troupe.inputs.utils.follows = "utils";
     troupe.inputs.treefmt-nix.follows = "bats/treefmt-nix";

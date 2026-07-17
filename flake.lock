@@ -14,17 +14,14 @@
         ]
       },
       "locked": {
-        "lastModified": 1784201818,
-        "narHash": "sha256-tXWylXtCnosOyuwFvRKlDOUql9GBX6CkD056B2lGc64=",
-        "ref": "refs/heads/master",
-        "rev": "cc408607caef418a09c20543d9fff1af780a5776",
-        "revCount": 2074,
-        "type": "git",
-        "url": "https://code.linenisgreat.com/bats.git"
+        "lastModified": 1784252875,
+        "narHash": "sha256-d+wWmM5DYZxWKlEwMsQjgFI6VyxtLpFgBaQWifsI/48=",
+        "type": "tarball",
+        "url": "https://code.linenisgreat.com/bats/archive/584562508c7c4e0b0e61ae92a9101f7f548dd0bb.tar.gz"
       },
       "original": {
-        "type": "git",
-        "url": "https://code.linenisgreat.com/bats.git"
+        "type": "tarball",
+        "url": "https://code.linenisgreat.com/bats/archive/master.tar.gz"
       }
     },
     "bun2nix": {
@@ -73,17 +70,14 @@
         ]
       },
       "locked": {
-        "lastModified": 1784111484,
-        "narHash": "sha256-ZXTFMIipgpc3WI4NRQe6pR0OJjw8RlB4mTU52s7/GCw=",
-        "ref": "refs/heads/master",
-        "rev": "2099b7b546aa25709146736d2adaac4f374fb711",
-        "revCount": 155,
-        "type": "git",
-        "url": "https://code.linenisgreat.com/conformist.git"
+        "lastModified": 1784252369,
+        "narHash": "sha256-2Sjoir0SEdW1iw8x7N3KO7uOi7Jc/71P5ajCVFfgbts=",
+        "type": "tarball",
+        "url": "https://code.linenisgreat.com/conformist/archive/255ce4249a043da02e57accb01f651b27f749978.tar.gz"
       },
       "original": {
-        "type": "git",
-        "url": "https://code.linenisgreat.com/conformist.git"
+        "type": "tarball",
+        "url": "https://code.linenisgreat.com/conformist/archive/master.tar.gz"
       }
     },
     "flake-parts": {
@@ -123,15 +117,12 @@
       "locked": {
         "lastModified": 1783896868,
         "narHash": "sha256-pN9WzpM9sBz6DmQIlALLhAKIC9yrbY9rLa+qrYr8Ph8=",
-        "ref": "refs/heads/master",
-        "rev": "e04bba9f87552e4161ebec00c528361316d36d3c",
-        "revCount": 73,
-        "type": "git",
-        "url": "https://code.linenisgreat.com/igloo.git"
+        "type": "tarball",
+        "url": "https://code.linenisgreat.com/igloo/archive/e04bba9f87552e4161ebec00c528361316d36d3c.tar.gz"
       },
       "original": {
-        "type": "git",
-        "url": "https://code.linenisgreat.com/igloo.git"
+        "type": "tarball",
+        "url": "https://code.linenisgreat.com/igloo/archive/master.tar.gz"
       }
     },
     "llm-agents": {
@@ -155,11 +146,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1784195636,
-        "narHash": "sha256-5X0Ivp0ClcTUH8nAqLhxWuWxgZ6QTd+s+xOpgQqucgk=",
+        "lastModified": 1784240587,
+        "narHash": "sha256-U02S4TzJ0OUyAF60dtzWaCtfKsjj0Vjywqt1aj9Fegc=",
         "owner": "numtide",
         "repo": "llm-agents.nix",
-        "rev": "45b0a359630126c84b1685bacf986cf7ddbb57a7",
+        "rev": "b384352cb2f0bfd8ec2ce984f87ec2ad0a293e2c",
         "type": "github"
       },
       "original": {
@@ -266,15 +257,12 @@
       "locked": {
         "lastModified": 1783593443,
         "narHash": "sha256-MWR2jbq005VZ/CFk2v68Ks4svLu6S+Z0DfZG0c0c4oI=",
-        "ref": "refs/heads/master",
-        "rev": "01649e68610b542f458da5d354e27df273a4fc9b",
-        "revCount": 10,
-        "type": "git",
-        "url": "https://code.linenisgreat.com/ringmaster.git"
+        "type": "tarball",
+        "url": "https://code.linenisgreat.com/ringmaster/archive/01649e68610b542f458da5d354e27df273a4fc9b.tar.gz"
       },
       "original": {
-        "type": "git",
-        "url": "https://code.linenisgreat.com/ringmaster.git"
+        "type": "tarball",
+        "url": "https://code.linenisgreat.com/ringmaster/archive/master.tar.gz"
       }
     },
     "root": {
@@ -347,15 +335,12 @@
       "locked": {
         "lastModified": 1783950659,
         "narHash": "sha256-lS8dUIjMaHy3SZYM3nyvC9BdcoJjfOoYTy9YEC7Hyoo=",
-        "ref": "refs/heads/master",
-        "rev": "82cb8666713ca9fddc76636d6225df16e2f2c30b",
-        "revCount": 23,
-        "type": "git",
-        "url": "https://code.linenisgreat.com/troupe.git"
+        "type": "tarball",
+        "url": "https://code.linenisgreat.com/troupe/archive/82cb8666713ca9fddc76636d6225df16e2f2c30b.tar.gz"
       },
       "original": {
-        "type": "git",
-        "url": "https://code.linenisgreat.com/troupe.git"
+        "type": "tarball",
+        "url": "https://code.linenisgreat.com/troupe/archive/master.tar.gz"
       }
     },
     "utils": {
