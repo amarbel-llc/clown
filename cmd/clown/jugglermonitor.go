@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/amarbel-llc/clown/internal/buildcfg"
+	"code.linenisgreat.com/clown/internal/buildcfg"
 )
 
 // jugglerMCPDisabled reports whether the juggler subagent-delegation tool is

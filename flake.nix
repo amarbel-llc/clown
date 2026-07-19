@@ -298,7 +298,7 @@
             "-X main.commit=${clownRev}"
           ];
           ldflagsX = {
-            "github.com/amarbel-llc/clown/internal/buildcfg.StdioBridgePath" =
+            "code.linenisgreat.com/clown/internal/buildcfg.StdioBridgePath" =
               "${clown-stdio-bridge}/bin/clown-stdio-bridge";
           };
         };
@@ -688,37 +688,34 @@
               "-w"
             ];
             ldflagsX = {
-              "github.com/amarbel-llc/clown/internal/buildcfg.ClaudeCliPath" = claudeCliPath;
-              "github.com/amarbel-llc/clown/internal/buildcfg.CodexCliPath" = codexCliPath;
-              "github.com/amarbel-llc/clown/internal/buildcfg.JugglerCliPath" = "${juggler-go}/bin/juggler";
-              "github.com/amarbel-llc/clown/internal/buildcfg.AgentsFile" = agents-file;
-              "github.com/amarbel-llc/clown/internal/buildcfg.DisallowedToolsFile" = disallowed-tools-file;
-              "github.com/amarbel-llc/clown/internal/buildcfg.SystemPromptAppendD" = "${
-                ./system-prompt-append.d
-              }";
-              "github.com/amarbel-llc/clown/internal/buildcfg.DefaultClownfilePath" = "${./default-clownfile}";
-              "github.com/amarbel-llc/clown/internal/buildcfg.Version" = clownVersion;
-              "github.com/amarbel-llc/clown/internal/buildcfg.Commit" = clownRev;
-              "github.com/amarbel-llc/clown/internal/buildcfg.ShortSha" = clownShortRev;
-              "github.com/amarbel-llc/clown/internal/buildcfg.ClaudeCodeVersion" = claudeCodeVersion;
-              "github.com/amarbel-llc/clown/internal/buildcfg.ClaudeCodeRev" = claudeCodeRev;
-              "github.com/amarbel-llc/clown/internal/buildcfg.CodexVersion" = codexVersion;
-              "github.com/amarbel-llc/clown/internal/buildcfg.CodexRev" = codexRev;
-              "github.com/amarbel-llc/clown/internal/buildcfg.OpencodeCliPath" = "${pkgs.opencode}/bin/opencode";
-              "github.com/amarbel-llc/clown/internal/buildcfg.CrushCliPath" =
-                "${pkgs-llm-agents.crush}/bin/crush";
-              "github.com/amarbel-llc/clown/internal/buildcfg.ClownboxCliPath" = clownboxCliPath;
-              "github.com/amarbel-llc/clown/internal/buildcfg.StdioBridgePath" =
+              "code.linenisgreat.com/clown/internal/buildcfg.ClaudeCliPath" = claudeCliPath;
+              "code.linenisgreat.com/clown/internal/buildcfg.CodexCliPath" = codexCliPath;
+              "code.linenisgreat.com/clown/internal/buildcfg.JugglerCliPath" = "${juggler-go}/bin/juggler";
+              "code.linenisgreat.com/clown/internal/buildcfg.AgentsFile" = agents-file;
+              "code.linenisgreat.com/clown/internal/buildcfg.DisallowedToolsFile" = disallowed-tools-file;
+              "code.linenisgreat.com/clown/internal/buildcfg.SystemPromptAppendD" = "${./system-prompt-append.d}";
+              "code.linenisgreat.com/clown/internal/buildcfg.DefaultClownfilePath" = "${./default-clownfile}";
+              "code.linenisgreat.com/clown/internal/buildcfg.Version" = clownVersion;
+              "code.linenisgreat.com/clown/internal/buildcfg.Commit" = clownRev;
+              "code.linenisgreat.com/clown/internal/buildcfg.ShortSha" = clownShortRev;
+              "code.linenisgreat.com/clown/internal/buildcfg.ClaudeCodeVersion" = claudeCodeVersion;
+              "code.linenisgreat.com/clown/internal/buildcfg.ClaudeCodeRev" = claudeCodeRev;
+              "code.linenisgreat.com/clown/internal/buildcfg.CodexVersion" = codexVersion;
+              "code.linenisgreat.com/clown/internal/buildcfg.CodexRev" = codexRev;
+              "code.linenisgreat.com/clown/internal/buildcfg.OpencodeCliPath" = "${pkgs.opencode}/bin/opencode";
+              "code.linenisgreat.com/clown/internal/buildcfg.CrushCliPath" = "${pkgs-llm-agents.crush}/bin/crush";
+              "code.linenisgreat.com/clown/internal/buildcfg.ClownboxCliPath" = clownboxCliPath;
+              "code.linenisgreat.com/clown/internal/buildcfg.StdioBridgePath" =
                 "${clown-stdio-bridge}/bin/clown-stdio-bridge";
-              "github.com/amarbel-llc/clown/internal/buildcfg.HookAllowPath" =
+              "code.linenisgreat.com/clown/internal/buildcfg.HookAllowPath" =
                 "${clown-hook-allow}/bin/clown-hook-allow";
-              "github.com/amarbel-llc/clown/internal/buildcfg.RingmasterPath" = "${ringmasterPkg}/bin/ringmaster";
-              "github.com/amarbel-llc/clown/internal/buildcfg.TroupePath" = "${troupePkg}/bin/troupe";
-              "github.com/amarbel-llc/clown/internal/buildcfg.DefaultProvider" = defaultProvider;
-              "github.com/amarbel-llc/clown/internal/buildcfg.DefaultProfile" = defaultProfile;
-              "github.com/amarbel-llc/clown/internal/buildcfg.PodmanPath" = tentPodmanPath;
-              "github.com/amarbel-llc/clown/internal/buildcfg.TentImageRef" = tentImageRef;
-              "github.com/amarbel-llc/clown/internal/buildcfg.TentImageTarball" = tentImageTarball;
+              "code.linenisgreat.com/clown/internal/buildcfg.RingmasterPath" = "${ringmasterPkg}/bin/ringmaster";
+              "code.linenisgreat.com/clown/internal/buildcfg.TroupePath" = "${troupePkg}/bin/troupe";
+              "code.linenisgreat.com/clown/internal/buildcfg.DefaultProvider" = defaultProvider;
+              "code.linenisgreat.com/clown/internal/buildcfg.DefaultProfile" = defaultProfile;
+              "code.linenisgreat.com/clown/internal/buildcfg.PodmanPath" = tentPodmanPath;
+              "code.linenisgreat.com/clown/internal/buildcfg.TentImageRef" = tentImageRef;
+              "code.linenisgreat.com/clown/internal/buildcfg.TentImageTarball" = tentImageTarball;
               # ${self} interpolates the source-tree store path captured
               # by the flake. Used at runtime as the flake-uri for
               # `nix build <self>#packages.<linux-system>.tent-image`
@@ -726,11 +723,11 @@
               # the tag and no tarball was baked in (darwin, or future
               # profiles). The dependency keeps the source tree alive
               # in /nix/store as long as the clown derivation is.
-              "github.com/amarbel-llc/clown/internal/buildcfg.TentImageFlakeRef" = "${self}";
-              "github.com/amarbel-llc/clown/internal/buildcfg.ClaudeTentCliPath" = tentClaudeCliPath;
-              "github.com/amarbel-llc/clown/internal/buildcfg.PodmanMachineName" = podmanMachineName;
-              "github.com/amarbel-llc/clown/internal/buildcfg.TentBackend" = tentBackend;
-              "github.com/amarbel-llc/clown/internal/buildcfg.LimactlPath" = limactlPath;
+              "code.linenisgreat.com/clown/internal/buildcfg.TentImageFlakeRef" = "${self}";
+              "code.linenisgreat.com/clown/internal/buildcfg.ClaudeTentCliPath" = tentClaudeCliPath;
+              "code.linenisgreat.com/clown/internal/buildcfg.PodmanMachineName" = podmanMachineName;
+              "code.linenisgreat.com/clown/internal/buildcfg.TentBackend" = tentBackend;
+              "code.linenisgreat.com/clown/internal/buildcfg.LimactlPath" = limactlPath;
             };
           };
 

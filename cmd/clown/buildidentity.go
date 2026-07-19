@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/amarbel-llc/clown/internal/buildcfg"
+	"code.linenisgreat.com/clown/internal/buildcfg"
 )
 
 // clownRepoURL is the canonical repository the agent links to when it signs

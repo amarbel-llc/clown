@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	rm "github.com/amarbel-llc/clown/internal/juggler"
-	"github.com/amarbel-llc/clown/internal/jugglermodels"
+	rm "code.linenisgreat.com/clown/internal/juggler"
+	"code.linenisgreat.com/clown/internal/jugglermodels"
 )
 
 // server is the control-plane daemon's RPC dispatcher (the `juggler

@@ -18,7 +18,7 @@
 
 - Run Go unit tests with the paved recipe: `just test-go` (or, scoped while iterating, `hamster.go-build` / `go test ./internal/jobwake/...`).
 - TDD: write the failing test, run it red, implement minimally, run it green, commit.
-- Commit messages: `feat(jobwake): …` / `test(jobwake): …`, signed off `🤡 via [Clown](https://github.com/amarbel-llc/clown)`.
+- Commit messages: `feat(jobwake): …` / `test(jobwake): …`, signed off `🤡 via [Clown](https://code.linenisgreat.com/clown)`.
 - Do **not** run the full `just` build before `merge-this-session` — the pre-merge hook is the CI lane.
 
 ---
@@ -812,7 +812,7 @@ import (
 	"os"
 	"os/signal"
 
-	"github.com/amarbel-llc/clown/internal/jobwake"
+	"code.linenisgreat.com/clown/internal/jobwake"
 )
 
 func runJob(args []string) int {

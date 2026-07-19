@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/amarbel-llc/clown/internal/buildcfg"
+	"code.linenisgreat.com/clown/internal/buildcfg"
 )
 
 // jobMonitorPlugin is the synthesized built-in plugin manifest that registers

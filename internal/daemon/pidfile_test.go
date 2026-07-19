@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/amarbel-llc/clown/internal/daemon"
+	"code.linenisgreat.com/clown/internal/daemon"
 )
 
 func TestWriteAndReadPID(t *testing.T) {

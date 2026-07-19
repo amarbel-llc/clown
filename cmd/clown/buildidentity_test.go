@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/amarbel-llc/clown/internal/buildcfg"
+	"code.linenisgreat.com/clown/internal/buildcfg"
 )
 
 func TestBuildIdentifier(t *testing.T) {

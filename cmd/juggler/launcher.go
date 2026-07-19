@@ -13,7 +13,7 @@ import (
 	"syscall"
 	"time"
 
-	rm "github.com/amarbel-llc/clown/internal/juggler"
+	rm "code.linenisgreat.com/clown/internal/juggler"
 )
 
 const (

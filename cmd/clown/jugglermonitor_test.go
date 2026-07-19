@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/amarbel-llc/clown/internal/buildcfg"
+	"code.linenisgreat.com/clown/internal/buildcfg"
 )
 
 func TestJugglerPluginDirSynthesized(t *testing.T) {

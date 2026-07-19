@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/amarbel-llc/clown/internal/sessions"
+	"code.linenisgreat.com/clown/internal/sessions"
 )
 
 func TestParseSessionsCompleteArgs_Empty(t *testing.T) {

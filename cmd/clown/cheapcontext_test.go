@@ -5,8 +5,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/amarbel-llc/clown/internal/pluginhost"
-	"github.com/amarbel-llc/clown/internal/profile"
+	"code.linenisgreat.com/clown/internal/pluginhost"
+	"code.linenisgreat.com/clown/internal/profile"
 )
 
 func TestGroupToolsByPrefix(t *testing.T) {

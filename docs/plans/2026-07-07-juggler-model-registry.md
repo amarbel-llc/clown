@@ -658,7 +658,7 @@ import (
 	"text/tabwriter"
 	"time"
 
-	rm "github.com/amarbel-llc/clown/internal/juggler"
+	rm "code.linenisgreat.com/clown/internal/juggler"
 )
 
 const modelUsage = "usage: juggler model <list|add <name> --style <anthropic|openai-compat> --url <url> --token <token>|remove <name>>"
@@ -817,7 +817,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/amarbel-llc/clown/internal/juggler"
+	"code.linenisgreat.com/clown/internal/juggler"
 )
 
 // resolveViaJuggler asks the juggler daemon to resolve modelName to a
@@ -1037,7 +1037,7 @@ func isSubagentModelKey(k string) bool {
 }
 ```
 
-Add the new import: `"github.com/amarbel-llc/clown/internal/juggler"`.
+Add the new import: `"code.linenisgreat.com/clown/internal/juggler"`.
 
 **Step 4:** `just zz-explore/go-test ./cmd/clown/...` — PASS, including
 the existing `TestApplyNamedProfileGatewayEnvAuthoritative` /

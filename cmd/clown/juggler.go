@@ -8,7 +8,7 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/huh"
 
-	"github.com/amarbel-llc/clown/internal/jugglermodels"
+	"code.linenisgreat.com/clown/internal/jugglermodels"
 )
 
 // pickJugglerModel resolves the juggler model when the user has not

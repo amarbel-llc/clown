@@ -8,7 +8,7 @@ import (
 	"os"
 	"strings"
 
-	rm "github.com/amarbel-llc/clown/internal/juggler"
+	rm "code.linenisgreat.com/clown/internal/juggler"
 )
 
 // dialClient connects to the juggler control socket and returns a

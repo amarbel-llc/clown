@@ -13,8 +13,8 @@ import (
 	"strconv"
 	"strings"
 
+	"code.linenisgreat.com/clown/internal/promptwalk"
 	"github.com/BurntSushi/toml"
-	"github.com/amarbel-llc/clown/internal/promptwalk"
 )
 
 // Filename is the per-instance config file clown discovers by ascending from

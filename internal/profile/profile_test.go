@@ -9,7 +9,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
-	"github.com/amarbel-llc/clown/internal/profile"
+	"code.linenisgreat.com/clown/internal/profile"
 )
 
 func TestLoad_ParsesProfiles(t *testing.T) {

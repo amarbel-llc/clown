@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	rm "github.com/amarbel-llc/clown/internal/juggler"
+	rm "code.linenisgreat.com/clown/internal/juggler"
 )
 
 func TestCmdStart_Basic(t *testing.T) {

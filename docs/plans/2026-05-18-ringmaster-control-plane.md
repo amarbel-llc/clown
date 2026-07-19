@@ -829,7 +829,7 @@ import (
 	"testing"
 	"time"
 
-	rm "github.com/amarbel-llc/clown/internal/ringmaster"
+	rm "code.linenisgreat.com/clown/internal/ringmaster"
 )
 
 func TestServer_ListInstances_Empty(t *testing.T) {
@@ -876,7 +876,7 @@ import (
 	"net"
 	"os"
 
-	rm "github.com/amarbel-llc/clown/internal/ringmaster"
+	rm "code.linenisgreat.com/clown/internal/ringmaster"
 )
 
 // server is the ringmaster daemon's RPC dispatcher. It owns the
@@ -972,7 +972,7 @@ import (
 	"path/filepath"
 	"syscall"
 
-	rm "github.com/amarbel-llc/clown/internal/ringmaster"
+	rm "code.linenisgreat.com/clown/internal/ringmaster"
 )
 
 func main() {
@@ -1121,7 +1121,7 @@ import (
 	"testing"
 	"time"
 
-	rm "github.com/amarbel-llc/clown/internal/ringmaster"
+	rm "code.linenisgreat.com/clown/internal/ringmaster"
 )
 
 func TestLauncher_StartAndStop(t *testing.T) {
@@ -1173,7 +1173,7 @@ import (
 	"syscall"
 	"time"
 
-	rm "github.com/amarbel-llc/clown/internal/ringmaster"
+	rm "code.linenisgreat.com/clown/internal/ringmaster"
 )
 
 const (
@@ -1530,7 +1530,7 @@ import (
     "net"
     "os"
 
-    rm "github.com/amarbel-llc/clown/internal/ringmaster"
+    rm "code.linenisgreat.com/clown/internal/ringmaster"
 )
 
 func dialClient() (*rm.Client, error) {

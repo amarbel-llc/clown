@@ -77,7 +77,7 @@ import (
 	"strings"
 	"testing"
 
-	rm "github.com/amarbel-llc/clown/internal/juggler"
+	rm "code.linenisgreat.com/clown/internal/juggler"
 )
 
 func TestMCPServe_Initialize(t *testing.T) {
@@ -242,7 +242,7 @@ import (
 	"io"
 	"time"
 
-	rm "github.com/amarbel-llc/clown/internal/juggler"
+	rm "code.linenisgreat.com/clown/internal/juggler"
 )
 
 // mcpMaxTokensDefault is deliberately higher than juggler prompt's CLI
@@ -465,7 +465,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/amarbel-llc/clown/internal/buildcfg"
+	"code.linenisgreat.com/clown/internal/buildcfg"
 )
 
 func TestJugglerPluginDirSynthesized(t *testing.T) {
@@ -573,7 +573,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/amarbel-llc/clown/internal/buildcfg"
+	"code.linenisgreat.com/clown/internal/buildcfg"
 )
 
 // jugglerMCPDisabled reports whether the juggler subagent-delegation tool is

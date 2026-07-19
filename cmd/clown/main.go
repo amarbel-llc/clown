@@ -23,17 +23,17 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"golang.org/x/term"
 
+	"code.linenisgreat.com/clown/internal/buildcfg"
+	"code.linenisgreat.com/clown/internal/clownfile"
+	"code.linenisgreat.com/clown/internal/clownname"
+	"code.linenisgreat.com/clown/internal/juggler"
+	"code.linenisgreat.com/clown/internal/pluginhost"
+	"code.linenisgreat.com/clown/internal/profile"
+	"code.linenisgreat.com/clown/internal/promptwalk"
+	"code.linenisgreat.com/clown/internal/provider"
+	"code.linenisgreat.com/clown/internal/ptysuspend"
+	"code.linenisgreat.com/clown/internal/tent"
 	"code.linenisgreat.com/ringmaster/jobwake"
-	"github.com/amarbel-llc/clown/internal/buildcfg"
-	"github.com/amarbel-llc/clown/internal/clownfile"
-	"github.com/amarbel-llc/clown/internal/clownname"
-	"github.com/amarbel-llc/clown/internal/juggler"
-	"github.com/amarbel-llc/clown/internal/pluginhost"
-	"github.com/amarbel-llc/clown/internal/profile"
-	"github.com/amarbel-llc/clown/internal/promptwalk"
-	"github.com/amarbel-llc/clown/internal/provider"
-	"github.com/amarbel-llc/clown/internal/ptysuspend"
-	"github.com/amarbel-llc/clown/internal/tent"
 )
 
 //go:embed profiles/builtin.toml

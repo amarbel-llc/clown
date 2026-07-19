@@ -5,7 +5,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/amarbel-llc/clown/internal/sessions"
+	"code.linenisgreat.com/clown/internal/sessions"
 )
 
 // sessionsCompleteArgs holds the parsed `clown sessions-complete` flags.

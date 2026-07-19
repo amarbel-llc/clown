@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	rm "github.com/amarbel-llc/clown/internal/juggler"
+	rm "code.linenisgreat.com/clown/internal/juggler"
 )
 
 func TestMCPServe_Initialize(t *testing.T) {

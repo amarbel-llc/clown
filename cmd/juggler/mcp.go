@@ -10,7 +10,7 @@ import (
 	"os"
 	"time"
 
-	rm "github.com/amarbel-llc/clown/internal/juggler"
+	rm "code.linenisgreat.com/clown/internal/juggler"
 )
 
 // mcpScannerMaxLine bounds a single JSON-RPC line. Deliberately far above

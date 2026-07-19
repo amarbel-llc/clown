@@ -1,4 +1,4 @@
-module github.com/amarbel-llc/clown
+module code.linenisgreat.com/clown
 
 go 1.25.0
 

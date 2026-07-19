@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	rm "github.com/amarbel-llc/clown/internal/juggler"
+	rm "code.linenisgreat.com/clown/internal/juggler"
 )
 
 // fakeJuggler spins up a Unix socket listener that responds to one

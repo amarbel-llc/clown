@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/amarbel-llc/clown/internal/juggler"
+	"code.linenisgreat.com/clown/internal/juggler"
 )
 
 // shortTempDir returns a short-path tmpdir. macOS imposes a ~104-char

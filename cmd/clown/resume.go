@@ -13,7 +13,7 @@ import (
 	"github.com/charmbracelet/huh"
 	"golang.org/x/term"
 
-	"github.com/amarbel-llc/clown/internal/sessions"
+	"code.linenisgreat.com/clown/internal/sessions"
 )
 
 // resumeArgs holds the parsed result of `clown resume <args>`.

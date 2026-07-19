@@ -21,7 +21,7 @@ purely informational: `net_cap`-tagged files ran in *both* lanes. The
 question is whether the tag should ever filter, and if so, what
 environment is it filtering for.
 
-Issue: [#47](https://github.com/amarbel-llc/clown/issues/47).
+Issue: [#47](https://code.linenisgreat.com/clown/issues/47).
 
 ## Options Considered
 
@@ -142,7 +142,7 @@ benefits.
 
 ## More Information
 
-- Resolves [#47](https://github.com/amarbel-llc/clown/issues/47)
+- Resolves [#47](https://code.linenisgreat.com/clown/issues/47)
 - Implementation: commit dropping the tags is the predecessor of this
   ADR's commit (`build(bats): drop net_cap file_tags from integration
   tests`).

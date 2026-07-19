@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"syscall"
 
-	rm "github.com/amarbel-llc/clown/internal/juggler"
-	"github.com/amarbel-llc/clown/internal/jugglermodels"
+	rm "code.linenisgreat.com/clown/internal/juggler"
+	"code.linenisgreat.com/clown/internal/jugglermodels"
 )
 
 // runDaemon runs the llama-server control-plane daemon (FDR-0010), invoked as

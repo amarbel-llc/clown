@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/amarbel-llc/clown/internal/juggler"
+	"code.linenisgreat.com/clown/internal/juggler"
 )
 
 // resolveViaJuggler asks the juggler daemon to resolve modelName to a

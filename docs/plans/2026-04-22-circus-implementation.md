@@ -45,11 +45,11 @@ package promptwalk
 
 Replace:
 ```go
-"github.com/amarbel-llc/clown/internal/circus"
+"code.linenisgreat.com/clown/internal/circus"
 ```
 With:
 ```go
-"github.com/amarbel-llc/clown/internal/promptwalk"
+"code.linenisgreat.com/clown/internal/promptwalk"
 ```
 
 Replace all uses of `circus.WalkPrompts` and `circus.PromptResult` with `promptwalk.WalkPrompts` and `promptwalk.PromptResult`.
@@ -90,7 +90,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/amarbel-llc/clown/internal/daemon"
+	"code.linenisgreat.com/clown/internal/daemon"
 )
 
 func TestWriteAndReadPID(t *testing.T) {
@@ -261,7 +261,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/amarbel-llc/clown/internal/daemon"
+	"code.linenisgreat.com/clown/internal/daemon"
 )
 
 const (
@@ -764,7 +764,7 @@ circus-go = buildGoApplication {
 
 In the `clown-go` ldflags list, add:
 ```nix
-"-X github.com/amarbel-llc/clown/internal/buildcfg.CircusCliPath=${circus-go}/bin/circus"
+"-X code.linenisgreat.com/clown/internal/buildcfg.CircusCliPath=${circus-go}/bin/circus"
 ```
 
 Note: `circus-go` is referenced before it is defined in the let block. In Nix, let bindings are mutually recursive, so this is fine.

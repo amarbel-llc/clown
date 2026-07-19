@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/amarbel-llc/clown/internal/jugglermodels"
+	"code.linenisgreat.com/clown/internal/jugglermodels"
 )
 
 // clown#55: the bubbletea progress UI requires /dev/tty; off-terminal the

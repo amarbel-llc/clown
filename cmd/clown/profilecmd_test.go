@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/amarbel-llc/clown/internal/profile"
+	"code.linenisgreat.com/clown/internal/profile"
 )
 
 func TestFormatProfileList(t *testing.T) {

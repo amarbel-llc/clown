@@ -8,8 +8,8 @@ import (
 
 	"github.com/charmbracelet/huh"
 
-	"github.com/amarbel-llc/clown/internal/pluginhost"
-	"github.com/amarbel-llc/clown/internal/profile"
+	"code.linenisgreat.com/clown/internal/pluginhost"
+	"code.linenisgreat.com/clown/internal/profile"
 )
 
 const profileCmdUsage = "usage: clown profile <list|add|edit <name>|remove <name>>"

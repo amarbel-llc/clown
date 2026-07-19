@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/amarbel-llc/clown/internal/clownfile"
+	"code.linenisgreat.com/clown/internal/clownfile"
 )
 
 func TestParseCaretKey(t *testing.T) {

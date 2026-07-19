@@ -8,7 +8,7 @@ import (
 	"text/tabwriter"
 	"time"
 
-	rm "github.com/amarbel-llc/clown/internal/juggler"
+	rm "code.linenisgreat.com/clown/internal/juggler"
 )
 
 func main() {

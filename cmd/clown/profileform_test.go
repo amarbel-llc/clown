@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/amarbel-llc/clown/internal/profile"
+	"code.linenisgreat.com/clown/internal/profile"
 )
 
 func templateByName(t *testing.T, key string) profile.Profile {

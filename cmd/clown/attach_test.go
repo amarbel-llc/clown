@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"code.linenisgreat.com/clown/internal/clownfile"
 	"code.linenisgreat.com/ringmaster/jobwake"
-	"github.com/amarbel-llc/clown/internal/clownfile"
 )
 
 func TestExtractAttachID(t *testing.T) {

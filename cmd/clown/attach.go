@@ -10,8 +10,8 @@ import (
 	"syscall"
 	"time"
 
+	"code.linenisgreat.com/clown/internal/clownfile"
 	"code.linenisgreat.com/ringmaster/jobwake"
-	"github.com/amarbel-llc/clown/internal/clownfile"
 )
 
 // attachIDFlag is the hidden clown flag that pins the per-instance id across the

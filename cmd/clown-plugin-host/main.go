@@ -9,8 +9,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/amarbel-llc/clown/internal/buildcfg"
-	"github.com/amarbel-llc/clown/internal/pluginhost"
+	"code.linenisgreat.com/clown/internal/buildcfg"
+	"code.linenisgreat.com/clown/internal/pluginhost"
 )
 
 var (
