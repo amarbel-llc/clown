@@ -65,7 +65,7 @@ in
     systemd.user.services.juggler = mkIf pkgs.stdenv.isLinux {
       Unit = {
         Description = "Juggler (llama-server control plane)";
-        Documentation = "https://code.linenisgreat.com/clown";
+        Documentation = "https://github.com/amarbel-llc/clown";
       };
       Service = {
         ExecStart = "${launcher}";

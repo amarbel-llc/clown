@@ -1,4 +1,4 @@
-# Tab completion for clown (https://code.linenisgreat.com/clown)
+# Tab completion for clown (https://github.com/amarbel-llc/clown)
 # Provider-aware: detects --provider flag or CLOWN_PROVIDER env var to
 # offer Claude or Codex completions from a single command.
 
