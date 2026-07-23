@@ -2,10 +2,15 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"code.linenisgreat.com/ringmaster/jobwake"
+
+	"code.linenisgreat.com/clown/internal/sessions"
 )
 
 // Key detection: a slashed positional that is not a URI parses into
@@ -176,6 +181,85 @@ func TestResumeByKey_LiveNameMismatchFallsThroughToDead(t *testing.T) {
 	}
 	if !strings.Contains(out, "no resumable claude sessions") {
 		t.Fatalf("missing the dead-resolution miss: %q", out)
+	}
+}
+
+// writeDeadSessionFixture fabricates one claude transcript under
+// home/.claude/projects so ListClaudeSessions discovers a dead session
+// with the given id, recorded cwd, and mtime.
+func writeDeadSessionFixture(t *testing.T, home, id, cwd string, mtime time.Time) {
+	t.Helper()
+	dir := filepath.Join(home, ".claude", "projects", "proj")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, id+".jsonl")
+	line := fmt.Sprintf(`{"cwd":%q,"gitBranch":"w1"}`+"\n", cwd)
+	if err := os.WriteFile(path, []byte(line), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, mtime, mtime); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Dead-path name filter (clown#192 step 3): the third key segment selects
+// the newest conversation whose SIDECAR-recorded name matches — here the
+// OLDER session, which the unfiltered path would never pick. Reaching
+// resumeSingle's non-tty guard (exit 1 with the interactive-terminal
+// message) after the older session's gone-directory note proves the
+// filter chose it.
+func TestResumeByKey_DeadNameFilterSelectsRecordedName(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	writeDeadSessionFixture(t, home, "id-old", "/x/repos/r/.worktrees/w1", time.Now().Add(-2*time.Hour))
+	writeDeadSessionFixture(t, home, "id-new", "/y/repos/r/.worktrees/w1", time.Now().Add(-1*time.Hour))
+	if err := sessions.RecordSessionName("id-old", "bozo", "r/w1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := sessions.RecordSessionName("id-new", "krusty", "r/w1"); err != nil {
+		t.Fatal(err)
+	}
+
+	var code int
+	out := captureStderr(t, func() int {
+		code = resumeByKey(resumeArgs{provider: "claude", key: "r/w1", keyName: "bozo"})
+		return code
+	})
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1 (non-tty confirm guard)", code)
+	}
+	if !strings.Contains(out, "resume requires an interactive terminal") {
+		t.Fatalf("expected to reach resumeSingle's non-tty guard: %q", out)
+	}
+	if !strings.Contains(out, `"/x/repos/r/.worktrees/w1"`) {
+		t.Fatalf("expected the OLDER (bozo) session's gone-directory note: %q", out)
+	}
+}
+
+// A name segment that matches no recorded conversation is a clear miss.
+func TestResumeByKey_DeadNameFilterMiss(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	writeDeadSessionFixture(t, home, "id-1", "/x/repos/r/.worktrees/w1", time.Now().Add(-time.Hour))
+	if err := sessions.RecordSessionName("id-1", "bozo", "r/w1"); err != nil {
+		t.Fatal(err)
+	}
+
+	var code int
+	out := captureStderr(t, func() int {
+		code = resumeByKey(resumeArgs{provider: "claude", key: "r/w1", keyName: "grock"})
+		return code
+	})
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1", code)
+	}
+	if !strings.Contains(out, `no resumable claude sessions for key "r/w1" named "grock"`) {
+		t.Fatalf("missing the named-miss message: %q", out)
 	}
 }
 

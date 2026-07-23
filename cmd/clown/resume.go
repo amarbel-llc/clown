@@ -379,8 +379,9 @@ Key mode (positional repo/worktree):
   into its recorded directory first when it still exists (resume where
   it lived; if the directory is gone, resume proceeds from the current
   one). An optional third segment names a specific clown (Bozo,
-  Krusty, ...): it filters live sessions now; filtering recorded
-  conversations by name lands with the session-name sidecar.
+  Krusty, ...): it filters live sessions by their current name and
+  recorded conversations by the name each wore while live (the
+  session-names sidecar).
   --provider is not accepted — a key implies claude. -y/--yes skips
   the confirmation as in picker mode.
 

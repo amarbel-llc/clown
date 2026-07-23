@@ -32,6 +32,7 @@ import (
 	"code.linenisgreat.com/clown/internal/promptwalk"
 	"code.linenisgreat.com/clown/internal/provider"
 	"code.linenisgreat.com/clown/internal/ptysuspend"
+	"code.linenisgreat.com/clown/internal/sessions"
 	"code.linenisgreat.com/clown/internal/tent"
 	"code.linenisgreat.com/ringmaster/jobwake"
 )
@@ -551,6 +552,19 @@ func runWithFlags(flags parsedFlags) int {
 	// and when job-wakeup is disabled (no presence dir is meant to exist).
 	if !flags.naked && !jobWakeupDisabled() {
 		_ = jobwake.RegisterPresenceKey(flags.identity.Key, time.Now())
+	}
+
+	// clown#192 step 3: record this conversation's clown-name in the
+	// session-names sidecar so a DEAD conversation can later be resumed as
+	// `clown resume repo/worktree/<name>`. This point runs exactly once per
+	// proceeding process — decideClaudeSession has fixed the claude session
+	// id (resumeHintID; empty for --print/--continue, where the id is
+	// unknown or the run is not resumable) and any [attach] re-exec has
+	// already decided which process carries on. Best-effort like the
+	// presence registration above: a miss only degrades name-based resume
+	// for this one conversation.
+	if flags.provider == "claude" && !flags.naked && flags.resumeHintID != "" && flags.clownName != "" {
+		_ = sessions.RecordSessionName(flags.resumeHintID, flags.clownName, flags.groupID)
 	}
 
 	if flags.naked {

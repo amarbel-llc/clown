@@ -79,12 +79,30 @@ func resumeByKey(args resumeArgs) int {
 		return 1
 	}
 	matches := sessions.FilterByKey(all, args.key)
-	if args.keyName != "" {
-		fmt.Fprintf(os.Stderr, "clown: clown-name filtering lands with the session-name sidecar; resuming most recent for %q\n", args.key)
-	}
 	if len(matches) == 0 {
 		fmt.Fprintf(os.Stderr, "clown: no resumable claude sessions for key %q\n", args.key)
 		return 1
+	}
+	if args.keyName != "" {
+		// clown#192 step 3: the session-names sidecar records the clown-name
+		// each conversation wore while live; the third key segment selects
+		// the newest conversation recorded under that name.
+		ids := make([]string, len(matches))
+		for i, s := range matches {
+			ids[i] = s.ID
+		}
+		names := sessions.NamesFor(ids)
+		var named []sessions.Session
+		for _, s := range matches {
+			if names[s.ID] == args.keyName {
+				named = append(named, s)
+			}
+		}
+		if len(named) == 0 {
+			fmt.Fprintf(os.Stderr, "clown: no resumable claude sessions for key %q named %q\n", args.key, args.keyName)
+			return 1
+		}
+		matches = named
 	}
 	s := matches[0]
 
