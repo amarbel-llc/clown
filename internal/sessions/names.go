@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -77,6 +78,14 @@ func RecordSessionName(id, name, group string) error {
 // the name its new live process claimed. A missing sidecar or unreadable
 // lines degrade to an empty map / skipped lines: the sidecar is an
 // enrichment, never a gate.
+//
+// Reads with bufio.Reader.ReadString rather than bufio.Scanner: every line
+// here is written by RecordSessionName itself (never external input), so
+// trading Scanner's fixed max-token-size for guaranteed forward progress is
+// the right call. A Scanner permanently stops at the first oversized or
+// otherwise-erroring line (e.g. bufio.ErrTooLong), which would silently
+// discard every record after it in this never-pruned file; ReadString keeps
+// advancing line by line regardless of any single line's length.
 func NamesFor(ids []string) map[string]string {
 	want := make(map[string]bool, len(ids))
 	for _, id := range ids {
@@ -94,15 +103,17 @@ func NamesFor(ids []string) map[string]string {
 	defer f.Close()
 
 	out := map[string]string{}
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for scanner.Scan() {
-		var rec NameRecord
-		if err := json.Unmarshal(scanner.Bytes(), &rec); err != nil {
-			continue
+	r := bufio.NewReader(f)
+	for {
+		line, readErr := r.ReadString('\n')
+		if trimmed := strings.TrimRight(line, "\n"); trimmed != "" {
+			var rec NameRecord
+			if json.Unmarshal([]byte(trimmed), &rec) == nil && want[rec.SessionID] {
+				out[rec.SessionID] = rec.Name
+			}
 		}
-		if want[rec.SessionID] {
-			out[rec.SessionID] = rec.Name
+		if readErr != nil {
+			break
 		}
 	}
 	return out

@@ -239,6 +239,49 @@ func TestResumeByKey_DeadNameFilterSelectsRecordedName(t *testing.T) {
 	}
 }
 
+// The core "resume where it lived" behavior: when the recorded cwd still
+// exists on disk, resumeByKey actually chdirs into it before falling through
+// to resumeSingle. Every other dead-path test above uses a cwd that doesn't
+// exist, exercising only the "directory is gone" branch — this covers the
+// chdir-succeeds branch itself.
+func TestResumeByKey_ChdirsIntoExistingRecordedDir(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	base := t.TempDir()
+	recorded := filepath.Join(base, "repos", "r", ".worktrees", "w1")
+	if err := os.MkdirAll(recorded, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeDeadSessionFixture(t, home, "id-1", recorded, time.Now())
+
+	origCWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(origCWD) })
+
+	var code int
+	out := captureStderr(t, func() int {
+		code = resumeByKey(resumeArgs{provider: "claude", key: "r/w1"})
+		return code
+	})
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1 (non-tty confirm guard)", code)
+	}
+	if strings.Contains(out, "is gone") {
+		t.Fatalf("recorded dir exists; must not report it as gone: %q", out)
+	}
+	gotCWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sessions.SameDir(gotCWD, recorded, "") {
+		t.Fatalf("cwd = %q, want to have chdir'd into %q", gotCWD, recorded)
+	}
+}
+
 // A name segment that matches no recorded conversation is a clear miss.
 func TestResumeByKey_DeadNameFilterMiss(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())

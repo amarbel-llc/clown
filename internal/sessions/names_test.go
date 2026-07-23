@@ -78,6 +78,45 @@ func TestRecordSessionNameEmptyNoOp(t *testing.T) {
 	}
 }
 
+// A corrupt or oversized line (e.g. a partial write from a crash) must not
+// blind NamesFor to records recorded AFTER it in this never-pruned,
+// append-only file — only that one line should be lost. Regression test for
+// a bufio.Scanner-based reader that stopped scanning entirely once it hit a
+// line past its max token size.
+func TestNamesForSurvivesOversizedCorruptLine(t *testing.T) {
+	state := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", state)
+
+	if err := RecordSessionName("id-before", "bozo", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	path := filepath.Join(state, "clown", "session-names.jsonl")
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	huge := strings.Repeat("x", 2*1024*1024) // exceeds bufio.Scanner's default 1MB max token size
+	if _, err := f.WriteString(huge + "\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := RecordSessionName("id-after", "krusty", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	got := NamesFor([]string{"id-before", "id-after"})
+	if got["id-before"] != "bozo" {
+		t.Errorf("id-before = %q, want bozo (record before the corrupt line)", got["id-before"])
+	}
+	if got["id-after"] != "krusty" {
+		t.Errorf("id-after = %q, want krusty — a record AFTER a corrupt/oversized line must still be readable", got["id-after"])
+	}
+}
+
 // The group rides along in the record (future queries; step 3 only reads
 // names, but the journal is append-only so the schema must be right now).
 func TestRecordSessionNamePersistsGroup(t *testing.T) {
