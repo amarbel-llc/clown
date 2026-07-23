@@ -1,0 +1,198 @@
+package main
+
+import (
+	"fmt"
+	"strings"
+	"testing"
+
+	"code.linenisgreat.com/ringmaster/jobwake"
+)
+
+// Key detection: a slashed positional that is not a URI parses into
+// key (first two segments) + optional keyName (third segment).
+func TestParseResumeArgs_KeyPositional(t *testing.T) {
+	cases := []struct {
+		name        string
+		arg         string
+		wantKey     string
+		wantKeyName string
+	}{
+		{"two segments", "clown/feature-x", "clown/feature-x", ""},
+		{"three segments", "clown/feature-x/bozo", "clown/feature-x", "bozo"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseResumeArgs([]string{tc.arg})
+			if err != nil {
+				t.Fatalf("parseResumeArgs(%q): %v", tc.arg, err)
+			}
+			if got.key != tc.wantKey {
+				t.Errorf("key = %q, want %q", got.key, tc.wantKey)
+			}
+			if got.keyName != tc.wantKeyName {
+				t.Errorf("keyName = %q, want %q", got.keyName, tc.wantKeyName)
+			}
+			if got.uri != "" {
+				t.Errorf("uri = %q, want empty for a key positional", got.uri)
+			}
+		})
+	}
+}
+
+// Non-key positionals stay in the uri lane: URIs (contain ://) and bare
+// words without a slash.
+func TestParseResumeArgs_NonKeyPositionalsStayURI(t *testing.T) {
+	cases := []struct {
+		name string
+		arg  string
+	}{
+		{"uri is not a key", "clown://claude/abc-123"},
+		{"bare word is not a key", "abc-123"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseResumeArgs([]string{tc.arg})
+			if err != nil {
+				t.Fatalf("parseResumeArgs(%q): %v", tc.arg, err)
+			}
+			if got.key != "" || got.keyName != "" {
+				t.Errorf("key/keyName = %q/%q, want empty", got.key, got.keyName)
+			}
+			if got.uri != tc.arg {
+				t.Errorf("uri = %q, want %q", got.uri, tc.arg)
+			}
+		})
+	}
+}
+
+// Key and URI are mutually exclusive positionals, in either order, and two
+// keys are rejected too.
+func TestParseResumeArgs_RejectsSecondPositionalWithKey(t *testing.T) {
+	cases := [][]string{
+		{"repo/wt", "clown://claude/abc"},
+		{"clown://claude/abc", "repo/wt"},
+		{"repo/wt", "other/wt"},
+	}
+	for i, args := range cases {
+		t.Run(fmt.Sprintf("case-%d", i), func(t *testing.T) {
+			if _, err := parseResumeArgs(args); err == nil {
+				t.Errorf("expected error for two positionals, got nil (args=%v)", args)
+			}
+		})
+	}
+}
+
+// Key mode rejects --provider (a key implies claude) but, unlike the URI
+// form, allows -y/--yes: a key is a scope, not a specific conversation.
+func TestParseResumeArgs_KeyValidation(t *testing.T) {
+	rejected := [][]string{
+		{"repo/wt", "--provider", "codex"},
+		{"--provider=codex", "repo/wt"},
+	}
+	for i, args := range rejected {
+		t.Run(fmt.Sprintf("provider-rejected-%d", i), func(t *testing.T) {
+			if _, err := parseResumeArgs(args); err == nil {
+				t.Errorf("expected error for key + --provider, got nil (args=%v)", args)
+			}
+		})
+	}
+
+	got, err := parseResumeArgs([]string{"repo/wt", "-y"})
+	if err != nil {
+		t.Fatalf("key + -y must be accepted: %v", err)
+	}
+	if got.key != "repo/wt" || !got.yes {
+		t.Errorf("key=%q yes=%v, want repo/wt true", got.key, got.yes)
+	}
+}
+
+func TestPoshAttachHint(t *testing.T) {
+	p := jobwake.Presence{SessionKey: "inst-a"}
+	if got := poshAttachHint(p); got != "posh attach inst-a" {
+		t.Errorf("poshAttachHint = %q, want %q", got, "posh attach inst-a")
+	}
+}
+
+// A live presence record whose group matches the key wins: resumeByKey
+// prints the attach hint and exits 0 without touching dead sessions.
+func TestResumeByKey_LiveSessionPrintsAttachHint(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	registerPresenceFixtureNamed(t, "inst-a", "repo/feature", "desc", "bozo")
+
+	var code int
+	out := captureStderr(t, func() int {
+		code = resumeByKey(resumeArgs{provider: "claude", key: "repo/feature"})
+		return code
+	})
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0", code)
+	}
+	if !strings.Contains(out, "LIVE") || !strings.Contains(out, "bozo") || !strings.Contains(out, "posh attach inst-a") {
+		t.Fatalf("live hint missing expected fields: %q", out)
+	}
+}
+
+// With a clown-name segment, only live records whose ClownName matches
+// count.
+func TestResumeByKey_LiveNamedMatch(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	registerPresenceFixtureNamed(t, "inst-a", "repo/feature", "desc", "bozo")
+	registerPresenceFixtureNamed(t, "inst-b", "repo/feature", "desc", "krusty")
+
+	var code int
+	out := captureStderr(t, func() int {
+		code = resumeByKey(resumeArgs{provider: "claude", key: "repo/feature", keyName: "krusty"})
+		return code
+	})
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0", code)
+	}
+	if !strings.Contains(out, "posh attach inst-b") {
+		t.Fatalf("named live hint missing: %q", out)
+	}
+	if strings.Contains(out, "inst-a") {
+		t.Fatalf("hint must exclude the other-named record: %q", out)
+	}
+}
+
+// Live records exist for the key but none carry the requested name: say so
+// and continue to dead resolution (which, with an empty HOME, finds
+// nothing and exits 1).
+func TestResumeByKey_LiveNameMismatchFallsThroughToDead(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	registerPresenceFixtureNamed(t, "inst-a", "repo/feature", "desc", "bozo")
+
+	var code int
+	out := captureStderr(t, func() int {
+		code = resumeByKey(resumeArgs{provider: "claude", key: "repo/feature", keyName: "krusty"})
+		return code
+	})
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1 (no dead sessions in empty HOME)", code)
+	}
+	if !strings.Contains(out, `none named "krusty"`) {
+		t.Fatalf("missing the name-mismatch note: %q", out)
+	}
+	if !strings.Contains(out, "no resumable claude sessions") {
+		t.Fatalf("missing the dead-resolution miss: %q", out)
+	}
+}
+
+// Nothing live and nothing recorded: a clear miss, exit 1.
+func TestResumeByKey_NoMatchesAnywhere(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+
+	var code int
+	out := captureStderr(t, func() int {
+		code = resumeByKey(resumeArgs{provider: "claude", key: "repo/absent"})
+		return code
+	})
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1", code)
+	}
+	if !strings.Contains(out, `no resumable claude sessions for key "repo/absent"`) {
+		t.Fatalf("missing the miss message: %q", out)
+	}
+}

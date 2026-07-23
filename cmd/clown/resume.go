@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -22,16 +23,22 @@ type resumeArgs struct {
 	providerExplicit bool
 	yes              bool
 	uri              string // positional clown://<provider>/<id>; empty for picker mode
+	key              string // positional repo/worktree session key (clown#192); empty otherwise
+	keyName          string // optional third key segment: a clown-name filter
 	forwarded        []string
 }
 
 // runResume implements the `clown resume` subcommand. Dispatches between
-// two flows depending on whether a URI positional was given.
+// three flows depending on the positional: a repo/worktree key, a
+// clown:// URI, or none (the $PWD picker).
 func runResume(args []string) int {
 	parsed, err := parseResumeArgs(args)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
 		return 1
+	}
+	if parsed.key != "" {
+		return resumeByKey(parsed)
 	}
 	if parsed.uri != "" {
 		return resumeByURI(parsed)
@@ -266,6 +273,12 @@ func buildResumeDesc(s sessions.Session, currentPWD string, warnMismatch bool) s
 	return desc.String()
 }
 
+// resumeKeyRe matches the repo/worktree[/clown-name] session-key positional
+// (clown#192): two or three non-empty slash-separated segments with no
+// whitespace. URIs are excluded before this is consulted (they contain
+// "://"), and a bare word without a slash never matches.
+var resumeKeyRe = regexp.MustCompile(`^[^/\s]+/[^/\s]+(/[^/\s]+)?$`)
+
 // parseResumeArgs parses the args after `clown resume`. Validates flag
 // combos at the end, since the URI positional disallows --provider and
 // -y/--yes regardless of order.
@@ -297,8 +310,20 @@ func parseResumeArgs(args []string) (resumeArgs, error) {
 		case strings.HasPrefix(arg, "-"):
 			return resumeArgs{}, fmt.Errorf("unknown resume flag %q", arg)
 		default:
-			if out.uri != "" {
-				return resumeArgs{}, fmt.Errorf("multiple positional arguments; only one URI is accepted (got %q and %q)", out.uri, arg)
+			if out.uri != "" || out.key != "" {
+				prev := out.uri
+				if prev == "" {
+					prev = out.key
+				}
+				return resumeArgs{}, fmt.Errorf("multiple positional arguments; only one URI or key is accepted (got %q and %q)", prev, arg)
+			}
+			if !strings.Contains(arg, "://") && resumeKeyRe.MatchString(arg) {
+				segs := strings.Split(arg, "/")
+				out.key = segs[0] + "/" + segs[1]
+				if len(segs) == 3 {
+					out.keyName = segs[2]
+				}
+				continue
 			}
 			out.uri = arg
 		}
@@ -315,12 +340,22 @@ func validateResumeArgs(a resumeArgs) (resumeArgs, error) {
 			return resumeArgs{}, fmt.Errorf("-y/--yes is incompatible with a positional URI; naming the URI is the confirmation")
 		}
 	}
+	if a.key != "" {
+		if a.providerExplicit {
+			return resumeArgs{}, fmt.Errorf("--provider is incompatible with a positional key; a key implies claude")
+		}
+		// -y/--yes stays allowed in key mode: a key names a scope, not a
+		// specific conversation, so the confirmation remains meaningful and
+		// skippable — unlike the URI form, where naming the URI is itself
+		// the confirmation.
+	}
 	return a, nil
 }
 
 func printResumeHelp() {
 	fmt.Print(`Usage: clown resume [--provider <name>] [-y|--yes] [-- <provider-args>]
        clown resume <uri>                       [-- <provider-args>]
+       clown resume <repo>/<worktree>[/<name>] [-y|--yes] [-- <provider-args>]
 
 Picker mode (no positional):
   Lists resumable sessions whose recorded working directory exactly
@@ -335,6 +370,19 @@ Direct mode (positional URI):
   --provider and -y/--yes are not accepted in this mode — the URI
   carries the provider, and naming a specific URI is itself the
   confirmation.
+
+Key mode (positional repo/worktree):
+  Resolves by the spinclass-shaped session key. If a live clown session
+  with that group is running, prints how to attach to it (posh) and
+  exits — attach beats resume for a live session. Otherwise the most
+  recent recorded claude conversation for that key is resumed, changing
+  into its recorded directory first when it still exists (resume where
+  it lived; if the directory is gone, resume proceeds from the current
+  one). An optional third segment names a specific clown (Bozo,
+  Krusty, ...): it filters live sessions now; filtering recorded
+  conversations by name lands with the session-name sidecar.
+  --provider is not accepted — a key implies claude. -y/--yes skips
+  the confirmation as in picker mode.
 
 Flags (picker mode):
   --provider <name>   Provider to resume from (default: claude). Only
