@@ -210,3 +210,25 @@ func TestWriteOpencodeConfigFile_ModelOverride(t *testing.T) {
 		t.Errorf("default model gpt-4o should not appear when overridden: %s", content)
 	}
 }
+
+func TestWriteOpencodeConfigFile_SlashModelSlug(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "opencode.json")
+	const slug = "openai/gpt-4o"
+	if err := writeOpencodeConfigFile(path, "https://openrouter.ai/api/v1", "key", slug); err != nil {
+		t.Fatalf("writeOpencodeConfigFile: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	// map key and "name" field must carry the full slug
+	if !strings.Contains(content, `"openai/gpt-4o"`) {
+		t.Errorf("slug missing from config: %s", content)
+	}
+	// model reference must be custom/<slug>
+	if !strings.Contains(content, `"model":"custom/openai/gpt-4o"`) {
+		t.Errorf("model ref wrong in config: %s", content)
+	}
+}
