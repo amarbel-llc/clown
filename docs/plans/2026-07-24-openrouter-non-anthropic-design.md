@@ -47,8 +47,8 @@ Add one entry to `profileTemplates` in `cmd/clown/profileform.go`:
 
 ```go
 {
-    key: "openrouter-opencode", display: "OpenRouter (opencode)",
-    p: profile.Profile{
+    key: "openrouter-opencode", display: "OpenRouter (opencode)", p: profile.Profile{
+        Name: "opencode-openrouter", Display: "OpenRouter (opencode)",
         Provider: "opencode", Backend: "gateway",
         URL:   "https://openrouter.ai/api/v1",
         Token: "${OPENROUTER_API_KEY}",
