@@ -9,7 +9,7 @@ lint: lint-fmt lint-worktree lint-man
 
 test: test-go test-plugin-host test-stdio-bridge test-plugin-host-moxy test-plugin-host-moxy-disabled
 
-verify: verify-clown-openrouter verify-clown-tailnet verify-cover-bats verify-cover-bats-html verify-crush-tailnet verify-dev-tent verify-juggler verify-juggler-multi verify-opencode-tailnet verify-plugin-agents verify-tailnet-url verify-tent-smoke
+verify: verify-clown-openrouter verify-clown-tailnet verify-cover-bats verify-cover-bats-html verify-crush-tailnet verify-dev-tent verify-juggler verify-juggler-multi verify-opencode-against-openrouter verify-opencode-tailnet verify-plugin-agents verify-tailnet-url verify-tent-smoke
 
 codemod: codemod-fmt
 
@@ -936,7 +936,7 @@ verify-clown-openrouter *args="--version": build
     exec ./result/bin/clown --profile claude-openrouter -- {{ args }}
 
 # Verify opencode launches via openrouter profile; needs OPENROUTER_API_KEY and a saved opencode-openrouter profile
-[group("smoke")]
+[group("test")]
 verify-opencode-against-openrouter: build
     #!/usr/bin/env bash
     set -euo pipefail
