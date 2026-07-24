@@ -26,8 +26,10 @@ config synthesizer unchanged.
 
 **Phase B (future):** Add `"openrouter"` as a first-class provider in
 `validCombos`, with its URL hardcoded rather than stored per-profile, and
-dedicated dispatch logic. Phase A deliberately leaves the `"openrouter"` key
-unclaimed to make room.
+dedicated dispatch logic. Note: the template key `"openrouter"` is already
+claimed by the existing `claude+gateway` template (the Anthropic-skin route).
+Phase B must either rename that template's key (e.g. to `"claude-openrouter"`)
+or repurpose it — it is not a free slot.
 
 Decisions made with Sasha:
 
@@ -88,7 +90,10 @@ When Phase B (new `openrouter` provider) lands:
 - Existing `provider=opencode, backend=gateway, url=https://openrouter.ai/api/v1`
   profiles continue to work as-is (opencode+gateway path is unchanged). A
   migration note in `clown profile list` output can flag them as upgradable.
-- Template key `"openrouter"` becomes available for the Phase B template;
+- The existing `"openrouter"` template key (`claude+gateway`, Anthropic skin)
+  must be renamed (e.g. to `"claude-openrouter"`) before Phase B introduces
+  a new `"openrouter"` template — `templateByKey` returns the first match,
+  so a silent key collision would shadow whichever entry comes second.
   `"openrouter-opencode"` remains but may be de-emphasized.
 
 ## Rollback
