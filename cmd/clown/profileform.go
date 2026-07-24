@@ -81,6 +81,16 @@ var profileTemplates = []profileTemplate{
 		// OpenRouter's Anthropic Skin maps them (tuning lever, design doc).
 		note: "If claude was previously logged in with an Anthropic account, run /logout once inside claude (cached-login conflict).",
 	},
+	{
+		key: "openrouter-opencode", display: "OpenRouter (opencode)", p: profile.Profile{
+			Name: "opencode-openrouter", Display: "OpenRouter (opencode)",
+			Provider: "opencode", Backend: "gateway",
+			URL:   "https://openrouter.ai/api/v1",
+			Token: "${OPENROUTER_API_KEY}",
+			Model: "openai/gpt-4o",
+		},
+		note: "Model is an OpenRouter slug (e.g. openai/gpt-4o, google/gemini-2.0-flash-001). Browse at https://openrouter.ai/models",
+	},
 	{key: "gateway", display: "Custom gateway", p: profile.Profile{Provider: "claude", Backend: "gateway"}},
 	{key: "anthropic", display: "Anthropic", p: profile.Profile{Provider: "claude", Backend: "anthropic"}},
 	{key: "local", display: "Local (juggler)", p: profile.Profile{Provider: "claude", Backend: "local"}},

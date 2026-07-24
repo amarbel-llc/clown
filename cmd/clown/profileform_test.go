@@ -95,6 +95,28 @@ func TestFormValuesToProfile_GatewayViaJugglerModelOnlyForClaude(t *testing.T) {
 	}
 }
 
+func TestProfileTemplates_OpenRouterOpencode(t *testing.T) {
+	p := templateByName(t, "openrouter-opencode")
+	if p.Provider != "opencode" {
+		t.Errorf("provider = %q, want opencode", p.Provider)
+	}
+	if p.Backend != "gateway" {
+		t.Errorf("backend = %q, want gateway", p.Backend)
+	}
+	if p.URL != "https://openrouter.ai/api/v1" {
+		t.Errorf("url = %q, want https://openrouter.ai/api/v1", p.URL)
+	}
+	if p.Token != "${OPENROUTER_API_KEY}" {
+		t.Errorf("token = %q, want ${OPENROUTER_API_KEY}", p.Token)
+	}
+	if p.Model == "" {
+		t.Error("model must be pre-filled (e.g. openai/gpt-4o)")
+	}
+	if err := profile.Validate(p); err != nil {
+		t.Errorf("template profile must pass validation: %v", err)
+	}
+}
+
 // TestEditRoundTripPreservesUneditableFields guards against the exact
 // failure mode profileFormValues.toProfile/valuesFromProfile must avoid:
 // editing a profile's form-visible fields (name/provider/model/etc.) via
