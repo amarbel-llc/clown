@@ -935,6 +935,17 @@ verify-clown-openrouter *args="--version": build
     fi
     exec ./result/bin/clown --profile claude-openrouter -- {{ args }}
 
+# Smoke-test opencode launched via openrouter profile; needs OPENROUTER_API_KEY and a saved opencode-openrouter profile
+[group("smoke")]
+smoke-opencode-against-openrouter: build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ -z "${OPENROUTER_API_KEY:-}" ]]; then
+        echo "FAIL: OPENROUTER_API_KEY is not exported" >&2
+        exit 1
+    fi
+    ./result/bin/clown --profile opencode-openrouter --version
+
 # Launch opencode pointed at a tailnet-exposed juggler instance.
 #
 # Why the file dance: clown's runOpencode dispatch is (1) --profile
