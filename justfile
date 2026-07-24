@@ -935,9 +935,9 @@ verify-clown-openrouter *args="--version": build
     fi
     exec ./result/bin/clown --profile claude-openrouter -- {{ args }}
 
-# Smoke-test opencode launched via openrouter profile; needs OPENROUTER_API_KEY and a saved opencode-openrouter profile
+# Verify opencode launches via openrouter profile; needs OPENROUTER_API_KEY and a saved opencode-openrouter profile
 [group("smoke")]
-smoke-opencode-against-openrouter: build
+verify-opencode-against-openrouter: build
     #!/usr/bin/env bash
     set -euo pipefail
     if [[ -z "${OPENROUTER_API_KEY:-}" ]]; then

@@ -185,7 +185,7 @@ Add after the existing `smoke-clown-against-openrouter` recipe:
 ```just
 # Smoke-test opencode+openrouter with a slash model slug; needs OPENROUTER_API_KEY
 [group('smoke')]
-smoke-opencode-against-openrouter:
+verify-opencode-against-openrouter:
     clown profile add  # select 'OpenRouter (opencode)', accept defaults, save as opencode-openrouter
     clown --profile opencode-openrouter --version
 ```
@@ -199,5 +199,5 @@ add a `clown-opencode-openrouter` builtin profile to `profiles/builtin.toml` wit
 
 ```
 git add justfile
-git commit -m "just: add smoke-opencode-against-openrouter recipe"
+git commit -m "just: add verify-opencode-against-openrouter recipe"
 ```
