@@ -6,7 +6,32 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"code.linenisgreat.com/clown/internal/profile"
 )
+
+// TestResolveCrushGateway_ExpandsTokenEnvVar guards the same gap as
+// opencode_test.go's TestResolveOpencodeGateway_ExpandsTokenEnvVar: a
+// gateway profile's Token like "${OPENROUTER_API_KEY}" must resolve to the
+// env var's value, not be sent to crush as the literal "${...}" string.
+func TestResolveCrushGateway_ExpandsTokenEnvVar(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "sk-real-key")
+	prof := &profile.Profile{
+		Provider: "crush", Backend: "gateway",
+		URL: "https://gw.example.com/v1", Token: "${OPENROUTER_API_KEY}",
+		Model: "gpt-4o",
+	}
+	baseURL, apiKey, model := resolveCrushGateway(prof)
+	if baseURL != "https://gw.example.com/v1" {
+		t.Errorf("baseURL = %q", baseURL)
+	}
+	if apiKey != "sk-real-key" {
+		t.Errorf("apiKey = %q, want expanded env value", apiKey)
+	}
+	if model != "gpt-4o" {
+		t.Errorf("model = %q", model)
+	}
+}
 
 func TestReadCrushLocalConfig_ParsesURLAndToken(t *testing.T) {
 	dir := t.TempDir()

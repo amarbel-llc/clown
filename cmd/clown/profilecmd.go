@@ -77,6 +77,22 @@ func formatProfileList(builtin, user []profile.Profile) string {
 	return buf.String()
 }
 
+// openrouterOpencodeUpgradeHint returns a note for each merged profile that
+// still uses the Phase A shape (provider=opencode, backend=gateway, URL
+// pointed at OpenRouter) rather than the Phase B first-class openrouter
+// provider (smith#196, docs/plans/2026-07-24-openrouter-non-anthropic-design.md
+// Section 3). Phase A profiles keep working unchanged — this is discovery
+// only, not a behavior change.
+func openrouterOpencodeUpgradeHint(builtin, user []profile.Profile) string {
+	var buf strings.Builder
+	for _, p := range profile.Merge(builtin, user) {
+		if p.Provider == "opencode" && p.Backend == "gateway" && strings.HasPrefix(p.URL, "https://openrouter.ai/") {
+			fmt.Fprintf(&buf, "note: profile %q routes to OpenRouter via opencode+gateway; `clown profile edit %s` to switch provider to \"openrouter\" (drops the redundant url field)\n", p.Name, p.Name)
+		}
+	}
+	return buf.String()
+}
+
 func runProfileList() int {
 	builtin, user, _, err := loadProfileSets("")
 	if err != nil {
@@ -84,6 +100,7 @@ func runProfileList() int {
 		return 1
 	}
 	fmt.Print(formatProfileList(builtin, user))
+	fmt.Print(openrouterOpencodeUpgradeHint(builtin, user))
 	return 0
 }
 

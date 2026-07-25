@@ -36,6 +36,13 @@
   # The troupe binary (messaging surface, RFC-0015). Plumbed below as
   # TROUPE_BIN; job_wakeup.bats / job_mcp.bats invoke `troupe send|read|mcp`.
   troupe,
+  # Real opencode binary (same nixpkgs attr buildcfg.OpencodeCliPath binds
+  # to, flake.nix's igloo pkgs). Plumbed below as OPENCODE_BIN;
+  # opencode.bats invokes `opencode models custom` against a synthesized
+  # OPENCODE_CONFIG to verify clown's writeOpencodeConfigFile output
+  # actually resolves in a real opencode, not just a unit-test JSON check
+  # (clown#197).
+  opencode,
 }:
 let
   # Naming anchor for the lane derivation — only consulted for
@@ -96,6 +103,10 @@ let
         FAKE_LLAMA_SERVER_BIN = {
           base = fake-llama-server;
           name = "fake-llama-server";
+        };
+        OPENCODE_BIN = {
+          base = opencode;
+          name = "opencode";
         };
       };
       # bats-libs ships bats-support, bats-assert, bats-emo, bats-island

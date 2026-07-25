@@ -13,6 +13,7 @@ import (
 
 	"github.com/charmbracelet/huh"
 
+	"code.linenisgreat.com/clown/internal/clownfile"
 	"code.linenisgreat.com/clown/internal/pluginhost"
 	"code.linenisgreat.com/clown/internal/profile"
 )
@@ -275,6 +276,26 @@ func ensureOpencodeMigrationMarker() {
 	_ = os.Symlink(target, marker)
 }
 
+// openrouterGatewayURL is OpenRouter's OpenAI-compatible endpoint, hardcoded
+// for provider=openrouter profiles rather than stored per-profile (Phase B,
+// docs/plans/2026-07-24-openrouter-non-anthropic-design.md).
+const openrouterGatewayURL = "https://openrouter.ai/api/v1"
+
+// resolveOpencodeGateway resolves a gateway-backend profile's url/token/model
+// for runOpencode. clownfile.ResolveEnv expands ${VAR}/$VAR references (e.g.
+// a profileTemplates entry's Token: "${OPENROUTER_API_KEY}") — mirrors the
+// expansion applyNamedProfile already does for the claude+gateway path;
+// without it, the literal "${VAR}" string would be sent as the API key.
+// Pulled out of runOpencode so it's unit-testable without the exec-coupled
+// control flow around it.
+func resolveOpencodeGateway(prof *profile.Profile) (url, token, model string) {
+	url, token, model = clownfile.ResolveEnv(prof.URL), clownfile.ResolveEnv(prof.Token), prof.Model
+	if prof.Provider == "openrouter" {
+		url = openrouterGatewayURL
+	}
+	return url, token, model
+}
+
 func runOpencode(opencodePath string, args []string, prof *profile.Profile) int {
 	if opencodePath == "" {
 		fmt.Fprintln(os.Stderr, "clown: opencode binary path not configured (build misconfiguration)")
@@ -283,7 +304,7 @@ func runOpencode(opencodePath string, args []string, prof *profile.Profile) int 
 
 	var url, token, model string
 	if prof != nil && prof.Backend == "gateway" {
-		url, token, model = prof.URL, prof.Token, prof.Model
+		url, token, model = resolveOpencodeGateway(prof)
 	} else if prof != nil && prof.Backend == "local" {
 		addr, err := readJugglerPortfile()
 		if err != nil {

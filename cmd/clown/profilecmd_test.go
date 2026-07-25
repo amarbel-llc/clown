@@ -21,6 +21,29 @@ func TestFormatProfileList(t *testing.T) {
 	}
 }
 
+// TestOpenrouterOpencodeUpgradeHint guards smith#196's migration-note scope
+// item: a Phase A profile (provider=opencode, backend=gateway, url pointed
+// at OpenRouter) gets flagged as upgradable to the Phase B openrouter
+// provider; unrelated opencode+gateway profiles and non-OpenRouter urls must
+// not be flagged.
+func TestOpenrouterOpencodeUpgradeHint(t *testing.T) {
+	user := []profile.Profile{
+		{Name: "opencode-openrouter", Provider: "opencode", Backend: "gateway", URL: "https://openrouter.ai/api/v1"},
+		{Name: "opencode-other-gateway", Provider: "opencode", Backend: "gateway", URL: "https://example.com/v1"},
+		{Name: "already-openrouter", Provider: "openrouter", Backend: "gateway"},
+	}
+	hint := openrouterOpencodeUpgradeHint(nil, user)
+	if !strings.Contains(hint, "opencode-openrouter") {
+		t.Errorf("hint missing the upgradable profile name: %q", hint)
+	}
+	if strings.Contains(hint, "opencode-other-gateway") {
+		t.Errorf("hint must not flag a non-OpenRouter opencode+gateway profile: %q", hint)
+	}
+	if strings.Contains(hint, "already-openrouter") {
+		t.Errorf("hint must not flag a profile already on provider=openrouter: %q", hint)
+	}
+}
+
 func TestFormatProfileList_ContextColumn(t *testing.T) {
 	user := []profile.Profile{
 		{Name: "plain", Provider: "claude", Backend: "anthropic"},

@@ -43,6 +43,7 @@ import (
 
 	"github.com/charmbracelet/huh"
 
+	"code.linenisgreat.com/clown/internal/clownfile"
 	"code.linenisgreat.com/clown/internal/pluginhost"
 	"code.linenisgreat.com/clown/internal/profile"
 )
@@ -290,6 +291,16 @@ func writeCrushConfig(configDir string, backend crushBackend, baseURL, apiKey, m
 	return os.WriteFile(filepath.Join(configDir, "crush.json"), data, 0o600)
 }
 
+// resolveCrushGateway resolves a gateway-backend profile's baseURL/apiKey/
+// model for runCrush. clownfile.ResolveEnv expands ${VAR}/$VAR references —
+// mirrors the expansion applyNamedProfile already does for the claude+gateway
+// path; without it, a literal "${VAR}" string would be sent as the API key.
+// Pulled out of runCrush so it's unit-testable without the exec-coupled
+// control flow around it.
+func resolveCrushGateway(prof *profile.Profile) (baseURL, apiKey, model string) {
+	return clownfile.ResolveEnv(prof.URL), clownfile.ResolveEnv(prof.Token), prof.Model
+}
+
 func runCrush(crushPath string, args []string, prof *profile.Profile) int {
 	if crushPath == "" {
 		fmt.Fprintln(os.Stderr, "clown: crush binary path not configured (build misconfiguration)")
@@ -309,7 +320,7 @@ func runCrush(crushPath string, args []string, prof *profile.Profile) int {
 		model = prof.Model
 	case prof != nil && prof.Backend == "gateway":
 		backend = crushBackendOpenAICompat
-		baseURL, apiKey, model = prof.URL, prof.Token, prof.Model
+		baseURL, apiKey, model = resolveCrushGateway(prof)
 	case prof != nil && prof.Backend == "local":
 		addr, err := readJugglerPortfile()
 		if err != nil {

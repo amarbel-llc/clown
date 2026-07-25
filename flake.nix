@@ -1088,6 +1088,7 @@
           troupe = troupePkg;
           juggler = juggler-go;
           fake-llama-server = fake-llama-server-go;
+          opencode = pkgs.opencode;
         };
 
         mkJuggler =

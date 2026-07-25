@@ -646,6 +646,12 @@ func runWithFlags(flags parsedFlags) int {
 		return runJuggler(cliPath, flags, prompts, pluginDirs)
 	case "opencode":
 		return runOpencode(cliPath, flags.forwarded, selectedProfile)
+	case "openrouter":
+		// Phase B (docs/plans/2026-07-24-openrouter-non-anthropic-design.md):
+		// openrouter is a first-class provider but has no CLI of its own —
+		// it rides the opencode runner, whose gateway branch hardcodes the
+		// OpenRouter URL when selectedProfile.Provider == "openrouter".
+		return runOpencode(cliPath, flags.forwarded, selectedProfile)
 	case "crush":
 		return runCrush(cliPath, flags.forwarded, selectedProfile)
 	case "clownbox":
@@ -1927,6 +1933,10 @@ func resolveProvider(name string) (string, error) {
 	case "juggler":
 		return buildcfg.JugglerCliPath, nil
 	case "opencode":
+		return buildcfg.OpencodeCliPath, nil
+	case "openrouter":
+		// Rides the opencode runner (see the dispatch switch above) — no
+		// dedicated CLI of its own.
 		return buildcfg.OpencodeCliPath, nil
 	case "crush":
 		return buildcfg.CrushCliPath, nil

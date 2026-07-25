@@ -935,7 +935,12 @@ verify-clown-openrouter *args="--version": build
     fi
     exec ./result/bin/clown --profile claude-openrouter -- {{ args }}
 
-# Verify opencode launches via openrouter profile; needs OPENROUTER_API_KEY and a saved opencode-openrouter profile
+# Verify opencode launches via openrouter profiles; needs OPENROUTER_API_KEY
+# and saved profiles. Tests both the Phase A template (opencode-openrouter,
+# provider=opencode, backend=gateway, url=https://openrouter.ai/api/v1) and
+# the Phase B first-class provider (openrouter, provider=openrouter,
+# backend=gateway, URL hardcoded by runOpencode). Each profile is verified
+# with `--version` (config synthesis only, no network call).
 [group("test")]
 verify-opencode-against-openrouter: build
     #!/usr/bin/env bash
@@ -944,7 +949,38 @@ verify-opencode-against-openrouter: build
         echo "FAIL: OPENROUTER_API_KEY is not exported" >&2
         exit 1
     fi
-    ./result/bin/clown --profile opencode-openrouter --version
+    for prof in opencode-openrouter openrouter; do
+        if ./result/bin/clown --profile "$prof" -- --version &>/dev/null; then
+            echo "✓ $prof"
+        else
+            echo "✗ $prof — profile not found or version check failed (run 'clown profile add' first, or 'clown profile list' to see existing profiles)" >&2
+        fi
+    done
+
+# Interactive smoke for the profile add/list UI (dynamic UI checkpoint).
+# Builds the project, prints the profile list (with upgrade hints for
+# Phase A opencode+gateway OpenRouter profiles), then launches the
+# interactive profile add flow so you can pick templates, fill the form,
+# and verify the TUI works. Needs OPENROUTER_API_KEY exported for the
+# token-env-var hint to resolve. Requires an interactive TTY.
+[group("debug")]
+debug-ui-openrouter-profiles: build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ -z "${OPENROUTER_API_KEY:-}" ]]; then
+        echo "WARNING: OPENROUTER_API_KEY is not exported — template tokens will show as raw \${...}" >&2
+    fi
+    echo "============================================"
+    echo "STEP 1: profile list (check upgrade hints)"
+    echo "============================================"
+    ./result/bin/clown profile list
+    echo
+    echo "==========================================="
+    echo "STEP 2: profile add — pick an OpenRouter"
+    echo "        template and verify the form"
+    echo "==========================================="
+    echo
+    exec ./result/bin/clown profile add
 
 # Launch opencode pointed at a tailnet-exposed juggler instance.
 #

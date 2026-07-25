@@ -98,6 +98,7 @@ func TestValidate_ValidCombos(t *testing.T) {
 		{Name: "f", Provider: "crush", Backend: "anthropic"},
 		{Name: "g", Provider: "crush", Backend: "gateway", URL: "http://x", Token: "t"},
 		{Name: "h", Provider: "crush", Backend: "local"},
+		{Name: "i", Provider: "openrouter", Backend: "gateway", Token: "t"},
 	}
 	for _, p := range cases {
 		if err := profile.Validate(p); err != nil {
@@ -164,6 +165,25 @@ func TestValidateClaudeGateway(t *testing.T) {
 		if err := profile.Validate(p); err == nil {
 			t.Errorf("profile %q should fail validation", p.Name)
 		}
+	}
+}
+
+// TestValidateOpenrouterGateway guards Phase B
+// (docs/plans/2026-07-24-openrouter-non-anthropic-design.md Section 3):
+// provider=openrouter requires Token but NOT URL — the URL is hardcoded by
+// cmd/clown/opencode.go's runOpencode, never stored on the profile.
+func TestValidateOpenrouterGateway(t *testing.T) {
+	ok := profile.Profile{Name: "or", Provider: "openrouter", Backend: "gateway", Token: "${OPENROUTER_API_KEY}"}
+	if err := profile.Validate(ok); err != nil {
+		t.Fatalf("openrouter+gateway with token (no url) should validate: %v", err)
+	}
+	missing := profile.Profile{Name: "no-token", Provider: "openrouter", Backend: "gateway"}
+	if err := profile.Validate(missing); err == nil || !strings.Contains(err.Error(), "token") {
+		t.Fatalf("openrouter+gateway without token should fail naming token, got: %v", err)
+	}
+	badBackend := profile.Profile{Name: "bad-backend", Provider: "openrouter", Backend: "anthropic"}
+	if err := profile.Validate(badBackend); err == nil {
+		t.Fatal("openrouter+anthropic should fail validation (only gateway is supported)")
 	}
 }
 
@@ -257,6 +277,32 @@ func TestBackendsForProvider(t *testing.T) {
 	}
 	if profile.Backends("nope") != nil {
 		t.Fatal("unknown provider should return nil")
+	}
+}
+
+// TestBackendsForOpenrouter guards Phase B: openrouter supports only the
+// gateway backend (no anthropic/local passthrough, unlike claude/opencode/
+// crush — there is no dedicated openrouter CLI to run locally or via a
+// direct Anthropic-compatible skin).
+func TestBackendsForOpenrouter(t *testing.T) {
+	got := profile.Backends("openrouter")
+	want := []string{"gateway"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Backends(openrouter) = %v, want %v", got, want)
+	}
+}
+
+func TestProvidersIncludesOpenrouter(t *testing.T) {
+	got := profile.Providers()
+	found := false
+	for _, p := range got {
+		if p == "openrouter" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("Providers() = %v, want it to include openrouter", got)
 	}
 }
 

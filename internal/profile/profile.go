@@ -3,6 +3,7 @@ package profile
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 )
@@ -66,21 +67,23 @@ func Merge(builtin, additional []Profile) []Profile {
 }
 
 var validCombos = map[string]map[string]bool{
-	"claude":   {"anthropic": true, "gateway": true, "local": true},
-	"opencode": {"anthropic": true, "gateway": true, "local": true},
-	"crush":    {"anthropic": true, "gateway": true, "local": true},
+	"claude":     {"anthropic": true, "gateway": true, "local": true},
+	"opencode":   {"anthropic": true, "gateway": true, "local": true},
+	"crush":      {"anthropic": true, "gateway": true, "local": true},
+	"openrouter": {"gateway": true},
 }
 
 func Validate(p Profile) error {
 	backends, ok := validCombos[p.Provider]
 	if !ok {
-		return fmt.Errorf("profile %q: unknown provider %q (valid: claude, opencode, crush)", p.Name, p.Provider)
+		return fmt.Errorf("profile %q: unknown provider %q (valid: %s)", p.Name, p.Provider, strings.Join(Providers(), ", "))
 	}
 	if !backends[p.Backend] {
 		return fmt.Errorf("profile %q: provider %q does not support backend %q", p.Name, p.Provider, p.Backend)
 	}
 	if p.Backend == "gateway" {
-		if p.Provider == "claude" {
+		switch p.Provider {
+		case "claude":
 			// Either an inline URL (with its required Token) or a Model that
 			// resolves via juggler (cmd/clown's applyNamedProfile juggler-
 			// fallback branch, only wired up for the claude family so far —
@@ -93,7 +96,15 @@ func Validate(p Profile) error {
 			if p.URL != "" && p.Token == "" {
 				return fmt.Errorf("profile %q: backend gateway requires token when url is set", p.Name)
 			}
-		} else {
+		case "openrouter":
+			// URL is hardcoded to OpenRouter's OpenAI-compatible endpoint by
+			// cmd/clown's runOpencode dispatch (Phase B,
+			// docs/plans/2026-07-24-openrouter-non-anthropic-design.md), not
+			// stored on the profile — only Token (and Model) are required.
+			if p.Token == "" {
+				return fmt.Errorf("profile %q: backend gateway requires token", p.Name)
+			}
+		default:
 			// opencode/crush have no juggler-resolution fallback yet
 			// (cmd/clown's runOpencode/runCrush read prof.URL/prof.Token
 			// directly for the gateway case) — keep requiring an inline

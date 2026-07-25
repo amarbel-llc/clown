@@ -6,8 +6,9 @@ Status: approved (brainstorm with Sasha, session lucid-fir)
 ## Problem
 
 The existing OpenRouter profile support (`claude-openrouter`, template key
-`"openrouter"`) routes Claude Code through OpenRouter's Anthropic-compatible
-skin — it only reaches Anthropic/Claude-family models. There is no path to
+`"claude-openrouter"`) routes Claude Code through OpenRouter's
+Anthropic-compatible skin — it only reaches Anthropic/Claude-family models.
+There is no path to
 run non-Anthropic models (GPT-4o, Gemini, Llama, etc.) via OpenRouter through
 any clown-managed provider.
 
@@ -78,23 +79,23 @@ normalize the map key in `writeOpencodeConfigFile` — replace `/` with `-` in
 the key only, keep the full slug in the `Name` field — without touching the
 `"model"` string.
 
-## Section 3 — Phase B migration path
+## Section 3 — Phase B migration path (implemented, smith#196)
 
-When Phase B (new `openrouter` provider) lands:
-
-- Add `"openrouter": {"gateway": true}` to `validCombos` in `profile.go`.
-- Profiles with `provider=openrouter` dispatch to the opencode runner (or a
-  dedicated runner) with `URL` hardcoded to `https://openrouter.ai/api/v1`
-  rather than read from the profile — the profile stores only `Token` and
-  `Model`.
+- Added `"openrouter": {"gateway": true}` to `validCombos` in `profile.go`,
+  with an `openrouter` branch in `Validate` requiring only `Token` (no `URL`).
+- Profiles with `provider=openrouter` dispatch to the opencode runner
+  (`cmd/clown/main.go`'s dispatch switch and `resolveProvider`) with `URL`
+  hardcoded to `https://openrouter.ai/api/v1` in `runOpencode`
+  (`cmd/clown/opencode.go`) rather than read from the profile — the profile
+  stores only `Token` and `Model`.
 - Existing `provider=opencode, backend=gateway, url=https://openrouter.ai/api/v1`
-  profiles continue to work as-is (opencode+gateway path is unchanged). A
-  migration note in `clown profile list` output can flag them as upgradable.
-- The existing `"openrouter"` template key (`claude+gateway`, Anthropic skin)
-  must be renamed (e.g. to `"claude-openrouter"`) before Phase B introduces
-  a new `"openrouter"` template — `templateByKey` returns the first match,
-  so a silent key collision would shadow whichever entry comes second.
-  `"openrouter-opencode"` remains but may be de-emphasized.
+  profiles continue to work as-is (opencode+gateway path is unchanged);
+  `"openrouter-opencode"` remains as its template.
+- The pre-existing `"openrouter"` template key (`claude+gateway`, Anthropic
+  skin) was renamed to `"claude-openrouter"` in `cmd/clown/profileform.go`,
+  and a new `"openrouter"` template (`provider=openrouter`) was added in its
+  place — avoiding the `templateByKey` first-match collision this doc
+  originally flagged.
 
 ## Rollback
 

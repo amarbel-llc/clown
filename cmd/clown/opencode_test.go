@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"code.linenisgreat.com/clown/internal/profile"
 )
 
 func TestReadOpencodeLocalConfig_ParsesURLAndToken(t *testing.T) {
@@ -208,6 +210,48 @@ func TestWriteOpencodeConfigFile_ModelOverride(t *testing.T) {
 	}
 	if strings.Contains(content, "\"gpt-4o\"") {
 		t.Errorf("default model gpt-4o should not appear when overridden: %s", content)
+	}
+}
+
+// TestResolveOpencodeGateway_ExpandsTokenEnvVar guards a real gap this
+// change fixes: a profileTemplates-style Token like "${OPENROUTER_API_KEY}"
+// must resolve to the env var's value, not be sent to opencode as the
+// literal "${...}" string.
+func TestResolveOpencodeGateway_ExpandsTokenEnvVar(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "sk-real-key")
+	prof := &profile.Profile{
+		Provider: "opencode", Backend: "gateway",
+		URL: "https://openrouter.ai/api/v1", Token: "${OPENROUTER_API_KEY}",
+		Model: "openai/gpt-4o",
+	}
+	url, token, model := resolveOpencodeGateway(prof)
+	if url != "https://openrouter.ai/api/v1" {
+		t.Errorf("url = %q", url)
+	}
+	if token != "sk-real-key" {
+		t.Errorf("token = %q, want expanded env value", token)
+	}
+	if model != "openai/gpt-4o" {
+		t.Errorf("model = %q", model)
+	}
+}
+
+// TestResolveOpencodeGateway_OpenrouterHardcodesURL guards the Phase B
+// dispatch: provider=openrouter always uses openrouterGatewayURL, ignoring
+// any profile.URL (which the openrouter template leaves empty anyway).
+func TestResolveOpencodeGateway_OpenrouterHardcodesURL(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "sk-real-key")
+	prof := &profile.Profile{
+		Provider: "openrouter", Backend: "gateway",
+		URL: "https://should-be-ignored.example.com", Token: "${OPENROUTER_API_KEY}",
+		Model: "openai/gpt-4o",
+	}
+	url, token, _ := resolveOpencodeGateway(prof)
+	if url != openrouterGatewayURL {
+		t.Errorf("url = %q, want hardcoded %q", url, openrouterGatewayURL)
+	}
+	if token != "sk-real-key" {
+		t.Errorf("token = %q, want expanded env value", token)
 	}
 }
 

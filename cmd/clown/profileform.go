@@ -72,7 +72,11 @@ type profileTemplate struct {
 
 var profileTemplates = []profileTemplate{
 	{
-		key: "openrouter", display: "OpenRouter", p: profile.Profile{
+		// Renamed from "openrouter" for Phase B (design doc's explicit
+		// collision warning): "openrouter" now names the first-class
+		// openrouter provider template below. templateByKey returns the
+		// first match, so the old key would have silently shadowed it.
+		key: "claude-openrouter", display: "Claude (OpenRouter)", p: profile.Profile{
 			Name:    "claude-openrouter",
 			Display: "Claude (OpenRouter)", Provider: "claude", Backend: "gateway",
 			URL: "https://openrouter.ai/api", Token: "${OPENROUTER_API_KEY}",
@@ -80,6 +84,18 @@ var profileTemplates = []profileTemplate{
 		// Model deliberately empty: claude's own defaults flow through and
 		// OpenRouter's Anthropic Skin maps them (tuning lever, design doc).
 		note: "If claude was previously logged in with an Anthropic account, run /logout once inside claude (cached-login conflict).",
+	},
+	{
+		// Phase B (docs/plans/2026-07-24-openrouter-non-anthropic-design.md):
+		// first-class openrouter provider. URL is hardcoded by
+		// cmd/clown/opencode.go's runOpencode, not stored on the profile.
+		key: "openrouter", display: "OpenRouter", p: profile.Profile{
+			Name: "openrouter", Display: "OpenRouter",
+			Provider: "openrouter", Backend: "gateway",
+			Token: "${OPENROUTER_API_KEY}",
+			Model: "openai/gpt-4o",
+		},
+		note: "Model is an OpenRouter slug (e.g. openai/gpt-4o, google/gemini-2.0-flash-001). Browse at https://openrouter.ai/models",
 	},
 	{
 		key: "openrouter-opencode", display: "OpenRouter (opencode)", p: profile.Profile{
@@ -165,21 +181,27 @@ func buildProfileForm(v *profileFormValues, existingUserNames map[string]bool, e
 						return nil
 					}
 					url := strings.TrimSpace(s)
-					if v.Provider == "claude" {
+					switch v.Provider {
+					case "claude":
 						// claude has the juggler-fallback branch (applyNamedProfile):
 						// url-or-model satisfies the gateway backend.
 						if url == "" && strings.TrimSpace(v.Model) == "" {
 							return fmt.Errorf("url is required for the gateway backend (or set Model to resolve via juggler)")
 						}
 						return nil
+					case "openrouter":
+						// URL is hardcoded by runOpencode's openrouter branch —
+						// not user-entered.
+						return nil
+					default:
+						// opencode/crush have no juggler-resolution fallback yet
+						// (runOpencode/runCrush read URL/Token directly) — url is
+						// unconditionally required.
+						if url == "" {
+							return fmt.Errorf("url is required for the gateway backend")
+						}
+						return nil
 					}
-					// opencode/crush have no juggler-resolution fallback yet
-					// (runOpencode/runCrush read URL/Token directly) — url is
-					// unconditionally required.
-					if url == "" {
-						return fmt.Errorf("url is required for the gateway backend")
-					}
-					return nil
 				}),
 			huh.NewInput().
 				Title("Token").

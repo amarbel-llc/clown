@@ -18,12 +18,38 @@ func templateByName(t *testing.T, key string) profile.Profile {
 }
 
 func TestProfileTemplates(t *testing.T) {
-	or := templateByName(t, "openrouter")
+	or := templateByName(t, "claude-openrouter")
 	if or.URL != "https://openrouter.ai/api" {
-		t.Errorf("openrouter url = %q (must be /api, NOT /api/v1)", or.URL)
+		t.Errorf("claude-openrouter url = %q (must be /api, NOT /api/v1)", or.URL)
 	}
 	if or.Token != "${OPENROUTER_API_KEY}" || or.Model != "" || or.Backend != "gateway" {
-		t.Errorf("openrouter template: %#v", or)
+		t.Errorf("claude-openrouter template: %#v", or)
+	}
+}
+
+// TestProfileTemplates_Openrouter guards the Phase B first-class openrouter
+// provider template (docs/plans/2026-07-24-openrouter-non-anthropic-design.md
+// Section 3): no URL stored (hardcoded by runOpencode), Token+Model present,
+// and it must pass profile.Validate.
+func TestProfileTemplates_Openrouter(t *testing.T) {
+	p := templateByName(t, "openrouter")
+	if p.Provider != "openrouter" {
+		t.Errorf("provider = %q, want openrouter", p.Provider)
+	}
+	if p.Backend != "gateway" {
+		t.Errorf("backend = %q, want gateway", p.Backend)
+	}
+	if p.URL != "" {
+		t.Errorf("url = %q, want empty (hardcoded by runOpencode)", p.URL)
+	}
+	if p.Token != "${OPENROUTER_API_KEY}" {
+		t.Errorf("token = %q, want ${OPENROUTER_API_KEY}", p.Token)
+	}
+	if p.Model == "" {
+		t.Error("model must be pre-filled (e.g. openai/gpt-4o)")
+	}
+	if err := profile.Validate(p); err != nil {
+		t.Errorf("template profile must pass validation: %v", err)
 	}
 }
 
