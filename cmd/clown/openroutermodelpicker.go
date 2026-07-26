@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/list"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -118,4 +120,135 @@ func shortDescription(desc string) string {
 		cut = cut[:idx]
 	}
 	return cut + "…"
+}
+
+// ---- picker program ----
+
+// openRouterModelItem adapts openRouterModel to bubbles/list's Item
+// interface. Two-line rows via list.DefaultDelegate (not a custom delegate
+// like cheapcontext_picker.go's checklistDelegate — this is a flat
+// single-select list, no cross-row cascade behavior needed).
+type openRouterModelItem struct {
+	model openRouterModel
+}
+
+func (it openRouterModelItem) Title() string {
+	return fmt.Sprintf("%-38s %s · %s", it.model.ID,
+		formatContextLen(it.model.ContextLen), formatPricing(it.model.PromptPrice, it.model.CompPrice))
+}
+func (it openRouterModelItem) Description() string { return shortDescription(it.model.Description) }
+func (it openRouterModelItem) FilterValue() string { return it.model.ID }
+
+type openRouterPickerModel struct {
+	list       list.Model
+	chosen     string // empty means cancelled — enter is the only path that sets it
+	detailBox  lipgloss.Style
+	detailWrap lipgloss.Style
+}
+
+// selectedModel returns the item currently under the cursor, if any.
+func (m openRouterPickerModel) selectedModel() (openRouterModel, bool) {
+	it, ok := m.list.SelectedItem().(openRouterModelItem)
+	if !ok {
+		return openRouterModel{}, false
+	}
+	return it.model, true
+}
+
+func (m openRouterPickerModel) Init() tea.Cmd { return nil }
+
+func (m openRouterPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		// enter/esc are gated on list.FilterState() because bubbles/list
+		// binds those same keys itself while the filter box is active
+		// (list.Filtering: enter applies the filter, esc clears it —
+		// list/keys.go) — the picker must let those two-step interactions
+		// through rather than treating every enter/esc as "confirm/cancel
+		// the whole picker". ctrl+c is NOT gated: it's the unconditional
+		// "abandon everything" key regardless of what the list is doing.
+		switch msg.String() {
+		case "enter":
+			if m.list.FilterState() != list.Filtering {
+				if mo, ok := m.selectedModel(); ok {
+					m.chosen = mo.ID
+				}
+				return m, tea.Quit
+			}
+		case "ctrl+c":
+			return m, tea.Quit
+		case "esc":
+			if m.list.FilterState() == list.Unfiltered {
+				return m, tea.Quit
+			}
+		}
+	case tea.WindowSizeMsg:
+		listWidth := msg.Width*3/5 - 1
+		detailWidth := msg.Width - listWidth - 3 // border(2) + gap(1); Width() already includes padding
+		m.list.SetWidth(listWidth)
+		m.list.SetHeight(msg.Height - 2)
+		// MarginLeft on the style, not string concatenation, for the gap —
+		// concatenating a literal space only offsets the pane's first
+		// line, breaking border alignment on every other line (caught
+		// during the #195 demo review).
+		m.detailBox = m.detailBox.Width(detailWidth).Height(msg.Height - 4).MarginLeft(1)
+		m.detailWrap = m.detailWrap.Width(detailWidth - 2) // minus the box's own padding
+	}
+	var cmd tea.Cmd
+	m.list, cmd = m.list.Update(msg)
+	return m, cmd
+}
+
+// detailPane renders the FULL, untruncated description of whatever item the
+// cursor is currently on. This lives outside list.Model's own View/height
+// accounting: bubbles/list's ItemDelegate.Height() is one fixed value
+// applied to every row for its pagination math (vendor/.../bubbles/list/list.go:38-53),
+// so a row can't grow taller only when focused — a separate pane is the only
+// way to show more text on focus without wasting that height on every row.
+func (m openRouterPickerModel) detailPane() string {
+	mo, ok := m.selectedModel()
+	if !ok {
+		return ""
+	}
+	return m.detailBox.Render(m.detailWrap.Render(renderMarkdownish(mo.Description)))
+}
+
+func (m openRouterPickerModel) View() string {
+	return lipgloss.JoinHorizontal(lipgloss.Top, m.list.View(), m.detailPane())
+}
+
+// runOpenRouterModelPicker drives the picker over models, pre-scrolled to
+// current if it matches one of models' ids. ok is false if the user
+// cancelled (esc/ctrl+c) — same return convention as cheapcontext_picker.go's
+// runChecklistPicker; the caller must leave the profile's Model field
+// untouched when ok is false.
+func runOpenRouterModelPicker(models []openRouterModel, current string) (id string, ok bool, err error) {
+	items := make([]list.Item, len(models))
+	startIndex := 0
+	for i, mo := range models {
+		items[i] = openRouterModelItem{model: mo}
+		if mo.ID == current {
+			startIndex = i
+		}
+	}
+	l := list.New(items, list.NewDefaultDelegate(), 100, 20)
+	l.Title = "Select an OpenRouter model (/ to filter, enter to confirm, esc to cancel)"
+	l.SetShowStatusBar(false)
+	l.Styles.Title = lipgloss.NewStyle().Bold(true)
+	l.Select(startIndex)
+
+	m := openRouterPickerModel{
+		list:       l,
+		detailBox:  lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1).Width(96),
+		detailWrap: lipgloss.NewStyle().Width(92),
+	}
+	res, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
+	if err != nil {
+		return "", false, err
+	}
+	final := res.(openRouterPickerModel)
+	if final.chosen == "" {
+		return "", false, nil
+	}
+	return final.chosen, true, nil
 }
