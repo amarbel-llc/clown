@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/huh"
 
+	"code.linenisgreat.com/clown/internal/clownfile"
 	"code.linenisgreat.com/clown/internal/pluginhost"
 	"code.linenisgreat.com/clown/internal/profile"
 )
@@ -119,6 +122,35 @@ func templateByKey(key string) profileTemplate {
 		}
 	}
 	return profileTemplate{}
+}
+
+// maybeApplyOpenRouterModelPicker offers the dynamic OpenRouter model picker
+// (issue #195) when v looks like an OpenRouter-backed profile. No-op,
+// silently, on any failure — a no-op leaves v.Model exactly as the template
+// or existing profile set it, and buildProfileForm's plain text Model field
+// remains fully functional either way (docs/plans/2026-07-26-openrouter-model-picker-design.md
+// Section 1).
+func maybeApplyOpenRouterModelPicker(v *profileFormValues) {
+	isOpenRouter := v.Provider == "openrouter" ||
+		(v.Provider == "opencode" && strings.TrimSpace(v.URL) == openrouterGatewayURL)
+	if !isOpenRouter {
+		return
+	}
+	token := clownfile.ResolveEnv(v.Token)
+	if token == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	models, err := fetchOpenRouterModels(ctx, token)
+	if err != nil || len(models) == 0 {
+		return
+	}
+	id, ok, err := runOpenRouterModelPicker(models, v.Model)
+	if err != nil || !ok {
+		return
+	}
+	v.Model = id
 }
 
 var profileNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
@@ -290,6 +322,7 @@ func profileAddInteractive() (*profile.Profile, error) {
 	tpl := templateByKey(tplKey)
 
 	v := valuesFromProfile(tpl.p)
+	maybeApplyOpenRouterModelPicker(&v)
 	existing := userNameSet(user)
 	if err := buildProfileForm(&v, existing, "", destPath).Run(); err != nil {
 		return nil, fmt.Errorf("prompt: %w", err)
@@ -344,6 +377,7 @@ func profileEditInteractive(name string) (*profile.Profile, error) {
 		editOriginal = name
 	}
 	v := valuesFromProfile(*found)
+	maybeApplyOpenRouterModelPicker(&v)
 	if err := buildProfileForm(&v, existing, editOriginal, destPath).Run(); err != nil {
 		return nil, fmt.Errorf("prompt: %w", err)
 	}
