@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/charmbracelet/huh"
 
@@ -124,25 +123,35 @@ func templateByKey(key string) profileTemplate {
 	return profileTemplate{}
 }
 
+// isOpenRouterProfile reports whether v looks like an OpenRouter-backed
+// profile — either the first-class openrouter provider, or the earlier
+// opencode+gateway shape pointed at OpenRouter's OpenAI-compatible endpoint.
+// Pulled out as a pure predicate (mirroring resolveOpencodeGateway's
+// testability in cmd/clown/opencode.go) so the decision logic has a unit
+// test independent of the network call and interactive picker it gates.
+func isOpenRouterProfile(v profileFormValues) bool {
+	return v.Provider == "openrouter" ||
+		(v.Provider == "opencode" && strings.TrimSpace(v.URL) == openrouterGatewayURL)
+}
+
 // maybeApplyOpenRouterModelPicker offers the dynamic OpenRouter model picker
 // (issue #195) when v looks like an OpenRouter-backed profile. No-op,
 // silently, on any failure — a no-op leaves v.Model exactly as the template
 // or existing profile set it, and buildProfileForm's plain text Model field
 // remains fully functional either way (docs/plans/2026-07-26-openrouter-model-picker-design.md
-// Section 1).
+// Section 1). No context timeout here: fetchOpenRouterModels already bounds
+// itself via its own http.Client timeout (cmd/clown/openroutermodels.go) —
+// wrapping the call in a second, independent context timeout would just be
+// two copies of the same tuning lever to keep in sync by hand.
 func maybeApplyOpenRouterModelPicker(v *profileFormValues) {
-	isOpenRouter := v.Provider == "openrouter" ||
-		(v.Provider == "opencode" && strings.TrimSpace(v.URL) == openrouterGatewayURL)
-	if !isOpenRouter {
+	if !isOpenRouterProfile(*v) {
 		return
 	}
 	token := clownfile.ResolveEnv(v.Token)
 	if token == "" {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	models, err := fetchOpenRouterModels(ctx, token)
+	models, err := fetchOpenRouterModels(context.Background(), token)
 	if err != nil || len(models) == 0 {
 		return
 	}

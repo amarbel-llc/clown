@@ -53,6 +53,47 @@ func TestProfileTemplates_Openrouter(t *testing.T) {
 	}
 }
 
+// TestIsOpenRouterProfile guards the trigger condition that gates the
+// dynamic OpenRouter model picker (#195, maybeApplyOpenRouterModelPicker):
+// it must fire for exactly the two OpenRouter-backed shapes and stay silent
+// for everything else, including profiles that merely resemble one (e.g. an
+// opencode+gateway profile pointed at a different, non-OpenRouter URL).
+func TestIsOpenRouterProfile(t *testing.T) {
+	cases := []struct {
+		name string
+		v    profileFormValues
+		want bool
+	}{
+		{"first-class openrouter provider", profileFormValues{Provider: "openrouter"}, true},
+		{
+			"opencode+gateway pointed at OpenRouter's endpoint",
+			profileFormValues{Provider: "opencode", URL: "https://openrouter.ai/api/v1"},
+			true,
+		},
+		{
+			"opencode+gateway URL padded with whitespace still matches",
+			profileFormValues{Provider: "opencode", URL: "  https://openrouter.ai/api/v1  "},
+			true,
+		},
+		{
+			"opencode+gateway pointed elsewhere does not match",
+			profileFormValues{Provider: "opencode", URL: "https://api.example.com/v1"},
+			false,
+		},
+		{
+			"claude+gateway on the Anthropic-skin OpenRouter URL does not match",
+			profileFormValues{Provider: "claude", URL: "https://openrouter.ai/api"},
+			false,
+		},
+		{"crush provider never matches", profileFormValues{Provider: "crush", URL: "https://openrouter.ai/api/v1"}, false},
+	}
+	for _, c := range cases {
+		if got := isOpenRouterProfile(c.v); got != c.want {
+			t.Errorf("%s: isOpenRouterProfile(%#v) = %v, want %v", c.name, c.v, got, c.want)
+		}
+	}
+}
+
 func TestValidateProfileNameField(t *testing.T) {
 	existing := map[string]bool{"taken": true}
 	v := validateProfileName(existing, "")
