@@ -103,8 +103,7 @@ func renderMarkdownish(s string) string {
 
 type demoModel struct {
 	list       list.Model
-	chosen     string
-	quit       bool
+	chosen     string // empty means cancelled (esc/ctrl+c) or nothing selected
 	detailBox  lipgloss.Style
 	detailWrap lipgloss.Style
 }
@@ -121,7 +120,6 @@ func (m demoModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, tea.Quit
 		case "ctrl+c", "esc":
-			m.quit = true
 			return m, tea.Quit
 		}
 	case tea.WindowSizeMsg:
@@ -175,7 +173,7 @@ func main() {
 		os.Exit(1)
 	}
 	final := m.(demoModel)
-	if final.quit || final.chosen == "" {
+	if final.chosen == "" {
 		fmt.Println("cancelled")
 		return
 	}

@@ -38,24 +38,28 @@ func TestFetchOpenRouterModelsFrom_Success(t *testing.T) {
 	}
 }
 
-func TestFetchOpenRouterModelsFrom_NonOK(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusUnauthorized)
-	}))
-	defer srv.Close()
-
-	if _, err := fetchOpenRouterModelsFrom(context.Background(), srv.URL, "bad-token"); err == nil {
-		t.Fatal("expected error on HTTP 401, got nil")
+func TestFetchOpenRouterModelsFrom_Errors(t *testing.T) {
+	cases := []struct {
+		name    string
+		handler http.HandlerFunc
+	}{
+		{
+			"non-200 status",
+			func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusUnauthorized) },
+		},
+		{
+			"malformed JSON body",
+			func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("{not json")) },
+		},
 	}
-}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			srv := httptest.NewServer(c.handler)
+			defer srv.Close()
 
-func TestFetchOpenRouterModelsFrom_MalformedJSON(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte("{not json"))
-	}))
-	defer srv.Close()
-
-	if _, err := fetchOpenRouterModelsFrom(context.Background(), srv.URL, "token"); err == nil {
-		t.Fatal("expected error on malformed JSON, got nil")
+			if _, err := fetchOpenRouterModelsFrom(context.Background(), srv.URL, "token"); err == nil {
+				t.Fatalf("expected error for %s, got nil", c.name)
+			}
+		})
 	}
 }
