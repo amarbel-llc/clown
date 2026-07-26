@@ -1479,17 +1479,6 @@ debug-cheap-context-moxy *ARGS="":
     just run-build-juggler
     exec ./result/bin/clown --verbose --cheap-context -- {{ARGS}}
 
-# Design-review demo for issue #195 (dynamic OpenRouter model picker):
-# renders the proposed bubbles/list two-line row layout against fixture
-# data, no network call. Throwaway — delete cmd/clown-openrouter-picker-demo
-# and this recipe once the design is approved and the real picker lands.
-# Non-interactive compile checks go through `just build-go` (already
-# compiles every package under ./cmd/..., including this one) rather than a
-# dedicated recipe here.
-[group("debug")]
-debug-openrouter-picker-demo:
-    go run -mod=mod ./cmd/clown-openrouter-picker-demo
-
 # Manually exercise the stdio bridge against a real stdio MCP. Expects
 # a plugin directory at $PLUGIN_DIR (default .tmp/stdio-bridge-plugin)
 # containing clown.json (with stdioServers entries), the standard
