@@ -65,11 +65,18 @@ override with `CLOWN_PROVIDER` env var, or pin one per-directory via a
   `bubbles/list` program: a custom `list.Item` type carries whatever extra
   state you need (checked, parent/child links), and a custom
   `list.ItemDelegate.Update` runs *before* the list consumes a keypress —
-  that's the interception point `huh` doesn't have. Keep using `huh` for
+  that's the interception point `huh` doesn't have. `huh.Option` is also
+  single-line-only (just a `Key string` + `Value`, no title/description
+  split) — `cmd/clown/openroutermodelpicker.go`'s dynamic OpenRouter model
+  picker hit that limit (needing a two-line id/pricing + description row
+  per model) and is a second bare `bubbles/list` program for the same
+  reason, using `list.DefaultDelegate` rather than a custom one since it's
+  a flat single-select list with no cross-row cascade. Keep using `huh` for
   simple, single-interaction forms (confirm prompts, the profile add/edit
-  form in `cmd/clown/profileform.go`); reach for `bubbles/list` the moment
-  a picker needs cross-row side effects or one continuously-scrollable
-  list spanning what would otherwise be several `huh` fields.
+  form in `cmd/clown/profileform.go` itself); reach for `bubbles/list` the
+  moment a picker needs cross-row side effects, richer per-row layout than
+  a single line, or one continuously-scrollable list spanning what would
+  otherwise be several `huh` fields.
 
 ## Build commands
 
