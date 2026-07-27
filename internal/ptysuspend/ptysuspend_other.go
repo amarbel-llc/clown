@@ -25,6 +25,9 @@ type Options struct {
 	// EscapeArgv is the command run when the escape key is pressed. Empty means
 	// the escape key is swallowed.
 	EscapeArgv []string
+	// Env mirrors the linux build's field (see ptysuspend_linux.go); unused
+	// here because Run is a no-op on this platform.
+	Env []string
 }
 
 // Supported reports that the pty-suspend proxy is not implemented here, so

@@ -1388,7 +1388,7 @@ func runWithPluginHost(executor Executor, args []string, pluginDirs []string, fl
 
 	if disableClown {
 		fullArgs := prependPluginDirs(args, pluginDirs, nil)
-		return runProvider(executor, fullArgs, nil, flags.ptyOpts)
+		return runProvider(executor, fullArgs, nil, flags.ptyOpts, nil)
 	}
 
 	logger := preLogger
@@ -1453,7 +1453,7 @@ func runWithPluginHost(executor Executor, args []string, pluginDirs []string, fl
 	if len(discovered) == 0 {
 		logger.Info("no plugin servers discovered; passing plugin dirs through")
 		fullArgs := prependPluginDirs(args, pluginDirs, nil)
-		return runProvider(executor, fullArgs, logger, flags.ptyOpts)
+		return runProvider(executor, fullArgs, logger, flags.ptyOpts, nil)
 	}
 
 	return runManaged(host, discovered, executor, args, pluginDirs, skipFailed, verbose, logger, appendFile, flags.ptyOpts, cheapContextActive, allDiscoveredDirs, flags.cheapContextProfile, flags.cheapContextSave)
@@ -1463,7 +1463,13 @@ func runWithPluginHost(executor Executor, args []string, pluginDirs []string, fl
 // and signals. Returns the provider's exit code (or 1 on a clown-side
 // failure). Used by every non-naked path so clown stays in the
 // process tree and can run post-exit hooks.
-func runProvider(executor Executor, args []string, logger *slog.Logger, ptyOpts ptysuspend.Options) int {
+//
+// extraEnv holds additional "KEY=VALUE" entries for the child. The
+// config-file providers (opencode, crush) use it to point at the config
+// clown generated for them. Empty leaves cmd.Env nil so the child inherits
+// clown's environment exactly as before — the claude paths pass nil and are
+// byte-for-byte unaffected.
+func runProvider(executor Executor, args []string, logger *slog.Logger, ptyOpts ptysuspend.Options, extraEnv []string) int {
 	binary, err := executor.Binary()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
@@ -1484,6 +1490,7 @@ func runProvider(executor Executor, args []string, logger *slog.Logger, ptyOpts 
 		if logger != nil {
 			logger.Info("running downstream via pty-suspend proxy", "binary", binary, "args", argv)
 		}
+		ptyOpts.Env = extraEnv
 		code, err := ptysuspend.Run(append([]string{binary}, argv...), os.Stdin, ptyOpts)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "clown: pty-suspend: %v\n", err)
@@ -1502,6 +1509,9 @@ func runProvider(executor Executor, args []string, logger *slog.Logger, ptyOpts 
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	if len(extraEnv) > 0 {
+		cmd.Env = append(os.Environ(), extraEnv...)
+	}
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
@@ -1682,7 +1692,7 @@ func runManaged(
 		logger.Info("no plugin servers healthy; falling back to original plugin dirs")
 		host.Shutdown()
 		fullArgs := prependPluginDirs(baseArgs, pluginDirs, nil)
-		return runProvider(executor, fullArgs, logger, ptyOpts)
+		return runProvider(executor, fullArgs, logger, ptyOpts, nil)
 	}
 	defer host.Shutdown()
 
@@ -1710,7 +1720,7 @@ func runManaged(
 		if len(discovered) == 0 {
 			logger.Info("cheap-context: every server deselected; falling back to original plugin dirs")
 			fullArgs := prependPluginDirs(baseArgs, pluginDirs, nil)
-			return runProvider(executor, fullArgs, logger, ptyOpts)
+			return runProvider(executor, fullArgs, logger, ptyOpts, nil)
 		}
 	}
 
@@ -1760,7 +1770,7 @@ func runManaged(
 	}
 
 	fullArgs := prependPluginDirs(baseArgs, pluginDirs, dirMap)
-	return runProvider(executor, fullArgs, logger, ptyOpts)
+	return runProvider(executor, fullArgs, logger, ptyOpts, nil)
 }
 
 func runCodex(cliPath string, flags parsedFlags, prompts promptwalk.PromptResult) int {

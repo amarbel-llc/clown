@@ -46,6 +46,13 @@ type Options struct {
 	// escape key is pressed; it runs in clown's cwd (the worktree). Empty means
 	// the escape key is swallowed (no-op) rather than forwarded.
 	EscapeArgv []string
+	// Env holds additional "KEY=VALUE" entries appended to the inherited
+	// environment for the proxied child. Empty inherits os.Environ() unchanged.
+	//
+	// Needed because the config-file providers (opencode, crush) locate their
+	// generated config through an env var; without this the pty-suspend path
+	// would silently launch them with no config while the plain path worked.
+	Env []string
 }
 
 func (o Options) escapeKey() byte {
@@ -77,6 +84,9 @@ func Run(argv []string, outer *os.File, opts Options) (int, error) {
 
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = slave, slave, slave
+	if len(opts.Env) > 0 {
+		cmd.Env = append(os.Environ(), opts.Env...)
+	}
 	// Setsid + Setctty: the child leads its own session with the inner pts as its
 	// controlling tty, so its raw-mode/ISIG changes land on the inner pty and its
 	// job-control signals stay off the outer terminal.
