@@ -14,10 +14,15 @@ system-prompt fragments, and ringmaster/troupe job-wakeup notifications.
 
 Status is **testing**: phases 0 and 1 are implemented
 (`docs/plans/2026-07-27-non-claude-provider-parity-design.md` and its
-implementation plan, issue #202) and covered by Go unit tests, but have
-not yet been exercised against a live opencode/crush session — the bats
-lane that would do that is phase 1b and needs the **dumbo** fixture
-(see Open Questions). Phases 2 and 3 have not started.
+implementation plan, issue #202), covered by Go unit tests, and smoke-
+verified against live opencode 1.17.7 and crush 0.86.0 — `clown
+--provider opencode -- mcp list` reports clown's three built-in servers
+(`clown-builtin-jobs__ringmaster`, `clown-builtin-jobs__troupe`,
+`clown-builtin-juggler__juggler`) as **connected**, and crush's workspace
+config at `<data-dir>/crush.json` carries the same three in its `mcp`
+block. What is NOT yet covered is an automated regression lane: that is
+phase 1b and needs the **dumbo** fixture (see Open Questions). Phases 2
+and 3 have not started.
 Agreed phasing: **phase 0** make clown's generated provider config
 authoritative (a precondition this record originally missed — see finding
 0), **phase 1** plugin/MCP compat, **phase 2** static + dynamic prompt
