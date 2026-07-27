@@ -7,10 +7,16 @@
 # Go on filter changes.
 #
 # Returns an attrset with one lane per unique `# bats file_tags=...`
-# directive plus an unfiltered `bats-default` lane. No tags are in
-# use today (see ADR docs/adrs/0007-drop-net-cap-bats-file-tag.md),
-# so the tag-derived lanes are empty and `bats-default` runs every
-# file.
+# directive plus a `bats-default` lane that runs everything except the
+# host-only tags (see hostOnlyTags below).
+#
+# Two tags are in use: `tent_smoke` (excluded from bats-default — the nix
+# builder can't run rootless podman) and `provider_mcp` (clown#203, the
+# opencode/crush MCP delivery lane; included in bats-default, addressable
+# on its own via `nix build .#bats-provider_mcp` since it drives two real
+# provider binaries and is slower than the rest).
+# ADR docs/adrs/0007-drop-net-cap-bats-file-tag.md records why there is no
+# `net_cap` tag — loopback binds need no capability escalation.
 {
   pkgs,
   lib,
