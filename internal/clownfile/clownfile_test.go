@@ -251,6 +251,66 @@ func TestPtySuspendOverride(t *testing.T) {
 	}
 }
 
+// hermetic-config is a *bool like pty-suspend but with the OPPOSITE default:
+// unset means ON. The failure mode of being off is that a repo-local
+// opencode.json/crush.json can replace a clown-owned `mcp` entry, so the safe
+// state is the one you get by not configuring anything.
+func TestHermeticConfigEnabled_UnsetDefaultsOn(t *testing.T) {
+	var p Providers
+	if !p.HermeticConfigEnabled() {
+		t.Error("unset hermetic-config must default ON (fail-closed)")
+	}
+}
+
+func TestHermeticConfigEnabled_ExplicitFalse(t *testing.T) {
+	off := false
+	if (Providers{HermeticConfig: &off}).HermeticConfigEnabled() {
+		t.Error("explicit hermetic-config = false must disable")
+	}
+	on := true
+	if !(Providers{HermeticConfig: &on}).HermeticConfigEnabled() {
+		t.Error("explicit hermetic-config = true must enable")
+	}
+}
+
+// The rollback path from the design doc: an operator turns hermeticity off in a
+// deeper clownfile. Mirrors TestPtySuspendOverride's cascade check.
+func TestHermeticConfigOverride(t *testing.T) {
+	// Nothing configured anywhere => on.
+	home := t.TempDir()
+	cf, err := Discover(home, home, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cf.Providers.HermeticConfigEnabled() {
+		t.Error("unset everywhere must be on")
+	}
+
+	// An ancestor turns it off even though nothing else set it.
+	home2 := t.TempDir()
+	write(t, home2, "[providers]\nhermetic-config = false\n")
+	cf, err = Discover(home2, home2, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cf.Providers.HermeticConfigEnabled() {
+		t.Error("hermetic-config = false must override the on-by-default")
+	}
+
+	// base disables it; a deeper file turns it back on.
+	home3 := t.TempDir()
+	base := filepath.Join(t.TempDir(), "default-clownfile")
+	writeFile(t, base, "[providers]\nhermetic-config = false\n")
+	write(t, home3, "[providers]\nhermetic-config = true\n")
+	cf, err = Discover(home3, home3, base, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cf.Providers.HermeticConfigEnabled() {
+		t.Error("hermetic-config = true must override base = false")
+	}
+}
+
 func TestXDGPath(t *testing.T) {
 	// $XDG_CONFIG_HOME set wins.
 	t.Setenv("XDG_CONFIG_HOME", "/cfg")

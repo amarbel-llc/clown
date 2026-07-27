@@ -262,11 +262,40 @@ func (m Messaging) Env() (map[string]string, error) {
 	return env, nil
 }
 
+// Providers is the clownfile [providers] table: cross-provider launch policy
+// that is not specific to any one backend. It cascades like
+// [profile]/[attach]/[messaging].
+type Providers struct {
+	// HermeticConfig makes clown's generated provider config authoritative for
+	// the config-file providers (opencode, crush) by suppressing or outranking
+	// repo-local config files.
+	//
+	// Verified 2026-07-27: without it, a repo-local opencode.json REPLACES a
+	// same-named entry in clown's `mcp` map — a probe clown wrote pointing at
+	// 127.0.0.1:19001 resolved to the project config's 127.0.0.1:19002 — so any
+	// repository clown runs in could silently repoint a clown-managed MCP server
+	// at a URL of its choosing. See
+	// docs/plans/2026-07-27-non-claude-provider-parity-design.md, finding 0.
+	//
+	// A *bool like Attach.PtySuspend, so a deeper clownfile can override, but
+	// with the OPPOSITE default: nil (unset) means ON. The failure mode of being
+	// off is a hijack, so the safe state must be the one you get by configuring
+	// nothing. See HermeticConfigEnabled.
+	HermeticConfig *bool `toml:"hermetic-config"`
+}
+
+// HermeticConfigEnabled reports whether clown's generated provider config
+// should outrank repo-local config. Unset (nil) is ON — see HermeticConfig.
+func (p Providers) HermeticConfigEnabled() bool {
+	return p.HermeticConfig == nil || *p.HermeticConfig
+}
+
 // Clownfile is one parsed clownfile.
 type Clownfile struct {
 	Profile   Profile   `toml:"profile"`
 	Attach    Attach    `toml:"attach"`
 	Messaging Messaging `toml:"messaging"`
+	Providers Providers `toml:"providers"`
 }
 
 // Load parses a single clownfile from disk.
@@ -428,5 +457,13 @@ func mergeInto(dst *Clownfile, src Clownfile) {
 	}
 	if src.Messaging.XMPPPasswordFile != "" {
 		dst.Messaging.XMPPPasswordFile = src.Messaging.XMPPPasswordFile
+	}
+
+	// [providers]: *bool overrides when set; nil inherits. Note the default
+	// lives in HermeticConfigEnabled, not here — merging only propagates an
+	// explicit choice, so "nobody configured it" still reaches the accessor as
+	// nil and resolves to on.
+	if src.Providers.HermeticConfig != nil {
+		dst.Providers.HermeticConfig = src.Providers.HermeticConfig
 	}
 }
