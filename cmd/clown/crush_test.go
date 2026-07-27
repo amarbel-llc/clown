@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
+	"code.linenisgreat.com/clown/internal/pluginhost"
 	"code.linenisgreat.com/clown/internal/profile"
 )
 
@@ -140,9 +142,119 @@ func readCrushConfigJSON(t *testing.T, dir string) map[string]any {
 	return out
 }
 
+// --data-dir is where crush keeps SESSIONS as well as the workspace config, so
+// instability here would silently break `crush --continue` on every launch.
+func TestCrushDataDir_StableAcrossCalls(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	a, err := crushDataDir("/home/u/proj")
+	if err != nil {
+		t.Fatalf("crushDataDir: %v", err)
+	}
+	b, err := crushDataDir("/home/u/proj")
+	if err != nil {
+		t.Fatalf("crushDataDir: %v", err)
+	}
+	if a != b {
+		t.Errorf("data dir must be stable for a project: %q vs %q", a, b)
+	}
+	if _, err := os.Stat(a); err != nil {
+		t.Errorf("data dir not created: %v", err)
+	}
+}
+
+// crush's own default resolves a per-project .crush, so pooling every project
+// into one directory would mix their session histories.
+func TestCrushDataDir_DistinctPerProject(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	a, err := crushDataDir("/home/u/proj-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := crushDataDir("/home/u/proj-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a == b {
+		t.Errorf("distinct projects must not share a data dir: %q", a)
+	}
+}
+
+func TestCrushArgs(t *testing.T) {
+	base := []string{"--yolo"}
+	if got := crushArgs(base, ""); !slices.Equal(got, base) {
+		t.Errorf("hermeticity off must leave argv untouched: %v", got)
+	}
+	got := crushArgs(base, "/state/clown/crush/ab12")
+	want := []string{"--data-dir", "/state/clown/crush/ab12", "--yolo"}
+	if !slices.Equal(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+// The trap this whole helper exists for: crush stores MCP timeouts in SECONDS
+// (internal/config/config.go), while clown and opencode use milliseconds.
+// Copying clown's 30000 across verbatim would configure an 8-hour timeout.
+func TestCrushMCPTimeoutSeconds(t *testing.T) {
+	for _, tc := range []struct {
+		ms   int
+		want int
+	}{
+		{0, 0},      // unset stays unset so crush applies its own 15s default
+		{-5, 0},     // defensive: never emit a negative
+		{30000, 30}, // the common case
+		{1500, 2},   // rounds UP; truncating would under-set the timeout
+		{1, 1},      // sub-second floors at 1, never 0 (0 reads as "unset")
+		{999, 1},
+		{1000, 1},
+	} {
+		if got := crushMCPTimeoutSeconds(tc.ms); got != tc.want {
+			t.Errorf("crushMCPTimeoutSeconds(%d) = %d, want %d", tc.ms, got, tc.want)
+		}
+	}
+}
+
+func TestWriteCrushConfig_EmitsMCPEntries(t *testing.T) {
+	dir := t.TempDir()
+	mcp := map[string]pluginhost.MCPServerEntry{
+		"moxy__moxy": {Type: "http", URL: "http://127.0.0.1:5001/mcp", Timeout: 30000},
+	}
+	if err := writeCrushConfig(dir, crushBackendOpenAICompat, "u", "k", "m", mcp); err != nil {
+		t.Fatalf("writeCrushConfig: %v", err)
+	}
+	cfg := readCrushConfigJSON(t, dir)
+
+	servers, ok := cfg["mcp"].(map[string]any)
+	if !ok {
+		t.Fatalf("mcp block missing or wrong type: %T", cfg["mcp"])
+	}
+	entry, ok := servers["moxy__moxy"].(map[string]any)
+	if !ok {
+		t.Fatalf("moxy__moxy entry missing: %v", servers)
+	}
+	if entry["type"] != "http" {
+		t.Errorf("type = %v, want http", entry["type"])
+	}
+	if entry["url"] != "http://127.0.0.1:5001/mcp" {
+		t.Errorf("url = %v", entry["url"])
+	}
+	if entry["timeout"] != float64(30) {
+		t.Errorf("timeout = %v, want 30 SECONDS (clown stores 30000 ms)", entry["timeout"])
+	}
+}
+
+func TestWriteCrushConfig_OmitsMCPWhenEmpty(t *testing.T) {
+	dir := t.TempDir()
+	if err := writeCrushConfig(dir, crushBackendOpenAICompat, "u", "k", "m", nil); err != nil {
+		t.Fatalf("writeCrushConfig: %v", err)
+	}
+	if _, present := readCrushConfigJSON(t, dir)["mcp"]; present {
+		t.Error("no servers must emit no mcp key at all")
+	}
+}
+
 func TestWriteCrushConfig_OpenAICompat(t *testing.T) {
 	dir := t.TempDir()
-	if err := writeCrushConfig(dir, crushBackendOpenAICompat, "https://gw.example.com/v1", "tok-xyz", "qwen3-coder"); err != nil {
+	if err := writeCrushConfig(dir, crushBackendOpenAICompat, "https://gw.example.com/v1", "tok-xyz", "qwen3-coder", nil); err != nil {
 		t.Fatalf("writeCrushConfig: %v", err)
 	}
 	cfg := readCrushConfigJSON(t, dir)
@@ -194,7 +306,7 @@ func TestWriteCrushConfig_OpenAICompat(t *testing.T) {
 
 func TestWriteCrushConfig_Anthropic(t *testing.T) {
 	dir := t.TempDir()
-	if err := writeCrushConfig(dir, crushBackendAnthropic, "", "", "claude-sonnet-4-5"); err != nil {
+	if err := writeCrushConfig(dir, crushBackendAnthropic, "", "", "claude-sonnet-4-5", nil); err != nil {
 		t.Fatalf("writeCrushConfig: %v", err)
 	}
 	cfg := readCrushConfigJSON(t, dir)
@@ -234,7 +346,7 @@ func TestWriteCrushConfig_Anthropic(t *testing.T) {
 func TestWriteCrushConfig_DefaultModels(t *testing.T) {
 	t.Run("openai-compat default", func(t *testing.T) {
 		dir := t.TempDir()
-		if err := writeCrushConfig(dir, crushBackendOpenAICompat, "u", "k", ""); err != nil {
+		if err := writeCrushConfig(dir, crushBackendOpenAICompat, "u", "k", "", nil); err != nil {
 			t.Fatal(err)
 		}
 		data, _ := os.ReadFile(filepath.Join(dir, "crush.json"))
@@ -244,7 +356,7 @@ func TestWriteCrushConfig_DefaultModels(t *testing.T) {
 	})
 	t.Run("anthropic default", func(t *testing.T) {
 		dir := t.TempDir()
-		if err := writeCrushConfig(dir, crushBackendAnthropic, "", "", ""); err != nil {
+		if err := writeCrushConfig(dir, crushBackendAnthropic, "", "", "", nil); err != nil {
 			t.Fatal(err)
 		}
 		data, _ := os.ReadFile(filepath.Join(dir, "crush.json"))
@@ -256,7 +368,7 @@ func TestWriteCrushConfig_DefaultModels(t *testing.T) {
 
 func TestWriteCrushConfig_UnknownBackendFails(t *testing.T) {
 	dir := t.TempDir()
-	err := writeCrushConfig(dir, crushBackend("nope"), "", "", "")
+	err := writeCrushConfig(dir, crushBackend("nope"), "", "", "", nil)
 	if err == nil {
 		t.Fatal("expected error for unknown backend")
 	}

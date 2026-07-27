@@ -4,10 +4,22 @@ package main
 //
 // Crush (charmbracelet/crush) is an OpenAI/Anthropic-compatible TUI agent.
 // Like opencode, clown launches it with a generated config that pins one
-// custom provider, and overrides the search path via $CRUSH_GLOBAL_CONFIG
-// so the call is hermetic w.r.t. the user's own ~/.config/crush/crush.json.
-// Crush's CRUSH_GLOBAL_CONFIG names a *directory*; crush appends
-// "crush.json" itself.
+// custom provider, overriding $CRUSH_GLOBAL_CONFIG — which names a *directory*;
+// crush appends "crush.json" itself.
+//
+// That override is NOT hermetic, contrary to what this comment used to claim.
+// crush merges, in order: the system config, GlobalConfig() (the only one
+// CRUSH_GLOBAL_CONFIG redirects), GlobalConfigData()
+// (~/.local/share/crush/crush.json, redirected only by CRUSH_GLOBAL_DATA), and
+// every crush.json/.crush.json found walking up from cwd to the git root —
+// then the WORKSPACE config at <data-dir>/crush.json last, "so it has highest
+// priority" (internal/config/load.go:65-66). Verified 2026-07-27 that a
+// repo-local crush.json really does merge over clown's, and that the workspace
+// slot really does override it in both directions.
+//
+// Since crush exposes no switch to disable the project walk, phase 0 takes
+// authority by precedence instead: clown writes its config into the workspace
+// slot as well and passes --data-dir. See crushDataDir.
 //
 // Three backends are supported, mirroring opencode:
 //
@@ -32,12 +44,13 @@ package main
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -195,7 +208,48 @@ const (
 // ANTHROPIC_API_KEY env var passed through the parent environment. We
 // still write disable_provider_auto_update so launches are reproducible
 // and don't depend on a network call to Catwalk.
-func writeCrushConfig(configDir string, backend crushBackend, baseURL, apiKey, model string) error {
+// crushMCPEntry is one entry in crush's top-level `mcp` object
+// (internal/config/config.go MCPConfig). Type is crush's own discriminator
+// ("stdio" | "sse" | "http"), which happens to match clown's vocabulary for
+// HTTP servers — unlike opencode's "remote".
+type crushMCPEntry struct {
+	Type    string `json:"type"`
+	URL     string `json:"url"`
+	Timeout int    `json:"timeout,omitempty"`
+}
+
+// crushMCPTimeoutSeconds converts clown's millisecond timeout into the SECONDS
+// crush expects (internal/config/config.go: "Timeout in seconds for MCP server
+// connections", default 15).
+//
+// This conversion is the whole reason crush needs its own translation step:
+// copying clown's 30000 across verbatim would configure an 8-hour timeout, and
+// nothing would fail loudly enough to notice. Rounds UP so a sub-second timeout
+// never truncates to 0, which crush would read as "unset" and silently replace
+// with its 15s default.
+func crushMCPTimeoutSeconds(ms int) int {
+	if ms <= 0 {
+		return 0
+	}
+	return (ms + 999) / 1000
+}
+
+func crushMCPBlock(mcp map[string]pluginhost.MCPServerEntry) map[string]crushMCPEntry {
+	if len(mcp) == 0 {
+		return nil
+	}
+	out := make(map[string]crushMCPEntry, len(mcp))
+	for name, e := range mcp {
+		out[name] = crushMCPEntry{
+			Type:    e.Type,
+			URL:     e.URL,
+			Timeout: crushMCPTimeoutSeconds(e.Timeout),
+		}
+	}
+	return out
+}
+
+func writeCrushConfig(configDir string, backend crushBackend, baseURL, apiKey, model string, mcp map[string]pluginhost.MCPServerEntry) error {
 	if model == "" {
 		switch backend {
 		case crushBackendAnthropic:
@@ -230,10 +284,12 @@ func writeCrushConfig(configDir string, backend crushBackend, baseURL, apiKey, m
 		Schema    string                   `json:"$schema,omitempty"`
 		Providers map[string]providerEntry `json:"providers,omitempty"`
 		Models    map[string]selectedModel `json:"models,omitempty"`
+		MCP       map[string]crushMCPEntry `json:"mcp,omitempty"`
 		Options   options                  `json:"options"`
 	}
 
 	cfg := crushConfig{
+		MCP:     crushMCPBlock(mcp),
 		Options: options{DisableProviderAutoUpdate: true},
 	}
 
@@ -301,7 +357,11 @@ func resolveCrushGateway(prof *profile.Profile) (baseURL, apiKey, model string) 
 	return clownfile.ResolveEnv(prof.URL), clownfile.ResolveEnv(prof.Token), prof.Model
 }
 
-func runCrush(crushPath string, args []string, prof *profile.Profile) int {
+// runCrush launches crush under clown's plugin host so its clown-managed MCP
+// servers reach crush through the generated config's `mcp` block (FDR 0016
+// phase 1). hermetic drives phase 0's workspace-slot precedence; see
+// crushDataDir.
+func runCrush(crushPath string, args []string, prof *profile.Profile, flags parsedFlags, pluginDirs []string, hermetic bool) int {
 	if crushPath == "" {
 		fmt.Fprintln(os.Stderr, "clown: crush binary path not configured (build misconfiguration)")
 		return 1
@@ -366,28 +426,92 @@ func runCrush(crushPath string, args []string, prof *profile.Profile) int {
 		fmt.Fprintf(os.Stderr, "clown: create temp dir: %v\n", err)
 		return 1
 	}
+	// Safe: runWithPluginHost runs crush as a subprocess and returns only after
+	// it exits, so the config outlives the launch.
 	defer os.RemoveAll(tmpDir)
 
-	if err := writeCrushConfig(tmpDir, backend, baseURL, apiKey, model); err != nil {
-		fmt.Fprintf(os.Stderr, "clown: write crush config: %v\n", err)
-		return 1
-	}
-
-	cmd := exec.Command(crushPath, args...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	// CRUSH_GLOBAL_CONFIG points at the *directory* — crush appends
-	// "crush.json" itself (see charmbracelet/crush internal/config/load.go's
-	// GlobalConfig function).
-	cmd.Env = append(os.Environ(), "CRUSH_GLOBAL_CONFIG="+tmpDir)
-
-	if err := cmd.Run(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return exitErr.ExitCode()
+	// Phase 0. crush has no switch to disable its project-config walk, so
+	// authority comes from precedence instead: the workspace config at
+	// <data-dir>/crush.json is loaded last and overrides a repo-local
+	// crush.json (verified in both directions, 2026-07-27). dataDir must be
+	// STABLE — it is also where crush keeps sessions, so a mkdtemp here would
+	// silently break `crush --continue` on every launch.
+	dataDir := ""
+	if hermetic {
+		cwd, cwdErr := os.Getwd()
+		if cwdErr != nil {
+			fmt.Fprintf(os.Stderr, "clown: getwd: %v\n", cwdErr)
+			return 1
 		}
-		fmt.Fprintf(os.Stderr, "clown: crush: %v\n", err)
-		return 1
+		if dataDir, err = crushDataDir(cwd); err != nil {
+			fmt.Fprintf(os.Stderr, "clown: crush data dir: %v\n", err)
+			return 1
+		}
 	}
-	return 0
+
+	binding := &configFileBinding{
+		baseArgs: crushArgs(args, dataDir),
+		writeConfig: func(mcp map[string]pluginhost.MCPServerEntry) ([]string, error) {
+			// The lower-priority copy, kept for parity with the pre-phase-0
+			// behavior; CRUSH_GLOBAL_CONFIG names the *directory* and crush
+			// appends "crush.json" itself (internal/config/load.go GlobalConfig).
+			if err := writeCrushConfig(tmpDir, backend, baseURL, apiKey, model, mcp); err != nil {
+				return nil, fmt.Errorf("write crush config: %w", err)
+			}
+			// The authoritative copy in the workspace slot.
+			if dataDir != "" {
+				if err := writeCrushConfig(dataDir, backend, baseURL, apiKey, model, mcp); err != nil {
+					return nil, fmt.Errorf("write crush workspace config: %w", err)
+				}
+			}
+			return []string{"CRUSH_GLOBAL_CONFIG=" + tmpDir}, nil
+		},
+	}
+
+	return runWithPluginHost(&directExecutor{cliPath: crushPath}, args, pluginDirs, flags, nil, "", binding)
+}
+
+// crushDataDir returns the stable, clown-owned crush data directory for
+// projectDir. It holds crush's WORKSPACE config — the highest-priority slot in
+// crush's merge order (internal/config/load.go:65-66) — which is how clown's
+// config outranks a repo-local crush.json.
+//
+// Two properties matter, both load-bearing:
+//
+//   - STABLE across launches, because --data-dir is also where crush keeps
+//     sessions. A mkdtemp here would silently reset session history and break
+//     `crush --continue` on every run.
+//   - PER-PROJECT, because that is what crush itself does when left alone
+//     (setDefaults resolves DataDirectory to the closest `.crush` bounded by the
+//     project, else <workingDir>/.crush). A single shared directory would pool
+//     every project's sessions together.
+//
+// The project path is hashed rather than embedded: worktree paths are long and
+// contain characters that are awkward in a directory name. Clown's own state
+// root is used rather than <project>/.crush so clown never writes into the
+// user's repository.
+func crushDataDir(projectDir string) (string, error) {
+	base := os.Getenv("XDG_STATE_HOME")
+	if base == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("home dir: %w", err)
+		}
+		base = filepath.Join(home, ".local", "state")
+	}
+	sum := sha256.Sum256([]byte(projectDir))
+	dir := filepath.Join(base, "clown", "crush", hex.EncodeToString(sum[:8]))
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("create %s: %w", dir, err)
+	}
+	return dir, nil
+}
+
+// crushArgs prepends --data-dir so crush reads the workspace config clown wrote
+// there. An empty dataDir (hermeticity off) leaves the argv untouched.
+func crushArgs(args []string, dataDir string) []string {
+	if dataDir == "" {
+		return args
+	}
+	return append([]string{"--data-dir", dataDir}, args...)
 }

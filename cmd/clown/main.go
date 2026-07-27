@@ -367,6 +367,11 @@ func runWithFlags(flags parsedFlags) int {
 	// without re-reading the clownfile.
 	flags.ptyOpts = resolvePtyOptions(cf.Attach)
 
+	// clownfile [providers] hermetic-config (default on): makes clown's generated
+	// opencode/crush config authoritative over a repo-local one. Resolved here so
+	// the runners don't re-read the clownfile. See internal/clownfile Providers.
+	flags.hermeticConfig = cf.Providers.HermeticConfigEnabled()
+
 	// RFC-0014 §2/§4: resolve the group-id and presence description from the
 	// clownfile via env interpolation, then export them as CLOWN_GROUP_ID /
 	// CLOWN_GROUP_DESCRIPTION. Unlike the per-instance key (threaded explicitly,
@@ -645,15 +650,15 @@ func runWithFlags(flags parsedFlags) int {
 	case "juggler":
 		return runJuggler(cliPath, flags, prompts, pluginDirs)
 	case "opencode":
-		return runOpencode(cliPath, flags.forwarded, selectedProfile)
+		return runOpencode(cliPath, flags.forwarded, selectedProfile, flags, pluginDirs, flags.hermeticConfig)
 	case "openrouter":
 		// Phase B (docs/plans/2026-07-24-openrouter-non-anthropic-design.md):
 		// openrouter is a first-class provider but has no CLI of its own —
 		// it rides the opencode runner, whose gateway branch hardcodes the
 		// OpenRouter URL when selectedProfile.Provider == "openrouter".
-		return runOpencode(cliPath, flags.forwarded, selectedProfile)
+		return runOpencode(cliPath, flags.forwarded, selectedProfile, flags, pluginDirs, flags.hermeticConfig)
 	case "crush":
-		return runCrush(cliPath, flags.forwarded, selectedProfile)
+		return runCrush(cliPath, flags.forwarded, selectedProfile, flags, pluginDirs, flags.hermeticConfig)
 	case "clownbox":
 		return runClownbox(cliPath, flags, prompts, pluginDirs)
 	default:
@@ -2182,6 +2187,11 @@ type parsedFlags struct {
 	// [attach] table (pty-suspend / escape-key / escape-command). Sourced in
 	// runWithFlags; no flag/env source yet.
 	ptyOpts ptysuspend.Options
+	// hermeticConfig is the resolved clownfile [providers] hermetic-config bit,
+	// defaulting ON. It makes clown's generated opencode/crush config
+	// authoritative over a repo-local one. Sourced in runWithFlags alongside
+	// ptyOpts; no flag/env source yet.
+	hermeticConfig bool
 	// passDevshell records an explicit opt-in to devshell-PATH
 	// passthrough (either via the --tent-pass-devshell flag or the
 	// CLOWN_TENT_PASS_DEVSHELL=1 env var). It does NOT capture the

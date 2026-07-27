@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -162,7 +161,64 @@ func promptOpencodeLocalConfig(path string) (opencodeLocalConfig, error) {
 // than hijacking XDG_CONFIG_HOME — XDG_CONFIG_HOME also shadows opencode's
 // data-dir derivation, which makes opencode believe each launch is a fresh
 // install and re-run its one-time database migration.
-func writeOpencodeConfigFile(path, url, token, model string) error {
+// opencodeEnv returns the environment entries clown sets for an opencode
+// launch.
+//
+// OPENCODE_DISABLE_PROJECT_CONFIG is what makes cfgPath authoritative. opencode
+// merges every project-level opencode.json AFTER the OPENCODE_CONFIG file
+// (packages/opencode/src/config/config.ts:406-409), and verified 2026-07-27
+// that a repo-local config REPLACES a same-named entry in clown's `mcp` map —
+// so without the suppression any repository clown runs in could silently
+// repoint a clown-managed MCP server at a URL of its choosing.
+//
+// The user's own GLOBAL config still merges, and merges BEFORE clown's, so
+// clown still wins there. Only the per-repo file is suppressed, because that is
+// the one an untrusted repository controls.
+func opencodeEnv(cfgPath string, hermetic bool) []string {
+	env := []string{"OPENCODE_CONFIG=" + cfgPath}
+	if hermetic {
+		env = append(env, "OPENCODE_DISABLE_PROJECT_CONFIG=1")
+	}
+	return env
+}
+
+// opencodeMCPEntry is one entry in opencode's top-level `mcp` object, in its
+// McpRemoteConfig shape (packages/core/src/v1/config/mcp.ts).
+//
+// Note Type is the literal "remote" — opencode's discriminator is
+// local/remote, NOT clown's or crush's http/sse. Timeout is milliseconds, the
+// same unit clown stores, so it copies straight across (crush is the one that
+// needs converting).
+type opencodeMCPEntry struct {
+	Type    string `json:"type"`
+	URL     string `json:"url"`
+	Enabled bool   `json:"enabled"`
+	Timeout int    `json:"timeout,omitempty"`
+}
+
+// opencodeMCPBlock translates clown's neutral entries into opencode's schema.
+//
+// The explicit timeout matters: opencode defaults to 5000ms, which is SHORTER
+// than clown's own 30s plugin default, so an omitted timeout would fail
+// long-running MCP tools at five seconds. A zero timeout is still omitted so a
+// plugin that sets none inherits opencode's default rather than a pinned 0.
+func opencodeMCPBlock(mcp map[string]pluginhost.MCPServerEntry) map[string]opencodeMCPEntry {
+	if len(mcp) == 0 {
+		return nil
+	}
+	out := make(map[string]opencodeMCPEntry, len(mcp))
+	for name, e := range mcp {
+		out[name] = opencodeMCPEntry{
+			Type:    "remote",
+			URL:     e.URL,
+			Enabled: true,
+			Timeout: e.Timeout,
+		}
+	}
+	return out
+}
+
+func writeOpencodeConfigFile(path, url, token, model string, mcp map[string]pluginhost.MCPServerEntry) error {
 	if model == "" {
 		model = "gpt-4o"
 	}
@@ -185,12 +241,14 @@ func writeOpencodeConfigFile(path, url, token, model string) error {
 		Models  map[string]modelEntry `json:"models"`
 	}
 	type opencodeConfig struct {
-		Schema   string                   `json:"$schema"`
-		Provider map[string]providerEntry `json:"provider"`
-		Model    string                   `json:"model"`
+		Schema   string                      `json:"$schema"`
+		Provider map[string]providerEntry    `json:"provider"`
+		Model    string                      `json:"model"`
+		MCP      map[string]opencodeMCPEntry `json:"mcp,omitempty"`
 	}
 
 	cfg := opencodeConfig{
+		MCP:    opencodeMCPBlock(mcp),
 		Schema: "https://opencode.ai/config.json",
 		Provider: map[string]providerEntry{
 			"custom": {
@@ -296,7 +354,11 @@ func resolveOpencodeGateway(prof *profile.Profile) (url, token, model string) {
 	return url, token, model
 }
 
-func runOpencode(opencodePath string, args []string, prof *profile.Profile) int {
+// runOpencode launches opencode under clown's plugin host, so its clown-managed
+// MCP servers reach opencode through the generated config's `mcp` block
+// (FDR 0016 phase 1). hermetic controls phase 0's project-config suppression;
+// see opencodeEnv.
+func runOpencode(opencodePath string, args []string, prof *profile.Profile, flags parsedFlags, pluginDirs []string, hermetic bool) int {
 	if opencodePath == "" {
 		fmt.Fprintln(os.Stderr, "clown: opencode binary path not configured (build misconfiguration)")
 		return 1
@@ -349,28 +411,23 @@ func runOpencode(opencodePath string, args []string, prof *profile.Profile) int 
 		fmt.Fprintf(os.Stderr, "clown: create temp dir: %v\n", err)
 		return 1
 	}
+	// Safe against the provider outliving this frame: runWithPluginHost runs the
+	// provider as a subprocess (cmd.Run, never syscall.Exec) and returns only
+	// after it exits, so the config file is still on disk for the whole session.
 	defer os.RemoveAll(tmpDir)
-
-	cfgPath := filepath.Join(tmpDir, "opencode.json")
-	if err := writeOpencodeConfigFile(cfgPath, url, token, model); err != nil {
-		fmt.Fprintf(os.Stderr, "clown: write opencode config: %v\n", err)
-		return 1
-	}
 
 	ensureOpencodeMigrationMarker()
 
-	cmd := exec.Command(opencodePath, args...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Env = append(os.Environ(), "OPENCODE_CONFIG="+cfgPath)
-
-	if err := cmd.Run(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return exitErr.ExitCode()
-		}
-		fmt.Fprintf(os.Stderr, "clown: opencode: %v\n", err)
-		return 1
+	cfgPath := filepath.Join(tmpDir, "opencode.json")
+	binding := &configFileBinding{
+		baseArgs: args,
+		writeConfig: func(mcp map[string]pluginhost.MCPServerEntry) ([]string, error) {
+			if err := writeOpencodeConfigFile(cfgPath, url, token, model, mcp); err != nil {
+				return nil, fmt.Errorf("write opencode config: %w", err)
+			}
+			return opencodeEnv(cfgPath, hermetic), nil
+		},
 	}
-	return 0
+
+	return runWithPluginHost(&directExecutor{cliPath: opencodePath}, args, pluginDirs, flags, nil, "", binding)
 }

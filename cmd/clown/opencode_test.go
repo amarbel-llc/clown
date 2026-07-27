@@ -1,11 +1,14 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
+	"code.linenisgreat.com/clown/internal/pluginhost"
 	"code.linenisgreat.com/clown/internal/profile"
 )
 
@@ -153,7 +156,7 @@ func TestWriteOpencodeLocalConfigFile_QuotesAreEscaped(t *testing.T) {
 func TestWriteOpencodeConfigFile_CreatesFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "opencode.json")
-	err := writeOpencodeConfigFile(path, "https://example.com/v1", "test-token", "")
+	err := writeOpencodeConfigFile(path, "https://example.com/v1", "test-token", "", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -176,7 +179,7 @@ func TestWriteOpencodeConfigFile_CreatesFile(t *testing.T) {
 func TestWriteOpencodeConfigFile_WithProfile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "opencode.json")
-	err := writeOpencodeConfigFile(path, "https://gw.example.com/v1", "tok-xyz", "gpt-4o")
+	err := writeOpencodeConfigFile(path, "https://gw.example.com/v1", "tok-xyz", "gpt-4o", nil)
 	if err != nil {
 		t.Fatalf("writeOpencodeConfigFile: %v", err)
 	}
@@ -196,7 +199,7 @@ func TestWriteOpencodeConfigFile_WithProfile(t *testing.T) {
 func TestWriteOpencodeConfigFile_ModelOverride(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "opencode.json")
-	err := writeOpencodeConfigFile(path, "https://gw.example.com/v1", "tok-xyz", "my-custom-model")
+	err := writeOpencodeConfigFile(path, "https://gw.example.com/v1", "tok-xyz", "my-custom-model", nil)
 	if err != nil {
 		t.Fatalf("writeOpencodeConfigFile: %v", err)
 	}
@@ -210,6 +213,110 @@ func TestWriteOpencodeConfigFile_ModelOverride(t *testing.T) {
 	}
 	if strings.Contains(content, "\"gpt-4o\"") {
 		t.Errorf("default model gpt-4o should not appear when overridden: %s", content)
+	}
+}
+
+// Phase 0. Verified 2026-07-27 that without OPENCODE_DISABLE_PROJECT_CONFIG a
+// repo-local opencode.json REPLACES a same-named entry in clown's mcp map, so
+// any repository could silently repoint a clown-managed MCP server.
+func TestOpencodeEnv_HermeticSuppressesProjectConfig(t *testing.T) {
+	got := opencodeEnv("/tmp/x/opencode.json", true)
+	want := []string{
+		"OPENCODE_CONFIG=/tmp/x/opencode.json",
+		"OPENCODE_DISABLE_PROJECT_CONFIG=1",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+func TestOpencodeEnv_NonHermeticOmitsSuppression(t *testing.T) {
+	got := opencodeEnv("/tmp/x/opencode.json", false)
+	want := []string{"OPENCODE_CONFIG=/tmp/x/opencode.json"}
+	if !slices.Equal(got, want) {
+		t.Errorf("got %v, want %v (rollback path must behave as before)", got, want)
+	}
+}
+
+// readOpencodeConfigJSON parses the generated opencode.json into a generic map
+// for shape assertions, mirroring crush_test.go's readCrushConfigJSON.
+func readOpencodeConfigJSON(t *testing.T, path string) map[string]any {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read opencode.json: %v", err)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatalf("unmarshal opencode.json: %v", err)
+	}
+	return out
+}
+
+// opencode's McpRemoteConfig discriminator is the literal "remote"
+// (packages/core/src/v1/config/mcp.ts) — NOT clown's internal "http". Emitting
+// clown's type verbatim would fail opencode's schema validation.
+func TestWriteOpencodeConfigFile_EmitsMCPRemoteEntries(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "opencode.json")
+	mcp := map[string]pluginhost.MCPServerEntry{
+		"moxy__moxy": {Type: "http", URL: "http://127.0.0.1:5001/mcp", Timeout: 30000},
+	}
+	if err := writeOpencodeConfigFile(path, "https://gw.example.com/v1", "tok", "gpt-4o", mcp); err != nil {
+		t.Fatalf("writeOpencodeConfigFile: %v", err)
+	}
+	cfg := readOpencodeConfigJSON(t, path)
+
+	servers, ok := cfg["mcp"].(map[string]any)
+	if !ok {
+		t.Fatalf("mcp block missing or wrong type: %T", cfg["mcp"])
+	}
+	entry, ok := servers["moxy__moxy"].(map[string]any)
+	if !ok {
+		t.Fatalf("moxy__moxy entry missing: %v", servers)
+	}
+	if entry["type"] != "remote" {
+		t.Errorf(`type = %v, want "remote" (opencode's literal, not clown's %q)`, entry["type"], "http")
+	}
+	if entry["url"] != "http://127.0.0.1:5001/mcp" {
+		t.Errorf("url = %v", entry["url"])
+	}
+	if entry["enabled"] != true {
+		t.Errorf("enabled = %v, want true", entry["enabled"])
+	}
+	// opencode's default is 5000ms, SHORTER than clown's 30s plugin default, so
+	// an omitted timeout would kill long-running MCP tools at five seconds.
+	if entry["timeout"] != float64(30000) {
+		t.Errorf("timeout = %v, want 30000 (ms)", entry["timeout"])
+	}
+}
+
+func TestWriteOpencodeConfigFile_OmitsMCPWhenEmpty(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "opencode.json")
+	if err := writeOpencodeConfigFile(path, "u", "t", "m", nil); err != nil {
+		t.Fatalf("writeOpencodeConfigFile: %v", err)
+	}
+	cfg := readOpencodeConfigJSON(t, path)
+	if _, present := cfg["mcp"]; present {
+		t.Errorf("no servers must emit no mcp key at all, got %v", cfg["mcp"])
+	}
+}
+
+// A plugin that declares no timeout must inherit opencode's own default rather
+// than being pinned to an explicit zero.
+func TestWriteOpencodeConfigFile_OmitsZeroTimeout(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "opencode.json")
+	mcp := map[string]pluginhost.MCPServerEntry{
+		"p__s": {Type: "http", URL: "http://127.0.0.1:1/mcp", Timeout: 0},
+	}
+	if err := writeOpencodeConfigFile(path, "u", "t", "m", mcp); err != nil {
+		t.Fatalf("writeOpencodeConfigFile: %v", err)
+	}
+	entry := readOpencodeConfigJSON(t, path)["mcp"].(map[string]any)["p__s"].(map[string]any)
+	if _, present := entry["timeout"]; present {
+		t.Errorf("zero timeout must be omitted, got %v", entry["timeout"])
 	}
 }
 
@@ -259,7 +366,7 @@ func TestWriteOpencodeConfigFile_SlashModelSlug(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "opencode.json")
 	const slug = "openai/gpt-4o"
-	if err := writeOpencodeConfigFile(path, "https://openrouter.ai/api/v1", "key", slug); err != nil {
+	if err := writeOpencodeConfigFile(path, "https://openrouter.ai/api/v1", "key", slug, nil); err != nil {
 		t.Fatalf("writeOpencodeConfigFile: %v", err)
 	}
 	data, err := os.ReadFile(path)

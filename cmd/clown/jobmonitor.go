@@ -98,9 +98,20 @@ func troupeAgentCommand(key string) string {
 // providerUsesPluginDirs reports whether the provider consumes --plugin-dir
 // (and runs as a subprocess so deferred cleanup fires). Only those need the
 // synthesized job-watch monitor dir. claude and clownbox thread pluginDirs
-// into runWithPluginHost (cmd.Run, not syscall.Exec); codex/opencode/crush
-// never receive pluginDirs and codex/naked exec away, so a synthesized dir
-// would leak. juggler is a stub that ignores pluginDirs entirely.
+// into runWithPluginHost (cmd.Run, not syscall.Exec); codex never receives
+// pluginDirs and codex/naked exec away, so a synthesized dir would leak.
+// juggler is a stub that ignores pluginDirs entirely.
+//
+// opencode and crush are the subtle case and MUST stay false. Since FDR 0016
+// phase 1 they DO run under runWithPluginHost, so the name now reads as if they
+// belong here — but what they consume is the plugin host's MCP servers, which
+// reach them through their own config's `mcp` block, not claude's --plugin-dir
+// mechanism. The synthesized dir carries MONITORS, and monitors are a Claude
+// Code feature with no opencode/crush equivalent: handing them the dir would
+// register a wake that never fires. Those two get the job platform's MCP TOOLS
+// (job_start, job_wait, chat_send) and poll instead of being woken, which is
+// the deliberate phase-1 scope decision. Closing that gap is phase 3 and needs
+// a server-mode invocation model, not a change here.
 func providerUsesPluginDirs(provider string) bool {
 	switch provider {
 	case "claude", "clownbox":
