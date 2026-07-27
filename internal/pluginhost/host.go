@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -531,4 +532,66 @@ func (h *Host) serverEntriesByPluginDir(discovered []DiscoveredServer) map[strin
 type serverOrigin struct {
 	pluginDir  string
 	serverName string
+}
+
+// mcpKeyDisallowed matches every character that is not legal in a flat `mcp`
+// map key. See ServerEntries for why the charset is exactly this narrow.
+var mcpKeyDisallowed = regexp.MustCompile(`[^A-Za-z0-9_-]`)
+
+// sanitizeMCPKey folds any character outside [A-Za-z0-9_-] to '_', matching
+// opencode's own sanitizer (packages/opencode/src/mcp/catalog.ts) so that
+// applying it here makes opencode's a no-op.
+func sanitizeMCPKey(s string) string {
+	return mcpKeyDisallowed.ReplaceAllString(s, "_")
+}
+
+// ServerEntries returns a flat name→entry map for every running server, for
+// providers whose config has a single top-level `mcp` object (opencode, crush)
+// rather than claude's per-plugin-dir namespacing. Call it after StartAll, like
+// CompileForClaude.
+//
+// Keys are "<plugin>__<server>", each component sanitized to [A-Za-z0-9_-].
+// The flat map is why the plugin name has to be in the key at all: claude
+// namespaces per plugin dir, so two plugins may each declare a server called
+// "mcp" without colliding, and that guarantee disappears here.
+//
+// The charset is not arbitrary. Both providers derive tool names from this key
+// but by different rules: opencode sanitizes it
+// (catalog.ts: /[^a-zA-Z0-9_-]/g -> "_"), while crush interpolates it verbatim
+// into fmt.Sprintf("mcp_%s_%s", ...) (internal/agent/tools/mcp-tools.go). A key
+// containing '/' would therefore be silently rewritten by one and would produce
+// a tool name the model API rejects under the other. Pre-sanitizing to the
+// intersection keeps clown's key identical to what both providers use.
+//
+// A post-sanitization collision is an error rather than last-write-wins:
+// silently shadowing one plugin's server with another's would make its tools
+// disappear with no diagnostic anywhere.
+//
+// Unlike CompileForClaude this returns provider-NEUTRAL entries. Translation to
+// each provider's schema (opencode's type:"remote", crush's seconds-valued
+// timeout) belongs next to that provider's config writer in cmd/clown, so this
+// package does not learn three providers' JSON schemas.
+func (h *Host) ServerEntries(discovered []DiscoveredServer) (map[string]MCPServerEntry, error) {
+	keyByComposite := make(map[string]string, len(discovered))
+	for _, d := range discovered {
+		keyByComposite[d.Name()] = sanitizeMCPKey(d.PluginName) + "__" + sanitizeMCPKey(d.ServerName)
+	}
+
+	result := make(map[string]MCPServerEntry, len(h.Servers))
+	origin := make(map[string]string, len(h.Servers))
+	for _, srv := range h.Servers {
+		key, ok := keyByComposite[srv.Name]
+		if !ok {
+			continue
+		}
+		if prev, dup := origin[key]; dup {
+			return nil, fmt.Errorf(
+				"mcp key collision: %q and %q both sanitize to %q; rename one plugin or server in its clown.json",
+				prev, srv.Name, key,
+			)
+		}
+		origin[key] = srv.Name
+		result[key] = h.serverEntryForManaged(srv)
+	}
+	return result, nil
 }
