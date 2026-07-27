@@ -1051,7 +1051,7 @@ func runClaude(cliPath string, flags parsedFlags, prompts promptwalk.PromptResul
 			tentLogger.Info("tent setup complete; entering plugin host")
 		}
 
-		return runWithPluginHost(executor, args, pluginDirs, flags, tentLogger, appendFile)
+		return runWithPluginHost(executor, args, pluginDirs, flags, tentLogger, appendFile, nil)
 	}
 	code := run(flags.forwarded)
 	// The resume hint is emitted by the OUTER process after the multiplexer exits
@@ -1381,14 +1381,28 @@ func ensureTentImage(backend tent.Backend, ref, tarball, flakeRef string) error 
 // healthy, runManaged folds any dynamic plugin-contributed fragments into it
 // (RFC-0002 §dynamic fragments). Empty for providers/paths that build no
 // append file.
-func runWithPluginHost(executor Executor, args []string, pluginDirs []string, flags parsedFlags, preLogger *slog.Logger, appendFile string) int {
+// binding selects how the started servers reach the provider. Pass nil for the
+// claude family to get the plugin-dir delivery built from args/pluginDirs;
+// opencode and crush pass a configFileBinding instead.
+func runWithPluginHost(executor Executor, args []string, pluginDirs []string, flags parsedFlags, preLogger *slog.Logger, appendFile string, binding pluginBinding) int {
 	skipFailed := flags.skipFailed || os.Getenv("CLOWN_SKIP_FAILED_PLUGINS") == "1"
 	disableClown := flags.disableClownProtocol || os.Getenv("CLOWN_DISABLE_CLOWN_PROTOCOL") == "1"
 	verbose := flags.verbose
 
+	cheapContextActive := cheapContextShouldActivate(flags.cheapContext, flags.cheapContextProfile)
+
+	isClaudeBinding := binding == nil
+	if isClaudeBinding {
+		binding = &claudeBinding{
+			baseArgs:           args,
+			pluginDirs:         pluginDirs,
+			logger:             preLogger,
+			cheapContextActive: cheapContextActive,
+		}
+	}
+
 	if disableClown {
-		fullArgs := prependPluginDirs(args, pluginDirs, nil)
-		return runProvider(executor, fullArgs, nil, flags.ptyOpts, nil)
+		return runUnbound(binding, executor, nil, flags.ptyOpts)
 	}
 
 	logger := preLogger
@@ -1436,10 +1450,13 @@ func runWithPluginHost(executor Executor, args []string, pluginDirs []string, fl
 	}
 
 	// allDiscoveredDirs is the pre-filter set of dirs that own at least one
-	// clown.json server, used below to detect dirs --cheap-context dropped
-	// entirely.
-	allDiscoveredDirs := pluginDirSet(discovered)
-	cheapContextActive := cheapContextShouldActivate(flags.cheapContext, flags.cheapContextProfile)
+	// clown.json server, used to detect dirs --cheap-context dropped entirely.
+	// Only claudeBinding consumes it (opencode/crush have no plugin-dir concept
+	// to exclude from), and it is only knowable here — after Discover, before
+	// filtering — so it is stamped on rather than passed at construction.
+	if isClaudeBinding {
+		binding.(*claudeBinding).allDiscoveredDirs = pluginDirSet(discovered)
+	}
 
 	// v2 (unlike v1): the --cheap-context picker no longer runs here, before
 	// any server starts. Fetching a per-tool catalog for grouping requires a
@@ -1452,11 +1469,10 @@ func runWithPluginHost(executor Executor, args []string, pluginDirs []string, fl
 
 	if len(discovered) == 0 {
 		logger.Info("no plugin servers discovered; passing plugin dirs through")
-		fullArgs := prependPluginDirs(args, pluginDirs, nil)
-		return runProvider(executor, fullArgs, logger, flags.ptyOpts, nil)
+		return runUnbound(binding, executor, logger, flags.ptyOpts)
 	}
 
-	return runManaged(host, discovered, executor, args, pluginDirs, skipFailed, verbose, logger, appendFile, flags.ptyOpts, cheapContextActive, allDiscoveredDirs, flags.cheapContextProfile, flags.cheapContextSave)
+	return runManaged(host, discovered, executor, binding, skipFailed, verbose, logger, appendFile, flags.ptyOpts, cheapContextActive, flags.cheapContextProfile, flags.cheapContextSave)
 }
 
 // runProvider executes a provider as a subprocess, forwarding stdio
@@ -1632,15 +1648,13 @@ func runManaged(
 	host *pluginhost.Host,
 	discovered []pluginhost.DiscoveredServer,
 	executor Executor,
-	baseArgs []string,
-	pluginDirs []string,
+	binding pluginBinding,
 	skipFailed bool,
 	verbose bool,
 	logger *slog.Logger,
 	appendFile string,
 	ptyOpts ptysuspend.Options,
 	cheapContextActive bool,
-	allDiscoveredDirs map[string]bool,
 	cheapContextProfile *profile.Profile,
 	cheapContextSave cheapContextSaveContext,
 ) int {
@@ -1691,8 +1705,7 @@ func runManaged(
 	if len(report.Started) == 0 {
 		logger.Info("no plugin servers healthy; falling back to original plugin dirs")
 		host.Shutdown()
-		fullArgs := prependPluginDirs(baseArgs, pluginDirs, nil)
-		return runProvider(executor, fullArgs, logger, ptyOpts, nil)
+		return runUnbound(binding, executor, logger, ptyOpts)
 	}
 	defer host.Shutdown()
 
@@ -1719,37 +1732,18 @@ func runManaged(
 		discovered = filtered
 		if len(discovered) == 0 {
 			logger.Info("cheap-context: every server deselected; falling back to original plugin dirs")
-			fullArgs := prependPluginDirs(baseArgs, pluginDirs, nil)
-			return runProvider(executor, fullArgs, logger, ptyOpts, nil)
+			return runUnbound(binding, executor, logger, ptyOpts)
 		}
 	}
 
-	dirMap, err := host.CompileForClaude(discovered)
+	// Deliver the healthy servers to the provider in its native form. Called
+	// HERE, before the prompt-fragment fold below, because that is where
+	// CompileForClaude ran pre-seam and the extraction must not reorder.
+	bound, err := binding.Bind(host, discovered)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "clown: compiling plugin manifests: %v\n", err)
-		logger.Error("compiling plugin manifests failed", "err", err)
+		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
+		logger.Error("binding plugin servers failed", "err", err)
 		return 1
-	}
-
-	// --cheap-context: a dir that owned a clown.json server
-	// before selection but has no compiled entry after it was deselected
-	// (and carries no monitors — CompileForClaude/pluginDirOrder already
-	// keeps monitor-only dirs in dirMap) must be dropped from pluginDirs
-	// entirely. Otherwise prependPluginDirs' fallback for a dir absent from
-	// dirMap — pass it through unmodified — hands claude the dir's ORIGINAL
-	// plugin.json, whose own mcpServers block still declares the tools the
-	// user just opted out of, silently reintroducing them.
-	if cheapContextActive {
-		excluded := make(map[string]bool, len(allDiscoveredDirs))
-		for dir := range allDiscoveredDirs {
-			if _, compiled := dirMap[dir]; !compiled {
-				excluded[dir] = true
-			}
-		}
-		if len(excluded) > 0 {
-			pluginDirs = dropExcludedDirs(pluginDirs, excluded)
-			logger.Info("cheap-context excluded plugin dirs", "count", len(excluded))
-		}
 	}
 
 	// Dynamic system-prompt contribution (RFC-0002 §dynamic fragments): now
@@ -1769,8 +1763,23 @@ func runManaged(
 		}
 	}
 
-	fullArgs := prependPluginDirs(baseArgs, pluginDirs, dirMap)
-	return runProvider(executor, fullArgs, logger, ptyOpts, nil)
+	return runProvider(executor, bound.Args, logger, ptyOpts, bound.Env)
+}
+
+// runUnbound is the shared "launch with no clown-managed MCP servers" path used
+// by every fallback in runWithPluginHost/runManaged. Routing all three through
+// one helper is what keeps them from drifting apart from each other, and from
+// the bound path, as bindings are added.
+func runUnbound(binding pluginBinding, executor Executor, logger *slog.Logger, ptyOpts ptysuspend.Options) int {
+	bound, err := binding.Bind(nil, nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
+		if logger != nil {
+			logger.Error("binding without plugin servers failed", "err", err)
+		}
+		return 1
+	}
+	return runProvider(executor, bound.Args, logger, ptyOpts, bound.Env)
 }
 
 func runCodex(cliPath string, flags parsedFlags, prompts promptwalk.PromptResult) int {
@@ -1866,7 +1875,7 @@ func runClownbox(cliPath string, flags parsedFlags, prompts promptwalk.PromptRes
 	}
 	defer cleanup()
 
-	return runWithPluginHost(&passthroughExecutor{cliPath: cliPath}, args, pluginDirs, flags, nil, appendFile)
+	return runWithPluginHost(&passthroughExecutor{cliPath: cliPath}, args, pluginDirs, flags, nil, appendFile, nil)
 }
 
 // pluginDirSet returns the deduplicated set of plugin dirs referenced by
