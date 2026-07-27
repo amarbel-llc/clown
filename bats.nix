@@ -43,6 +43,11 @@
   # actually resolves in a real opencode, not just a unit-test JSON check
   # (clown#197).
   opencode,
+  # Real crush binary (same nixpkgs-llm-agents attr buildcfg.CrushCliPath
+  # binds to). Plumbed below as CRUSH_BIN; provider_mcp.bats drives
+  # `clown --provider crush` and asserts the generated config lands in the
+  # workspace slot crush reads (FDR 0016 phase 0).
+  crush,
 }:
 let
   # Naming anchor for the lane derivation — only consulted for
@@ -107,6 +112,10 @@ let
         OPENCODE_BIN = {
           base = opencode;
           name = "opencode";
+        };
+        CRUSH_BIN = {
+          base = crush;
+          name = "crush";
         };
       };
       # bats-libs ships bats-support, bats-assert, bats-emo, bats-island

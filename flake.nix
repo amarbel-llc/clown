@@ -1089,6 +1089,10 @@
           juggler = juggler-go;
           fake-llama-server = fake-llama-server-go;
           opencode = pkgs.opencode;
+          # Real crush binary, same source buildcfg.CrushCliPath binds to.
+          # provider_mcp.bats drives `clown --provider crush` to verify the
+          # generated config lands in the workspace slot crush actually reads.
+          crush = pkgs-llm-agents.crush;
         };
 
         mkJuggler =

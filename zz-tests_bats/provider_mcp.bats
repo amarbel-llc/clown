@@ -25,9 +25,14 @@ setup() {
   setup_test_home
   require_bin CLOWN_BIN clown
   require_bin OPENCODE_BIN opencode
+  require_bin CRUSH_BIN crush
 
   clown_config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/clown"
   mkdir -p "$clown_config_dir"
+  cat >"$clown_config_dir/crush.toml" <<'EOF'
+url = "http://127.0.0.1:1/v1"
+token = "local"
+EOF
   # No --profile is passed, so runOpencode falls back to reading this file.
   # The URL is never dialed: `opencode mcp list` is config introspection plus
   # MCP connections, not a model call.
@@ -80,6 +85,78 @@ EOF
   # Clown's own server must still be there — proving the suppression did not
   # simply blank the whole config.
   assert_output --partial "synthetic-test__mock-mcp"
+}
+
+# crush has no `mcp list` equivalent, so its coverage is split in two: clown
+# must write the mcp block into the workspace slot, AND crush must resolve
+# that same directory. Either alone would be weak — a correct file in a
+# directory crush ignores proves nothing, and vice versa.
+
+# crush_workspace_config echoes the path of the workspace crush.json clown
+# wrote, or fails if it is missing. The directory name is a hash of the
+# project path (crushDataDir), so it is globbed rather than recomputed.
+crush_workspace_config() {
+  local state="${XDG_STATE_HOME:-$HOME/.local/state}"
+  local found
+  found="$(echo "$state"/clown/crush/*/crush.json)"
+  [[ -f $found ]] || return 1
+  echo "$found"
+}
+
+@test "clown writes its MCP servers into crush's workspace config slot" {
+  cd "$project"
+  run timeout 120 "$CLOWN_BIN" \
+    --provider crush \
+    --plugin-dir "$SYNTHETIC_PLUGIN_DIR" \
+    -- --version
+  assert_success
+
+  local cfg
+  cfg="$(crush_workspace_config)"
+
+  # type "http" is crush's discriminator, deliberately NOT opencode's
+  # "remote" — the two providers disagree and each writer translates.
+  run jq -r '.mcp["synthetic-test__mock-mcp"].type' "$cfg"
+  assert_success
+  assert_output "http"
+
+  run jq -r '.mcp["synthetic-test__mock-mcp"].url' "$cfg"
+  assert_success
+  assert_output --regexp '^http://127\.0\.0\.1:[0-9]+/mcp$'
+
+  # The synthetic plugin declares no timeout, so none must be emitted —
+  # crush then applies its own default rather than being pinned to 0.
+  run jq -r '.mcp["synthetic-test__mock-mcp"] | has("timeout")' "$cfg"
+  assert_success
+  assert_output "false"
+}
+
+# NOT covered in this lane: that crush READS clown's workspace config slot.
+#
+# That property was verified manually against crush 0.86.0 during clown#202 —
+# a scalar set in <data-dir>/crush.json overrode a repo-local crush.json in
+# BOTH directions — and `crushArgs` is unit-tested in Go for emitting
+# --data-dir. But neither surface crush exposes can assert it here:
+# `crush dirs` prints only CONFIG paths (not the data dir), and
+# `crush projects` reports "No projects tracked yet" because registration
+# happens when crush runs a real session, which needs a model.
+#
+# This is a concrete case where the dumbo fixture (RFC 0017) would pay for
+# itself: `crush run` against a mock model would register the project and make
+# the resolved data dir assertable. Tracked as remaining work on clown#203.
+@test "crush loads the config clown generated for it" {
+  cd "$project"
+  run timeout 120 "$CLOWN_BIN" \
+    --provider crush \
+    --plugin-dir "$SYNTHETIC_PLUGIN_DIR" \
+    -- dirs
+  assert_success
+  # `crush dirs` lists the config paths crush itself resolved. clown's
+  # generated config dir appearing there proves CRUSH_GLOBAL_CONFIG was both
+  # set by clown and honored by crush — so the config asserted above is in
+  # crush's search path, not merely on disk somewhere. The temp dir's suffix
+  # is random, hence the pattern.
+  assert_output --regexp 'clown-crush-[0-9]+'
 }
 
 @test "hermetic-config = false restores the repo-local override" {
