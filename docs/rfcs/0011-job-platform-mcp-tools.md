@@ -96,9 +96,32 @@ the `clown-builtin-jobs` plugin identity, split across the `ringmaster` and
 defined in §3 partitioned by surface. The auto-allow hook (clown#130) keys on the
 `clown-builtin-jobs` plugin segment, so every server under it auto-allows.
 
-clown MUST inject the server only for providers that consume `--plugin-dir` and
-run the agent as a supervised subprocess (today: `claude`, `clownbox`), matching
-`providerUsesPluginDirs`; other providers MUST NOT receive it.
+That surfacing describes the **claude family**. Under the config-file providers
+(§1.1) the same servers reach the agent through the provider's own flat `mcp`
+map, so the tool names are the provider's own derivation from clown's
+`<plugin>__<server>` key rather than `plugin:<plugin>:<server>`, and the
+auto-allow hook does not apply — those providers prompt for the job tools like
+any other MCP tool.
+
+clown MUST inject the server only for providers that run the agent as a
+supervised subprocess, so clown's deferred cleanup of the synthesized dir
+actually fires, matching `providerUsesPluginDirs`; other providers MUST NOT
+receive it. Providers that exec-replace clown (`codex`, `--naked`) MUST NOT
+receive it, since the dir would leak.
+
+#### 1.1 Config-file providers (FDR 0016 phase 1)
+
+`opencode`, `openrouter`, and `crush` satisfy the supervised-subprocess rule and
+DO receive the built-in server, even though they consume no `--plugin-dir`: they
+run under the plugin host and take the synthesized dir's `clown.json`, with the
+resulting servers delivered through their own config's `mcp` block.
+
+They receive the job platform's TOOLS but NOT the wake. The synthesized
+`plugin.json`'s `monitors` array is a Claude Code mechanism these providers never
+read, so it is inert rather than harmful. A session on those providers can start
+and poll a job (`job_wait` blocks) but is never woken when one finishes. Closing
+that gap requires a server-mode invocation model and is out of scope here; see
+FDR 0016 phase 3.
 
 ### 2. Session key, target, and the disable switch
 

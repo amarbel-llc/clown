@@ -650,15 +650,15 @@ func runWithFlags(flags parsedFlags) int {
 	case "juggler":
 		return runJuggler(cliPath, flags, prompts, pluginDirs)
 	case "opencode":
-		return runOpencode(cliPath, flags.forwarded, selectedProfile, flags, pluginDirs, flags.hermeticConfig)
+		return runOpencode(cliPath, selectedProfile, flags, pluginDirs)
 	case "openrouter":
 		// Phase B (docs/plans/2026-07-24-openrouter-non-anthropic-design.md):
 		// openrouter is a first-class provider but has no CLI of its own —
 		// it rides the opencode runner, whose gateway branch hardcodes the
 		// OpenRouter URL when selectedProfile.Provider == "openrouter".
-		return runOpencode(cliPath, flags.forwarded, selectedProfile, flags, pluginDirs, flags.hermeticConfig)
+		return runOpencode(cliPath, selectedProfile, flags, pluginDirs)
 	case "crush":
-		return runCrush(cliPath, flags.forwarded, selectedProfile, flags, pluginDirs, flags.hermeticConfig)
+		return runCrush(cliPath, selectedProfile, flags, pluginDirs)
 	case "clownbox":
 		return runClownbox(cliPath, flags, prompts, pluginDirs)
 	default:
@@ -1056,7 +1056,8 @@ func runClaude(cliPath string, flags parsedFlags, prompts promptwalk.PromptResul
 			tentLogger.Info("tent setup complete; entering plugin host")
 		}
 
-		return runWithPluginHost(executor, args, pluginDirs, flags, tentLogger, appendFile, nil)
+		return runWithPluginHost(executor, pluginDirs, flags, tentLogger, appendFile,
+			newClaudeBinding(args, pluginDirs, flags, tentLogger))
 	}
 	code := run(flags.forwarded)
 	// The resume hint is emitted by the OUTER process after the multiplexer exits
@@ -1386,25 +1387,16 @@ func ensureTentImage(backend tent.Backend, ref, tarball, flakeRef string) error 
 // healthy, runManaged folds any dynamic plugin-contributed fragments into it
 // (RFC-0002 §dynamic fragments). Empty for providers/paths that build no
 // append file.
-// binding selects how the started servers reach the provider. Pass nil for the
-// claude family to get the plugin-dir delivery built from args/pluginDirs;
-// opencode and crush pass a configFileBinding instead.
-func runWithPluginHost(executor Executor, args []string, pluginDirs []string, flags parsedFlags, preLogger *slog.Logger, appendFile string, binding pluginBinding) int {
+// binding is REQUIRED and owns the provider's argv: the claude family passes
+// newClaudeBinding (plugin-dir delivery), opencode and crush pass a
+// configFileBinding. pluginDirs is still separate because host.Discover needs it
+// regardless of how the results are ultimately delivered.
+func runWithPluginHost(executor Executor, pluginDirs []string, flags parsedFlags, preLogger *slog.Logger, appendFile string, binding pluginBinding) int {
 	skipFailed := flags.skipFailed || os.Getenv("CLOWN_SKIP_FAILED_PLUGINS") == "1"
 	disableClown := flags.disableClownProtocol || os.Getenv("CLOWN_DISABLE_CLOWN_PROTOCOL") == "1"
 	verbose := flags.verbose
 
 	cheapContextActive := cheapContextShouldActivate(flags.cheapContext, flags.cheapContextProfile)
-
-	isClaudeBinding := binding == nil
-	if isClaudeBinding {
-		binding = &claudeBinding{
-			baseArgs:           args,
-			pluginDirs:         pluginDirs,
-			logger:             preLogger,
-			cheapContextActive: cheapContextActive,
-		}
-	}
 
 	if disableClown {
 		return runUnbound(binding, executor, nil, flags.ptyOpts)
@@ -1452,15 +1444,6 @@ func runWithPluginHost(executor Executor, args []string, pluginDirs []string, fl
 		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
 		logger.Error("discovery failed", "err", err)
 		return 1
-	}
-
-	// allDiscoveredDirs is the pre-filter set of dirs that own at least one
-	// clown.json server, used to detect dirs --cheap-context dropped entirely.
-	// Only claudeBinding consumes it (opencode/crush have no plugin-dir concept
-	// to exclude from), and it is only knowable here — after Discover, before
-	// filtering — so it is stamped on rather than passed at construction.
-	if isClaudeBinding {
-		binding.(*claudeBinding).allDiscoveredDirs = pluginDirSet(discovered)
 	}
 
 	// v2 (unlike v1): the --cheap-context picker no longer runs here, before
@@ -1666,6 +1649,10 @@ func runManaged(
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// The pre-filter set, captured before --cheap-context narrows `discovered`.
+	// claudeBinding needs the difference to know which plugin dirs to exclude.
+	allDiscovered := discovered
+
 	if verbose {
 		fmt.Fprintf(os.Stderr, "clown: launching %d HTTP MCP server(s)\n", len(discovered))
 	}
@@ -1744,7 +1731,7 @@ func runManaged(
 	// Deliver the healthy servers to the provider in its native form. Called
 	// HERE, before the prompt-fragment fold below, because that is where
 	// CompileForClaude ran pre-seam and the extraction must not reorder.
-	bound, err := binding.Bind(host, discovered)
+	bound, err := binding.Bind(host, allDiscovered, discovered)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
 		logger.Error("binding plugin servers failed", "err", err)
@@ -1776,7 +1763,7 @@ func runManaged(
 // one helper is what keeps them from drifting apart from each other, and from
 // the bound path, as bindings are added.
 func runUnbound(binding pluginBinding, executor Executor, logger *slog.Logger, ptyOpts ptysuspend.Options) int {
-	bound, err := binding.Bind(nil, nil)
+	bound, err := binding.Bind(nil, nil, nil)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
 		if logger != nil {
@@ -1880,7 +1867,8 @@ func runClownbox(cliPath string, flags parsedFlags, prompts promptwalk.PromptRes
 	}
 	defer cleanup()
 
-	return runWithPluginHost(&passthroughExecutor{cliPath: cliPath}, args, pluginDirs, flags, nil, appendFile, nil)
+	return runWithPluginHost(&passthroughExecutor{cliPath: cliPath}, pluginDirs, flags, nil, appendFile,
+		newClaudeBinding(args, pluginDirs, flags, nil))
 }
 
 // pluginDirSet returns the deduplicated set of plugin dirs referenced by

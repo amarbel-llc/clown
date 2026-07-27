@@ -45,6 +45,26 @@ func userConfigWritePath(name string) (string, error) {
 	return filepath.Join(home, ".config", "clown", name), nil
 }
 
+// userStateWritePath is the canonical location for per-user STATE (as opposed
+// to config): $XDG_STATE_HOME/clown/<parts...>, ~/.local/state/clown/<parts...>
+// when XDG is unset. It is the state-side sibling of userConfigWritePath.
+//
+// Same ladder as internal/clownname's lockPath and internal/sessions' namesPath,
+// which predate this helper and cannot call it (they live under internal/ and
+// this is package main). Prefer this one for anything in cmd/clown so the rule
+// stops accumulating spellings.
+func userStateWritePath(parts ...string) (string, error) {
+	base := os.Getenv("XDG_STATE_HOME")
+	if base == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("home dir: %w", err)
+		}
+		base = filepath.Join(home, ".local", "state")
+	}
+	return filepath.Join(append([]string{base, "clown"}, parts...)...), nil
+}
+
 // legacyConfigWarned dedupes warnLegacyConfig per path — several read sites
 // (profiles, opencode, crush) may resolve to legacy files in one launch.
 var legacyConfigWarned = map[string]bool{}

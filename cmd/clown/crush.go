@@ -361,7 +361,9 @@ func resolveCrushGateway(prof *profile.Profile) (baseURL, apiKey, model string) 
 // servers reach crush through the generated config's `mcp` block (FDR 0016
 // phase 1). hermetic drives phase 0's workspace-slot precedence; see
 // crushDataDir.
-func runCrush(crushPath string, args []string, prof *profile.Profile, flags parsedFlags, pluginDirs []string, hermetic bool) int {
+func runCrush(crushPath string, prof *profile.Profile, flags parsedFlags, pluginDirs []string) int {
+	args, hermetic := flags.forwarded, flags.hermeticConfig
+
 	if crushPath == "" {
 		fmt.Fprintln(os.Stderr, "clown: crush binary path not configured (build misconfiguration)")
 		return 1
@@ -468,7 +470,7 @@ func runCrush(crushPath string, args []string, prof *profile.Profile, flags pars
 		},
 	}
 
-	return runWithPluginHost(&directExecutor{cliPath: crushPath}, args, pluginDirs, flags, nil, "", binding)
+	return runWithPluginHost(&directExecutor{cliPath: crushPath}, pluginDirs, flags, nil, "", binding)
 }
 
 // crushDataDir returns the stable, clown-owned crush data directory for
@@ -491,16 +493,11 @@ func runCrush(crushPath string, args []string, prof *profile.Profile, flags pars
 // root is used rather than <project>/.crush so clown never writes into the
 // user's repository.
 func crushDataDir(projectDir string) (string, error) {
-	base := os.Getenv("XDG_STATE_HOME")
-	if base == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("home dir: %w", err)
-		}
-		base = filepath.Join(home, ".local", "state")
-	}
 	sum := sha256.Sum256([]byte(projectDir))
-	dir := filepath.Join(base, "clown", "crush", hex.EncodeToString(sum[:8]))
+	dir, err := userStateWritePath("crush", hex.EncodeToString(sum[:8]))
+	if err != nil {
+		return "", err
+	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("create %s: %w", dir, err)
 	}

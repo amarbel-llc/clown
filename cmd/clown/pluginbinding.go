@@ -19,12 +19,19 @@ import (
 // (job-wakeup) then have exactly one place to land rather than one per
 // provider.
 //
-// Bind is called with the post-cheap-context server set, and ALSO on the three
-// fallback paths (nothing discovered, nothing healthy, everything deselected)
-// with a nil host and empty set. An implementation MUST treat that as "launch
-// with no clown-managed MCP servers", not as an error.
+// Bind receives BOTH server sets: allDiscovered is everything Discover found,
+// before --cheap-context dropped anything, and selected is what survived and is
+// actually running. claude needs the difference to know which plugin dirs to
+// exclude; the config-file providers only care about what is running. Passing
+// both keeps that claude-specific bookkeeping inside claudeBinding instead of
+// leaking back into the shared pipeline.
+//
+// Bind is ALSO called on the three fallback paths (nothing discovered, nothing
+// healthy, everything deselected) with a nil host and empty sets. An
+// implementation MUST treat that as "launch with no clown-managed MCP servers",
+// not as an error.
 type pluginBinding interface {
-	Bind(host *pluginhost.Host, discovered []pluginhost.DiscoveredServer) (bindResult, error)
+	Bind(host *pluginhost.Host, allDiscovered, selected []pluginhost.DiscoveredServer) (bindResult, error)
 }
 
 // bindResult is what a binding produces: the final argv, plus any additional
@@ -39,27 +46,32 @@ type bindResult struct {
 // runManaged did inline, so the existing claude tests are its control: any
 // behavior change here is a bug, not a configuration choice.
 type claudeBinding struct {
-	baseArgs   []string
-	pluginDirs []string
-	logger     *slog.Logger
-
-	// cheapContextActive and allDiscoveredDirs drive the dir-exclusion step
-	// below. allDiscoveredDirs is the PRE-filter set of dirs owning at least one
-	// clown.json server, which is only knowable inside runWithPluginHost (after
-	// Discover, before --cheap-context drops anything), so runWithPluginHost
-	// stamps it on after construction.
+	baseArgs           []string
+	pluginDirs         []string
+	logger             *slog.Logger
 	cheapContextActive bool
-	allDiscoveredDirs  map[string]bool
 }
 
-func (b *claudeBinding) Bind(host *pluginhost.Host, discovered []pluginhost.DiscoveredServer) (bindResult, error) {
+// newClaudeBinding builds the claude-family binding. cheapContextActive is
+// derived here rather than passed so the two claude call sites cannot disagree
+// with what runWithPluginHost computes for the same flags.
+func newClaudeBinding(baseArgs, pluginDirs []string, flags parsedFlags, logger *slog.Logger) *claudeBinding {
+	return &claudeBinding{
+		baseArgs:           baseArgs,
+		pluginDirs:         pluginDirs,
+		logger:             logger,
+		cheapContextActive: cheapContextShouldActivate(flags.cheapContext, flags.cheapContextProfile),
+	}
+}
+
+func (b *claudeBinding) Bind(host *pluginhost.Host, allDiscovered, selected []pluginhost.DiscoveredServer) (bindResult, error) {
 	// Fallback path: no managed servers to deliver. Hand claude the original,
 	// uncompiled plugin dirs — matching the pre-seam behavior exactly.
-	if host == nil || len(discovered) == 0 {
+	if host == nil || len(selected) == 0 {
 		return bindResult{Args: prependPluginDirs(b.baseArgs, b.pluginDirs, nil)}, nil
 	}
 
-	dirMap, err := host.CompileForClaude(discovered)
+	dirMap, err := host.CompileForClaude(selected)
 	if err != nil {
 		return bindResult{}, fmt.Errorf("compiling plugin manifests: %w", err)
 	}
@@ -74,8 +86,9 @@ func (b *claudeBinding) Bind(host *pluginhost.Host, discovered []pluginhost.Disc
 	// claude the dir's ORIGINAL plugin.json, whose own mcpServers block still
 	// declares the tools the user just opted out of, silently reintroducing them.
 	if b.cheapContextActive {
-		excluded := make(map[string]bool, len(b.allDiscoveredDirs))
-		for dir := range b.allDiscoveredDirs {
+		allDirs := pluginDirSet(allDiscovered)
+		excluded := make(map[string]bool, len(allDirs))
+		for dir := range allDirs {
 			if _, compiled := dirMap[dir]; !compiled {
 				excluded[dir] = true
 			}
@@ -105,11 +118,14 @@ type configFileBinding struct {
 	writeConfig func(mcp map[string]pluginhost.MCPServerEntry) ([]string, error)
 }
 
-func (b *configFileBinding) Bind(host *pluginhost.Host, discovered []pluginhost.DiscoveredServer) (bindResult, error) {
+// allDiscovered is unused: the pre-filter set only matters for claude's
+// plugin-dir exclusion, and these providers have no plugin dirs to exclude from
+// — a deselected server simply never appears in the `mcp` block.
+func (b *configFileBinding) Bind(host *pluginhost.Host, _, selected []pluginhost.DiscoveredServer) (bindResult, error) {
 	var entries map[string]pluginhost.MCPServerEntry
-	if host != nil && len(discovered) > 0 {
+	if host != nil {
 		var err error
-		entries, err = host.ServerEntries(discovered)
+		entries, err = host.ServerEntries(selected)
 		if err != nil {
 			return bindResult{}, err
 		}

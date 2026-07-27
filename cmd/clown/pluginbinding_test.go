@@ -17,7 +17,7 @@ func TestClaudeBinding_NilServersMatchesLegacyFallback(t *testing.T) {
 	dirs := []string{"/plugins/a", "/plugins/b"}
 
 	b := &claudeBinding{baseArgs: baseArgs, pluginDirs: dirs}
-	got, err := b.Bind(nil, nil)
+	got, err := b.Bind(nil, nil, nil)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
 	}
@@ -33,7 +33,7 @@ func TestClaudeBinding_NilServersMatchesLegacyFallback(t *testing.T) {
 // An empty (non-nil) discovered slice is the same fallback case as nil.
 func TestClaudeBinding_EmptyDiscoveredIsFallback(t *testing.T) {
 	b := &claudeBinding{baseArgs: []string{"x"}, pluginDirs: []string{"/p"}}
-	got, err := b.Bind(nil, []pluginhost.DiscoveredServer{})
+	got, err := b.Bind(nil, nil, []pluginhost.DiscoveredServer{})
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
 	}
@@ -55,7 +55,7 @@ func TestConfigFileBinding_PassesEntriesAndReturnsEnv(t *testing.T) {
 		},
 	}
 
-	got, err := b.Bind(nil, nil)
+	got, err := b.Bind(nil, nil, nil)
 	if err != nil {
 		t.Fatalf("Bind: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestConfigFileBinding_WriteErrorPropagates(t *testing.T) {
 			return nil, sentinel
 		},
 	}
-	if _, err := b.Bind(nil, nil); !errors.Is(err, sentinel) {
+	if _, err := b.Bind(nil, nil, nil); !errors.Is(err, sentinel) {
 		t.Errorf("err = %v, want %v", err, sentinel)
 	}
 }

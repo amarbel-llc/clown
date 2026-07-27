@@ -358,7 +358,9 @@ func resolveOpencodeGateway(prof *profile.Profile) (url, token, model string) {
 // MCP servers reach opencode through the generated config's `mcp` block
 // (FDR 0016 phase 1). hermetic controls phase 0's project-config suppression;
 // see opencodeEnv.
-func runOpencode(opencodePath string, args []string, prof *profile.Profile, flags parsedFlags, pluginDirs []string, hermetic bool) int {
+func runOpencode(opencodePath string, prof *profile.Profile, flags parsedFlags, pluginDirs []string) int {
+	args, hermetic := flags.forwarded, flags.hermeticConfig
+
 	if opencodePath == "" {
 		fmt.Fprintln(os.Stderr, "clown: opencode binary path not configured (build misconfiguration)")
 		return 1
@@ -429,5 +431,5 @@ func runOpencode(opencodePath string, args []string, prof *profile.Profile, flag
 		},
 	}
 
-	return runWithPluginHost(&directExecutor{cliPath: opencodePath}, args, pluginDirs, flags, nil, "", binding)
+	return runWithPluginHost(&directExecutor{cliPath: opencodePath}, pluginDirs, flags, nil, "", binding)
 }
