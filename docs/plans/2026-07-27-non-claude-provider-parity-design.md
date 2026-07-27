@@ -261,7 +261,8 @@ upstream but not separately executed.
 | crush cannot disable its project-config walk | source | no such env var; `lookupConfigs` always appends it |
 | opencode merges project `opencode.json` over clown's | observed | yes |
 | opencode project config **replaces** a clown-owned `mcp` key | observed | yes — `clownprobe` → project's `:19002`, "2 server(s)" |
-| opencode `OPENCODE_DISABLE_PROJECT_CONFIG` exists | source | exists; **not** tested |
+| opencode `OPENCODE_DISABLE_PROJECT_CONFIG` suppresses the project config | observed (post-implementation) | yes — a project `opencode.json` declaring `EVILPROJECTENTRY` is absent with hermeticity on (3 servers) and present with `[providers] hermetic-config = false` (4 servers). The control matters: it shows the file really is read when suppression is off, so the absence is suppression rather than opencode ignoring it |
+| clownfile `hermetic-config = false` rollback switch works end to end | observed (post-implementation) | yes — same experiment, the `false` arm |
 | crush `mcp` map obeys the same last-wins merge | source | one `jsons.Merge` over the whole document, so `mcp` cannot be exempt; not separately observed |
 | opencode/crush MCP tool-name derivation rules | source | differ; see MCP key naming |
 | opencode/crush `mcp` schema shapes and timeout units | source | see table above |
