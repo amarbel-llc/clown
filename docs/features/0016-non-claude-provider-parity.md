@@ -1,5 +1,5 @@
 ---
-status: exploring
+status: proposed
 date: 2026-07-27
 ---
 
@@ -11,9 +11,18 @@ This record captures research into closing three related capability gaps
 between the claude-family providers and the opencode/crush providers:
 the clown plugin protocol (MCP tool injection), plugin-contributed
 system-prompt fragments, and ringmaster/troupe job-wakeup notifications.
-Status is **exploring** — the research below identifies concrete,
-plausible extension paths for each gap, but no implementation has
-started and no scope/phasing decision has been made.
+
+Status is **proposed**: a design for the first gap has been approved
+(`docs/plans/2026-07-27-non-claude-provider-parity-design.md`, issue #202)
+and the phasing question below is settled. No implementation has started.
+Agreed phasing: **phase 0** make clown's generated provider config
+authoritative (a precondition this record originally missed — see finding
+0), **phase 1** plugin/MCP compat, **phase 2** static + dynamic prompt
+fragments, **phase 3** job-wakeup.
+
+Several claims in the original research have since been checked against
+upstream source and live experiment; where they were wrong they are
+corrected inline below and marked.
 
 ## Problem Statement
 
@@ -34,6 +43,31 @@ which model backend (Anthropic, OpenRouter, a local gateway) that
 session talks to.
 
 ## Findings
+
+### 0. Clown's generated configs are NOT hermetic (added 2026-07-27, verified)
+
+This record originally assumed clown's generated provider configs were
+authoritative, as does `cmd/clown/crush.go`'s header comment. Both are
+wrong, and the consequence gates finding 1.
+
+Verified live: a repo-local `opencode.json` **replaces** a same-named
+entry in clown's `mcp` map. A probe named `clownprobe`, written by clown
+pointing at `127.0.0.1:19001`, resolved instead to the project config's
+`127.0.0.1:19002`; `opencode mcp list` reported "2 server(s)" — an
+override, not a duplicate. crush likewise merges a project `crush.json`
+over clown's `CRUSH_GLOBAL_CONFIG`.
+
+So any repository clown is run in can silently repoint a clown-managed
+MCP server name at a URL of its choosing. This is latent today only
+because clown injects no `mcp` entries into these providers; finding 1 is
+the change that arms it.
+
+Levers (both verified): opencode honors
+`OPENCODE_DISABLE_PROJECT_CONFIG`; crush has no such switch, but its
+workspace config at `<data-dir>/crush.json` is loaded last and overrides
+the project config in both directions. Note that `--data-dir` also holds
+crush's session state, so clown needs a stable per-project data dir, not
+a `mkdtemp`, or `crush --continue` breaks.
 
 ### 1. Plugin protocol / MCP compat: both providers have a native landing spot
 
@@ -57,13 +91,41 @@ session talks to.
   `runWithPluginHost`. RFC 0002 §5.5 already documents this scope
   boundary explicitly: "Dynamic contribution applies only to downstream
   providers that run under the plugin host... the claude family."
-- **Candidate extension path:** add `CompileForOpencode` /
-  `CompileForCrush` methods to `internal/pluginhost` (siblings to the
-  existing `CompileForClaude`, `host.go:444`) that emit the
-  provider-native `mcp` shapes above instead of Claude's `plugin.json`
-  shape; wire `runOpencode`/`runCrush` through `runWithPluginHost`; teach
-  the two config writers to include the compiled `mcp` and
-  `instructions`/`context_paths` sections.
+- **Candidate extension path (superseded — see the design doc):** add
+  `CompileForOpencode` / `CompileForCrush` methods to
+  `internal/pluginhost` (siblings to the existing `CompileForClaude`,
+  `host.go:444`); wire `runOpencode`/`runCrush` through
+  `runWithPluginHost`; teach the two config writers to include the
+  compiled sections. **The approved design rejects the sibling-compilers
+  half of this**: `pluginhost` instead exposes one neutral
+  `ServerEntries()` accessor and each provider's existing config writer in
+  `cmd/clown` does its own translation, so `pluginhost` does not learn
+  three providers' JSON schemas. The design also found `runWithPluginHost`
+  is more claude-coupled than "wire it through" implies — its tail is
+  `CompileForClaude` → `prependPluginDirs` — so it grows a `pluginBinding`
+  seam rather than a new caller.
+
+- **The `mcp` shapes are a translation, not a re-serialization**
+  (verified against upstream source):
+
+  | | type vocabulary | timeout unit | default |
+  |---|---|---|---|
+  | clown `MCPServerEntry` | `http` / `sse` | ms | none emitted |
+  | opencode `McpRemoteConfig` | `remote` (literal) | ms | 5000 |
+  | crush `MCPConfig` | `stdio` / `sse` / `http` | **seconds** | 15 |
+
+  crush needs ms→s conversion (a naive copy of clown's `30000` becomes an
+  8-hour timeout), and opencode's 5s default is shorter than clown's 30s,
+  so clown must emit an explicit `timeout`.
+
+- **Flat `mcp` maps force a key-naming decision.** Claude namespaces MCP
+  servers per plugin dir; opencode and crush have one flat map. Worse, the
+  two derive tool names from the key by different rules — opencode
+  sanitizes (`catalog.ts:117-119`, `[^a-zA-Z0-9_-]` → `_`), crush does not
+  (`mcp-tools.go:58-60`, `fmt.Sprintf("mcp_%s_%s", ...)`). A `/` key is
+  silently mangled by one and invalid under the other. Resolved: keys are
+  `<plugin>__<server>`, sanitized clown-side to `[A-Za-z0-9_-]`, with
+  collisions detected at compile time.
 
 ### 2. OpenRouter is orthogonal — no separate work needed
 
@@ -111,6 +173,18 @@ job-wakeup channel, FDR 0013, piggybacks on for claude).
 
 ## Open Questions
 
+**Resolved 2026-07-27** (issue #202 brainstorm):
+
+- *Should finding 1 and finding 3 ship as separate phases?* Yes — and a
+  phase 0 was inserted ahead of both (finding 0). Phase 2 is the prompt
+  work.
+- *Is job-wakeup worth pursuing at all?* Deferred, not dropped: phase 1
+  ships the `clown-builtin-jobs` **MCP tools** to opencode/crush without
+  the wake, so those sessions can start and poll jobs (`job_wait` blocks)
+  but are not woken. Accepted as degraded-not-broken until phase 3.
+
+Still open:
+
 - Does clown need to **launch** a new `opencode serve`/`crush serve`
   process, or can it **discover and connect to** the server every
   `opencode`/`crush` TUI invocation already starts implicitly? The
@@ -119,26 +193,31 @@ job-wakeup channel, FDR 0013, piggybacks on for claude).
   (e.g. a pidfile, a well-known local port, `--print-logs`-style
   stdout). Unconfirmed — needs direct investigation before scoping an
   implementation.
-- Should finding 1 (plugin/MCP compat) and finding 3 (job-wakeup) ship
-  as separate phases? They have very different blast radius — finding 1
-  is additive config-writer changes plus new `pluginhost` methods;
-  finding 3 changes the process-invocation model for two providers.
-  Provisional lean: yes, phase them — finding 1 first as a
-  self-contained, lower-risk slice.
-- Is job-wakeup support for opencode/crush worth the architectural
-  shift at all, or should it stay a claude-family-only capability
-  indefinitely (documented as a deliberate limitation rather than a gap
-  to close)? No usage signal yet either way.
+- Where does **dumbo** live — in-tree (`cmd/dumbo`) or as a standalone
+  repo in the ringmaster/troupe style (FDR 0014)? dumbo is the mock
+  OpenAI/Anthropic-compatible API fixture the phase-1 bats lane needs to
+  drive opencode/crush end-to-end without a real provider.
+- Does clown's blanket project-config suppression (phase 0) eventually
+  become a **safe merge** — honoring project entries except where they
+  would clobber a clown-owned key? That is the stated end state, but the
+  merge semantics are unspecified.
 
 ## Tuning Levers
 
 | Lever | Current | Rationale | Change signal |
 |---|---|---|---|
-| Plugin/MCP compat vs. job-wakeup: same phase or separate | Provisionally separate, MCP first | MCP compat is additive and low-risk; job-wakeup changes process invocation | A concrete user request ties the two together, or MCP-first turns out to require server-mode plumbing anyway |
+| Plugin/MCP compat vs. job-wakeup: same phase or separate | **Settled: separate.** Phases 0-3 as in the Abstract | MCP compat is additive and low-risk; job-wakeup changes process invocation | — (resolved) |
 | Launch-new-server vs. discover-existing-server for opencode/crush | Unknown — not yet investigated | Discovery would be much cheaper than a new subprocess-management architecture | Direct investigation of what `opencode`/`crush`'s bare CLI invocation exposes about its embedded server's address |
+| MCP key scheme | `<plugin>__<server>`, `[A-Za-z0-9_-]` | union of both providers' constraints; makes opencode's sanitize a no-op | tool-name length overruns near the ~64-char cap (crush's `mcp_` prefix eats 4) |
+| opencode per-entry `timeout` | explicit, from `clown.json` | opencode's 5s default is shorter than clown's 30s | per-entry proves noisy → switch to `experimental.mcp_timeout` |
+| crush data-dir location | stable, clown-owned, per-project | a `mkdtemp` would break `crush --continue` | session-continuity complaints, or collisions across worktrees |
+| Project-config suppression (phase 0) | on | closes the MCP-name override in finding 0 | a user legitimately needs repo-local config → build the safe merge sooner |
 
 ## More Information
 
+- `docs/plans/2026-07-27-non-claude-provider-parity-design.md` — the
+  approved phase 0 + phase 1 design (issue #202), including the evidence
+  table distinguishing observed from source-read claims.
 - RFC 0002 — Clown Plugin Protocol: HTTP MCP Server Lifecycle Management
   (`docs/rfcs/0002-clown-plugin-protocol.md`), especially §5.5's explicit
   claude-family scope boundary and §3.6-3.7's manifest compilation.
@@ -152,3 +231,10 @@ job-wakeup channel, FDR 0013, piggybacks on for claude).
 - opencode config schema: `https://opencode.ai/config.json`; server API:
   `https://opencode.ai/docs/server/`; plugin API: `https://opencode.ai/docs/plugins/`.
 - crush config schema: `https://charm.land/crush.json`.
+- Upstream source consulted for findings 0 and 1 (anomalyco/opencode,
+  charmbracelet/crush): opencode config loading
+  `packages/opencode/src/config/config.ts`, MCP schema
+  `packages/core/src/v1/config/mcp.ts`, tool naming
+  `packages/opencode/src/mcp/catalog.ts`; crush config loading
+  `internal/config/load.go`, MCP schema `internal/config/config.go`, tool
+  naming `internal/agent/tools/mcp-tools.go`.
