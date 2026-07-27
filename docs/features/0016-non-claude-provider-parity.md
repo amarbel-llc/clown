@@ -202,9 +202,16 @@ Still open:
   stdout). Unconfirmed — needs direct investigation before scoping an
   implementation.
 - Where does **dumbo** live — in-tree (`cmd/dumbo`) or as a standalone
-  repo in the ringmaster/troupe style (FDR 0014)? dumbo is the mock
-  OpenAI/Anthropic-compatible API fixture the phase-1 bats lane needs to
-  drive opencode/crush end-to-end without a real provider.
+  repo in the ringmaster/troupe style (FDR 0014)? Specified in RFC 0017
+  (`docs/rfcs/0017-dumbo-mock-model-api.md`), which leaves the home
+  question open because it depends on whether phase 3 needs dumbo on the
+  ringmaster side too.
+  - Correction: this record previously said the phase-1 bats lane *needs*
+    dumbo. It does not. `clown --provider opencode -- mcp list` exercises
+    config synthesis, key naming, schema validation, plugin-host startup
+    and the MCP handshake with no model involved, so issue #203 can land
+    without dumbo. dumbo is required only for phases 2 and 3, where the
+    agent must actually take a turn.
 - Does clown's blanket project-config suppression (phase 0) eventually
   become a **safe merge** — honoring project entries except where they
   would clobber a clown-owned key? That is the stated end state, but the
