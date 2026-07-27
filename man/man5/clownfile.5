@@ -349,8 +349,57 @@ When
 and a required coordinate is missing, clown errors at launch
 .Pq the config layer ,
 rather than letting the failure surface opaquely inside the troupe child.
+.Ss [providers]
+.Sy [providers]
+holds cross-provider launch policy that is not specific to one backend.
+It cascades like the tables above.
+.Bl -tag -width Ds
+.It Sy hermetic-config
+Boolean, default
+.Sy true .
+Makes clown's generated provider configuration authoritative for the
+config-file providers
+.Pq Sy opencode , Sy crush
+by suppressing or outranking repository-local configuration files.
+.Pp
+Without it, a repository-local
+.Pa opencode.json
+replaces a same-named entry in the
+.Sy mcp
+map clown generates, so any repository clown is run in can silently repoint a
+clown-managed MCP server at a URL of its choosing.
+For
+.Sy opencode
+clown sets
+.Ev OPENCODE_DISABLE_PROJECT_CONFIG ;
+for
+.Sy crush ,
+which has no equivalent switch, clown writes its configuration into the
+workspace slot at
+.Pa <data-dir>/crush.json
+and passes
+.Fl -data-dir ,
+that slot being last in crush's merge order.
+.Pp
+The user's own global configuration is unaffected in both cases: only the
+per-repository file is suppressed, since that is the one an untrusted
+repository controls.
+Set to
+.Sy false
+to restore the previous merge behavior.
+.El
 .Sh FILES
 .Bl -tag -width Ds
+.It Pa $XDG_STATE_HOME/clown/crush/ Ns Aq hash
+clown's per-project
+.Sy crush
+data directory, holding crush's workspace configuration and its sessions.
+Keyed by a hash of the project path, and stable across launches so
+.Cm crush --continue
+keeps working.
+Created only when
+.Sy hermetic-config
+is enabled.
 .It Pa $XDG_CONFIG_HOME/clown/clownfile
 The user-global
 .Nm ,

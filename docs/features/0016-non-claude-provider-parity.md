@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: testing
 date: 2026-07-27
 ---
 
@@ -12,9 +12,12 @@ between the claude-family providers and the opencode/crush providers:
 the clown plugin protocol (MCP tool injection), plugin-contributed
 system-prompt fragments, and ringmaster/troupe job-wakeup notifications.
 
-Status is **proposed**: a design for the first gap has been approved
-(`docs/plans/2026-07-27-non-claude-provider-parity-design.md`, issue #202)
-and the phasing question below is settled. No implementation has started.
+Status is **testing**: phases 0 and 1 are implemented
+(`docs/plans/2026-07-27-non-claude-provider-parity-design.md` and its
+implementation plan, issue #202) and covered by Go unit tests, but have
+not yet been exercised against a live opencode/crush session — the bats
+lane that would do that is phase 1b and needs the **dumbo** fixture
+(see Open Questions). Phases 2 and 3 have not started.
 Agreed phasing: **phase 0** make clown's generated provider config
 authoritative (a precondition this record originally missed — see finding
 0), **phase 1** plugin/MCP compat, **phase 2** static + dynamic prompt

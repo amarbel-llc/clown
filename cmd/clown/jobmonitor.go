@@ -95,26 +95,31 @@ func troupeAgentCommand(key string) string {
 	return base
 }
 
-// providerUsesPluginDirs reports whether the provider consumes --plugin-dir
-// (and runs as a subprocess so deferred cleanup fires). Only those need the
-// synthesized job-watch monitor dir. claude and clownbox thread pluginDirs
-// into runWithPluginHost (cmd.Run, not syscall.Exec); codex never receives
-// pluginDirs and codex/naked exec away, so a synthesized dir would leak.
-// juggler is a stub that ignores pluginDirs entirely.
+// providerUsesPluginDirs reports whether the provider should receive clown's
+// SYNTHESIZED plugin dirs (the job-watch monitor dir and the juggler-prompt
+// dir). The requirement is that the provider runs as a subprocess, so the
+// caller's deferred os.RemoveAll actually fires: codex and --naked exec away
+// and would leak the dir, and juggler is a stub that ignores pluginDirs.
 //
-// opencode and crush are the subtle case and MUST stay false. Since FDR 0016
-// phase 1 they DO run under runWithPluginHost, so the name now reads as if they
-// belong here — but what they consume is the plugin host's MCP servers, which
-// reach them through their own config's `mcp` block, not claude's --plugin-dir
-// mechanism. The synthesized dir carries MONITORS, and monitors are a Claude
-// Code feature with no opencode/crush equivalent: handing them the dir would
-// register a wake that never fires. Those two get the job platform's MCP TOOLS
-// (job_start, job_wait, chat_send) and poll instead of being woken, which is
-// the deliberate phase-1 scope decision. Closing that gap is phase 3 and needs
-// a server-mode invocation model, not a change here.
+// opencode and crush qualify since FDR 0016 phase 1 routed them through
+// runWithPluginHost (cmd.Run, never syscall.Exec). What they take from the
+// synthesized dir is its clown.json — the `ringmaster mcp` / `troupe mcp`
+// stdioServers — which clown's own plugin host starts and hands them through
+// their config's `mcp` block. They get the job platform's TOOLS (job_start,
+// job_wait, chat_send, chat_read).
+//
+// They do NOT get the wake. The dir's .claude-plugin/plugin.json also declares
+// `monitors`, and monitors are a Claude Code mechanism these two have no
+// equivalent for; they simply never read that file, so the declaration is inert
+// rather than harmful. The result is a session that can start and poll a
+// background job (job_wait blocks) but is never woken when one finishes —
+// degraded, not broken, and the deliberate phase-1 scope decision. Closing it
+// is phase 3 and needs a server-mode invocation model, not a change here. The
+// PreToolUse auto-allow hook is inert for the same reason, so clown's job tools
+// will hit these providers' own permission prompts.
 func providerUsesPluginDirs(provider string) bool {
 	switch provider {
-	case "claude", "clownbox":
+	case "claude", "clownbox", "opencode", "openrouter", "crush":
 		return true
 	default:
 		return false

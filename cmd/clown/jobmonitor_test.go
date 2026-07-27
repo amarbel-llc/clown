@@ -200,16 +200,23 @@ func TestJobMonitorTroupeAgentGatedOnXMPP(t *testing.T) {
 	}
 }
 
-// providerUsesPluginDirs gates which providers get the synthesized job-monitor
-// plugin dir (only --plugin-dir subprocess providers).
+// providerUsesPluginDirs gates which providers get clown's synthesized plugin
+// dirs. The requirement is running as a subprocess so the caller's deferred
+// cleanup fires — codex and --naked exec away and would leak the dir.
+//
+// opencode/openrouter/crush became true with FDR 0016 phase 1: they run under
+// runWithPluginHost now, and take the synthesized dir's clown.json (the
+// ringmaster/troupe MCP servers) even though its plugin.json monitors are inert
+// for them. That is the "tools without the wake" scope decision.
 func TestProviderUsesPluginDirs(t *testing.T) {
 	uses := map[string]bool{
-		"claude":   true,
-		"clownbox": true,
-		"codex":    false,
-		"juggler":  false,
-		"opencode": false,
-		"crush":    false,
+		"claude":     true,
+		"clownbox":   true,
+		"opencode":   true,
+		"openrouter": true,
+		"crush":      true,
+		"codex":      false,
+		"juggler":    false,
 	}
 	for provider, want := range uses {
 		if got := providerUsesPluginDirs(provider); got != want {
