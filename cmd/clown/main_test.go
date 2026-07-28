@@ -1200,6 +1200,83 @@ func TestNewTentExecutor_EmptyImageRef(t *testing.T) {
 	}
 }
 
+// tent cannot currently deliver clown-generated artifacts into the container:
+// Command.Env would land on the podman process rather than on the agent inside
+// it, and the staging root holding the file that env names is not mounted. Fail
+// loudly rather than launching a provider that silently sees no config
+// (clown#205). Deliberately NOT rollback-gated — reverting it restores a bug.
+func TestTentExecutor_RejectsUntranslatableEnv(t *testing.T) {
+	// backend is nil on purpose: the guard must fire before anything reaches
+	// the container runtime, and a nil backend makes "returned early" provable
+	// rather than merely asserted — a guard placed after RunArgs would panic
+	// here instead of erroring.
+	e := &tentExecutor{innerCliPath: "/x/claude"}
+	_, err := e.FormatArgs(Command{
+		Args: []string{"--version"},
+		Env:  []string{"OPENCODE_CONFIG=/stage/opencode.json"},
+	})
+	if err == nil {
+		t.Fatal("expected an error for env tent cannot translate")
+	}
+	if !strings.Contains(err.Error(), "OPENCODE_CONFIG") {
+		t.Errorf("error should name the offending variable: %v", err)
+	}
+	// The pointer to the design record is what makes this actionable for
+	// whoever revives tent, rather than a dead end.
+	if !strings.Contains(err.Error(), "containment-primitive-design.md") {
+		t.Errorf("error should point at the design record: %v", err)
+	}
+}
+
+// Every offending variable is named, not just the first: a reviver who fixes
+// one and relaunches should not have to discover the rest one run at a time.
+// Values are NOT echoed — an env value can be a credential, which is the same
+// reason the launch-plan dump redacts them.
+func TestTentExecutor_RejectsUntranslatableEnv_NamesAllAndHidesValues(t *testing.T) {
+	e := &tentExecutor{innerCliPath: "/x/claude"}
+	_, err := e.FormatArgs(Command{
+		Args: []string{"--version"},
+		Env:  []string{"OPENCODE_CONFIG=/stage/opencode.json", "API_TOKEN=sk-secret"},
+	})
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	for _, key := range []string{"OPENCODE_CONFIG", "API_TOKEN"} {
+		if !strings.Contains(err.Error(), key) {
+			t.Errorf("error should name %s: %v", key, err)
+		}
+	}
+	if strings.Contains(err.Error(), "sk-secret") {
+		t.Errorf("error must not echo env values: %v", err)
+	}
+}
+
+// The claude path passes no extra env, so tent must keep working for it — the
+// guard rejects an untranslatable env, not tent itself.
+func TestTentExecutor_EmptyEnvIsFine(t *testing.T) {
+	e := &tentExecutor{
+		innerCliPath: "/x/claude",
+		backend:      tent.NewPodman("/usr/bin/podman", ""),
+	}
+	got, err := e.FormatArgs(Command{Args: []string{"--version"}})
+	if err != nil {
+		t.Fatalf("empty env must not error: %v", err)
+	}
+	if len(got.Args) == 0 {
+		t.Fatal("expected a rewritten podman argv")
+	}
+	// Binary() owns argv[0], so the podman path must have been stripped.
+	if got.Args[0] == "/usr/bin/podman" {
+		t.Errorf("argv[0] should be stripped, got %v", got.Args)
+	}
+	if got.Args[len(got.Args)-1] != "--version" {
+		t.Errorf("inner args should survive the rewrite, got %v", got.Args)
+	}
+	if len(got.Env) != 0 {
+		t.Errorf("Env should stay empty, got %v", got.Env)
+	}
+}
+
 func TestResolvePassDevshell(t *testing.T) {
 	cases := []struct {
 		name       string

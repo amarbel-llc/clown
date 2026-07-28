@@ -964,7 +964,64 @@ func (e *tentExecutor) Binary() (string, error) {
 	return exec.LookPath(e.backend.Binary())
 }
 
+// envKeys extracts the KEYs from "KEY=VALUE" entries in the order given. Only
+// keys, never values: a value can be a credential, which is the same reason
+// launchPlan redacts them before writing a plan anyone can read. An entry with
+// no "=" is returned whole — it has no value to hide.
+func envKeys(env []string) []string {
+	keys := make([]string, 0, len(env))
+	for _, e := range env {
+		key, _, ok := strings.Cut(e, "=")
+		if !ok {
+			key = e
+		}
+		keys = append(keys, key)
+	}
+	return keys
+}
+
+// FormatArgs rewrites the claude argv into a `podman run … <image> <claude>
+// <args>` argv, and REFUSES a Command carrying extra environment.
+//
+// The refusal is the point of Command existing (clown#205). Under tent the
+// process clown spawns is the container runtime, not the agent, so an entry
+// like OPENCODE_CONFIG=<staging>/opencode.json would be set on podman itself
+// and never reach the process meant to read it. That half is unconditional.
+//
+// The file the variable names is the softer half, and the error is worded
+// accordingly. tent binds opts.TmpDir at the same path (internal/tent/tent.go),
+// so a staging root left at its $TMPDIR default happens to be visible inside
+// the container — by blanket coverage, not by design. Nothing guarantees it:
+// stagingBaseFor already places the clownbox root inside the repo rather than
+// under $TMPDIR, and any future placement is free to do the same. So the claim
+// here is "not guaranteed", not "not mounted" — asserting the stronger thing
+// would be wrong in the default configuration and would mislead exactly the
+// reader this error exists for.
+//
+// tent is a shelved experiment that must remain revivable, so this does not try
+// to translate. It fails loudly instead of pretending to support a combination
+// nobody has verified, and names the variables so a reviver knows exactly what
+// a future Placement.File() has to carry. Deliberately NOT rollback-gated: this
+// converts a silent misconfiguration into a loud error, and reverting it would
+// restore the bug.
+//
+// It cannot fire today — tent is only ever paired with claudeBinding, which
+// contributes no env — and that is what makes it worth writing now rather than
+// later: it is a tripwire on the seam, sprung the moment someone wires tent to
+// a config-file provider, which is exactly the combination #205 describes and
+// exactly when nobody would be looking for it.
 func (e *tentExecutor) FormatArgs(cmd Command) (Command, error) {
+	if len(cmd.Env) > 0 {
+		return Command{}, fmt.Errorf(
+			"tent cannot deliver clown-generated config to the container: "+
+				"env %s would be set on the container runtime, not on the agent "+
+				"inside it, and nothing guarantees the staging root it names is "+
+				"mounted there; "+
+				"see docs/plans/2026-07-28-containment-primitive-design.md",
+			strings.Join(envKeys(cmd.Env), ", "),
+		)
+	}
+
 	// RunArgs returns argv INCLUDING the backend binary path as
 	// argv[0]. The Executor contract expects argv[1:] (Binary() owns
 	// argv[0]). Strip the head.
