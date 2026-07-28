@@ -629,17 +629,16 @@ func runWithFlags(flags parsedFlags) int {
 	// Register clown's built-in job-watch monitor by synthesizing a plugin
 	// dir that declares it as a Claude Code experimental monitor (RFC-0009
 	// §8, §9). Gated by CLOWN_DISABLE_JOB_WAKEUP (returns "" when disabled).
-	// The temp dir is removed when runWithFlags returns, mirroring the
-	// other staged-dir cleanup. It is appended last so it cannot shadow a
-	// user- or plugin-supplied dir. Only providers that thread pluginDirs
-	// into Claude as a subprocess synthesize it; exec-path providers (codex,
-	// --naked) would skip the deferred cleanup and leak the dir, and they
-	// ignore --plugin-dir anyway.
+	// The dir lives under the launch staging root, which removes it when this
+	// function returns. It is appended last so it cannot shadow a user- or
+	// plugin-supplied dir. Only providers that thread pluginDirs into Claude
+	// as a subprocess synthesize it; exec-path providers (codex, --naked)
+	// would strand the root before it is closed, and they ignore --plugin-dir
+	// anyway.
 	if providerUsesPluginDirs(flags.provider) && !flags.naked {
-		if monitorDir, err := synthJobMonitorPluginDir(flags.identity.Key); err != nil {
+		if monitorDir, err := synthJobMonitorPluginDir(root, flags.identity.Key); err != nil {
 			fmt.Fprintf(os.Stderr, "clown: registering job-watch monitor: %v\n", err)
 		} else if monitorDir != "" {
-			defer os.RemoveAll(monitorDir)
 			pluginDirs = append(pluginDirs, monitorDir)
 		}
 	}

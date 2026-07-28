@@ -17,14 +17,13 @@ func TestJobMonitorPluginDirSynthesized(t *testing.T) {
 	origRM := buildcfg.RingmasterPath
 	buildcfg.RingmasterPath = "/nix/store/x/bin/ringmaster"
 	t.Cleanup(func() { buildcfg.RingmasterPath = origRM })
-	dir, err := synthJobMonitorPluginDir("sess-key-xyz")
+	dir, err := synthJobMonitorPluginDir(testStagingRoot(t), "sess-key-xyz")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if dir == "" {
 		t.Fatal("expected a synthesized plugin dir when job-wakeup is enabled")
 	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 
 	manifestPath := filepath.Join(dir, ".claude-plugin", "plugin.json")
 	b, err := os.ReadFile(manifestPath)
@@ -156,11 +155,10 @@ func TestJobMonitorTroupeAgentGatedOnXMPP(t *testing.T) {
 
 	monitorNames := func(t *testing.T) []string {
 		t.Helper()
-		dir, err := synthJobMonitorPluginDir("sess-1")
+		dir, err := synthJobMonitorPluginDir(testStagingRoot(t), "sess-1")
 		if err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() { _ = os.RemoveAll(dir) })
 		b, err := os.ReadFile(filepath.Join(dir, ".claude-plugin", "plugin.json"))
 		if err != nil {
 			t.Fatal(err)
@@ -227,12 +225,11 @@ func TestProviderUsesPluginDirs(t *testing.T) {
 
 func TestJobMonitorDisabledReturnsEmpty(t *testing.T) {
 	t.Setenv("CLOWN_DISABLE_JOB_WAKEUP", "1")
-	dir, err := synthJobMonitorPluginDir("")
+	dir, err := synthJobMonitorPluginDir(testStagingRoot(t), "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if dir != "" {
-		_ = os.RemoveAll(dir)
 		t.Fatalf("expected no plugin dir when disabled, got %q", dir)
 	}
 }
@@ -252,11 +249,10 @@ func TestJobMonitorPluginDirIncludesMCPWhenBridgeSet(t *testing.T) {
 		buildcfg.StdioBridgePath, buildcfg.RingmasterPath, buildcfg.TroupePath = origBridge, origRM, origTroupe
 	})
 
-	dir, err := synthJobMonitorPluginDir("")
+	dir, err := synthJobMonitorPluginDir(testStagingRoot(t), "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 
 	b, err := os.ReadFile(filepath.Join(dir, "clown.json"))
 	if err != nil {
@@ -330,11 +326,10 @@ func TestJobMonitorPluginDirIncludesHookWhenHookAllowSet(t *testing.T) {
 	buildcfg.HookAllowPath = "/nix/store/x/bin/clown-hook-allow"
 	t.Cleanup(func() { buildcfg.HookAllowPath = orig })
 
-	dir, err := synthJobMonitorPluginDir("")
+	dir, err := synthJobMonitorPluginDir(testStagingRoot(t), "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 
 	b, err := os.ReadFile(filepath.Join(dir, "hooks", "hooks.json"))
 	if err != nil {
@@ -377,11 +372,10 @@ func TestJobMonitorPluginDirNoHookWhenHookAllowUnset(t *testing.T) {
 	buildcfg.HookAllowPath = ""
 	t.Cleanup(func() { buildcfg.HookAllowPath = orig })
 
-	dir, err := synthJobMonitorPluginDir("")
+	dir, err := synthJobMonitorPluginDir(testStagingRoot(t), "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 
 	if _, err := os.Stat(filepath.Join(dir, "hooks", "hooks.json")); !os.IsNotExist(err) {
 		t.Fatalf("hooks/hooks.json must be absent without a hook-allow path, stat err = %v", err)
@@ -396,11 +390,10 @@ func TestJobMonitorPluginDirNoMCPWhenBridgeUnset(t *testing.T) {
 	buildcfg.StdioBridgePath = ""
 	t.Cleanup(func() { buildcfg.StdioBridgePath = orig })
 
-	dir, err := synthJobMonitorPluginDir("")
+	dir, err := synthJobMonitorPluginDir(testStagingRoot(t), "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 
 	if _, err := os.Stat(filepath.Join(dir, "clown.json")); !os.IsNotExist(err) {
 		t.Fatalf("clown.json must be absent without a bridge path, stat err = %v", err)

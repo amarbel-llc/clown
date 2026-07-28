@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"code.linenisgreat.com/clown/internal/buildcfg"
+	"code.linenisgreat.com/clown/internal/staging"
 )
 
 // jobMonitorPlugin is the synthesized built-in plugin manifest that registers
@@ -98,8 +99,9 @@ func troupeAgentCommand(key string) string {
 // providerUsesPluginDirs reports whether the provider should receive clown's
 // SYNTHESIZED plugin dirs (the job-watch monitor dir and the juggler-prompt
 // dir). The requirement is that the provider runs as a subprocess, so the
-// caller's deferred os.RemoveAll actually fires: codex and --naked exec away
-// and would leak the dir, and juggler is a stub that ignores pluginDirs.
+// launch staging root's deferred Close actually fires: codex and --naked exec
+// away and would strand the root, and juggler is a stub that ignores
+// pluginDirs.
 //
 // opencode and crush qualify since FDR 0016 phase 1 routed them through
 // runWithPluginHost (cmd.Run, never syscall.Exec). What they take from the
@@ -126,22 +128,22 @@ func providerUsesPluginDirs(provider string) bool {
 	}
 }
 
-// synthJobMonitorPluginDir writes a temporary built-in plugin directory whose
+// synthJobMonitorPluginDir writes a built-in plugin directory whose
 // .claude-plugin/plugin.json declares the clown job-watch monitor, and returns
 // its path. The caller appends the path to the --plugin-dir set passed to
-// Claude and removes the directory on shutdown. When CLOWN_DISABLE_JOB_WAKEUP=1
-// it returns ("", nil) so the monitor is not registered (RFC-0009 §8).
-func synthJobMonitorPluginDir(sessionKey string) (string, error) {
+// Claude; the launch's staging root owns the directory and removes it on
+// close, so the caller must not. When CLOWN_DISABLE_JOB_WAKEUP=1 it returns
+// ("", nil) so the monitor is not registered (RFC-0009 §8).
+func synthJobMonitorPluginDir(root *staging.Root, sessionKey string) (string, error) {
 	if jobWakeupDisabled() {
 		return "", nil
 	}
-	dir, err := os.MkdirTemp("", "clown-jobwake-plugin-")
+	dir, err := root.Dir("clown-jobwake-plugin-*")
 	if err != nil {
 		return "", err
 	}
 	manifestDir := filepath.Join(dir, ".claude-plugin")
 	if err := os.MkdirAll(manifestDir, 0o700); err != nil {
-		_ = os.RemoveAll(dir)
 		return "", err
 	}
 	monitors := []jobMonitorEntry{{
@@ -169,11 +171,9 @@ func synthJobMonitorPluginDir(sessionKey string) (string, error) {
 	}
 	b, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
-		_ = os.RemoveAll(dir)
 		return "", err
 	}
 	if err := os.WriteFile(filepath.Join(manifestDir, "plugin.json"), b, 0o600); err != nil {
-		_ = os.RemoveAll(dir)
 		return "", err
 	}
 
@@ -219,11 +219,9 @@ func synthJobMonitorPluginDir(sessionKey string) (string, error) {
 		}
 		cb, err := json.MarshalIndent(clownCfg, "", "  ")
 		if err != nil {
-			_ = os.RemoveAll(dir)
 			return "", err
 		}
 		if err := os.WriteFile(filepath.Join(dir, "clown.json"), cb, 0o600); err != nil {
-			_ = os.RemoveAll(dir)
 			return "", err
 		}
 	}
@@ -241,7 +239,6 @@ func synthJobMonitorPluginDir(sessionKey string) (string, error) {
 	if buildcfg.HookAllowPath != "" {
 		hooksDir := filepath.Join(dir, "hooks")
 		if err := os.MkdirAll(hooksDir, 0o700); err != nil {
-			_ = os.RemoveAll(dir)
 			return "", err
 		}
 		hooksCfg := map[string]any{
@@ -262,11 +259,9 @@ func synthJobMonitorPluginDir(sessionKey string) (string, error) {
 		}
 		hb, err := json.MarshalIndent(hooksCfg, "", "  ")
 		if err != nil {
-			_ = os.RemoveAll(dir)
 			return "", err
 		}
 		if err := os.WriteFile(filepath.Join(hooksDir, "hooks.json"), hb, 0o600); err != nil {
-			_ = os.RemoveAll(dir)
 			return "", err
 		}
 	}
