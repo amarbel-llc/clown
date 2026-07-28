@@ -122,8 +122,8 @@ restore.
 
 ## Part 2 — the FDR
 
-The durable artifact, and the actual point of this work. Written as FDR 0017,
-recording:
+The durable artifact, and the actual point of this work. Landed as
+`docs/features/0017-containment-primitive.md`, recording:
 
 - **The five resources** a locus must translate — argv, environment (with
   `$PATH` a special case needing store-canonicalisation), files, network
