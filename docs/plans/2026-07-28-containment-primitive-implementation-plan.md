@@ -10,7 +10,7 @@
 
 **Rollback:** `Command` is a mechanical signature change with no behavioral fork — rollback is `git revert`. The staging root gets `CLOWN_STAGING_ROOT=tmpdir`, which forces the root's base back to `$TMPDIR`, so an artifact-placement regression is one env var from being ruled out. (This wording originally said "restoring today's scattering"; see the design doc's corrected Rollback section for why that is not what the hatch does or should do.) The tent guard is deliberately NOT rollback-gated: it converts a silent misconfiguration into a loud error, and reverting it would restore a bug.
 
-**Design record:** `docs/plans/2026-07-28-containment-primitive-design.md`. Read it first — particularly the "verified vs assumed" table, which marks the suspected tent `appendFile` bug as an unverified theory.
+**Design record:** `docs/plans/2026-07-28-containment-primitive-design.md`. Read it first — particularly the "verified vs assumed" table, and the retraction section: the tent `appendFile` theory that table originally carried turned out to be false, and was withdrawn during Task 5.
 
 ---
 
@@ -372,9 +372,11 @@ Documented in `clown(1)`'s ENVIRONMENT section — `clownfile(5)` has no such se
 
 **Files:** Create `docs/features/0017-containment-primitive.md` (0016 is the highest FDR today).
 
-Use the `eng:fdr` skill. Content is specified in part 2 of the design doc — the five resources, tent's discovered requirements, the `Placement` sketch, the layered policy split, loci with server-mode-as-invocation-model, the suspected `appendFile` bug, and the revival cost.
+Use the `eng:fdr` skill. Content is specified in part 2 of the design doc — the five resources, tent's discovered requirements, the `Placement` sketch, the layered policy split, loci with server-mode-as-invocation-model, the exec-replacing-locus constraint, and the revival cost.
 
-**Mark the suspected bug as an unverified theory**, with why it is masked inside a spinclass session. Do not upgrade it to a finding without running tent.
+**CORRECTED during Task 5 — do not follow the instruction this replaces.** This step used to say: *"Mark the suspected bug as an unverified theory, with why it is masked inside a spinclass session."* That theory was **false**. `internal/tent/tent.go:212` sets `TmpDir: os.TempDir()` and `:347-348` bind-mounts it at the same path, so the prompt file was visible inside the container all along. Record it as a **methodological note** — a theory that shipped with a plausible explanation for its own non-observation, and thereby stopped being falsifiable by observation — not as a known issue. See the design doc's retraction section.
+
+Left in place rather than deleted because an executed plan is a record of what was believed at the time, and this particular belief being wrong is the useful part.
 
 Also: comment on #205 that it is now structurally addressed, and link the FDR.
 

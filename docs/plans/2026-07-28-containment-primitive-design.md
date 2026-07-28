@@ -229,7 +229,7 @@ characterization first:
 
 | Lever | Current | Rationale | Change signal |
 |---|---|---|---|
-| Staging root location | one dir per launch under `$TMPDIR` | matches today's default; container loci override to a mounted path | a locus needs the root somewhere specific (clownbox already wants the repo) |
+| Staging root location | one dir per launch under `$TMPDIR`, except clownbox which uses `<repo>/.tmp` | the default matches today; clownbox needs the root inside its bind-mount, which `stagingBaseFor` already does unconditionally | another locus needs the root somewhere specific; overridable via `CLOWN_STAGING_ROOT=tmpdir` |
 | Staging root lifetime | removed on process exit | artifacts are per-launch by definition | a debugging need for post-mortem inspection → add a keep flag |
 | Build `Placement` at all | deferred until a second live locus | one live consumer invites over-design | tent revived, or a remote locus becomes real |
 
@@ -239,7 +239,7 @@ characterization first:
 |---|---|
 | Four ad-hoc translation mechanisms exist in-tree | read from source |
 | `binds.go` is a static ambient allowlist with no per-launch mechanism | read from source |
-| `internal/tent` has no `TMPDIR` handling | searched; none found |
+| `internal/tent` does not read the `TMPDIR` *environment variable* | searched; none found. **Narrowed after the retraction** — this row originally read "has no `TMPDIR` handling", which is what produced the false theory: it is true of the env var and false of `Options.TmpDir`, two rows below. A search that answers a narrower question than the one you are asking is worse than no search |
 | `runClownbox` redirects `TMPDIR` into the repo bind-mount | read from source |
 | #205's env lands on the container runtime | inferred from `runProvider` + `tentExecutor`; never executed |
 | tent bind-mounts all of `$TMPDIR` into the container | read from source (`tent.go:212`, `:347-348`) |
