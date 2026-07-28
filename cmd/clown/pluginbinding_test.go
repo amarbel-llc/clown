@@ -8,6 +8,46 @@ import (
 	"code.linenisgreat.com/clown/internal/pluginhost"
 )
 
+// recordingExecutor captures whatever FormatArgs was handed. The compile-time
+// Executor assertion below is half the point: it fails to build unless the
+// interface actually carries the env alongside the argv.
+type recordingExecutor struct {
+	gotArgs []string
+	gotEnv  []string
+}
+
+var _ Executor = (*recordingExecutor)(nil)
+
+func (e *recordingExecutor) Binary() (string, error) { return "/bin/true", nil }
+
+func (e *recordingExecutor) FormatArgs(cmd Command) (Command, error) {
+	e.gotArgs = cmd.Args
+	e.gotEnv = cmd.Env
+	return cmd, nil
+}
+
+// The #205 regression test. An executor that rewrites argv MUST be handed the
+// env too — that is the whole point of the type. Pre-Command, argv went through
+// FormatArgs (so tentExecutor rewrote it) while env went straight to
+// runProvider, so a containerizing executor could not even see what it was
+// failing to translate.
+func TestExecutor_FormatArgsReceivesEnv(t *testing.T) {
+	e := &recordingExecutor{}
+	_, err := e.FormatArgs(Command{
+		Args: []string{"--version"},
+		Env:  []string{"OPENCODE_CONFIG=/stage/opencode.json"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(e.gotEnv, []string{"OPENCODE_CONFIG=/stage/opencode.json"}) {
+		t.Errorf("executor did not receive env: %v", e.gotEnv)
+	}
+	if !slices.Equal(e.gotArgs, []string{"--version"}) {
+		t.Errorf("executor did not receive args: %v", e.gotArgs)
+	}
+}
+
 // claudeBinding is an extraction, not a rewrite: on the fallback paths it must
 // produce byte-for-byte what the pre-seam code produced, which was literally
 // prependPluginDirs(baseArgs, pluginDirs, nil). Comparing against that call

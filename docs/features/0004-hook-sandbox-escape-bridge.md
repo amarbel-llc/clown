@@ -175,7 +175,7 @@ zero cost when no plugin uses it.
 ### 5. `--settings` construction
 
 `runProvider` today executes the provider with
-`executor.FormatArgs(args)`. We add a step that, when the dispatch
+`executor.FormatArgs(cmd)`. We add a step that, when the dispatch
 table is non-empty, synthesizes a JSON settings object of the form:
 
 ```json

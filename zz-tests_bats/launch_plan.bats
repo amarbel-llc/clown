@@ -332,4 +332,4 @@ EOF
 # exists. It is unit-tested exhaustively instead, at the one place that can
 # construct the input: TestLaunchPlanJSON_RedactsSecrets in
 # cmd/clown/launchplan_test.go. Add an arm here the moment a provider starts
-# passing a token through bindResult.Env.
+# passing a token through Command.Env.

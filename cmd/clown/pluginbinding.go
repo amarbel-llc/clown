@@ -31,14 +31,28 @@ import (
 // implementation MUST treat that as "launch with no clown-managed MCP servers",
 // not as an error.
 type pluginBinding interface {
-	Bind(host *pluginhost.Host, allDiscovered, selected []pluginhost.DiscoveredServer) (bindResult, error)
+	Bind(host *pluginhost.Host, allDiscovered, selected []pluginhost.DiscoveredServer) (Command, error)
 }
 
-// bindResult is what a binding produces: the final argv, plus any additional
-// environment the child needs. Env is nil for providers that need none.
-type bindResult struct {
+// Command is a fully-formed provider invocation. Args and Env travel together
+// because any locus that rewrites one must rewrite the other; keeping them in
+// separate parameters is precisely how clown#205 happened — argv went through
+// Executor.FormatArgs (so tent rewrote it into `podman run … <inner> <args>`)
+// while env went straight to runProvider (so tent did not, and OPENCODE_CONFIG
+// landed on the container runtime rather than on the agent inside it).
+//
+// Be precise about what this buys. Bundling alone does NOT force correctness:
+// an executor can still pass Env through untouched, and directExecutor /
+// passthroughExecutor do exactly that — correctly, since neither crosses a
+// namespace. What it buys is that the env is now IN FRONT OF the one component
+// that knows it is crossing a boundary. tentExecutor is that component, and it
+// can only refuse an env it cannot translate (see its FormatArgs) because the
+// env is now in its hands at all.
+//
+// See docs/plans/2026-07-28-containment-primitive-design.md part 1a.
+type Command struct {
 	Args []string
-	Env  []string
+	Env  []string // additional entries; empty means inherit unchanged
 }
 
 // claudeBinding is the plugin-dir delivery the claude family (claude,
@@ -64,16 +78,16 @@ func newClaudeBinding(baseArgs, pluginDirs []string, flags parsedFlags, logger *
 	}
 }
 
-func (b *claudeBinding) Bind(host *pluginhost.Host, allDiscovered, selected []pluginhost.DiscoveredServer) (bindResult, error) {
+func (b *claudeBinding) Bind(host *pluginhost.Host, allDiscovered, selected []pluginhost.DiscoveredServer) (Command, error) {
 	// Fallback path: no managed servers to deliver. Hand claude the original,
 	// uncompiled plugin dirs — matching the pre-seam behavior exactly.
 	if host == nil || len(selected) == 0 {
-		return bindResult{Args: prependPluginDirs(b.baseArgs, b.pluginDirs, nil)}, nil
+		return Command{Args: prependPluginDirs(b.baseArgs, b.pluginDirs, nil)}, nil
 	}
 
 	dirMap, err := host.CompileForClaude(selected)
 	if err != nil {
-		return bindResult{}, fmt.Errorf("compiling plugin manifests: %w", err)
+		return Command{}, fmt.Errorf("compiling plugin manifests: %w", err)
 	}
 
 	pluginDirs := b.pluginDirs
@@ -101,7 +115,7 @@ func (b *claudeBinding) Bind(host *pluginhost.Host, allDiscovered, selected []pl
 		}
 	}
 
-	return bindResult{Args: prependPluginDirs(b.baseArgs, pluginDirs, dirMap)}, nil
+	return Command{Args: prependPluginDirs(b.baseArgs, pluginDirs, dirMap)}, nil
 }
 
 // configFileBinding is the binding for providers configured by a generated JSON
@@ -121,13 +135,13 @@ type configFileBinding struct {
 // allDiscovered is unused: the pre-filter set only matters for claude's
 // plugin-dir exclusion, and these providers have no plugin dirs to exclude from
 // — a deselected server simply never appears in the `mcp` block.
-func (b *configFileBinding) Bind(host *pluginhost.Host, _, selected []pluginhost.DiscoveredServer) (bindResult, error) {
+func (b *configFileBinding) Bind(host *pluginhost.Host, _, selected []pluginhost.DiscoveredServer) (Command, error) {
 	var entries map[string]pluginhost.MCPServerEntry
 	if host != nil {
 		var err error
 		entries, err = host.ServerEntries(selected)
 		if err != nil {
-			return bindResult{}, err
+			return Command{}, err
 		}
 	}
 	// Always write: the provider needs its config (provider, model, token) even
@@ -135,7 +149,7 @@ func (b *configFileBinding) Bind(host *pluginhost.Host, _, selected []pluginhost
 	// file — it just carries no `mcp` block.
 	env, err := b.writeConfig(entries)
 	if err != nil {
-		return bindResult{}, err
+		return Command{}, err
 	}
-	return bindResult{Args: b.baseArgs, Env: env}, nil
+	return Command{Args: b.baseArgs, Env: env}, nil
 }

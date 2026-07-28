@@ -872,35 +872,48 @@ func providerTakesModelFlag(provider string) bool {
 // and the ldflag (see flake.nix).
 const clownboxDisabledMessage = "clownbox provider is disabled in this build"
 
-// Executor abstracts how a provider receives its argv. The plugin-host
+// Executor abstracts how a provider receives its invocation. The plugin-host
 // pipeline is identical for claude and clownbox; only the final exec
 // differs. claude takes args directly; clownbox prepends `--` so its
 // arg parser stops and forwards the rest verbatim to the inner claude.
 type Executor interface {
 	// Binary resolves the absolute path of the executable to run.
 	Binary() (string, error)
-	// FormatArgs transforms the post-prependPluginDirs argv into the
-	// argv that the executable should actually receive (excluding argv[0]).
-	FormatArgs(fullArgs []string) []string
+	// FormatArgs transforms the bound Command into the one the executable
+	// should actually receive (Args excluding argv[0]).
+	//
+	// It takes the whole Command — not just argv — because an executor that
+	// relocates the process across a namespace boundary must translate the
+	// environment in the same breath, or refuse. See Command's doc comment
+	// and clown#205; tentExecutor is the implementation that refuses.
+	//
+	// The error return exists for exactly that refusal: an executor that
+	// cannot honor part of the Command must say so rather than drop it.
+	FormatArgs(cmd Command) (Command, error)
 }
 
-// directExecutor passes args through unchanged. Used by the claude
+// directExecutor passes the Command through unchanged. Used by the claude
 // provider: claude takes --plugin-dir, --system-prompt-file, etc.
-// directly.
+// directly. Env passes through untouched, which is correct — the provider
+// runs as clown's own child, in clown's own namespace.
 type directExecutor struct{ cliPath string }
 
-func (e *directExecutor) Binary() (string, error)           { return exec.LookPath(e.cliPath) }
-func (e *directExecutor) FormatArgs(args []string) []string { return args }
+func (e *directExecutor) Binary() (string, error) { return exec.LookPath(e.cliPath) }
+
+func (e *directExecutor) FormatArgs(cmd Command) (Command, error) { return cmd, nil }
 
 // passthroughExecutor prepends `--` so a wrapper's arg parser stops
 // and the remaining args reach the wrapped binary verbatim. Used by
 // the clownbox provider: claudebox accepts `claudebox -- <claude-args>`
-// (per nix/patches/claudebox-arg-passthrough.patch).
+// (per nix/patches/claudebox-arg-passthrough.patch). Env passes through
+// untouched: the wrapper execs in place, so the child inherits it.
 type passthroughExecutor struct{ cliPath string }
 
 func (e *passthroughExecutor) Binary() (string, error) { return exec.LookPath(e.cliPath) }
-func (e *passthroughExecutor) FormatArgs(args []string) []string {
-	return append([]string{"--"}, args...)
+
+func (e *passthroughExecutor) FormatArgs(cmd Command) (Command, error) {
+	cmd.Args = append([]string{"--"}, cmd.Args...)
+	return cmd, nil
 }
 
 // tentExecutor wraps the inner provider binary in a podman container.
@@ -951,15 +964,17 @@ func (e *tentExecutor) Binary() (string, error) {
 	return exec.LookPath(e.backend.Binary())
 }
 
-func (e *tentExecutor) FormatArgs(args []string) []string {
+func (e *tentExecutor) FormatArgs(cmd Command) (Command, error) {
 	// RunArgs returns argv INCLUDING the backend binary path as
 	// argv[0]. The Executor contract expects argv[1:] (Binary() owns
 	// argv[0]). Strip the head.
-	full := e.backend.RunArgs(e.innerCliPath, args, e.opts)
+	full := e.backend.RunArgs(e.innerCliPath, cmd.Args, e.opts)
 	if len(full) == 0 {
-		return nil
+		cmd.Args = nil
+		return cmd, nil
 	}
-	return full[1:]
+	cmd.Args = full[1:]
+	return cmd, nil
 }
 
 // resolveClaudeForRun picks the inner claude binary path and the
@@ -1430,14 +1445,16 @@ func ensureTentImage(backend tent.Backend, ref, tarball, flakeRef string) error 
 // configFileBinding. pluginDirs is still separate because host.Discover needs it
 // regardless of how the results are ultimately delivered.
 func runWithPluginHost(executor Executor, pluginDirs []string, flags parsedFlags, preLogger *slog.Logger, appendFile string, root *staging.Root, binding pluginBinding) int {
-	skipFailed := flags.skipFailed || os.Getenv("CLOWN_SKIP_FAILED_PLUGINS") == "1"
+	// Fold the env-var override into the flags value itself. flags is a copy —
+	// the caller's is untouched — and normalizing here means runManaged reads
+	// one skipFailed rather than receiving a second, separately-computed one as
+	// a positional that could drift from this.
+	flags.skipFailed = flags.skipFailed || os.Getenv("CLOWN_SKIP_FAILED_PLUGINS") == "1"
 	disableClown := flags.disableClownProtocol || os.Getenv("CLOWN_DISABLE_CLOWN_PROTOCOL") == "1"
 	verbose := flags.verbose
 
-	cheapContextActive := cheapContextShouldActivate(flags.cheapContext, flags.cheapContextProfile)
-
 	if disableClown {
-		return runUnbound(binding, executor, nil, flags.ptyOpts, flags.printLaunchPlan)
+		return runUnbound(binding, executor, nil, flags)
 	}
 
 	logger := preLogger
@@ -1499,10 +1516,10 @@ func runWithPluginHost(executor Executor, pluginDirs []string, flags parsedFlags
 
 	if len(discovered) == 0 {
 		logger.Info("no plugin servers discovered; passing plugin dirs through")
-		return runUnbound(binding, executor, logger, flags.ptyOpts, flags.printLaunchPlan)
+		return runUnbound(binding, executor, logger, flags)
 	}
 
-	return runManaged(host, discovered, executor, binding, skipFailed, verbose, logger, appendFile, flags.ptyOpts, cheapContextActive, flags.cheapContextProfile, flags.cheapContextSave, flags.printLaunchPlan)
+	return runManaged(host, discovered, executor, binding, logger, appendFile, flags)
 }
 
 // runProvider executes a provider as a subprocess, forwarding stdio
@@ -1510,18 +1527,21 @@ func runWithPluginHost(executor Executor, pluginDirs []string, flags parsedFlags
 // failure). Used by every non-naked path so clown stays in the
 // process tree and can run post-exit hooks.
 //
-// extraEnv holds additional "KEY=VALUE" entries for the child. The
-// config-file providers (opencode, crush) use it to point at the config
-// clown generated for them. Empty leaves cmd.Env nil so the child inherits
-// clown's environment exactly as before — the claude paths pass nil and are
-// byte-for-byte unaffected.
+// bound is the Command the binding produced: argv plus any additional
+// "KEY=VALUE" entries for the child. The config-file providers (opencode,
+// crush) use Env to point at the config clown generated for them. An empty Env
+// leaves cmd.Env nil so the child inherits clown's environment exactly as
+// before — the claude paths contribute none and are byte-for-byte unaffected.
+// Both halves go through executor.FormatArgs together, so an executor that
+// relocates the process can translate or refuse the env rather than never
+// seeing it (clown#205).
 //
-// printLaunchPlan (--print-launch-plan) short-circuits the spawn: the resolved
-// invocation is written to stdout as JSON and the function returns 0. This is
-// the single point where binary, argv and env are all resolved and nothing has
-// been executed yet, which is why the dump lives here rather than at any of the
-// callers.
-func runProvider(executor Executor, args []string, logger *slog.Logger, ptyOpts ptysuspend.Options, extraEnv []string, printLaunchPlan bool) int {
+// flags is threaded whole rather than unpacked into positionals. runProvider
+// consumes two of its fields today (ptyOpts, printLaunchPlan) and the previous
+// shape made every new diagnostic flag a signature change on all three
+// functions in the runWithPluginHost → runManaged/runUnbound → runProvider
+// chain — which is how runManaged reached thirteen parameters.
+func runProvider(executor Executor, bound Command, logger *slog.Logger, flags parsedFlags) int {
 	binary, err := executor.Binary()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
@@ -1531,9 +1551,18 @@ func runProvider(executor Executor, args []string, logger *slog.Logger, ptyOpts 
 		return 1
 	}
 
-	argv := executor.FormatArgs(args)
+	final, err := executor.FormatArgs(bound)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
+		if logger != nil {
+			logger.Error("formatting provider invocation failed", "err", err)
+		}
+		return 1
+	}
+	argv, extraEnv := final.Args, final.Env
+	ptyOpts := flags.ptyOpts
 
-	if printLaunchPlan {
+	if flags.printLaunchPlan {
 		// Files is left empty. The staging root now gives per-launch artifacts
 		// one home, so enumerating them is a walk of root.Path() rather than
 		// the fragile guess it would have been across seven independent temp
@@ -1701,23 +1730,35 @@ func defaultShell() string {
 	return "/bin/sh"
 }
 
+// runManaged launches the provider with the plugin host's servers bound in.
+//
+// flags is threaded whole. It used to arrive as thirteen positionals, five of
+// which runWithPluginHost had just unpacked out of the same parsedFlags value
+// it already held (ptyOpts, the cheap-context trio, printLaunchPlan) — so every
+// new diagnostic flag cost a signature change here and at every call site, and
+// the two derivations of cheapContextActive could disagree. Both hazards go
+// away by handing down the value the caller already has.
+//
+// skipFailed and verbose come from flags too; runWithPluginHost folds the
+// CLOWN_SKIP_FAILED_PLUGINS env override into flags.skipFailed before calling,
+// so there is exactly one source of truth for it on this path.
 func runManaged(
 	host *pluginhost.Host,
 	discovered []pluginhost.DiscoveredServer,
 	executor Executor,
 	binding pluginBinding,
-	skipFailed bool,
-	verbose bool,
 	logger *slog.Logger,
 	appendFile string,
-	ptyOpts ptysuspend.Options,
-	cheapContextActive bool,
-	cheapContextProfile *profile.Profile,
-	cheapContextSave cheapContextSaveContext,
-	printLaunchPlan bool,
+	flags parsedFlags,
 ) int {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	skipFailed := flags.skipFailed
+	verbose := flags.verbose
+	// Derived here from flags rather than passed in, so this and claudeBinding
+	// cannot end up disagreeing about whether cheap-context is active.
+	cheapContextActive := cheapContextShouldActivate(flags.cheapContext, flags.cheapContextProfile)
 
 	// The pre-filter set, captured before --cheap-context narrows `discovered`.
 	// claudeBinding needs the difference to know which plugin dirs to exclude.
@@ -1767,7 +1808,7 @@ func runManaged(
 	if len(report.Started) == 0 {
 		logger.Info("no plugin servers healthy; falling back to original plugin dirs")
 		host.Shutdown()
-		return runUnbound(binding, executor, logger, ptyOpts, printLaunchPlan)
+		return runUnbound(binding, executor, logger, flags)
 	}
 	defer host.Shutdown()
 
@@ -1785,7 +1826,7 @@ func runManaged(
 	// like moxy has no clown-owned proxy in its request path at all, so its
 	// per-tool selection currently has no effect (clown#175).
 	if cheapContextActive {
-		filtered, err := applyCheapContextSelection(ctx, host, discovered, report.Started, logger, cheapContextProfile, cheapContextSave)
+		filtered, err := applyCheapContextSelection(ctx, host, discovered, report.Started, logger, flags.cheapContextProfile, flags.cheapContextSave)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "clown: %v\n", err)
 			logger.Error("cheap-context selection failed", "err", err)
@@ -1794,7 +1835,7 @@ func runManaged(
 		discovered = filtered
 		if len(discovered) == 0 {
 			logger.Info("cheap-context: every server deselected; falling back to original plugin dirs")
-			return runUnbound(binding, executor, logger, ptyOpts, printLaunchPlan)
+			return runUnbound(binding, executor, logger, flags)
 		}
 	}
 
@@ -1825,14 +1866,14 @@ func runManaged(
 		}
 	}
 
-	return runProvider(executor, bound.Args, logger, ptyOpts, bound.Env, printLaunchPlan)
+	return runProvider(executor, bound, logger, flags)
 }
 
 // runUnbound is the shared "launch with no clown-managed MCP servers" path used
 // by every fallback in runWithPluginHost/runManaged. Routing all three through
 // one helper is what keeps them from drifting apart from each other, and from
 // the bound path, as bindings are added.
-func runUnbound(binding pluginBinding, executor Executor, logger *slog.Logger, ptyOpts ptysuspend.Options, printLaunchPlan bool) int {
+func runUnbound(binding pluginBinding, executor Executor, logger *slog.Logger, flags parsedFlags) int {
 	bound, err := binding.Bind(nil, nil, nil)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
@@ -1841,7 +1882,7 @@ func runUnbound(binding pluginBinding, executor Executor, logger *slog.Logger, p
 		}
 		return 1
 	}
-	return runProvider(executor, bound.Args, logger, ptyOpts, bound.Env, printLaunchPlan)
+	return runProvider(executor, bound, logger, flags)
 }
 
 func runCodex(cliPath string, flags parsedFlags, prompts promptwalk.PromptResult, root *staging.Root) int {
