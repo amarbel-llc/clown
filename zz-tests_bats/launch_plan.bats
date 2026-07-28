@@ -39,6 +39,20 @@ url = "http://127.0.0.1:1/v1"
 token = "local"
 EOF
 
+  # Stub multiplexer, same shape as clownfile_attach.bats: records its argv to a
+  # file so a test can prove the [attach] wrap did — or did not — happen without
+  # zmx being installed.
+  STUB_BIN="$BATS_TEST_TMPDIR/bin"
+  mkdir -p "$STUB_BIN"
+  MUX_ARGV="$BATS_TEST_TMPDIR/zmx-argv"
+  cat >"$STUB_BIN/zmx" <<EOF
+#!$(command -v bash)
+printf '%s\n' "\$@" >"$MUX_ARGV"
+exit 0
+EOF
+  chmod +x "$STUB_BIN/zmx"
+  export PATH="$STUB_BIN:$PATH" STUB_BIN MUX_ARGV
+
   # A project directory is the unit of hermeticity: clown resolves the
   # clownfile from cwd, and crush's data-dir name is a hash of it.
   project="$BATS_TEST_TMPDIR/project"
@@ -60,6 +74,15 @@ EOF
 #                        about to collapse into a single staging root
 #   - --session-id       a fresh uuid per launch (decideClaudeSession)
 #   - crush data dir     a hash of the absolute project path
+#
+# The temp dirs are numbered per family by first appearance, NOT collapsed to a
+# single placeholder. claude is handed two distinct clown-plugin-compile-* dirs
+# (the job-monitor and juggler synth dirs); rendering both as one placeholder
+# would mean a staging-root migration that wrongly gave them a SHARED path still
+# produced an identical golden and passed green — the precise mistake
+# "collapse seven temp dirs into one home" invites, and the one this lane exists
+# to catch. Identical raw paths still map to identical placeholders, so a
+# genuinely repeated path stays visibly repeated.
 #
 # Plus one thing that does NOT vary per run but is elided anyway: the --agents
 # payload, a ~7 KB JSON blob of built-in subagent definitions baked in at build
@@ -87,9 +110,31 @@ normalize_plan() {
       -e "s#$BATS_TEST_TMPDIR#<test>#g" \
       -e "s#${TMPDIR:-/tmp}#<tmp>#g" \
       -e 's#/nix/store/[a-z0-9]\{32\}-[^/"]*#<store>#g' \
-      -e 's#clown-\([a-z-]*\)-[0-9]\{1,\}#clown-\1-<rand>#g' \
       -e 's#\("--session-id","\)[0-9a-f-]\{36\}#\1<uuid>#g' \
-      -e 's#\(/clown/crush/\)[0-9a-f]\{1,\}#\1<hash>#g'
+      -e 's#\(/clown/crush/\)[0-9a-f]\{1,\}#\1<hash>#g' |
+    # Number each mkdtemp'd dir per family by first appearance. sed cannot do
+    # this: it has no memory across matches, so every clown-plugin-compile-*
+    # would render as the same placeholder no matter how many distinct dirs
+    # there were.
+    awk '
+      {
+        rest = $0
+        out = ""
+        while (match(rest, /clown-[a-z-]+-[0-9]+/)) {
+          out = out substr(rest, 1, RSTART - 1)
+          tok = substr(rest, RSTART, RLENGTH)
+          rest = substr(rest, RSTART + RLENGTH)
+          family = tok
+          sub(/-[0-9]+$/, "", family)
+          if (!(tok in seen)) {
+            count[family]++
+            seen[tok] = count[family]
+          }
+          out = out family "-<rand#" seen[tok] ">"
+        }
+        print out rest
+      }
+    '
 }
 
 # assert_matches_golden <name> — compare the normalized plan on stdout with
@@ -166,6 +211,62 @@ run_plan() {
   # And stdout is exactly one line: the plan, with no trailing resume hint or
   # human chatter that a consumer would have to strip.
   assert_equal "${#lines[@]}" 1
+}
+
+@test "--print-launch-plan runs inline instead of wrapping in the multiplexer" {
+  # The regression this pins: maybeReexecMultiplexer runs ~40 lines BEFORE the
+  # refusal check below, and reexecArgv() emits only user/selection-derived
+  # flags — so --print-launch-plan does not survive into the inner clown. With
+  # [attach] enabled (the shipped default) on a tty, clown would wrap itself and
+  # the INNER clown would spawn the provider for real: the one outcome the
+  # flag's contract rules out. Before the fix this test sees the stub's argv
+  # file and an empty stdout.
+  #
+  # CLOWN_ATTACH_FORCE=1 substitutes for the tty that bats does not have; it is
+  # the documented test seam for exactly this gate, and without it the run would
+  # take the non-interactive path and pass trivially.
+  cat >"$project/clownfile" <<'EOF'
+[attach]
+multiplexer = "zmx"
+start = ["zmx", "attach", "{id}", "{entry}"]
+EOF
+
+  cd "$project"
+  run env CLOWN_ATTACH_FORCE=1 CLOWN_SESSION_ID=plan-sess \
+    "$CLOWN_BIN" --provider claude --print-launch-plan -- --version
+  assert_success
+  [ ! -f "$MUX_ARGV" ] || {
+    echo "multiplexer was invoked with: $(cat "$MUX_ARGV")" >&2
+    return 1
+  }
+  # The plan still reaches OUR stdout — the point of running inline. Asserted
+  # structurally rather than against the golden: CLOWN_SESSION_ID pins the
+  # identity key, so the injected --session-id is "plan-sess" rather than the
+  # uuid the golden's normalizer expects.
+  assert_equal "${#lines[@]}" 1
+  run jq -r .binary <<<"$output"
+  assert_success
+  assert_output --partial "/bin/claude"
+}
+
+@test "the multiplexer wrap still happens without --print-launch-plan" {
+  # The control arm. Without it the previous test cannot distinguish "the flag
+  # suppressed the wrap" from "the wrap never fired here for some unrelated
+  # reason" (stub not on PATH, CLOWN_ATTACH_FORCE ignored, clownfile not read).
+  cat >"$project/clownfile" <<'EOF'
+[attach]
+multiplexer = "zmx"
+start = ["zmx", "attach", "{id}", "{entry}"]
+EOF
+
+  cd "$project"
+  run env CLOWN_ATTACH_FORCE=1 CLOWN_SESSION_ID=plan-sess \
+    "$CLOWN_BIN" --provider claude -- --version
+  assert_success
+  [ -f "$MUX_ARGV" ]
+  run cat "$MUX_ARGV"
+  assert_line --index 0 "attach"
+  assert_line --index 1 "plan-sess"
 }
 
 @test "--print-launch-plan refuses the exec-replacing paths" {

@@ -169,7 +169,8 @@ func titleDisambiguationNeeded(sameScope func(jobwake.Presence) bool) bool {
 // returns on success; on a wrap failure it returns the error.
 //
 // Skip conditions: this is already the inner attached process (attachedID set —
-// the loop guard), [attach] is disabled (multiplexer "" / "none"), or — for the
+// the loop guard), [attach] is disabled (multiplexer "" / "none"),
+// --print-launch-plan is set (below), or — for the
 // interactive start/resume modes only — there is no interactive terminal (an
 // interactive attach needs a TTY; non-interactive runs inline). ModeSpawn is
 // exempt from the TTY gate: it is a detached-worker launch that is always
@@ -181,6 +182,22 @@ func titleDisambiguationNeeded(sameScope func(jobwake.Presence) bool) bool {
 // --session-id (which would otherwise misdetect a fresh launch as a resume).
 func maybeReexecMultiplexer(cf clownfile.Clownfile, flags parsedFlags, mode clownfile.AttachMode) error {
 	if attachedID != "" || !cf.Attach.Enabled() {
+		return nil
+	}
+	// --print-launch-plan runs inline, always. Two reasons, either sufficient:
+	//
+	// The wrap re-execs clown inside the multiplexer, and reexecArgv() emits only
+	// user/selection-derived flags — so the inner clown would NOT carry
+	// --print-launch-plan and would spawn the provider for real. That is the exact
+	// outcome the flag's contract rules out, and it fires on the shipped [attach]
+	// default whenever stdin and stdout are both ttys (which is why piping the
+	// plan into a tool masks it).
+	//
+	// Even with the flag threaded through, wrapping would be wrong: the plan would
+	// be written to the multiplexer's screen rather than to clown's stdout, so
+	// nothing could capture it. A machine-readable dump has no business inside a
+	// terminal multiplexer.
+	if flags.printLaunchPlan {
 		return nil
 	}
 	// Spawn is a detached-worker launch (RFC-0014 §5): non-interactive by

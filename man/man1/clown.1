@@ -109,11 +109,19 @@ or
 .Li PASSWORD
 .Pq case-insensitive
 are replaced with
-.Li "<redacted>" ,
-so a plan is safe to paste into a bug report or commit as a test
-fixture.
+.Li "<redacted>" .
 .Li files
 is currently always empty.
+.Pp
+Redaction is by environment-variable NAME only.
+.Li args
+is reproduced verbatim, including everything after
+.Cm -- ,
+so a credential passed on the command line
+.Pq for example Cm -- --api-key Ar secret
+appears in the plan unchanged.
+Review a plan before pasting it into a bug report or committing it as a
+test fixture.
 .Pp
 Everything upstream of the spawn still runs, including plugin
 discovery and plugin server startup, because the plan's
@@ -121,6 +129,15 @@ discovery and plugin server startup, because the plan's
 and
 .Li env
 are derived from it.
+With
+.Fl -tent
+this also includes loading the container image, so the run is not
+side-effect-free there.
+The clownfile
+.Li [attach]
+multiplexer wrap is skipped, so the plan always reaches this process's
+standard output rather than a multiplexer's screen.
+.Pp
 Not supported with
 .Fl -naked
 or

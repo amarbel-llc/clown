@@ -1,1 +1,1 @@
-{"binary":"<store>/bin/crush","args":["--data-dir","<test>/.xdg/state/clown/crush/<hash>","--version"],"env":["CRUSH_GLOBAL_CONFIG=<tmp>/clown-crush-<rand>"],"files":[]}
+{"binary":"<store>/bin/crush","args":["--data-dir","<test>/.xdg/state/clown/crush/<hash>","--version"],"env":["CRUSH_GLOBAL_CONFIG=<tmp>/clown-crush-<rand#1>"],"files":[]}
