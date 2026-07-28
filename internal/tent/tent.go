@@ -48,8 +48,16 @@ type Options struct {
 
 	// TmpDir is the host temp directory (typically /tmp). Bind-
 	// mounted writable so the plugin-host pipeline's staged plugin
-	// dirs (created via os.MkdirTemp) are reachable from inside the
-	// container at the same path. Pass an empty string to skip.
+	// dirs are reachable from inside the container at the same path.
+	// Pass an empty string to skip.
+	//
+	// Those dirs no longer come from independent os.MkdirTemp("") calls:
+	// every per-launch artifact clown generates now lives under a single
+	// staging root (internal/staging), placed by stagingBaseFor in
+	// cmd/clown. A revived tent should therefore bind THAT root rather
+	// than all of /tmp — one mount covering every artifact, which is the
+	// point of the root existing. See
+	// docs/plans/2026-07-28-containment-primitive-design.md part 1b.
 	TmpDir string
 
 	// PluginDirs lists host paths to bind-mount read-only. The raw
