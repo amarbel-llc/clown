@@ -572,6 +572,19 @@ func runWithFlags(flags parsedFlags) int {
 		_ = sessions.RecordSessionName(flags.resumeHintID, flags.clownName, flags.groupID)
 	}
 
+	// --print-launch-plan is implemented at the runProvider seam, which the
+	// exec-replacing paths (--naked, codex) never reach. Refusing is the only
+	// safe answer: silently ignoring the flag would LAUNCH the provider, the
+	// one outcome its entire contract rules out.
+	if flags.printLaunchPlan && (flags.naked || flags.provider == "codex") {
+		which := "--naked"
+		if !flags.naked {
+			which = "--provider codex"
+		}
+		fmt.Fprintf(os.Stderr, "clown: --print-launch-plan is not supported with %s (that path exec-replaces clown instead of spawning a child)\n", which)
+		return 1
+	}
+
 	if flags.naked {
 		if flags.provider == "opencode" || flags.provider == "crush" {
 			fmt.Fprintf(os.Stderr, "clown: --naked is not supported with --provider %s (config injection required)\n", flags.provider)
@@ -1065,7 +1078,10 @@ func runClaude(cliPath string, flags parsedFlags, prompts promptwalk.PromptResul
 	// NOT print it — inside the mux it is wiped by the immediate teardown. An empty
 	// attachedID also covers the genuinely un-wrapped run (mux disabled / absent /
 	// gated-out / non-claude inline), which is the correct place to print here.
-	if flags.resumeHintID != "" && attachedID == "" {
+	// --print-launch-plan also suppresses it: that flag's contract is that stdout
+	// is the plan and nothing else, and a trailing human hint would have to be
+	// stripped by every consumer.
+	if flags.resumeHintID != "" && attachedID == "" && !flags.printLaunchPlan {
 		printResumeHint(flags.resumeHintID)
 	}
 	return code
@@ -1399,7 +1415,7 @@ func runWithPluginHost(executor Executor, pluginDirs []string, flags parsedFlags
 	cheapContextActive := cheapContextShouldActivate(flags.cheapContext, flags.cheapContextProfile)
 
 	if disableClown {
-		return runUnbound(binding, executor, nil, flags.ptyOpts)
+		return runUnbound(binding, executor, nil, flags.ptyOpts, flags.printLaunchPlan)
 	}
 
 	logger := preLogger
@@ -1457,10 +1473,10 @@ func runWithPluginHost(executor Executor, pluginDirs []string, flags parsedFlags
 
 	if len(discovered) == 0 {
 		logger.Info("no plugin servers discovered; passing plugin dirs through")
-		return runUnbound(binding, executor, logger, flags.ptyOpts)
+		return runUnbound(binding, executor, logger, flags.ptyOpts, flags.printLaunchPlan)
 	}
 
-	return runManaged(host, discovered, executor, binding, skipFailed, verbose, logger, appendFile, flags.ptyOpts, cheapContextActive, flags.cheapContextProfile, flags.cheapContextSave)
+	return runManaged(host, discovered, executor, binding, skipFailed, verbose, logger, appendFile, flags.ptyOpts, cheapContextActive, flags.cheapContextProfile, flags.cheapContextSave, flags.printLaunchPlan)
 }
 
 // runProvider executes a provider as a subprocess, forwarding stdio
@@ -1473,7 +1489,13 @@ func runWithPluginHost(executor Executor, pluginDirs []string, flags parsedFlags
 // clown generated for them. Empty leaves cmd.Env nil so the child inherits
 // clown's environment exactly as before — the claude paths pass nil and are
 // byte-for-byte unaffected.
-func runProvider(executor Executor, args []string, logger *slog.Logger, ptyOpts ptysuspend.Options, extraEnv []string) int {
+//
+// printLaunchPlan (--print-launch-plan) short-circuits the spawn: the resolved
+// invocation is written to stdout as JSON and the function returns 0. This is
+// the single point where binary, argv and env are all resolved and nothing has
+// been executed yet, which is why the dump lives here rather than at any of the
+// callers.
+func runProvider(executor Executor, args []string, logger *slog.Logger, ptyOpts ptysuspend.Options, extraEnv []string, printLaunchPlan bool) int {
 	binary, err := executor.Binary()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
@@ -1484,6 +1506,26 @@ func runProvider(executor Executor, args []string, logger *slog.Logger, ptyOpts 
 	}
 
 	argv := executor.FormatArgs(args)
+
+	if printLaunchPlan {
+		// Files is left empty: per-launch artifacts are scattered across
+		// independent temp dirs today, with no registry to enumerate. The
+		// staging-root migration gives them one home.
+		plan := launchPlan{Binary: binary, Args: argv, Env: extraEnv}
+		out, err := plan.JSON()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "clown: rendering launch plan: %v\n", err)
+			if logger != nil {
+				logger.Error("rendering launch plan failed", "err", err)
+			}
+			return 1
+		}
+		fmt.Fprintln(os.Stdout, string(out))
+		if logger != nil {
+			logger.Info("printed launch plan; not spawning downstream", "binary", binary)
+		}
+		return 0
+	}
 
 	// ctrl-z escape-to-shell pty proxy (clownfile [attach].pty-suspend): run the
 	// provider on an inner pty so ^Z suspends clown back to the launching shell,
@@ -1645,6 +1687,7 @@ func runManaged(
 	cheapContextActive bool,
 	cheapContextProfile *profile.Profile,
 	cheapContextSave cheapContextSaveContext,
+	printLaunchPlan bool,
 ) int {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1697,7 +1740,7 @@ func runManaged(
 	if len(report.Started) == 0 {
 		logger.Info("no plugin servers healthy; falling back to original plugin dirs")
 		host.Shutdown()
-		return runUnbound(binding, executor, logger, ptyOpts)
+		return runUnbound(binding, executor, logger, ptyOpts, printLaunchPlan)
 	}
 	defer host.Shutdown()
 
@@ -1724,7 +1767,7 @@ func runManaged(
 		discovered = filtered
 		if len(discovered) == 0 {
 			logger.Info("cheap-context: every server deselected; falling back to original plugin dirs")
-			return runUnbound(binding, executor, logger, ptyOpts)
+			return runUnbound(binding, executor, logger, ptyOpts, printLaunchPlan)
 		}
 	}
 
@@ -1755,14 +1798,14 @@ func runManaged(
 		}
 	}
 
-	return runProvider(executor, bound.Args, logger, ptyOpts, bound.Env)
+	return runProvider(executor, bound.Args, logger, ptyOpts, bound.Env, printLaunchPlan)
 }
 
 // runUnbound is the shared "launch with no clown-managed MCP servers" path used
 // by every fallback in runWithPluginHost/runManaged. Routing all three through
 // one helper is what keeps them from drifting apart from each other, and from
 // the bound path, as bindings are added.
-func runUnbound(binding pluginBinding, executor Executor, logger *slog.Logger, ptyOpts ptysuspend.Options) int {
+func runUnbound(binding pluginBinding, executor Executor, logger *slog.Logger, ptyOpts ptysuspend.Options, printLaunchPlan bool) int {
 	bound, err := binding.Bind(nil, nil, nil)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
@@ -1771,7 +1814,7 @@ func runUnbound(binding pluginBinding, executor Executor, logger *slog.Logger, p
 		}
 		return 1
 	}
-	return runProvider(executor, bound.Args, logger, ptyOpts, bound.Env)
+	return runProvider(executor, bound.Args, logger, ptyOpts, bound.Env, printLaunchPlan)
 }
 
 func runCodex(cliPath string, flags parsedFlags, prompts promptwalk.PromptResult) int {
@@ -2049,6 +2092,10 @@ Clown flags (must appear before --):
                              outside a devshell. (Interim; --profile will subsume.)
   --no-tent-pass-devshell    Suppress the IN_NIX_SHELL auto-on default and leave the
                              tent's PATH at the image baseline.
+  --print-launch-plan        Print the resolved provider invocation
+                             ({binary, args, env, files}) as JSON and exit
+                             without spawning it. Secret-looking env values are
+                             redacted. Diagnostic/characterization seam.
   --verbose, -v              Enable verbose output
   --help, -h                 Show this help text
   version                    Print version information (first argument only)
@@ -2195,9 +2242,19 @@ type parsedFlags struct {
 	// over implicit env detection.
 	noPassDevshell bool
 	verbose        bool
-	version        bool
-	help           bool
-	forwarded      []string
+	// printLaunchPlan makes runProvider dump the fully-resolved invocation
+	// (binary, argv, extra env) as JSON and return 0 instead of spawning it.
+	// The launch path is nearly pure — flags + config produce a command — so
+	// this seam is what lets it be characterization-tested against golden
+	// fixtures (zz-tests_bats/golden/launch-plan-*.json) without a provider
+	// process, a tty, or a model. Everything upstream of the spawn still runs,
+	// including plugin discovery and startup, because the plan's argv and env
+	// are derived from it. No env-var mirror: it is a diagnostic, and an
+	// ambient one would be a foot-gun that silently stops launching anything.
+	printLaunchPlan bool
+	version         bool
+	help            bool
+	forwarded       []string
 	// extraPluginDirs holds plugin directories supplied at the command
 	// line via --plugin-dir. They are appended to the baked-in set from
 	// CLOWN_PLUGIN_META and let users wire ad-hoc plugins (typically
@@ -2296,6 +2353,8 @@ parse:
 			p.passDevshell = true
 		case args[i] == "--no-tent-pass-devshell":
 			p.noPassDevshell = true
+		case args[i] == "--print-launch-plan":
+			p.printLaunchPlan = true
 		case args[i] == "--verbose" || args[i] == "-v":
 			p.verbose = true
 		case args[i] == "--plugin-dir":

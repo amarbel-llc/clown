@@ -1,0 +1,1 @@
+{"binary":"<store>/bin/opencode","args":["--version"],"env":["OPENCODE_CONFIG=<tmp>/clown-opencode-<rand>/opencode.json","OPENCODE_DISABLE_PROJECT_CONFIG=1"],"files":[]}

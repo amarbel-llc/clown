@@ -84,6 +84,52 @@ is preferred.
 Also settable via the
 .Ev CLOWN_DISABLE_CLOWN_PROTOCOL
 environment variable.
+.It Fl -print-launch-plan
+Print the fully-resolved provider invocation to standard output as a
+single line of JSON and exit 0 without spawning the provider.
+The object has the keys
+.Li binary ,
+.Li args ,
+.Li env ,
+and
+.Li files ;
+.Li args
+preserves argv order, while
+.Li env
+and
+.Li files
+are sorted.
+Values of
+.Li env
+entries whose key matches
+.Li TOKEN ,
+.Li KEY ,
+.Li SECRET ,
+or
+.Li PASSWORD
+.Pq case-insensitive
+are replaced with
+.Li "<redacted>" ,
+so a plan is safe to paste into a bug report or commit as a test
+fixture.
+.Li files
+is currently always empty.
+.Pp
+Everything upstream of the spawn still runs, including plugin
+discovery and plugin server startup, because the plan's
+.Li args
+and
+.Li env
+are derived from it.
+Not supported with
+.Fl -naked
+or
+.Cm --provider codex ,
+which exec-replace
+.Nm
+rather than spawning a child;
+.Nm
+exits non-zero rather than silently launching the provider.
 .It Fl v , Fl -verbose
 Emit informational progress on stderr in addition to the always-on
 log file.
