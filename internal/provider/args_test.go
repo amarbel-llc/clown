@@ -295,11 +295,10 @@ func TestBuildClaudeArgs_SettingsBeforeForwarded(t *testing.T) {
 }
 
 func TestBuildCodexArgs_SandboxWrite(t *testing.T) {
-	args, cleanup, err := BuildCodexArgs(CodexArgs{}, nil)
+	args, err := BuildCodexArgs(CodexArgs{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer cleanup()
 
 	if len(args) < 2 || args[0] != "--sandbox" || args[1] != "workspace-write" {
 		t.Errorf("args = %v, want [--sandbox workspace-write ...]", args)
@@ -315,14 +314,14 @@ func TestBuildCodexArgs_CombinedPrompt(t *testing.T) {
 	promptFile.WriteString("base prompt")
 	promptFile.Close()
 
-	args, cleanup, err := BuildCodexArgs(CodexArgs{
+	args, err := BuildCodexArgs(CodexArgs{
 		SystemPromptFile: promptFile.Name(),
 		AppendFragments:  "extra fragment",
+		Staging:          testStagingRoot(t),
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer cleanup()
 
 	for i, a := range args {
 		if a == "--config" && i+1 < len(args) {
@@ -350,24 +349,30 @@ func TestBuildCodexArgs_CombinedPrompt(t *testing.T) {
 }
 
 func TestBuildCodexArgs_AppendOnly(t *testing.T) {
-	args, cleanup, err := BuildCodexArgs(CodexArgs{
+	root := testStagingRoot(t)
+	args, err := BuildCodexArgs(CodexArgs{
 		AppendFragments: "only fragment",
+		Staging:         root,
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer cleanup()
 
 	for i, a := range args {
 		if a == "--config" && i+1 < len(args) {
 			val := args[i+1]
 			tmpPath := strings.TrimPrefix(val, "experimental_instructions_file=")
+			// Must land under the launch root, not $TMPDIR — the property the
+			// whole migration exists to establish.
+			if !strings.HasPrefix(tmpPath, root.Path()) {
+				t.Errorf("instructions file %q is not under the staging root %q", tmpPath, root.Path())
+			}
 			data, err := os.ReadFile(tmpPath)
 			if err != nil {
-				t.Fatalf("reading temp file: %v", err)
+				t.Fatalf("reading instructions file: %v", err)
 			}
 			if string(data) != "only fragment" {
-				t.Errorf("temp file content = %q, want 'only fragment'", string(data))
+				t.Errorf("instructions file content = %q, want 'only fragment'", string(data))
 			}
 			return
 		}
@@ -375,12 +380,19 @@ func TestBuildCodexArgs_AppendOnly(t *testing.T) {
 	t.Error("--config not found in args")
 }
 
+// Mirrors the claude arm: a missing root is refused rather than silently
+// falling back to $TMPDIR and producing a file outside the exposed directory.
+func TestBuildCodexArgs_PromptsRequireStagingRoot(t *testing.T) {
+	if _, err := BuildCodexArgs(CodexArgs{AppendFragments: "x"}, nil); err == nil {
+		t.Fatal("expected an error when AppendFragments is set without a staging root")
+	}
+}
+
 func TestBuildCodexArgs_NoPrompts(t *testing.T) {
-	args, cleanup, err := BuildCodexArgs(CodexArgs{}, nil)
+	args, err := BuildCodexArgs(CodexArgs{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer cleanup()
 
 	for _, a := range args {
 		if a == "--config" {
@@ -390,11 +402,10 @@ func TestBuildCodexArgs_NoPrompts(t *testing.T) {
 }
 
 func TestBuildCodexArgs_ForwardedArgs(t *testing.T) {
-	args, cleanup, err := BuildCodexArgs(CodexArgs{}, []string{"--model", "o3"})
+	args, err := BuildCodexArgs(CodexArgs{}, []string{"--model", "o3"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer cleanup()
 
 	last2 := args[len(args)-2:]
 	if last2[0] != "--model" || last2[1] != "o3" {

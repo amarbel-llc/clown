@@ -1846,19 +1846,22 @@ func runUnbound(binding pluginBinding, executor Executor, logger *slog.Logger, p
 }
 
 func runCodex(cliPath string, flags parsedFlags, prompts promptwalk.PromptResult, root *staging.Root) int {
-	args, cleanup, err := provider.BuildCodexArgs(provider.CodexArgs{
+	args, err := provider.BuildCodexArgs(provider.CodexArgs{
 		CLIPath:          cliPath,
 		SystemPromptFile: prompts.SystemPromptFile,
 		AppendFragments:  prompts.AppendFragments,
+		Staging:          root,
 	}, flags.forwarded)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown: building codex args: %v\n", err)
 		return 1
 	}
-	defer cleanup()
 
 	// codex exec-replaces clown and IS the agent, so stamp identity on the env
-	// it inherits (clown#136 §5).
+	// it inherits (clown#136 §5). The staging root is deliberately NOT closed
+	// first: codex reads the instructions file after this process is gone, so
+	// the artifacts must outlive clown. The root leaks here, inherently — see
+	// BuildCodexArgs.
 	applyIdentityEnv(flags.identity)
 	execProcess(cliPath, args)
 	return 0 // unreachable
