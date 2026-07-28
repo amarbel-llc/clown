@@ -96,7 +96,8 @@ The flake's `symlinkJoin` output bundles: the `clown` wrapper script, the
 dispatch, system-prompt injection, MCP plugin lifecycle via
 `internal/pluginhost`, `clownfile`-driven config via `internal/clownfile`,
 multiplexer self-attach via `internal/ptysuspend`/`cmd/clown/attach.go`,
-and tent (sandboxed container) support via `internal/tent`), the standalone
+per-launch artifact staging via `internal/staging`, and tent (sandboxed
+container) support via `internal/tent`), the standalone
 `clown-plugin-host` binary, `clown sessions-complete` fish-completion
 support, and `completions/clown.fish`.
 
