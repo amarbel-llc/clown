@@ -98,10 +98,16 @@ func troupeAgentCommand(key string) string {
 
 // providerUsesPluginDirs reports whether the provider should receive clown's
 // SYNTHESIZED plugin dirs (the job-watch monitor dir and the juggler-prompt
-// dir). The requirement is that the provider runs as a subprocess, so the
-// launch staging root's deferred Close actually fires: codex and --naked exec
-// away and would strand the root, and juggler is a stub that ignores
-// pluginDirs.
+// dir). The requirement is simply that the provider CONSUMES them: codex
+// ignores --plugin-dir, --naked bypasses clown's wrapping altogether, and
+// juggler is a stub that ignores pluginDirs. Synthesizing dirs none of them
+// reads would be pure waste.
+//
+// This is deliberately not a cleanup argument. The launch staging root owns
+// these dirs now, so nothing here depends on a deferred removal firing — and
+// the exec-replacing providers strand the root either way (codex writes its
+// prompt file under it regardless; see BuildCodexArgs), so excluding them
+// changes how much is left behind, not whether anything is.
 //
 // opencode and crush qualify since FDR 0016 phase 1 routed them through
 // runWithPluginHost (cmd.Run, never syscall.Exec). What they take from the
@@ -134,6 +140,13 @@ func providerUsesPluginDirs(provider string) bool {
 // Claude; the launch's staging root owns the directory and removes it on
 // close, so the caller must not. When CLOWN_DISABLE_JOB_WAKEUP=1 it returns
 // ("", nil) so the monitor is not registered (RFC-0009 §8).
+//
+// root is required and a nil one panics, rather than being refused with an
+// error the way CompilePluginDir and BuildClaudeArgs refuse theirs. The
+// asymmetry is deliberate: those cross a package boundary and can be reached
+// by callers this package does not control, whereas this has exactly one call
+// site — in runWithFlags, where the root is always live — so a nil here is a
+// programming error in this file, not input to validate.
 func synthJobMonitorPluginDir(root *staging.Root, sessionKey string) (string, error) {
 	if jobWakeupDisabled() {
 		return "", nil

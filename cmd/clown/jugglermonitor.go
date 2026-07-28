@@ -34,6 +34,10 @@ type jugglerPluginManifest struct {
 // buildcfg.JugglerCliPath is empty (dev builds — go run/go build never
 // burn this in; only the nix derivation does), so a dev build never ships
 // a clown.json pointing at a nonexistent path.
+//
+// As with synthJobMonitorPluginDir, root is required and a nil one panics
+// rather than being refused; see the note there for why that differs from the
+// package-boundary writers.
 func synthJugglerPluginDir(root *staging.Root) (string, error) {
 	if jugglerMCPDisabled() || buildcfg.JugglerCliPath == "" {
 		return "", nil
