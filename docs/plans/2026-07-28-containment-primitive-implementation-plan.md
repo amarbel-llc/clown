@@ -241,6 +241,16 @@ For each: add the `*staging.Root` parameter, replace the `os.MkdirTemp("")`/`os.
 
 **Promotion criteria:** N/A.
 
+**Acceptance criterion added during Task 1 review:** collapse the
+`runWithPluginHost` → `runManaged`/`runUnbound` → `runProvider` positional tail.
+`runWithPluginHost` already receives `flags parsedFlags` and then unpacks five
+of its fields into separate positionals to hand down the same chain
+(`ptyOpts`, the cheap-context trio, and now `printLaunchPlan`), leaving
+`runManaged` at 13 parameters. Task 1's reviewer flagged that deferring this is
+correct *only if* this task actually absorbs it — otherwise the next diagnostic
+flag makes it 14 and the case for deferring weakens each time. Thread `flags`
+itself, or fold the tail into the new `Command`/options struct.
+
 **Files:** `cmd/clown/pluginbinding.go`, `cmd/clown/main.go`, `cmd/clown/pluginbinding_test.go`
 
 **Step 1: Write the failing test**
