@@ -129,15 +129,21 @@ recording:
   `$PATH` a special case needing store-canonicalisation), files, network
   services, tty — and which of the four in-tree mechanisms solves which today.
 - **Tent's discovered requirements**: the C+F bind allowlist as ambient
-  policy, `RewritePathToNixStore`, `URLHostRewrite`, and the fresh-`/tmp`
-  consequence that makes per-launch artifacts invisible.
+  policy, `RewritePathToNixStore`, `URLHostRewrite`, and the blanket
+  `$TMPDIR` bind — which covers per-launch artifacts by accident rather than
+  by design, and stops covering them the moment the staging root moves.
 - **The `Placement` sketch** — `File`/`Service`/`Exec`/`Close` over a
   `Command` — and the layered split above.
 - **Loci**, with server mode recorded as an invocation model rather than a
   locus, and the reasoning for that.
-- **The suspected `appendFile`-in-tent bug** (below), as a known issue for
-  whoever revives tent.
+- **Exec-replacing loci cannot have their staging reclaimed by the launcher.**
+  codex `syscall.Exec`s, so the artifacts must outlive clown and no `Close` is
+  correct. Any locus that replaces or outlives clown's process faces the same
+  question of who reaps.
 - **Revival cost**: implement one interface against a recorded requirement set.
+
+The retracted `appendFile` theory (below) is recorded as a **methodological**
+note, not a known issue — it was false, and the FDR must not repeat it.
 
 ## A suspected bug — RETRACTED
 
