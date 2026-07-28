@@ -424,14 +424,16 @@ func runCrush(crushPath string, prof *profile.Profile, flags parsedFlags, plugin
 		baseURL, apiKey = localCfg.URL, localCfg.Token
 	}
 
-	tmpDir, err := os.MkdirTemp("", "clown-crush-*")
+	// Safe: runWithPluginHost runs crush as a subprocess and returns only after
+	// it exits, so the config outlives the launch. The launch root owns this
+	// directory. Note this is the LOWER-priority config copy only; the
+	// authoritative one goes to dataDir below, which is deliberately NOT
+	// staging — see crushDataDir.
+	tmpDir, err := root.Dir("clown-crush-*")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "clown: create temp dir: %v\n", err)
+		fmt.Fprintf(os.Stderr, "clown: create config dir: %v\n", err)
 		return 1
 	}
-	// Safe: runWithPluginHost runs crush as a subprocess and returns only after
-	// it exits, so the config outlives the launch.
-	defer os.RemoveAll(tmpDir)
 
 	// Phase 0. crush has no switch to disable its project-config walk, so
 	// authority comes from precedence instead: the workspace config at
