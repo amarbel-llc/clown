@@ -59,6 +59,7 @@ import (
 	"code.linenisgreat.com/clown/internal/clownfile"
 	"code.linenisgreat.com/clown/internal/pluginhost"
 	"code.linenisgreat.com/clown/internal/profile"
+	"code.linenisgreat.com/clown/internal/staging"
 )
 
 type crushLocalConfig struct {
@@ -361,7 +362,7 @@ func resolveCrushGateway(prof *profile.Profile) (baseURL, apiKey, model string) 
 // servers reach crush through the generated config's `mcp` block (FDR 0016
 // phase 1). hermetic drives phase 0's workspace-slot precedence; see
 // crushDataDir.
-func runCrush(crushPath string, prof *profile.Profile, flags parsedFlags, pluginDirs []string) int {
+func runCrush(crushPath string, prof *profile.Profile, flags parsedFlags, pluginDirs []string, root *staging.Root) int {
 	args, hermetic := flags.forwarded, flags.hermeticConfig
 
 	if crushPath == "" {
@@ -470,7 +471,7 @@ func runCrush(crushPath string, prof *profile.Profile, flags parsedFlags, plugin
 		},
 	}
 
-	return runWithPluginHost(&directExecutor{cliPath: crushPath}, pluginDirs, flags, nil, "", binding)
+	return runWithPluginHost(&directExecutor{cliPath: crushPath}, pluginDirs, flags, nil, "", root, binding)
 }
 
 // crushDataDir returns the stable, clown-owned crush data directory for

@@ -200,7 +200,7 @@ func TestCompileForClaude_MonitorsOnlyPlugin(t *testing.T) {
 	mustWrite(t, filepath.Join(dir, ".claude-plugin", "plugin.json"),
 		`{"name": "monitors-only-demo"}`)
 
-	host := &Host{PluginDirs: []string{dir}}
+	host := &Host{PluginDirs: []string{dir}, Staging: testRoot(t)}
 	defer host.Shutdown()
 
 	discovered, err := host.Discover()

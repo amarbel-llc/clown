@@ -33,6 +33,7 @@ import (
 	"code.linenisgreat.com/clown/internal/provider"
 	"code.linenisgreat.com/clown/internal/ptysuspend"
 	"code.linenisgreat.com/clown/internal/sessions"
+	"code.linenisgreat.com/clown/internal/staging"
 	"code.linenisgreat.com/clown/internal/tent"
 	"code.linenisgreat.com/ringmaster/jobwake"
 )
@@ -605,6 +606,23 @@ func runWithFlags(flags parsedFlags) int {
 		return 0 // unreachable
 	}
 
+	// One staging root per launch: every artifact clown generates for this
+	// provider (compiled plugin dirs, the synthesized built-in plugins, the
+	// generated opencode/crush config, the prompt-append file) is created under
+	// it instead of each writer calling os.MkdirTemp("") for itself. That is
+	// what turns "make clown's artifacts visible to the provider" into a single
+	// directory rather than an open-ended set
+	// (docs/plans/2026-07-28-containment-primitive-design.md, part 1b).
+	//
+	// Created after the --naked exec above, which replaces this process and
+	// would strand the root; see stagingBaseFor for where it lands.
+	root, err := staging.New(stagingBaseFor(flags, cwd))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
+		return 1
+	}
+	defer root.Close()
+
 	pluginDirs := readPluginDirs()
 	pluginDirs = append(pluginDirs, flags.extraPluginDirs...)
 
@@ -665,23 +683,23 @@ func runWithFlags(flags parsedFlags) int {
 
 	switch flags.provider {
 	case "claude":
-		return runClaude(cliPath, flags, prompts, pluginDirs)
+		return runClaude(cliPath, flags, prompts, pluginDirs, root)
 	case "codex":
-		return runCodex(cliPath, flags, prompts)
+		return runCodex(cliPath, flags, prompts, root)
 	case "juggler":
 		return runJuggler(cliPath, flags, prompts, pluginDirs)
 	case "opencode":
-		return runOpencode(cliPath, selectedProfile, flags, pluginDirs)
+		return runOpencode(cliPath, selectedProfile, flags, pluginDirs, root)
 	case "openrouter":
 		// Phase B (docs/plans/2026-07-24-openrouter-non-anthropic-design.md):
 		// openrouter is a first-class provider but has no CLI of its own —
 		// it rides the opencode runner, whose gateway branch hardcodes the
 		// OpenRouter URL when selectedProfile.Provider == "openrouter".
-		return runOpencode(cliPath, selectedProfile, flags, pluginDirs)
+		return runOpencode(cliPath, selectedProfile, flags, pluginDirs, root)
 	case "crush":
-		return runCrush(cliPath, selectedProfile, flags, pluginDirs)
+		return runCrush(cliPath, selectedProfile, flags, pluginDirs, root)
 	case "clownbox":
-		return runClownbox(cliPath, flags, prompts, pluginDirs)
+		return runClownbox(cliPath, flags, prompts, pluginDirs, root)
 	default:
 		fmt.Fprintf(os.Stderr, "clown: unknown provider %q\n", flags.provider)
 		return 1
@@ -1004,7 +1022,7 @@ func resolveClaudeForRun(defaultCliPath string, tent bool) (cliPath, disallowedT
 	return buildcfg.ClaudeTentCliPath, "", nil
 }
 
-func runClaude(cliPath string, flags parsedFlags, prompts promptwalk.PromptResult, pluginDirs []string) int {
+func runClaude(cliPath string, flags parsedFlags, prompts promptwalk.PromptResult, pluginDirs []string, root *staging.Root) int {
 	innerCliPath, disallowedToolsFile, err := resolveClaudeForRun(cliPath, flags.tent)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
@@ -1077,7 +1095,7 @@ func runClaude(cliPath string, flags parsedFlags, prompts promptwalk.PromptResul
 			tentLogger.Info("tent setup complete; entering plugin host")
 		}
 
-		return runWithPluginHost(executor, pluginDirs, flags, tentLogger, appendFile,
+		return runWithPluginHost(executor, pluginDirs, flags, tentLogger, appendFile, root,
 			newClaudeBinding(args, pluginDirs, flags, tentLogger))
 	}
 	code := run(flags.forwarded)
@@ -1415,7 +1433,7 @@ func ensureTentImage(backend tent.Backend, ref, tarball, flakeRef string) error 
 // newClaudeBinding (plugin-dir delivery), opencode and crush pass a
 // configFileBinding. pluginDirs is still separate because host.Discover needs it
 // regardless of how the results are ultimately delivered.
-func runWithPluginHost(executor Executor, pluginDirs []string, flags parsedFlags, preLogger *slog.Logger, appendFile string, binding pluginBinding) int {
+func runWithPluginHost(executor Executor, pluginDirs []string, flags parsedFlags, preLogger *slog.Logger, appendFile string, root *staging.Root, binding pluginBinding) int {
 	skipFailed := flags.skipFailed || os.Getenv("CLOWN_SKIP_FAILED_PLUGINS") == "1"
 	disableClown := flags.disableClownProtocol || os.Getenv("CLOWN_DISABLE_CLOWN_PROTOCOL") == "1"
 	verbose := flags.verbose
@@ -1458,6 +1476,10 @@ func runWithPluginHost(executor Executor, pluginDirs []string, flags parsedFlags
 		Logger:         logger,
 		BridgePath:     buildcfg.StdioBridgePath,
 		URLHostRewrite: pluginURLHostFor(flags),
+		// Every plugin dir CompileForClaude stages lands under the launch root,
+		// so the compiled manifests are reachable through the same single
+		// directory as the rest of clown's per-launch artifacts.
+		Staging: root,
 		// Inject the per-instance identity into every managed producer so it
 		// resolves the same channel without clown polluting its own (and the
 		// claude subtree's) env (clown#136).
@@ -1825,7 +1847,7 @@ func runUnbound(binding pluginBinding, executor Executor, logger *slog.Logger, p
 	return runProvider(executor, bound.Args, logger, ptyOpts, bound.Env, printLaunchPlan)
 }
 
-func runCodex(cliPath string, flags parsedFlags, prompts promptwalk.PromptResult) int {
+func runCodex(cliPath string, flags parsedFlags, prompts promptwalk.PromptResult, root *staging.Root) int {
 	args, cleanup, err := provider.BuildCodexArgs(provider.CodexArgs{
 		CLIPath:          cliPath,
 		SystemPromptFile: prompts.SystemPromptFile,
@@ -1868,6 +1890,27 @@ func runJuggler(jugglerPath string, flags parsedFlags, prompts promptwalk.Prompt
 	return 1
 }
 
+// stagingBaseFor returns the directory the launch's staging root is created
+// under. An empty result means $TMPDIR (os.MkdirTemp's default), which is where
+// every per-launch artifact lived before the staging migration.
+//
+// clownbox is the one provider that cannot use $TMPDIR: its sandbox gives the
+// container a fresh /tmp and mounts only the repo writable, so a root under the
+// host's $TMPDIR is simply not there from inside. Placing the root in
+// <repo>/.tmp is the same destination runClownbox's global os.Setenv("TMPDIR")
+// aims at, reached as configuration rather than by mutating process state — and
+// it has to be decided HERE, because the root is created before runClownbox is
+// ever called, so that setenv could no longer influence it.
+//
+// The failure this prevents is silent: an unreachable prompt-append file makes
+// claude start with no clown system prompt at all, and nothing errors.
+func stagingBaseFor(flags parsedFlags, cwd string) string {
+	if flags.provider == "clownbox" {
+		return filepath.Join(cwd, ".tmp")
+	}
+	return ""
+}
+
 // runClownbox launches claude-code wrapped in the clownbox sandbox (a fork
 // of numtide/claudebox patched for `--` arg passthrough). The sandbox
 // shadows $HOME with an isolated session dir and mounts the repo
@@ -1880,7 +1923,7 @@ func runJuggler(jugglerPath string, flags parsedFlags, prompts promptwalk.Prompt
 // passthroughExecutor — clownbox's bwrap profile uses --share-net, so
 // HTTP MCP servers spawned on the host's localhost are reachable from
 // inside the sandbox without further plumbing.
-func runClownbox(cliPath string, flags parsedFlags, prompts promptwalk.PromptResult, pluginDirs []string) int {
+func runClownbox(cliPath string, flags parsedFlags, prompts promptwalk.PromptResult, pluginDirs []string, root *staging.Root) int {
 	repoRoot, err := os.Getwd()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown: getwd: %v\n", err)
@@ -1918,7 +1961,7 @@ func runClownbox(cliPath string, flags parsedFlags, prompts promptwalk.PromptRes
 	}
 	defer cleanup()
 
-	return runWithPluginHost(&passthroughExecutor{cliPath: cliPath}, pluginDirs, flags, nil, appendFile,
+	return runWithPluginHost(&passthroughExecutor{cliPath: cliPath}, pluginDirs, flags, nil, appendFile, root,
 		newClaudeBinding(args, pluginDirs, flags, nil))
 }
 

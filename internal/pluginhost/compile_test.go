@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"code.linenisgreat.com/clown/internal/staging"
 )
 
 func TestCompilePluginManifest_StripsMcpServers(t *testing.T) {
@@ -196,6 +198,73 @@ func TestCompilePluginManifest_InvalidJSON(t *testing.T) {
 	}
 }
 
+// testRoot returns a staging root scoped to the test, closed on cleanup. It
+// replaces the `defer os.RemoveAll(staged)` these tests used to carry: the root
+// owns every compiled dir now, which is the property under test.
+func testRoot(t *testing.T) *staging.Root {
+	t.Helper()
+	r, err := staging.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("staging.New: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Close() })
+	return r
+}
+
+// The whole point of the migration: a compiled dir must land under the launch
+// root, not in an independent $TMPDIR mkdtemp. Without this the signature could
+// take a root, ignore it, and every other assertion here would still pass.
+func TestCompilePluginDir_LandsUnderStagingRoot(t *testing.T) {
+	source := t.TempDir()
+	mustMkdir(t, filepath.Join(source, ".claude-plugin"))
+	mustWrite(t, filepath.Join(source, ".claude-plugin", "plugin.json"), `{"name":"demo"}`)
+
+	root := testRoot(t)
+	staged, err := CompilePluginDir(source, root, CompileInputs{})
+	if err != nil {
+		t.Fatalf("CompilePluginDir: %v", err)
+	}
+	if !strings.HasPrefix(staged, root.Path()) {
+		t.Errorf("staged dir %q is not under staging root %q", staged, root.Path())
+	}
+}
+
+// A nil root must be refused rather than quietly falling back to $TMPDIR. The
+// fallback would be the worse failure: the artifact exists, so nothing errors,
+// but it sits outside the one directory a container locus exposes.
+func TestCompilePluginDir_NilRootIsRefused(t *testing.T) {
+	source := t.TempDir()
+	mustMkdir(t, filepath.Join(source, ".claude-plugin"))
+	mustWrite(t, filepath.Join(source, ".claude-plugin", "plugin.json"), `{"name":"demo"}`)
+
+	if _, err := CompilePluginDir(source, nil, CompileInputs{}); err == nil {
+		t.Fatal("expected an error for a nil staging root, got nil")
+	}
+}
+
+// Two source dirs must get two staging dirs. The launch-plan golden lane can
+// see this for the claude arm, but nothing else pins it, and a migration that
+// handed every compile the same directory would silently make one plugin's
+// manifest overwrite another's.
+func TestCompilePluginDir_DistinctSourcesGetDistinctDirs(t *testing.T) {
+	root := testRoot(t)
+
+	staged := make([]string, 2)
+	for i := range staged {
+		source := t.TempDir()
+		mustMkdir(t, filepath.Join(source, ".claude-plugin"))
+		mustWrite(t, filepath.Join(source, ".claude-plugin", "plugin.json"), `{"name":"demo"}`)
+
+		var err error
+		if staged[i], err = CompilePluginDir(source, root, CompileInputs{}); err != nil {
+			t.Fatalf("CompilePluginDir: %v", err)
+		}
+	}
+	if staged[0] == staged[1] {
+		t.Errorf("two compiles shared one staging dir: %q", staged[0])
+	}
+}
+
 func TestCompilePluginDir_SymlinksAndRewrites(t *testing.T) {
 	source := t.TempDir()
 
@@ -212,11 +281,10 @@ func TestCompilePluginDir_SymlinksAndRewrites(t *testing.T) {
 	mustWrite(t, filepath.Join(source, ".claude-plugin", "marketplace.json"),
 		`{"displayName":"demo"}`)
 
-	staged, err := CompilePluginDir(source, CompileInputs{})
+	staged, err := CompilePluginDir(source, testRoot(t), CompileInputs{})
 	if err != nil {
 		t.Fatalf("CompilePluginDir: %v", err)
 	}
-	defer os.RemoveAll(staged)
 
 	// Top-level entries (non-.claude-plugin) must be symlinks.
 	for _, name := range []string{"clown.json", "skills", "hooks"} {
@@ -285,11 +353,10 @@ func TestCompilePluginDir_InjectsServerEntries(t *testing.T) {
 	entries := map[string]MCPServerEntry{
 		"srv": {Type: "http", URL: "http://127.0.0.1:9999/mcp"},
 	}
-	staged, err := CompilePluginDir(source, CompileInputs{Servers: entries})
+	staged, err := CompilePluginDir(source, testRoot(t), CompileInputs{Servers: entries})
 	if err != nil {
 		t.Fatalf("CompilePluginDir: %v", err)
 	}
-	defer os.RemoveAll(staged)
 
 	pjData, err := os.ReadFile(filepath.Join(staged, ".claude-plugin", "plugin.json"))
 	if err != nil {
@@ -322,7 +389,7 @@ func TestCompilePluginDir_MissingPluginJSON(t *testing.T) {
 	mustMkdir(t, filepath.Join(source, ".claude-plugin"))
 	// no plugin.json
 
-	_, err := CompilePluginDir(source, CompileInputs{})
+	_, err := CompilePluginDir(source, testRoot(t), CompileInputs{})
 	if err == nil {
 		t.Fatal("expected error when plugin.json is missing, got nil")
 	}
@@ -332,7 +399,7 @@ func TestCompilePluginDir_MissingClaudePluginDir(t *testing.T) {
 	source := t.TempDir()
 	mustWrite(t, filepath.Join(source, "clown.json"), `{}`)
 
-	_, err := CompilePluginDir(source, CompileInputs{})
+	_, err := CompilePluginDir(source, testRoot(t), CompileInputs{})
 	if err == nil {
 		t.Fatal("expected error when .claude-plugin is missing, got nil")
 	}
@@ -423,11 +490,10 @@ func TestCompilePluginDir_InjectsMonitors(t *testing.T) {
 			{Name: "errlog", Command: "tail -F /tmp/x", Description: "errors"},
 		},
 	}
-	staged, err := CompilePluginDir(source, in)
+	staged, err := CompilePluginDir(source, testRoot(t), in)
 	if err != nil {
 		t.Fatalf("CompilePluginDir: %v", err)
 	}
-	defer os.RemoveAll(staged)
 
 	pjData, err := os.ReadFile(filepath.Join(staged, ".claude-plugin", "plugin.json"))
 	if err != nil {

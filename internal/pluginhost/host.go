@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"code.linenisgreat.com/clown/internal/staging"
 )
 
 // promptFetchBudget caps how long FetchPromptFragments will block the launch
@@ -101,9 +103,12 @@ type Host struct {
 	// Empty disables rewriting (current default on linux native).
 	URLHostRewrite string
 
-	// compiledDirs tracks staging directories produced by
-	// CompileForClaude; Shutdown removes them.
-	compiledDirs []string
+	// Staging is the launch's staging root, under which CompileForClaude
+	// places every compiled plugin dir. Required whenever CompileForClaude is
+	// called; it is what makes the compiled dirs reachable through the single
+	// directory a container locus has to expose, instead of scattering them
+	// across $TMPDIR. The root owns their removal, so Shutdown does not.
+	Staging *staging.Root
 
 	// monitorsByDir holds each discovered plugin's monitor declarations
 	// keyed by plugin dir. Populated by Discover even when the plugin
@@ -421,13 +426,10 @@ func (h *Host) Shutdown() {
 	}
 	wg.Wait()
 
-	for _, dir := range h.compiledDirs {
-		if err := os.RemoveAll(dir); err != nil && h.Logger != nil {
-			h.Logger.Warn("failed to remove compiled plugin dir",
-				"dir", dir, "err", err)
-		}
-	}
-	h.compiledDirs = nil
+	// Compiled plugin dirs are deliberately NOT removed here: they live under
+	// the launch's staging root (h.Staging), which removes the whole tree on
+	// Close. Removing them here as well would make two things own one
+	// directory's lifetime.
 }
 
 // CompileForClaude produces a map from each plugin-dir to a staging
@@ -441,7 +443,8 @@ func (h *Host) Shutdown() {
 //
 // Call this after StartAll so server URLs are available.
 // Dirs that appear in multiple DiscoveredServer entries are compiled once.
-// Compiled dirs are tracked on the Host and removed by Shutdown.
+// Compiled dirs are created under h.Staging, which must be set, and are removed
+// when that root is closed — not by Shutdown.
 func (h *Host) CompileForClaude(discovered []DiscoveredServer) (map[string]string, error) {
 	serversByDir := h.serverEntriesByPluginDir(discovered)
 
@@ -455,14 +458,13 @@ func (h *Host) CompileForClaude(discovered []DiscoveredServer) (map[string]strin
 		if !dirSet[dir] {
 			continue
 		}
-		staged, err := CompilePluginDir(dir, CompileInputs{
+		staged, err := CompilePluginDir(dir, h.Staging, CompileInputs{
 			Servers:  serversByDir[dir],
 			Monitors: h.monitorsByDir[dir],
 		})
 		if err != nil {
 			return nil, fmt.Errorf("compiling %s: %w", dir, err)
 		}
-		h.compiledDirs = append(h.compiledDirs, staged)
 		result[dir] = staged
 		if h.Logger != nil {
 			h.Logger.Info("compiled plugin manifest",

@@ -15,6 +15,7 @@ import (
 	"code.linenisgreat.com/clown/internal/clownfile"
 	"code.linenisgreat.com/clown/internal/pluginhost"
 	"code.linenisgreat.com/clown/internal/profile"
+	"code.linenisgreat.com/clown/internal/staging"
 )
 
 type opencodeLocalConfig struct {
@@ -358,7 +359,7 @@ func resolveOpencodeGateway(prof *profile.Profile) (url, token, model string) {
 // MCP servers reach opencode through the generated config's `mcp` block
 // (FDR 0016 phase 1). hermetic controls phase 0's project-config suppression;
 // see opencodeEnv.
-func runOpencode(opencodePath string, prof *profile.Profile, flags parsedFlags, pluginDirs []string) int {
+func runOpencode(opencodePath string, prof *profile.Profile, flags parsedFlags, pluginDirs []string, root *staging.Root) int {
 	args, hermetic := flags.forwarded, flags.hermeticConfig
 
 	if opencodePath == "" {
@@ -431,5 +432,5 @@ func runOpencode(opencodePath string, prof *profile.Profile, flags parsedFlags, 
 		},
 	}
 
-	return runWithPluginHost(&directExecutor{cliPath: opencodePath}, pluginDirs, flags, nil, "", binding)
+	return runWithPluginHost(&directExecutor{cliPath: opencodePath}, pluginDirs, flags, nil, "", root, binding)
 }

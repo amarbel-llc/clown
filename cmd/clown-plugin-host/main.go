@@ -11,6 +11,7 @@ import (
 
 	"code.linenisgreat.com/clown/internal/buildcfg"
 	"code.linenisgreat.com/clown/internal/pluginhost"
+	"code.linenisgreat.com/clown/internal/staging"
 )
 
 var (
@@ -72,10 +73,23 @@ func run(logger *slog.Logger, logPath string) int {
 		return 0 // unreachable after exec
 	}
 
+	// This binary is its own launch, so it owns a staging root rather than
+	// inheriting clown's: it is invoked standalone (RFC-0002), with no clown
+	// process around to hand one down. Everything CompileForClaude stages lands
+	// under it and goes away when it closes.
+	root, err := staging.New("")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clown-plugin-host: %v\n", err)
+		logger.Error("creating staging root failed", "err", err)
+		return 1
+	}
+	defer root.Close()
+
 	host := &pluginhost.Host{
 		PluginDirs: parsed.pluginDirs,
 		Logger:     logger,
 		BridgePath: buildcfg.StdioBridgePath,
+		Staging:    root,
 	}
 	discovered, err := host.Discover()
 	if err != nil {
@@ -86,11 +100,14 @@ func run(logger *slog.Logger, logPath string) int {
 
 	if len(discovered) == 0 {
 		logger.Info("no plugin servers discovered; passing plugin dirs through to downstream", "downstream", parsed.downstream)
+		// See the fallback in runManaged: exec replaces this process, so the
+		// deferred Close never runs and the root has to be reclaimed here.
+		_ = root.Close()
 		execDownstream(buildDownstreamArgs(parsed.downstream, parsed.pluginDirs, nil))
 		return 0 // unreachable after exec
 	}
 
-	return runManaged(host, discovered, parsed.downstream, parsed.pluginDirs, skipFailed, verbose, logger)
+	return runManaged(host, discovered, parsed.downstream, parsed.pluginDirs, skipFailed, verbose, logger, root)
 }
 
 func runManaged(
@@ -101,6 +118,7 @@ func runManaged(
 	skipFailed bool,
 	verbose bool,
 	logger *slog.Logger,
+	root *staging.Root,
 ) int {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -155,6 +173,10 @@ func runManaged(
 	if len(report.Started) == 0 {
 		logger.Info("no plugin servers healthy; falling back to original plugin dirs so claude's native MCP still works")
 		host.Shutdown()
+		// Closed explicitly: execDownstream replaces this process, so the
+		// deferred Close never runs. Nothing has been staged yet on this path,
+		// so this reclaims an empty root rather than leaking it.
+		_ = root.Close()
 		execDownstream(buildDownstreamArgs(downstream, pluginDirs, nil))
 		return 0 // unreachable after exec
 	}

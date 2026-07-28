@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"code.linenisgreat.com/clown/internal/staging"
 )
 
 // CompileInputs groups the clown-derived data injected into the
@@ -71,22 +73,31 @@ func CompilePluginManifest(raw []byte, in CompileInputs) ([]byte, bool, error) {
 // in.Servers and in.Monitors carry the same semantics as in
 // CompilePluginManifest.
 //
-// The caller owns cleanup: pass the returned path to os.RemoveAll when the
-// staged directory is no longer needed. sourceDir must contain a
+// The launch's staging root owns cleanup: the compiled directory is created
+// under root and disappears when root is closed, so the caller must NOT remove
+// it itself. root is required — a nil root would mean this artifact lands
+// outside the one directory a container locus exposes, which is the failure the
+// staging package exists to remove. sourceDir must contain a
 // .claude-plugin/plugin.json file.
-func CompilePluginDir(sourceDir string, in CompileInputs) (string, error) {
+func CompilePluginDir(sourceDir string, root *staging.Root, in CompileInputs) (string, error) {
+	if root == nil {
+		return "", fmt.Errorf("compiling %s: staging root is required", sourceDir)
+	}
+
 	absSource, err := filepath.Abs(sourceDir)
 	if err != nil {
 		return "", fmt.Errorf("resolving source plugin dir: %w", err)
 	}
 
-	stageDir, err := os.MkdirTemp("", "clown-plugin-compile-*")
+	stageDir, err := root.Dir("clown-plugin-compile-*")
 	if err != nil {
 		return "", fmt.Errorf("creating staging dir: %w", err)
 	}
 
+	// A partially-staged dir is deliberately left in place on error rather than
+	// removed here: the root already owns it, and a second remover is the
+	// double-ownership this migration exists to delete.
 	if err := stagePluginDir(absSource, stageDir, in); err != nil {
-		os.RemoveAll(stageDir)
 		return "", err
 	}
 	return stageDir, nil
