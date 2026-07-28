@@ -4,7 +4,21 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"code.linenisgreat.com/clown/internal/staging"
 )
+
+// testStagingRoot returns a launch staging root scoped to the test, closed on
+// cleanup — which is also what removes any prompt file written under it.
+func testStagingRoot(t *testing.T) *staging.Root {
+	t.Helper()
+	r, err := staging.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("staging.New: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Close() })
+	return r
+}
 
 func TestBuildClaudeArgs_DisallowedToolsFromFile(t *testing.T) {
 	f, err := os.CreateTemp("", "disallowed-*.txt")
@@ -15,13 +29,12 @@ func TestBuildClaudeArgs_DisallowedToolsFromFile(t *testing.T) {
 	f.WriteString("Bash(*)\nAgent(Explore)\nWebFetch\n")
 	f.Close()
 
-	args, _, cleanup, err := BuildClaudeArgs(ClaudeArgs{
+	args, _, err := BuildClaudeArgs(ClaudeArgs{
 		DisallowedToolsFile: f.Name(),
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer cleanup()
 
 	found := map[string]bool{}
 	for i, a := range args {
@@ -44,13 +57,12 @@ func TestBuildClaudeArgs_DisallowedToolsFileEmpty(t *testing.T) {
 	defer os.Remove(f.Name())
 	f.Close()
 
-	args, _, cleanup, err := BuildClaudeArgs(ClaudeArgs{
+	args, _, err := BuildClaudeArgs(ClaudeArgs{
 		DisallowedToolsFile: f.Name(),
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer cleanup()
 
 	for _, a := range args {
 		if a == "--disallowed-tools" {
@@ -68,13 +80,12 @@ func TestBuildClaudeArgs_DisallowedToolsFileCommentsAndBlanks(t *testing.T) {
 	f.WriteString("# comment\nBash(*)\n\n  \n# another comment\nWrite\n")
 	f.Close()
 
-	args, _, cleanup, err := BuildClaudeArgs(ClaudeArgs{
+	args, _, err := BuildClaudeArgs(ClaudeArgs{
 		DisallowedToolsFile: f.Name(),
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer cleanup()
 
 	var got []string
 	for i, a := range args {
@@ -94,11 +105,10 @@ func TestBuildClaudeArgs_DisallowedToolsFileCommentsAndBlanks(t *testing.T) {
 }
 
 func TestBuildClaudeArgs_NoDisallowedToolsFile(t *testing.T) {
-	args, _, cleanup, err := BuildClaudeArgs(ClaudeArgs{}, nil)
+	args, _, err := BuildClaudeArgs(ClaudeArgs{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer cleanup()
 
 	for _, a := range args {
 		if a == "--disallowed-tools" {
@@ -116,13 +126,12 @@ func TestBuildClaudeArgs_AgentsFile(t *testing.T) {
 	f.WriteString(`{"test-agent": {}}`)
 	f.Close()
 
-	args, _, cleanup, err := BuildClaudeArgs(ClaudeArgs{
+	args, _, err := BuildClaudeArgs(ClaudeArgs{
 		AgentsFile: f.Name(),
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer cleanup()
 
 	for i, a := range args {
 		if a == "--agents" && i+1 < len(args) {
@@ -136,13 +145,12 @@ func TestBuildClaudeArgs_AgentsFile(t *testing.T) {
 }
 
 func TestBuildClaudeArgs_SystemPromptFile(t *testing.T) {
-	args, _, cleanup, err := BuildClaudeArgs(ClaudeArgs{
+	args, _, err := BuildClaudeArgs(ClaudeArgs{
 		SystemPromptFile: "/tmp/test-prompt",
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer cleanup()
 
 	for i, a := range args {
 		if a == "--system-prompt-file" && i+1 < len(args) {
@@ -156,22 +164,34 @@ func TestBuildClaudeArgs_SystemPromptFile(t *testing.T) {
 }
 
 func TestBuildClaudeArgs_AppendFragments(t *testing.T) {
-	args, _, cleanup, err := BuildClaudeArgs(ClaudeArgs{
+	root := testStagingRoot(t)
+	args, appendFile, err := BuildClaudeArgs(ClaudeArgs{
 		AppendFragments: "test fragment content",
+		Staging:         root,
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer cleanup()
+
+	// The prompt file must land under the launch root, not in $TMPDIR. Under a
+	// container locus the root is the one directory mounted through, so a file
+	// outside it is a path claude cannot open — and the symptom is a session
+	// silently missing clown's system prompt, not an error.
+	if !strings.HasPrefix(appendFile, root.Path()) {
+		t.Errorf("append file %q is not under the staging root %q", appendFile, root.Path())
+	}
 
 	for i, a := range args {
 		if a == "--append-system-prompt-file" && i+1 < len(args) {
+			if args[i+1] != appendFile {
+				t.Errorf("argv path %q != returned appendFile %q", args[i+1], appendFile)
+			}
 			data, err := os.ReadFile(args[i+1])
 			if err != nil {
-				t.Fatalf("reading temp file: %v", err)
+				t.Fatalf("reading prompt file: %v", err)
 			}
 			if string(data) != "test fragment content" {
-				t.Errorf("temp file content = %q", string(data))
+				t.Errorf("prompt file content = %q", string(data))
 			}
 			return
 		}
@@ -179,12 +199,37 @@ func TestBuildClaudeArgs_AppendFragments(t *testing.T) {
 	t.Error("--append-system-prompt-file not found in args")
 }
 
-func TestBuildClaudeArgs_ForwardedArgs(t *testing.T) {
-	args, _, cleanup, err := BuildClaudeArgs(ClaudeArgs{}, []string{"chat", "--resume"})
+// A missing root must be refused rather than silently falling back to $TMPDIR,
+// for the same reason CompilePluginDir refuses one: the fallback produces a
+// file that exists but sits outside the directory a locus exposes.
+func TestBuildClaudeArgs_AppendFragmentsRequiresStagingRoot(t *testing.T) {
+	if _, _, err := BuildClaudeArgs(ClaudeArgs{AppendFragments: "x"}, nil); err == nil {
+		t.Fatal("expected an error when AppendFragments is set without a staging root")
+	}
+}
+
+// The staging root is only consulted when there is something to write, so the
+// no-fragments path must stay usable without one.
+func TestBuildClaudeArgs_NoFragmentsNeedsNoStagingRoot(t *testing.T) {
+	args, appendFile, err := BuildClaudeArgs(ClaudeArgs{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer cleanup()
+	if appendFile != "" {
+		t.Errorf("appendFile = %q, want empty when no fragments were written", appendFile)
+	}
+	for _, a := range args {
+		if a == "--append-system-prompt-file" {
+			t.Error("--append-system-prompt-file emitted with no fragments")
+		}
+	}
+}
+
+func TestBuildClaudeArgs_ForwardedArgs(t *testing.T) {
+	args, _, err := BuildClaudeArgs(ClaudeArgs{}, []string{"chat", "--resume"})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	last2 := args[len(args)-2:]
 	if last2[0] != "chat" || last2[1] != "--resume" {
@@ -197,11 +242,10 @@ func TestBuildClaudeArgs_ForwardedArgs(t *testing.T) {
 // actually reads (clown ships no managed-settings, clown#133).
 func TestBuildClaudeArgs_Settings(t *testing.T) {
 	settings := `{"env":{"CLAUDE_AFK_TIMEOUT_MS":"2147483647"}}`
-	args, _, cleanup, err := BuildClaudeArgs(ClaudeArgs{SettingsJSON: settings}, nil)
+	args, _, err := BuildClaudeArgs(ClaudeArgs{SettingsJSON: settings}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer cleanup()
 
 	for i, a := range args {
 		if a == "--settings" && i+1 < len(args) {
@@ -215,11 +259,10 @@ func TestBuildClaudeArgs_Settings(t *testing.T) {
 }
 
 func TestBuildClaudeArgs_NoSettings(t *testing.T) {
-	args, _, cleanup, err := BuildClaudeArgs(ClaudeArgs{}, nil)
+	args, _, err := BuildClaudeArgs(ClaudeArgs{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer cleanup()
 
 	for _, a := range args {
 		if a == "--settings" {
@@ -232,11 +275,10 @@ func TestBuildClaudeArgs_NoSettings(t *testing.T) {
 // (passed after the `--`) wins on claude's last-flag precedence, preserving the
 // user's ability to override clown's safety default.
 func TestBuildClaudeArgs_SettingsBeforeForwarded(t *testing.T) {
-	args, _, cleanup, err := BuildClaudeArgs(ClaudeArgs{SettingsJSON: `{"env":{}}`}, []string{"--resume"})
+	args, _, err := BuildClaudeArgs(ClaudeArgs{SettingsJSON: `{"env":{}}`}, []string{"--resume"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer cleanup()
 
 	settingsIdx, fwdIdx := -1, -1
 	for i, a := range args {

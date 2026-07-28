@@ -1032,19 +1032,19 @@ func runClaude(cliPath string, flags parsedFlags, prompts promptwalk.PromptResul
 	// carries the injected --session-id and flags.resumeHintID holds the id to
 	// print. This local closure just runs claude; the hint prints after it exits.
 	run := func(forwarded []string) int {
-		args, appendFile, cleanup, err := provider.BuildClaudeArgs(provider.ClaudeArgs{
+		args, appendFile, err := provider.BuildClaudeArgs(provider.ClaudeArgs{
 			CLIPath:             innerCliPath,
 			AgentsFile:          buildcfg.AgentsFile,
 			DisallowedToolsFile: disallowedToolsFile,
 			SystemPromptFile:    prompts.SystemPromptFile,
 			AppendFragments:     prompts.AppendFragments,
 			SettingsJSON:        claudeSafetySettingsJSON(),
+			Staging:             root,
 		}, forwarded)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "clown: building claude args: %v\n", err)
 			return 1
 		}
-		defer cleanup()
 
 		var executor Executor = &directExecutor{cliPath: innerCliPath}
 		var tentLogger *slog.Logger
@@ -1945,19 +1945,19 @@ func runClownbox(cliPath string, flags parsedFlags, prompts promptwalk.PromptRes
 		}
 	}()
 
-	args, appendFile, cleanup, err := provider.BuildClaudeArgs(provider.ClaudeArgs{
+	args, appendFile, err := provider.BuildClaudeArgs(provider.ClaudeArgs{
 		CLIPath:             cliPath,
 		AgentsFile:          buildcfg.AgentsFile,
 		DisallowedToolsFile: buildcfg.DisallowedToolsFile,
 		SystemPromptFile:    prompts.SystemPromptFile,
 		AppendFragments:     prompts.AppendFragments,
 		SettingsJSON:        claudeSafetySettingsJSON(),
+		Staging:             root,
 	}, flags.forwarded)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown: building clownbox args: %v\n", err)
 		return 1
 	}
-	defer cleanup()
 
 	return runWithPluginHost(&passthroughExecutor{cliPath: cliPath}, pluginDirs, flags, nil, appendFile, root,
 		newClaudeBinding(args, pluginDirs, flags, nil))
