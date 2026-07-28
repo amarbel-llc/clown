@@ -35,7 +35,7 @@ lint-worktree:
     cfg=$(nix build --no-link --print-out-paths '.#conformist-impure-config')
     conformist check --config-file "$cfg" --tree-root .
 
-# Run conformist in-place repair (nix fmt) to reformat the tree.
+# run conformist in-place repair (nix fmt) to reformat the tree
 [group('codemod')]
 codemod-fmt:
     nix fmt
@@ -323,7 +323,9 @@ test-plugin-host-moxy-disabled: build
     fi
     echo "OK: plugin-host-moxy-disabled integration test passed"
 
-# Default nix build (authoritative check — see AGENTS.md).
+# The authoritative build check — see AGENTS.md.
+#
+# run the default nix build
 build-nix:
     nix build --show-trace
 
@@ -505,7 +507,7 @@ explore-skip-failed MODE: build
     set +x
     echo ">> exit=$exit_code"
 
-# Delete result symlinks.
+# delete result symlinks
 clean-result:
     rm -rf result
 
@@ -532,7 +534,7 @@ run-build-juggler *ARGS:
       in juggler.packages.default
     "
 
-# Build and exec clown with plugins (mkJuggler).
+# build and exec clown with plugins (mkJuggler)
 run-juggler *ARGS:
     just run-build-juggler
     exec ./result/bin/clown {{ARGS}}
@@ -608,7 +610,7 @@ explore-agents-schema: build
     echo "$base}" > "$manifest"
     echo "=== Done ==="
 
-# Update all flake inputs and rebuild to verify.
+# update all flake inputs and rebuild to verify
 update-inputs: && build
     nix flake update
 
@@ -1310,6 +1312,8 @@ verify-dev-tent DOWN="0":
 # entry from the existing file without re-fetching.
 #
 # Usage: just install-model-ad-hoc <name> <url>
+#
+# download a model by URL and print its SHA + registry JSON entry
 [group("test")]
 install-model-ad-hoc NAME URL: build
     #!/usr/bin/env bash
@@ -1374,6 +1378,8 @@ install-model-ad-hoc NAME URL: build
 # this is the model, not the harness.
 #
 # Usage: just install-model-qwen-coder
+#
+# download Qwen2.5-Coder-7B-Instruct (Q4_K_M, ~4.7GB) into the model dir
 [group("test")]
 install-model-qwen-coder: build
     @just install-model-ad-hoc qwen2.5-coder-7b \
@@ -1395,6 +1401,8 @@ install-model-qwen-coder: build
 #     /health does.
 #
 # Run `just build` first.
+#
+# probe how far a model-less llama-server gets before /health comes up
 [group("debug")]
 debug-probe-real-llama-server:
     #!/usr/bin/env bash
