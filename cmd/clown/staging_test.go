@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -107,10 +108,22 @@ func TestSynthPluginDirs_GetDistinctDirsUnderOneRoot(t *testing.T) {
 // Pinned as a pure function because the failure is invisible from the outside:
 // nothing errors, claude just runs without clown's prompt.
 func TestStagingBaseFor_ClownboxLandsInRepo(t *testing.T) {
+	// Hermetic against an operator (or a CI image) that exports the rollback
+	// lever: an inherited CLOWN_STAGING_ROOT=tmpdir would otherwise turn this
+	// guard red for a reason that has nothing to do with the policy it pins.
+	t.Setenv(stagingRootEnv, "")
+
 	cwd := "/repo/root"
-	got := stagingBaseFor(parsedFlags{provider: "clownbox"}, cwd)
+	var warn bytes.Buffer
+	got := stagingBaseFor(parsedFlags{provider: "clownbox"}, cwd, &warn)
 	if want := filepath.Join(cwd, ".tmp"); got != want {
 		t.Errorf("stagingBaseFor(clownbox) = %q, want %q", got, want)
+	}
+	// An empty value is an unset value — `export CLOWN_STAGING_ROOT=` and
+	// `unset CLOWN_STAGING_ROOT` are the same intent, so neither may be
+	// reported as a typo.
+	if warn.Len() != 0 {
+		t.Errorf("unset %s warned: %q", stagingRootEnv, warn.String())
 	}
 }
 
@@ -119,9 +132,76 @@ func TestStagingBaseFor_ClownboxLandsInRepo(t *testing.T) {
 // empty string rather than a resolved path is deliberate — resolving $TMPDIR
 // here would duplicate os.MkdirTemp's own logic and pin the wrong thing.
 func TestStagingBaseFor_OtherProvidersUseTmpdir(t *testing.T) {
+	t.Setenv(stagingRootEnv, "")
+
 	for _, provider := range []string{"claude", "codex", "opencode", "crush", "openrouter", "juggler"} {
-		if got := stagingBaseFor(parsedFlags{provider: provider}, "/repo/root"); got != "" {
+		var warn bytes.Buffer
+		if got := stagingBaseFor(parsedFlags{provider: provider}, "/repo/root", &warn); got != "" {
 			t.Errorf("stagingBaseFor(%s) = %q, want \"\" ($TMPDIR default)", provider, got)
 		}
+	}
+}
+
+// CLOWN_STAGING_ROOT=tmpdir is the rollback lever for the one decision in the
+// staging migration that can go wrong in the field: WHERE the root lands. It
+// cannot un-invent the root — every artifact is under it by construction now —
+// so what it actually does is pin the root's base back to the default, beating
+// whatever policy stagingBaseFor would otherwise apply.
+//
+// clownbox is the case worth pinning because it is the only provider with a
+// non-default arm today: if that arm is what is causing trouble in the field,
+// this is how an operator rules it out without waiting for a revert.
+func TestStagingBaseFor_EnvOverrideForcesTmpdir(t *testing.T) {
+	t.Setenv(stagingRootEnv, stagingRootTmpdir)
+
+	for _, provider := range []string{"clownbox", "claude", "opencode", "crush"} {
+		var warn bytes.Buffer
+		if got := stagingBaseFor(parsedFlags{provider: provider}, "/repo/root", &warn); got != "" {
+			t.Errorf("stagingBaseFor(%s) with %s=%s = %q, want \"\" ($TMPDIR default)",
+				provider, stagingRootEnv, stagingRootTmpdir, got)
+		}
+		if warn.Len() != 0 {
+			t.Errorf("the documented value warned: %q", warn.String())
+		}
+	}
+}
+
+// An unrecognised value must do BOTH halves of this, and the pair is the whole
+// decision:
+//
+//   - It must not change placement. Erroring out, or guessing, would let a stale
+//     export in a shell profile break every launch — a far larger blast radius
+//     than the one misconfiguration it would be protecting against.
+//   - It must say so on stderr. This is a rollback lever, and a silently-ignored
+//     typo leaves an operator believing they have rolled back when they have
+//     not, which is precisely the state in which they draw the wrong conclusion
+//     about whether placement was the cause.
+//
+// An explicit path is deliberately NOT accepted, and is tested here as just
+// another unrecognised value: this is a lever scheduled for removal after one
+// clean release, and a path would make it a configuration feature (relative vs
+// absolute, who creates it, what mode, how it interacts with clownbox's
+// bind-mount requirement) that is much harder to withdraw.
+func TestStagingBaseFor_UnrecognisedValueWarnsAndKeepsPolicy(t *testing.T) {
+	for _, value := range []string{"tmpdirr", "TMPDIR", "1", "true", "/some/explicit/path"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv(stagingRootEnv, value)
+
+			cwd := "/repo/root"
+			var warn bytes.Buffer
+			got := stagingBaseFor(parsedFlags{provider: "clownbox"}, cwd, &warn)
+			if want := filepath.Join(cwd, ".tmp"); got != want {
+				t.Errorf("stagingBaseFor(clownbox) with %s=%q = %q, want %q (policy unchanged)",
+					stagingRootEnv, value, got, want)
+			}
+
+			// The warning has to be actionable on its own: what was ignored,
+			// and what would have worked.
+			for _, want := range []string{stagingRootEnv, value, stagingRootTmpdir} {
+				if !strings.Contains(warn.String(), want) {
+					t.Errorf("warning %q does not mention %q", warn.String(), want)
+				}
+			}
+		})
 	}
 }

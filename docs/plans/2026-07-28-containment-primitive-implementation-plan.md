@@ -8,7 +8,7 @@
 
 **Tech Stack:** Go, Nix flakes. `just build` is the authoritative check.
 
-**Rollback:** `Command` is a mechanical signature change with no behavioral fork — rollback is `git revert`. The staging root gets `CLOWN_STAGING_ROOT=tmpdir`, restoring today's scattering, so an artifact-placement regression is one env var from being ruled out. The tent guard is deliberately NOT rollback-gated: it converts a silent misconfiguration into a loud error, and reverting it would restore a bug.
+**Rollback:** `Command` is a mechanical signature change with no behavioral fork — rollback is `git revert`. The staging root gets `CLOWN_STAGING_ROOT=tmpdir`, which forces the root's base back to `$TMPDIR`, so an artifact-placement regression is one env var from being ruled out. (This wording originally said "restoring today's scattering"; see the design doc's corrected Rollback section for why that is not what the hatch does or should do.) The tent guard is deliberately NOT rollback-gated: it converts a silent misconfiguration into a loud error, and reverting it would restore a bug.
 
 **Design record:** `docs/plans/2026-07-28-containment-primitive-design.md`. Read it first — particularly the "verified vs assumed" table, which marks the suspected tent `appendFile` bug as an unverified theory.
 
@@ -352,9 +352,19 @@ Add a test asserting the clownbox staging root is under the repo root.
 
 ## Task 7: rollback escape hatch
 
-**Files:** `internal/staging/staging.go`, `cmd/clown/main.go`
+**Promotion criteria:** remove after one release with no artifact-placement reports across claude, opencode and crush.
 
-`CLOWN_STAGING_ROOT=tmpdir` makes `staging.New("")` behave as today (root directly under `$TMPDIR`, artifacts scattered as before). Document in `clownfile(5)` or `clown(1)` alongside the other `CLOWN_*` env vars. Add a test.
+**Files:** `cmd/clown/main.go`, `cmd/clown/staging_test.go`, `man/man1/clown.1`
+
+**The original wording of this task was stale and was NOT implemented literally.** It said `CLOWN_STAGING_ROOT=tmpdir` should leave artifacts "scattered as before". After Task 3 that is not a state the code can be in — every writer takes a `*staging.Root` — and a hatch promising it would need a dead second code path.
+
+What was implemented instead: the variable **forces the staging root's base to the default (`$TMPDIR`), overriding whatever `stagingBaseFor` would have chosen.** That is a genuine rollback of the one decision that can go wrong in the field, since a misplaced artifact fails silently rather than erroring.
+
+- The override lives **inside `stagingBaseFor`**, not at the `staging.New` call site: it overrides that function's decision, so keeping it there keeps the knob next to the policy and keeps the unit tests pinning what actually happens. A call-site check would be silently escaped by a second locus-specific arm added later.
+- **`tmpdir` is the only accepted value.** An explicit path was rejected: it would make a lever into a configuration feature (relative vs absolute, creation, mode, clownbox's bind-mount requirement) and features are much harder to withdraw on the promotion criterion above. Empty is treated as unset.
+- **An unrecognised value warns on stderr and leaves placement unchanged.** Silence would let a typo convince an operator they had rolled back when they had not; a hard error would let one stale export in a shell profile break every launch.
+
+Documented in `clown(1)`'s ENVIRONMENT section — `clownfile(5)` has no such section — including the temporary status and the promotion criterion.
 
 ---
 

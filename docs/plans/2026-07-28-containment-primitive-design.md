@@ -191,9 +191,29 @@ characterization first:
 
 - **Dual architecture**: `Command` is a mechanical signature change with no
   behavioral fork, so the rollback is a revert rather than a switch. The
-  staging root gets an escape hatch — an env var pinning the staging root to
-  `$TMPDIR`, restoring today's scattering — so a regression in artifact
-  placement is one variable away from being ruled out.
+  staging root gets an escape hatch — `CLOWN_STAGING_ROOT=tmpdir`, which forces
+  the root's BASE to `$TMPDIR`, overriding whatever `stagingBaseFor` would have
+  chosen — so a regression in artifact placement is one variable away from
+  being ruled out.
+
+  **Corrected during Task 7.** An earlier revision of this section, and of the
+  plan, said the hatch would restore "today's scattering". It cannot, and
+  should not: once every artifact writer takes a `*staging.Root`, scattering is
+  not a state the code can be in, so a hatch promising it would have to be a
+  second, dead code path — exactly the dormant implementation decision 1
+  rejects. Placement is the one decision here that can go wrong somewhere the
+  in-repo lanes cannot see, because its failure is a file the provider cannot
+  reach rather than an error; that is what the lever rolls back, and nothing
+  more.
+
+  Its grammar is one value. An explicit path was considered and rejected: it
+  would turn a lever into a configuration feature (relative vs absolute, who
+  creates it, what mode, how it interacts with clownbox's bind-mount
+  requirement) and features are much harder to withdraw than levers. An
+  unrecognised value warns on stderr and leaves placement unchanged — silence
+  would let a typo convince an operator they had rolled back when they had not,
+  and a hard error would let one stale export in a shell profile break every
+  launch.
 - **Promotion criteria**: remove the escape hatch after one release with no
   reports of artifact-placement failures across claude, opencode, and crush.
 - **The tent guard is not rollback-gated.** It converts a silent

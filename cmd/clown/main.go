@@ -6,6 +6,7 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -616,7 +617,7 @@ func runWithFlags(flags parsedFlags) int {
 	//
 	// Created after the --naked exec above, which replaces this process and
 	// would strand the root; see stagingBaseFor for where it lands.
-	root, err := staging.New(stagingBaseFor(flags, cwd))
+	root, err := staging.New(stagingBaseFor(flags, cwd, os.Stderr))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
 		return 1
@@ -1988,6 +1989,26 @@ func runJuggler(jugglerPath string, flags parsedFlags, prompts promptwalk.Prompt
 	return 1
 }
 
+// stagingRootEnv is the rollback lever for artifact PLACEMENT — the one
+// decision in the staging migration that can go wrong somewhere clown's own
+// lanes cannot see, because the failure is a file the provider cannot reach
+// rather than an error.
+//
+// It deliberately cannot un-invent the staging root: every artifact writer
+// takes a *staging.Root now, so "scatter them again" is not a state the code
+// can be in. What it rolls back is stagingBaseFor's choice of BASE, pinning it
+// to the default so a suspect locus-specific arm can be ruled out in the field
+// without waiting for a revert.
+//
+// TEMPORARY. Promotion criterion (design doc, "Rollback"): delete it after one
+// release with no artifact-placement reports across claude, opencode and crush.
+// Keeping the accepted grammar to a single value is what keeps that deletion
+// cheap — see stagingBaseFor.
+const stagingRootEnv = "CLOWN_STAGING_ROOT"
+
+// stagingRootTmpdir is the only value stagingRootEnv accepts.
+const stagingRootTmpdir = "tmpdir"
+
 // stagingBaseFor returns the directory the launch's staging root is created
 // under. An empty result means $TMPDIR (os.MkdirTemp's default), which is where
 // every per-launch artifact lived before the staging migration.
@@ -2010,7 +2031,33 @@ func runJuggler(jugglerPath string, flags parsedFlags, prompts promptwalk.Prompt
 // 0o700 on a fresh clone. Inert for clownbox, whose bwrap runs as the same uid,
 // and the tighter mode is the better default for a directory holding a launch's
 // generated config.
-func stagingBaseFor(flags parsedFlags, cwd string) string {
+//
+// The stagingRootEnv override lives HERE rather than at the staging.New call
+// site because it overrides this function's decision, and putting it anywhere
+// else would mean these unit tests no longer pin what actually happens — a
+// second locus-specific arm added below would silently escape a call-site
+// check. warn receives the notice for an unrecognised value; a nil warn
+// discards it.
+func stagingBaseFor(flags parsedFlags, cwd string, warn io.Writer) string {
+	// Unset and empty are the same intent (`unset X` vs `export X=`), so
+	// neither is reported as a typo.
+	switch value := os.Getenv(stagingRootEnv); value {
+	case "":
+	case stagingRootTmpdir:
+		return ""
+	default:
+		// Neither silent nor fatal, and both halves are load-bearing. A
+		// silently-ignored typo leaves an operator believing they have rolled
+		// back when they have not — exactly the state in which they conclude
+		// placement was not the cause. Erroring instead would let one stale
+		// export in a shell profile break every launch, a far larger blast
+		// radius than the misconfiguration it guards against. So: proceed with
+		// policy, and say what was ignored and what would have worked.
+		if warn != nil {
+			fmt.Fprintf(warn, "clown: ignoring %s=%q; the only accepted value is %q, which pins the launch staging root to $TMPDIR\n",
+				stagingRootEnv, value, stagingRootTmpdir)
+		}
+	}
 	if flags.provider == "clownbox" {
 		return filepath.Join(cwd, ".tmp")
 	}

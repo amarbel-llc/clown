@@ -366,6 +366,42 @@ When set to
 .Li 1 ,
 behaves the same as passing
 .Fl -disable-clown-protocol .
+.It Ev CLOWN_STAGING_ROOT
+Rollback lever for where the per-launch staging root is created.
+Every artifact
+.Nm
+generates for a provider lives under one directory per launch, removed on
+exit: compiled plugin dirs, the synthesized built-in plugins, the generated
+.Xr opencode 1
+and
+.Xr crush 1
+config, and the prompt-append file.
+Its base is normally chosen per provider:
+.Cm clownbox
+gets
+.Pa <cwd>/.tmp ,
+so the artifacts fall inside the sandbox's repo bind-mount, and every other
+provider gets
+.Ev TMPDIR .
+The only accepted value is
+.Li tmpdir ,
+which forces the base to
+.Ev TMPDIR
+regardless of provider.
+An unrecognised value is reported on standard error and otherwise ignored,
+leaving placement unchanged.
+.Pp
+This variable is
+.Em temporary .
+It exists so an artifact-placement regression can be ruled out in the field
+without a revert, and will be removed after one release with no
+artifact-placement reports across
+.Cm claude ,
+.Cm opencode
+and
+.Cm crush .
+It cannot restore the pre-staging behaviour of scattering artifacts across
+independent temporary directories; that is no longer representable.
 .It Ev CLOWN_PLUGIN_META
 Path to the plugin metadata directory containing
 .Pa plugin-dirs
