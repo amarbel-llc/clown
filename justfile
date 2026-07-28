@@ -15,6 +15,8 @@ codemod: codemod-fmt
 
 # Sandboxed formatting check via conformist (reads only git-tracked files).
 # Drives `nix fmt` and checks.formatting. Fails if any file would change.
+#
+# check the tree's formatting without modifying files
 [group('lint')]
 lint-fmt:
     #!/usr/bin/env bash
@@ -24,6 +26,8 @@ lint-fmt:
 
 # Impure worktree state checks via conformist (git-remotes, sweatfile,
 # agents-md, gomod2nix). Runs against the working tree, not the sandbox.
+#
+# run the impure conformist worktree-state checks
 [group('lint')]
 lint-worktree:
     #!/usr/bin/env bash
@@ -54,6 +58,8 @@ build-ambient: build-go
 # a build-go failure as suspect and confirm against `just build` before
 # concluding your code is broken. For that reason it's grouped under
 # `build-ambient`, not `build` — it must never gate `default`/pre-merge.
+#
+# build the Go binaries through nix develop
 [group("go")]
 build-go:
     nix develop --command go build ./cmd/...
@@ -63,6 +69,8 @@ build-go:
 # goFlakeInputs bridge is applied — a bare `go test ./...` in the hermetic
 # hook hits "inconsistent vendoring" on the bridged ringmaster module. For
 # local iteration, `nix develop --command go test ./...` also works.
+#
+# run the Go test suite inside the clown-go-test derivation
 [group("go")]
 test-go:
     nix build .#clown-go-test --no-link --print-build-logs
@@ -76,6 +84,8 @@ test-go:
 # of a module the goFlakeInputs bridge deliberately keeps proxy-unreachable.
 # Don't block on this recipe finishing; `just build` doesn't depend on it
 # and remains the authoritative check after a go.mod change.
+#
+# regenerate gomod2nix.toml after a go.mod change
 [group("go")]
 update-gomod2nix:
     gomod2nix generate
@@ -85,6 +95,8 @@ update-gomod2nix:
 # MCP translation path. Runs the full bats suite via the nix sandbox
 # lane (bats.lib.${system}.batsLane from amarbel-llc/bats);
 # stdio_bridge.bats is one of the files it executes.
+#
+# run the bats suite covering the stdio bridge against a mock MCP server
 [group("test")]
 test-stdio-bridge:
     nix build .#bats-default --no-link --print-build-logs
@@ -104,6 +116,8 @@ test-stdio-bridge:
 #
 # Linux-only (rootless podman). On darwin, point the recipe at the
 # podman-machine VM by exporting CONTAINER_HOST=ssh://… before invoking.
+#
+# run the host-side tent smoke tests against a rootless podman container
 [group("test")]
 verify-tent-smoke:
     #!/usr/bin/env bash
@@ -155,6 +169,8 @@ verify-tent-smoke:
 # clown.json and verify URL-based MCP compilation, name preservation,
 # and agents field passthrough. Runs the full bats suite via the nix
 # sandbox lane; plugin_host.bats is one of the files it executes.
+#
+# run the bats suite covering clown-plugin-host against the synthetic plugin
 [group("test")]
 test-plugin-host:
     nix build .#bats-default --no-link --print-build-logs
@@ -163,12 +179,16 @@ test-plugin-host:
 # result/coverage.out. Distinct from `go test -cover` (unit
 # reachability) — this measures what zz-tests_bats/* exercises through
 # the real CLI against -cover-instrumented binaries.
+#
+# build clown-cover and emit the bats-suite coverage profile
 [group("test")]
 verify-cover-bats:
     nix build .#clown-cover --no-link --print-build-logs
 
 # Build clown-cover and open the HTML coverage report. Falls back
 # to printing the path if no $BROWSER is available.
+#
+# build clown-cover and open the HTML coverage report
 [group("test")]
 verify-cover-bats-html:
     #!/usr/bin/env bash
@@ -191,6 +211,8 @@ verify-cover-bats-html:
 # (consumers wire it via lib.mkJuggler). Validating clown-plugin-host
 # against a downstream artifact is a layering violation. Set
 # CLOWN_RUN_DOWNSTREAM_TESTS=1 to opt back in for local debugging.
+#
+# run clown-plugin-host against the real moxy MCP server (opt-in)
 [group("test")]
 test-plugin-host-moxy: build
     #!/usr/bin/env bash
@@ -261,6 +283,8 @@ test-plugin-host-moxy: build
 # Skipped unconditionally for the same downstream-layering reason as
 # test-plugin-host-moxy. Set CLOWN_RUN_DOWNSTREAM_TESTS=1 to opt back
 # in for local debugging.
+#
+# run clown-plugin-host against moxy with --disable-clown-protocol (opt-in)
 [group("test")]
 test-plugin-host-moxy-disabled: build
     #!/usr/bin/env bash
@@ -306,6 +330,8 @@ build-nix:
 # Build the stamped clown-manpages store path (with @MDOCDATE@
 # substituted for the flake's lastModifiedDate) and echo where it
 # landed. Useful as a prerequisite for docs recipes.
+#
+# build the stamped clown-manpages store path and echo where it landed
 [group("docs")]
 build-man:
     #!/usr/bin/env bash
@@ -316,6 +342,8 @@ build-man:
 # Render a single manpage as utf8 through mandoc to preview how it
 # looks. Accepts either a source path (man/man1/clown-plugin-host.1)
 # or a built path (result-man/share/man/man1/clown-plugin-host.1).
+#
+# render a single manpage as utf8 through mandoc
 [group("debug")]
 debug-render-man PAGE:
     nix shell nixpkgs#mandoc -c mandoc -Tutf8 {{PAGE}}
@@ -334,6 +362,8 @@ debug-render-man PAGE:
 # Each page is both linted (-Tlint -Wwarning, warnings fatal) and rendered
 # (-Tutf8, must produce output) so a rendering regression a pure lint misses
 # still fails the gate.
+#
+# lint and render the clown-authored mdoc(7) manpages with mandoc
 [group("lint")]
 lint-man: build-man
     #!/usr/bin/env bash
@@ -372,6 +402,8 @@ lint-man: build-man
 #     surface schema errors (same reason).
 # So the working form: `--mcp-config FILE NONEXISTENT_FILE` — claude
 # emits both errors, the schema marker is the discriminator.
+#
+# probe which claude invocation surfaces .mcp.json schema errors
 [group("explore")]
 explore-claude-mcp-config-parsing:
     #!/usr/bin/env bash
@@ -399,6 +431,8 @@ explore-claude-mcp-config-parsing:
 # validator accepts it. MODE is one of: bare (just "url"), typed-http
 # ("type":"http","url"), typed-sse. Useful for reproducing the
 # mcpServers schema error seen when clown-plugin-host ships the config.
+#
+# feed a hand-crafted .mcp.json into claude to test its schema validator
 [group("explore")]
 explore-mcp-config MODE:
     #!/usr/bin/env bash
@@ -435,6 +469,8 @@ explore-mcp-config MODE:
 # binary. MODE is one of: none | flag | env. Append "+v" to turn on
 # --verbose (e.g. `just explore-skip-failed flag+v`). Assumes the plugin
 # dir already exists (created by hand for now).
+#
+# smoke-test the --skip-failed / CLOWN_SKIP_FAILED_PLUGINS branches
 [group("explore")]
 explore-skip-failed MODE: build
     #!/usr/bin/env bash
@@ -475,6 +511,8 @@ clean-result:
 
 # Build clown with moxy + bob plugins via mkJuggler, using the local worktree
 # as the clown input. Only evaluates clown/moxy/bob — not the full eng flake.
+#
+# build clown with the moxy + bob plugins via mkJuggler
 run-build-juggler *ARGS:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -501,6 +539,8 @@ run-juggler *ARGS:
 
 # Verify plugin agents appear in `claude agents list` using the in-repo
 # synthetic test plugin.
+#
+# verify plugin agents appear in clown agents list
 [group("test")]
 verify-plugin-agents: build
     #!/usr/bin/env bash
@@ -530,6 +570,8 @@ verify-plugin-agents: build
 
 # Probe the plugin.json "agents" field schema by trying different formats
 # and reporting which ones pass validation. Requires a built clown.
+#
+# probe which plugin.json "agents" field formats pass validation
 [group("explore")]
 explore-agents-schema: build
     #!/usr/bin/env bash
@@ -578,6 +620,8 @@ update-inputs: && build
 #
 # Usage: just smoke-juggler [model-name]
 # Default model: gemma3-1b (smallest GGUF in ~/.local/share/juggler/models)
+#
+# end-to-end smoke against a real llama-server and a real GGUF
 [group("test")]
 verify-juggler MODEL="gemma3-1b": build
     #!/usr/bin/env bash
@@ -662,6 +706,8 @@ verify-juggler MODEL="gemma3-1b": build
 #
 # Usage: just smoke-juggler-multi [model-a] [model-b]
 # Defaults: gemma3-1b + qwen3-1.7b (both small, both already on disk).
+#
+# multi-instance live smoke: two ringmaster-managed llama-server instances
 [group("test")]
 verify-juggler-multi MODEL_A="gemma3-1b" MODEL_B="qwen3-1.7b": build
     #!/usr/bin/env bash
@@ -785,6 +831,8 @@ verify-juggler-multi MODEL_A="gemma3-1b" MODEL_B="qwen3-1.7b": build
 #
 # Usage: just smoke-tailnet-url [alias]
 #   alias defaults to gemma3-12b
+#
+# compute and probe the tailnet URL for a running juggler instance
 [group("test")]
 verify-tailnet-url ALIAS="gemma3-12b": build
     #!/usr/bin/env bash
@@ -876,6 +924,8 @@ verify-tailnet-url ALIAS="gemma3-12b": build
 #   alias defaults to gemma3-12b
 #   naked=1 (default): --naked
 #   naked=0:           full clown pipeline
+#
+# launch clown pointed at a tailnet-exposed juggler instance
 [group("test")]
 verify-clown-tailnet ALIAS="gemma3-12b" NAKED="1": build
     #!/usr/bin/env bash
@@ -925,6 +975,8 @@ verify-clown-tailnet ALIAS="gemma3-12b" NAKED="1": build
 # (design: docs/plans/2026-07-06-openrouter-profiles-design.md). Requires
 # OPENROUTER_API_KEY exported and a claude-openrouter profile
 # (`clown profile add`, openrouter template). Diagnostic paved path.
+#
+# launch claude-code against openrouter.ai via the claude+gateway profile
 [group("test")]
 verify-clown-openrouter *args="--version": build
     #!/usr/bin/env bash
@@ -941,6 +993,8 @@ verify-clown-openrouter *args="--version": build
 # the Phase B first-class provider (openrouter, provider=openrouter,
 # backend=gateway, URL hardcoded by runOpencode). Each profile is verified
 # with `--version` (config synthesis only, no network call).
+#
+# verify opencode launches via both OpenRouter profile templates
 [group("test")]
 verify-opencode-against-openrouter: build
     #!/usr/bin/env bash
@@ -963,6 +1017,8 @@ verify-opencode-against-openrouter: build
 # interactive profile add flow so you can pick templates, fill the form,
 # and verify the TUI works. Needs OPENROUTER_API_KEY exported for the
 # token-env-var hint to resolve. Requires an interactive TTY.
+#
+# interactive smoke for the profile add/list TUI
 [group("debug")]
 debug-ui-openrouter-profiles: build
     #!/usr/bin/env bash
@@ -1015,6 +1071,8 @@ debug-ui-openrouter-profiles: build
 #
 # Usage: just smoke-opencode-against-tailnet [alias]
 #   alias defaults to gemma3-12b
+#
+# launch opencode pointed at a tailnet-exposed juggler instance
 [group("test")]
 verify-opencode-tailnet ALIAS="gemma3-12b": build
     #!/usr/bin/env bash
@@ -1090,6 +1148,8 @@ verify-opencode-tailnet ALIAS="gemma3-12b": build
 #
 # Usage: just smoke-crush-against-tailnet [alias]
 #   alias defaults to gemma3-12b
+#
+# launch crush pointed at a tailnet-exposed juggler instance
 [group("test")]
 verify-crush-tailnet ALIAS="gemma3-12b": build
     #!/usr/bin/env bash
@@ -1145,6 +1205,8 @@ verify-crush-tailnet ALIAS="gemma3-12b": build
 # (podman on darwin is single-VM), then initializes / starts
 # clown-dev. The eng default is unavailable until `debug-tent-dev-down`
 # restarts it. See AGENTS.md § Dev loop for tent for the full story.
+#
+# swap to the dev-loop podman-machine clown-dev
 [group("debug")]
 debug-tent-dev-up:
     nix run .#dev-tent-machine-up
@@ -1152,12 +1214,16 @@ debug-tent-dev-up:
 # Swap back from clown-dev to the eng-managed default. Stops and
 # removes clown-dev, then restarts podman-machine-default. Safe to
 # run when no clown-dev machine exists.
+#
+# swap back from clown-dev to the eng-managed default machine
 [group("debug")]
 debug-tent-dev-down:
     nix run .#dev-tent-machine-down
 
 # Print BOTH machines' states (clown-dev and podman-machine-default).
 # Helpful for confirming which one currently owns the VM slot.
+#
+# print both podman machines' states (clown-dev and podman-machine-default)
 [group("debug")]
 debug-tent-dev-status:
     nix run .#dev-tent-machine-status
@@ -1176,6 +1242,8 @@ debug-tent-dev-status:
 # home-manager module activation hook, or upstream claude gaining a
 # CLAUDE_CREDENTIALS_FILE env var that points at a host path), this
 # manual step disappears.
+#
+# extract the macOS Keychain claude credentials to ~/.claude/.credentials.json
 [group("debug")]
 debug-extract-claude-credentials:
     #!/usr/bin/env bash
@@ -1196,6 +1264,8 @@ debug-extract-claude-credentials:
 
 # End-to-end dev-tent smoke: swap to clown-dev, build .#dev, run
 # `clown --tent -- --version`. Pass DOWN=1 to swap back at the end.
+#
+# end-to-end dev-tent smoke: swap to clown-dev, build .#dev, run clown --tent
 [group("test")]
 verify-dev-tent DOWN="0":
     #!/usr/bin/env bash
@@ -1395,6 +1465,8 @@ debug-probe-real-llama-server:
 # (eng-versioning(7)). Pure mutation — does not stage or commit; `release`
 # composes that. No-op (exit 0) if already at the target. Usage:
 # just bump-version 0.5.0
+#
+# rewrite CLOWN_VERSION in version.env to the given semver
 [group("maintenance")]
 bump-version new_version:
     #!/usr/bin/env bash
@@ -1412,6 +1484,8 @@ bump-version new_version:
 # version.env) and push it to origin (eng-versioning(7)). The "v" prefix is
 # added for you. Pass a changelog as the message for richer notes; defaults
 # to "release v<ver>". Usage: just tag "release v0.5.0"
+#
+# create, verify, and push a signed tag for the current CLOWN_VERSION
 [group("maintenance")]
 [positional-arguments]
 tag message="":
@@ -1439,6 +1513,8 @@ tag message="":
 # supplied via the new --plugin-dir flag. The wrapper script in
 # result/bin/clown sets CLOWN_PLUGIN_META at exec time, so the env-var
 # route doesn't survive; the runtime flag is the right knob.
+#
+# launch the built clown with an ad-hoc plugin dir via --plugin-dir
 [group("debug")]
 debug-clown-with-stdio-plugin PLUGIN_DIR=".tmp/chrest-plugin": build
     #!/usr/bin/env bash
@@ -1474,6 +1550,8 @@ debug-clown-with-stdio-plugin PLUGIN_DIR=".tmp/chrest-plugin": build
 # down before there's anything to observe. ARGS forwards to the provider
 # after `--` if you need to override (e.g. `just debug-cheap-context-moxy
 # --version` for a non-interactive smoke check instead).
+#
+# launch clown --cheap-context with the real moxy MCP server as a plugin
 [group("debug")]
 debug-cheap-context-moxy *ARGS="":
     just run-build-juggler
@@ -1485,6 +1563,8 @@ debug-cheap-context-moxy *ARGS="":
 # .claude-plugin/plugin.json, and a probe.sh helper that takes
 # --plugin-dir, extracts the wrapped server URL from the compiled
 # manifest, and exercises it.
+#
+# exercise the stdio bridge against a real stdio MCP plugin dir
 [group("debug")]
 debug-stdio-bridge-plugin PLUGIN_DIR=".tmp/stdio-bridge-plugin": build
     #!/usr/bin/env bash
@@ -1505,6 +1585,8 @@ debug-stdio-bridge-plugin PLUGIN_DIR=".tmp/stdio-bridge-plugin": build
 # wrapping the REAL `ringmaster mcp`, then GET /clown/system-prompt and print the
 # live fragment. The fragment embeds CLOWN_SESSION_ID + the mcp server's own tool
 # catalog, so it proves the bridge->prompts/get->HTTP dogfood end to end.
+#
+# smoke the dynamic system-prompt fetch path without nix or claude
 [group("debug")]
 debug-system-prompt-fetch SESSION="local-smoke":
     #!/usr/bin/env bash
@@ -1540,6 +1622,8 @@ debug-system-prompt-fetch SESSION="local-smoke":
 
 # Run the moxy-dependent integration tests with the opt-in env var pre-set.
 # Useful for verifying fixes to those recipes without typing the long form.
+#
+# run the moxy-dependent integration tests with the opt-in env var set
 [group("debug")]
 debug-run-downstream-tests:
     #!/usr/bin/env bash
@@ -1550,6 +1634,8 @@ debug-run-downstream-tests:
 # Probe a running llama-server for /v1/models and a test /v1/messages call.
 # Restarts juggler with the specified model (defaults to gemma3).
 # Usage: just debug-juggler-api [model-store-path]
+#
+# probe a running llama-server for /v1/models and a test /v1/messages call
 [group("debug")]
 debug-juggler-api model="":
     #!/usr/bin/env bash
@@ -1583,6 +1669,8 @@ debug-juggler-api model="":
 # and create the Forgejo release. The bump+commit is skipped when version.env
 # already holds the target (a prior commit may have pre-bumped it). The "v"
 # prefix is added for you. Usage: just release 0.5.0
+#
+# cut a release: bump version.env, commit, tag, and create the Forgejo release
 [group("maintenance")]
 release new_version:
     #!/usr/bin/env bash
