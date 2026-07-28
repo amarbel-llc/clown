@@ -34,6 +34,13 @@ type launchPlan struct {
 // that merely contains "key" costs nothing, while under-redacting writes a live
 // credential into a committed golden fixture — permanently, since git history
 // does not forget.
+//
+// Scope: environment entries ONLY. Args is passed through verbatim, so a
+// credential given on the command line (clown -- --api-key sk-...) still appears
+// in the plan; deciding which positional is a flag's secret VALUE is a guess
+// that would corrupt exactly the argv the fixtures exist to pin. That trade is
+// documented for users in clown(1) and pinned by
+// TestLaunchPlanJSON_DoesNotRedactArgs.
 var secretEnvKeyRe = regexp.MustCompile(`(?i)(TOKEN|KEY|SECRET|PASSWORD)`)
 
 const redactedValue = "<redacted>"
@@ -91,5 +98,6 @@ func (p launchPlan) JSON() ([]byte, error) {
 	if err := enc.Encode(p); err != nil {
 		return nil, err
 	}
-	return bytes.TrimRight(buf.Bytes(), "\n"), nil
+	// Encode appends exactly one newline; the plan is a single line.
+	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
 }

@@ -51,13 +51,12 @@ printf '%s\n' "\$@" >"$MUX_ARGV"
 exit 0
 EOF
   chmod +x "$STUB_BIN/zmx"
-  export PATH="$STUB_BIN:$PATH" STUB_BIN MUX_ARGV
+  export PATH="$STUB_BIN:$PATH"
 
   # A project directory is the unit of hermeticity: clown resolves the
   # clownfile from cwd, and crush's data-dir name is a hash of it.
   project="$BATS_TEST_TMPDIR/project"
   mkdir -p "$project"
-  export clown_config_dir project
 }
 
 # normalize_plan rewrites the run-to-run-variable parts of a launch plan into
@@ -96,19 +95,33 @@ EOF
 # Nothing else is touched. Argv order and the complete env key set survive
 # normalization, because those are precisely what the refactor could break.
 normalize_plan() {
+  # Strip any trailing separator from each root before matching. Go's
+  # os.TempDir() strips it, so os.MkdirTemp yields "<tmp>/clown-crush-123"
+  # — but macOS exports TMPDIR WITH a trailing slash, which would make the
+  # sed emit "<tmp>clown-crush-123" and mismatch the golden for no reason a
+  # reader could guess. Normalizing all three roots kills the class rather
+  # than the one instance that happens to bite.
+  local home_root="${HOME%/}"
+  local test_root="${BATS_TEST_TMPDIR%/}"
+  local tmp_root="${TMPDIR:-/tmp}"
+  tmp_root="${tmp_root%/}"
+
   jq -c '
     .args as $a
+    # $i > 0 is load-bearing: jq indexes from the END for negative subscripts,
+    # so at $i == 0 the guard-less form would compare $a[-1] — the LAST element
+    # — and elide argv[0] whenever the plan happened to end with "--agents".
     | .args = [ range(0; ($a | length)) as $i
                 | if $i > 0 and $a[$i - 1] == "--agents" then "<elided>" else $a[$i] end ]
   ' |
     # Longest prefix first. $HOME lives under $BATS_TEST_TMPDIR, which lives
-    # under $TMPDIR; substituting an outer root first rewrites the prefix of
-    # the inner ones so they can never match again (which is how the first
-    # draft of this leaked a bats-run-XXXXXX name into the crush plan).
+    # under $TMPDIR; substituting an outer root first would rewrite the prefix
+    # of the inner ones, so they could never match again (which is how the
+    # first draft of this leaked a bats-run-XXXXXX name into the crush plan).
     sed \
-      -e "s#$HOME#<home>#g" \
-      -e "s#$BATS_TEST_TMPDIR#<test>#g" \
-      -e "s#${TMPDIR:-/tmp}#<tmp>#g" \
+      -e "s#$home_root#<home>#g" \
+      -e "s#$test_root#<test>#g" \
+      -e "s#$tmp_root#<tmp>#g" \
       -e 's#/nix/store/[a-z0-9]\{32\}-[^/"]*#<store>#g' \
       -e 's#\("--session-id","\)[0-9a-f-]\{36\}#\1<uuid>#g' \
       -e 's#\(/clown/crush/\)[0-9a-f]\{1,\}#\1<hash>#g' |
@@ -182,6 +195,38 @@ run_plan() {
   run timeout 120 "$CLOWN_BIN" --provider "$1" --print-launch-plan -- --version
 }
 
+@test "normalize_plan collapses only what it is meant to" {
+  # The normalizer decides what these goldens can DETECT, so it needs its own
+  # coverage: an over-broad rule would keep all three golden arms green while
+  # quietly masking a real change — a silent failure of the whole lane, which
+  # is worse than having no lane at all. Nothing here runs clown; the input is
+  # synthetic so each rule can be exercised in isolation.
+  # Built from the trailing-slash-stripped root, matching what Go's
+  # os.MkdirTemp actually emits (os.TempDir strips the separator even when
+  # TMPDIR carries one, as macOS always does).
+  local tmp="${TMPDIR:-/tmp}"
+  tmp="${tmp%/}"
+
+  local input='{"binary":"/nix/store/abcdefghijklmnopqrstuvwxyz012345-claude-code-9.9.9/bin/claude","args":["--plugin-dir","'"$tmp"'/clown-plugin-compile-111","--plugin-dir","'"$tmp"'/clown-plugin-compile-222","--plugin-dir","'"$tmp"'/clown-plugin-compile-111","--agents","{\"A\":{\"prompt\":\"secret\"}}","--append-system-prompt-file","'"$tmp"'/clown-prompt-333.txt","--session-id","0e5f8a1c-2b3d-4e5f-8a9b-0c1d2e3f4a5b","--version"],"env":["CRUSH_GLOBAL_CONFIG='"$tmp"'/clown-crush-444"],"files":[]}'
+
+  local want='{"binary":"<store>/bin/claude","args":["--plugin-dir","<tmp>/clown-plugin-compile-<rand#1>","--plugin-dir","<tmp>/clown-plugin-compile-<rand#2>","--plugin-dir","<tmp>/clown-plugin-compile-<rand#1>","--agents","<elided>","--append-system-prompt-file","<tmp>/clown-prompt-<rand#1>.txt","--session-id","<uuid>","--version"],"env":["CRUSH_GLOBAL_CONFIG=<tmp>/clown-crush-<rand#1>"],"files":[]}'
+
+  run normalize_plan <<<"$input"
+  assert_success
+  # Asserted as one exact string rather than per-rule --partial checks, for the
+  # same reason the golden arms are: a substring assertion only catches the
+  # over-collapse someone thought to look for.
+  #
+  # What each expectation buys:
+  #   -111 -> #1 and -222 -> #2   distinct dirs stay distinct (the blind spot)
+  #   -111 -> #1 twice            the SAME raw dir stays the same placeholder,
+  #                               so a genuine repeat is not read as two dirs
+  #   clown-prompt-333 -> #1      numbering is per family, not global
+  #   --agents kept, payload gone the flag and its argv position stay pinned
+  #   36-char id -> <uuid>        the session id rule fires on a real uuid
+  assert_output "$want"
+}
+
 @test "claude launch plan matches its golden" {
   run_plan claude
   assert_success
@@ -214,13 +259,13 @@ run_plan() {
 }
 
 @test "--print-launch-plan runs inline instead of wrapping in the multiplexer" {
-  # The regression this pins: maybeReexecMultiplexer runs ~40 lines BEFORE the
-  # refusal check below, and reexecArgv() emits only user/selection-derived
-  # flags — so --print-launch-plan does not survive into the inner clown. With
-  # [attach] enabled (the shipped default) on a tty, clown would wrap itself and
-  # the INNER clown would spawn the provider for real: the one outcome the
-  # flag's contract rules out. Before the fix this test sees the stub's argv
-  # file and an empty stdout.
+  # The regression this pins: maybeReexecMultiplexer runs long before the
+  # runProvider seam where the plan is built, and reexecArgv() emits only
+  # user/selection-derived flags — so --print-launch-plan does not survive into
+  # the inner clown. With [attach] enabled (the shipped default) on a tty, clown
+  # would wrap itself and the INNER clown would spawn the provider for real: the
+  # one outcome the flag's contract rules out. Before the fix this arm sees the
+  # stub's argv file, and stdout carrying a resume hint instead of a plan.
   #
   # CLOWN_ATTACH_FORCE=1 substitutes for the tty that bats does not have; it is
   # the documented test seam for exactly this gate, and without it the run would
@@ -232,21 +277,19 @@ start = ["zmx", "attach", "{id}", "{entry}"]
 EOF
 
   cd "$project"
-  run env CLOWN_ATTACH_FORCE=1 CLOWN_SESSION_ID=plan-sess \
+  run timeout 120 env CLOWN_ATTACH_FORCE=1 CLOWN_SESSION_ID=plan-sess \
     "$CLOWN_BIN" --provider claude --print-launch-plan -- --version
   assert_success
   [ ! -f "$MUX_ARGV" ] || {
     echo "multiplexer was invoked with: $(cat "$MUX_ARGV")" >&2
     return 1
   }
-  # The plan still reaches OUR stdout — the point of running inline. Asserted
-  # structurally rather than against the golden: CLOWN_SESSION_ID pins the
-  # identity key, so the injected --session-id is "plan-sess" rather than the
-  # uuid the golden's normalizer expects.
-  assert_equal "${#lines[@]}" 1
-  run jq -r .binary <<<"$output"
-  assert_success
-  assert_output --partial "/bin/claude"
+  # The plan still reaches OUR stdout, byte-identical to the un-attached run —
+  # the point of running inline. CLOWN_SESSION_ID pins the job-wakeup channel
+  # key but NOT claude's --session-id: decideClaudeSession only adopts an
+  # existing key as the session id when it is a 36-char UUID, and "plan-sess"
+  # is 10, so a fresh UUID is minted and the normalizer's <uuid> rule applies.
+  assert_matches_golden claude
 }
 
 @test "the multiplexer wrap still happens without --print-launch-plan" {
@@ -260,7 +303,7 @@ start = ["zmx", "attach", "{id}", "{entry}"]
 EOF
 
   cd "$project"
-  run env CLOWN_ATTACH_FORCE=1 CLOWN_SESSION_ID=plan-sess \
+  run timeout 120 env CLOWN_ATTACH_FORCE=1 CLOWN_SESSION_ID=plan-sess \
     "$CLOWN_BIN" --provider claude -- --version
   assert_success
   [ -f "$MUX_ARGV" ]

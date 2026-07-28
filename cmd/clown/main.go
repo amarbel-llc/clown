@@ -502,6 +502,27 @@ func runWithFlags(flags parsedFlags) int {
 		return 1
 	}
 
+	// --print-launch-plan is implemented at the runProvider seam, which the
+	// exec-replacing paths (--naked, codex) never reach. Refusing is the only
+	// safe answer: silently ignoring the flag would LAUNCH the provider, the one
+	// outcome its entire contract rules out.
+	//
+	// Placed here, immediately after the provider resolves, because this is the
+	// earliest point where both inputs are final (the profile picker above can
+	// still change flags.provider) AND nothing has been written yet. Everything
+	// below mutates on-disk session state — RegisterPresenceKey writes a presence
+	// file, RecordSessionName writes the session-names sidecar — so refusing any
+	// later would fail dirty, leaving durable traces of a launch that never
+	// happened for a flag whose contract is "do nothing observable".
+	if flags.printLaunchPlan && (flags.naked || flags.provider == "codex") {
+		which := "--naked"
+		if !flags.naked {
+			which = "--provider codex"
+		}
+		fmt.Fprintf(os.Stderr, "clown: --print-launch-plan is not supported with %s (that path exec-replaces clown instead of spawning a child)\n", which)
+		return 1
+	}
+
 	// Resolve the job-wakeup channel identity once, here, so the monitor synth
 	// (--session) and the plugin host (BaseEnv) below share the SAME final key
 	// (clown#136). No os.Setenv on clown's own process — the key is threaded
@@ -570,19 +591,6 @@ func runWithFlags(flags parsedFlags) int {
 	// for this one conversation.
 	if flags.provider == "claude" && !flags.naked && flags.resumeHintID != "" && flags.clownName != "" {
 		_ = sessions.RecordSessionName(flags.resumeHintID, flags.clownName, flags.groupID)
-	}
-
-	// --print-launch-plan is implemented at the runProvider seam, which the
-	// exec-replacing paths (--naked, codex) never reach. Refusing is the only
-	// safe answer: silently ignoring the flag would LAUNCH the provider, the
-	// one outcome its entire contract rules out.
-	if flags.printLaunchPlan && (flags.naked || flags.provider == "codex") {
-		which := "--naked"
-		if !flags.naked {
-			which = "--provider codex"
-		}
-		fmt.Fprintf(os.Stderr, "clown: --print-launch-plan is not supported with %s (that path exec-replaces clown instead of spawning a child)\n", which)
-		return 1
 	}
 
 	if flags.naked {

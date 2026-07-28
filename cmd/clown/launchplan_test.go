@@ -2,12 +2,19 @@ package main
 
 import "testing"
 
-func TestLaunchPlanJSON_IsDeterministic(t *testing.T) {
+// TestLaunchPlanJSON_FieldOrderAndSorting pins the two properties the golden
+// fixtures rest on: the field order of the emitted object, and that Env and
+// Files come out sorted while Args keeps its given order.
+//
+// Env and Files are given REVERSED here on purpose. With an already-sorted
+// fixture the sort calls never actually run, so removing them — or sorting the
+// wrong field — would still pass.
+func TestLaunchPlanJSON_FieldOrderAndSorting(t *testing.T) {
 	p := launchPlan{
 		Binary: "/nix/store/xxx/bin/claude",
 		Args:   []string{"--plugin-dir", "/a", "--resume"},
 		Env:    []string{"B=2", "A=1"},
-		Files:  []string{"/stage/opencode.json", "/stage/prompt.txt"},
+		Files:  []string{"/stage/prompt.txt", "/stage/opencode.json"},
 	}
 	got, err := p.JSON()
 	if err != nil {
@@ -25,14 +32,43 @@ func TestLaunchPlanJSON_IsDeterministic(t *testing.T) {
 // JSON() has a value receiver, but slices share their backing array, so a naive
 // sort.Strings(p.Env) would reorder the CALLER's slice as a side effect — and
 // the caller is runProvider, holding the very env it hands the child process.
+//
+// Both slices are checked: covering only Env would let an in-place sort of
+// Files through, which is the arm that matters most as the staging-root work
+// starts populating it.
 func TestLaunchPlanJSON_DoesNotMutateReceiver(t *testing.T) {
 	env := []string{"B=2", "A=1"}
-	p := launchPlan{Binary: "/bin/true", Env: env}
+	files := []string{"/stage/prompt.txt", "/stage/opencode.json"}
+	p := launchPlan{Binary: "/bin/true", Env: env, Files: files}
 	if _, err := p.JSON(); err != nil {
 		t.Fatal(err)
 	}
 	if env[0] != "B=2" || env[1] != "A=1" {
-		t.Errorf("JSON() reordered the caller's slice: %v", env)
+		t.Errorf("JSON() reordered the caller's env slice: %v", env)
+	}
+	if files[0] != "/stage/prompt.txt" || files[1] != "/stage/opencode.json" {
+		t.Errorf("JSON() reordered the caller's files slice: %v", files)
+	}
+}
+
+// TestLaunchPlanJSON_DoesNotRedactArgs pins the deliberate LIMIT of redaction.
+// Only env values are scrubbed, and only by key name; argv is reproduced
+// verbatim because deciding which positional is a flag's secret value is a
+// guess that would corrupt the argv the fixtures exist to pin. Without this
+// test the boundary is merely current behavior rather than a decision, and a
+// later "make it safer" change could silently start rewriting argv.
+func TestLaunchPlanJSON_DoesNotRedactArgs(t *testing.T) {
+	p := launchPlan{
+		Binary: "/bin/true",
+		Args:   []string{"--api-key", "sk-not-a-real-key", "--token=abc"},
+	}
+	got, err := p.JSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"binary":"/bin/true","args":["--api-key","sk-not-a-real-key","--token=abc"],"env":[],"files":[]}`
+	if string(got) != want {
+		t.Errorf("got  %s\nwant %s", got, want)
 	}
 }
 
