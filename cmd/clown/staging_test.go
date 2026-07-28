@@ -101,6 +101,9 @@ func TestSynthPluginDirs_GetDistinctDirsUnderOneRoot(t *testing.T) {
 // place, or clown's prompt-append file silently vanishes inside the sandbox and
 // the system prompt goes quietly missing rather than erroring.
 //
+// That setenv is now deleted, so this arm is the ONLY thing placing clownbox's
+// artifacts inside the bind-mount and this test is the only thing guarding it.
+//
 // Pinned as a pure function because the failure is invisible from the outside:
 // nothing errors, claude just runs without clown's prompt.
 func TestStagingBaseFor_ClownboxLandsInRepo(t *testing.T) {

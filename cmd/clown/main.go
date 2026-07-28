@@ -1995,19 +1995,21 @@ func runJuggler(jugglerPath string, flags parsedFlags, prompts promptwalk.Prompt
 // clownbox is the one provider that cannot use $TMPDIR: its sandbox gives the
 // container a fresh /tmp and mounts only the repo writable, so a root under the
 // host's $TMPDIR is simply not there from inside. Placing the root in
-// <repo>/.tmp is the same destination runClownbox's global os.Setenv("TMPDIR")
-// aims at, reached as configuration rather than by mutating process state — and
-// it has to be decided HERE, because the root is created before runClownbox is
-// ever called, so that setenv could no longer influence it.
+// <repo>/.tmp is where runClownbox's since-deleted global os.Setenv("TMPDIR")
+// used to aim, reached as configuration rather than by mutating process state
+// — and it has to be decided HERE, because the root is created before
+// runClownbox is ever called, so a setenv there could no longer influence it.
 //
-// The failure this prevents is silent: an unreachable prompt-append file makes
-// claude start with no clown system prompt at all, and nothing errors.
+// This arm is now the ONLY thing keeping clownbox's artifacts inside the
+// bind-mount. Do not delete it as redundant: the failure is silent, because an
+// unreachable prompt-append file makes claude start with no clown system prompt
+// at all and nothing errors.
 //
-// Side effect worth knowing: staging.New creates the base 0o700, and it now
-// runs before runClownbox's own os.MkdirAll(stagingDir, 0o755), so <repo>/.tmp
-// ends up 0o700 on a fresh clone rather than 0o755. Inert for clownbox, whose
-// bwrap runs as the same uid, and the tighter mode is the better default for a
-// directory holding a launch's generated config.
+// Side effect worth knowing: staging.New creates the base 0o700, where
+// runClownbox's since-deleted os.MkdirAll used 0o755, so <repo>/.tmp ends up
+// 0o700 on a fresh clone. Inert for clownbox, whose bwrap runs as the same uid,
+// and the tighter mode is the better default for a directory holding a launch's
+// generated config.
 func stagingBaseFor(flags parsedFlags, cwd string) string {
 	if flags.provider == "clownbox" {
 		return filepath.Join(cwd, ".tmp")
@@ -2022,49 +2024,19 @@ func stagingBaseFor(flags parsedFlags, cwd string) string {
 // fragment files written by BuildClaudeArgs must land inside the repo
 // bind-mount.
 //
-// That placement is now decided by stagingBaseFor (above), which puts the
-// launch staging root in <repoRoot>/.tmp. The TMPDIR setenv below no longer
-// achieves it and MUST NOT be mistaken for the mechanism: the staging root is
-// created in runWithFlags, before this function is ever called, and
-// BuildClaudeArgs writes into that root rather than consulting $TMPDIR. The
-// setenv is vestigial, kept only until the task that removes it — deleting
-// stagingBaseFor's clownbox arm as "redundant" would silently move the
-// prompt-append file outside the bind-mount, and claude would then start with
-// no clown system prompt at all, erroring nowhere.
+// That placement is decided entirely by stagingBaseFor (above), which puts the
+// launch staging root in <cwd>/.tmp. This function does nothing to arrange it:
+// the root is created in runWithFlags before this is ever called, and
+// BuildClaudeArgs writes into that root rather than consulting $TMPDIR. An
+// earlier os.Setenv("TMPDIR") here was the original mechanism and is now
+// deleted — if you are restoring sandbox visibility, stagingBaseFor is the only
+// place that can still affect it.
 //
 // Plugin-host orchestration is handled by runWithPluginHost using the
 // passthroughExecutor — clownbox's bwrap profile uses --share-net, so
 // HTTP MCP servers spawned on the host's localhost are reachable from
 // inside the sandbox without further plumbing.
 func runClownbox(cliPath string, flags parsedFlags, prompts promptwalk.PromptResult, pluginDirs []string, root *staging.Root) int {
-	repoRoot, err := os.Getwd()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "clown: getwd: %v\n", err)
-		return 1
-	}
-	stagingDir := filepath.Join(repoRoot, ".tmp")
-	if err := os.MkdirAll(stagingDir, 0o755); err != nil {
-		fmt.Fprintf(os.Stderr, "clown: creating staging dir %s: %v\n", stagingDir, err)
-		return 1
-	}
-	// VESTIGIAL — safe to delete, but see the doc comment first. This no longer
-	// places clown's per-launch artifacts: the staging root was already created
-	// (in runWithFlags) by the time this runs, and stagingBaseFor is what puts
-	// it under <repoRoot>/.tmp. Removing this block is correct; removing
-	// stagingBaseFor's clownbox arm along with it is not.
-	prevTmp, hadTmp := os.LookupEnv("TMPDIR")
-	if err := os.Setenv("TMPDIR", stagingDir); err != nil {
-		fmt.Fprintf(os.Stderr, "clown: setting TMPDIR: %v\n", err)
-		return 1
-	}
-	defer func() {
-		if hadTmp {
-			os.Setenv("TMPDIR", prevTmp)
-		} else {
-			os.Unsetenv("TMPDIR")
-		}
-	}()
-
 	args, appendFile, err := provider.BuildClaudeArgs(provider.ClaudeArgs{
 		CLIPath:             cliPath,
 		AgentsFile:          buildcfg.AgentsFile,
