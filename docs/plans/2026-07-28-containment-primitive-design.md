@@ -27,8 +27,23 @@ abstraction is real. The gap is the fifth case that got no mechanism at all:
 **per-launch artifacts under a container locus**. FDR 0016 phase 1 added a
 config-file delivery path whose `bindResult.Env` is applied by `runProvider`
 to the process it spawns — which under tent is the container runtime, not the
-agent — while the generated config sits in a host temp dir that is never
-mounted. That is #205.
+agent. That is #205.
+
+**Correction (2026-07-28, during Task 5).** An earlier revision of this
+document also claimed the generated config "sits in a host temp dir that is
+never mounted". That is **false in the default configuration**:
+`internal/tent/tent.go:212` sets `TmpDir: os.TempDir()` and `:347-348` binds it
+into the container at the same path, so anything under `$TMPDIR` — including a
+staging root left at its default — *is* visible inside the tent, by blanket
+coverage rather than by design.
+
+The env half of #205 is the real, unconditional defect: an env var set on the
+container runtime does not reach the agent inside it, no matter where the file
+sits. The file half is *conditional* — it bites once the staging root moves off
+`$TMPDIR`, which `stagingBaseFor` already does for clownbox. That distinction
+matters for a future `Placement`: blanket-mounting `$TMPDIR` is not a design,
+it is an accident that happens to cover the case, and it grants the container
+far more than the one directory it needs.
 
 ## Context that shapes the answer
 
@@ -124,22 +139,34 @@ recording:
   whoever revives tent.
 - **Revival cost**: implement one interface against a recorded requirement set.
 
-## A suspected bug, recorded as a theory
+## A suspected bug — RETRACTED
 
-`internal/tent` has no `TMPDIR` redirect and no per-launch-artifact mechanism;
-`binds.go` is a static allowlist of ambient dev state, not "files clown
-generated this run". So `--append-system-prompt-file <host-tmp-path>` may point
-at a path that does not exist inside the container.
+An earlier revision of this document theorised that
+`--append-system-prompt-file <host-tmp-path>` pointed at a path not existing
+inside the container, reasoning that `binds.go` is a static allowlist of
+ambient dev state with no per-launch-artifact mechanism.
 
-**This is unverified.** It would be masked inside a spinclass session, because
-spinclass sets `$TMPDIR` inside the worktree and tent mounts the worktree
-writable — so the file would happen to be visible. Outside one, `$TMPDIR` is
-`/tmp` and the tent has its own.
+**That theory was wrong, and the reasoning had a hole**: it looked only at
+`binds.go` and missed `Options.TmpDir`. `internal/tent/tent.go:212` sets it to
+`os.TempDir()` and `:347-348` bind-mounts it at the same path, so the prompt
+file at `$TMPDIR/clown-prompt-*.txt` has been visible inside the tent all
+along.
 
-Verifying needs a host with rootless podman and the tent image loaded, which
-the nix lane cannot do. It is deliberately **not** a blocker for this work
-(tent is shelved), and is recorded so a reviver finds it rather than
-rediscovering it.
+Worth recording *why* the wrong theory survived a review: it came with a
+plausible explanation for its own non-observation ("masked inside a spinclass
+session, because spinclass sets `$TMPDIR` inside the worktree and tent mounts
+the worktree"). That story was coherent, matched the observed absence of bug
+reports, and was wrong — the real reason is simpler and one grep away. A theory
+that explains why nobody has noticed it is a theory that has stopped being
+falsifiable by observation, and should be checked against the code rather than
+against experience.
+
+The residual true statement is narrower: tent covers per-launch artifacts by
+blanket-mounting all of `$TMPDIR`, not by knowing about them. That breaks the
+moment the staging root moves off `$TMPDIR` — as `stagingBaseFor` already does
+for clownbox — and it grants the container far more than the one directory it
+needs. Both are reasons a revived tent should bind the staging root
+specifically, which is what `internal/tent/tent.go`'s `TmpDir` doc now says.
 
 ## Testing
 
@@ -189,7 +216,8 @@ characterization first:
 | `internal/tent` has no `TMPDIR` handling | searched; none found |
 | `runClownbox` redirects `TMPDIR` into the repo bind-mount | read from source |
 | #205's env lands on the container runtime | inferred from `runProvider` + `tentExecutor`; never executed |
-| tent's `appendFile` is broken outside spinclass | **theory, unverified** — see above |
+| tent bind-mounts all of `$TMPDIR` into the container | read from source (`tent.go:212`, `:347-348`) |
+| ~~tent's `appendFile` is broken outside spinclass~~ | **RETRACTED** — the theory was wrong; see the retraction above |
 
 ## More information
 
