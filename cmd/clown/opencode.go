@@ -409,15 +409,15 @@ func runOpencode(opencodePath string, prof *profile.Profile, flags parsedFlags, 
 		}
 	}
 
-	tmpDir, err := os.MkdirTemp("", "clown-opencode-*")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "clown: create temp dir: %v\n", err)
-		return 1
-	}
 	// Safe against the provider outliving this frame: runWithPluginHost runs the
 	// provider as a subprocess (cmd.Run, never syscall.Exec) and returns only
-	// after it exits, so the config file is still on disk for the whole session.
-	defer os.RemoveAll(tmpDir)
+	// after it exits, so the config file is still on disk for the whole session
+	// — the launch root outlives this frame too, and owns the directory.
+	tmpDir, err := root.Dir("clown-opencode-*")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clown: create config dir: %v\n", err)
+		return 1
+	}
 
 	ensureOpencodeMigrationMarker()
 
