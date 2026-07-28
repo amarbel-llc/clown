@@ -15,14 +15,13 @@ func TestJugglerPluginDirSynthesized(t *testing.T) {
 	buildcfg.JugglerCliPath = "/nix/store/x/bin/juggler"
 	t.Cleanup(func() { buildcfg.JugglerCliPath = orig })
 
-	dir, err := synthJugglerPluginDir()
+	dir, err := synthJugglerPluginDir(testStagingRoot(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if dir == "" {
 		t.Fatal("expected a synthesized plugin dir when JugglerCliPath is set")
 	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 
 	manifestPath := filepath.Join(dir, ".claude-plugin", "plugin.json")
 	b, err := os.ReadFile(manifestPath)
@@ -71,12 +70,11 @@ func TestJugglerPluginDirNoPathReturnsEmpty(t *testing.T) {
 	buildcfg.JugglerCliPath = ""
 	t.Cleanup(func() { buildcfg.JugglerCliPath = orig })
 
-	dir, err := synthJugglerPluginDir()
+	dir, err := synthJugglerPluginDir(testStagingRoot(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if dir != "" {
-		_ = os.RemoveAll(dir)
 		t.Fatalf("expected no plugin dir when JugglerCliPath is empty (dev build), got %q", dir)
 	}
 }
@@ -87,12 +85,11 @@ func TestJugglerPluginDirDisabledReturnsEmpty(t *testing.T) {
 	buildcfg.JugglerCliPath = "/nix/store/x/bin/juggler"
 	t.Cleanup(func() { buildcfg.JugglerCliPath = orig })
 
-	dir, err := synthJugglerPluginDir()
+	dir, err := synthJugglerPluginDir(testStagingRoot(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if dir != "" {
-		_ = os.RemoveAll(dir)
 		t.Fatalf("expected no plugin dir when CLOWN_DISABLE_JUGGLER_MCP=1, got %q", dir)
 	}
 }

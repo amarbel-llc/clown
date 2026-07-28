@@ -649,10 +649,9 @@ func runWithFlags(flags parsedFlags) int {
 	// juggler-subagent-tool-design.md). Gated by CLOWN_DISABLE_JUGGLER_MCP
 	// and an empty buildcfg.JugglerCliPath (returns "" when disabled).
 	if providerUsesPluginDirs(flags.provider) && !flags.naked {
-		if jugglerDir, err := synthJugglerPluginDir(); err != nil {
+		if jugglerDir, err := synthJugglerPluginDir(root); err != nil {
 			fmt.Fprintf(os.Stderr, "clown: registering juggler-prompt tool: %v\n", err)
 		} else if jugglerDir != "" {
-			defer os.RemoveAll(jugglerDir)
 			pluginDirs = append(pluginDirs, jugglerDir)
 		}
 	}
