@@ -195,8 +195,8 @@ func (h *httpHandler) filterToolsListResponse(body json.RawMessage) json.RawMess
 
 // bridgeStats adapts the bridge's *statsdClient to mcphttp.Stats so the spine
 // can emit the bridge's per-request metrics without importing statsd. A nil
-// underlying client is nil-safe (metricLabel/responseOutcome are pure; the
-// EmitOutcome forward is itself a no-op on a nil *statsdClient).
+// underlying client is nil-safe (metricLabel is pure; the EmitOutcome forward
+// is itself a no-op on a nil *statsdClient).
 type bridgeStats struct {
 	c *statsdClient
 }
@@ -205,17 +205,14 @@ func (b bridgeStats) Label(method string, body []byte) string {
 	return metricLabel(method, body)
 }
 
-func (b bridgeStats) ResponseOutcome(resp json.RawMessage) string {
-	return responseOutcome(resp)
-}
-
 func (b bridgeStats) EmitOutcome(label string, started time.Time, outcome string) {
 	b.c.emitOutcome(label, started, outcome)
 }
 
 // newHTTPHandler builds the bridge's HTTP handler and its embedded mcphttp
 // spine over the given translator. The spine is configured with the bridge's
-// log prefix, statsd adapter, and the tools/list exclusion filter so the
+// log prefix, resolved heartbeat policy (from the bridge's CLOWN_BRIDGE_*
+// env vars), statsd adapter, and the tools/list exclusion filter so the
 // externally observable behavior is identical to the pre-extraction inline
 // handler.
 func newHTTPHandler(t *translator, log logger, stats *statsdClient) *httpHandler {
@@ -224,6 +221,7 @@ func newHTTPHandler(t *translator, log logger, stats *statsdClient) *httpHandler
 		Handler:   t,
 		Logger:    log,
 		LogPrefix: "clown-stdio-bridge",
+		Heartbeat: resolveHeartbeat(),
 		Stats:     bridgeStats{c: stats},
 		Filter:    h.filterResponse,
 	})

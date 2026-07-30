@@ -8,80 +8,33 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
-	"strings"
 	"time"
 )
 
-// heartbeatEnvVar selects the cadence at which handlePost emits keep-alive
-// activity on streaming responses. Unset uses heartbeatDefault. "0" or
-// "off" disables heartbeats AND falls back to plain application/json
-// responses (legacy behavior). Any other value is parsed by
-// time.ParseDuration.
-const heartbeatEnvVar = "CLOWN_BRIDGE_HEARTBEAT_INTERVAL"
-
-// heartbeatModeEnvVar selects a named heartbeat mode that overrides the
-// interval-derived policy. Recognized overrides:
-//   - "forward-only" (alias "child"): keep SSE streaming on so child
-//     notifications/progress and the final response are delivered, but
-//     suppress the bridge's own timer so heartbeats are activity-driven by the
-//     child alone.
-//   - "forward-only+fallback" (alias "child+fallback"): like forward-only, but
-//     arm an ACTIVITY-GATED fallback timer — the bridge emits a heartbeat only
-//     after the child has been silent for heartbeatEnvVar's interval, re-arming
-//     on every child message. A bridge-side keep-alive ceiling that still lets
-//     a genuinely hung child time out (clown#109).
+// Heartbeat is the resolved per-POST streaming/timer policy the spine applies
+// while awaiting an upstream response. The caller resolves it (from env, flags,
+// or defaults) and passes it in via Config, so the spine carries no policy
+// source of its own and two consumers in one process can differ.
 //
-// Unset or any unrecognized value falls back to the heartbeatEnvVar cadence.
-const heartbeatModeEnvVar = "CLOWN_BRIDGE_HEARTBEAT"
-
-const heartbeatDefault = 30 * time.Second
-
-// heartbeatInterval reports the configured heartbeat cadence. Returns 0
-// when heartbeats are disabled.
-func heartbeatInterval() time.Duration {
-	v, set := os.LookupEnv(heartbeatEnvVar)
-	if !set {
-		return heartbeatDefault
-	}
-	switch v {
-	case "0", "off", "":
-		return 0
-	}
-	d, err := time.ParseDuration(v)
-	if err != nil || d < 0 {
-		return heartbeatDefault
-	}
-	return d
-}
-
-// heartbeatMode resolves the per-POST streaming/timer policy from the two
-// heartbeat env vars. It reports whether the response should stream
-// (text/event-stream), the timer interval, and whether that interval is
-// activity-gated (fallback). heartbeatModeEnvVar takes precedence.
-//
-//   - "forward-only"/"child": stream, no bridge timer (interval 0) — keep-alive
-//     is the child's own notifications/progress alone.
-//   - "forward-only+fallback"/"child+fallback": stream, and arm an
-//     activity-gated fallback timer (fallback=true) whose threshold reuses
-//     heartbeatInterval() (heartbeatDefault when that is 0/off).
-//   - otherwise: the heartbeatEnvVar cadence as a fixed-interval timer
-//     (fallback=false; streaming when the cadence is > 0).
-func heartbeatMode() (streaming bool, interval time.Duration, fallback bool) {
-	if v, set := os.LookupEnv(heartbeatModeEnvVar); set {
-		switch strings.ToLower(strings.TrimSpace(v)) {
-		case "forward-only", "child":
-			return true, 0, false
-		case "forward-only+fallback", "child+fallback":
-			iv := heartbeatInterval()
-			if iv <= 0 {
-				iv = heartbeatDefault
-			}
-			return true, iv, true
-		}
-	}
-	iv := heartbeatInterval()
-	return iv > 0, iv, false
+// The three shapes the timer logic supports:
+//   - Streaming false: no SSE; the POST is answered as plain application/json.
+//   - Streaming true, Interval 0: SSE with no spine timer — keep-alive is the
+//     upstream's own notifications/progress alone (forward-only).
+//   - Streaming true, Interval > 0, Fallback false: SSE with a fixed-cadence
+//     ticker firing every Interval regardless of upstream activity.
+//   - Streaming true, Interval > 0, Fallback true: SSE with an activity-gated
+//     timer that fires only after the upstream has been silent for Interval,
+//     re-arming on every upstream message.
+type Heartbeat struct {
+	// Streaming reports whether the response streams as text/event-stream. When
+	// false the POST is answered synchronously as application/json.
+	Streaming bool
+	// Interval is the heartbeat/silence timer cadence. Zero means no spine timer
+	// (forward-only) even when Streaming is true.
+	Interval time.Duration
+	// Fallback makes Interval an activity-gated silence threshold (re-armed by
+	// upstream output) rather than a fixed cadence. Ignored when Interval is 0.
+	Fallback bool
 }
 
 // logger is a tiny abstraction so callers can capture log lines without
@@ -124,10 +77,9 @@ type Stats interface {
 	// Label derives the per-request metric label from the JSON-RPC method and
 	// full request body (e.g. the tool name for tools/call).
 	Label(method string, body []byte) string
-	// ResponseOutcome classifies a delivered response as "success"/"failure".
-	ResponseOutcome(resp json.RawMessage) string
 	// EmitOutcome records one request's terminal outcome (and, for completed
-	// responses, its duration).
+	// responses, its duration). outcome is the backend-independent string the
+	// spine classifies (e.g. "success"/"failure"/"abandoned").
 	EmitOutcome(label string, started time.Time, outcome string)
 }
 
@@ -148,6 +100,10 @@ type Config struct {
 	// to the client (e.g. "clown-stdio-bridge"). The Server appends ": " after
 	// it. Empty yields "mcphttp".
 	LogPrefix string
+	// Heartbeat is the resolved streaming/timer policy applied to request POSTs.
+	// The zero value (Streaming false) answers POSTs synchronously as
+	// application/json — the caller supplies its own resolved policy.
+	Heartbeat Heartbeat
 	// Stats emits per-request outcome metrics. Nil disables emission.
 	Stats Stats
 	// Filter, when non-nil, post-processes each successful response body keyed
@@ -163,6 +119,7 @@ type Server struct {
 	h         RequestHandler
 	logger    logger
 	logPrefix string
+	heartbeat Heartbeat
 	stats     Stats
 	filter    ResponseFilter
 }
@@ -177,6 +134,7 @@ func NewServer(cfg Config) *Server {
 		h:         cfg.Handler,
 		logger:    cfg.Logger,
 		logPrefix: prefix,
+		heartbeat: cfg.Heartbeat,
 		stats:     cfg.Stats,
 		filter:    cfg.Filter,
 	}
@@ -206,14 +164,21 @@ func (s *Server) emitOutcome(label string, started time.Time, outcome string) {
 	}
 }
 
-// responseOutcome classifies a delivered response via Stats, defaulting to
-// "success" when stats are disabled (the value is only consumed by
-// emitOutcome, which is itself a no-op then).
-func (s *Server) responseOutcome(resp json.RawMessage) string {
-	if s.stats == nil {
+// responseOutcome classifies a delivered JSON-RPC response as "failure" when
+// it carries a non-null error member, else "success". Backend-independent —
+// the spine already parses every response, so this stays in the spine rather
+// than routing through the Stats backend.
+func responseOutcome(resp json.RawMessage) string {
+	var probe struct {
+		Error json.RawMessage `json:"error"`
+	}
+	if json.Unmarshal(resp, &probe) != nil {
 		return "success"
 	}
-	return s.stats.ResponseOutcome(resp)
+	if len(probe.Error) > 0 && string(probe.Error) != "null" {
+		return "failure"
+	}
+	return "success"
 }
 
 // filterResponse applies the configured response filter, if any.
@@ -248,7 +213,7 @@ const (
 // stream of server-initiated messages), DELETE (405 — no session
 // termination), else 405. Origin is restricted to loopback.
 func (s *Server) HandleMCP(w http.ResponseWriter, r *http.Request) {
-	if !validateOrigin(r) {
+	if !ValidateOrigin(r) {
 		http.Error(w, "origin not permitted", http.StatusForbidden)
 		return
 	}
@@ -295,8 +260,8 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request) {
 			"post start id=%s method=%q has_progressToken=%t body_size=%d",
 			idKey, probe.Method, hasToken, len(body),
 		)
-		if streaming, interval, fallback := heartbeatMode(); streaming {
-			s.handlePostStreaming(w, r, idKey, probe.ID, probe.Method, body, interval, fallback, started, label)
+		if s.heartbeat.Streaming {
+			s.handlePostStreaming(w, r, idKey, probe.ID, probe.Method, body, s.heartbeat.Interval, s.heartbeat.Fallback, started, label)
 			return
 		}
 		// Synchronous JSON response (streaming disabled).
@@ -328,7 +293,7 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request) {
 		}
 		s.logf("post end id=%s outcome=response_sent elapsed_ms=%d transport=json",
 			idKey, time.Since(started).Milliseconds())
-		s.emitOutcome(label, started, s.responseOutcome(resp))
+		s.emitOutcome(label, started, responseOutcome(resp))
 		resp = s.filterResponse(probe.Method, resp)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(resp)
@@ -493,7 +458,7 @@ func (s *Server) handlePostStreaming(
 			}
 			s.logf("post end id=%s outcome=response_sent elapsed_ms=%d transport=sse heartbeats=%d",
 				idKey, time.Since(started).Milliseconds(), seq)
-			s.emitOutcome(label, started, s.responseOutcome(res.resp))
+			s.emitOutcome(label, started, responseOutcome(res.resp))
 			resp := s.filterResponse(method, res.resp)
 			fmt.Fprintf(w, "data: %s\n\n", resp)
 			flusher.Flush()
@@ -575,18 +540,12 @@ func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// ValidateOrigin reports whether r's Origin passes the spine's loopback-only
-// check. Exported so callers can gate their own sibling control endpoints
-// (e.g. the bridge's /clown/exclude-tools) with the identical policy the /mcp
-// handler applies internally.
-func ValidateOrigin(r *http.Request) bool {
-	return validateOrigin(r)
-}
-
-// validateOrigin enforces the loopback-only posture mandated by the
+// ValidateOrigin enforces the loopback-only posture mandated by the
 // streamable-HTTP spec's security warning. Empty Origin is permitted
-// (curl, programmatic clients without a browser context).
-func validateOrigin(r *http.Request) bool {
+// (curl, programmatic clients without a browser context). Exported so callers
+// can gate their own sibling control endpoints (e.g. the bridge's
+// /clown/exclude-tools) with the identical policy HandleMCP applies to /mcp.
+func ValidateOrigin(r *http.Request) bool {
 	origin := r.Header.Get("Origin")
 	if origin == "" {
 		return true

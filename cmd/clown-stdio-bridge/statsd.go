@@ -117,16 +117,10 @@ func metricLabel(method string, body []byte) string {
 	return sanitizeMetric(method)
 }
 
-// responseOutcome classifies a delivered JSON-RPC response for emitOutcome.
-func responseOutcome(resp json.RawMessage) string {
-	if responseIsError(resp) {
-		return "failure"
-	}
-	return "success"
-}
-
 // responseIsError reports whether a JSON-RPC response carries an error
-// member (the success/failure discriminator for delivered responses).
+// member (the success/failure discriminator for delivered responses). Retained
+// for its direct unit coverage; the spine now owns the response→outcome
+// classification (mcphttp.responseOutcome).
 func responseIsError(resp json.RawMessage) bool {
 	var probe struct {
 		Error json.RawMessage `json:"error"`

@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -37,13 +36,14 @@ func (s stubHandler) Subscribe() (<-chan json.RawMessage, func()) {
 }
 
 // newTestServer wires a Server over the stub handler with heartbeats disabled
-// (synchronous JSON path) so the canned response is asserted directly.
+// (Streaming false → synchronous JSON path) so the canned response is asserted
+// directly.
 func newTestServer(t *testing.T, resp string) *httptest.Server {
 	t.Helper()
-	t.Setenv(heartbeatEnvVar, "0")
 	srv := NewServer(Config{
-		Handler: stubHandler{resp: json.RawMessage(resp)},
-		Logger:  nullLogger{},
+		Handler:   stubHandler{resp: json.RawMessage(resp)},
+		Logger:    nullLogger{},
+		Heartbeat: Heartbeat{}, // synchronous JSON path
 	})
 	return httptest.NewServer(http.HandlerFunc(srv.HandleMCP))
 }
@@ -220,11 +220,12 @@ func idFromBody(body []byte) any {
 
 // newSpineServer wires a Server over child with the bridge's log prefix so any
 // prefix-derived strings match the originals.
-func newSpineServer(child *fakeChild) *httptest.Server {
+func newSpineServer(child *fakeChild, hb Heartbeat) *httptest.Server {
 	srv := NewServer(Config{
 		Handler:   child,
 		Logger:    nullLogger{},
 		LogPrefix: "clown-stdio-bridge",
+		Heartbeat: hb,
 	})
 	return httptest.NewServer(http.HandlerFunc(srv.HandleMCP))
 }
@@ -241,10 +242,9 @@ func echoOnRequest(c *fakeChild, idKey string, body []byte) {
 }
 
 func TestServer_PostRequestReturnsResponse(t *testing.T) {
-	t.Setenv(heartbeatEnvVar, "0") // exercise the legacy synchronous JSON path
 	child := newFakeChild()
 	child.onRequest = echoOnRequest
-	srv := newSpineServer(child)
+	srv := newSpineServer(child, Heartbeat{}) // synchronous JSON path
 	defer srv.Close()
 
 	body := `{"jsonrpc":"2.0","id":1,"method":"ping"}`
@@ -270,10 +270,10 @@ func TestServer_PostRequestReturnsResponse(t *testing.T) {
 }
 
 func TestServer_PostRequestReturnsSSEByDefault(t *testing.T) {
-	// Heartbeat env var unset → default cadence → SSE response.
+	// Default cadence → SSE response.
 	child := newFakeChild()
 	child.onRequest = echoOnRequest
-	srv := newSpineServer(child)
+	srv := newSpineServer(child, Heartbeat{Streaming: true, Interval: 30 * time.Second})
 	defer srv.Close()
 
 	body := `{"jsonrpc":"2.0","id":1,"method":"ping"}`
@@ -302,8 +302,6 @@ func TestServer_PostRequestReturnsSSEByDefault(t *testing.T) {
 // notifications/progress events referencing that token. This is the
 // resetTimeoutOnProgress hook path.
 func TestServer_PostStreamingHeartbeatProgressToken(t *testing.T) {
-	t.Setenv(heartbeatEnvVar, "20ms")
-
 	child := newFakeChild()
 	// Slow child: wait 80 ms (≥4 heartbeat intervals), then echo response.
 	child.onRequest = func(c *fakeChild, idKey string, body []byte) {
@@ -316,7 +314,7 @@ func TestServer_PostStreamingHeartbeatProgressToken(t *testing.T) {
 		out, _ := json.Marshal(resp)
 		c.reply(idKey, out)
 	}
-	srv := newSpineServer(child)
+	srv := newSpineServer(child, Heartbeat{Streaming: true, Interval: 20 * time.Millisecond})
 	defer srv.Close()
 
 	body := `{"jsonrpc":"2.0","id":7,"method":"slow","params":{"_meta":{"progressToken":"tok-7"}}}`
@@ -345,8 +343,6 @@ func TestServer_PostStreamingHeartbeatProgressToken(t *testing.T) {
 // but as SSE comments rather than notifications/progress (per spec —
 // progress notifications MUST reference a token from the request).
 func TestServer_PostStreamingHeartbeatNoProgressToken(t *testing.T) {
-	t.Setenv(heartbeatEnvVar, "20ms")
-
 	child := newFakeChild()
 	child.onRequest = func(c *fakeChild, idKey string, body []byte) {
 		time.Sleep(80 * time.Millisecond)
@@ -358,7 +354,7 @@ func TestServer_PostStreamingHeartbeatNoProgressToken(t *testing.T) {
 		out, _ := json.Marshal(resp)
 		c.reply(idKey, out)
 	}
-	srv := newSpineServer(child)
+	srv := newSpineServer(child, Heartbeat{Streaming: true, Interval: 20 * time.Millisecond})
 	defer srv.Close()
 
 	body := `{"jsonrpc":"2.0","id":8,"method":"slow"}`
@@ -387,9 +383,6 @@ func TestServer_PostStreamingHeartbeatNoProgressToken(t *testing.T) {
 func TestServer_PostStreamingForwardOnlySuppressesTimer(t *testing.T) {
 	// 20ms interval would fire ~4 times across the 80ms child wait if the
 	// timer were active; forward-only must suppress it entirely.
-	t.Setenv(heartbeatEnvVar, "20ms")
-	t.Setenv(heartbeatModeEnvVar, "forward-only")
-
 	child := newFakeChild()
 	// Slow child: wait 80 ms (≥4 heartbeat intervals) then echo.
 	child.onRequest = func(c *fakeChild, idKey string, body []byte) {
@@ -402,7 +395,7 @@ func TestServer_PostStreamingForwardOnlySuppressesTimer(t *testing.T) {
 		out, _ := json.Marshal(resp)
 		c.reply(idKey, out)
 	}
-	srv := newSpineServer(child)
+	srv := newSpineServer(child, Heartbeat{Streaming: true, Interval: 0, Fallback: false})
 	defer srv.Close()
 
 	// Includes a progressToken: in the default regime this would produce
@@ -435,9 +428,6 @@ func TestServer_PostStreamingForwardOnlySuppressesTimer(t *testing.T) {
 func TestServer_PostStreamingFallbackHeartbeatOnSilence(t *testing.T) {
 	// 20ms silence threshold; child stays silent 80ms (≥4 thresholds) before
 	// responding, so the fallback timer must fire at least once.
-	t.Setenv(heartbeatEnvVar, "20ms")
-	t.Setenv(heartbeatModeEnvVar, "forward-only+fallback")
-
 	child := newFakeChild()
 	// Silent child: wait 80ms with no output, then echo.
 	child.onRequest = func(c *fakeChild, idKey string, body []byte) {
@@ -446,7 +436,7 @@ func TestServer_PostStreamingFallbackHeartbeatOnSilence(t *testing.T) {
 		out, _ := json.Marshal(resp)
 		c.reply(idKey, out)
 	}
-	srv := newSpineServer(child)
+	srv := newSpineServer(child, Heartbeat{Streaming: true, Interval: 20 * time.Millisecond, Fallback: true})
 	defer srv.Close()
 
 	body := `{"jsonrpc":"2.0","id":11,"method":"slow"}`
@@ -470,9 +460,6 @@ func TestServer_PostStreamingFallbackHeartbeatOnSilence(t *testing.T) {
 // responding, so the silence window never elapses and NO heartbeat is emitted
 // despite the total wait exceeding the threshold many times over.
 func TestServer_PostStreamingFallbackResetByActivity(t *testing.T) {
-	t.Setenv(heartbeatEnvVar, "50ms")
-	t.Setenv(heartbeatModeEnvVar, "forward-only+fallback")
-
 	child := newFakeChild()
 	// Active child: emit a notification every 10ms for ~120ms (each well under
 	// the 50ms threshold), then respond. Notifications carry a method, so the
@@ -486,7 +473,7 @@ func TestServer_PostStreamingFallbackResetByActivity(t *testing.T) {
 		out, _ := json.Marshal(resp)
 		c.reply(idKey, out)
 	}
-	srv := newSpineServer(child)
+	srv := newSpineServer(child, Heartbeat{Streaming: true, Interval: 50 * time.Millisecond, Fallback: true})
 	defer srv.Close()
 
 	body := `{"jsonrpc":"2.0","id":12,"method":"slow"}`
@@ -504,71 +491,9 @@ func TestServer_PostStreamingFallbackResetByActivity(t *testing.T) {
 	}
 }
 
-// setOrUnsetEnv sets (or unsets) an env var for the duration of the test,
-// restoring the original state on cleanup. Unlike t.Setenv it can model an
-// absent variable, which heartbeatMode distinguishes from an empty value.
-func setOrUnsetEnv(t *testing.T, key, val string, set bool) {
-	t.Helper()
-	orig, had := os.LookupEnv(key)
-	t.Cleanup(func() {
-		if had {
-			_ = os.Setenv(key, orig)
-		} else {
-			_ = os.Unsetenv(key)
-		}
-	})
-	if set {
-		_ = os.Setenv(key, val)
-	} else {
-		_ = os.Unsetenv(key)
-	}
-}
-
-func TestHeartbeatMode(t *testing.T) {
-	tests := []struct {
-		name         string
-		mode         string
-		modeSet      bool
-		interval     string
-		intervalSet  bool
-		wantStream   bool
-		wantInterval time.Duration
-		wantFallback bool
-	}{
-		{name: "default: stream at default cadence", wantStream: true, wantInterval: heartbeatDefault},
-		{name: "explicit interval", interval: "5s", intervalSet: true, wantStream: true, wantInterval: 5 * time.Second},
-		{name: "interval off disables streaming", interval: "off", intervalSet: true, wantStream: false, wantInterval: 0},
-		{name: "forward-only streams without timer", mode: "forward-only", modeSet: true, wantStream: true, wantInterval: 0},
-		{name: "child alias", mode: "child", modeSet: true, wantStream: true, wantInterval: 0},
-		{name: "forward-only is case/space insensitive", mode: "  Forward-Only  ", modeSet: true, wantStream: true, wantInterval: 0},
-		{name: "forward-only overrides a short interval", mode: "forward-only", modeSet: true, interval: "20ms", intervalSet: true, wantStream: true, wantInterval: 0},
-		{name: "fallback arms an activity-gated timer at the interval", mode: "forward-only+fallback", modeSet: true, interval: "20ms", intervalSet: true, wantStream: true, wantInterval: 20 * time.Millisecond, wantFallback: true},
-		{name: "fallback alias child+fallback", mode: "child+fallback", modeSet: true, interval: "5s", intervalSet: true, wantStream: true, wantInterval: 5 * time.Second, wantFallback: true},
-		{name: "fallback with no/off interval uses the default threshold", mode: "forward-only+fallback", modeSet: true, interval: "off", intervalSet: true, wantStream: true, wantInterval: heartbeatDefault, wantFallback: true},
-		{name: "unknown mode falls back to interval", mode: "bogus", modeSet: true, interval: "5s", intervalSet: true, wantStream: true, wantInterval: 5 * time.Second},
-		{name: "unknown mode falls back to default", mode: "bogus", modeSet: true, wantStream: true, wantInterval: heartbeatDefault},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			setOrUnsetEnv(t, heartbeatModeEnvVar, tt.mode, tt.modeSet)
-			setOrUnsetEnv(t, heartbeatEnvVar, tt.interval, tt.intervalSet)
-			gotStream, gotInterval, gotFallback := heartbeatMode()
-			if gotStream != tt.wantStream {
-				t.Errorf("streaming = %v, want %v", gotStream, tt.wantStream)
-			}
-			if gotInterval != tt.wantInterval {
-				t.Errorf("interval = %v, want %v", gotInterval, tt.wantInterval)
-			}
-			if gotFallback != tt.wantFallback {
-				t.Errorf("fallback = %v, want %v", gotFallback, tt.wantFallback)
-			}
-		})
-	}
-}
-
 func TestServer_PostInvalidJSONReturns400(t *testing.T) {
 	child := newFakeChild()
-	srv := newSpineServer(child)
+	srv := newSpineServer(child, Heartbeat{})
 	defer srv.Close()
 
 	resp, err := http.Post(srv.URL, "application/json", strings.NewReader("not json"))
@@ -583,7 +508,7 @@ func TestServer_PostInvalidJSONReturns400(t *testing.T) {
 
 func TestServer_DeleteReturns405(t *testing.T) {
 	child := newFakeChild()
-	srv := newSpineServer(child)
+	srv := newSpineServer(child, Heartbeat{})
 	defer srv.Close()
 
 	req, _ := http.NewRequest(http.MethodDelete, srv.URL, nil)
@@ -600,10 +525,9 @@ func TestServer_DeleteReturns405(t *testing.T) {
 func TestServer_OriginValidation(t *testing.T) {
 	child := newFakeChild()
 	child.onRequest = echoOnRequest
-	// Origin checks run before dispatch; keep the synchronous JSON path so the
-	// allowed cases return cleanly.
-	t.Setenv(heartbeatEnvVar, "0")
-	srv := newSpineServer(child)
+	// Origin checks run before dispatch; keep the synchronous JSON path
+	// (Heartbeat{}) so the allowed cases return cleanly.
+	srv := newSpineServer(child, Heartbeat{})
 	defer srv.Close()
 
 	tests := []struct {
@@ -641,7 +565,7 @@ func TestServer_OriginValidation(t *testing.T) {
 
 func TestServer_GetSSEStream(t *testing.T) {
 	child := newFakeChild()
-	srv := newSpineServer(child)
+	srv := newSpineServer(child, Heartbeat{})
 	defer srv.Close()
 
 	clientCtx, clientCancel := context.WithTimeout(context.Background(), 2*time.Second)
