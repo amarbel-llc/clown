@@ -111,7 +111,7 @@ func run(p parsedArgs) int {
 		}
 	}()
 
-	handler := &httpHandler{t: tr, logger: stdLogger, stats: newStatsdFromEnv()}
+	handler := newHTTPHandler(tr, stdLogger, newStatsdFromEnv())
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		select {

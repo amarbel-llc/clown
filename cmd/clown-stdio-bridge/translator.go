@@ -11,6 +11,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"code.linenisgreat.com/clown/internal/mcphttp"
 )
 
 // traceEnvVar gates the full passthrough log of every JSON-RPC line in
@@ -398,4 +400,10 @@ func (t *translator) DroppedOutbound() int64 { return t.droppedOutbound.Load() }
 // ErrQueueFull is returned when the bounded inbound queue cannot accept
 // another message. The caller should surface this to the HTTP client
 // as an MCP-level error.
-var ErrQueueFull = errors.New("clown-stdio-bridge: inbound queue full")
+//
+// It aliases mcphttp.ErrQueueFull so the mcphttp.Server spine's
+// errors.Is(err, mcphttp.ErrQueueFull) backpressure check matches when the
+// translator is the spine's RequestHandler — the translator satisfies that
+// interface unchanged, and this is the single sentinel both sides compare
+// against.
+var ErrQueueFull = mcphttp.ErrQueueFull

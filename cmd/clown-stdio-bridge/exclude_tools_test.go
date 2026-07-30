@@ -74,7 +74,9 @@ func TestFilterToolsListResponse_NonToolsListBodyPassesThrough(t *testing.T) {
 // the runTranslator fake-child harness from http_test.go, extended here
 // with a child that answers tools/list with a real MCP-shaped result.
 func TestHTTP_ExcludeToolsEndpointFiltersToolsList(t *testing.T) {
-	t.Setenv(heartbeatEnvVar, "0") // synchronous JSON path, simplest to assert on
+	// Synchronous JSON path (heartbeats off), simplest to assert on. The env
+	// var name is the spine's public contract (mcphttp owns the const now).
+	t.Setenv("CLOWN_BRIDGE_HEARTBEAT_INTERVAL", "0")
 
 	stdinR, stdinW := io.Pipe()
 	stdoutR, stdoutW := io.Pipe()
@@ -128,7 +130,7 @@ func TestHTTP_ExcludeToolsEndpointFiltersToolsList(t *testing.T) {
 		}
 	}()
 
-	h := &httpHandler{t: tr, logger: nullLogger{}}
+	h := newHTTPHandler(tr, nullLogger{}, nil)
 	srv := httptest.NewServer(http.HandlerFunc(h.handleMCP))
 	defer srv.Close()
 
