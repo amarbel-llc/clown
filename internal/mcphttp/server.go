@@ -112,7 +112,7 @@ type RequestHandler interface {
 
 // ErrQueueFull is the backpressure sentinel a RequestHandler returns when its
 // bounded inbound queue cannot accept another message. The Server maps it to
-// the codeBridgeQueueFull JSON-RPC error. The bridge's translator returns this
+// the codeQueueFull JSON-RPC error. The bridge's translator returns this
 // exact sentinel (see clown-stdio-bridge, which aliases it) so errors.Is
 // matches across the interface boundary.
 var ErrQueueFull = errors.New("mcphttp: inbound queue full")
@@ -239,9 +239,9 @@ type jsonRPCErrorObj struct {
 // MCP error codes (subset). -32000 is the JSON-RPC reserved-for-server
 // range; we use one slot for queue-full back-pressure signaling.
 const (
-	codeBridgeQueueFull = -32000
-	codeParseError      = -32700
-	codeInvalidRequest  = -32600
+	codeQueueFull      = -32000
+	codeParseError     = -32700
+	codeInvalidRequest = -32600
 )
 
 // HandleMCP routes the /mcp endpoint: POST (request/notification), GET (SSE
@@ -307,7 +307,7 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request) {
 					idKey, time.Since(started).Milliseconds())
 				s.emitOutcome(label, started, "failure")
 				writeJSONRPCError(w, http.StatusServiceUnavailable, probe.ID,
-					codeBridgeQueueFull,
+					codeQueueFull,
 					s.logPrefix+": inbound queue saturated")
 				return
 			}
@@ -473,7 +473,7 @@ func (s *Server) handlePostStreaming(
 				code := codeInvalidRequest
 				outcome := "error"
 				if errors.Is(res.err, ErrQueueFull) {
-					code = codeBridgeQueueFull
+					code = codeQueueFull
 					outcome = "queue_full"
 				}
 				s.logf("post end id=%s outcome=%s elapsed_ms=%d transport=sse heartbeats=%d err=%q",
