@@ -317,6 +317,26 @@
           ];
         };
 
+        # clown-mcp-collapse: the N-upstream MCP aggregator binary. Like
+        # clown-stdio-bridge it speaks the plugin-protocol handshake on stdout
+        # and serves streamable-HTTP; unlike the bridge it fronts many upstreams
+        # and collapses their tools behind three generic verbs
+        # (mcp_list/mcp_describe/mcp_call). clown (--mcp-collapse, a later task)
+        # spawns the upstreams and passes their names+URLs.
+        clown-mcp-collapse = buildGoApplication {
+          pname = "clown-mcp-collapse";
+          version = clownVersion;
+          src = goSrc;
+          subPackages = [ "cmd/clown-mcp-collapse" ];
+          modules = ./gomod2nix.toml;
+          ldflags = [
+            "-s"
+            "-w"
+            "-X main.version=${clownVersion}"
+            "-X main.commit=${clownRev}"
+          ];
+        };
+
         # Mock stdio MCP server used by the test-stdio-bridge integration
         # test. Built as a derivation so the test recipe consumes a store
         # path instead of dropping a binary into the worktree. The
@@ -371,6 +391,7 @@
           subPackages = [
             "cmd/clown-plugin-host"
             "cmd/clown-stdio-bridge"
+            "cmd/clown-mcp-collapse"
             "internal/pluginhost/testdata/mockstdiomcp"
           ];
           modules = ./gomod2nix.toml;
@@ -413,6 +434,7 @@
 
           export CLOWN_PLUGIN_HOST_BIN="$out/bin/clown-plugin-host"
           export CLOWN_STDIO_BRIDGE_BIN="$out/bin/clown-stdio-bridge"
+          export CLOWN_MCP_COLLAPSE_BIN="$out/bin/clown-mcp-collapse"
           export MOCK_STDIO_MCP_BIN="$out/bin/mock-stdio-mcp"
           export SYNTHETIC_PLUGIN_DIR="${synthetic-plugin}"
           # common.bash bats_load_library calls resolve through this path.
@@ -1040,6 +1062,7 @@
               (mkClownBin { inherit pluginMeta clownGoBin; })
               clown-plugin-host
               clown-stdio-bridge
+              clown-mcp-collapse
               juggler-go
               # jobPlatformBins = bin/ringmaster (from the ringmaster input) +
               # bin/troupe (from the troupe input) + their manpages, collision-
@@ -1070,6 +1093,7 @@
             defaultDefaultProvider
             defaultDefaultProfile
             clown-stdio-bridge
+            clown-mcp-collapse
             clown-plugin-host
             mock-stdio-mcp
             synthetic-plugin

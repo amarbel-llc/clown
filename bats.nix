@@ -26,6 +26,7 @@
   defaultDefaultProvider,
   defaultDefaultProfile,
   clown-stdio-bridge,
+  clown-mcp-collapse,
   clown-plugin-host,
   mock-stdio-mcp,
   synthetic-plugin,
@@ -90,6 +91,10 @@ let
         CLOWN_STDIO_BRIDGE_BIN = {
           base = clown-stdio-bridge;
           name = "clown-stdio-bridge";
+        };
+        CLOWN_MCP_COLLAPSE_BIN = {
+          base = clown-mcp-collapse;
+          name = "clown-mcp-collapse";
         };
         CLOWN_PLUGIN_HOST_BIN = {
           base = clown-plugin-host;
