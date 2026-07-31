@@ -93,8 +93,17 @@ func parseUpstream(spec string) (mcpcollapse.Upstream, error) {
 }
 
 func run(p parsedArgs) int {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	// Install the signal handler BEFORE the blocking NewAggregator call. The
+	// fan-out is network-controllable (round-trips to N upstreams, each bounded
+	// by perUpstreamEnumerateTimeout), so a SIGTERM/SIGINT delivered DURING
+	// startup must be able to abort it — otherwise the process is unresponsive
+	// to signals for up to the per-upstream timeout while upstreams hang. Passing
+	// this ctx to NewAggregator threads the cancellation all the way down
+	// (NewAggregator → enumerateUpstream's context.WithTimeout(ctx) →
+	// mcphttp.PostJSONRPC → http.NewRequestWithContext), so a signal aborts the
+	// in-flight enumeration promptly. stop() releases the signal registration.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	defer stop()
 
 	stdLogger := log.New(os.Stderr, "", 0)
 
@@ -105,6 +114,14 @@ func run(p parsedArgs) int {
 	// upstreams sharing a server name) is fatal; enumeration failures are
 	// fail-open and land in Degraded().
 	agg, err := mcpcollapse.NewAggregator(ctx, p.upstreams, perUpstreamEnumerateTimeout)
+	// A signal delivered during the fan-out cancels ctx, which may surface as a
+	// NewAggregator error (or a benign degraded-everything success). Either way a
+	// signal during startup is a NORMAL shutdown, not a crash: exit 0 with a plain
+	// message rather than a scary "building aggregator" error.
+	if ctx.Err() != nil {
+		fmt.Fprintln(os.Stderr, "clown-mcp-collapse: interrupted during startup; shutting down")
+		return 0
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown-mcp-collapse: building aggregator: %v\n", err)
 		return 1
@@ -185,13 +202,13 @@ func run(p parsedArgs) int {
 	stdLogger.Printf("clown-mcp-collapse: serving %d upstream(s) (%d degraded) on %s",
 		len(p.upstreams), len(agg.Degraded()), ln.Addr().String())
 
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
-
 	exit := 0
 	select {
-	case sig := <-sigCh:
-		fmt.Fprintf(os.Stderr, "clown-mcp-collapse: received %s; shutting down\n", sig)
+	case <-ctx.Done():
+		// A SIGTERM/SIGINT (the only sources feeding this ctx) triggers graceful
+		// shutdown. This is the same ctx installed before NewAggregator, so it
+		// covers signals delivered both during startup and while serving.
+		fmt.Fprintln(os.Stderr, "clown-mcp-collapse: received signal; shutting down")
 	case err := <-serveErr:
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "clown-mcp-collapse: HTTP serve error: %v\n", err)
