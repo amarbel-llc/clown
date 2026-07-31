@@ -98,8 +98,12 @@ dispatch, system-prompt injection, MCP plugin lifecycle via
 multiplexer self-attach via `internal/ptysuspend`/`cmd/clown/attach.go`,
 per-launch artifact staging via `internal/staging`, and tent (sandboxed
 container) support via `internal/tent`), the standalone
-`clown-plugin-host` binary, `clown sessions-complete` fish-completion
-support, and `completions/clown.fish`.
+`clown-plugin-host` binary, the `clown-stdio-bridge` binary (wraps a
+single stdio MCP server over streamable-HTTP; see `internal/mcphttp`),
+the `clown-mcp-collapse` binary (aggregates N upstream MCP servers behind
+three generic verbs — `mcp_list`/`mcp_describe`/`mcp_call` — to save agent
+context; see `internal/mcpcollapse`), `clown sessions-complete`
+fish-completion support, and `completions/clown.fish`.
 
 Provider-specific behavior (juggler local models, opencode, crush, the
 named profile registry, tent backend selection between podman/lima) is
