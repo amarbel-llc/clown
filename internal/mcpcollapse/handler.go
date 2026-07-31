@@ -341,25 +341,69 @@ func (h *Handler) verbCall(ctx context.Context, id, arguments json.RawMessage) (
 // params._meta.progressToken so heartbeat-on-progress upstreams keep their
 // stream warm. A JSON-RPC error envelope from the upstream is surfaced as an
 // error for verbCall to shape.
+//
+// Stale-session recovery: the per-upstream session id is cached for the life of
+// the process, so an upstream that restarts or TTLs out its session would make
+// every subsequent mcp_call fail permanently against the dead id. To recover, a
+// dispatch that FAILS after using a NON-EMPTY cached session id is treated as
+// possibly-stale: the cached id is invalidated, a fresh one is established via
+// the same lazy-init path, and the tools/call is retried EXACTLY ONCE with the
+// fresh id. We deliberately do NOT try to distinguish "session expired" from a
+// genuine tool/transport failure — the retry is cheap, bounded to one attempt,
+// and a real failure simply fails again on the retry and surfaces as before.
+// The retry is skipped when the first attempt used an EMPTY session id (the
+// upstream does no session continuity, so re-initializing cannot change the
+// outcome) — avoiding a pointless second round-trip.
 func (h *Handler) dispatchUpstream(ctx context.Context, entry Entry, args json.RawMessage) (json.RawMessage, error) {
-	sessionID, err := h.sessionForURL(ctx, entry.URL)
-	if err != nil {
-		return nil, fmt.Errorf("establishing session: %w", err)
-	}
-
 	callBody := fmt.Sprintf(
 		`{"jsonrpc":"2.0","id":"mcp-collapse-call","method":"tools/call","params":{"name":%s,"arguments":%s,"_meta":{"progressToken":"mcp-collapse-call"}}}`,
 		jsonQuote(entry.Tool), string(args),
 	)
 
-	respBody, newSessionID, err := mcphttp.PostJSONRPC(ctx, entry.URL, sessionID, callBody, maxUpstreamCallBytes)
+	sessionID, err := h.sessionForURL(ctx, entry.URL)
+	if err != nil {
+		return nil, fmt.Errorf("establishing session: %w", err)
+	}
+
+	result, err := h.attemptDispatch(ctx, entry.URL, sessionID, callBody)
+	if err == nil {
+		return result, nil
+	}
+	// A dispatch that used an empty session id cannot be helped by re-initializing
+	// (the upstream does no session continuity), so don't retry — surface the
+	// original error.
+	if sessionID == "" {
+		return nil, err
+	}
+
+	// Possibly-stale cached session: invalidate it, get a fresh one, retry ONCE.
+	freshSession, reinitErr := h.reinitSession(ctx, entry.URL, sessionID)
+	if reinitErr != nil {
+		// Re-init failed; the upstream is genuinely unreachable — surface the
+		// original dispatch error, which is the more actionable of the two.
+		return nil, err
+	}
+	result, retryErr := h.attemptDispatch(ctx, entry.URL, freshSession, callBody)
+	if retryErr != nil {
+		return nil, retryErr
+	}
+	return result, nil
+}
+
+// attemptDispatch performs one tools/call round-trip with the given session id
+// and returns the upstream's result verbatim. It also refreshes the session
+// cache when the upstream rotates the id on its response. A transport error,
+// non-200, malformed body, JSON-RPC error envelope, or a resultless response is
+// returned as an error (the signal dispatchUpstream may treat as possibly-stale).
+func (h *Handler) attemptDispatch(ctx context.Context, url, sessionID, callBody string) (json.RawMessage, error) {
+	respBody, newSessionID, err := mcphttp.PostJSONRPC(ctx, url, sessionID, callBody, maxUpstreamCallBytes)
 	if err != nil {
 		return nil, fmt.Errorf("tools/call: %w", err)
 	}
 	// Some upstreams rotate the session id on each response; keep the cache fresh.
 	if newSessionID != "" && newSessionID != sessionID {
 		h.mu.Lock()
-		h.sessions[entry.URL] = newSessionID
+		h.sessions[url] = newSessionID
 		h.mu.Unlock()
 	}
 
@@ -382,12 +426,33 @@ func (h *Handler) dispatchUpstream(ctx context.Context, entry Entry, args json.R
 	return parsed.Result, nil
 }
 
+// reinitSession invalidates a possibly-stale cached session id for url and
+// establishes a fresh one. It deletes the cache entry only when it still holds
+// stale (a compare-and-delete) so a concurrent caller that already refreshed the
+// session is not clobbered; then it re-runs the lazy-init path, which caches and
+// returns the fresh id. Returns the fresh session id (which may be empty for an
+// upstream with no session continuity).
+func (h *Handler) reinitSession(ctx context.Context, url, stale string) (string, error) {
+	h.mu.Lock()
+	if current, ok := h.sessions[url]; ok && current == stale {
+		delete(h.sessions, url)
+	}
+	h.mu.Unlock()
+	return h.sessionForURL(ctx, url)
+}
+
 // sessionForURL returns the cached Mcp-Session-Id for an upstream URL,
 // establishing one lazily via an initialize handshake on first use. The startup
 // fan-out does not retain the session it used to enumerate, so the first mcp_call
 // to each upstream re-initializes here and caches the result for reuse. An
 // upstream that implements no session continuity hands back an empty id, which is
 // cached and passed through as "no header" — correct for such upstreams.
+//
+// Concurrency: the lock is held only around the map read and the map write, never
+// across the initialize network I/O. Two concurrent first-callers can therefore
+// both miss the cache and both initialize — a benign double-init whose second
+// write simply overwrites the first with an equivalent id; no map corruption and
+// no lock held across I/O.
 func (h *Handler) sessionForURL(ctx context.Context, url string) (string, error) {
 	h.mu.Lock()
 	cached, ok := h.sessions[url]

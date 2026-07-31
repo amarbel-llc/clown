@@ -3,6 +3,7 @@ package mcpcollapse
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"code.linenisgreat.com/clown/internal/mcphttp"
 )
 
 // callableUpstream extends the enumeration-only fake with a tools/call handler
@@ -25,13 +28,33 @@ type callableUpstream struct {
 	// result. This is distinct from a tool that RAN and returned an isError
 	// result (that goes in callResult).
 	callError string
+	// sessionAware, when true, makes initialize mint a fresh session id (echoed
+	// via Mcp-Session-Id) and makes tools/call REJECT any request whose
+	// Mcp-Session-Id does not match the currently-valid id — the shape the
+	// stale-session retry recovers from. rotateSession() invalidates the current
+	// id so the next tools/call on the old id fails until a fresh initialize.
+	sessionAware bool
+	// alwaysRejectCall, when true, makes EVERY tools/call 404 regardless of
+	// session — even one carrying a freshly-initialized id. It models an upstream
+	// that can never satisfy the call, so the handler's single retry cannot
+	// recover: used to prove the retry is bounded to exactly one attempt.
+	alwaysRejectCall bool
 
 	mu sync.Mutex
 	// gotCall records whether tools/call was invoked at all.
 	gotCall bool
+	// callCount counts tools/call invocations (including rejected ones).
+	callCount int
 	// gotName / gotArgs record the params of the last tools/call.
 	gotName string
 	gotArgs json.RawMessage
+	// callBodies records the raw request body of every tools/call, so a test can
+	// assert the exact bytes the upstream received (JSON-escaping regression).
+	callBodies [][]byte
+	// validSession is the currently-accepted session id (sessionAware mode).
+	validSession string
+	// sessionSeq mints monotonically-distinct session ids across initializes.
+	sessionSeq int
 }
 
 func (f *callableUpstream) handler() http.HandlerFunc {
@@ -49,6 +72,14 @@ func (f *callableUpstream) handler() http.HandlerFunc {
 
 		switch envelope.Method {
 		case "initialize":
+			if f.sessionAware {
+				f.mu.Lock()
+				f.sessionSeq++
+				f.validSession = fmt.Sprintf("sess-%d", f.sessionSeq)
+				current := f.validSession
+				f.mu.Unlock()
+				w.Header().Set(mcphttp.MCPSessionIDHeader, current)
+			}
 			w.Header().Set("Content-Type", "application/json")
 			w.Write([]byte(`{"jsonrpc":"2.0","id":` + string(envelope.ID) + `,"result":{"protocolVersion":"2025-06-18","capabilities":{},"serverInfo":{"name":"fake","version":"1"}}}`))
 		case "tools/list":
@@ -56,6 +87,18 @@ func (f *callableUpstream) handler() http.HandlerFunc {
 			w.Write([]byte(`{"jsonrpc":"2.0","id":` + string(envelope.ID) + `,"result":{"tools":[` + f.toolsJSON() + `]}}`))
 		case "tools/call":
 			f.mu.Lock()
+			f.callCount++
+			f.callBodies = append(f.callBodies, bodyBytes)
+			reject := f.alwaysRejectCall ||
+				(f.sessionAware && r.Header.Get(mcphttp.MCPSessionIDHeader) != f.validSession)
+			// A mismatched/stale (or always-rejected) id is rejected BEFORE the
+			// call is recorded as a real dispatch, so a test can assert that the
+			// rejected attempt never "ran" the tool.
+			if reject {
+				f.mu.Unlock()
+				http.Error(w, "unknown or expired session", http.StatusNotFound)
+				return
+			}
 			f.gotCall = true
 			f.gotName = envelope.Params.Name
 			f.gotArgs = envelope.Params.Arguments
@@ -74,6 +117,33 @@ func (f *callableUpstream) handler() http.HandlerFunc {
 			http.Error(w, "unexpected method", http.StatusBadRequest)
 		}
 	}
+}
+
+// rotateSession invalidates the currently-valid session id so the next
+// tools/call carrying the old id is rejected (until a fresh initialize),
+// simulating an upstream that restarted or TTL'd out its session.
+func (f *callableUpstream) rotateSession() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.validSession = ""
+}
+
+// callTally returns the number of tools/call requests received (including
+// rejected stale ones) and how many actually ran the tool.
+func (f *callableUpstream) callTally() (received int, ran bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.callCount, f.gotCall
+}
+
+// lastCallBody returns the raw request body of the most recent tools/call.
+func (f *callableUpstream) lastCallBody() []byte {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.callBodies) == 0 {
+		return nil
+	}
+	return f.callBodies[len(f.callBodies)-1]
 }
 
 func (f *callableUpstream) toolsJSON() string {
@@ -459,5 +529,220 @@ func TestMCPCallToolErrorPassthrough(t *testing.T) {
 	}
 	if called, _, _ := up.called(); !called {
 		t.Fatalf("upstream should have been called for a valid tool that returns an error result")
+	}
+}
+
+// TestMCPCallRetriesOnStaleSession: an upstream that rejects a cached (now
+// invalid) session id makes the first dispatch fail; the handler must invalidate
+// the cached id, re-initialize for a fresh one, and retry the tools/call ONCE —
+// which then succeeds. The tool must ultimately run exactly once (the stale
+// attempt is rejected before running), and the upstream must have received two
+// tools/call requests (stale + fresh).
+func TestMCPCallRetriesOnStaleSession(t *testing.T) {
+	up := &callableUpstream{
+		sessionAware: true,
+		tools: []fakeTool{
+			{name: "commit", description: "d", schema: `{"type":"object","properties":{}}`},
+		},
+		callResult: `{"content":[{"type":"text","text":"done"}]}`,
+	}
+	srv := httptest.NewServer(up.handler())
+	defer srv.Close()
+	agg, err := NewAggregator(context.Background(), []Upstream{{Name: "srv", URL: srv.URL}}, time.Second)
+	if err != nil {
+		t.Fatalf("NewAggregator: %v", err)
+	}
+	h := NewHandler(agg)
+
+	// First call succeeds and caches session id S1.
+	result, isErr := callVerb(t, h, "mcp_call", map[string]any{
+		"tool_id": "srv.commit", "args": map[string]any{},
+	})
+	if isErr || resultIsError(t, result) {
+		t.Fatalf("first mcp_call should succeed: %s", result)
+	}
+
+	// Upstream "restarts": S1 is now stale. The next call's cached id will be
+	// rejected, forcing the retry path.
+	up.rotateSession()
+
+	result, isErr = callVerb(t, h, "mcp_call", map[string]any{
+		"tool_id": "srv.commit", "args": map[string]any{},
+	})
+	if isErr {
+		t.Fatalf("stale-session call should recover, not return a JSON-RPC error: %s", result)
+	}
+	if resultIsError(t, result) {
+		t.Fatalf("stale-session call should recover via retry, got shaped error: %s", resultText(t, result))
+	}
+	if got := resultText(t, result); got != "done" {
+		t.Fatalf("recovered call result = %q, want 'done'", got)
+	}
+}
+
+// TestMCPCallNoRetryLoopWhenAlwaysStale: if EVERY dispatch is rejected — even
+// one carrying a freshly-initialized session id — the handler must retry exactly
+// ONCE and then surface a shaped error, never looping. Assert the upstream
+// received exactly two tools/call requests (original + one retry) and the shaped
+// error is returned.
+func TestMCPCallNoRetryLoopWhenAlwaysStale(t *testing.T) {
+	up := &callableUpstream{
+		sessionAware:     true,
+		alwaysRejectCall: true,
+		tools: []fakeTool{
+			{name: "commit", description: "d", schema: `{"type":"object","properties":{}}`},
+		},
+	}
+	srv := httptest.NewServer(up.handler())
+	defer srv.Close()
+	agg, err := NewAggregator(context.Background(), []Upstream{{Name: "srv", URL: srv.URL}}, time.Second)
+	if err != nil {
+		t.Fatalf("NewAggregator: %v", err)
+	}
+	h := NewHandler(agg)
+
+	result, _ := callVerb(t, h, "mcp_call", map[string]any{
+		"tool_id": "srv.commit", "args": map[string]any{},
+	})
+	if !resultIsError(t, result) {
+		t.Fatalf("an always-failing dispatch should surface a shaped error, got: %s", result)
+	}
+	// Exactly two tools/call requests: the original attempt and the single retry.
+	// More than two would mean the retry looped.
+	received, ran := up.callTally()
+	if ran {
+		t.Fatalf("the tool must never actually run when every dispatch is rejected")
+	}
+	if received != 2 {
+		t.Fatalf("expected exactly 2 tools/call requests (original + one retry), got %d", received)
+	}
+}
+
+// TestMCPCallConcurrentSameUpstream: many concurrent mcp_calls to the SAME
+// upstream must all succeed with no data race on the session-cache map. Run
+// under -race to exercise the lock discipline (the benign double-init race, no
+// map corruption). The upstream here is session-continuity-free (empty id) so
+// the test isolates the cache-map lock discipline from session-rotation churn —
+// the stale-session retry path is covered by its own dedicated tests.
+func TestMCPCallConcurrentSameUpstream(t *testing.T) {
+	up := &callableUpstream{
+		tools: []fakeTool{
+			{name: "commit", description: "d", schema: `{"type":"object","properties":{}}`},
+		},
+		callResult: `{"content":[{"type":"text","text":"ok"}]}`,
+	}
+	srv := httptest.NewServer(up.handler())
+	defer srv.Close()
+	agg, err := NewAggregator(context.Background(), []Upstream{{Name: "srv", URL: srv.URL}}, time.Second)
+	if err != nil {
+		t.Fatalf("NewAggregator: %v", err)
+	}
+	h := NewHandler(agg)
+
+	const n = 24
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			args, _ := json.Marshal(map[string]any{"tool_id": "srv.commit", "args": map[string]any{}})
+			body, _ := json.Marshal(map[string]any{
+				"jsonrpc": "2.0", "id": fmt.Sprintf("%d", i), "method": "tools/call",
+				"params": map[string]any{"name": "mcp_call", "arguments": json.RawMessage(args)},
+			})
+			resp, err := h.SendRequest(context.Background(), fmt.Sprintf(`"%d"`, i), body)
+			if err != nil {
+				errs[i] = err
+				return
+			}
+			var env struct {
+				Result json.RawMessage `json:"result"`
+			}
+			if err := json.Unmarshal(resp, &env); err != nil {
+				errs[i] = err
+				return
+			}
+			if resultIsError(t, env.Result) {
+				errs[i] = fmt.Errorf("call %d got shaped error: %s", i, env.Result)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent call %d failed: %v", i, err)
+		}
+	}
+	received, ran := up.callTally()
+	if !ran {
+		t.Fatalf("upstream never ran a tool under concurrent load")
+	}
+	if received < n {
+		t.Fatalf("upstream received %d tools/call requests, want at least %d", received, n)
+	}
+}
+
+// TestMCPCallJSONEscaping: a tool name and arg values containing characters that
+// MUST be JSON-escaped (quotes, backslashes, newlines) must reach the upstream as
+// a well-formed tools/call the upstream can parse, carrying the EXACT original
+// strings. Regression against the hand-built JSON-RPC dispatch body.
+func TestMCPCallJSONEscaping(t *testing.T) {
+	const trickyTool = `he said "hi"\and\so`
+	up := &callableUpstream{
+		tools: []fakeTool{
+			{name: trickyTool, description: "d", schema: `{"type":"object","properties":{}}`},
+		},
+	}
+	srv := httptest.NewServer(up.handler())
+	defer srv.Close()
+	agg, err := NewAggregator(context.Background(), []Upstream{{Name: "srv", URL: srv.URL}}, time.Second)
+	if err != nil {
+		t.Fatalf("NewAggregator: %v", err)
+	}
+	h := NewHandler(agg)
+
+	toolID := "srv." + trickyTool
+	trickyValue := "line1\nline2 \"quoted\" back\\slash"
+	result, isErr := callVerb(t, h, "mcp_call", map[string]any{
+		"tool_id": toolID,
+		"args":    map[string]any{"msg": trickyValue},
+	})
+	if isErr {
+		t.Fatalf("mcp_call with tricky strings returned a JSON-RPC error: %s", result)
+	}
+	if resultIsError(t, result) {
+		t.Fatalf("mcp_call with tricky strings should dispatch cleanly, got shaped error: %s", resultText(t, result))
+	}
+
+	// The upstream must have received a WELL-FORMED body it could parse, and the
+	// parsed name/args must equal the exact originals (proving correct escaping,
+	// not corruption or injection).
+	raw := up.lastCallBody()
+	if raw == nil {
+		t.Fatalf("upstream received no tools/call body")
+	}
+	var env struct {
+		Params struct {
+			Name      string          `json:"name"`
+			Arguments json.RawMessage `json:"arguments"`
+		} `json:"params"`
+	}
+	if err := json.Unmarshal(raw, &env); err != nil {
+		t.Fatalf("upstream body was not well-formed JSON: %v\nbody: %s", err, raw)
+	}
+	if env.Params.Name != trickyTool {
+		t.Fatalf("upstream name = %q, want the exact original %q", env.Params.Name, trickyTool)
+	}
+	var gotArgs map[string]string
+	if err := json.Unmarshal(env.Params.Arguments, &gotArgs); err != nil {
+		t.Fatalf("upstream arguments not parseable: %v (%s)", err, env.Params.Arguments)
+	}
+	if gotArgs["msg"] != trickyValue {
+		t.Fatalf("upstream arg msg = %q, want the exact original %q", gotArgs["msg"], trickyValue)
+	}
+	if called, name, _ := up.called(); !called || name != trickyTool {
+		t.Fatalf("upstream did not run the tricky-named tool (called=%v name=%q)", called, name)
 	}
 }
