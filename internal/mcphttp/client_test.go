@@ -1,4 +1,4 @@
-package pluginhost
+package mcphttp
 
 import (
 	"context"
@@ -6,6 +6,10 @@ import (
 	"net/http/httptest"
 	"testing"
 )
+
+// clientMaxBytes is a generous bound for the client tests; the responses
+// under test never approach it, so it never affects the parsed result.
+const clientMaxBytes = 1024 * 1024
 
 func TestExtractSSEData(t *testing.T) {
 	cases := []struct {
@@ -32,7 +36,7 @@ func TestExtractSSEData(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := extractSSEData([]byte(tc.raw))
+			got, err := ExtractSSEData([]byte(tc.raw))
 			if tc.wantErr {
 				if err == nil {
 					t.Fatalf("expected error, got %s", got)
@@ -43,33 +47,35 @@ func TestExtractSSEData(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 			if string(got) != tc.want {
-				t.Errorf("extractSSEData() = %q, want %q", got, tc.want)
+				t.Errorf("ExtractSSEData() = %q, want %q", got, tc.want)
 			}
 		})
 	}
 }
 
-// TestPostJSONRPC_SSEResponse verifies postJSONRPC correctly extracts a
+// TestPostJSONRPC_SSEResponse verifies PostJSONRPC correctly extracts a
 // JSON-RPC response framed as text/event-stream — the default mode
 // clown-stdio-bridge answers POSTs in (heartbeatMode streams unless
-// CLOWN_BRIDGE_HEARTBEAT_INTERVAL=0), which FetchToolCatalog must handle
-// since clown doesn't control that env var per-fetch.
+// CLOWN_BRIDGE_HEARTBEAT_INTERVAL=0), which callers must handle since clown
+// doesn't control that env var per-fetch.
 func TestPostJSONRPC_SSEResponse(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
+		// A heartbeat/progress event precedes the final response event; only
+		// the last data: payload is the JSON-RPC message.
+		_, _ = w.Write([]byte("data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\"}\n\n"))
 		_, _ = w.Write([]byte("data: {\"jsonrpc\":\"2.0\",\"id\":\"x\",\"result\":{\"tools\":[]}}\n\n"))
 	}))
 	defer srv.Close()
 
-	h := &Host{}
-	body, _, err := h.postJSONRPC(context.Background(), srv.URL, "", `{"jsonrpc":"2.0","id":"x","method":"tools/list"}`)
+	body, _, err := PostJSONRPC(context.Background(), srv.URL, "", `{"jsonrpc":"2.0","id":"x","method":"tools/list"}`, clientMaxBytes)
 	if err != nil {
-		t.Fatalf("postJSONRPC: %v", err)
+		t.Fatalf("PostJSONRPC: %v", err)
 	}
 	want := `{"jsonrpc":"2.0","id":"x","result":{"tools":[]}}`
 	if string(body) != want {
-		t.Errorf("postJSONRPC() = %q, want %q", body, want)
+		t.Errorf("PostJSONRPC() = %q, want %q", body, want)
 	}
 }
 
@@ -83,18 +89,17 @@ func TestPostJSONRPC_PlainJSONResponse(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	h := &Host{}
-	body, _, err := h.postJSONRPC(context.Background(), srv.URL, "", `{"jsonrpc":"2.0","id":"x","method":"tools/list"}`)
+	body, _, err := PostJSONRPC(context.Background(), srv.URL, "", `{"jsonrpc":"2.0","id":"x","method":"tools/list"}`, clientMaxBytes)
 	if err != nil {
-		t.Fatalf("postJSONRPC: %v", err)
+		t.Fatalf("PostJSONRPC: %v", err)
 	}
 	want := `{"jsonrpc":"2.0","id":"x","result":{"tools":[]}}`
 	if string(body) != want {
-		t.Errorf("postJSONRPC() = %q, want %q", body, want)
+		t.Errorf("PostJSONRPC() = %q, want %q", body, want)
 	}
 }
 
-// TestPostJSONRPC_SessionIDRoundTrip verifies postJSONRPC captures a
+// TestPostJSONRPC_SessionIDRoundTrip verifies PostJSONRPC captures a
 // response's Mcp-Session-Id header and echoes a provided sessionID back on
 // the request — the continuity moxy's native httpServers implementation
 // requires between initialize and tools/list (internal/streamhttp,
@@ -103,30 +108,43 @@ func TestPostJSONRPC_PlainJSONResponse(t *testing.T) {
 func TestPostJSONRPC_SessionIDRoundTrip(t *testing.T) {
 	var gotHeader string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotHeader = r.Header.Get(mcpSessionIDHeader)
+		gotHeader = r.Header.Get(MCPSessionIDHeader)
 		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set(mcpSessionIDHeader, "sess-123")
+		w.Header().Set(MCPSessionIDHeader, "sess-123")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":"x","result":{}}`))
 	}))
 	defer srv.Close()
 
-	h := &Host{}
-	_, sessionID, err := h.postJSONRPC(context.Background(), srv.URL, "", `{"jsonrpc":"2.0","id":"x","method":"initialize"}`)
+	_, sessionID, err := PostJSONRPC(context.Background(), srv.URL, "", `{"jsonrpc":"2.0","id":"x","method":"initialize"}`, clientMaxBytes)
 	if err != nil {
-		t.Fatalf("postJSONRPC (initialize): %v", err)
+		t.Fatalf("PostJSONRPC (initialize): %v", err)
 	}
 	if sessionID != "sess-123" {
 		t.Fatalf("captured sessionID = %q, want sess-123", sessionID)
 	}
 	if gotHeader != "" {
-		t.Errorf("initialize request unexpectedly sent %s=%q", mcpSessionIDHeader, gotHeader)
+		t.Errorf("initialize request unexpectedly sent %s=%q", MCPSessionIDHeader, gotHeader)
 	}
 
-	if _, _, err := h.postJSONRPC(context.Background(), srv.URL, sessionID, `{"jsonrpc":"2.0","id":"y","method":"tools/list"}`); err != nil {
-		t.Fatalf("postJSONRPC (tools/list): %v", err)
+	if _, _, err := PostJSONRPC(context.Background(), srv.URL, sessionID, `{"jsonrpc":"2.0","id":"y","method":"tools/list"}`, clientMaxBytes); err != nil {
+		t.Fatalf("PostJSONRPC (tools/list): %v", err)
 	}
 	if gotHeader != "sess-123" {
-		t.Errorf("tools/list request sent %s=%q, want sess-123", mcpSessionIDHeader, gotHeader)
+		t.Errorf("tools/list request sent %s=%q, want sess-123", MCPSessionIDHeader, gotHeader)
+	}
+}
+
+// TestPostJSONRPC_Non200 verifies a non-200 status is surfaced as an error
+// rather than a body — FetchToolCatalog relies on this to degrade to
+// (nil, false) instead of parsing an error page as JSON-RPC.
+func TestPostJSONRPC_Non200(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	if _, _, err := PostJSONRPC(context.Background(), srv.URL, "", `{}`, clientMaxBytes); err == nil {
+		t.Fatal("PostJSONRPC: want error for non-200 status, got nil")
 	}
 }
