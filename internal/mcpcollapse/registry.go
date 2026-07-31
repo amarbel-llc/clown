@@ -167,6 +167,12 @@ func (r *Registry) Entries() []Entry {
 // Warnings returns the non-fatal first-wins tiebreaker messages recorded during
 // Build (empty when every id was unique). The caller surfaces these — e.g. logs
 // them at startup — so a silently-dropped colliding tool is visible.
+//
+// It returns a fresh copy per call (like Entries) so a caller that mutates the
+// result — appends past cap, sorts in place, shrinks it — cannot corrupt the
+// Registry's internal slice that the verbs read concurrently.
 func (r *Registry) Warnings() []string {
-	return r.warnings
+	out := make([]string, len(r.warnings))
+	copy(out, r.warnings)
+	return out
 }

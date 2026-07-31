@@ -150,6 +150,62 @@ func TestFirstWinsTiebreakerOnRenderedIDCollision(t *testing.T) {
 	}
 }
 
+// TestWarningsReturnsDefensiveCopy verifies Warnings() hands back a fresh slice
+// per call rather than aliasing the Registry's internal one: the aggregator's
+// verbs read the Registry concurrently, so a caller mutating the returned slice
+// (overwrite, append) must not corrupt what every other reader sees.
+func TestWarningsReturnsDefensiveCopy(t *testing.T) {
+	var b Builder
+	b.AddServer("grit.sub", "http://127.0.0.1:9001/mcp", []ToolSpec{{Name: "commit"}})
+	b.AddServer("grit", "http://127.0.0.1:9002/mcp", []ToolSpec{{Name: "sub.commit"}})
+	reg, err := b.Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	w1 := reg.Warnings()
+	if len(w1) != 1 {
+		t.Fatalf("Warnings() = %v, want exactly one warning", w1)
+	}
+	original := w1[0]
+
+	// Corrupt the returned slice in every way an aliasing bug would leak:
+	// overwrite an element, then append past its length.
+	w1[0] = "corrupted"
+	w1 = append(w1, "extra")
+
+	w2 := reg.Warnings()
+	if len(w2) != 1 {
+		t.Fatalf("second Warnings() = %v, want length 1 unaffected by first caller's append", w2)
+	}
+	if w2[0] != original {
+		t.Errorf("second Warnings()[0] = %q, want %q — first caller's mutation leaked", w2[0], original)
+	}
+}
+
+// TestEntriesReturnsDefensiveCopy mirrors the Warnings non-aliasing guarantee
+// for Entries — cheap to assert and it pins the same concurrent-reader
+// invariant for the mcp_list path.
+func TestEntriesReturnsDefensiveCopy(t *testing.T) {
+	var b Builder
+	b.AddServer("grit", "http://127.0.0.1:9001/mcp", []ToolSpec{{Name: "commit"}})
+	reg, err := b.Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	e1 := reg.Entries()
+	if len(e1) != 1 {
+		t.Fatalf("Entries() = %v, want one entry", e1)
+	}
+	e1[0].Tool = "corrupted"
+
+	e2 := reg.Entries()
+	if e2[0].Tool != "commit" {
+		t.Errorf("second Entries()[0].Tool = %q, want commit — first caller's mutation leaked", e2[0].Tool)
+	}
+}
+
 // TestBuildNoCollisionsHasNoWarnings verifies the common case records nothing —
 // Warnings() is empty when every id is unique, so a non-empty slice is a real
 // signal rather than routine noise.
