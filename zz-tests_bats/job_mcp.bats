@@ -41,19 +41,19 @@ teardown() {
   assert_output --partial '"name":"clown-ringmaster"'
 }
 
-# `ringmaster mcp` exposes only the seven job-control tools (clown#144).
+# `ringmaster mcp` exposes only the eight job-control tools (clown#144).
 @test "ringmaster mcp exposes only the job-control tools" {
   req='{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
   run bash -c "printf '%s\n' '$req' | '$RINGMASTER_BIN' mcp"
   assert_success
-  for tool in job_start job_progress job_done job_read job_status job_spool_path job_wait; do
+  for tool in job_start job_progress job_done job_cancel job_read job_status job_spool_path job_wait; do
     assert_output --partial "\"$tool\""
   done
   for tool in chat_send chat_read chat_list job_message; do
     refute_output --partial "\"$tool\""
   done
   count="$(printf '%s' "$output" | jq -r '.result.tools | length')"
-  assert_equal "$count" "7"
+  assert_equal "$count" "8"
 }
 
 # `troupe mcp` exposes only the four messaging tools and reports the clown-troupe
