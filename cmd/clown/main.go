@@ -508,6 +508,19 @@ func runWithFlags(flags parsedFlags) int {
 		return 1
 	}
 
+	// --mcp-collapse is claude-family-only: the aggregator is synthesized into a
+	// claude --plugin-dir manifest, a seam the config-file providers (opencode,
+	// crush) and the exec-replacing ones (codex, juggler) do not share. Reject a
+	// non-claude provider HERE — the earliest point flags.provider is final (the
+	// profile picker above can still change it) and nothing has been written yet
+	// — so `clown --mcp-collapse --provider opencode` gets a crisp early error
+	// instead of failing deep in runManaged. The runManaged binding-type guard
+	// stays as a belt-and-suspenders assertion of the same invariant.
+	if err := mcpCollapseProviderError(flags.mcpCollapse, flags.provider); err != nil {
+		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
+		return 1
+	}
+
 	// --print-launch-plan is implemented at the runProvider seam, which the
 	// exec-replacing paths (--naked, codex) never reach. Refusing is the only
 	// safe answer: silently ignoring the flag would LAUNCH the provider, the one
@@ -1913,9 +1926,11 @@ func runManaged(
 	if flags.mcpCollapse {
 		claudeBase, ok := binding.(*claudeBinding)
 		if !ok {
-			// --mcp-collapse is gated to the claude family at flag-resolution time
-			// (runClaude is the only caller that honors it); any other binding here
-			// is a wiring bug, so fail loudly rather than silently ignore the flag.
+			// Belt-and-suspenders: runWithFlags already rejects --mcp-collapse on a
+			// non-claude provider at flag-resolution time (mcpCollapseProviderError),
+			// so this only fires if a future caller wires a non-claude binding into
+			// this path despite the flag. Fail loudly rather than silently ignore
+			// the flag; the assertion also documents the claude-only invariant here.
 			fmt.Fprintln(os.Stderr, "clown: --mcp-collapse is only supported for the claude provider")
 			logger.Error("mcp-collapse requested with a non-claude binding")
 			return 1
@@ -2157,6 +2172,20 @@ func pluginDirSet(discovered []pluginhost.DiscoveredServer) map[string]bool {
 	return set
 }
 
+// mcpCollapseProviderError returns a non-nil error when --mcp-collapse is set
+// on a provider other than claude. --mcp-collapse synthesizes the aggregator
+// into a claude --plugin-dir manifest, which only the claude family consumes;
+// the config-file providers (opencode, crush) and the exec-replacing ones
+// (codex, juggler) have no such seam. Extracted as a pure helper so the early
+// (runWithFlags) rejection is unit-testable without a launch. Returns nil when
+// the flag is off, or when the provider is claude.
+func mcpCollapseProviderError(mcpCollapse bool, provider string) error {
+	if !mcpCollapse || provider == "claude" {
+		return nil
+	}
+	return fmt.Errorf("--mcp-collapse is only supported for the claude provider (got %q)", provider)
+}
+
 // collapseUpstreamsFor maps the selected DiscoveredServers to the
 // AggregatorUpstream list clown-mcp-collapse is launched with: each survivor's
 // composite "<plugin>/<server>" name paired with its running server's resolved
@@ -2168,6 +2197,14 @@ func pluginDirSet(discovered []pluginhost.DiscoveredServer) map[string]bool {
 // the plain handshake URL (not the host-rewritten one meant for an
 // out-of-process/in-container consumer) — the aggregator runs in clown's own
 // network namespace alongside the upstreams.
+//
+// A '=' anywhere in the composite name is REJECTED, not sanitized: the name is
+// passed to clown-mcp-collapse as `--upstream <name>=<url>`, whose parser splits
+// on the FIRST '=', so a name containing '=' would truncate the name and corrupt
+// the url. Rejecting (rather than folding it away à la sanitizeMCPKey) is the
+// right call because the name becomes the visible "{server}" half of every
+// dotted tool_id the agent sees — silently rewriting it would surprise the
+// agent, whereas a name with '=' is a plain misconfiguration worth surfacing.
 func collapseUpstreamsFor(selected []pluginhost.DiscoveredServer, started []*pluginhost.ManagedServer) ([]pluginhost.AggregatorUpstream, error) {
 	byName := make(map[string]*pluginhost.ManagedServer, len(started))
 	for _, srv := range started {
@@ -2175,12 +2212,16 @@ func collapseUpstreamsFor(selected []pluginhost.DiscoveredServer, started []*plu
 	}
 	upstreams := make([]pluginhost.AggregatorUpstream, 0, len(selected))
 	for _, d := range selected {
-		srv, ok := byName[d.Name()]
+		name := d.Name()
+		if strings.Contains(name, "=") {
+			return nil, fmt.Errorf("mcp-collapse: server name %q contains '=', which would corrupt the --upstream name=url wire form; rename the plugin or server in its clown.json", name)
+		}
+		srv, ok := byName[name]
 		if !ok {
-			return nil, fmt.Errorf("mcp-collapse: selected server %q has no running instance", d.Name())
+			return nil, fmt.Errorf("mcp-collapse: selected server %q has no running instance", name)
 		}
 		upstreams = append(upstreams, pluginhost.AggregatorUpstream{
-			Name: d.Name(),
+			Name: name,
 			URL:  srv.Handshake().URL(),
 		})
 	}

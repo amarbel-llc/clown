@@ -245,6 +245,46 @@ func keysOf(m map[string]string) []string {
 	return out
 }
 
+// StartAggregator must reject an empty BinaryPath BEFORE any exec: a dev build
+// leaves buildcfg.McpCollapsePath empty, and --mcp-collapse there should fail
+// with a clear, actionable error rather than trying to exec "".
+func TestStartAggregator_EmptyBinaryPathErrors(t *testing.T) {
+	host := &Host{}
+	_, err := host.StartAggregator(context.Background(), AggregatorSpec{
+		BinaryPath: "",
+		Upstreams:  []AggregatorUpstream{{Name: "a", URL: "http://127.0.0.1:1/mcp"}},
+	})
+	if err == nil {
+		t.Fatal("expected error for empty BinaryPath, got nil")
+	}
+	if !strings.Contains(err.Error(), "binary path is empty") {
+		t.Errorf("error = %q, want it to mention the empty binary path", err)
+	}
+	if len(host.Servers) != 0 {
+		t.Errorf("no server should be registered on the guard path, got %d", len(host.Servers))
+	}
+}
+
+// StartAggregator with no upstreams is a caller bug (there is nothing to
+// collapse) and must error before exec rather than launch an aggregator that
+// fronts nothing.
+func TestStartAggregator_NoUpstreamsErrors(t *testing.T) {
+	host := &Host{}
+	_, err := host.StartAggregator(context.Background(), AggregatorSpec{
+		BinaryPath: "/nonexistent/clown-mcp-collapse",
+		Upstreams:  nil,
+	})
+	if err == nil {
+		t.Fatal("expected error for empty Upstreams, got nil")
+	}
+	if !strings.Contains(err.Error(), "no upstreams") {
+		t.Errorf("error = %q, want it to mention no upstreams", err)
+	}
+	if len(host.Servers) != 0 {
+		t.Errorf("no server should be registered on the guard path, got %d", len(host.Servers))
+	}
+}
+
 // Sanity check: the discover → report roundtrip still works for a plugin
 // dir that has no clown.json (discover returns nothing, StartAll on empty
 // list returns an empty report).

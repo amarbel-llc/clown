@@ -713,6 +713,45 @@ func TestParseFlagsErrors(t *testing.T) {
 	}
 }
 
+// mcpCollapseProviderError is the early (runWithFlags) gate that rejects
+// --mcp-collapse on any non-claude provider. It is the user-facing rejection —
+// the deep runManaged binding-type guard is only a belt-and-suspenders
+// assertion — so it is the one worth testing exhaustively.
+func TestMcpCollapseProviderError(t *testing.T) {
+	cases := []struct {
+		name        string
+		mcpCollapse bool
+		provider    string
+		wantErr     bool
+	}{
+		{"flag off, claude", false, "claude", false},
+		{"flag off, opencode", false, "opencode", false},
+		{"flag on, claude ok", true, "claude", false},
+		{"flag on, opencode rejected", true, "opencode", true},
+		{"flag on, crush rejected", true, "crush", true},
+		{"flag on, codex rejected", true, "codex", true},
+		{"flag on, juggler rejected", true, "juggler", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := mcpCollapseProviderError(tc.mcpCollapse, tc.provider)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error for provider %q with --mcp-collapse, got nil", tc.provider)
+				}
+				if !strings.Contains(err.Error(), "only supported for the claude provider") {
+					t.Errorf("error = %q, want the claude-only message", err)
+				}
+				if !strings.Contains(err.Error(), tc.provider) {
+					t.Errorf("error = %q, want it to name the offending provider %q", err, tc.provider)
+				}
+			} else if err != nil {
+				t.Errorf("unexpected error for %v: %v", tc, err)
+			}
+		})
+	}
+}
+
 func TestParseFlagsPassDevshellEnv(t *testing.T) {
 	t.Setenv("CLOWN_TENT_PASS_DEVSHELL", "1")
 	got, err := parseFlags(nil)

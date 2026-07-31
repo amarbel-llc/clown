@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"code.linenisgreat.com/clown/internal/pluginhost"
@@ -222,6 +223,74 @@ func TestCollapseBinding_NilAggregatorMatchesLegacyFallback(t *testing.T) {
 	}
 	if got.Env != nil {
 		t.Errorf("collapse binding must contribute no env, got %v", got.Env)
+	}
+}
+
+// collapseUpstreamsFor pairs each selected server with its running instance's
+// URL. The happy path: both selected servers have a started counterpart, so
+// both become --upstream entries carrying the plain (non-rewritten) handshake
+// URL.
+func TestCollapseUpstreamsFor_HappyPath(t *testing.T) {
+	selected := []pluginhost.DiscoveredServer{
+		discoveredForTest("moxy", "moxy", "/plugins/moxy"),
+		discoveredForTest("dodder", "dodder", "/plugins/dodder"),
+	}
+	started := []*pluginhost.ManagedServer{
+		pluginhost.NewStartedServerForTest("moxy/moxy", "127.0.0.1:7001", "streamable-http"),
+		pluginhost.NewStartedServerForTest("dodder/dodder", "127.0.0.1:7002", "streamable-http"),
+	}
+	ups, err := collapseUpstreamsFor(selected, started)
+	if err != nil {
+		t.Fatalf("collapseUpstreamsFor: %v", err)
+	}
+	if len(ups) != 2 {
+		t.Fatalf("expected 2 upstreams, got %d: %+v", len(ups), ups)
+	}
+	if ups[0].Name != "moxy/moxy" || ups[0].URL != "http://127.0.0.1:7001/mcp" {
+		t.Errorf("upstream[0] = %+v, want moxy/moxy at .../7001/mcp", ups[0])
+	}
+	if ups[1].Name != "dodder/dodder" || ups[1].URL != "http://127.0.0.1:7002/mcp" {
+		t.Errorf("upstream[1] = %+v, want dodder/dodder at .../7002/mcp", ups[1])
+	}
+}
+
+// A selected server with NO started counterpart (a name-map mismatch) must
+// surface loudly rather than silently front fewer servers than the agent
+// expects — a wiring regression, not a benign skip.
+func TestCollapseUpstreamsFor_MissingRunningInstanceErrors(t *testing.T) {
+	selected := []pluginhost.DiscoveredServer{
+		discoveredForTest("moxy", "moxy", "/plugins/moxy"),
+	}
+	// started names a DIFFERENT server, so the lookup by "moxy/moxy" misses.
+	started := []*pluginhost.ManagedServer{
+		pluginhost.NewStartedServerForTest("ghost/srv", "127.0.0.1:7001", "streamable-http"),
+	}
+	_, err := collapseUpstreamsFor(selected, started)
+	if err == nil {
+		t.Fatal("expected error when a selected server has no running instance, got nil")
+	}
+	if !strings.Contains(err.Error(), "no running instance") {
+		t.Errorf("error = %q, want it to mention the missing running instance", err)
+	}
+}
+
+// A '=' in the composite server name would corrupt the --upstream name=url wire
+// form (clown-mcp-collapse splits on the FIRST '='), so collapseUpstreamsFor
+// rejects it rather than silently truncating the name / url.
+func TestCollapseUpstreamsFor_EqualsInNameRejected(t *testing.T) {
+	// PluginName carries the '=' so d.Name() = "we=ird/srv".
+	selected := []pluginhost.DiscoveredServer{
+		discoveredForTest("we=ird", "srv", "/plugins/weird"),
+	}
+	started := []*pluginhost.ManagedServer{
+		pluginhost.NewStartedServerForTest("we=ird/srv", "127.0.0.1:7001", "streamable-http"),
+	}
+	_, err := collapseUpstreamsFor(selected, started)
+	if err == nil {
+		t.Fatal("expected error for a server name containing '=', got nil")
+	}
+	if !strings.Contains(err.Error(), "'='") {
+		t.Errorf("error = %q, want it to call out the '=' in the name", err)
 	}
 }
 
