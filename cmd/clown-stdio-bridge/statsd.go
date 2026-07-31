@@ -117,20 +117,6 @@ func metricLabel(method string, body []byte) string {
 	return sanitizeMetric(method)
 }
 
-// responseIsError reports whether a JSON-RPC response carries an error
-// member (the success/failure discriminator for delivered responses). Retained
-// for its direct unit coverage; the spine now owns the response→outcome
-// classification (mcphttp.responseOutcome).
-func responseIsError(resp json.RawMessage) bool {
-	var probe struct {
-		Error json.RawMessage `json:"error"`
-	}
-	if json.Unmarshal(resp, &probe) != nil {
-		return false
-	}
-	return len(probe.Error) > 0 && string(probe.Error) != "null"
-}
-
 // emitOutcome records one bridged request's terminal outcome: counters for
 // every outcome, plus duration for completed responses (success/failure —
 // abandoned requests never completed, so their elapsed time would skew the

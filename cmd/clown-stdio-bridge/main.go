@@ -146,8 +146,8 @@ func run(p parsedArgs) int {
 	// --cheap-context v2 (cmd/clown/cheapcontext.go): clown GETs/POSTs the set
 	// of tool names to exclude from every subsequent tools/list response,
 	// after the user's picker selection is known. Loopback-only per
-	// validateOrigin, like every other /clown/* control endpoint on this
-	// bridge — this is a clown-internal control surface, not part of MCP.
+	// mcphttp.ValidateOrigin, like every other /clown/* control endpoint on
+	// this bridge — this is a clown-internal control surface, not part of MCP.
 	// Contract matches moxy's independently-shipped /clown/exclude-tools
 	// (amarbel-llc/moxy#399): see httpHandler.handleExcludeTools.
 	mux.HandleFunc("/clown/exclude-tools", handler.handleExcludeTools)

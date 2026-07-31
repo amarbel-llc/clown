@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +18,24 @@ import (
 type nullLogger struct{}
 
 func (nullLogger) Printf(format string, args ...any) {}
+
+// recordingLogger captures formatted log lines for assertions.
+type recordingLogger struct {
+	mu    sync.Mutex
+	lines []string
+}
+
+func (r *recordingLogger) Printf(format string, args ...any) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.lines = append(r.lines, fmt.Sprintf(format, args...))
+}
+
+func (r *recordingLogger) joined() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return strings.Join(r.lines, "\n")
+}
 
 // stubHandler is a minimal RequestHandler: SendRequest returns a canned
 // response body regardless of input, notifications/subscriptions are no-ops.
@@ -626,5 +645,45 @@ func TestServer_GetSSEStream(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Errorf("SSE read timed out")
+	}
+}
+
+// TestNewServer_FallbackWithoutIntervalCoercedAndLogged verifies the
+// construction-time guard: a Heartbeat asking for the activity-gated fallback
+// but with a non-positive Interval (which could never arm the timer) is coerced
+// to plain forward-only and a warning is logged, so the misconfiguration is not
+// silent.
+func TestNewServer_FallbackWithoutIntervalCoercedAndLogged(t *testing.T) {
+	log := &recordingLogger{}
+	srv := NewServer(Config{
+		Handler:   stubHandler{},
+		Logger:    log,
+		Heartbeat: Heartbeat{Streaming: true, Fallback: true, Interval: 0},
+	})
+	if srv.heartbeat.Fallback {
+		t.Errorf("Fallback should have been coerced off; got %+v", srv.heartbeat)
+	}
+	if !srv.heartbeat.Streaming {
+		t.Errorf("Streaming must be preserved (forward-only); got %+v", srv.heartbeat)
+	}
+	if !strings.Contains(log.joined(), "forward-only") {
+		t.Errorf("expected a coercion warning mentioning forward-only; got %q", log.joined())
+	}
+}
+
+// TestNewServer_ValidFallbackNotCoerced confirms the guard leaves a correctly
+// configured activity-gated fallback (Interval > 0) untouched.
+func TestNewServer_ValidFallbackNotCoerced(t *testing.T) {
+	log := &recordingLogger{}
+	srv := NewServer(Config{
+		Handler:   stubHandler{},
+		Logger:    log,
+		Heartbeat: Heartbeat{Streaming: true, Fallback: true, Interval: 20 * time.Millisecond},
+	})
+	if !srv.heartbeat.Fallback || srv.heartbeat.Interval != 20*time.Millisecond {
+		t.Errorf("valid fallback policy was altered; got %+v", srv.heartbeat)
+	}
+	if log.joined() != "" {
+		t.Errorf("no warning expected for a valid fallback; got %q", log.joined())
 	}
 }

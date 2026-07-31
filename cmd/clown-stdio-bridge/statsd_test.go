@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"net"
 	"strings"
 	"testing"
@@ -33,21 +32,6 @@ func TestMetricLabel(t *testing.T) {
 	}
 	if got := metricLabel("initialize", []byte(`{}`)); got != "initialize" {
 		t.Errorf("initialize label = %q", got)
-	}
-}
-
-func TestResponseIsError(t *testing.T) {
-	if responseIsError(json.RawMessage(`{"jsonrpc":"2.0","id":1,"result":{}}`)) {
-		t.Error("result response classified as error")
-	}
-	if !responseIsError(json.RawMessage(`{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"boom"}}`)) {
-		t.Error("error response not classified as error")
-	}
-	if responseIsError(json.RawMessage(`{"id":1,"error":null}`)) {
-		t.Error("error:null classified as error")
-	}
-	if responseIsError(json.RawMessage(`not json`)) {
-		t.Error("unparseable response classified as error")
 	}
 }
 

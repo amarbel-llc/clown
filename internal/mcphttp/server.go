@@ -125,16 +125,35 @@ type Server struct {
 }
 
 // NewServer builds a Server from cfg. Handler must be non-nil.
+//
+// A Heartbeat{Fallback: true, Interval: 0} is a misconfiguration: the streaming
+// timer switch matches neither the fallback branch (which needs Interval > 0)
+// nor the fixed-cadence branch, so the activity-gated keep-alive the caller
+// asked for would silently never fire (plain forward-only). NewServer doesn't
+// return an error, so rather than change its signature it coerces Fallback off
+// and logs a warning via cfg.Logger — the policy becomes honest forward-only
+// and the misconfiguration is no longer invisible.
 func NewServer(cfg Config) *Server {
 	prefix := cfg.LogPrefix
 	if prefix == "" {
 		prefix = "mcphttp"
 	}
+	hb := cfg.Heartbeat
+	if hb.Fallback && hb.Interval <= 0 {
+		if cfg.Logger != nil {
+			cfg.Logger.Printf(
+				"%s: Heartbeat.Fallback set with non-positive Interval (%v); "+
+					"activity-gated keep-alive cannot arm — coercing to forward-only",
+				prefix, hb.Interval,
+			)
+		}
+		hb.Fallback = false
+	}
 	return &Server{
 		h:         cfg.Handler,
 		logger:    cfg.Logger,
 		logPrefix: prefix,
-		heartbeat: cfg.Heartbeat,
+		heartbeat: hb,
 		stats:     cfg.Stats,
 		filter:    cfg.Filter,
 	}

@@ -36,6 +36,12 @@ const heartbeatDefault = 30 * time.Second
 // returns the resolved mcphttp.Heartbeat policy the spine applies per POST.
 // The env-reading lives here (bridge-side), not in the shared spine, so the
 // spine carries no policy source of its own.
+//
+// These env vars are read ONCE, at handler construction (newHTTPHandler folds
+// the result into mcphttp.Config.Heartbeat), NOT per-request. A test that
+// mutates CLOWN_BRIDGE_HEARTBEAT_INTERVAL / CLOWN_BRIDGE_HEARTBEAT must do so
+// BEFORE constructing the handler — flipping them afterward has no effect on an
+// already-built server.
 func resolveHeartbeat() mcphttp.Heartbeat {
 	streaming, interval, fallback := heartbeatMode()
 	return mcphttp.Heartbeat{
