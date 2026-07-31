@@ -22,6 +22,11 @@ type fakeUpstream struct {
 	// failToolsList, when set, makes tools/list return HTTP 500 — the fail-open
 	// trigger the aggregator must skip rather than abort on.
 	failToolsList bool
+	// toolsListRPCError, when set, makes tools/list return a JSON-RPC error
+	// envelope at HTTP 200 (the method-level-error framing many MCP servers use)
+	// rather than a result — the aggregator must treat this as degraded, not as
+	// a healthy empty-tool server.
+	toolsListRPCError string
 	// requireSession, when true, makes initialize hand back a session id and
 	// makes tools/list 400 unless that id is echoed on the request, mirroring
 	// moxy's streamhttp session-continuity requirement.
@@ -62,6 +67,10 @@ func (f *fakeUpstream) handler() http.HandlerFunc {
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")
+			if f.toolsListRPCError != "" {
+				w.Write([]byte(`{"jsonrpc":"2.0","id":` + string(envelope.ID) + `,"error":{"code":-32601,"message":` + jsonString(f.toolsListRPCError) + `}}`))
+				return
+			}
 			w.Write([]byte(`{"jsonrpc":"2.0","id":` + string(envelope.ID) + `,"result":{"tools":[` + f.toolsJSON() + `]}}`))
 		default:
 			http.Error(w, "unexpected method", http.StatusBadRequest)
@@ -254,5 +263,80 @@ func TestAggregatorDuplicateServerNameFails(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "duplicate server name") {
 		t.Fatalf("error should mention duplicate server name, got: %v", err)
+	}
+}
+
+// TestAggregatorFailOpenOnJSONRPCErrorEnvelope: a tools/list that returns a
+// JSON-RPC error envelope at HTTP 200 (not a result) must land the upstream in
+// Degraded() with the upstream's error message — not be swallowed as a healthy
+// empty-tool server.
+func TestAggregatorFailOpenOnJSONRPCErrorEnvelope(t *testing.T) {
+	healthy := httptest.NewServer((&fakeUpstream{tools: []fakeTool{
+		{name: "search", description: "search the web"},
+	}}).handler())
+	defer healthy.Close()
+	errServer := httptest.NewServer((&fakeUpstream{
+		toolsListRPCError: "method not found",
+	}).handler())
+	defer errServer.Close()
+
+	agg, err := NewAggregator(context.Background(), []Upstream{
+		{Name: "web", URL: healthy.URL},
+		{Name: "rpcerr", URL: errServer.URL},
+	}, time.Second)
+	if err != nil {
+		t.Fatalf("NewAggregator: %v", err)
+	}
+
+	if got := len(agg.Registry().Entries()); got != 1 {
+		t.Fatalf("registry has %d entries, want 1 (rpcerr must not be a healthy empty server)", got)
+	}
+
+	deg := agg.Degraded()
+	if len(deg) != 1 {
+		t.Fatalf("expected 1 degraded upstream, got %d: %v", len(deg), deg)
+	}
+	if deg[0].Name != "rpcerr" {
+		t.Fatalf("degraded name = %q, want %q", deg[0].Name, "rpcerr")
+	}
+	if deg[0].Err == nil || !strings.Contains(deg[0].Err.Error(), "method not found") {
+		t.Fatalf("degraded reason should reflect the upstream error, got: %v", deg[0].Err)
+	}
+}
+
+// TestAggregatorSkipsEmptyNamedTool: a tools/list with one valid tool and one
+// empty-named tool must yield a registry containing ONLY the valid tool, and the
+// skip must be observable via Aggregator.Warnings().
+func TestAggregatorSkipsEmptyNamedTool(t *testing.T) {
+	up := httptest.NewServer((&fakeUpstream{tools: []fakeTool{
+		{name: "good", description: "a real tool"},
+		{name: "", description: "a nameless tool"},
+	}}).handler())
+	defer up.Close()
+
+	agg, err := NewAggregator(context.Background(), []Upstream{
+		{Name: "srv", URL: up.URL},
+	}, time.Second)
+	if err != nil {
+		t.Fatalf("NewAggregator: %v", err)
+	}
+
+	reg := agg.Registry()
+	if _, ok := reg.Lookup("srv.good"); !ok {
+		t.Fatalf("expected the valid tool srv.good in registry")
+	}
+	if _, ok := reg.Lookup("srv."); ok {
+		t.Fatalf("empty-named tool must not produce a registry entry")
+	}
+	if got := len(reg.Entries()); got != 1 {
+		t.Fatalf("registry has %d entries, want 1 (only the valid tool)", got)
+	}
+
+	warnings := agg.Warnings()
+	if len(warnings) != 1 {
+		t.Fatalf("expected 1 warning for the skipped empty-named tool, got %d: %v", len(warnings), warnings)
+	}
+	if !strings.Contains(warnings[0], "empty name") || !strings.Contains(warnings[0], "srv") {
+		t.Fatalf("warning should name the empty-name skip and the server, got: %q", warnings[0])
 	}
 }

@@ -46,13 +46,15 @@ type DegradedUpstream struct {
 }
 
 // Aggregator holds the result of the startup fan-out: the registry built from
-// the upstreams that enumerated successfully and the list of those that did
-// not. It is immutable after NewAggregator returns — the fan-out is complete by
-// then, which IS the health gate — so the verbs (a later task) read it without
-// locking.
+// the upstreams that enumerated successfully, the list of those that did not,
+// and any non-fatal warnings collected while enumerating (e.g. tools skipped
+// for having an empty name). It is immutable after NewAggregator returns — the
+// fan-out is complete by then, which IS the health gate — so the verbs (a later
+// task) read it without locking.
 type Aggregator struct {
 	registry *Registry
 	degraded []DegradedUpstream
+	warnings []string
 }
 
 // NewAggregator performs the startup fan-out across upstreams and returns the
@@ -81,6 +83,7 @@ func NewAggregator(ctx context.Context, upstreams []Upstream, perUpstreamTimeout
 	type enumResult struct {
 		upstream Upstream
 		tools    []ToolSpec
+		warnings []string
 		err      error
 	}
 
@@ -90,16 +93,18 @@ func NewAggregator(ctx context.Context, upstreams []Upstream, perUpstreamTimeout
 		wg.Add(1)
 		go func(i int, up Upstream) {
 			defer wg.Done()
-			tools, err := enumerateUpstream(ctx, up, perUpstreamTimeout)
-			results[i] = enumResult{upstream: up, tools: tools, err: err}
+			tools, warnings, err := enumerateUpstream(ctx, up, perUpstreamTimeout)
+			results[i] = enumResult{upstream: up, tools: tools, warnings: warnings, err: err}
 		}(i, up)
 	}
 	wg.Wait()
 
 	// Build the registry from the successful upstreams in input order, so
-	// AddServer sees a deterministic sequence, and collect the failures.
+	// AddServer sees a deterministic sequence, and collect the failures and
+	// enumeration-time warnings.
 	var builder Builder
 	var degraded []DegradedUpstream
+	var warnings []string
 	for _, res := range results {
 		if res.err != nil {
 			degraded = append(degraded, DegradedUpstream{
@@ -109,6 +114,7 @@ func NewAggregator(ctx context.Context, upstreams []Upstream, perUpstreamTimeout
 			})
 			continue
 		}
+		warnings = append(warnings, res.warnings...)
 		builder.AddServer(res.upstream.Name, res.upstream.URL, res.tools)
 	}
 
@@ -117,7 +123,12 @@ func NewAggregator(ctx context.Context, upstreams []Upstream, perUpstreamTimeout
 		return nil, fmt.Errorf("mcpcollapse: building aggregator registry: %w", err)
 	}
 
-	return &Aggregator{registry: registry, degraded: degraded}, nil
+	// The registry's own Build warnings (first-wins id-collision ties) join the
+	// aggregator's enumeration-time warnings so a single Warnings() call surfaces
+	// every non-fatal skip.
+	warnings = append(warnings, registry.Warnings()...)
+
+	return &Aggregator{registry: registry, degraded: degraded, warnings: warnings}, nil
 }
 
 // Registry returns the registry built from the upstreams that enumerated
@@ -136,6 +147,19 @@ func (a *Aggregator) Degraded() []DegradedUpstream {
 	return out
 }
 
+// Warnings returns the non-fatal issues collected during the fan-out: tools
+// skipped for having an empty name (which would otherwise render a garbage
+// "<server>." id) plus the registry's own first-wins id-collision ties. It
+// returns a fresh copy per call so a caller mutating the result cannot corrupt
+// the Aggregator's internal slice. Empty when nothing was skipped. The caller
+// surfaces these — e.g. logs them at startup — so a silently-dropped tool is
+// visible.
+func (a *Aggregator) Warnings() []string {
+	out := make([]string, len(a.warnings))
+	copy(out, a.warnings)
+	return out
+}
+
 // enumerateUpstream runs one upstream's MCP handshake: initialize (to establish
 // a session and capture the Mcp-Session-Id the server may require echoed), then
 // tools/list, parsing the result into the ToolSpecs the registry Builder
@@ -144,7 +168,10 @@ func (a *Aggregator) Degraded() []DegradedUpstream {
 // aggregator hands that schema back verbatim from mcp_describe. Any failure is
 // returned as an error for the caller to record as degraded — this function
 // does not itself decide fail-open policy.
-func enumerateUpstream(ctx context.Context, up Upstream, timeout time.Duration) ([]ToolSpec, error) {
+//
+// It returns, alongside the specs, a slice of non-fatal warnings (tools skipped
+// for having an empty name) for the caller to surface via Aggregator.Warnings.
+func enumerateUpstream(ctx context.Context, up Upstream, timeout time.Duration) ([]ToolSpec, []string, error) {
 	reqCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -154,34 +181,61 @@ func enumerateUpstream(ctx context.Context, up Upstream, timeout time.Duration) 
 	// that call 400s even though initialize succeeded.
 	_, sessionID, err := mcphttp.PostJSONRPC(reqCtx, up.URL, "", `{"jsonrpc":"2.0","id":"mcp-collapse-init","method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"clown-mcp-collapse","version":"1"}}}`, maxEnumerateBytes)
 	if err != nil {
-		return nil, fmt.Errorf("initialize: %w", err)
+		return nil, nil, fmt.Errorf("initialize: %w", err)
 	}
 
 	body, _, err := mcphttp.PostJSONRPC(reqCtx, up.URL, sessionID, `{"jsonrpc":"2.0","id":"mcp-collapse-tools","method":"tools/list","params":{}}`, maxEnumerateBytes)
 	if err != nil {
-		return nil, fmt.Errorf("tools/list: %w", err)
+		return nil, nil, fmt.Errorf("tools/list: %w", err)
 	}
 
+	// A JSON-RPC response carries EITHER a result OR an error, both at HTTP 200.
+	// Result is a pointer so an ABSENT result is distinguishable from a present
+	// empty one: encoding/json leaves an absent field nil rather than erroring,
+	// so a plain value struct would parse an error-only envelope as a healthy
+	// zero-tool server and hide the failure from Degraded().
 	var parsed struct {
-		Result struct {
+		Result *struct {
 			Tools []struct {
 				Name        string          `json:"name"`
 				Description string          `json:"description"`
 				InputSchema json.RawMessage `json:"inputSchema"`
 			} `json:"tools"`
 		} `json:"result"`
+		Error *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
 	}
 	if err := json.Unmarshal(body, &parsed); err != nil {
-		return nil, fmt.Errorf("parsing tools/list response: %w", err)
+		return nil, nil, fmt.Errorf("parsing tools/list response: %w", err)
+	}
+	if parsed.Error != nil {
+		return nil, nil, fmt.Errorf("tools/list: upstream error %d: %s", parsed.Error.Code, parsed.Error.Message)
+	}
+	if parsed.Result == nil {
+		// Neither a result nor an error is a malformed JSON-RPC response — treat
+		// it as a failure rather than a healthy empty-tool server.
+		return nil, nil, fmt.Errorf("tools/list: response has neither result nor error")
 	}
 
+	var warnings []string
 	specs := make([]ToolSpec, 0, len(parsed.Result.Tools))
 	for _, t := range parsed.Result.Tools {
+		// An empty name would render a garbage "<server>." id via Entry.ID(),
+		// which the verbs would expose as a callable-but-broken tool. Skip it,
+		// but record the skip so it is not silently dropped.
+		if t.Name == "" {
+			warnings = append(warnings, fmt.Sprintf(
+				"mcpcollapse: skipping tool with empty name from server %q (%s)", up.Name, up.URL,
+			))
+			continue
+		}
 		specs = append(specs, ToolSpec{
 			Name:        t.Name,
 			Description: t.Description,
 			Schema:      t.InputSchema,
 		})
 	}
-	return specs, nil
+	return specs, warnings, nil
 }
