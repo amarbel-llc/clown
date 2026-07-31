@@ -135,6 +135,27 @@ func TestPostJSONRPC_SessionIDRoundTrip(t *testing.T) {
 	}
 }
 
+// TestPostJSONRPC_ZeroMaxBytesUsesDefault verifies a non-positive maxBytes
+// falls back to DefaultMaxResponseBytes and reads the full body, rather than
+// io.LimitReader(_, 0)'s silent zero-byte read that would return an empty
+// "success" — the failure mode the aggregator's many call sites could trip.
+func TestPostJSONRPC_ZeroMaxBytesUsesDefault(t *testing.T) {
+	const wantBody = `{"jsonrpc":"2.0","id":"x","result":{"tools":[]}}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(wantBody))
+	}))
+	defer srv.Close()
+
+	body, _, err := PostJSONRPC(context.Background(), srv.URL, "", `{}`, 0)
+	if err != nil {
+		t.Fatalf("PostJSONRPC: %v", err)
+	}
+	if string(body) != wantBody {
+		t.Errorf("PostJSONRPC(..., 0) = %q, want %q (should use DefaultMaxResponseBytes, not truncate to empty)", body, wantBody)
+	}
+}
+
 // TestPostJSONRPC_Non200 verifies a non-200 status is surfaced as an error
 // rather than a body — FetchToolCatalog relies on this to degrade to
 // (nil, false) instead of parsing an error page as JSON-RPC.

@@ -18,11 +18,20 @@ import (
 // forwarding it when present is harmless there too.
 const MCPSessionIDHeader = "Mcp-Session-Id"
 
+// DefaultMaxResponseBytes bounds a JSON-RPC response body when a caller passes
+// a non-positive maxBytes to PostJSONRPC, so an accidental 0 reads a bounded
+// body rather than silently succeeding with zero bytes (io.LimitReader(_, 0)
+// reads nothing without erroring). 1 MiB matches pluginhost's historical
+// maxToolCatalogBytes, so the real caller's behavior is unchanged.
+const DefaultMaxResponseBytes = 1 << 20
+
 // PostJSONRPC POSTs a single JSON-RPC request body to url and returns the
 // extracted JSON-RPC message body plus the response's Mcp-Session-Id header
-// (empty if absent), reading at most maxBytes of the response body. A non-200
-// status is treated as an error. sessionID, when non-empty, is echoed back on
-// the request via MCPSessionIDHeader (see pluginhost.Host.FetchToolCatalog).
+// (empty if absent). maxBytes bounds the response read; if <= 0,
+// DefaultMaxResponseBytes is used. A non-200 status is treated as an error.
+// sessionID, when non-empty, is echoed back on the request via
+// MCPSessionIDHeader for session continuity across a caller's
+// initialize → follow-up calls.
 //
 // The MCP streamable-HTTP transport lets a server answer a POST with either
 // a plain application/json body or a text/event-stream response framing
@@ -52,6 +61,9 @@ func PostJSONRPC(ctx context.Context, url, sessionID, body string, maxBytes int6
 		return nil, "", fmt.Errorf("unexpected status %d", resp.StatusCode)
 	}
 	respSessionID := resp.Header.Get(MCPSessionIDHeader)
+	if maxBytes <= 0 {
+		maxBytes = DefaultMaxResponseBytes
+	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes))
 	if err != nil {
 		return nil, "", err
