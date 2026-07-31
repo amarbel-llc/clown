@@ -1,10 +1,14 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 
 	"code.linenisgreat.com/clown/internal/pluginhost"
+	"code.linenisgreat.com/clown/internal/staging"
 )
 
 // pluginBinding delivers the started MCP servers to a provider in that
@@ -116,6 +120,129 @@ func (b *claudeBinding) Bind(host *pluginhost.Host, allDiscovered, selected []pl
 	}
 
 	return Command{Args: prependPluginDirs(b.baseArgs, pluginDirs, dirMap)}, nil
+}
+
+// collapseBinding is the claude-family binding for --mcp-collapse mode. It is a
+// pure decorator over the claude plugin-dir delivery: the aggregator process is
+// already running (runManaged spawned it via host.StartAggregator, parallel to
+// the cheap-context step, before Bind is called), so Bind itself has no side
+// effects — it only compiles a single synthesized plugin dir pointing the
+// harness at that running aggregator and hands claude a --plugin-dir set that
+// (a) excludes every dir that owned a discovered upstream MCP server (those are
+// now fronted by the aggregator, one-in-N-out), (b) keeps every non-server dir
+// (job monitor, juggler, skills-only plugins), and (c) adds the aggregator dir.
+//
+// This mirrors claudeBinding's own cheap-context dir-exclusion — a dir whose
+// only contribution was a now-collapsed MCP server must be dropped, or claude
+// would load its ORIGINAL plugin.json whose mcpServers block still declares the
+// flat upstream tools, defeating the collapse.
+type collapseBinding struct {
+	baseArgs   []string
+	pluginDirs []string
+	aggregator *pluginhost.ManagedServer
+	root       *staging.Root
+	logger     *slog.Logger
+}
+
+// newCollapseBinding builds the --mcp-collapse binding. aggregator is the
+// already-started clown-mcp-collapse ManagedServer; root is the launch staging
+// root under which the synthesized aggregator plugin dir is compiled.
+func newCollapseBinding(baseArgs, pluginDirs []string, aggregator *pluginhost.ManagedServer, root *staging.Root, logger *slog.Logger) *collapseBinding {
+	return &collapseBinding{
+		baseArgs:   baseArgs,
+		pluginDirs: pluginDirs,
+		aggregator: aggregator,
+		root:       root,
+		logger:     logger,
+	}
+}
+
+func (b *collapseBinding) Bind(host *pluginhost.Host, allDiscovered, selected []pluginhost.DiscoveredServer) (Command, error) {
+	// Fallback path: nothing discovered / healthy / running. With no upstreams
+	// there is nothing to collapse, so behave exactly like the plain claude
+	// fallback — hand claude the original, uncompiled plugin dirs. runManaged
+	// only ever installs a collapseBinding when it also started an aggregator,
+	// but the interface contract (nil host on the fallback paths) still routes
+	// here, and a nil aggregator would otherwise panic below.
+	if host == nil || b.aggregator == nil || len(selected) == 0 {
+		return Command{Args: prependPluginDirs(b.baseArgs, b.pluginDirs, nil)}, nil
+	}
+
+	aggDir, err := b.synthAggregatorPluginDir(host)
+	if err != nil {
+		return Command{}, fmt.Errorf("mcp-collapse: synthesizing aggregator plugin dir: %w", err)
+	}
+
+	// Drop every plugin dir that contributed a now-collapsed upstream MCP server.
+	// allDiscovered is the full pre-selection set, so this catches all of them
+	// regardless of cheap-context (which is not combined with --mcp-collapse in
+	// the prototype). A dir that ALSO ships non-server contributions (skills,
+	// monitors) is still dropped here — the prototype is all-or-nothing and a
+	// dir mixing a collapsed server with skills is out of scope; keeping it would
+	// reintroduce its flat mcpServers block.
+	excluded := pluginDirSet(allDiscovered)
+	pluginDirs := dropExcludedDirs(b.pluginDirs, excluded)
+	if b.logger != nil {
+		b.logger.Info("mcp-collapse: fronting upstreams behind aggregator",
+			"upstreams", len(selected), "excluded_dirs", len(excluded), "aggregator_dir", aggDir)
+	}
+
+	// Append the synthesized aggregator dir last so it cannot shadow a
+	// user-supplied dir, and pass it through prependPluginDirs' compiled-dir map
+	// so its --plugin-dir points at the staged copy (it IS the staged copy, so
+	// the map is identity here, but this keeps the arg-shape uniform).
+	pluginDirs = append(pluginDirs, aggDir)
+	return Command{Args: prependPluginDirs(b.baseArgs, pluginDirs, nil)}, nil
+}
+
+// aggregatorPluginManifest is the minimal .claude-plugin/plugin.json for the
+// synthesized aggregator plugin dir. Only the name is load-bearing (claude
+// namespaces the collapsed server under it); version mirrors the other
+// synthesized builtin plugins.
+type aggregatorPluginManifest struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+}
+
+// synthAggregatorPluginDir writes a fresh plugin dir under the staging root
+// whose compiled plugin.json carries exactly ONE mcpServers entry — the running
+// aggregator, via host.ServerEntry so it inherits URLHostRewrite/tent treatment
+// — and returns the dir. Unlike synthJugglerPluginDir / synthJobMonitorPluginDir
+// it does NOT write a clown.json: the aggregator process is already spawned and
+// lifecycle-managed (host.StartAggregator), so pluginhost must NOT rediscover
+// and re-spawn it. The mcpServers block is baked directly into the compiled
+// manifest instead, the same shape CompileForClaude produces for a discovered
+// server.
+func (b *collapseBinding) synthAggregatorPluginDir(host *pluginhost.Host) (string, error) {
+	if b.root == nil {
+		return "", fmt.Errorf("staging root is required")
+	}
+	srcDir, err := b.root.Dir("clown-mcp-collapse-plugin-src-*")
+	if err != nil {
+		return "", err
+	}
+	manifestDir := filepath.Join(srcDir, ".claude-plugin")
+	if err := os.MkdirAll(manifestDir, 0o700); err != nil {
+		return "", err
+	}
+	manifest := aggregatorPluginManifest{Name: "clown-mcp-collapse", Version: "1"}
+	raw, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(filepath.Join(manifestDir, "plugin.json"), raw, 0o600); err != nil {
+		return "", err
+	}
+
+	staged, err := pluginhost.CompilePluginDir(srcDir, b.root, pluginhost.CompileInputs{
+		Servers: map[string]pluginhost.MCPServerEntry{
+			"mcp-collapse": host.ServerEntry(b.aggregator),
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+	return staged, nil
 }
 
 // configFileBinding is the binding for providers configured by a generated JSON

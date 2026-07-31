@@ -729,6 +729,8 @@
               "code.linenisgreat.com/clown/internal/buildcfg.ClownboxCliPath" = clownboxCliPath;
               "code.linenisgreat.com/clown/internal/buildcfg.StdioBridgePath" =
                 "${clown-stdio-bridge}/bin/clown-stdio-bridge";
+              "code.linenisgreat.com/clown/internal/buildcfg.McpCollapsePath" =
+                "${clown-mcp-collapse}/bin/clown-mcp-collapse";
               "code.linenisgreat.com/clown/internal/buildcfg.HookAllowPath" =
                 "${clown-hook-allow}/bin/clown-hook-allow";
               "code.linenisgreat.com/clown/internal/buildcfg.RingmasterPath" = "${ringmasterPkg}/bin/ringmaster";

@@ -50,6 +50,18 @@ var (
 	// layout. Empty in dev builds (go build, go run); stdioServers
 	// requires the Nix-built artifact.
 	StdioBridgePath string
+	// McpCollapsePath is the absolute path to the clown-mcp-collapse binary
+	// in its own Nix store output, baked at build time. Used by clown(1)'s
+	// opt-in --mcp-collapse mode: after the discovered upstream MCP servers
+	// are started, clown launches ONE clown-mcp-collapse process fronting
+	// them all (passing each --upstream <name>=<url>) and registers only that
+	// aggregator with the harness, so the agent sees the three collapsed
+	// verbs instead of every upstream tool flat. clown-mcp-collapse lives in a
+	// separate derivation, so resolving from os.Executable() would land in the
+	// wrong directory; baking the path is the only correct option for the Nix
+	// layout, exactly like StdioBridgePath. Empty in dev builds (go build,
+	// go run); --mcp-collapse fails fast with a clear error when empty.
+	McpCollapsePath string
 	// HookAllowPath is the absolute path to the clown-hook-allow binary in
 	// its own Nix store output, baked at build time. The synthesized
 	// clown-builtin-jobs plugin wires it as a PreToolUse hook (hooks/hooks.json,

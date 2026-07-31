@@ -586,6 +586,11 @@ func TestParseFlags(t *testing.T) {
 			want: parsedFlags{provider: "claude", tent: true, noPassDevshell: true},
 		},
 		{
+			name: "mcp-collapse flag",
+			in:   []string{"--mcp-collapse"},
+			want: parsedFlags{provider: "claude", mcpCollapse: true},
+		},
+		{
 			name: "verbose long flag",
 			in:   []string{"--verbose"},
 			want: parsedFlags{provider: "claude", verbose: true},

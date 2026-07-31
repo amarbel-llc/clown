@@ -201,6 +201,95 @@ func (h *Host) StartAll(ctx context.Context, discovered []DiscoveredServer) Star
 	return report
 }
 
+// AggregatorSpec parameterizes StartAggregator: the absolute path to the
+// clown-mcp-collapse binary and the upstreams it should front (each becomes a
+// --upstream <name>=<url> arg, in slice order). Name is the composite
+// "<plugin>/<server>" identity the aggregator reports in logs and the {server}
+// half of every collapsed tool id; URL is the upstream's resolved handshake MCP
+// URL.
+type AggregatorSpec struct {
+	BinaryPath string
+	Upstreams  []AggregatorUpstream
+}
+
+// AggregatorUpstream is one fronted upstream for StartAggregator.
+type AggregatorUpstream struct {
+	Name string
+	URL  string
+}
+
+// StartAggregator launches the clown-mcp-collapse binary as a ManagedServer
+// fronting spec.Upstreams, reusing the same spawn → handshake → healthz →
+// reap lifecycle as any other managed server. The returned server is appended
+// to h.Servers so Shutdown() reaps it alongside the upstreams it fronts (the
+// upstreams STAY running — the aggregator dials them). It opts the aggregator
+// into dynamic system-prompt contribution via BridgeSystemPromptPath (the fixed
+// path clown-mcp-collapse serves), so FetchPromptFragments folds the collapse
+// steering fragment into the agent's prompt exactly as it does for any other
+// opted-in server.
+//
+// clown-mcp-collapse prints the clown handshake on its stdout byte-for-byte
+// like clown-stdio-bridge, so no special-casing is needed here beyond building
+// its argv. It is the opt-in --mcp-collapse mode's single point of process
+// synthesis; absent the flag this is never called and behavior is unchanged.
+func (h *Host) StartAggregator(ctx context.Context, spec AggregatorSpec) (*ManagedServer, error) {
+	if spec.BinaryPath == "" {
+		return nil, fmt.Errorf("mcp-collapse: aggregator binary path is empty (dev build? --mcp-collapse requires the Nix-built clown-mcp-collapse)")
+	}
+	if len(spec.Upstreams) == 0 {
+		return nil, fmt.Errorf("mcp-collapse: no upstreams to front")
+	}
+	args := make([]string, 0, len(spec.Upstreams)*2)
+	for _, up := range spec.Upstreams {
+		args = append(args, "--upstream", up.Name+"="+up.URL)
+	}
+	def := ServerDef{
+		Command:          spec.BinaryPath,
+		Args:             args,
+		Transport:        "streamable-http",
+		SystemPromptPath: BridgeSystemPromptPath,
+		Healthcheck: HealthcheckDef{
+			Path:     "/healthz",
+			Interval: JSONDuration{Duration: 1 * time.Second},
+			Timeout:  JSONDuration{Duration: 30 * time.Second},
+		},
+	}
+	srv := &ManagedServer{
+		Name:    "clown-mcp-collapse",
+		Def:     def,
+		Logger:  h.Logger,
+		BaseEnv: h.BaseEnv,
+	}
+	if err := srv.Start(ctx); err != nil {
+		return nil, fmt.Errorf("mcp-collapse: starting aggregator: %w", err)
+	}
+	h.Servers = append(h.Servers, srv)
+	return srv, nil
+}
+
+// NewStartedServerForTest builds a ManagedServer that looks started —
+// handshake resolved to addr/protocol — WITHOUT spawning a process. It exists
+// so tests in OTHER packages (notably cmd/clown's collapseBinding test) can
+// exercise code that reads a running server's handshake URL, since the
+// handshake field is unexported and cannot be set from outside this package.
+// Not for production use: nothing here has a live process to reap.
+func NewStartedServerForTest(name, addr, protocol string) *ManagedServer {
+	return &ManagedServer{
+		Name:      name,
+		handshake: Handshake{Address: addr, Protocol: protocol},
+	}
+}
+
+// ServerEntry is the exported form of serverEntryForManaged: it builds the
+// MCPServerEntry (url + type, with URLHostRewrite applied) that a compiled
+// plugin manifest should carry for a running server. The --mcp-collapse
+// binding uses it to point the single synthesized aggregator plugin dir at the
+// running clown-mcp-collapse process, so the collapsed server inherits the
+// same URLHostRewrite / tent treatment as any discovered server.
+func (h *Host) ServerEntry(srv *ManagedServer) MCPServerEntry {
+	return h.serverEntryForManaged(srv)
+}
+
 // serverEntryForManaged builds an MCPServerEntry from a running server's
 // handshake. The Type field maps "streamable-http" to "http"; other
 // protocols pass through unmodified so schema errors are legible. When

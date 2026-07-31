@@ -336,6 +336,10 @@ func runWithFlags(flags parsedFlags) int {
 		fmt.Fprintln(os.Stderr, "clown: --tent-pass-devshell and --no-tent-pass-devshell are mutually exclusive")
 		return 1
 	}
+	if flags.mcpCollapse && flags.naked {
+		fmt.Fprintln(os.Stderr, "clown: --mcp-collapse and --naked are mutually exclusive (naked bypasses clown's plugin host, which is where the aggregator is synthesized)")
+		return 1
+	}
 
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -1897,6 +1901,45 @@ func runManaged(
 		}
 	}
 
+	// --mcp-collapse: front every healthy upstream behind ONE clown-mcp-collapse
+	// aggregator (all-or-nothing for the prototype). Done HERE — after StartAll
+	// (the upstreams' handshake URLs are the aggregator's --upstream args, so
+	// they must be resolved first) and after cheap-context (so a deselected
+	// server is never fronted), parallel to applyCheapContextSelection and
+	// before binding.Bind — so the binding stays a pure "compile + return
+	// Command" step (collapseBinding.Bind spawns nothing). The aggregator is
+	// registered on host, so host.Shutdown() (deferred above) reaps it alongside
+	// the upstreams it fronts; the upstreams STAY running so it can dial them.
+	if flags.mcpCollapse {
+		claudeBase, ok := binding.(*claudeBinding)
+		if !ok {
+			// --mcp-collapse is gated to the claude family at flag-resolution time
+			// (runClaude is the only caller that honors it); any other binding here
+			// is a wiring bug, so fail loudly rather than silently ignore the flag.
+			fmt.Fprintln(os.Stderr, "clown: --mcp-collapse is only supported for the claude provider")
+			logger.Error("mcp-collapse requested with a non-claude binding")
+			return 1
+		}
+		upstreams, err := collapseUpstreamsFor(discovered, report.Started)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "clown: %v\n", err)
+			logger.Error("mcp-collapse: resolving upstream URLs failed", "err", err)
+			return 1
+		}
+		agg, err := host.StartAggregator(ctx, pluginhost.AggregatorSpec{
+			BinaryPath: buildcfg.McpCollapsePath,
+			Upstreams:  upstreams,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "clown: %v\n", err)
+			logger.Error("mcp-collapse: starting aggregator failed", "err", err)
+			return 1
+		}
+		logger.Info("mcp-collapse aggregator started",
+			"upstreams", len(upstreams), "url", agg.Handshake().URL())
+		binding = newCollapseBinding(claudeBase.baseArgs, claudeBase.pluginDirs, agg, host.Staging, logger)
+	}
+
 	// Deliver the healthy servers to the provider in its native form. Called
 	// HERE, before the prompt-fragment fold below, because that is where
 	// CompileForClaude ran pre-seam and the extraction must not reorder.
@@ -2112,6 +2155,36 @@ func pluginDirSet(discovered []pluginhost.DiscoveredServer) map[string]bool {
 		set[d.PluginDir] = true
 	}
 	return set
+}
+
+// collapseUpstreamsFor maps the selected DiscoveredServers to the
+// AggregatorUpstream list clown-mcp-collapse is launched with: each survivor's
+// composite "<plugin>/<server>" name paired with its running server's resolved
+// handshake MCP URL. started is the *ManagedServer set from StartAll; a
+// selected server with no started counterpart (should not happen — selection is
+// a subset of started) is an error rather than a silently-dropped upstream, so
+// a wiring regression surfaces loudly instead of collapsing fewer servers than
+// the agent expects. The URL is the aggregator's OWN dial target, so it uses
+// the plain handshake URL (not the host-rewritten one meant for an
+// out-of-process/in-container consumer) — the aggregator runs in clown's own
+// network namespace alongside the upstreams.
+func collapseUpstreamsFor(selected []pluginhost.DiscoveredServer, started []*pluginhost.ManagedServer) ([]pluginhost.AggregatorUpstream, error) {
+	byName := make(map[string]*pluginhost.ManagedServer, len(started))
+	for _, srv := range started {
+		byName[srv.Name] = srv
+	}
+	upstreams := make([]pluginhost.AggregatorUpstream, 0, len(selected))
+	for _, d := range selected {
+		srv, ok := byName[d.Name()]
+		if !ok {
+			return nil, fmt.Errorf("mcp-collapse: selected server %q has no running instance", d.Name())
+		}
+		upstreams = append(upstreams, pluginhost.AggregatorUpstream{
+			Name: d.Name(),
+			URL:  srv.Handshake().URL(),
+		})
+	}
+	return upstreams, nil
 }
 
 // dropExcludedDirs returns pluginDirs with every dir in excluded removed,
@@ -2406,6 +2479,17 @@ type parsedFlags struct {
 	// and re-parse profiles.toml a second time in the same launch (clown#178).
 	cheapContextSave cheapContextSaveContext
 	tent             bool
+	// mcpCollapse opts this launch into MCP-collapse mode (all-or-nothing for
+	// the prototype): after the discovered upstream MCP servers are started,
+	// clown launches ONE clown-mcp-collapse aggregator fronting them all and
+	// registers only that aggregator with the harness, so the agent sees the
+	// three generic verbs (mcp_list/mcp_describe/mcp_call) instead of every
+	// upstream tool flat — saving agent context. Unset (the default) is
+	// byte-identical to today: every upstream is registered flat, no aggregator
+	// is spawned. Claude-family only; requires the Nix-built clown-mcp-collapse
+	// (buildcfg.McpCollapsePath). No env mirror by design — it is an explicit
+	// per-launch opt-in.
+	mcpCollapse bool
 	// ptyOpts is the resolved escape-to-shell pty proxy config from the clownfile
 	// [attach] table (pty-suspend / escape-key / escape-command). Sourced in
 	// runWithFlags; no flag/env source yet.
@@ -2533,6 +2617,8 @@ parse:
 			p.skipFailed = true
 		case args[i] == "--cheap-context":
 			p.cheapContext = true
+		case args[i] == "--mcp-collapse":
+			p.mcpCollapse = true
 		case args[i] == "--disable-clown-protocol":
 			p.disableClownProtocol = true
 		case args[i] == "--tent":
