@@ -10,7 +10,10 @@
 # hits the network for the proxy-unreachable forge module. Mirror the
 # bridge with a throwaway modfile carrying the store replace (same path
 # the merged-go.mod derivation bakes in; re-derive it from a fresh
-# `nix develop` if the ringmaster input gets bumped).
+# `nix develop` if the ringmaster input gets bumped). Set the RACE env var to 1
+# to run the race detector (e.g.
+# `RACE=1 just explore run-go-test ./internal/mcpcollapse/...`), which the
+# concurrency-bearing packages' TDD wants as a matter of course.
 run-go-test *PKGS='./...':
     #!/usr/bin/env bash
     set -euo pipefail
@@ -20,7 +23,9 @@ run-go-test *PKGS='./...':
     cp go.mod "$tmp/merged.mod" && chmod +w "$tmp/merged.mod"
     cp go.sum "$tmp/merged.sum" && chmod +w "$tmp/merged.sum"
     printf '\nreplace code.linenisgreat.com/ringmaster => /nix/store/j1nxw2brqq239qi0jcb4p2q2inqykbqk-ringmaster-go-pkgs\n' >> "$tmp/merged.mod"
-    go test -mod=mod -modfile="$tmp/merged.mod" {{PKGS}}
+    race=""
+    [ "${RACE:-0}" = "1" ] && race="-race"
+    go test -mod=mod -modfile="$tmp/merged.mod" $race {{PKGS}}
 
 # Smoke-test the new crush provider against the local juggler llama-server.
 # Starts juggler (idempotent — attaches to existing daemon), waits for the
