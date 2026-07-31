@@ -25,6 +25,7 @@ type resumeArgs struct {
 	uri              string // positional clown://<provider>/<id>; empty for picker mode
 	key              string // positional repo/worktree session key (clown#192); empty otherwise
 	keyName          string // optional third key segment: a clown-name filter
+	mcpCollapse      bool   // --mcp-collapse: opt into MCP-collapse mode on the resumed launch
 	forwarded        []string
 }
 
@@ -188,6 +189,7 @@ func launchResume(s sessions.Session, args resumeArgs) int {
 	flags := parsedFlags{
 		provider:         "claude",
 		providerExplicit: true,
+		mcpCollapse:      args.mcpCollapse,
 		forwarded:        append(args.forwarded, "--resume", s.ID),
 	}
 	return runWithFlags(flags)
@@ -304,6 +306,8 @@ func parseResumeArgs(args []string) (resumeArgs, error) {
 			out.providerExplicit = true
 		case arg == "--yes" || arg == "-y":
 			out.yes = true
+		case arg == "--mcp-collapse":
+			out.mcpCollapse = true
 		case arg == "--help" || arg == "-h":
 			printResumeHelp()
 			os.Exit(0)
@@ -391,6 +395,10 @@ Flags (picker mode):
   -y, --yes           Skip the single-match confirmation dialog and
                       launch directly. No effect when zero or multiple
                       sessions match.
+  --mcp-collapse      Opt the resumed launch into MCP-collapse mode:
+                      register one aggregator fronting all upstream MCP
+                      servers (mcp_list/mcp_describe/mcp_call) instead of
+                      every upstream tool flat.
   --help, -h          Show this help text.
 
 Args after -- are forwarded to the provider alongside --resume <id>.

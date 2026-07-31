@@ -442,6 +442,9 @@ func (p parsedFlags) reexecArgv() []string {
 	if p.cheapContext {
 		argv = append(argv, "--cheap-context")
 	}
+	if p.mcpCollapse {
+		argv = append(argv, "--mcp-collapse")
+	}
 	if p.disableClownProtocol {
 		argv = append(argv, "--disable-clown-protocol")
 	}

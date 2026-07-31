@@ -470,6 +470,19 @@ func TestReexecArgv(t *testing.T) {
 			},
 			want: []string{"--provider", "claude", "--cheap-context"},
 		},
+		{
+			// --mcp-collapse must survive the re-exec for the SAME reason as
+			// --cheap-context: the default posh multiplexer wrap re-launches the
+			// inner clown from reexecArgv, so an omission here silently disables
+			// collapse on every normal launch (clown#211-adjacent bug: the flag
+			// parsed and applied fine in-process but never reached the inner one).
+			name: "mcp-collapse survives",
+			in: parsedFlags{
+				provider:    "claude",
+				mcpCollapse: true,
+			},
+			want: []string{"--provider", "claude", "--mcp-collapse"},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -478,6 +491,71 @@ func TestReexecArgv(t *testing.T) {
 				t.Errorf("reexecArgv() = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestReexecArgvBoolFlagsRoundTrip guards the WHOLE CLASS of the
+// "--mcp-collapse silently dropped across the multiplexer self-wrap" bug:
+// reexecArgv is a hand-maintained flag-echo list, so any NEW top-level bool
+// flag someone forgets to add there vanishes on the inner clown when the
+// default posh [attach] wrap re-launches from reexecArgv (not raw os.Args).
+// This test sets every reexecArgv-emitted bool flag true, round-trips through
+// reexecArgv -> parseFlags, and asserts each survives. A future dropped flag
+// fails here loudly instead of silently no-op'ing at launch.
+//
+// Flags NOT emitted by reexecArgv are intentionally excluded: printLaunchPlan
+// (diagnostic), version/help (early-return in run before the wrap), and the
+// noPassDevshell/passDevshell pair (asserted separately below so the mutually
+// exclusive devshell opt-in/opt-out don't clobber each other).
+func TestReexecArgvBoolFlagsRoundTrip(t *testing.T) {
+	// mcpCollapse is the mandatory anchor: this is the exact flag whose omission
+	// from reexecArgv was the bug. If Fix A is reverted, the round-trip below
+	// leaves out.mcpCollapse false and this test fails.
+	in := parsedFlags{
+		provider:             "claude",
+		providerExplicit:     true,
+		naked:                true,
+		skipFailed:           true,
+		cheapContext:         true,
+		mcpCollapse:          true,
+		disableClownProtocol: true,
+		tent:                 true,
+		verbose:              true,
+	}
+
+	out, err := parseFlags(in.reexecArgv())
+	if err != nil {
+		t.Fatalf("parseFlags(reexecArgv()) errored: %v", err)
+	}
+
+	checks := []struct {
+		name string
+		got  bool
+	}{
+		{"naked", out.naked},
+		{"skipFailed", out.skipFailed},
+		{"cheapContext", out.cheapContext},
+		{"mcpCollapse", out.mcpCollapse},
+		{"disableClownProtocol", out.disableClownProtocol},
+		{"tent", out.tent},
+		{"verbose", out.verbose},
+	}
+	for _, c := range checks {
+		if !c.got {
+			t.Errorf("bool flag %s did not survive the reexecArgv round-trip — is it emitted in reexecArgv()?", c.name)
+		}
+	}
+
+	// Negative: a launch WITHOUT --mcp-collapse must NOT emit it, so the
+	// default (non-collapse) reexec path is byte-identical to before.
+	bare := parsedFlags{provider: "claude", providerExplicit: true}
+	for _, a := range bare.reexecArgv() {
+		if a == "--mcp-collapse" {
+			t.Fatal("reexecArgv() emitted --mcp-collapse without mcpCollapse set — the default path must not collapse")
+		}
+	}
+	if got, _ := parseFlags(bare.reexecArgv()); got.mcpCollapse {
+		t.Fatal("round-tripped bare flags set mcpCollapse — default launch must not enable collapse")
 	}
 }
 
