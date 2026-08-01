@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"code.linenisgreat.com/clown/internal/buildcfg"
 	"code.linenisgreat.com/clown/internal/pluginhost"
 	"code.linenisgreat.com/clown/internal/staging"
 )
@@ -232,6 +233,48 @@ func (b *collapseBinding) synthAggregatorPluginDir(host *pluginhost.Host) (strin
 	}
 	if err := os.WriteFile(filepath.Join(manifestDir, "plugin.json"), raw, 0o600); err != nil {
 		return "", err
+	}
+
+	// Added for mcp-collapse permission-mux POC. When the clown-hook-collapse
+	// binary path is baked in (nix builds), ship a PreToolUse hook THROUGH THIS
+	// aggregator plugin so the collapsed mcp_call tool can be demuxed by tool_id
+	// back to a per-upstream-tool allow/ask/deny decision (restoring the
+	// permission granularity collapse otherwise erases). This mirrors
+	// synthJobMonitorPluginDir's clown-hook-allow wire-up: claude loads a
+	// plugin's hooks/hooks.json via --plugin-dir in every session. The hooks/
+	// dir is written into srcDir BEFORE CompilePluginDir, which symlinks all
+	// non-plugin.json entries (including hooks/) into the staged dir claude
+	// loads. The `.*` matcher routes every tool through clown-hook-collapse,
+	// which self-filters to the collapsed mcp_call and defers otherwise. Skipped
+	// in dev builds (empty McpCollapseHookPath).
+	if buildcfg.McpCollapseHookPath != "" {
+		hooksDir := filepath.Join(srcDir, "hooks")
+		if err := os.MkdirAll(hooksDir, 0o700); err != nil {
+			return "", err
+		}
+		hooksCfg := map[string]any{
+			"hooks": map[string]any{
+				"PreToolUse": []any{
+					map[string]any{
+						"matcher": ".*",
+						"hooks": []any{
+							map[string]any{
+								"type":    "command",
+								"command": buildcfg.McpCollapseHookPath,
+								"timeout": 5,
+							},
+						},
+					},
+				},
+			},
+		}
+		hb, err := json.MarshalIndent(hooksCfg, "", "  ")
+		if err != nil {
+			return "", err
+		}
+		if err := os.WriteFile(filepath.Join(hooksDir, "hooks.json"), hb, 0o600); err != nil {
+			return "", err
+		}
 	}
 
 	staged, err := pluginhost.CompilePluginDir(srcDir, b.root, pluginhost.CompileInputs{

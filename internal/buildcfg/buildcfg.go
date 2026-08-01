@@ -72,6 +72,16 @@ var (
 	// dev builds (go build, go run); the hook is then omitted and the tools
 	// prompt as before. Mirrors how spinclass/moxy auto-allow their own tools.
 	HookAllowPath string
+	// McpCollapseHookPath is the absolute path to the clown-hook-collapse binary
+	// in its own Nix store output, baked at build time. Added for the mcp-collapse
+	// permission-mux POC (throwaway; stage 1 mechanics): the synthesized aggregator
+	// plugin dir (collapseBinding.synthAggregatorPluginDir) wires it as a PreToolUse
+	// hook (hooks/hooks.json, discovered via --plugin-dir) so the collapsed mcp_call
+	// tool can be demuxed by tool_id back to a per-upstream-tool allow/ask/deny
+	// decision — restoring the permission granularity mcp-collapse otherwise erases.
+	// Mirrors HookAllowPath's wire-up exactly. Empty in dev builds (go build,
+	// go run); the hook is then omitted and the collapsed tool prompts as before.
+	McpCollapseHookPath string
 	// DefaultProvider is the provider name used when neither
 	// --provider nor CLOWN_PROVIDER is set. Empty falls back to
 	// the historical "claude" default in main.go.

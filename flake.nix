@@ -513,6 +513,24 @@
           ];
         };
 
+        # Added for mcp-collapse permission-mux POC (throwaway; stage 1
+        # mechanics). PreToolUse hook that demuxes the collapsed mcp_call tool by
+        # tool_id back to a per-upstream-tool allow/ask/deny decision. Its path is
+        # baked in via buildcfg.McpCollapseHookPath and shipped THROUGH THE
+        # aggregator plugin by collapseBinding.synthAggregatorPluginDir — the same
+        # live --plugin-dir hook mechanism clown-hook-allow uses.
+        clown-hook-collapse = buildGoApplication {
+          pname = "clown-hook-collapse";
+          version = clownVersion;
+          src = goSrc;
+          subPackages = [ "cmd/clown-hook-collapse" ];
+          modules = ./gomod2nix.toml;
+          ldflags = [
+            "-s"
+            "-w"
+          ];
+        };
+
         # Build-time defaults baked into the standalone packages.default
         # and into mkClownPkg / mkJuggler when no override is given. Match
         # the historical hardcoded "claude" provider and the builtin
@@ -733,6 +751,9 @@
                 "${clown-mcp-collapse}/bin/clown-mcp-collapse";
               "code.linenisgreat.com/clown/internal/buildcfg.HookAllowPath" =
                 "${clown-hook-allow}/bin/clown-hook-allow";
+              # Added for mcp-collapse permission-mux POC
+              "code.linenisgreat.com/clown/internal/buildcfg.McpCollapseHookPath" =
+                "${clown-hook-collapse}/bin/clown-hook-collapse";
               "code.linenisgreat.com/clown/internal/buildcfg.RingmasterPath" = "${ringmasterPkg}/bin/ringmaster";
               "code.linenisgreat.com/clown/internal/buildcfg.TroupePath" = "${troupePkg}/bin/troupe";
               "code.linenisgreat.com/clown/internal/buildcfg.DefaultProvider" = defaultProvider;
