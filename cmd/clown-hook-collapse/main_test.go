@@ -46,13 +46,12 @@ func TestDemuxHonorsPolicyDecisions(t *testing.T) {
 		toolID string
 		want   string
 	}{
-		{"moxy/moxy.folio_read", "allow"},
-		{"moxy/moxy.folio_write", "ask"},
-		{"moxy/moxy.grit_push", "deny"},
-		// smith deny entry (both hyphen and underscore forms) — the load-bearing
-		// live tell that `deny` is honored on an mcp__* tool.
-		{"moxy/moxy.smith_issue-list", "deny"},
-		{"moxy/moxy.smith_issue_list", "deny"},
+		// Real dotted multi-level tool_ids from the user's live session. A
+		// BLOCK on smith.issue-list is the load-bearing proof that `deny` is
+		// honored on a collapsed mcp__* tool.
+		{"moxy/moxy.get-hubbed.api", "allow"},
+		{"moxy/moxy.smith.whoami", "ask"},
+		{"moxy/moxy.smith.issue-list", "deny"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.toolID, func(t *testing.T) {
@@ -73,7 +72,7 @@ func TestDemuxHonorsPolicyDecisions(t *testing.T) {
 
 // An unknown tool_id must fail open (defer): emit nothing.
 func TestUnknownToolIDDefers(t *testing.T) {
-	out := runHook(t, mcpCallInput("moxy/moxy.grit_clone"))
+	out := runHook(t, mcpCallInput("moxy/moxy.grit.clone"))
 	if out != "" {
 		t.Errorf("expected defer (empty output) for unknown tool_id, got %q", out)
 	}
@@ -87,7 +86,7 @@ func TestNonMcpCallToolDefers(t *testing.T) {
 		"mcp__plugin_clown-mcp-collapse_mcp-collapse__mcp_list",
 		"mcp__plugin_moxy_moxy__folio_read",
 	} {
-		in := `{"tool_name":"` + name + `","tool_input":{"tool_id":"moxy/moxy.grit_push"}}`
+		in := `{"tool_name":"` + name + `","tool_input":{"tool_id":"moxy/moxy.smith.issue-list"}}`
 		if out := runHook(t, in); out != "" {
 			t.Errorf("tool_name=%q: expected defer, got %q", name, out)
 		}
@@ -115,7 +114,7 @@ func TestLogfileWriteOnHit(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_LOG_HOME", dir)
 
-	out := runHook(t, mcpCallInput("moxy/moxy.grit_push"))
+	out := runHook(t, mcpCallInput("moxy/moxy.smith.issue-list"))
 	if out == "" {
 		t.Fatal("expected a deny decision, got empty (deferred)")
 	}
@@ -125,7 +124,7 @@ func TestLogfileWriteOnHit(t *testing.T) {
 		t.Fatalf("reading logfile: %v", err)
 	}
 	line := string(data)
-	if !strings.Contains(line, "moxy/moxy.grit_push") || !strings.Contains(line, "decision=deny") {
+	if !strings.Contains(line, "moxy/moxy.smith.issue-list") || !strings.Contains(line, "decision=deny") {
 		t.Errorf("logfile missing expected decision, got %q", line)
 	}
 }

@@ -45,27 +45,35 @@ import (
 	"time"
 )
 
+// Added for mcp-collapse permission-mux POC — STRUCTURAL FINDING (carry into the
+// RFC-0008 revision):
+//
+// Collapsed tool_ids are MULTI-LEVEL NESTED — shape `{plugin}/{server}.{moxin}.{tool}`
+// — because clown-mcp-collapse fronts moxy, which is ITSELF an aggregator of moxins.
+// The registry builds the id by a naive `Server + "." + Tool` concatenation
+// (registry.go Entry.ID()), where `Server` is the composite "<plugin>/<server>" =
+// "moxy/moxy" (and thus CONTAINS a `/`) and `Tool` is moxy's own dotted "moxin.tool"
+// name (and thus CONTAINS a `.`, e.g. "smith.issue-list"). So a live id looks like
+// `moxy/moxy.smith.issue-list` — verified from the user's session log.
+//
+// CONSEQUENCE for the permission design: policy MUST key on the FULL, OPAQUE tool_id
+// string via EXACT MATCH. There is no unambiguous way to re-split a proxy-of-a-proxy
+// id by its delimiters — given `moxy/moxy.smith.issue-list`, is the server
+// `moxy/moxy` or `moxy/moxy.smith`? — so any structural parse is wrong. A map lookup
+// (which evaluate does: `stage1Policy[ti.ToolID]`) is the correct primitive; do NOT
+// add delimiter-splitting.
+//
 // Stage-1 POC policy: hardcoded so we test hook MECHANICS, not policy plumbing.
-// tool_id (dotted {server}.{tool}) -> decision. Stage 2 replaces this with
-// policy captured from the upstream plugins before collapse drops their dirs.
-// These use moxy tools that WILL appear under collapse in the live demo.
+// Stage 2 replaces this with policy captured from the upstream plugins before
+// collapse drops their dirs. These tool_ids are the REAL dotted forms from the
+// user's live session (they DO call these tools, so the live re-run is guaranteed to
+// hit them). Expected live behavior: get-hubbed.api PROCEEDS, smith.whoami PROMPTS,
+// smith.issue-list BLOCKS — a BLOCK on smith.issue-list is the load-bearing proof
+// that `deny` is honored on a collapsed mcp__* tool (prior code only proved `allow`).
 var stage1Policy = map[string]string{
-	"moxy/moxy.folio_read":  "allow",
-	"moxy/moxy.folio_write": "ask",
-	"moxy/moxy.grit_push":   "deny",
-	// smith_issue-list deny is the load-bearing live tell: the user already saw
-	// it PROMPT (the defer path), so making it deny behaviorally proves both that
-	// the hook fires on collapsed mcp_call AND that `deny` is honored on an mcp__*
-	// tool via the nested hookSpecificOutput (prior code only proved `allow`).
-	// The {server} half is the composite "<plugin>/<server>" = "moxy/moxy"
-	// (pluginhost.AggregatorSpec doc, host.go:206-208); the {tool} half is moxy's
-	// RAW tools/list name, passed through verbatim by the aggregator (no
-	// hyphen→underscore transform, registry.go:45-47). moxy reports the tool as
-	// `smith_issue-list` (hyphen before "list", matching claude's namespaced
-	// mcp__plugin_moxy_moxy__smith_issue-list). Both the hyphen and underscore
-	// forms are mapped so a naming mismatch can't false-negative the live test.
-	"moxy/moxy.smith_issue-list": "deny",
-	"moxy/moxy.smith_issue_list": "deny",
+	"moxy/moxy.get-hubbed.api":   "allow", // read-ish; should PROCEED
+	"moxy/moxy.smith.whoami":     "ask",   // should PROMPT the user
+	"moxy/moxy.smith.issue-list": "deny",  // should BLOCK
 }
 
 // mcpCallToolSuffix / collapsePluginMarker identify the collapsed mcp_call verb.
