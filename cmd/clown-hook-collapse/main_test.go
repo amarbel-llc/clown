@@ -4,6 +4,8 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -47,6 +49,10 @@ func TestDemuxHonorsPolicyDecisions(t *testing.T) {
 		{"moxy/moxy.folio_read", "allow"},
 		{"moxy/moxy.folio_write", "ask"},
 		{"moxy/moxy.grit_push", "deny"},
+		// smith deny entry (both hyphen and underscore forms) — the load-bearing
+		// live tell that `deny` is honored on an mcp__* tool.
+		{"moxy/moxy.smith_issue-list", "deny"},
+		{"moxy/moxy.smith_issue_list", "deny"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.toolID, func(t *testing.T) {
@@ -100,5 +106,26 @@ func TestMcpCallWithoutToolIDDefers(t *testing.T) {
 func TestMalformedInputFailsOpen(t *testing.T) {
 	if out := runHook(t, `{not json`); out != "" {
 		t.Errorf("expected defer for malformed input, got %q", out)
+	}
+}
+
+// A hit must not panic writing the decision logfile, and the decision line must
+// land in it. Point XDG_LOG_HOME at a temp dir so the write is real but isolated.
+func TestLogfileWriteOnHit(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_LOG_HOME", dir)
+
+	out := runHook(t, mcpCallInput("moxy/moxy.grit_push"))
+	if out == "" {
+		t.Fatal("expected a deny decision, got empty (deferred)")
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, "clown", "hook-collapse.log"))
+	if err != nil {
+		t.Fatalf("reading logfile: %v", err)
+	}
+	line := string(data)
+	if !strings.Contains(line, "moxy/moxy.grit_push") || !strings.Contains(line, "decision=deny") {
+		t.Errorf("logfile missing expected decision, got %q", line)
 	}
 }

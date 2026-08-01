@@ -40,7 +40,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
+	"time"
 )
 
 // Stage-1 POC policy: hardcoded so we test hook MECHANICS, not policy plumbing.
@@ -51,6 +53,19 @@ var stage1Policy = map[string]string{
 	"moxy/moxy.folio_read":  "allow",
 	"moxy/moxy.folio_write": "ask",
 	"moxy/moxy.grit_push":   "deny",
+	// smith_issue-list deny is the load-bearing live tell: the user already saw
+	// it PROMPT (the defer path), so making it deny behaviorally proves both that
+	// the hook fires on collapsed mcp_call AND that `deny` is honored on an mcp__*
+	// tool via the nested hookSpecificOutput (prior code only proved `allow`).
+	// The {server} half is the composite "<plugin>/<server>" = "moxy/moxy"
+	// (pluginhost.AggregatorSpec doc, host.go:206-208); the {tool} half is moxy's
+	// RAW tools/list name, passed through verbatim by the aggregator (no
+	// hyphen→underscore transform, registry.go:45-47). moxy reports the tool as
+	// `smith_issue-list` (hyphen before "list", matching claude's namespaced
+	// mcp__plugin_moxy_moxy__smith_issue-list). Both the hyphen and underscore
+	// forms are mapped so a naming mismatch can't false-negative the live test.
+	"moxy/moxy.smith_issue-list": "deny",
+	"moxy/moxy.smith_issue_list": "deny",
 }
 
 // mcpCallToolSuffix / collapsePluginMarker identify the collapsed mcp_call verb.
@@ -69,6 +84,33 @@ const (
 type hookInput struct {
 	ToolName  string          `json:"tool_name"`
 	ToolInput json.RawMessage `json:"tool_input"`
+}
+
+// Added for mcp-collapse permission-mux POC. The multiplexer self-wrap swallows
+// the hook's stderr several process layers deep, so decisions also go to a fixed
+// logfile that survives the pane. Path: $XDG_LOG_HOME/clown/hook-collapse.log if
+// XDG_LOG_HOME is set, else $HOME/.local/log/clown/hook-collapse.log — the same
+// dir the plugin-host logs already land in. Best-effort: any error opening or
+// writing is swallowed so logging can never break the hook.
+func logDecision(format string, args ...any) {
+	base := os.Getenv("XDG_LOG_HOME")
+	if base == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return
+		}
+		base = filepath.Join(home, ".local", "log")
+	}
+	dir := filepath.Join(base, "clown")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return
+	}
+	f, err := os.OpenFile(filepath.Join(dir, "hook-collapse.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	fmt.Fprintf(f, "%s %s\n", time.Now().Format(time.RFC3339), fmt.Sprintf(format, args...))
 }
 
 // hookSpecificOutput is the nested PreToolUse permission-decision payload claude-code
@@ -142,10 +184,12 @@ func evaluate(in hookInput) *hookOutput {
 	}
 	if err := json.Unmarshal(in.ToolInput, &ti); err != nil {
 		fmt.Fprintf(os.Stderr, "clown-hook-collapse: mcp_call tool_input unparseable (fail-open, deferring): %v\n", err)
+		logDecision("mcp_call tool_input unparseable (fail-open, defer): %v", err)
 		return nil // fail open
 	}
 	if ti.ToolID == "" {
 		fmt.Fprintln(os.Stderr, "clown-hook-collapse: mcp_call had no tool_id (fail-open, deferring)")
+		logDecision("mcp_call had no tool_id (fail-open, defer)")
 		return nil // fail open
 	}
 
@@ -154,11 +198,13 @@ func evaluate(in hookInput) *hookOutput {
 		// Miss: unknown collapsed tool_id → defer to claude's normal flow
 		// (fail-open, don't block unknown tools).
 		fmt.Fprintf(os.Stderr, "clown-hook-collapse: tool_id=%q not in policy (deferring)\n", ti.ToolID)
+		logDecision("tool_id=%s defer: not in policy", ti.ToolID)
 		return nil
 	}
 
 	reason := fmt.Sprintf("mcp-collapse POC: tool_id=%s policy=%s", ti.ToolID, perm)
 	fmt.Fprintf(os.Stderr, "clown-hook-collapse: tool_id=%q decision=%s\n", ti.ToolID, perm)
+	logDecision("tool_id=%s decision=%s", ti.ToolID, perm)
 	return decision(perm, reason)
 }
 
