@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"code.linenisgreat.com/clown/internal/buildcfg"
 	"code.linenisgreat.com/clown/internal/pluginhost"
 	"code.linenisgreat.com/clown/internal/staging"
 )
@@ -201,6 +202,66 @@ func TestCollapseBinding_SingleAggregatorCommand(t *testing.T) {
 			t.Errorf("aggregator mcpServers type = %q, want http", entry.Type)
 		}
 	}
+}
+
+// Added for mcp-collapse permission-mux POC. The POC hook is OFF by default: the
+// aggregator plugin dir must ship a hooks/hooks.json ONLY when the binary path is
+// baked in AND CLOWN_MCP_COLLAPSE_POC_HOOK=1 is set. This proves the gate so a
+// default --mcp-collapse launch on master is byte-identical to before the POC.
+func TestCollapseBinding_PocHookGate(t *testing.T) {
+	// Bake in a non-empty hook path for the duration of this test so the ONLY
+	// variable is the env-var gate.
+	t.Cleanup(func() { buildcfg.McpCollapseHookPath = "" })
+	buildcfg.McpCollapseHookPath = "/nix/store/fake/bin/clown-hook-collapse"
+
+	aggDirHooksJSON := func(t *testing.T) string {
+		t.Helper()
+		root, err := staging.New(t.TempDir())
+		if err != nil {
+			t.Fatalf("staging.New: %v", err)
+		}
+		t.Cleanup(func() { _ = root.Close() })
+		host := &pluginhost.Host{}
+		agg := pluginhost.NewStartedServerForTest("clown-mcp-collapse", "127.0.0.1:6001", "streamable-http")
+		upstreamDir := "/plugins/moxy"
+		allDiscovered := []pluginhost.DiscoveredServer{discoveredForTest("moxy", "moxy", upstreamDir)}
+		b := newCollapseBinding([]string{"--resume", "abc"}, []string{upstreamDir}, agg, root, nil)
+		got, err := b.Bind(host, allDiscovered, allDiscovered)
+		if err != nil {
+			t.Fatalf("Bind: %v", err)
+		}
+		// The aggregator dir is the sole --plugin-dir that is not an input dir.
+		for i := 0; i < len(got.Args); i++ {
+			if got.Args[i] == "--plugin-dir" && i+1 < len(got.Args) && got.Args[i+1] != upstreamDir {
+				return filepath.Join(got.Args[i+1], "hooks", "hooks.json")
+			}
+		}
+		t.Fatal("no synthesized aggregator --plugin-dir found")
+		return ""
+	}
+
+	t.Run("env unset ships no hooks.json", func(t *testing.T) {
+		os.Unsetenv("CLOWN_MCP_COLLAPSE_POC_HOOK")
+		hooksJSON := aggDirHooksJSON(t)
+		if _, err := os.Stat(hooksJSON); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("hooks.json must NOT exist when the POC env var is unset (found %q, err=%v)", hooksJSON, err)
+		}
+	})
+
+	t.Run("env=1 ships hooks.json wiring the hook", func(t *testing.T) {
+		t.Setenv("CLOWN_MCP_COLLAPSE_POC_HOOK", "1")
+		hooksJSON := aggDirHooksJSON(t)
+		raw, err := os.ReadFile(hooksJSON)
+		if err != nil {
+			t.Fatalf("hooks.json must exist when the POC env var is 1: %v", err)
+		}
+		if !strings.Contains(string(raw), buildcfg.McpCollapseHookPath) {
+			t.Errorf("hooks.json does not reference the hook binary path %q: %s", buildcfg.McpCollapseHookPath, raw)
+		}
+		if !strings.Contains(string(raw), "PreToolUse") {
+			t.Errorf("hooks.json is not a PreToolUse registration: %s", raw)
+		}
+	})
 }
 
 // The off-path safety proof: a collapseBinding with a nil aggregator (the

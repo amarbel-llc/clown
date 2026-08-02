@@ -245,9 +245,21 @@ func (b *collapseBinding) synthAggregatorPluginDir(host *pluginhost.Host) (strin
 	// dir is written into srcDir BEFORE CompilePluginDir, which symlinks all
 	// non-plugin.json entries (including hooks/) into the staged dir claude
 	// loads. The `.*` matcher routes every tool through clown-hook-collapse,
-	// which self-filters to the collapsed mcp_call and defers otherwise. Skipped
-	// in dev builds (empty McpCollapseHookPath).
-	if buildcfg.McpCollapseHookPath != "" {
+	// which self-filters to the collapsed mcp_call and defers otherwise.
+	//
+	// POC GATE — OFF BY DEFAULT: the hook and its hardcoded 3-entry stage1Policy
+	// are throwaway scaffolding (stage-1 mechanics proof), so they must NOT gate
+	// real tools for anyone using the shipped --mcp-collapse feature. The hooks.json
+	// is written ONLY when CLOWN_MCP_COLLAPSE_POC_HOOK=1 is explicitly set (in
+	// addition to the binary path being baked in). With the env var unset — the
+	// default — the aggregator plugin dir ships NO hooks.json and this POC hook
+	// never engages, so master's --mcp-collapse is byte-identical to before the POC.
+	// The `debug-mcp-collapse-perms` justfile recipe sets the env var to exercise it.
+	// This gate is removed once the real policy source lands (moxy#432 — moxy
+	// advertising per-tool permission policy in tool _meta, which clown's hook will
+	// eventually read instead of a hardcoded map). Skipped in dev builds (empty
+	// McpCollapseHookPath).
+	if buildcfg.McpCollapseHookPath != "" && os.Getenv("CLOWN_MCP_COLLAPSE_POC_HOOK") == "1" {
 		hooksDir := filepath.Join(srcDir, "hooks")
 		if err := os.MkdirAll(hooksDir, 0o700); err != nil {
 			return "", err

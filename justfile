@@ -1565,6 +1565,99 @@ debug-cheap-context-moxy *ARGS="":
     just run-build-juggler
     exec ./result/bin/clown --verbose --cheap-context -- {{ARGS}}
 
+# Launch clown --mcp-collapse against the real moxy MCP plugin, INTERACTIVELY.
+# Builds clown from THIS worktree with moxy wired in (mkJuggler, same as
+# debug-cheap-context-moxy), then execs a real, persistent `clown
+# --mcp-collapse` session so you can actually see the collapse in the claude
+# UI: instead of moxy's ~170 flat tools, claude should see exactly the three
+# generic verbs (mcp_list / mcp_describe / mcp_call), and the collapse
+# steering fragment in its system prompt. Use claude's own tool listing (or
+# /mcp) inside the session to confirm the three verbs, then mcp_list to browse
+# the collapsed upstream catalogs and mcp_call to invoke one.
+#
+# Deliberately launches a real, persistent session (no `-- --version`): claude
+# exits near-instantly on --version, which tears down clown's posh multiplexer
+# self-wrap before you can interact — and --mcp-collapse is claude-only and
+# mutually exclusive with --naked, so the multiplexer can't be bypassed. To
+# inspect the plumbing instead of the UI, the clown-plugin-host log (printed
+# below before exec) records the aggregator startup ("mcp-collapse aggregator
+# started ... url=...") and the one-in-N-out manifest swap ("fronting upstreams
+# behind aggregator ... excluded_dirs=N"). ARGS forwards to the provider after
+# `--` if you need to override (e.g. `just debug-mcp-collapse-moxy --version`
+# for a quick non-interactive startup-path check).
+[group("debug")]
+debug-mcp-collapse-moxy *ARGS="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just run-build-juggler
+    logdir="${XDG_LOG_HOME:-$HOME/.local/state}/clown"
+    echo "=== clown-plugin-host log dir (inspect after for aggregator startup): $logdir ===" >&2
+    echo "=== launching interactive clown --mcp-collapse (real session) ===" >&2
+    exec ./result/bin/clown --verbose --mcp-collapse -- {{ARGS}}
+
+# All-in-one live gate for the mcp-collapse permission-mux POC (stage 1): rebuild,
+# launch a real interactive `clown --mcp-collapse` session, then after you exit
+# print exactly what the clown-hook-collapse PreToolUse hook decided — the
+# ground-truth verdict for whether the hook fired + honored allow/ask/deny.
+#
+# The test is inherently interactive (the hook fires when CLAUDE calls mcp_call,
+# and an 'ask' decision prompts YOU), so a recipe can't drive the tool calls.
+# What this recipe automates is everything around them: build, the run, and the
+# post-run extraction of the hook's own stderr diagnostics from the captured
+# session output — so you don't hunt through logs.
+#
+# WHAT TO DO inside the session (the recipe prints this reminder too):
+#   1. Ask claude to run `mcp_list` FIRST — confirm the real dotted tool_ids
+#      match the hardcoded policy below (moxy/moxy.smith.issue-list etc.). If
+#      they differ, exit, tell the assistant the real tool_ids, fix the map,
+#      re-run.
+#   2. Ask claude to mcp_call each policy tool and watch claude's behavior:
+#        moxy/moxy.get-hubbed.api   -> should PROCEED (allow)
+#        moxy/moxy.smith.whoami     -> should PROMPT you (ask)
+#        moxy/moxy.smith.issue-list -> should BLOCK (deny)
+#   3. Exit the session. This recipe then greps the captured output for the
+#      hook's `clown-hook-collapse: tool_id=... decision=...` lines.
+#
+# POC HOOK IS OPT-IN: the clown-hook-collapse hook is OFF by default (so shipped
+# --mcp-collapse is unaffected by the throwaway 3-entry policy). This recipe
+# exports CLOWN_MCP_COLLAPSE_POC_HOOK=1 to turn it ON for the test; without that
+# env var the aggregator ships no hooks.json and the hook never fires.
+#
+# NOTE: clown-hook-collapse runs as a fresh process spawned by CLAUDE (not
+# clown-plugin-host), so its stderr rides claude's hook-stderr channel, surfaced
+# by --verbose into the session output captured here (tee). If the grep finds
+# nothing, the hook did not fire — that itself is the stage-1 stop-gate finding.
+[group("debug")]
+debug-mcp-collapse-perms *ARGS="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just run-build-juggler
+    # POC hook is OFF by default; opt it in for this test. Without this the
+    # aggregator ships no hooks.json and the perms hook never engages.
+    export CLOWN_MCP_COLLAPSE_POC_HOOK=1
+    cap="$(mktemp -t clown-collapse-perms.XXXXXX.log)"
+    echo "=== POC hook opt-in: CLOWN_MCP_COLLAPSE_POC_HOOK=1 (off by default) ===" >&2
+    echo "=== stage-1 policy (hardcoded in cmd/clown-hook-collapse/main.go) ===" >&2
+    echo "  moxy/moxy.get-hubbed.api   -> allow (should PROCEED)" >&2
+    echo "  moxy/moxy.smith.whoami     -> ask   (should PROMPT you)" >&2
+    echo "  moxy/moxy.smith.issue-list -> deny  (should BLOCK)" >&2
+    echo "=== ground truth is the logfile, NOT this recipe's grep (which can't reach the" >&2
+    echo "=== multiplexer-nested hook): read ~/.local/log/clown/hook-collapse.log after ===" >&2
+    echo "=== inside the session: mcp_call each of the three tools above ===" >&2
+    echo "=== session output captured to: $cap ===" >&2
+    # Run interactively but tee the combined output so hook stderr is captured.
+    # Not exec'd: we need to run the post-grep after the session exits.
+    script -q /dev/null ./result/bin/clown --verbose --mcp-collapse -- {{ARGS}} 2>&1 | tee "$cap" || true
+    echo "" >&2
+    echo "=== clown-hook-collapse decisions observed this session (ground truth) ===" >&2
+    if grep -a 'clown-hook-collapse:' "$cap"; then
+        echo "--- (above: each line is one PreToolUse hook invocation + its decision/defer) ---" >&2
+    else
+        echo "NO clown-hook-collapse lines found — the hook did NOT fire on any mcp_call." >&2
+        echo "That is the stage-1 stop-gate finding: mechanics did not engage." >&2
+    fi
+    echo "=== full captured session output: $cap ===" >&2
+
 # Manually exercise the stdio bridge against a real stdio MCP. Expects
 # a plugin directory at $PLUGIN_DIR (default .tmp/stdio-bridge-plugin)
 # containing clown.json (with stdioServers entries), the standard
