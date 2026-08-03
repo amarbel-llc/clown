@@ -36,7 +36,7 @@ import (
 	"code.linenisgreat.com/clown/internal/sessions"
 	"code.linenisgreat.com/clown/internal/staging"
 	"code.linenisgreat.com/clown/internal/tent"
-	"code.linenisgreat.com/ringmaster/jobwake"
+	"code.linenisgreat.com/ringmaster/pkgs/jobwake"
 )
 
 //go:embed profiles/builtin.toml

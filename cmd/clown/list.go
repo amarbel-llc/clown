@@ -9,7 +9,7 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"code.linenisgreat.com/ringmaster/jobwake"
+	"code.linenisgreat.com/ringmaster/pkgs/jobwake"
 )
 
 // runList dispatches `clown list`: a flat table of every live clown session,

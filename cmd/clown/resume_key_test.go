@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"code.linenisgreat.com/ringmaster/jobwake"
+	"code.linenisgreat.com/ringmaster/pkgs/jobwake"
 
 	"code.linenisgreat.com/clown/internal/sessions"
 )

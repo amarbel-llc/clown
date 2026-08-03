@@ -125,5 +125,5 @@ does not re-emit the OSC-2 sequence.
   output is `{id}` here; unaffected by this feature.
 - Implementation: `cmd/clown/attach.go` (`maybeReexecMultiplexer`'s title
   block), `internal/clownfile/clownfile.go` (`Attach.Title`), and
-  `code.linenisgreat.com/ringmaster/jobwake` (`Presence.Cwd`,
+  `code.linenisgreat.com/ringmaster/pkgs/jobwake` (`Presence.Cwd`,
   `RegisterPresenceKey`).

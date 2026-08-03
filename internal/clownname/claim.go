@@ -6,7 +6,7 @@ import (
 	"syscall"
 	"time"
 
-	"code.linenisgreat.com/ringmaster/jobwake"
+	"code.linenisgreat.com/ringmaster/pkgs/jobwake"
 )
 
 // Claim resolves and returns a free clown name, guarding the read-live-set +

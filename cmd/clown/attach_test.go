@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"code.linenisgreat.com/clown/internal/clownfile"
-	"code.linenisgreat.com/ringmaster/jobwake"
+	"code.linenisgreat.com/ringmaster/pkgs/jobwake"
 )
 
 func TestExtractAttachID(t *testing.T) {

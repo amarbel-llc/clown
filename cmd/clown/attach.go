@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"code.linenisgreat.com/clown/internal/clownfile"
-	"code.linenisgreat.com/ringmaster/jobwake"
+	"code.linenisgreat.com/ringmaster/pkgs/jobwake"
 )
 
 // attachIDFlag is the hidden clown flag that pins the per-instance id across the

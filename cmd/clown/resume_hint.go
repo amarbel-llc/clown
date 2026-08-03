@@ -5,7 +5,7 @@ import (
 	"os"
 	"strings"
 
-	"code.linenisgreat.com/ringmaster/jobwake"
+	"code.linenisgreat.com/ringmaster/pkgs/jobwake"
 )
 
 // decideClaudeSession inspects the user's forwarded args plus the resolved base
