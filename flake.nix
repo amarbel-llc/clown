@@ -75,6 +75,7 @@
     ringmaster.inputs.nixpkgs-master.follows = "nixpkgs-master";
     ringmaster.inputs.utils.follows = "utils";
     ringmaster.inputs.bats.follows = "bats";
+    ringmaster.inputs.purse-first.inputs.conformist.follows = "conformist";
     # troupe: the messaging binary (chat + `troupe agent` XMPP receiver + the
     # troupe MCP surface). clown's 2nd extracted dep — but BINARY-only: clown
     # runs the troupe binary and does NOT import its Go (jobwake comes from

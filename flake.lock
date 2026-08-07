@@ -16,11 +16,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1785257467,
-        "narHash": "sha256-oCJjh2pQaGhdxMt8a1eKninXqr9Ex0I+KgdMCXHv7JU=",
-        "rev": "455c6c483c108f0477b0db70d28bc2a51d2c21db",
+        "lastModified": 1785438425,
+        "narHash": "sha256-LwWEVk4h2SrcRxgLZTA3zjGDCyRo0oZU522Iz6mmx2Q=",
+        "rev": "266860c1271a30b4b20e93b9d7c5693cadadac88",
         "type": "tarball",
-        "url": "https://code.linenisgreat.com/bats/archive/455c6c483c108f0477b0db70d28bc2a51d2c21db.tar.gz"
+        "url": "https://code.linenisgreat.com/bats/archive/266860c1271a30b4b20e93b9d7c5693cadadac88.tar.gz"
       },
       "original": {
         "type": "tarball",
@@ -47,11 +47,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1782772816,
-        "narHash": "sha256-s9BuFv0mRuZx9C1MF8qPHRdcAK14ONi0A5m6E2wqOoM=",
+        "lastModified": 1784665499,
+        "narHash": "sha256-9BMxlTxCCDAeoNLtb1a/st7udtTIJep+wpUzquA29VU=",
         "owner": "nix-community",
         "repo": "bun2nix",
-        "rev": "5a39d717029e94163ac223aee8d5c9946cafed1c",
+        "rev": "0f2a1f0b6f42cebe3b149bf62d38754c5e0e9729",
         "type": "github"
       },
       "original": {
@@ -69,36 +69,6 @@
           "nixpkgs-master"
         ],
         "utils": [
-          "utils"
-        ]
-      },
-      "locked": {
-        "lastModified": 1785332762,
-        "narHash": "sha256-p47St+gV504shWmEj+5nzZio+Tu2f4HaUmTyLyABCCU=",
-        "rev": "372ac68dfe3717eb46bf8033d86f5e7cda1a43c2",
-        "type": "tarball",
-        "url": "https://code.linenisgreat.com/conformist/archive/372ac68dfe3717eb46bf8033d86f5e7cda1a43c2.tar.gz"
-      },
-      "original": {
-        "type": "tarball",
-        "url": "https://code.linenisgreat.com/conformist/archive/master.tar.gz"
-      }
-    },
-    "conformist_2": {
-      "inputs": {
-        "igloo": [
-          "ringmaster",
-          "purse-first",
-          "igloo"
-        ],
-        "nixpkgs-master": [
-          "ringmaster",
-          "purse-first",
-          "nixpkgs-master"
-        ],
-        "utils": [
-          "ringmaster",
-          "purse-first",
           "utils"
         ]
       },
@@ -171,11 +141,11 @@
         "treefmt-nix": "treefmt-nix"
       },
       "locked": {
-        "lastModified": 1785249252,
-        "narHash": "sha256-sYKk1RiTgbF1cha8lQsUzFRn8BpYTxupyzOCCrRSZD0=",
-        "rev": "ccb50c7f53ca67e6eba59ebaf3f602ff20d2100f",
+        "lastModified": 1785433795,
+        "narHash": "sha256-UznGsJ8AjUEmQ+uxnqQG7bZQFGinDTrg0Hw+GMRLv6A=",
+        "rev": "f1605f03483962d46fe278ae178910ad87bd80c4",
         "type": "tarball",
-        "url": "https://code.linenisgreat.com/igloo/archive/ccb50c7f53ca67e6eba59ebaf3f602ff20d2100f.tar.gz"
+        "url": "https://code.linenisgreat.com/igloo/archive/f1605f03483962d46fe278ae178910ad87bd80c4.tar.gz"
       },
       "original": {
         "type": "tarball",
@@ -203,11 +173,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1785393846,
-        "narHash": "sha256-ZrkupCDmDaM2lZZoOZ4bR5ioHBxyBdIUTSeXbx+383c=",
+        "lastModified": 1786078118,
+        "narHash": "sha256-MW8q88uv/Z5DF9UyVKQjlUOBmcoh0OyUWl94aSVtvVU=",
         "owner": "numtide",
         "repo": "llm-agents.nix",
-        "rev": "ce99071da939d9d7997e27d35cf4d6c5e44bc32a",
+        "rev": "c4fe91eee512d8278f2593fc8f544829c76c84f8",
         "type": "github"
       },
       "original": {
@@ -218,11 +188,11 @@
     },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1785301185,
-        "narHash": "sha256-eoS3KQTO0aPWXZvIaRbRAzSSHW3l5wdMFXtT1ISfoKA=",
+        "lastModified": 1785747939,
+        "narHash": "sha256-D740uKsMbgsfK2oaDenJLLPIZfq7W0/g4KN/Fls8eKs=",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "9bc02893134c733dd85de46ee4fb2fac696b5529",
+        "rev": "104240a772428cc2e20d8fd86c9ddbb886bbaff2",
         "type": "github"
       },
       "original": {
@@ -298,7 +268,9 @@
     },
     "purse-first": {
       "inputs": {
-        "conformist": "conformist_2",
+        "conformist": [
+          "conformist"
+        ],
         "gomod2nix": "gomod2nix",
         "igloo": [
           "ringmaster",
@@ -391,11 +363,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1784369104,
-        "narHash": "sha256-47cxbcZODibHv3rELFQ9vZly0vUNkND/atn/U7HLeb0=",
+        "lastModified": 1785360170,
+        "narHash": "sha256-XE1lKgQ3eIO3E7zWryqcRsax+mYXod/5RHBn4YaR9YE=",
         "owner": "numtide",
         "repo": "treefmt-nix",
-        "rev": "df3c0640565d04a0261253cdd89fce78ec50168a",
+        "rev": "d1187f8bc71fb8aab02395869ec3f5c1920f75c0",
         "type": "github"
       },
       "original": {
