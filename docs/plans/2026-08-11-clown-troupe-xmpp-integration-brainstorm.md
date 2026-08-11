@@ -164,26 +164,34 @@ instant-room dependency**, no co-occupancy. Instant-room stays deferred. (Interi
 mention-in-a-shared-room is an acceptable pre-mint demo stopgap, but the built
 design is (d).)
 
-**session-key → JID resolution (decided, operator, 2026-08-11).** clown does
-**not** guarantee `CLOWN_SESSION_ID` is a valid XMPP localpart —
-`cmd/clown/resume_hint.go decideClaudeSession` mints a UUID on the normal path
-but passes an explicit `--session-id`/`--resume` value, or an inherited non-UUID
-`CLOWN_SESSION_ID`/`CLAUDE_SESSION_ID` (case 5), through **verbatim**. So rather
-than have clown compute a localpart from an unenforced-format key, the resolution
-is:
+**session-key → JID resolution (decided 2026-08-11; revised after the worker's
+build).** clown does **not** guarantee `CLOWN_SESSION_ID` is a valid XMPP
+localpart — `cmd/clown/resume_hint.go decideClaudeSession` mints a UUID on the
+normal path but passes an explicit `--session-id`/`--resume` value, or an
+inherited non-UUID `CLOWN_SESSION_ID`/`CLAUDE_SESSION_ID` (case 5), through
+**verbatim**. The resolution:
 
 - **Canonical derivation lives in one place — `troupe derive-jid` (troupe#3).**
-  clown never replicates the mint's sanitize path.
-- **The presence index (RFC-0013 §3.3 / RFC-0014 §4) carries the full minted JID
-  verbatim**, sourced from the mint's Interface-1 response (not computed), so
-  **same-host** `key → JID` is a direct lookup with zero derivation.
-- **The `<troupe>` envelope's `From` carries the sender's full JID**, so a
-  reply-to-sender never derives.
-- Only **cold cross-host addressing** (the peer's presence index is host-local,
-  RFC-0013 §3.3) shells to `troupe derive-jid --session-key K --vhost <remote>`.
+  clown never replicates the mint's sanitize path; `derive-jid` handles hostile
+  keys, so the unenforced key format is never leaned on.
+- **The presence index carries the peer's `host`/vhost** (an additive ringmaster
+  presence-schema field — Q2, §8), and the JID is **derived** via
+  `troupe derive-jid --session-key K --vhost <presence.vhost>`. Same-host DMs use
+  the sender's own vhost (`TROUPE_XMPP_DOMAIN`) with no lookup; cross-host DMs
+  read the peer's vhost from presence.
+- **The `<troupe>` envelope's `From` carries the sender's full minted JID**
+  (`cmd/troupe/dm.go`), so a reply-to-sender never derives.
 - **No key-format enforcement in clown** — rejecting currently-accepted
-  resume/override keys would be a compat break with no gain once the above make
-  derivation the rare case.
+  resume/override keys would be a compat break with no gain.
+
+> **Revision note (operator-confirmed, 2026-08-11).** The earlier decision was
+> "presence carries the **full minted JID verbatim**, no derivation." The
+> worker's landed code instead **computes** the JID via the canonical
+> `derive-jid` from a **vhost**-bearing presence field (`cmd/troupe/mint.go` §15,
+> `dm.go`). Adopted: it preserves the decision's intent — never trust an
+> unenforced key format; one canonical sanitize (`derive-jid` IS that path) —
+> while materializing the JID at resolution rather than storing it.
+> Built-and-validated beats decided-but-unbuilt when intent is preserved.
 
 ## 7. Plan & sequencing
 

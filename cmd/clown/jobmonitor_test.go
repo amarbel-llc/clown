@@ -117,36 +117,38 @@ func TestMonitorCommandBareFallback(t *testing.T) {
 	}
 }
 
-func TestTroupeAgentCommand(t *testing.T) {
+func TestTroupeMonitorCommand(t *testing.T) {
 	orig := buildcfg.TroupePath
 	t.Cleanup(func() { buildcfg.TroupePath = orig })
 
-	// Nix builds: absolute TroupePath + `agent`, with the session key threaded as
-	// a scoped env prefix (clown#136-style: `troupe agent` reads
+	// Nix builds: absolute TroupePath + the verb, with the session key threaded
+	// as a scoped env prefix (clown#136-style: the subcommand reads
 	// CLOWN_SESSION_ID, which clown does not export ambiently and takes no flag
 	// for).
 	buildcfg.TroupePath = "/nix/store/x/bin/troupe"
-	cmd := troupeAgentCommand("k-1")
-	if !strings.HasSuffix(cmd, "/nix/store/x/bin/troupe agent") {
-		t.Fatalf("agent command = %q, want it to end with the absolute troupe agent subcommand", cmd)
+	cmd := troupeMonitorCommand("receive", "k-1")
+	if !strings.HasSuffix(cmd, "/nix/store/x/bin/troupe receive") {
+		t.Fatalf("receive command = %q, want it to end with the absolute troupe receive subcommand", cmd)
 	}
 	if !strings.HasPrefix(cmd, "env CLOWN_SESSION_ID=k-1 ") {
-		t.Fatalf("agent command = %q, want the scoped CLOWN_SESSION_ID env prefix", cmd)
+		t.Fatalf("receive command = %q, want the scoped CLOWN_SESSION_ID env prefix", cmd)
 	}
-	// An empty key omits the prefix.
-	if cmd := troupeAgentCommand(""); cmd != "/nix/store/x/bin/troupe agent" {
+	// An empty key omits the prefix; the legacy `agent` verb builds the same way.
+	if cmd := troupeMonitorCommand("agent", ""); cmd != "/nix/store/x/bin/troupe agent" {
 		t.Fatalf("agent command = %q, want the bare absolute agent command for an empty key", cmd)
 	}
-	// Dev build (empty TroupePath) falls back to the bare `troupe agent`.
+	// Dev build (empty TroupePath) falls back to the bare `troupe <verb>`.
 	buildcfg.TroupePath = ""
-	if cmd := troupeAgentCommand("k-1"); cmd != "env CLOWN_SESSION_ID=k-1 troupe agent" {
-		t.Fatalf("agent command = %q, want the bare `troupe agent` with env prefix", cmd)
+	if cmd := troupeMonitorCommand("receive", "k-1"); cmd != "env CLOWN_SESSION_ID=k-1 troupe receive" {
+		t.Fatalf("receive command = %q, want the bare `troupe receive` with env prefix", cmd)
 	}
 }
 
-// The troupe-agent monitor is registered only when the session opts into the
-// xmpp transport (TROUPE_TRANSPORT=xmpp) and the troupe binary is available.
-func TestJobMonitorTroupeAgentGatedOnXMPP(t *testing.T) {
+// The troupe receiver monitor is registered per TROUPE_TRANSPORT: none under
+// local, the legacy troupe-agent under xmpp, and troupe-receive under
+// xmpp-native — the last gated on a minted credential (TROUPE_XMPP_PASSWORD_FILE)
+// so a mint miss degrades to no receiver. All require the troupe binary.
+func TestJobMonitorTroupeTransportGating(t *testing.T) {
 	t.Setenv("CLOWN_DISABLE_JOB_WAKEUP", "")
 	origRM, origTroupe := buildcfg.RingmasterPath, buildcfg.TroupePath
 	buildcfg.RingmasterPath = "/nix/store/x/bin/ringmaster"
@@ -184,7 +186,7 @@ func TestJobMonitorTroupeAgentGatedOnXMPP(t *testing.T) {
 		t.Fatalf("local transport monitors = %v, want just [ringmaster-monitor]", names)
 	}
 
-	// xmpp: the troupe agent is registered alongside the ringmaster monitor.
+	// xmpp (legacy): the troupe agent is registered alongside the ringmaster monitor.
 	t.Setenv("TROUPE_TRANSPORT", "xmpp")
 	names := monitorNames(t)
 	found := false
@@ -195,6 +197,28 @@ func TestJobMonitorTroupeAgentGatedOnXMPP(t *testing.T) {
 	}
 	if len(names) != 2 || !found {
 		t.Fatalf("xmpp transport monitors = %v, want ringmaster-monitor + troupe-agent", names)
+	}
+
+	// xmpp-native WITHOUT a minted credential: the receiver is NOT registered
+	// (graceful degrade on a mint miss), leaving just the ringmaster monitor.
+	t.Setenv("TROUPE_TRANSPORT", "xmpp-native")
+	t.Setenv("TROUPE_XMPP_PASSWORD_FILE", "")
+	if n := monitorNames(t); len(n) != 1 || n[0] != "ringmaster-monitor" {
+		t.Fatalf("xmpp-native without credential monitors = %v, want just [ringmaster-monitor]", n)
+	}
+
+	// xmpp-native WITH the minted credential: troupe-receive joins the ringmaster
+	// monitor.
+	t.Setenv("TROUPE_XMPP_PASSWORD_FILE", "/run/troupe/accounts/sess-1.pass")
+	names = monitorNames(t)
+	found = false
+	for _, n := range names {
+		if n == "troupe-receive" {
+			found = true
+		}
+	}
+	if len(names) != 2 || !found {
+		t.Fatalf("xmpp-native with credential monitors = %v, want ringmaster-monitor + troupe-receive", names)
 	}
 }
 

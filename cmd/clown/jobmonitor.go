@@ -2,8 +2,11 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"code.linenisgreat.com/clown/internal/buildcfg"
 	"code.linenisgreat.com/clown/internal/staging"
@@ -69,31 +72,73 @@ func monitorCommand(key string) string {
 	return base
 }
 
-// troupeAgentCommand returns the `troupe agent` command string for the
-// persistent per-session XMPP receiver, registered as a monitor when the
-// session opts into the troupe xmpp transport (troupe RFC-0001 §2/§6). It is the
-// RECEIVE half of the xmpp backend: it joins this session's MUC rooms and
-// delivers inbound cross-host chat onto this host's local journal, then nudges
-// this session's channel so the ringmaster monitor emits the wake.
+// troupeMonitorCommand returns the monitor command string for a persistent
+// per-session troupe subcommand: `receive` (the troupe#3 minted-account receiver
+// under transport=xmpp-native) or the legacy `agent` (RFC-0001, transport=xmpp).
+// Both are the RECEIVE half of the XMPP backend: they stay joined and nudge this
+// session's channel so the ringmaster monitor emits the wake.
 //
 // The absolute buildcfg.TroupePath is used for the same PATH-independence reason
-// as the ringmaster monitor. The agent resolves its session key from
+// as the ringmaster monitor. The subcommand resolves its session key from
 // CLOWN_SESSION_ID (jobwake.SessionKey()), which clown does NOT export ambiently
-// (clown#136) and which `troupe agent` takes no flag for; it is threaded here as
-// a SCOPED env prefix so the agent's own-channel nudge targets THIS session's
-// channel (matching the ringmaster monitor's --session key) without polluting
-// the claude subtree env. The transport coordinates (TROUPE_TRANSPORT +
-// TROUPE_XMPP_*) and CLOWN_GROUP_ID are ambient (os.Setenv'd from the clownfile
-// [messaging] table) and inherited.
-func troupeAgentCommand(key string) string {
-	base := "troupe agent"
+// (clown#136) and which takes no flag; it is threaded here as a SCOPED env prefix
+// so the own-channel nudge targets THIS session's channel (matching the
+// ringmaster monitor's --session key) without polluting the claude subtree env.
+// The transport coordinates (TROUPE_TRANSPORT + TROUPE_XMPP_*, including the
+// minted TROUPE_XMPP_USER/PASSWORD_FILE) and CLOWN_GROUP_ID are ambient
+// (os.Setenv'd at launch) and inherited.
+func troupeMonitorCommand(verb, key string) string {
+	base := "troupe " + verb
 	if buildcfg.TroupePath != "" {
-		base = buildcfg.TroupePath + " agent"
+		base = buildcfg.TroupePath + " " + verb
 	}
 	if key != "" {
 		base = "env CLOWN_SESSION_ID=" + key + " " + base
 	}
 	return base
+}
+
+// mintSessionXMPPCredential mints this session's per-session XMPP account for the
+// xmpp-native transport (troupe#3 Interface 1) and exports the resulting
+// credential-by-reference so the `troupe receive` monitor and the `troupe mcp`
+// child inherit it. It shells `troupe mint --session-key <key>` — idempotent on
+// resume, prosodyctl-offline — and parses its {jid, password_file} JSON:
+// TROUPE_XMPP_PASSWORD_FILE gets the file PATH (never the secret) and
+// TROUPE_XMPP_USER the JID localpart. The vhost the mint provisions on comes from
+// TROUPE_XMPP_DOMAIN, already exported from the [messaging] table before this
+// runs.
+//
+// Best-effort, matching the mint's own contract and the presence registration at
+// the call site: a failure logs and leaves the credential unset, so
+// synthJobMonitorPluginDir skips the receiver (its TROUPE_XMPP_PASSWORD_FILE
+// guard) and the session degrades to no-XMPP rather than breaking the launch or
+// crash-looping a credential-less connect. A no-op when the troupe binary is
+// absent (dev `go run`), where the receiver is skipped anyway.
+func mintSessionXMPPCredential(key string) {
+	if buildcfg.TroupePath == "" {
+		return
+	}
+	cmd := exec.Command(buildcfg.TroupePath, "mint", "--session-key", key)
+	cmd.Stderr = os.Stderr
+	out, err := cmd.Output()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clown: troupe mint failed; xmpp-native messaging disabled this session: %v\n", err)
+		return
+	}
+	var res struct {
+		JID          string `json:"jid"`
+		PasswordFile string `json:"password_file"`
+	}
+	if err := json.Unmarshal(out, &res); err != nil {
+		fmt.Fprintf(os.Stderr, "clown: troupe mint: parsing output: %v\n", err)
+		return
+	}
+	if res.PasswordFile != "" {
+		_ = os.Setenv("TROUPE_XMPP_PASSWORD_FILE", res.PasswordFile)
+	}
+	if user, _, ok := strings.Cut(res.JID, "@"); ok && user != "" {
+		_ = os.Setenv("TROUPE_XMPP_USER", user)
+	}
 }
 
 // providerUsesPluginDirs reports whether the provider should receive clown's
@@ -164,18 +209,37 @@ func synthJobMonitorPluginDir(root *staging.Root, sessionKey string) (string, er
 		Command:     monitorCommand(sessionKey),
 		Description: "clown job-wakeup channel: wakes this session when a background job finishes",
 	}}
-	// When the session opts into the troupe xmpp transport (clownfile
-	// [messaging], exported as TROUPE_TRANSPORT=xmpp), also run the per-session
-	// `troupe agent`: the persistent XMPP receiver that delivers cross-host chat
-	// onto this host's local journal + nudges this session's channel (troupe
-	// RFC-0001 §2/§6). It needs the troupe binary (nix builds); dev builds (empty
+	// When the session opts into a troupe XMPP transport (clownfile [messaging],
+	// exported as TROUPE_TRANSPORT), also register the persistent per-session
+	// receiver. It needs the troupe binary (nix builds); dev builds (empty
 	// TroupePath) skip it, as they do the MCP servers below.
-	if os.Getenv("TROUPE_TRANSPORT") == "xmpp" && buildcfg.TroupePath != "" {
-		monitors = append(monitors, jobMonitorEntry{
-			Name:        "troupe-agent",
-			Command:     troupeAgentCommand(sessionKey),
-			Description: "troupe XMPP messaging receiver: delivers cross-host chat into this session",
-		})
+	switch os.Getenv("TROUPE_TRANSPORT") {
+	case "xmpp-native":
+		// troupe#3: the minted-account persistent receiver. `troupe receive`
+		// joins the configured plain-JID rooms (TROUPE_XMPP_ROOMS) + this
+		// session's own 1:1 inbox and emits EPHEMERAL wakes on the session's own
+		// channel — no durable per-message record (clown#215 fixed structurally
+		// on this path). Gated on the minted credential (TROUPE_XMPP_PASSWORD_FILE,
+		// set by the mint-first step at launch): a mint miss leaves it unset, so
+		// the receiver is not registered and the session degrades to no-XMPP
+		// rather than crash-looping a credential-less connect.
+		if buildcfg.TroupePath != "" && os.Getenv("TROUPE_XMPP_PASSWORD_FILE") != "" {
+			monitors = append(monitors, jobMonitorEntry{
+				Name:        "troupe-receive",
+				Command:     troupeMonitorCommand("receive", sessionKey),
+				Description: "troupe XMPP receiver (xmpp-native): rooms + 1:1 inbox, ephemeral wakes",
+			})
+		}
+	case "xmpp":
+		// Legacy RFC-0001 agent+journal path (kept until retired): joins the
+		// mechanical 3-tier rooms and delivers inbound onto the local journal.
+		if buildcfg.TroupePath != "" {
+			monitors = append(monitors, jobMonitorEntry{
+				Name:        "troupe-agent",
+				Command:     troupeMonitorCommand("agent", sessionKey),
+				Description: "troupe XMPP messaging receiver (legacy): delivers cross-host chat into this session",
+			})
+		}
 	}
 	manifest := jobMonitorPlugin{
 		Name:     "clown-builtin-jobs",

@@ -599,6 +599,17 @@ func runWithFlags(flags parsedFlags) int {
 		_ = jobwake.RegisterPresenceKey(flags.identity.Key, time.Now())
 	}
 
+	// Mint this session's per-session XMPP account when it opts into the
+	// xmpp-native transport (troupe#3), before the receiver + troupe mcp child
+	// are wired below, so both inherit the minted credential
+	// (TROUPE_XMPP_USER/PASSWORD_FILE). Best-effort: a mint miss logs and leaves
+	// the credential unset, so the receiver is not registered (opt-in transport)
+	// and the launch is never broken. Skipped for --naked and when job-wakeup is
+	// disabled (no receiver to feed).
+	if !flags.naked && !jobWakeupDisabled() && os.Getenv("TROUPE_TRANSPORT") == "xmpp-native" {
+		mintSessionXMPPCredential(flags.identity.Key)
+	}
+
 	// clown#192 step 3: record this conversation's clown-name in the
 	// session-names sidecar so a DEAD conversation can later be resumed as
 	// `clown resume repo/worktree/<name>`. This point runs exactly once per

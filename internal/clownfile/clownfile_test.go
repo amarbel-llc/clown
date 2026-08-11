@@ -444,4 +444,21 @@ func TestMessagingEnv(t *testing.T) {
 			t.Errorf("rooms %q: want error, got nil", name)
 		}
 	}
+
+	// xmpp-native (troupe#3): requires xmpp-domain but NOT xmpp-muc-domain
+	// (plain-JID rooms), and emits TROUPE_TRANSPORT=xmpp-native.
+	env, err = Messaging{Transport: "xmpp-native", XMPPDomain: "clown.local"}.Env()
+	if err != nil {
+		t.Fatalf("xmpp-native: %v", err)
+	}
+	if env["TROUPE_TRANSPORT"] != "xmpp-native" {
+		t.Errorf("xmpp-native TROUPE_TRANSPORT = %q, want xmpp-native", env["TROUPE_TRANSPORT"])
+	}
+	if _, ok := env["TROUPE_XMPP_MUC_DOMAIN"]; ok {
+		t.Errorf("xmpp-native emitted MUC_DOMAIN when unset: %q", env["TROUPE_XMPP_MUC_DOMAIN"])
+	}
+	// xmpp-native still requires xmpp-domain.
+	if _, err := (Messaging{Transport: "xmpp-native"}).Env(); err == nil {
+		t.Error("xmpp-native missing domain: want error, got nil")
+	}
 }

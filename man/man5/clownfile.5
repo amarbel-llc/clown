@@ -313,19 +313,27 @@ clownfile opts in.
 .Bl -tag -width Ds
 .It Sy transport
 .Sy local
-(default) or
-.Sy xmpp .
+(default),
+.Sy xmpp
+(legacy RFC-0001 agent + journal), or
+.Sy xmpp-native
+(the troupe#3 persistent receiver + minted per-session account).
 Anything else is an error.
 .It Sy xmpp-domain
 The c2s vhost.
 .Sy REQUIRED
-when
-.Sy transport = "xmpp" .
+for both
+.Sy xmpp
+and
+.Sy xmpp-native .
 .It Sy xmpp-muc-domain
 The base MUC domain rooms are addressed under.
 .Sy REQUIRED
-when
-.Sy transport = "xmpp" .
+for legacy
+.Sy transport = "xmpp"
+only;
+.Sy xmpp-native
+addresses rooms by full JID and does not use it.
 .It Sy xmpp-host , xmpp-port , xmpp-nick , xmpp-insecure
 Optional connection parameters (troupe defaults: DNS-resolve the domain, 5222,
 the clown-name, and TLS-verify on).

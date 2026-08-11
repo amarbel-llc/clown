@@ -193,12 +193,13 @@ func (a Attach) Title(id, group string, showID bool) string {
 }
 
 // Messaging is the clownfile [messaging] table: clown's opt-in for troupe's
-// XMPP messaging transport (troupe RFC-0001 §8). It cascades like
-// [profile]/[attach]. When Transport is "xmpp", clown resolves it (via Env)
-// into the TROUPE_* environment troupe's `agent` + `mcp` children read
-// (RFC-0001 §1) and injects that env into those children. The default (local)
-// emits no TROUPE_XMPP_* vars, so the run stays on the local journal
-// single-host — the transport is inert until a clownfile opts in.
+// XMPP messaging transport. It cascades like [profile]/[attach]. When Transport
+// is "xmpp" (legacy RFC-0001 agent+journal) or "xmpp-native" (the troupe#3
+// persistent-receiver + minted-account model), clown resolves it (via Env) into
+// the TROUPE_* environment troupe's receiver + `mcp` children read and injects
+// that env into those children. The default (local) emits no TROUPE_XMPP_* vars,
+// so the run stays on the local journal single-host — the transport is inert
+// until a clownfile opts in.
 type Messaging struct {
 	Transport        string `toml:"transport"`          // "local" (default) | "xmpp"
 	XMPPHost         string `toml:"xmpp-host"`          // connect addr, env-interpolated; troupe defaults to DNS-resolving xmpp-domain
@@ -230,11 +231,12 @@ type MessagingRoom struct {
 // Env resolves the [messaging] table into the TROUPE_* environment for troupe's
 // `agent` + `mcp` children (troupe RFC-0001 §1/§8). Transport "" or "local"
 // returns an empty map (the default: local journal, no XMPP vars emitted).
-// Transport "xmpp" emits TROUPE_TRANSPORT=xmpp plus the coordinate vars (and
-// TROUPE_XMPP_ROOMS when [[messaging.rooms]] is set, §roomsEnv), and FAILS FAST
-// (error) when a required var (xmpp-domain, xmpp-muc-domain) is missing — so the
-// diagnostic lands at clown's config layer, not opaquely inside the troupe
-// child. Optional vars are emitted only when set. The
+// Transport "xmpp"/"xmpp-native" emits TROUPE_TRANSPORT=<value> plus the
+// coordinate vars (and TROUPE_XMPP_ROOMS when [[messaging.rooms]] is set,
+// §roomsEnv), and FAILS FAST (error) when a required var is missing (xmpp-domain
+// always; xmpp-muc-domain additionally for legacy xmpp) — so the diagnostic
+// lands at clown's config layer, not opaquely inside the troupe child. Optional
+// vars are emitted only when set. The
 // credential is emitted BY REFERENCE (the file path only, env-interpolated) —
 // never inline — satisfying §1's credential-by-reference MUST. Any transport
 // other than ""/"local"/"xmpp" is an error.
@@ -242,18 +244,28 @@ func (m Messaging) Env() (map[string]string, error) {
 	switch m.Transport {
 	case "", "local":
 		return map[string]string{}, nil
-	case "xmpp":
+	case "xmpp", "xmpp-native":
 		// resolved below
 	default:
-		return nil, fmt.Errorf("clownfile [messaging]: transport must be \"local\" or \"xmpp\", got %q", m.Transport)
+		return nil, fmt.Errorf("clownfile [messaging]: transport must be \"local\", \"xmpp\", or \"xmpp-native\", got %q", m.Transport)
 	}
-	if m.XMPPDomain == "" || m.XMPPMUCDomain == "" {
-		return nil, fmt.Errorf("clownfile [messaging]: transport=xmpp requires xmpp-domain and xmpp-muc-domain")
+	// xmpp-domain (the c2s vhost) is required by both XMPP transports. The legacy
+	// mechanical 3-tier addressing (transport=xmpp, troupe RFC-0001 §3)
+	// additionally requires xmpp-muc-domain; the plain-JID persistent-receiver
+	// model (transport=xmpp-native, troupe#3) addresses rooms by full JID and
+	// does not use it.
+	if m.XMPPDomain == "" {
+		return nil, fmt.Errorf("clownfile [messaging]: transport=%s requires xmpp-domain", m.Transport)
+	}
+	if m.Transport == "xmpp" && m.XMPPMUCDomain == "" {
+		return nil, fmt.Errorf("clownfile [messaging]: transport=xmpp requires xmpp-muc-domain")
 	}
 	env := map[string]string{
-		"TROUPE_TRANSPORT":       "xmpp",
-		"TROUPE_XMPP_DOMAIN":     m.XMPPDomain,
-		"TROUPE_XMPP_MUC_DOMAIN": m.XMPPMUCDomain,
+		"TROUPE_TRANSPORT":   m.Transport,
+		"TROUPE_XMPP_DOMAIN": m.XMPPDomain,
+	}
+	if m.XMPPMUCDomain != "" {
+		env["TROUPE_XMPP_MUC_DOMAIN"] = m.XMPPMUCDomain
 	}
 	if m.XMPPHost != "" {
 		env["TROUPE_XMPP_HOST"] = ResolveEnv(m.XMPPHost)
