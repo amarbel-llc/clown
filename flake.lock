@@ -393,11 +393,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1785784971,
-        "narHash": "sha256-ZBkjD9H1nNCCqFzLyTAelSHJ2TKb00bMaWAPFo/K9jg=",
-        "rev": "f824cef29f26a817ff156c5d0f652ab93d5ef10e",
+        "lastModified": 1786451292,
+        "narHash": "sha256-XTkM/3LGX2MGWgRdrEDoJpYuh259i80NHYpRfwaiwfg=",
+        "rev": "38fbdc43e39f236312e75d09eca6da96ef4d3b03",
         "type": "tarball",
-        "url": "https://code.linenisgreat.com/troupe/archive/f824cef29f26a817ff156c5d0f652ab93d5ef10e.tar.gz"
+        "url": "https://code.linenisgreat.com/troupe/archive/38fbdc43e39f236312e75d09eca6da96ef4d3b03.tar.gz"
       },
       "original": {
         "type": "tarball",
