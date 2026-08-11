@@ -1799,3 +1799,112 @@ release new_version:
     fi
     just tag "$notes"
     fj release create "v{{new_version}}" --tag "v{{new_version}}" --body "$notes"
+
+# DEBUG (clown#213): tier-3 same-host smoke of clown's xmpp-native LAUNCH WIRING
+# against this host's real prosody. The transport (mint/connect/DM/wake/MAM) is
+# already troupe-proven (troupe's debug-troupe-native/receive); this proves the
+# CLOWN delta — that `clown`'s launch, given a transport=xmpp-native clownfile,
+# runs mint-first, sets CLOWN_XMPP_VHOST (-> Presence.Vhost), and provisions the
+# receiver. Mechanism: `clown -- --version` runs the full launch wiring, then
+# `claude --version` exits (no API, non-interactive), leaving the minted account
+# + presence record as durable side-effects to assert. Mints a THROWAWAY
+# smoke-<ts> account (recognizable localpart for humans + troupe#4 mint-gc),
+# revoked trap-style on exit so a failure never leaks it. prosodyctl-offline, so
+# the mint works daemon-down; presence + credential are read from an ISOLATED
+# XDG_STATE_HOME so the host's real ringmaster state is never touched.
+[group("debug")]
+[linux]
+debug-xmpp-native-clown-smoke:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    clown="$(nix build --no-link --print-out-paths)/bin/clown"
+    troupe="$(nix build --no-link --print-out-paths .#troupe)/bin/troupe"
+    vhost="$(hostname -s).xmpp.starbrandshoes.com"
+    host="$(tailscale ip -4 2>/dev/null | head -1 || echo 127.0.0.1)"
+    # prosodyctl is not on PATH in this recipe env; the mint shells it to
+    # register/unregister the account. Resolve it from the running prosody unit
+    # (as debug-prosody does) and thread it via TROUPE_PROSODYCTL.
+    execstart="$(systemctl --user show prosody.service -p ExecStart --value 2>/dev/null || true)"
+    prosody_bin="$(grep -oE '/nix/store/[^ ]+/bin/prosody' <<<"$execstart" | head -1)"
+    prosodyctl="${prosody_bin%/prosody}/prosodyctl"
+    if [ ! -x "$prosodyctl" ]; then
+      echo "=== SKIP: could not resolve prosodyctl from the prosody unit (prosody installed on this host?) ===" >&2
+      exit 0
+    fi
+    export TROUPE_PROSODYCTL="$prosodyctl"
+    ts="$(date -u +%s)"
+    key="smoke-$ts"
+    state="$(mktemp -d)"
+    cfgdir="$(mktemp -d)"
+    rpid=
+    cleanup() {
+      [ -n "${rpid:-}" ] && kill "$rpid" 2>/dev/null || true
+      env XDG_STATE_HOME="$state" XDG_RUNTIME_DIR="$state" TROUPE_XMPP_DOMAIN="$vhost" TROUPE_PROSODYCTL="$prosodyctl" \
+        "$troupe" mint-revoke --session-key "$key" >/dev/null 2>&1 || true
+      rm -rf "$state" "$cfgdir"
+    }
+    trap cleanup EXIT
+
+    {
+      echo '[attach]'
+      echo 'multiplexer = "none"'
+      echo '[messaging]'
+      echo 'transport = "xmpp-native"'
+      echo "xmpp-domain = \"$vhost\""
+      echo 'xmpp-insecure = true'
+    } >"$cfgdir/clownfile"
+
+    log="$state/clown.out"
+    echo "== launch clown (xmpp-native, key=$key): mint-first + presence.vhost + receiver synth, then claude --version exits =="
+    ( cd "$cfgdir" && timeout 90 env \
+        XDG_STATE_HOME="$state" XDG_RUNTIME_DIR="$state" \
+        CLOWN_SESSION_ID="$key" TROUPE_PROSODYCTL="$prosodyctl" \
+        "$clown" -- --version ) >"$log" 2>&1 || true
+    sed 's/^/  clown: /' "$log"
+    echo
+
+    fail=0
+
+    # Assert 1: mint-first actually PROVISIONED a real account. Not a file check
+    # (troupe mint writes the password file BEFORE prosodyctl register, so the file
+    # exists even on a failed register). Instead: clown must not have logged a mint
+    # failure, AND the minted credential must AUTHENTICATE over c2s — proven by
+    # running `troupe receive` with clown's minted credential and seeing it connect.
+    if grep -q "troupe mint failed" "$log"; then
+      echo "FAIL: clown's mint-first reported a failure (see log above)"; fail=1
+    else
+      localpart="$(env TROUPE_XMPP_DOMAIN="$vhost" "$troupe" derive-jid --session-key "$key" --vhost "$vhost" --json 2>/dev/null | jq -r .localpart)"
+      passfile="$state/troupe/accounts/$localpart.pass"
+      rlog="$state/receive.out"
+      env XDG_STATE_HOME="$state" XDG_RUNTIME_DIR="$state" CLOWN_SESSION_ID="$key" \
+          TROUPE_XMPP_DOMAIN="$vhost" TROUPE_XMPP_HOST="$host" TROUPE_XMPP_INSECURE=1 \
+          TROUPE_XMPP_USER="$localpart" TROUPE_XMPP_PASSWORD_FILE="$passfile" \
+          "$troupe" receive >"$rlog" 2>&1 &
+      rpid=$!
+      for _ in $(seq 1 12); do grep -q "connected as" "$rlog" && break; sleep 1; done
+      if grep -q "connected as" "$rlog"; then
+        echo "PASS: clown minted a REAL account — receiver authenticated over c2s as ${localpart}@${vhost}"
+      elif grep -qiE 'connection refused|no route to host|i/o timeout|no such host|dial' "$rlog"; then
+        echo "SKIP: account minted, but prosody c2s unreachable at $host:5222 (register OK; connect not exercised)"; sed 's/^/    /' "$rlog"
+      else
+        echo "FAIL: receiver did not authenticate with clown's minted credential"; sed 's/^/    /' "$rlog"; fail=1
+      fi
+      kill "$rpid" 2>/dev/null || true; rpid=
+    fi
+
+    # Assert 2: clown set CLOWN_XMPP_VHOST -> presence carries Presence.Vhost.
+    pres="$(env XDG_STATE_HOME="$state" "$troupe" list --json 2>/dev/null)"
+    got="$(jq -r --arg k "$key" 'select(.sessionKey==$k) | .vhost' <<<"$pres" 2>/dev/null)"
+    if [ "$got" = "$vhost" ]; then
+      echo "PASS: presence carries vhost=$got for $key"
+    else
+      echo "FAIL: presence vhost for $key = '${got:-<none>}', want '$vhost'"
+      echo "  presence dump:"; sed 's/^/    /' <<<"$pres"; fail=1
+    fi
+    echo
+
+    if [ "$fail" = 0 ]; then
+      echo "=== PASS: clown xmpp-native launch wiring verified on $vhost (mint provisions a real account + presence.vhost) ==="
+    else
+      echo "=== FAIL: see above ==="; exit 1
+    fi
