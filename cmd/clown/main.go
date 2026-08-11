@@ -595,6 +595,19 @@ func runWithFlags(flags parsedFlags) int {
 	// launch, and the monitor's later refresh keeps the record alive either
 	// way. Skipped for --naked (no CLOWN_NAME, no monitor to hand off to)
 	// and when job-wakeup is disabled (no presence dir is meant to exist).
+	// Under the xmpp-native transport, publish this session's XMPP vhost into its
+	// presence record so a cross-host peer can resolve this session's DM JID
+	// (<derived-localpart(key)>@<vhost>). jobwake reads CLOWN_XMPP_VHOST at
+	// registration (like decoration/description), surfaces it as Presence.Vhost,
+	// and troupe's dm.go reads it off ListPresence (clown#213; ringmaster
+	// 50438b6). The vhost is the c2s domain the [messaging] table already
+	// exported (TROUPE_XMPP_DOMAIN); set before the presence registration below so
+	// both it and the monitor's later refresh carry the field.
+	if os.Getenv("TROUPE_TRANSPORT") == "xmpp-native" {
+		if vhost := os.Getenv("TROUPE_XMPP_DOMAIN"); vhost != "" {
+			_ = os.Setenv("CLOWN_XMPP_VHOST", vhost)
+		}
+	}
 	if !flags.naked && !jobWakeupDisabled() {
 		_ = jobwake.RegisterPresenceKey(flags.identity.Key, time.Now())
 	}

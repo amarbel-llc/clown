@@ -174,11 +174,13 @@ inherited non-UUID `CLOWN_SESSION_ID`/`CLAUDE_SESSION_ID` (case 5), through
 - **Canonical derivation lives in one place — `troupe derive-jid` (troupe#3).**
   clown never replicates the mint's sanitize path; `derive-jid` handles hostile
   keys, so the unenforced key format is never leaned on.
-- **The presence index carries the peer's `host`/vhost** (an additive ringmaster
-  presence-schema field — Q2, §8), and the JID is **derived** via
+- **The presence index carries the peer's vhost** — `jobwake.Presence.Vhost`
+  (JSON `"vhost"`, omitempty; additive, ringmaster `50438b6`), which clown
+  populates by setting `CLOWN_XMPP_VHOST = TROUPE_XMPP_DOMAIN` before
+  `RegisterPresenceKey` under xmpp-native. The JID is then **derived** via
   `troupe derive-jid --session-key K --vhost <presence.vhost>`. Same-host DMs use
   the sender's own vhost (`TROUPE_XMPP_DOMAIN`) with no lookup; cross-host DMs
-  read the peer's vhost from presence.
+  read the peer's vhost from presence (`dm.go` reads `p.Vhost` off `ListPresence`).
 - **The `<troupe>` envelope's `From` carries the sender's full minted JID**
   (`cmd/troupe/dm.go`), so a reply-to-sender never derives.
 - **No key-format enforcement in clown** — rejecting currently-accepted
