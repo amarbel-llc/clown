@@ -402,4 +402,46 @@ func TestMessagingEnv(t *testing.T) {
 	if !reflect.DeepEqual(env, want) {
 		t.Errorf("full xmpp env = %v, want %v", env, want)
 	}
+
+	// Rooms: env-interpolated JID, default-mentions + explicit all, with the
+	// resolved policy emitted explicitly (clown#213 / troupe#3).
+	t.Setenv("MSG_TEST_MUC", "muc.clown.local")
+	env, err = Messaging{
+		Transport:     "xmpp",
+		XMPPDomain:    "clown.local",
+		XMPPMUCDomain: "muc.clown.local",
+		Rooms: []MessagingRoom{
+			{JID: "coord@${MSG_TEST_MUC}"}, // wake unset -> mentions
+			{JID: "fleet@muc.clown.local", Wake: "all"},
+		},
+	}.Env()
+	if err != nil {
+		t.Fatalf("xmpp rooms: %v", err)
+	}
+	wantRooms := "coord@muc.clown.local=mentions,fleet@muc.clown.local=all"
+	if got := env["TROUPE_XMPP_ROOMS"]; got != wantRooms {
+		t.Errorf("TROUPE_XMPP_ROOMS = %q, want %q", got, wantRooms)
+	}
+
+	// Rooms under local are ignored, like the other xmpp-* fields.
+	env, err = Messaging{Transport: "local", Rooms: []MessagingRoom{{JID: "x@y"}}}.Env()
+	if err != nil {
+		t.Fatalf("local rooms: %v", err)
+	}
+	if len(env) != 0 {
+		t.Errorf("local with rooms: want empty env, got %v", env)
+	}
+
+	// Rooms validation: empty jid, bad wake, and a delimiter-bearing jid each error.
+	badRooms := map[string]MessagingRoom{
+		"empty jid": {JID: ""},
+		"bad wake":  {JID: "a@b", Wake: "loud"},
+		"delimiter": {JID: "a,b@c"},
+	}
+	for name, room := range badRooms {
+		m := Messaging{Transport: "xmpp", XMPPDomain: "x", XMPPMUCDomain: "y", Rooms: []MessagingRoom{room}}
+		if _, err := m.Env(); err == nil {
+			t.Errorf("rooms %q: want error, got nil", name)
+		}
+	}
 }

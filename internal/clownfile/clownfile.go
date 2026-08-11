@@ -209,15 +209,32 @@ type Messaging struct {
 	XMPPInsecure     *bool  `toml:"xmpp-insecure"`      // skip TLS verify (loopback/testing only). *bool so a deeper clownfile can override an enabled default
 	XMPPUser         string `toml:"xmpp-user"`          // authenticated-mode c2s localpart; used only when xmpp-password-file is set (troupe defaults it to the nick)
 	XMPPPasswordFile string `toml:"xmpp-password-file"` // credential REFERENCE: a file path (env-interpolated), NEVER the secret. Only-if-authenticated.
+	// Rooms is the set of plain-JID MUC rooms this session joins under the
+	// persistent-receiver model (clown#213 / troupe#3), each with a wake policy.
+	// Resolved into TROUPE_XMPP_ROOMS (a comma-separated jid=policy list) for the
+	// receiver. Empty is valid — a session may do 1:1 DMs only. Only meaningful
+	// under transport=xmpp; ignored under local, like the other xmpp-* fields.
+	Rooms []MessagingRoom `toml:"rooms"`
+}
+
+// MessagingRoom is one [[messaging.rooms]] entry: a plain-JID MUC room the
+// session joins plus its per-room wake policy (clown#213). Wake is "mentions"
+// (default) — wake only on an @-mention of the session's clown-name — or "all"
+// — wake on every message in the room. DMs are native XMPP 1:1, not
+// room-scoped, and always wake regardless of any room policy.
+type MessagingRoom struct {
+	JID  string `toml:"jid"`  // full room JID (env-interpolated); REQUIRED
+	Wake string `toml:"wake"` // "" (=mentions) | "mentions" | "all"
 }
 
 // Env resolves the [messaging] table into the TROUPE_* environment for troupe's
 // `agent` + `mcp` children (troupe RFC-0001 §1/§8). Transport "" or "local"
 // returns an empty map (the default: local journal, no XMPP vars emitted).
-// Transport "xmpp" emits TROUPE_TRANSPORT=xmpp plus the coordinate vars, and
-// FAILS FAST (error) when a required var (xmpp-domain, xmpp-muc-domain) is
-// missing — so the diagnostic lands at clown's config layer, not opaquely
-// inside the troupe child. Optional vars are emitted only when set. The
+// Transport "xmpp" emits TROUPE_TRANSPORT=xmpp plus the coordinate vars (and
+// TROUPE_XMPP_ROOMS when [[messaging.rooms]] is set, §roomsEnv), and FAILS FAST
+// (error) when a required var (xmpp-domain, xmpp-muc-domain) is missing — so the
+// diagnostic lands at clown's config layer, not opaquely inside the troupe
+// child. Optional vars are emitted only when set. The
 // credential is emitted BY REFERENCE (the file path only, env-interpolated) —
 // never inline — satisfying §1's credential-by-reference MUST. Any transport
 // other than ""/"local"/"xmpp" is an error.
@@ -259,7 +276,45 @@ func (m Messaging) Env() (map[string]string, error) {
 		// resolves at launch and never sits in the committed clownfile.
 		env["TROUPE_XMPP_PASSWORD_FILE"] = ResolveEnv(m.XMPPPasswordFile)
 	}
+	if len(m.Rooms) > 0 {
+		rooms, err := m.roomsEnv()
+		if err != nil {
+			return nil, err
+		}
+		env["TROUPE_XMPP_ROOMS"] = rooms
+	}
 	return env, nil
+}
+
+// roomsEnv resolves [[messaging.rooms]] into the TROUPE_XMPP_ROOMS value: a
+// comma-separated list of `jid=policy` pairs (clown#213 / troupe#3). Each JID is
+// env-interpolated (like xmpp-host); a missing wake defaults to "mentions", and
+// clown emits the RESOLVED policy explicitly so the receiver never has to
+// default. A room with an empty JID, a JID carrying the `,`/`=` delimiters, or a
+// wake outside {mentions, all} is a config error surfaced at clown's launch —
+// not opaquely inside the receiver. (If a JID ever legitimately needs a
+// delimiter char, the pinned fallback is a TROUPE_XMPP_ROOMS_FILE; this encoding
+// covers realistic room JIDs.)
+func (m Messaging) roomsEnv() (string, error) {
+	parts := make([]string, 0, len(m.Rooms))
+	for i, r := range m.Rooms {
+		jid := ResolveEnv(r.JID)
+		if jid == "" {
+			return "", fmt.Errorf("clownfile [messaging]: rooms[%d] requires a jid", i)
+		}
+		if strings.ContainsAny(jid, ",=") {
+			return "", fmt.Errorf("clownfile [messaging]: rooms[%d] jid %q cannot contain ',' or '=' (the TROUPE_XMPP_ROOMS encoding delimiters)", i, jid)
+		}
+		wake := r.Wake
+		if wake == "" {
+			wake = "mentions"
+		}
+		if wake != "mentions" && wake != "all" {
+			return "", fmt.Errorf("clownfile [messaging]: rooms[%d] (%s) wake must be \"mentions\" or \"all\", got %q", i, jid, r.Wake)
+		}
+		parts = append(parts, jid+"="+wake)
+	}
+	return strings.Join(parts, ","), nil
 }
 
 // Providers is the clownfile [providers] table: cross-provider launch policy

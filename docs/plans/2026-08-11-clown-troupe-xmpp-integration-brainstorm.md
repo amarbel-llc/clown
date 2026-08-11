@@ -164,9 +164,26 @@ instant-room dependency**, no co-occupancy. Instant-room stays deferred. (Interi
 mention-in-a-shared-room is an acceptable pre-mint demo stopgap, but the built
 design is (d).)
 
-**Consumer-side addition clown owns:** the presence index (RFC-0013 §3.3 /
-RFC-0014 §4) gains a **host/vhost** (or full-JID) field so cross-host `key → JID`
-resolution stays registry-free.
+**session-key → JID resolution (decided, operator, 2026-08-11).** clown does
+**not** guarantee `CLOWN_SESSION_ID` is a valid XMPP localpart —
+`cmd/clown/resume_hint.go decideClaudeSession` mints a UUID on the normal path
+but passes an explicit `--session-id`/`--resume` value, or an inherited non-UUID
+`CLOWN_SESSION_ID`/`CLAUDE_SESSION_ID` (case 5), through **verbatim**. So rather
+than have clown compute a localpart from an unenforced-format key, the resolution
+is:
+
+- **Canonical derivation lives in one place — `troupe derive-jid` (troupe#3).**
+  clown never replicates the mint's sanitize path.
+- **The presence index (RFC-0013 §3.3 / RFC-0014 §4) carries the full minted JID
+  verbatim**, sourced from the mint's Interface-1 response (not computed), so
+  **same-host** `key → JID` is a direct lookup with zero derivation.
+- **The `<troupe>` envelope's `From` carries the sender's full JID**, so a
+  reply-to-sender never derives.
+- Only **cold cross-host addressing** (the peer's presence index is host-local,
+  RFC-0013 §3.3) shells to `troupe derive-jid --session-key K --vhost <remote>`.
+- **No key-format enforcement in clown** — rejecting currently-accepted
+  resume/override keys would be a compat break with no gain once the above make
+  derivation the rare case.
 
 ## 7. Plan & sequencing
 

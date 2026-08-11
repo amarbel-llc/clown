@@ -342,6 +342,32 @@ a file PATH (environment-interpolated), never the password itself.
 clown emits only the path; the secret never enters clown's configuration or a
 process environment.
 Present only when an authenticated mechanism is used.
+.It Sy [[messaging.rooms]]
+An array of MUC rooms this session joins under the persistent-receiver model
+(clown#213), each a plain room JID plus a per-room wake policy.
+clown resolves the set into
+.Ev TROUPE_XMPP_ROOMS ,
+a comma-separated list of
+.Sy jid=policy
+pairs (the resolved policy is emitted explicitly).
+Empty is valid \(en a session may exchange 1:1 DMs only.
+Each entry takes:
+.Bl -tag -width Ds
+.It Sy jid
+The full room JID (environment-interpolated).
+.Sy REQUIRED ;
+it may not contain a
+.Ql \&,
+or
+.Ql =
+(the encoding delimiters).
+.It Sy wake
+.Sy mentions
+(default) \(en wake only on an @-mention of the session's clown-name \(en or
+.Sy all
+\(en wake on every message in the room.
+DMs are native 1:1 and always wake regardless of any room policy.
+.El
 .El
 .Pp
 When
