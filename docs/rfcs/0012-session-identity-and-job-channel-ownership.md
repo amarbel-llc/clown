@@ -93,6 +93,46 @@ MUST NOT change the resolution to "fix" it. A divergence is an env-hygiene smell
 fixed at the source (the orchestrator's child-env construction), not by clown
 re-interpreting the precedence.
 
+**XMPP-native transport addressing (strict, fully-qualified JID).** The
+channel-id derivation above (key → `SHA-256(key)[:16]`) addresses the on-disk
+journal transport. The XMPP-native transport — per-session minted accounts over
+a Prosody/XMPP backend (troupe#3; RFC-0016) — instead addresses by a
+**fully-qualified JID** `localpart@vhost`, where the localpart is the session key
+and the vhost is the target host's XMPP domain. Under this transport:
+
+- A chat address (the `chat_send` `target`) MUST be a well-formed fully-qualified
+  JID. A non-JID target — a bare session key, a group/decoration label, or a
+  malformed string — MUST be rejected with a hard, actionable error naming the
+  expected `localpart@vhost` form. An unresolvable target MUST NOT be hashed into
+  a synthesized ("phantom") channel and reported delivered with a success id;
+  silently mis-routing a directed message is the exact failure class this
+  contract closes.
+- Addressing MUST NOT *guess* the vhost. The vhost is taken from the address
+  itself and MUST NOT be derived by a presence lookup at send time — that
+  derivation is the ambiguity that produced the mis-routing. Rule: **fall back on
+  failure, never guess at addressing time.**
+- The mixed-fleet journal fallback (troupe#5) is preserved, but its trigger
+  changes accordingly: it fires on **send failure** (recipient account absent,
+  server unreachable, transport error), not on an addressing-time resolution
+  miss, degrading that one send to the journal channel keyed by the localpart
+  (= session key).
+- **Cross-host addressing** is simply a fully-qualified JID whose vhost is a
+  remote host's XMPP domain, federated by the backend (server-to-server). The
+  transport performs no auto-discovery of a remote session: the presence index
+  (RFC-0013 §3.3) is discovery-only and host-local, and a caller reaches a
+  cross-host session by supplying its explicit FQ JID. This realizes the
+  cross-host extension previously deferred (clown#119; see Security
+  Considerations).
+- The discovery half MUST be paved: the recipient listing (`chat_list`) MUST
+  surface each session's fully-qualified JID — it holds the session key and, via
+  `presence.vhost`, the host domain — so a caller copies a ready address rather
+  than assembling one. Strict addressing without a surfaced address is caller
+  friction, not safety.
+
+The normative implementation of this contract on the messaging tool surface is
+troupe's (`troupe mcp`; RFC-0015 §4/§6, troupe#15); this section is the
+addressing-ownership half, and the two MUST NOT drift.
+
 ### 2. Job, Channel, and Journal Model (by reference)
 
 clown owns the following components; their normative detail lives in the cited
@@ -194,8 +234,13 @@ driver's messages, and messages intended for the worker are dropped. The
 mitigation is env hygiene at the orchestrator (spinclass#169) plus clown's
 divergence warning (clown#135); it MUST NOT be "fixed" by inverting the §1
 precedence, which would break legitimate cross-channel targeting. Extending the
-channel across host boundaries would require an actual peer-authentication model
-and is out of scope (clown#119).
+channel across host boundaries was originally deferred as requiring an actual
+peer-authentication model (clown#119); the XMPP-native transport now realizes it
+— per-session minted XMPP accounts provide account-based peer authentication and
+Prosody server-to-server federation carries cross-host delivery, addressed
+strictly by fully-qualified JID (§1). Cross-host addressing is therefore in scope
+via that transport and remains explicit: the transport performs no
+auto-discovery, so a leaked or guessed address cannot silently cross hosts.
 
 **`whoami` disclosure.** `whoami` discloses only the calling session's own
 resolved key/channel — no cross-session disclosure beyond what the addressing
@@ -248,4 +293,14 @@ is a consumer-side change requiring no modification to the component RFCs.
   (`docs/features/0013-job-wakeup-channel.md`).
 - clown#132, clown#135, clown#136 — open seam gaps (§5).
 - spinclass#169 — orchestrator spawn-env scrub (the load-bearing divergence fix).
-- clown#119 — cross-host channel exploration (out of scope here).
+- clown#119 — cross-host channel exploration (realized by the XMPP-native
+  transport; see §1 XMPP-native transport addressing and Security Considerations).
+- RFC-0013 — Clownfile, per-instance identity, and clown-owned chat: the presence
+  index (§3.3, discovery-only) and chat construct the §1 JID addressing rides on.
+- RFC-0015 — ringmaster/troupe platform binaries: the `troupe mcp` messaging tool
+  surface (§4 transport addressing, §6 entrypoints) that MUST conform to the §1
+  addressing contract.
+- RFC-0016 — slidge-clown XMPP gateway: the XMPP backend context for the
+  transport addressing in §1.
+- troupe#15 — the strict FQ-JID addressing-contract implementation on the troupe
+  tool surface.

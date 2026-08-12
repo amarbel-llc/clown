@@ -177,6 +177,15 @@ across that transition:
 - A message MUST be addressable by a logical recipient identifier (a session
   key or group id today; a JID or MUC address under XMPP) resolved by the
   backend, not by a caller-supplied storage location.
+- Under the XMPP-native backend, that recipient identifier MUST be a
+  **fully-qualified JID**, and the surface MUST reject a non-JID target with a
+  hard, actionable error rather than silently mis-routing it into a synthesized
+  channel; the vhost is taken from the address, never guessed by a presence
+  lookup. This addressing contract — strict FQ-JID-only, fail-hard, presence
+  discovery-only, cross-host = a remote vhost in the address — is specified
+  normatively in **clown RFC-0012 §1 (XMPP-native transport addressing)**, and
+  the `troupe mcp` surface (§6) MUST conform to it. `chat_list` MUST surface each
+  session's fully-qualified JID as the addressable form (troupe#15).
 - The subject/body message model (§3) is the transport-abstract unit and MUST
   be preserved across backends: the summary maps to a lightweight/notification
   payload and the body to the full message payload, whatever the transport.
