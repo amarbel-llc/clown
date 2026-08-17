@@ -123,6 +123,22 @@ func TestResolveClownNameInnerProcessFallsBackWhenNoInheritedName(t *testing.T) 
 	}
 }
 
+// TestResolveClownNameRejectsDottedInheritedName covers clown#217: a
+// user-set CLOWN_NAME containing '.' (reserved as the fleet room-JID
+// component separator) must not be trusted even in the inner-process reuse
+// path — resolveClownName rejects it and falls back to a fresh, dot-free
+// Claim() rather than propagating the dot into presence and room JIDs.
+func TestResolveClownNameRejectsDottedInheritedName(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	got := resolveClownName("pinned-attach-id", "circus.clear-walnut")
+	if got == "circus.clear-walnut" {
+		t.Fatal("resolveClownName returned the dotted inherited name; want it rejected")
+	}
+	if strings.Contains(got, ".") {
+		t.Fatalf("resolveClownName = %q, want a dot-free fallback name", got)
+	}
+}
+
 func TestApplyClownfileProfile(t *testing.T) {
 	t.Run("provider applied when not explicit, then marked explicit", func(t *testing.T) {
 		f := parsedFlags{provider: "claude"}

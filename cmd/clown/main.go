@@ -236,9 +236,18 @@ func resolveSessionIdentity() sessionIdentity {
 // un-wrapped / outer case) or inheritedName is empty (defensive: an
 // [attach]-inner process that somehow did not inherit CLOWN_NAME, e.g. a
 // future caller that scrubs env across the re-exec).
+//
+// A dotted inheritedName is also rejected (clown#217: '.' is reserved as the
+// fleet room-JID component separator) and treated as absent — the run falls
+// through to a fresh, dot-free Claim() with a note on stderr, rather than
+// propagating the dot into presence and room JIDs.
 func resolveClownName(attachedID, inheritedName string) string {
 	if attachedID != "" && inheritedName != "" {
-		return inheritedName
+		if err := clownname.Validate(inheritedName); err != nil {
+			fmt.Fprintf(os.Stderr, "clown: ignoring inherited CLOWN_NAME: %v; allocating a fresh name\n", err)
+		} else {
+			return inheritedName
+		}
 	}
 	return clownname.Claim()
 }

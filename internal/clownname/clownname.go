@@ -11,12 +11,18 @@
 // flock on a single well-known lockfile; once chosen, the name is persisted
 // by the existing presence mechanism (CLOWN_NAME env -> jobwake.Presence.
 // ClownName, clown#179), not by this package.
+//
+// Clown names must never contain '.', which the fleet reserves as the
+// separator between decoration components (repo/worktree/clown) in MUC
+// room-JID localparts (clown#217). The Pool is dot-free by construction and
+// Validate guards any externally-supplied name.
 package clownname
 
 import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Pool is the curated list of famous clown names, tried in this order. It is
@@ -63,6 +69,21 @@ func Allocate(liveNames map[string]bool) string {
 			return candidate
 		}
 	}
+}
+
+// Validate reports an error when name is not a legal clown name. A clown name
+// must not contain '.', which the fleet reserves as the separator between the
+// decoration components (repo/worktree/clown) encoded in a MUC room-JID
+// localpart — e.g. "circus.clear-walnut@rooms.xmpp.<zone>". '/' being illegal
+// in XMPP localparts (RFC 7622), the dot is the chosen encoding, so a dotted
+// clown name would make room-JID parsing ambiguous (clown#217). The generated
+// Pool names never contain a dot (guarded by TestPoolNamesContainNoDot); this
+// guards the externally-supplied path — a user- or env-set CLOWN_NAME.
+func Validate(name string) error {
+	if strings.Contains(name, ".") {
+		return fmt.Errorf("invalid clown name %q: must not contain '.' (reserved as the fleet room-JID component separator, clown#217)", name)
+	}
+	return nil
 }
 
 // lockPath resolves the allocator's flock file: $XDG_STATE_HOME/clown/names.lock,

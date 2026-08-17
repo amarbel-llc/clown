@@ -1,6 +1,9 @@
 package clownname
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestAllocatePicksFirstFreeBaseName(t *testing.T) {
 	live := map[string]bool{Pool[0]: true}
@@ -58,5 +61,31 @@ func TestAllocateGenerationNamesAreDisjunctFromBase(t *testing.T) {
 func TestPoolIsNonEmpty(t *testing.T) {
 	if len(Pool) == 0 {
 		t.Fatal("Pool must not be empty — Allocate has no fallback for an empty pool beyond a degenerate clown-1")
+	}
+}
+
+// TestPoolNamesContainNoDot guards clown#217 at the generator: '.' is reserved
+// as the fleet room-JID component separator, so no generated name may carry
+// one. The suffix path (Allocate's "%s-%d") can only append a hyphen+digits,
+// so keeping every Pool entry dot-free keeps every generated name dot-free.
+func TestPoolNamesContainNoDot(t *testing.T) {
+	for _, name := range Pool {
+		if strings.Contains(name, ".") {
+			t.Errorf("Pool entry %q contains '.', reserved as the fleet room-JID component separator (clown#217)", name)
+		}
+	}
+}
+
+func TestValidateRejectsDottedName(t *testing.T) {
+	if err := Validate("circus.clear-walnut"); err == nil {
+		t.Fatal("Validate() = nil for a dotted name, want an error naming the reservation")
+	}
+}
+
+func TestValidateAcceptsPoolAndGenerationNames(t *testing.T) {
+	for _, name := range append(append([]string{}, Pool...), Pool[0]+"-2") {
+		if err := Validate(name); err != nil {
+			t.Errorf("Validate(%q) = %v, want nil (a legal clown name)", name, err)
+		}
 	}
 }
