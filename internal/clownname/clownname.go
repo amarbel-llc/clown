@@ -12,6 +12,12 @@
 // by the existing presence mechanism (CLOWN_NAME env -> jobwake.Presence.
 // ClownName, clown#179), not by this package.
 //
+// Allocate/Claim mint a name for a genuinely NEW session. The caller
+// (cmd/clown) binds that name to the session lineage in a persistent journal
+// (internal/sessions, keyed by the harness session id) and consults the
+// binding first, so a restart or resume of the SAME session reuses its bound
+// name and only a new session ever reaches Claim (clown#216).
+//
 // Clown names must never contain '.', which the fleet reserves as the
 // separator between decoration components (repo/worktree/clown) in MUC
 // room-JID localparts (clown#217). The Pool is dot-free by construction and

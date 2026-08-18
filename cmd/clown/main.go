@@ -232,21 +232,42 @@ func resolveSessionIdentity() sessionIdentity {
 // title (maybeReexecMultiplexer's titleID, chosen before the re-exec) and
 // than the one this process would otherwise register as its own presence.
 //
-// Falls through to a fresh Claim() whenever attachedID is empty (the
-// un-wrapped / outer case) or inheritedName is empty (defensive: an
-// [attach]-inner process that somehow did not inherit CLOWN_NAME, e.g. a
+// When attachedID is empty (the outer / un-wrapped process), the name is
+// bound to the session lineage (clown#216): a restart or resume of the SAME
+// session must keep the name it wore, not mint a fresh one on every launch.
+// harnessSessionID is that lineage key — clown's per-session identity key
+// (identity.Key), which for claude decideClaudeSession has unified with the
+// claude --session-id, so it is stable across restart/resume and freshly
+// minted only for a genuinely new session. Before minting, consult the
+// persistent binding (sessions.NameOf, the session-names journal keyed by
+// this id): a hit reuses the previously-bound name. This is harness-agnostic
+// — any provider that carries a stable session id through identity.Key gets
+// the same persistence, and one whose id is minted fresh each launch simply
+// finds no record and mints a new name (the correct degradation, since there
+// is no stable lineage to bind to).
+//
+// Falls through to a fresh Claim() whenever no inherited name (inner) and no
+// bound name (outer) apply — including the defensive case of an
+// [attach]-inner process that somehow did not inherit CLOWN_NAME (e.g. a
 // future caller that scrubs env across the re-exec).
 //
-// A dotted inheritedName is also rejected (clown#217: '.' is reserved as the
-// fleet room-JID component separator) and treated as absent — the run falls
-// through to a fresh, dot-free Claim() with a note on stderr, rather than
-// propagating the dot into presence and room JIDs.
-func resolveClownName(attachedID, inheritedName string) string {
+// A dotted name — inherited OR bound — is rejected (clown#217: '.' is
+// reserved as the fleet room-JID component separator) and treated as absent:
+// the run falls through to a fresh, dot-free Claim() rather than propagating
+// the dot into presence and room JIDs. A rejected inheritedName is noted on
+// stderr; a rejected bound record is silently skipped (a stale journal line
+// is not something the operator did wrong this launch).
+func resolveClownName(attachedID, inheritedName, harnessSessionID string) string {
 	if attachedID != "" && inheritedName != "" {
 		if err := clownname.Validate(inheritedName); err != nil {
 			fmt.Fprintf(os.Stderr, "clown: ignoring inherited CLOWN_NAME: %v; allocating a fresh name\n", err)
 		} else {
 			return inheritedName
+		}
+	}
+	if harnessSessionID != "" {
+		if bound := sessions.NameOf(harnessSessionID); bound != "" && clownname.Validate(bound) == nil {
+			return bound
 		}
 	}
 	return clownname.Claim()
@@ -399,20 +420,6 @@ func runWithFlags(flags parsedFlags) int {
 	}
 	if desc := clownfile.ResolveEnv(cf.Attach.Description); desc != "" {
 		_ = os.Setenv("CLOWN_GROUP_DESCRIPTION", desc)
-	}
-
-	// clown#169: claim a human-ergonomic clown name (Bozo, Krusty, ...) for
-	// this session, exported the same way as CLOWN_GROUP_DESCRIPTION above so
-	// the presence-registration path (jobwake.RegisterPresenceKey, below)
-	// picks it up with no further threading. The allocator
-	// (internal/clownname) is entirely clown-owned and best-effort: a
-	// locking or presence-read failure still returns a name (see Claim's
-	// doc comment), so this can never fail the launch. See
-	// resolveClownName's doc comment for the --naked and [attach]-inner-
-	// process skip conditions.
-	if !flags.naked {
-		flags.clownName = resolveClownName(attachedID, os.Getenv("CLOWN_NAME"))
-		_ = os.Setenv("CLOWN_NAME", flags.clownName)
 	}
 
 	// clownfile [messaging] (troupe RFC-0001 §1/§8): resolve the XMPP transport
@@ -580,6 +587,24 @@ func runWithFlags(flags parsedFlags) int {
 		flags.forwarded, flags.identity.Key, flags.resumeHintID = decideClaudeSession(flags.forwarded, flags.identity.Key)
 	}
 
+	// clown#169/#216: resolve this session's human-ergonomic clown name and
+	// export it as CLOWN_NAME, the same way as CLOWN_GROUP_DESCRIPTION above so
+	// the presence-registration path (jobwake.RegisterPresenceKey, below) and
+	// the OSC title bake (maybeReexecMultiplexer, below) pick it up with no
+	// further threading. Placed HERE, after decideClaudeSession, so the name
+	// binds to the FINAL harness session id (identity.Key, unified with the
+	// claude --session-id) — a restart/resume of the same session then reuses
+	// its previously-bound name instead of minting a fresh one (clown#216).
+	// The allocator (internal/clownname) is entirely clown-owned and
+	// best-effort: a locking or presence-read failure still returns a name
+	// (see Claim's doc comment), so this can never fail the launch. Skipped
+	// for --naked (no name, no monitor to hand off to). See resolveClownName's
+	// doc comment for the [attach]-inner-process reuse and binding conditions.
+	if !flags.naked {
+		flags.clownName = resolveClownName(attachedID, os.Getenv("CLOWN_NAME"), flags.identity.Key)
+		_ = os.Setenv("CLOWN_NAME", flags.clownName)
+	}
+
 	// clownfile [attach] (RFC-0013 §1.3): wrap clown in the configured
 	// multiplexer on boot, after the per-instance id is resolved so {id} is
 	// available. No-op when already attached, disabled, or non-interactive; on a
@@ -632,17 +657,30 @@ func runWithFlags(flags parsedFlags) int {
 		mintSessionXMPPCredential(flags.identity.Key)
 	}
 
-	// clown#192 step 3: record this conversation's clown-name in the
-	// session-names sidecar so a DEAD conversation can later be resumed as
-	// `clown resume repo/worktree/<name>`. This point runs exactly once per
-	// proceeding process — decideClaudeSession has fixed the claude session
-	// id (resumeHintID; empty for --print/--continue, where the id is
-	// unknown or the run is not resumable) and any [attach] re-exec has
-	// already decided which process carries on. Best-effort like the
-	// presence registration above: a miss only degrades name-based resume
-	// for this one conversation.
-	if flags.provider == "claude" && !flags.naked && flags.resumeHintID != "" && flags.clownName != "" {
-		_ = sessions.RecordSessionName(flags.resumeHintID, flags.clownName, flags.groupID)
+	// clown#216 + clown#192 step 3: bind this session's clown-name to its
+	// harness session lineage (identity.Key) so a restart/resume of the SAME
+	// session reuses the name it wore (resolveClownName above reads this
+	// binding), and record it in the session-names sidecar so a DEAD
+	// conversation can later be resumed as `clown resume repo/worktree/<name>`.
+	// identity.Key is the lineage key for every provider — for claude,
+	// decideClaudeSession has unified it with the claude --session-id — so this
+	// is harness-agnostic: a provider carrying a stable session id gets
+	// persistence, one minting a fresh id each launch simply records a new
+	// binding nothing later looks up. This point runs exactly once per
+	// proceeding process (any [attach] re-exec has already decided which
+	// process carries on). Best-effort like the presence registration above: a
+	// miss only degrades name persistence / name-based resume for this session.
+	//
+	// For claude, ALSO record under the claude conversation id when it differs
+	// from identity.Key (the non-UUID operator-key edge, where decideClaudeSession
+	// keeps the operator key as the channel but mints a separate --session-id),
+	// so `clown resume repo/worktree/<name>` still resolves the dead
+	// conversation by the id claude actually persisted it under.
+	if !flags.naked && flags.clownName != "" {
+		_ = sessions.RecordSessionName(flags.identity.Key, flags.clownName, flags.groupID)
+		if flags.provider == "claude" && flags.resumeHintID != "" && flags.resumeHintID != flags.identity.Key {
+			_ = sessions.RecordSessionName(flags.resumeHintID, flags.clownName, flags.groupID)
+		}
 	}
 
 	if flags.naked {

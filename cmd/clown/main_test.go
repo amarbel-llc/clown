@@ -16,6 +16,7 @@ import (
 	"code.linenisgreat.com/clown/internal/juggler"
 	"code.linenisgreat.com/clown/internal/profile"
 	"code.linenisgreat.com/clown/internal/promptwalk"
+	"code.linenisgreat.com/clown/internal/sessions"
 	"code.linenisgreat.com/clown/internal/tent"
 )
 
@@ -93,7 +94,7 @@ func TestSessionIdentityEnvMapOmitsEmpty(t *testing.T) {
 // title (baked from the outer's claim) from the presence record this process
 // goes on to register.
 func TestResolveClownNameInnerProcessReusesInheritedName(t *testing.T) {
-	if got := resolveClownName("pinned-attach-id", "krusty"); got != "krusty" {
+	if got := resolveClownName("pinned-attach-id", "krusty", ""); got != "krusty" {
 		t.Fatalf("resolveClownName = %q, want the inherited name reused, not a fresh Claim()", got)
 	}
 }
@@ -105,7 +106,7 @@ func TestResolveClownNameInnerProcessReusesInheritedName(t *testing.T) {
 // live presence and deterministically returns the pool's first name.
 func TestResolveClownNameOuterProcessClaims(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	got := resolveClownName("", "stale-inherited-value")
+	got := resolveClownName("", "stale-inherited-value", "")
 	if got == "" || got == "stale-inherited-value" {
 		t.Fatalf("resolveClownName = %q, want a fresh Claim() result, not the inherited value", got)
 	}
@@ -117,7 +118,7 @@ func TestResolveClownNameOuterProcessClaims(t *testing.T) {
 // silently returning "".
 func TestResolveClownNameInnerProcessFallsBackWhenNoInheritedName(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	got := resolveClownName("pinned-attach-id", "")
+	got := resolveClownName("pinned-attach-id", "", "")
 	if got == "" {
 		t.Fatal("resolveClownName = \"\", want a fresh Claim() fallback")
 	}
@@ -130,12 +131,50 @@ func TestResolveClownNameInnerProcessFallsBackWhenNoInheritedName(t *testing.T) 
 // Claim() rather than propagating the dot into presence and room JIDs.
 func TestResolveClownNameRejectsDottedInheritedName(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	got := resolveClownName("pinned-attach-id", "circus.clear-walnut")
+	got := resolveClownName("pinned-attach-id", "circus.clear-walnut", "")
 	if got == "circus.clear-walnut" {
 		t.Fatal("resolveClownName returned the dotted inherited name; want it rejected")
 	}
 	if strings.Contains(got, ".") {
 		t.Fatalf("resolveClownName = %q, want a dot-free fallback name", got)
+	}
+}
+
+// TestResolveClownNameOuterProcessReusesBoundName covers clown#216: an outer
+// process (attachedID == "") whose harness session id already has a recorded
+// clown-name in the session-names journal reuses that bound name instead of
+// minting a fresh one — this is what keeps a restart/resume of the same
+// session on its original name. The binding is keyed by the harness session
+// id (identity.Key), so recording it under that id and passing the same id is
+// the whole mechanism.
+func TestResolveClownNameOuterProcessReusesBoundName(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	const sessionID = "11111111-2222-4333-8444-555555555555"
+	if err := sessions.RecordSessionName(sessionID, "bozo", "repo/wt"); err != nil {
+		t.Fatal(err)
+	}
+	if got := resolveClownName("", "", sessionID); got != "bozo" {
+		t.Fatalf("resolveClownName = %q, want the bound name %q reused across restart", got, "bozo")
+	}
+}
+
+// TestResolveClownNameSkipsDottedBoundRecord covers the clown#217 guard on the
+// clown#216 path: a stale journal record whose name contains '.' (reserved as
+// the fleet room-JID component separator) must not be reused — resolveClownName
+// treats it as absent and falls through to a fresh, dot-free Claim() rather
+// than resurrecting an illegal name into presence and room JIDs.
+func TestResolveClownNameSkipsDottedBoundRecord(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	const sessionID = "99999999-2222-4333-8444-555555555555"
+	if err := sessions.RecordSessionName(sessionID, "circus.walnut", ""); err != nil {
+		t.Fatal(err)
+	}
+	got := resolveClownName("", "", sessionID)
+	if got == "circus.walnut" {
+		t.Fatal("resolveClownName reused a dotted bound name; want it skipped")
+	}
+	if got == "" || strings.Contains(got, ".") {
+		t.Fatalf("resolveClownName = %q, want a fresh dot-free Claim() fallback", got)
 	}
 }
 
