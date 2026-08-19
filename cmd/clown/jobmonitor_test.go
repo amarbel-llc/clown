@@ -406,6 +406,95 @@ func TestJobMonitorPluginDirNoHookWhenHookAllowUnset(t *testing.T) {
 	}
 }
 
+// The session output tee (troupe#21): on an xmpp-native session with a minted
+// credential and both binaries baked in, the plugin's hooks.json gains a Stop
+// hook running clown-hook-tee with the scoped CLOWN_SESSION_ID env prefix (the
+// muc-send child must resolve the session's OWN nick for self-echo
+// suppression) and the --troupe binary path.
+func TestJobMonitorPluginDirIncludesTeeHookWhenEligible(t *testing.T) {
+	t.Setenv("CLOWN_DISABLE_JOB_WAKEUP", "")
+	t.Setenv("TROUPE_TRANSPORT", "xmpp-native")
+	t.Setenv("TROUPE_XMPP_PASSWORD_FILE", "/run/troupe/accounts/sess-1.pass")
+	origTee, origTroupe, origAllow := buildcfg.HookTeePath, buildcfg.TroupePath, buildcfg.HookAllowPath
+	buildcfg.HookTeePath = "/nix/store/x/bin/clown-hook-tee"
+	buildcfg.TroupePath = "/nix/store/x/bin/troupe"
+	buildcfg.HookAllowPath = "" // isolate: hooks.json must exist for the tee alone
+	t.Cleanup(func() {
+		buildcfg.HookTeePath, buildcfg.TroupePath, buildcfg.HookAllowPath = origTee, origTroupe, origAllow
+	})
+
+	dir, err := synthJobMonitorPluginDir(testStagingRoot(t), "sess-key-tee")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "hooks", "hooks.json"))
+	if err != nil {
+		t.Fatalf("expected hooks/hooks.json for the tee hook: %v", err)
+	}
+	var cfg struct {
+		Hooks struct {
+			Stop []struct {
+				Hooks []struct {
+					Type    string `json:"type"`
+					Command string `json:"command"`
+				} `json:"hooks"`
+			} `json:"Stop"`
+		} `json:"hooks"`
+	}
+	if err := json.Unmarshal(b, &cfg); err != nil {
+		t.Fatalf("hooks.json invalid: %v\n%s", err, b)
+	}
+	if len(cfg.Hooks.Stop) != 1 || len(cfg.Hooks.Stop[0].Hooks) != 1 {
+		t.Fatalf("want exactly one Stop command hook, got %s", b)
+	}
+	cmd := cfg.Hooks.Stop[0].Hooks[0].Command
+	if !strings.HasPrefix(cmd, "env CLOWN_SESSION_ID=sess-key-tee ") {
+		t.Fatalf("tee command = %q, want the scoped CLOWN_SESSION_ID prefix (own-nick resolution)", cmd)
+	}
+	if !strings.Contains(cmd, "/nix/store/x/bin/clown-hook-tee --troupe /nix/store/x/bin/troupe") {
+		t.Fatalf("tee command = %q, want the baked hook path with --troupe", cmd)
+	}
+}
+
+// The tee hook registers only when the whole gate holds: both baked binary
+// paths, the xmpp-native transport, and the minted credential. Any miss yields
+// no Stop hook (degrade to no tee, mirroring the troupe-receive monitor gate).
+func TestTeeHookCommandGating(t *testing.T) {
+	origTee, origTroupe := buildcfg.HookTeePath, buildcfg.TroupePath
+	t.Cleanup(func() { buildcfg.HookTeePath, buildcfg.TroupePath = origTee, origTroupe })
+
+	set := func(tee, troupe, transport, passFile string) {
+		buildcfg.HookTeePath, buildcfg.TroupePath = tee, troupe
+		t.Setenv("TROUPE_TRANSPORT", transport)
+		t.Setenv("TROUPE_XMPP_PASSWORD_FILE", passFile)
+	}
+
+	set("/x/tee", "/x/troupe", "xmpp-native", "/x/pass")
+	if cmd := teeHookCommand("k-1"); cmd == "" {
+		t.Fatal("full gate must produce a tee command")
+	}
+	// An empty key omits the env prefix rather than baking an empty value.
+	if cmd := teeHookCommand(""); cmd != "/x/tee --troupe /x/troupe" {
+		t.Fatalf("empty-key tee command = %q, want the bare command", cmd)
+	}
+	set("", "/x/troupe", "xmpp-native", "/x/pass")
+	if cmd := teeHookCommand("k-1"); cmd != "" {
+		t.Fatalf("dev build (no HookTeePath) must not register the tee, got %q", cmd)
+	}
+	set("/x/tee", "", "xmpp-native", "/x/pass")
+	if cmd := teeHookCommand("k-1"); cmd != "" {
+		t.Fatalf("dev build (no TroupePath) must not register the tee, got %q", cmd)
+	}
+	set("/x/tee", "/x/troupe", "local", "/x/pass")
+	if cmd := teeHookCommand("k-1"); cmd != "" {
+		t.Fatalf("non-xmpp-native transport must not register the tee, got %q", cmd)
+	}
+	set("/x/tee", "/x/troupe", "xmpp-native", "")
+	if cmd := teeHookCommand("k-1"); cmd != "" {
+		t.Fatalf("mint miss (no credential) must not register the tee, got %q", cmd)
+	}
+}
+
 // In dev builds (no bridge path) the MCP server is omitted so host discovery's
 // Desugar does not error and abort the launch; the monitor still ships.
 func TestJobMonitorPluginDirNoMCPWhenBridgeUnset(t *testing.T) {

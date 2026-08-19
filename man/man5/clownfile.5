@@ -378,6 +378,22 @@ DMs are native 1:1 and always wake regardless of any room policy.
 .El
 .El
 .Pp
+Under
+.Sy transport = "xmpp-native"
+with a minted credential, clown also registers a session output tee
+(troupe#21): a
+.Sy Stop
+hook that, at the end of each turn, posts the turn's user-visible assistant
+reply text verbatim into the session's per-worktree MUC channel
+.Pq Ql <repo>.<worktree>@<rooms-domain> ,
+derived from the session identity exactly as troupe's derived-rooms join
+(troupe#24), via
+.Ic troupe muc send .
+The post goes out under the session's own nick, so the receiver's self-echo
+suppression keeps the tee from waking the session that produced it.
+It is best-effort and detached: a failure or an unreachable server drops the
+post rather than disturbing the session.
+.Pp
 When
 .Sy transport = "xmpp"
 and a required coordinate is missing, clown errors at launch

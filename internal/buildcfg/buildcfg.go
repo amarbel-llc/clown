@@ -88,6 +88,15 @@ var (
 	// dev builds (go build, go run); the hook is then omitted and the tools
 	// prompt as before. Mirrors how spinclass/moxy auto-allow their own tools.
 	HookAllowPath string
+	// HookTeePath is the absolute path to the clown-hook-tee binary in its own
+	// Nix store output, baked at build time. The synthesized clown-builtin-jobs
+	// plugin wires it as a Stop hook (hooks/hooks.json, discovered via
+	// --plugin-dir) when the session runs the xmpp-native transport with a
+	// minted credential: the session output tee (troupe#21), posting each
+	// turn's user-visible assistant reply text into the session's per-worktree
+	// MUC channel via `troupe muc send`. Empty in dev builds (go build,
+	// go run); the hook is then omitted and no tee is registered.
+	HookTeePath string
 	// McpCollapseHookPath is the absolute path to the clown-hook-collapse binary
 	// in its own Nix store output, baked at build time. Added for the mcp-collapse
 	// permission-mux POC (throwaway; stage 1 mechanics): the synthesized aggregator

@@ -303,38 +303,53 @@ func synthJobMonitorPluginDir(root *staging.Root, sessionKey string) (string, er
 		}
 	}
 
-	// When the clown-hook-allow binary path is baked in (nix builds), ship a
-	// PreToolUse hook THROUGH THE PLUGIN so the job MCP tools auto-allow with no
-	// permission prompt (clown#130). This is the live mechanism: claude loads a
-	// plugin's hooks/hooks.json via --plugin-dir in every session — unlike
-	// managed-settings, which it does not read outside --tent (clown#133). The
-	// `.*` matcher routes every tool through clown-hook-allow, which returns
-	// "allow" for the clown-builtin-jobs tool prefix and /nix/store reads and
-	// "defer" otherwise, leaving all other permission decisions untouched.
-	// Mirrors how spinclass and moxy auto-allow their own tools. Skipped in dev
-	// builds (empty HookAllowPath), where the tools prompt as before.
+	// The plugin's hooks/hooks.json — the live --plugin-dir hook mechanism
+	// (claude loads it in every session, unlike managed-settings, which it does
+	// not read outside --tent; clown#133) — carries up to two event handlers:
+	//
+	// PreToolUse (nix builds; empty HookAllowPath skips): clown-hook-allow, so
+	// the job MCP tools auto-allow with no permission prompt (clown#130). The
+	// `.*` matcher routes every tool through it; it returns "allow" for the
+	// clown-builtin-jobs tool prefix and /nix/store reads and "defer" otherwise,
+	// leaving all other permission decisions untouched. Mirrors how spinclass
+	// and moxy auto-allow their own tools.
+	//
+	// Stop (xmpp-native sessions with a minted credential): clown-hook-tee, the
+	// session output tee (troupe#21) — see teeHookCommand.
+	hookEvents := map[string]any{}
 	if buildcfg.HookAllowPath != "" {
-		hooksDir := filepath.Join(dir, "hooks")
-		if err := os.MkdirAll(hooksDir, 0o700); err != nil {
-			return "", err
-		}
-		hooksCfg := map[string]any{
-			"hooks": map[string]any{
-				"PreToolUse": []any{
+		hookEvents["PreToolUse"] = []any{
+			map[string]any{
+				"matcher": ".*",
+				"hooks": []any{
 					map[string]any{
-						"matcher": ".*",
-						"hooks": []any{
-							map[string]any{
-								"type":    "command",
-								"command": buildcfg.HookAllowPath,
-								"timeout": 5,
-							},
-						},
+						"type":    "command",
+						"command": buildcfg.HookAllowPath,
+						"timeout": 5,
 					},
 				},
 			},
 		}
-		hb, err := json.MarshalIndent(hooksCfg, "", "  ")
+	}
+	if teeCmd := teeHookCommand(sessionKey); teeCmd != "" {
+		hookEvents["Stop"] = []any{
+			map[string]any{
+				"hooks": []any{
+					map[string]any{
+						"type":    "command",
+						"command": teeCmd,
+						"timeout": 15,
+					},
+				},
+			},
+		}
+	}
+	if len(hookEvents) > 0 {
+		hooksDir := filepath.Join(dir, "hooks")
+		if err := os.MkdirAll(hooksDir, 0o700); err != nil {
+			return "", err
+		}
+		hb, err := json.MarshalIndent(map[string]any{"hooks": hookEvents}, "", "  ")
 		if err != nil {
 			return "", err
 		}
@@ -343,4 +358,33 @@ func synthJobMonitorPluginDir(root *staging.Root, sessionKey string) (string, er
 		}
 	}
 	return dir, nil
+}
+
+// teeHookCommand returns the Stop-hook command for the session output tee
+// (troupe#21), or "" when the tee does not apply. clown-hook-tee posts each
+// turn's user-visible assistant reply text into the session's per-worktree MUC
+// channel via `troupe muc send`, so the gate mirrors the troupe-receive
+// monitor's exactly: both binaries baked in (nix builds), the xmpp-native
+// transport selected, and the minted credential present (a mint miss degrades
+// to no tee, like it degrades to no receiver).
+//
+// The command threads the per-instance key as the same SCOPED
+// `env CLOWN_SESSION_ID=<key>` prefix troupeMonitorCommand uses (clown#136 —
+// clown does not export the key ambiently): the muc-send child inherits it and
+// resolves the session's OWN nick, which is what keeps the receiver's SelfNick
+// self-echo suppression intact — the tee's posts must never wake the session
+// that made them. --troupe passes the burned-in troupe binary path since the
+// hook binary lives in a different store output and cannot resolve it itself.
+func teeHookCommand(key string) string {
+	if buildcfg.HookTeePath == "" || buildcfg.TroupePath == "" {
+		return ""
+	}
+	if os.Getenv("TROUPE_TRANSPORT") != "xmpp-native" || os.Getenv("TROUPE_XMPP_PASSWORD_FILE") == "" {
+		return ""
+	}
+	cmd := buildcfg.HookTeePath + " --troupe " + buildcfg.TroupePath
+	if key != "" {
+		cmd = "env CLOWN_SESSION_ID=" + key + " " + cmd
+	}
+	return cmd
 }

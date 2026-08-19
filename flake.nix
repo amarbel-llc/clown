@@ -514,6 +514,25 @@
           ];
         };
 
+        # Stop hook implementing the session output tee (troupe#21): posts each
+        # turn's user-visible assistant reply text into the session's
+        # per-worktree MUC channel via `troupe muc send`. Its path is baked in
+        # via buildcfg.HookTeePath and shipped THROUGH THE PLUGIN by
+        # synthJobMonitorPluginDir, same live --plugin-dir hook mechanism as
+        # clown-hook-allow; registration is gated at launch on the xmpp-native
+        # transport with a minted credential.
+        clown-hook-tee = buildGoApplication {
+          pname = "clown-hook-tee";
+          version = clownVersion;
+          src = goSrc;
+          subPackages = [ "cmd/clown-hook-tee" ];
+          modules = ./gomod2nix.toml;
+          ldflags = [
+            "-s"
+            "-w"
+          ];
+        };
+
         # Added for mcp-collapse permission-mux POC (throwaway; stage 1
         # mechanics). PreToolUse hook that demuxes the collapsed mcp_call tool by
         # tool_id back to a per-upstream-tool allow/ask/deny decision. Its path is
@@ -752,6 +771,8 @@
                 "${clown-mcp-collapse}/bin/clown-mcp-collapse";
               "code.linenisgreat.com/clown/internal/buildcfg.HookAllowPath" =
                 "${clown-hook-allow}/bin/clown-hook-allow";
+              "code.linenisgreat.com/clown/internal/buildcfg.HookTeePath" =
+                "${clown-hook-tee}/bin/clown-hook-tee";
               # Added for mcp-collapse permission-mux POC
               "code.linenisgreat.com/clown/internal/buildcfg.McpCollapseHookPath" =
                 "${clown-hook-collapse}/bin/clown-hook-collapse";
