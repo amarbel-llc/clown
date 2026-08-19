@@ -40,6 +40,22 @@ var (
 	// skipped along with the stdio bridge.
 	RingmasterPath string
 	TroupePath     string
+	// RingmasterVersion/RingmasterRev and TroupeVersion/TroupeRev are the
+	// version and git rev of the ringmaster and troupe binaries embedded at
+	// RingmasterPath/TroupePath, baked at build time from the resolved flake
+	// packages/inputs (eng-versioning(7), mirroring ClaudeCodeVersion/Rev and
+	// CodexVersion/Rev). Because clown's troupe/ringmaster inputs FOLLOW eng's
+	// when clown is built through the eng superflake, these reflect the ACTUAL
+	// embedded binary — the eng-follows latest — not clown's standalone flake
+	// pin, which is the whole point of surfacing them: `clown version` shows
+	// ringmaster/troupe rows so the operator can see which job-platform build
+	// the monitor and MCP servers are actually running. Empty in dev builds
+	// (go build, go run), where the rows render bare (name only), exactly like
+	// claude-code/codex do.
+	RingmasterVersion string
+	RingmasterRev     string
+	TroupeVersion     string
+	TroupeRev         string
 	// StdioBridgePath is the absolute path to the clown-stdio-bridge
 	// binary in its own Nix store output, baked at build time. Used by
 	// pluginhost.Desugar to rewrite stdioServers entries into httpServers

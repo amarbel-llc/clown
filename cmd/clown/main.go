@@ -2504,6 +2504,13 @@ func buildVersionRows() []versionRow {
 	rest := []versionRow{
 		{"claude-code", buildcfg.ClaudeCodeVersion, buildcfg.ClaudeCodeRev},
 		{"codex", buildcfg.CodexVersion, buildcfg.CodexRev},
+		// The job-platform binaries clown embeds and runs (the wake monitor as
+		// `ringmaster monitor`, the MCP servers as `ringmaster mcp` / `troupe
+		// mcp`). Under the eng superflake's follows, these are the eng-latest
+		// builds, which can be newer than clown's own flake pin — surfacing them
+		// makes "which troupe/ringmaster is actually running" self-evident.
+		{"ringmaster", buildcfg.RingmasterVersion, buildcfg.RingmasterRev},
+		{"troupe", buildcfg.TroupeVersion, buildcfg.TroupeRev},
 	}
 	if metaDir := os.Getenv("CLOWN_PLUGIN_META"); metaDir != "" {
 		if data, err := os.ReadFile(metaDir + "/version-info"); err == nil {

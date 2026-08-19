@@ -30,3 +30,22 @@ func TestBuildVersionRowsSelfFirst(t *testing.T) {
 		}
 	}
 }
+
+// TestBuildVersionRowsIncludesJobPlatform asserts the ringmaster and troupe
+// binaries clown embeds and runs (the wake monitor + the job-platform MCP
+// servers) each get their own row, so `clown version` reveals which
+// job-platform build is actually running. This session showed how easily
+// clown's own flake pin and the eng-follows actual diverge; the rows make that
+// visible.
+func TestBuildVersionRowsIncludesJobPlatform(t *testing.T) {
+	t.Setenv("CLOWN_PLUGIN_META", "")
+	got := map[string]bool{}
+	for _, r := range buildVersionRows() {
+		got[r.component] = true
+	}
+	for _, want := range []string{"ringmaster", "troupe"} {
+		if !got[want] {
+			t.Errorf("buildVersionRows missing %q row", want)
+		}
+	}
+}

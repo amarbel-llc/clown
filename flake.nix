@@ -757,6 +757,17 @@
                 "${clown-hook-collapse}/bin/clown-hook-collapse";
               "code.linenisgreat.com/clown/internal/buildcfg.RingmasterPath" = "${ringmasterPkg}/bin/ringmaster";
               "code.linenisgreat.com/clown/internal/buildcfg.TroupePath" = "${troupePkg}/bin/troupe";
+              # Version + rev of the embedded job-platform binaries, for the
+              # `clown version` ringmaster/troupe rows. Sourced from the SAME
+              # resolved packages/inputs as the *Path ldflags above, so under
+              # the eng superflake's follows they report the eng-latest build
+              # actually embedded — not clown's standalone flake pin. getVersion
+              # parses the version from the package name (ringmaster sets no
+              # `version` attr; its name still carries it).
+              "code.linenisgreat.com/clown/internal/buildcfg.RingmasterVersion" = lib.getVersion ringmasterPkg;
+              "code.linenisgreat.com/clown/internal/buildcfg.RingmasterRev" = ringmaster.rev or "dirty";
+              "code.linenisgreat.com/clown/internal/buildcfg.TroupeVersion" = lib.getVersion troupePkg;
+              "code.linenisgreat.com/clown/internal/buildcfg.TroupeRev" = troupe.rev or "dirty";
               "code.linenisgreat.com/clown/internal/buildcfg.DefaultProvider" = defaultProvider;
               "code.linenisgreat.com/clown/internal/buildcfg.DefaultProfile" = defaultProfile;
               "code.linenisgreat.com/clown/internal/buildcfg.PodmanPath" = tentPodmanPath;
