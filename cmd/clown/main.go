@@ -757,13 +757,16 @@ func runWithFlags(flags parsedFlags) int {
 	// Lead the append block with the build-identity fragment so the agent
 	// stamps version+shortSha and the originating commit into sign-offs, followed
 	// by the best-effort host-identity fragment (clown#152) so the agent knows
-	// which machine and config model it is on up front. All prompt-consuming
-	// providers read prompts.AppendFragments from this struct, so this one
-	// mutation reaches each of them.
+	// which machine and config model it is on up front, then the
+	// fully-qualified session-identity requirement (clown#222) so
+	// cross-session references never use a colliding bare clown-name. All
+	// prompt-consuming providers read prompts.AppendFragments from this
+	// struct, so this one mutation reaches each of them.
 	lead := buildIdentityFragment()
 	if host := hostIdentityFragment(); host != "" {
 		lead += "\n\n" + host
 	}
+	lead += "\n\n" + fqIdentityFragment(flags.groupID, flags.clownName)
 	prompts.AppendFragments = lead + "\n\n" + prompts.AppendFragments
 
 	switch flags.provider {
