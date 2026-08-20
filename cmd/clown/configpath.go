@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"code.linenisgreat.com/clown/internal/userpath"
 )
 
 // userConfigPath resolves the per-user config file `name` (e.g.
@@ -34,35 +36,18 @@ func userConfigPath(name string) (path string, legacy bool, err error) {
 
 // userConfigWritePath is the canonical (always-write) location for name:
 // $XDG_CONFIG_HOME/clown/<name>, ~/.config/clown/<name> when XDG is unset.
+// Thin wrapper over the shared internal/userpath ladder (clown#204); the
+// legacy ~/.config/juggler fallback stays here in userConfigPath — it is a
+// cmd/clown config-migration concern, not part of the ladder.
 func userConfigWritePath(name string) (string, error) {
-	if base := os.Getenv("XDG_CONFIG_HOME"); base != "" {
-		return filepath.Join(base, "clown", name), nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("home dir: %w", err)
-	}
-	return filepath.Join(home, ".config", "clown", name), nil
+	return userpath.ConfigPath(name)
 }
 
 // userStateWritePath is the canonical location for per-user STATE (as opposed
-// to config): $XDG_STATE_HOME/clown/<parts...>, ~/.local/state/clown/<parts...>
-// when XDG is unset. It is the state-side sibling of userConfigWritePath.
-//
-// Same ladder as internal/clownname's lockPath and internal/sessions' namesPath,
-// which predate this helper and cannot call it (they live under internal/ and
-// this is package main). Prefer this one for anything in cmd/clown so the rule
-// stops accumulating spellings.
+// to config): $XDG_STATE_HOME/clown/<parts...>. Thin wrapper over the shared
+// internal/userpath ladder (clown#204).
 func userStateWritePath(parts ...string) (string, error) {
-	base := os.Getenv("XDG_STATE_HOME")
-	if base == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("home dir: %w", err)
-		}
-		base = filepath.Join(home, ".local", "state")
-	}
-	return filepath.Join(append([]string{base, "clown"}, parts...)...), nil
+	return userpath.StatePath(parts...)
 }
 
 // legacyConfigWarned dedupes warnLegacyConfig per path — several read sites

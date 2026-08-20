@@ -26,9 +26,9 @@ package clownname
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
+
+	"code.linenisgreat.com/clown/internal/userpath"
 )
 
 // Pool is the curated list of famous clown names, tried in this order. It is
@@ -92,17 +92,9 @@ func Validate(name string) error {
 	return nil
 }
 
-// lockPath resolves the allocator's flock file: $XDG_STATE_HOME/clown/names.lock,
-// or ~/.local/state/clown/names.lock when XDG_STATE_HOME is unset — mirroring
-// cmd/clown/configpath.go's userConfigWritePath pattern but for state, not
-// config (this is throwaway coordination state, never user-edited).
+// lockPath resolves the allocator's flock file,
+// $XDG_STATE_HOME/clown/names.lock (throwaway coordination state, never
+// user-edited), via the shared userpath ladder.
 func lockPath() (string, error) {
-	if base := os.Getenv("XDG_STATE_HOME"); base != "" {
-		return filepath.Join(base, "clown", "names.lock"), nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("home dir: %w", err)
-	}
-	return filepath.Join(home, ".local", "state", "clown", "names.lock"), nil
+	return userpath.StatePath("names.lock")
 }

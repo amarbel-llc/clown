@@ -20,6 +20,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"code.linenisgreat.com/clown/internal/userpath"
 )
 
 // NameRecord is one line of the session-names sidecar.
@@ -30,19 +32,10 @@ type NameRecord struct {
 	TS        time.Time `json:"ts"`
 }
 
-// namesPath resolves $XDG_STATE_HOME/clown/session-names.jsonl, or
-// ~/.local/state/clown/session-names.jsonl when XDG_STATE_HOME is unset —
-// mirroring internal/clownname's lockPath (throwaway coordination state,
-// never user-edited).
+// namesPath resolves $XDG_STATE_HOME/clown/session-names.jsonl (throwaway
+// coordination state, never user-edited) via the shared userpath ladder.
 func namesPath() (string, error) {
-	if base := os.Getenv("XDG_STATE_HOME"); base != "" {
-		return filepath.Join(base, "clown", "session-names.jsonl"), nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".local", "state", "clown", "session-names.jsonl"), nil
+	return userpath.StatePath("session-names.jsonl")
 }
 
 // RecordSessionName appends one {session_id, name, group, ts} record.
