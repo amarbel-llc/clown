@@ -48,8 +48,12 @@
 // size by teeBodyMaxBytes.
 //
 // Wire-up: clown's synthesized clown-builtin-jobs plugin registers this binary
-// as a Stop hook (hooks/hooks.json, discovered via --plugin-dir) when the
-// session runs the xmpp-native transport with a minted credential. The command
+// as both a Stop hook and a SessionEnd hook (hooks/hooks.json, discovered via
+// --plugin-dir) when the session runs the xmpp-native transport with a minted
+// credential. SessionEnd (clown#226) flushes the tail the last Stop could not
+// see — the session's final turn has no next post for a late-flushed block to
+// ride; the cursor makes the double registration idempotent. Both events'
+// stdin payloads carry transcript_path, the only field consumed. The command
 // carries a scoped `env CLOWN_SESSION_ID=<key>` prefix (clown#136 — clown does
 // not export the key ambiently) so the muc-send child resolves the session's
 // own nick, and `--troupe <path>` (buildcfg.TroupePath) names the binary to

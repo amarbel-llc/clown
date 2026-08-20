@@ -407,14 +407,18 @@ func TestJobMonitorPluginDirNoHookWhenHookAllowUnset(t *testing.T) {
 }
 
 // The session output tee (troupe#21): on an xmpp-native session with a minted
-// credential and both binaries baked in, the plugin's hooks.json gains a Stop
-// hook running clown-hook-tee with the scoped CLOWN_SESSION_ID env prefix (the
-// muc-send child must resolve the session's OWN nick for self-echo
-// suppression) and the --troupe binary path.
+// credential and both binaries baked in, the plugin's hooks.json gains Stop
+// AND SessionEnd hooks (clown#226 — the end-of-session flush for the tail the
+// last Stop could not see) running clown-hook-tee with the scoped
+// CLOWN_SESSION_ID env prefix (the muc-send child must resolve the session's
+// OWN nick for self-echo suppression) and the --troupe binary path. The
+// SessionEnd hook budget override is exported for the provider exec, since
+// plugin-hook timeouts cannot raise the harness's 1.5s SessionEnd budget.
 func TestJobMonitorPluginDirIncludesTeeHookWhenEligible(t *testing.T) {
 	t.Setenv("CLOWN_DISABLE_JOB_WAKEUP", "")
 	t.Setenv("TROUPE_TRANSPORT", "xmpp-native")
 	t.Setenv("TROUPE_XMPP_PASSWORD_FILE", "/run/troupe/accounts/sess-1.pass")
+	t.Setenv("CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS", "")
 	origTee, origTroupe, origAllow := buildcfg.HookTeePath, buildcfg.TroupePath, buildcfg.HookAllowPath
 	buildcfg.HookTeePath = "/nix/store/x/bin/clown-hook-tee"
 	buildcfg.TroupePath = "/nix/store/x/bin/troupe"
@@ -431,28 +435,59 @@ func TestJobMonitorPluginDirIncludesTeeHookWhenEligible(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected hooks/hooks.json for the tee hook: %v", err)
 	}
+	type hookEntry []struct {
+		Hooks []struct {
+			Type    string `json:"type"`
+			Command string `json:"command"`
+		} `json:"hooks"`
+	}
 	var cfg struct {
 		Hooks struct {
-			Stop []struct {
-				Hooks []struct {
-					Type    string `json:"type"`
-					Command string `json:"command"`
-				} `json:"hooks"`
-			} `json:"Stop"`
+			Stop       hookEntry `json:"Stop"`
+			SessionEnd hookEntry `json:"SessionEnd"`
 		} `json:"hooks"`
 	}
 	if err := json.Unmarshal(b, &cfg); err != nil {
 		t.Fatalf("hooks.json invalid: %v\n%s", err, b)
 	}
-	if len(cfg.Hooks.Stop) != 1 || len(cfg.Hooks.Stop[0].Hooks) != 1 {
-		t.Fatalf("want exactly one Stop command hook, got %s", b)
+	for name, entry := range map[string]hookEntry{
+		"Stop": cfg.Hooks.Stop, "SessionEnd": cfg.Hooks.SessionEnd,
+	} {
+		if len(entry) != 1 || len(entry[0].Hooks) != 1 {
+			t.Fatalf("want exactly one %s command hook, got %s", name, b)
+		}
+		cmd := entry[0].Hooks[0].Command
+		if !strings.HasPrefix(cmd, "env CLOWN_SESSION_ID=sess-key-tee ") {
+			t.Fatalf("%s tee command = %q, want the scoped CLOWN_SESSION_ID prefix (own-nick resolution)", name, cmd)
+		}
+		if !strings.Contains(cmd, "/nix/store/x/bin/clown-hook-tee --troupe /nix/store/x/bin/troupe") {
+			t.Fatalf("%s tee command = %q, want the baked hook path with --troupe", name, cmd)
+		}
 	}
-	cmd := cfg.Hooks.Stop[0].Hooks[0].Command
-	if !strings.HasPrefix(cmd, "env CLOWN_SESSION_ID=sess-key-tee ") {
-		t.Fatalf("tee command = %q, want the scoped CLOWN_SESSION_ID prefix (own-nick resolution)", cmd)
+	if got := os.Getenv("CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS"); got != "5000" {
+		t.Fatalf("SessionEnd budget override = %q, want 5000 exported for the provider exec", got)
 	}
-	if !strings.Contains(cmd, "/nix/store/x/bin/clown-hook-tee --troupe /nix/store/x/bin/troupe") {
-		t.Fatalf("tee command = %q, want the baked hook path with --troupe", cmd)
+}
+
+// A user-set SessionEnd budget override survives the tee registration — the
+// export is only-if-unset.
+func TestTeeHookPreservesUserSessionEndBudget(t *testing.T) {
+	t.Setenv("CLOWN_DISABLE_JOB_WAKEUP", "")
+	t.Setenv("TROUPE_TRANSPORT", "xmpp-native")
+	t.Setenv("TROUPE_XMPP_PASSWORD_FILE", "/run/troupe/accounts/sess-1.pass")
+	t.Setenv("CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS", "9999")
+	origTee, origTroupe := buildcfg.HookTeePath, buildcfg.TroupePath
+	buildcfg.HookTeePath = "/nix/store/x/bin/clown-hook-tee"
+	buildcfg.TroupePath = "/nix/store/x/bin/troupe"
+	t.Cleanup(func() {
+		buildcfg.HookTeePath, buildcfg.TroupePath = origTee, origTroupe
+	})
+
+	if _, err := synthJobMonitorPluginDir(testStagingRoot(t), "sess-key-tee"); err != nil {
+		t.Fatal(err)
+	}
+	if got := os.Getenv("CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS"); got != "9999" {
+		t.Fatalf("SessionEnd budget override = %q, want the user's 9999 preserved", got)
 	}
 }
 

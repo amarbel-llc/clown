@@ -395,6 +395,12 @@ Extraction is cursor-based (clown#224): a per-transcript byte offset under
 records how far the previous post consumed, so a reply block the harness had
 not yet flushed to the transcript when the hook ran is carried by the next
 post instead of being dropped, and no post repeats text.
+The same handler also runs as a
+.Sy SessionEnd
+hook (clown#226) to flush the tail of the session's final turn, which has no
+next post to ride; clown exports
+.Ev CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS
+(only if unset) so the flush fits the harness's session-end hook budget.
 The post goes out under the session's own nick, so the receiver's self-echo
 suppression keeps the tee from waking the session that produced it.
 It is best-effort and detached: a failure or an unreachable server drops the

@@ -314,8 +314,15 @@ func synthJobMonitorPluginDir(root *staging.Root, sessionKey string) (string, er
 	// leaving all other permission decisions untouched. Mirrors how spinclass
 	// and moxy auto-allow their own tools.
 	//
-	// Stop (xmpp-native sessions with a minted credential): clown-hook-tee, the
-	// session output tee (troupe#21) — see teeHookCommand.
+	// Stop + SessionEnd (xmpp-native sessions with a minted credential):
+	// clown-hook-tee, the session output tee (troupe#21) — see teeHookCommand.
+	// SessionEnd (clown#226) flushes the tail the last Stop could not see:
+	// the final assistant message the harness flushes to the transcript only
+	// after the Stop hook already read it has no next turn to ride, so the
+	// same cursor-based extraction runs once more at session end (exit,
+	// /clear, /resume-switch). The cursor makes the double registration
+	// idempotent — whichever hook runs second sees nothing new and posts
+	// nothing.
 	hookEvents := map[string]any{}
 	if buildcfg.HookAllowPath != "" {
 		hookEvents["PreToolUse"] = []any{
@@ -332,7 +339,7 @@ func synthJobMonitorPluginDir(root *staging.Root, sessionKey string) (string, er
 		}
 	}
 	if teeCmd := teeHookCommand(sessionKey); teeCmd != "" {
-		hookEvents["Stop"] = []any{
+		teeEntry := []any{
 			map[string]any{
 				"hooks": []any{
 					map[string]any{
@@ -342,6 +349,20 @@ func synthJobMonitorPluginDir(root *staging.Root, sessionKey string) (string, er
 					},
 				},
 			},
+		}
+		hookEvents["Stop"] = teeEntry
+		hookEvents["SessionEnd"] = teeEntry
+		// SessionEnd hooks share a 1.5s default budget, and per-hook timeouts
+		// on PLUGIN-provided hooks do not raise it (unlike settings-file
+		// hooks) — too tight for the tee's bounded settle-wait (up to 2s).
+		// Claude Code documents CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS as
+		// the explicit budget override; clown execs the provider with its own
+		// env, so setting it here (only-if-unset, preserving a user override)
+		// reaches the harness the documented way.
+		if os.Getenv("CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS") == "" {
+			if err := os.Setenv("CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS", "5000"); err != nil {
+				return "", err
+			}
 		}
 	}
 	if len(hookEvents) > 0 {
@@ -360,11 +381,12 @@ func synthJobMonitorPluginDir(root *staging.Root, sessionKey string) (string, er
 	return dir, nil
 }
 
-// teeHookCommand returns the Stop-hook command for the session output tee
-// (troupe#21), or "" when the tee does not apply. clown-hook-tee posts each
-// turn's user-visible assistant reply text into the session's per-worktree MUC
-// channel via `troupe muc send`, so the gate mirrors the troupe-receive
-// monitor's exactly: both binaries baked in (nix builds), the xmpp-native
+// teeHookCommand returns the hook command for the session output tee
+// (troupe#21), registered for both Stop and SessionEnd (clown#226), or ""
+// when the tee does not apply. clown-hook-tee posts the user-visible
+// assistant reply text appended since its previous post into the session's
+// per-worktree MUC channel via `troupe muc send`, so the gate mirrors the
+// troupe-receive monitor's exactly: both binaries baked in (nix builds), the xmpp-native
 // transport selected, and the minted credential present (a mint miss degrades
 // to no tee, like it degrades to no receiver).
 //
