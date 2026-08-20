@@ -256,11 +256,9 @@ func TestResumeByKey_ChdirsIntoExistingRecordedDir(t *testing.T) {
 	}
 	writeDeadSessionFixture(t, home, "id-1", recorded, time.Now())
 
-	origCWD, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(origCWD) })
+	// Restore-only guard: resumeByKey chdirs as a side effect (asserted
+	// below), and t.Chdir registers the restoration for later tests.
+	t.Chdir(".")
 
 	var code int
 	out := captureStderr(t, func() int {

@@ -212,14 +212,7 @@ func TestMaybeReexecPrefersClownNameForTitle(t *testing.T) {
 	// the assertion below depend on ambient presence state (how many other
 	// clown sessions happen to share this cwd right now) rather than this
 	// test's own inputs (clown#186).
-	orig, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(orig) })
-	if err := os.Chdir(hostTempDir(t)); err != nil {
-		t.Fatal(err)
-	}
+	t.Chdir(hostTempDir(t))
 
 	cf := clownfile.Clownfile{Attach: clownfile.Attach{
 		Multiplexer: "zmx",
@@ -603,14 +596,7 @@ func TestGitRepoAndBranch(t *testing.T) {
 	}
 
 	// A directory with no .git anywhere above it resolves to "".
-	orig, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(orig) })
-	if err := os.Chdir(hostTempDir(t)); err != nil {
-		t.Fatal(err)
-	}
+	t.Chdir(hostTempDir(t))
 	if got := gitRepoAndBranch(); got != "" {
 		t.Errorf("gitRepoAndBranch() in a non-git dir = %q, want \"\"", got)
 	}
