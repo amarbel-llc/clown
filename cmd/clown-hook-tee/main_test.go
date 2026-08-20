@@ -88,18 +88,25 @@ func TestDeriveWorktreeRoom(t *testing.T) {
 func writeTranscript(t *testing.T, lines ...string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "transcript.jsonl")
-	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeTranscriptTo(t, path, lines...)
 	return path
 }
 
-// extractTurnText collects only the LAST turn's assistant text blocks: a
+// writeTranscriptTo (re)writes lines to path as JSONL, for tests that grow a
+// transcript across multiple run() calls.
+func writeTranscriptTo(t *testing.T, path string, lines ...string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Bootstrap mode (no cursor): only the LAST turn's assistant text posts — a
 // genuine user prompt (string content, or any block array that is not purely
 // tool_result — an image-only paste counts) resets the collection; tool_result
 // user entries, meta entries, sidechain entries, thinking and tool_use blocks
-// never contribute.
-func TestExtractTurnText(t *testing.T) {
+// never contribute. The consumed offset lands at end-of-file.
+func TestExtractSinceBootstrap(t *testing.T) {
 	path := writeTranscript(
 		t,
 		`{"type":"user","message":{"content":"first prompt"}}`,
@@ -114,7 +121,7 @@ func TestExtractTurnText(t *testing.T) {
 		`not even json`,
 		`{"type":"assistant","message":{"content":[{"type":"text","text":"final answer"}]}}`,
 	)
-	got, err := extractTurnText(path)
+	got, consumed, err := extractSince(path, 0, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,59 +129,145 @@ func TestExtractTurnText(t *testing.T) {
 	if got != want {
 		t.Fatalf("extracted text = %q, want %q", got, want)
 	}
+	if size := fileSize(t, path); consumed != size {
+		t.Fatalf("consumed = %d, want file size %d", consumed, size)
+	}
 }
 
-func TestExtractTurnTextEmptyTurn(t *testing.T) {
+// Cursor mode: every main-line assistant text block from the offset on
+// contributes and user prompts do NOT reset — the clown#224 property that lets
+// a late-flushed final message ride along with the next post.
+func TestExtractSinceCursorDoesNotResetAtPrompts(t *testing.T) {
+	first := `{"type":"user","message":{"content":"first prompt"}}`
 	path := writeTranscript(
 		t,
-		`{"type":"user","message":{"content":"earlier prompt"}}`,
-		`{"type":"assistant","message":{"content":[{"type":"text","text":"earlier reply"}]}}`,
-		`{"type":"user","message":{"content":"latest prompt"}}`,
-		`{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{}}]}}`,
+		first,
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"late-flushed final block"}]}}`,
+		`{"type":"user","message":{"content":"second prompt"}}`,
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"next turn's text"}]}}`,
 	)
-	got, err := extractTurnText(path)
+	offset := int64(len(first) + 1) // just past the first prompt line
+	got, consumed, err := extractSince(path, offset, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != "" {
-		t.Fatalf("turn with no text blocks must extract empty, got %q", got)
+	want := "late-flushed final block\n\nnext turn's text"
+	if got != want {
+		t.Fatalf("extracted text = %q, want %q", got, want)
+	}
+	if size := fileSize(t, path); consumed != size {
+		t.Fatalf("consumed = %d, want file size %d", consumed, size)
 	}
 }
 
-// teeSubjectBody: subject is the first non-empty line (rune-capped), body the
-// verbatim text (byte-capped rune-safe with a truncation marker).
+// A trailing line with no newline that is not valid JSON is a torn in-flight
+// append: it must be left unconsumed so the next post picks it up whole. A
+// complete-JSON trailing line without its newline IS consumed.
+func TestExtractSinceTornTail(t *testing.T) {
+	complete := `{"type":"assistant","message":{"content":[{"type":"text","text":"whole"}]}}`
+	torn := `{"type":"assistant","message":{"content":[{"type":"text","te`
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	if err := os.WriteFile(path, []byte(complete+"\n"+torn), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, consumed, err := extractSince(path, 0, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "whole" {
+		t.Fatalf("extracted text = %q, want %q", got, "whole")
+	}
+	if want := int64(len(complete) + 1); consumed != want {
+		t.Fatalf("consumed = %d, want %d (torn tail unconsumed)", consumed, want)
+	}
+
+	unterminated := `{"type":"assistant","message":{"content":[{"type":"text","text":"tail"}]}}`
+	if err := os.WriteFile(path, []byte(complete+"\n"+unterminated), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, consumed, err = extractSince(path, 0, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "whole\n\ntail"; got != want {
+		t.Fatalf("extracted text = %q, want %q", got, want)
+	}
+	if size := fileSize(t, path); consumed != size {
+		t.Fatalf("consumed = %d, want file size %d (valid unterminated tail consumed)", consumed, size)
+	}
+}
+
+// A cursor beyond EOF (transcript replaced or truncated) falls back to
+// bootstrap mode: last turn only, from offset 0.
+func TestExtractSinceOffsetBeyondEOF(t *testing.T) {
+	path := writeTranscript(
+		t,
+		`{"type":"user","message":{"content":"old prompt"}}`,
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"old reply"}]}}`,
+		`{"type":"user","message":{"content":"new prompt"}}`,
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"new reply"}]}}`,
+	)
+	got, consumed, err := extractSince(path, 1<<40, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "new reply" {
+		t.Fatalf("extracted text = %q, want %q", got, "new reply")
+	}
+	if size := fileSize(t, path); consumed != size {
+		t.Fatalf("consumed = %d, want file size %d", consumed, size)
+	}
+}
+
+// teeSubjectBody cuts at the first blank line so troupe's wire rendering
+// (subject + "\n\n" + body) reconstructs the reply byte-for-byte — no
+// duplicated first line (clown#224).
 func TestTeeSubjectBody(t *testing.T) {
-	subj, body := teeSubjectBody("Fixed the bug.\n\nDetails follow.")
+	reply := "Fixed the bug.\n\nDetails follow.\nMore details."
+	subj, body := teeSubjectBody(reply)
 	if subj != "Fixed the bug." {
 		t.Fatalf("subject = %q", subj)
 	}
-	if body != "Fixed the bug.\n\nDetails follow." {
-		t.Fatalf("body must be the verbatim reply, got %q", body)
+	if body != "Details follow.\nMore details." {
+		t.Fatalf("body = %q", body)
+	}
+	if rejoined := subj + "\n\n" + body; rejoined != reply {
+		t.Fatalf("wire reconstruction = %q, want the verbatim reply %q", rejoined, reply)
 	}
 
-	longLine := strings.Repeat("ä", 300)
-	subj, _ = teeSubjectBody(longLine)
-	if r := []rune(subj); len(r) != teeSubjectMaxRunes || r[len(r)-1] != '…' {
-		t.Fatalf("long subject must be capped at %d runes with an ellipsis, got %d runes", teeSubjectMaxRunes, len(r))
+	// No blank line: the whole reply travels as the subject, empty body —
+	// joinMessage then emits the subject alone, still byte-for-byte.
+	subj, body = teeSubjectBody("Done: the thing.\nSecond line.")
+	if subj != "Done: the thing.\nSecond line." || body != "" {
+		t.Fatalf("no-blank-line split = (%q, %q)", subj, body)
 	}
 
 	huge := strings.Repeat("ü", teeBodyMaxBytes) // 2 bytes per rune: over the cap
-	_, body = teeSubjectBody(huge)
-	if len(body) > teeBodyMaxBytes+64 {
-		t.Fatalf("body not truncated: %d bytes", len(body))
+	subj, body = teeSubjectBody(huge)
+	rejoined := subj + "\n\n" + body
+	if len(rejoined) > teeBodyMaxBytes+64 {
+		t.Fatalf("not truncated: %d bytes", len(rejoined))
 	}
 	if !strings.HasSuffix(body, "[clown-hook-tee: reply truncated]") {
-		t.Fatal("truncated body must carry the truncation marker")
+		t.Fatal("truncated reply must carry the truncation marker")
 	}
-	if !utf8.ValidString(body) {
+	if !utf8.ValidString(rejoined) {
 		t.Fatal("truncation must not split a rune")
 	}
 }
 
-// run gates on the xmpp-native transport env and, when eligible, spawns the
-// detached `troupe muc send` with the derived room and the turn's reply as
-// --subject/--body. The troupe binary is stubbed with a script recording argv.
-func TestRunSpawnsMucSend(t *testing.T) {
+// fastSettle zeroes the settle-wait so run() tests don't pay real wall time.
+func fastSettle(t *testing.T) {
+	t.Helper()
+	q, m, p := settleQuiet, settleMax, settlePoll
+	settleQuiet, settleMax, settlePoll = 0, 0, 0
+	t.Cleanup(func() { settleQuiet, settleMax, settlePoll = q, m, p })
+}
+
+// writeStubTroupe writes a shell stub that records its argv (one element per
+// line) and returns (stubPath, argvPath).
+func writeStubTroupe(t *testing.T) (string, string) {
+	t.Helper()
 	dir := t.TempDir()
 	argvFile := filepath.Join(dir, "argv")
 	stub := filepath.Join(dir, "troupe")
@@ -182,61 +275,122 @@ func TestRunSpawnsMucSend(t *testing.T) {
 	if err := os.WriteFile(stub, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	return stub, argvFile
+}
 
+// waitArgv polls for the detached stub's argv record.
+func waitArgv(t *testing.T, argvFile string) string {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if b, err := os.ReadFile(argvFile); err == nil && len(b) > 0 {
+			return string(b)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("stub troupe binary was never invoked")
+	return ""
+}
+
+func teeEnv(t *testing.T) {
+	t.Helper()
 	t.Setenv("TROUPE_TRANSPORT", "xmpp-native")
 	t.Setenv("TROUPE_XMPP_PASSWORD_FILE", "/run/troupe/x.pass")
 	t.Setenv("TROUPE_XMPP_DOMAIN", "flac.xmpp.starbrandshoes.com")
 	t.Setenv("TROUPE_XMPP_ROOMS", "fleet@muc.starbrandshoes.com=all")
 	t.Setenv("CLOWN_GROUP_ID", "clown/rare-redwood")
 	t.Setenv("CLOWN_HOOK_DEBUG_LOG", "")
+	t.Setenv("XDG_STATE_HOME", t.TempDir()) // cursor state stays inside the test
+}
+
+// run gates on the xmpp-native transport env and, when eligible, spawns the
+// detached `troupe muc send` with the derived room and the reply split at its
+// first blank line into --subject/--body. The cursor is persisted at the
+// consumed offset.
+func TestRunSpawnsMucSend(t *testing.T) {
+	fastSettle(t)
+	teeEnv(t)
+	stub, argvFile := writeStubTroupe(t)
 
 	transcript := writeTranscript(
 		t,
 		`{"type":"user","message":{"content":"do the thing"}}`,
-		`{"type":"assistant","message":{"content":[{"type":"text","text":"Done: the thing.\nSecond line."}]}}`,
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"Done: the thing.\n\nSecond paragraph."}]}}`,
 	)
 	stdin := strings.NewReader(`{"transcript_path":` + strconvQuote(transcript) + `}`)
 	if err := run(stdin, stub); err != nil {
 		t.Fatal(err)
 	}
 
-	// The send is detached; poll briefly for the stub's argv record.
-	var argv string
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if b, err := os.ReadFile(argvFile); err == nil && len(b) > 0 {
-			argv = string(b)
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if argv == "" {
-		t.Fatal("stub troupe binary was never invoked")
-	}
-	// The stub prints one argv element per line, so the body's own newline
-	// makes it span two lines — assert on the raw newline-joined record.
+	argv := waitArgv(t, argvFile)
+	// The stub prints one argv element per line — assert on the raw
+	// newline-joined record.
 	for _, want := range []string{
 		"muc\nsend\n",
 		"--room\nclown.rare-redwood@muc.starbrandshoes.com\n",
-		"--subject\nDone: the thing.\n",
-		"--body\nDone: the thing.\nSecond line.\n",
+		"--subject\nDone: the thing.\n--body\nSecond paragraph.\n",
 	} {
 		if !strings.Contains(argv, want) {
 			t.Fatalf("argv missing %q:\n%s", want, argv)
 		}
 	}
+	if got, ok := loadCursor(transcript); !ok || got != fileSize(t, transcript) {
+		t.Fatalf("cursor after post = (%d, %v), want (%d, true)", got, ok, fileSize(t, transcript))
+	}
+}
+
+// The clown#224 regression: the turn's final assistant message is flushed to
+// the transcript only AFTER the Stop hook has read it. The cursor must carry
+// that late block into the NEXT post (no reset at the intervening prompt) and
+// must never repeat text a post already carried.
+func TestRunCursorCarriesLateFlushedFinalBlock(t *testing.T) {
+	fastSettle(t)
+	teeEnv(t)
+	stub, argvFile := writeStubTroupe(t)
+
+	transcript := filepath.Join(t.TempDir(), "transcript.jsonl")
+	prompt1 := `{"type":"user","message":{"content":"do the thing"}}`
+	interim := `{"type":"assistant","message":{"content":[{"type":"text","text":"Interim status."}]}}`
+	writeTranscriptTo(t, transcript, prompt1, interim)
+
+	stdinJSON := `{"transcript_path":` + strconvQuote(transcript) + `}`
+	if err := run(strings.NewReader(stdinJSON), stub); err != nil {
+		t.Fatal(err)
+	}
+	if argv := waitArgv(t, argvFile); !strings.Contains(argv, "--subject\nInterim status.\n") {
+		t.Fatalf("first post must carry the flushed interim text:\n%s", argv)
+	}
+	if err := os.Remove(argvFile); err != nil {
+		t.Fatal(err)
+	}
+
+	// The final block lands after the first Stop already ran; then the next
+	// turn happens and its Stop fires.
+	writeTranscriptTo(
+		t, transcript,
+		prompt1,
+		interim,
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"Final answer, flushed late."}]}}`,
+		`{"type":"user","message":{"content":"next task"}}`,
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"Next turn's reply."}]}}`,
+	)
+	if err := run(strings.NewReader(stdinJSON), stub); err != nil {
+		t.Fatal(err)
+	}
+	argv := waitArgv(t, argvFile)
+	if !strings.Contains(argv, "--subject\nFinal answer, flushed late.\n--body\nNext turn's reply.\n") {
+		t.Fatalf("second post must carry the late final block plus the new turn:\n%s", argv)
+	}
+	if strings.Contains(argv, "Interim status.") {
+		t.Fatalf("second post repeats text the first post already carried:\n%s", argv)
+	}
 }
 
 // Ineligible sessions (wrong transport, no credential) and empty turns spawn
-// nothing.
+// nothing; an empty turn still initializes the cursor.
 func TestRunGates(t *testing.T) {
-	dir := t.TempDir()
-	argvFile := filepath.Join(dir, "argv")
-	stub := filepath.Join(dir, "troupe")
-	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + argvFile + "\n"
-	if err := os.WriteFile(stub, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	fastSettle(t)
+	stub, argvFile := writeStubTroupe(t)
 	transcript := writeTranscript(
 		t,
 		`{"type":"user","message":{"content":"do the thing"}}`,
@@ -258,12 +412,9 @@ func TestRunGates(t *testing.T) {
 			t.Fatal("want an (ignored) gate error without a minted credential")
 		}
 	})
-	t.Run("empty turn spawns nothing", func(t *testing.T) {
-		t.Setenv("TROUPE_TRANSPORT", "xmpp-native")
-		t.Setenv("TROUPE_XMPP_PASSWORD_FILE", "/run/troupe/x.pass")
-		t.Setenv("TROUPE_XMPP_DOMAIN", "flac.xmpp.starbrandshoes.com")
+	t.Run("empty turn spawns nothing but initializes the cursor", func(t *testing.T) {
+		teeEnv(t)
 		t.Setenv("TROUPE_XMPP_ROOMS", "")
-		t.Setenv("CLOWN_GROUP_ID", "clown/rare-redwood")
 		if err := run(strings.NewReader(stdinJSON), stub); err != nil {
 			t.Fatal(err)
 		}
@@ -271,7 +422,20 @@ func TestRunGates(t *testing.T) {
 		if _, err := os.Stat(argvFile); !os.IsNotExist(err) {
 			t.Fatal("no send may be spawned for a turn with no reply text")
 		}
+		if got, ok := loadCursor(transcript); !ok || got != fileSize(t, transcript) {
+			t.Fatalf("cursor after empty turn = (%d, %v), want (%d, true)", got, ok, fileSize(t, transcript))
+		}
 	})
+}
+
+// fileSize returns path's size, failing the test on error.
+func fileSize(t *testing.T, path string) int64 {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return info.Size()
 }
 
 // strconvQuote JSON-quotes a test path for embedding in hook-input JSON.

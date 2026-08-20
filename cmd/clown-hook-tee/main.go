@@ -1,9 +1,22 @@
 // clown-hook-tee is a Claude Code Stop hook handler: the clown-side half of
 // the session output tee (troupe#21). At the end of each turn it extracts the
-// turn's user-visible assistant reply text from the transcript (text blocks
-// only — no tool calls, no thinking, no transcript firehose) and posts it
-// verbatim into the session's per-worktree MUC channel via `troupe muc send`,
-// so a human or another agent can watch the session's replies live in a room.
+// user-visible assistant reply text appended to the transcript since the last
+// post (text blocks only — no tool calls, no thinking, no transcript
+// firehose) and posts it verbatim into the session's per-worktree MUC channel
+// via `troupe muc send`, so a human or another agent can watch the session's
+// replies live in a room.
+//
+// Extraction is cursor-based (clown#224): a per-transcript byte offset,
+// persisted under $XDG_STATE_HOME/clown/hook-tee/, records how far the last
+// post consumed. Claude Code's transcript flush lags the UI stream — at
+// Stop-hook time the turn's final assistant message is routinely not yet in
+// the file — so a fixed "extract the last turn" read deterministically
+// dropped every turn's conclusion. With the cursor, a block missed by one
+// post (not yet flushed) is carried by the next post instead of being lost,
+// posts never repeat text, and a bounded settle-wait before reading gives an
+// in-flight append a chance to land in the current post. The first post of a
+// transcript (no cursor yet) extracts only the last turn, so a resumed
+// session does not dump its history into the room.
 //
 // Ratified contract (troupe#21):
 //
@@ -45,6 +58,8 @@ package main
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -52,19 +67,33 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
+	"time"
 	"unicode/utf8"
+
+	"code.linenisgreat.com/clown/internal/userpath"
 )
 
 const (
-	// teeBodyMaxBytes bounds the posted body. A reply longer than this is
+	// teeBodyMaxBytes bounds the posted text. A reply longer than this is
 	// truncated (rune-safe) with a marker — the room is a watch surface, not
 	// durable storage, and an unbounded body risks stanza-size rejection.
 	teeBodyMaxBytes = 16 * 1024
-	// teeSubjectMaxRunes bounds the one-line subject (the first line of the
-	// reply); the full first line is still present verbatim in the body.
-	teeSubjectMaxRunes = 120
+)
+
+// Settle-wait tuning: before reading the transcript, wait until its size has
+// been stable for settleQuiet (bounded by settleMax overall), so an append
+// that is in flight when Stop fires lands in THIS post rather than the next.
+// Heuristic only — the cursor is what guarantees no text is ever dropped; a
+// flush that misses the window is simply carried by the next post. Vars, not
+// consts, so tests can zero them.
+var (
+	settleQuiet = 300 * time.Millisecond
+	settleMax   = 2 * time.Second
+	settlePoll  = 50 * time.Millisecond
 )
 
 // hookInput is the Stop-hook event payload this handler consumes. Claude Code
@@ -111,15 +140,98 @@ func run(stdin io.Reader, troupeBin string) error {
 	if err != nil {
 		return err
 	}
-	text, err := extractTurnText(in.TranscriptPath)
+	waitTranscriptQuiet(in.TranscriptPath)
+	offset, hasCursor := loadCursor(in.TranscriptPath)
+	text, consumed, err := extractSince(in.TranscriptPath, offset, hasCursor)
 	if err != nil {
 		return err
 	}
 	if text == "" {
-		return nil // a turn with no visible reply text: nothing to tee
+		// Nothing visible appended since the last post: no post, but still
+		// advance the cursor past the consumed non-text entries (and, on the
+		// first run, initialize it so the next post starts from here).
+		return saveCursor(in.TranscriptPath, consumed)
 	}
 	subject, body := teeSubjectBody(text)
-	return spawnSend(troupeBin, room, subject, body)
+	if err := spawnSend(troupeBin, room, subject, body); err != nil {
+		// Spawn never started: leave the cursor so the next post retries
+		// this text instead of dropping it.
+		return err
+	}
+	return saveCursor(in.TranscriptPath, consumed)
+}
+
+// waitTranscriptQuiet blocks until path's size has been stable for
+// settleQuiet, bounded by settleMax overall. Errors (racing writer aside, the
+// file should exist) end the wait — extraction will surface them.
+func waitTranscriptQuiet(path string) {
+	deadline := time.Now().Add(settleMax)
+	info, err := os.Stat(path)
+	if err != nil {
+		return
+	}
+	last := info.Size()
+	stableSince := time.Now()
+	for time.Now().Before(deadline) {
+		if time.Since(stableSince) >= settleQuiet {
+			return
+		}
+		time.Sleep(settlePoll)
+		info, err := os.Stat(path)
+		if err != nil {
+			return
+		}
+		if info.Size() != last {
+			last = info.Size()
+			stableSince = time.Now()
+		}
+	}
+}
+
+// cursorPath resolves the persisted-offset file for one transcript:
+// $XDG_STATE_HOME/clown/hook-tee/<sha256(path)>.cursor. Keyed by the
+// transcript path (unique per Claude session) rather than a session id so the
+// cursor survives however the hook was invoked.
+func cursorPath(transcriptPath string) (string, error) {
+	sum := sha256.Sum256([]byte(transcriptPath))
+	return userpath.StatePath("hook-tee", hex.EncodeToString(sum[:])+".cursor")
+}
+
+// loadCursor reads the persisted byte offset for a transcript. A missing or
+// malformed cursor file means "no cursor" — extraction then bootstraps in
+// last-turn mode.
+func loadCursor(transcriptPath string) (int64, bool) {
+	path, err := cursorPath(transcriptPath)
+	if err != nil {
+		return 0, false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, false
+	}
+	n, err := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64)
+	if err != nil || n < 0 {
+		return 0, false
+	}
+	return n, true
+}
+
+// saveCursor atomically persists the consumed byte offset for a transcript
+// (write-temp + rename, so a torn write can never leave a corrupt cursor —
+// worst case the old one survives and the next post re-carries some text).
+func saveCursor(transcriptPath string, offset int64) error {
+	path, err := cursorPath(transcriptPath)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(strconv.FormatInt(offset, 10)+"\n"), 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 // deriveWorktreeRoom computes the per-worktree channel JID
@@ -170,31 +282,61 @@ type transcriptEntry struct {
 	} `json:"message"`
 }
 
-// extractTurnText returns the just-finished turn's user-visible assistant text:
-// every text block of every main-line assistant entry after the LAST genuine
-// user prompt, joined with blank lines. One forward pass, resetting the
-// collection at each prompt boundary, so memory holds at most one turn's text.
-// Sidechain (subagent) entries and meta user entries (tool results,
-// system-reminder injections) never reset or contribute. Unparseable lines are
-// skipped — the transcript is an internal format that may grow entry kinds.
-func extractTurnText(path string) (string, error) {
+// extractSince returns the user-visible assistant text of the transcript's
+// main line starting at byte offset, plus the byte offset consumed — the
+// position after the last COMPLETE entry processed, which becomes the next
+// cursor. A trailing line without its newline is left unconsumed unless it
+// already parses as complete JSON: it is likely a torn in-flight append, and
+// the next post picks it up.
+//
+// With a cursor (hasCursor), every main-line assistant text block from offset
+// on contributes — user prompts do NOT reset the collection, which is what
+// lets a final message that had not been flushed when the previous Stop fired
+// ride along with the next post instead of being dropped (clown#224).
+// Without a cursor (first post for this transcript), the scan starts at 0 and
+// resets at each genuine user prompt, so only the last turn posts. An offset
+// beyond EOF (transcript replaced or truncated) falls back to that bootstrap
+// mode. Sidechain (subagent) entries, meta user entries, and unparseable
+// lines never contribute.
+func extractSince(path string, offset int64, hasCursor bool) (string, int64, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	defer f.Close()
 
+	if hasCursor {
+		info, err := f.Stat()
+		if err != nil {
+			return "", 0, err
+		}
+		if offset > info.Size() {
+			offset, hasCursor = 0, false
+		}
+	} else {
+		offset = 0
+	}
+	if _, err := f.Seek(offset, io.SeekStart); err != nil {
+		return "", 0, err
+	}
+
 	var parts []string
+	consumed := offset
 	r := bufio.NewReaderSize(f, 64*1024)
 	for {
 		line, readErr := r.ReadBytes('\n')
 		if len(line) > 0 {
+			complete := line[len(line)-1] == '\n'
+			if !complete && !json.Valid(line) {
+				break // torn in-flight append: leave it for the next post
+			}
+			consumed += int64(len(line))
 			var e transcriptEntry
 			if json.Unmarshal(line, &e) == nil && !e.IsSidechain {
 				switch e.Type {
 				case "user":
-					if !e.IsMeta && isUserPrompt(e.Message.Content) {
-						parts = parts[:0] // a new turn begins: drop the previous turn's text
+					if !hasCursor && !e.IsMeta && isUserPrompt(e.Message.Content) {
+						parts = parts[:0] // bootstrap: only the last turn posts
 					}
 				case "assistant":
 					parts = append(parts, assistantText(e.Message.Content)...)
@@ -205,10 +347,10 @@ func extractTurnText(path string) (string, error) {
 			break
 		}
 		if readErr != nil {
-			return "", readErr
+			return "", 0, readErr
 		}
 	}
-	return strings.TrimSpace(strings.Join(parts, "\n\n")), nil
+	return strings.TrimSpace(strings.Join(parts, "\n\n")), consumed, nil
 }
 
 // isUserPrompt reports whether a user entry's content is a genuine prompt — a
@@ -256,31 +398,29 @@ func assistantText(content json.RawMessage) []string {
 	return out
 }
 
-// teeSubjectBody splits the reply into the muc-send --subject/--body pair: the
-// subject is the reply's first non-empty line (capped, it becomes the one-line
-// summary a room shows), the body the full verbatim reply (capped rune-safe
-// with a truncation marker). --subject/--body is used instead of --message
-// because an arbitrary reply does not satisfy the git-commit blank-line rule
-// chat.SplitMessage enforces.
+// teeSubjectBody splits the reply (capped rune-safe with a truncation marker)
+// into the muc-send --subject/--body pair by cutting at the FIRST blank line.
+// troupe's EncodeChat renders the wire <body> as subject + "\n\n" + body
+// (joinMessage), so this split makes the stanza carry the reply byte-for-byte
+// — no duplicated first line (clown#224: the old first-line subject rendered
+// twice in MUC clients, since there is no XMPP <subject> element; the CLI
+// subject is just the wire body's leading chunk). A reply with no blank line
+// travels entirely as the subject; a multi-line first paragraph makes a
+// multi-line subject — both reconstruct exactly. --subject/--body is used
+// instead of --message because an arbitrary reply does not satisfy the
+// git-commit blank-line rule chat.SplitMessage enforces.
 func teeSubjectBody(text string) (subject, body string) {
-	for _, line := range strings.Split(text, "\n") {
-		if s := strings.TrimSpace(line); s != "" {
-			subject = s
-			break
-		}
-	}
-	if r := []rune(subject); len(r) > teeSubjectMaxRunes {
-		subject = string(r[:teeSubjectMaxRunes-1]) + "…"
-	}
-	body = text
-	if len(body) > teeBodyMaxBytes {
+	if len(text) > teeBodyMaxBytes {
 		cut := teeBodyMaxBytes
-		for cut > 0 && !utf8.RuneStart(body[cut]) {
+		for cut > 0 && !utf8.RuneStart(text[cut]) {
 			cut--
 		}
-		body = body[:cut] + "\n\n[clown-hook-tee: reply truncated]"
+		text = text[:cut] + "\n\n[clown-hook-tee: reply truncated]"
 	}
-	return subject, body
+	if i := strings.Index(text, "\n\n"); i >= 0 {
+		return text[:i], text[i+2:]
+	}
+	return text, ""
 }
 
 // spawnSend launches `troupe muc send` detached — own session, output to the

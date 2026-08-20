@@ -383,12 +383,18 @@ Under
 with a minted credential, clown also registers a session output tee
 (troupe#21): a
 .Sy Stop
-hook that, at the end of each turn, posts the turn's user-visible assistant
-reply text verbatim into the session's per-worktree MUC channel
+hook that, at the end of each turn, posts the user-visible assistant reply
+text appended to the transcript since the previous post, verbatim, into the
+session's per-worktree MUC channel
 .Pq Ql <repo>.<worktree>@<rooms-domain> ,
 derived from the session identity exactly as troupe's derived-rooms join
 (troupe#24), via
 .Ic troupe muc send .
+Extraction is cursor-based (clown#224): a per-transcript byte offset under
+.Pa $XDG_STATE_HOME/clown/hook-tee/
+records how far the previous post consumed, so a reply block the harness had
+not yet flushed to the transcript when the hook ran is carried by the next
+post instead of being dropped, and no post repeats text.
 The post goes out under the session's own nick, so the receiver's self-echo
 suppression keeps the tee from waking the session that produced it.
 It is best-effort and detached: a failure or an unreachable server drops the
