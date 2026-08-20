@@ -31,7 +31,7 @@ function __clown_is_codex
 end
 
 # --- Provider selection (always available) ---
-complete -c clown -x -n __fish_use_subcommand -l provider -a 'claude codex' -d 'Coding agent provider'
+complete -c clown -x -n __fish_use_subcommand -l provider -a 'claude codex juggler opencode openrouter crush clownbox' -d 'Coding agent provider'
 
 # --- Common options ---
 complete -c clown -f -n __fish_use_subcommand -l naked -d 'Run provider without clown modifications'
