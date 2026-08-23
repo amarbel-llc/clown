@@ -19,6 +19,49 @@ func parseSafetyEnv(t *testing.T, got string) map[string]string {
 	return v.Env
 }
 
+// parseRemoteControl reports whether the settings JSON carries a
+// remoteControlAtStartup key and, if so, its value.
+func parseRemoteControl(t *testing.T, got string) (present bool, value bool) {
+	t.Helper()
+	var v struct {
+		RemoteControlAtStartup *bool `json:"remoteControlAtStartup"`
+	}
+	if err := json.Unmarshal([]byte(got), &v); err != nil {
+		t.Fatalf("not valid JSON: %v (%q)", err, got)
+	}
+	if v.RemoteControlAtStartup == nil {
+		return false, false
+	}
+	return true, *v.RemoteControlAtStartup
+}
+
+// remoteControlAtStartup is injected unconditionally to disable Remote Control
+// auto-connect for clown sessions, independent of the env-gated defaults.
+func TestClaudeSafetySettingsJSON_RemoteControlAlwaysDisabled(t *testing.T) {
+	// Env defaults present, then fully overridden — remoteControlAtStartup
+	// must be false in both cases.
+	for _, tc := range []struct {
+		name         string
+		afk, autoMem string
+	}{
+		{"defaults unset", "", ""},
+		{"defaults overridden", "60000", "0"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("CLAUDE_AFK_TIMEOUT_MS", tc.afk)
+			t.Setenv("CLAUDE_CODE_DISABLE_AUTO_MEMORY", tc.autoMem)
+
+			present, val := parseRemoteControl(t, claudeSafetySettingsJSON())
+			if !present {
+				t.Fatal("remoteControlAtStartup missing; must always be injected")
+			}
+			if val {
+				t.Error("remoteControlAtStartup = true, want false (Remote Control disabled)")
+			}
+		})
+	}
+}
+
 // clown#163 + clown#164: with no user overrides, clown injects both safety
 // defaults (AFK auto-continue off, auto memory off) as a valid settings env block.
 func TestClaudeSafetySettingsJSON_InjectsBothWhenUnset(t *testing.T) {
@@ -52,11 +95,18 @@ func TestClaudeSafetySettingsJSON_IndependentOverride(t *testing.T) {
 	}
 }
 
-// When the user has overridden every default, nothing is injected.
-func TestClaudeSafetySettingsJSON_AllOverridden(t *testing.T) {
+// When the user has overridden every env default, the env block is omitted —
+// but the settings JSON is still non-empty because remoteControlAtStartup is
+// injected unconditionally.
+func TestClaudeSafetySettingsJSON_AllEnvOverridden(t *testing.T) {
 	t.Setenv("CLAUDE_AFK_TIMEOUT_MS", "60000")
 	t.Setenv("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "0") // user opts back into auto memory
-	if got := claudeSafetySettingsJSON(); got != "" {
-		t.Errorf("with all defaults overridden, want empty (no injection), got %q", got)
+
+	got := claudeSafetySettingsJSON()
+	if got == "" {
+		t.Fatal("settings must never be empty (remoteControlAtStartup is always injected)")
+	}
+	if env := parseSafetyEnv(t, got); len(env) != 0 {
+		t.Errorf("env block should be omitted when every env default is overridden, got %v", env)
 	}
 }

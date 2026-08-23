@@ -22,15 +22,20 @@ Clown wraps the `claude` binary with four additions:
 1. **Bash disabled by default** — passes `--disallowed-tools 'Bash(*)'` to
    every invocation.
 
-2. **Auto-memory disabled and idle sessions can't silently auto-continue** —
-   clown ships the unpatched upstream `claude-code` binary (an earlier
-   approach patched it to read managed-settings from clown's own store path;
-   that patch was removed) and instead passes an inline `--settings` JSON
-   block: `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` turns off Claude's autonomous
-   memory writes (`CLAUDE.md`/`AGENTS.md` files are unaffected), and a very
-   large `CLAUDE_AFK_TIMEOUT_MS` stops an idle confirmation prompt from
-   auto-continuing past the user. Each is skipped if you've already set that
-   variable yourself.
+2. **Auto-memory disabled, idle sessions can't silently auto-continue, and
+   Remote Control stays off** — clown ships the unpatched upstream
+   `claude-code` binary (an earlier approach patched it to read
+   managed-settings from clown's own store path; that patch was removed) and
+   instead passes an inline `--settings` JSON block: `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`
+   turns off Claude's autonomous memory writes (`CLAUDE.md`/`AGENTS.md` files
+   are unaffected), and a very large `CLAUDE_AFK_TIMEOUT_MS` stops an idle
+   confirmation prompt from auto-continuing past the user. Each of those env
+   vars is skipped if you've already set it yourself. The same block also sets
+   `remoteControlAtStartup: false`, so a session never auto-connects to
+   [Remote Control](https://docs.claude.com/en/docs/claude-code/remote-control);
+   unlike the two env vars this settings key has no paired variable to opt out
+   with, so clown always injects it — pass claude's `--remote-control` flag to
+   turn Remote Control on for a single session.
 
 3. **Hierarchical system prompt injection** — walks from `$PWD` up to `$HOME`,
    collecting `.clown/` directories along the way:
