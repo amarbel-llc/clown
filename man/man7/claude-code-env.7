@@ -397,10 +397,15 @@ When set to
 .Qq 1 ,
 use a simplified UI mode with reduced visual complexity.
 .It Ev CLAUDE_CODE_REMOTE
-When set to
-.Qq 1 ,
-indicates the session is running in remote mode.
-Adjusts UI and behavior for remote connections.
+Set automatically to
+.Qq true
+by Claude Code when the session is running as a cloud session, such as
+Claude Code on the web.
+It is a state indicator that Claude Code sets for itself, not a switch you
+set to turn on remote behavior.
+To detect a cloud session from a hook or setup script, read
+.Ev CLAUDE_CODE_REMOTE_SESSION_ID ,
+which Claude Code also sets automatically there.
 .El
 .Sh NETWORK AND STREAMING
 .Bl -tag -width Ds
