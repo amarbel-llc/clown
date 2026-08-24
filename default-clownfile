@@ -41,8 +41,8 @@ group-id     = "${SPINCLASS_SESSION_ID}"
 # description is the human-readable presence label (RFC-0014 §4.1), same
 # interpolation + graceful-empty contract as group-id.
 description  = "${SPINCLASS_DESCRIPTION}"
-start        = ["posh", "attach", "{id}", "{entry}"]
-resume       = ["posh", "attach", "{id}", "{entry}"]
+start        = ["posh", "attach", "--create", "{id}", "{entry}"]
+resume       = ["posh", "attach", "--create", "{id}", "{entry}"]
 # resume-title is emitted on BOTH a fresh start and a reattach (clown#169;
 # previously resume-only). {id} prefers the human-ergonomic clown-name
 # (clown#169's mutex-allocated name pool, internal/clownname) over the raw
@@ -51,7 +51,7 @@ resume       = ["posh", "attach", "{id}", "{entry}"]
 # literal "sc/" prefix is just a literal string here, not a placeholder; a
 # bare clown (empty {group}) falls back to "sc/<clown-name>".
 resume-title = "sc/{group}/{id}"
-spawn        = ["posh", "attach", "{id}", "--detach", "{entry}"]
+spawn        = ["posh", "attach", "--create", "{id}", "--detach", "{entry}"]
 spawn-entry  = ["clown", "--", "{prompt}"]
 # spawn-window has no default (unset = no window).
 # pty-suspend wraps the interactive provider in clown's escape-to-shell pty proxy
