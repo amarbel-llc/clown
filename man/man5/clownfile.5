@@ -503,10 +503,10 @@ ANTHROPIC_LOG = "info"
 multiplexer = "posh"
 group-id = "${SPINCLASS_SESSION_ID}"
 description = "${SPINCLASS_DESCRIPTION}"
-start = ["posh", "attach", "{id}", "{entry}"]
-resume = ["posh", "attach", "{id}", "{entry}"]
+start = ["posh", "attach", "--create", "{id}", "{entry}"]
+resume = ["posh", "attach", "--create", "{id}", "{entry}"]
 resume-title = "{group}"
-spawn = ["posh", "attach", "{id}", "--detach", "{entry}"]
+spawn = ["posh", "attach", "--create", "{id}", "--detach", "{entry}"]
 spawn-entry = ["clown", "--", "{prompt}"]
 .Ed
 .Sh SEE ALSO
