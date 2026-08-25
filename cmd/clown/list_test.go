@@ -17,9 +17,7 @@ func TestListHumanTableShowsAllSessions(t *testing.T) {
 		t.Fatalf("grouped row missing expected fields: %q", out)
 	}
 	// The ungrouped row's SPINCLASS/NAME columns fall back to "-", not empty
-	// cells, so the table stays aligned/readable. tabwriter renders columns
-	// as space-padded (not literal tabs), so assert per-field via the raw
-	// line rather than a fixed separator string.
+	// cells, so the table stays aligned/readable.
 	var ungroupedLine string
 	for _, line := range strings.Split(out, "\n") {
 		if strings.Contains(line, "inst-b") {
@@ -36,13 +34,20 @@ func TestListHumanTableShowsAllSessions(t *testing.T) {
 	}
 }
 
+// --json now emits mesa NDJSON (breaking change from raw jobwake.Presence JSON):
+// a header record with column definitions, then one cells record per session.
 func TestListJSONEmitsPresenceRecords(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	registerPresenceFixtureNamed(t, "inst-a", "repo/feature", "desc", "bozo")
 
 	out := captureStdout(t, func() int { return runList([]string{"--json"}) })
-	if !strings.Contains(out, `"sessionKey":"inst-a"`) {
-		t.Fatalf("json missing the record: %q", out)
+	// Header record must declare the four columns.
+	if !strings.Contains(out, `"columns"`) || !strings.Contains(out, `"NAME"`) {
+		t.Fatalf("json missing column header: %q", out)
+	}
+	// Row record must contain the session key in the cells array.
+	if !strings.Contains(out, `"cells"`) || !strings.Contains(out, `"inst-a"`) {
+		t.Fatalf("json missing session row: %q", out)
 	}
 }
 

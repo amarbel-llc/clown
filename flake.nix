@@ -75,7 +75,15 @@
     ringmaster.inputs.nixpkgs-master.follows = "nixpkgs-master";
     ringmaster.inputs.utils.follows = "utils";
     ringmaster.inputs.bats.follows = "bats";
-    ringmaster.inputs.purse-first.inputs.conformist.follows = "conformist";
+    ringmaster.inputs.purse-first.follows = "purse-first";
+    # purse-first: table/NDJSON rendering library (mesa package). Direct input
+    # so we get a version that includes pkgs/mesa (ringmaster's transitive pin
+    # predates it). follows-align shared inputs to avoid a second closure eval.
+    purse-first.url = "https://code.linenisgreat.com/purse-first/archive/master.tar.gz";
+    purse-first.inputs.conformist.follows = "conformist";
+    purse-first.inputs.igloo.follows = "igloo";
+    purse-first.inputs.nixpkgs-master.follows = "nixpkgs-master";
+    purse-first.inputs.utils.follows = "utils";
     # troupe: the messaging binary (chat + `troupe agent` XMPP receiver + the
     # troupe MCP surface). clown's 2nd extracted dep — but BINARY-only: clown
     # runs the troupe binary and does NOT import its Go (jobwake comes from
@@ -105,6 +113,7 @@
       bats,
       ringmaster,
       troupe,
+      purse-first,
     }:
     (utils.lib.eachDefaultSystem (
       system:
@@ -258,7 +267,9 @@
         # (all ~dozen Go builders + both devshell envs) — the protocol
         # requires identical goFlakeInputs on every builder and the devshell,
         # or go.mod/vendor drift between build and `nix develop`.
-        goFlakeInputs = import ./gomod.nix { inherit ringmaster system; };
+        goFlakeInputs = import ./gomod.nix {
+          inherit ringmaster purse-first system;
+        };
         buildGoApplication = args: pkgs.buildGoApplication (args // { inherit goFlakeInputs; });
         mkGoEnv = args: pkgs.mkGoEnv (args // { inherit goFlakeInputs; });
 

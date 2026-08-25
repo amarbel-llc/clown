@@ -19,9 +19,17 @@
 # This value MUST be threaded identically into every buildGoApplication and
 # mkGoEnv call in flake.nix (via `inherit goFlakeInputs;`) — build and
 # devshell diverging silently reintroduces lockstep drift.
-{ ringmaster, system }:
+{
+  ringmaster,
+  purse-first,
+  system,
+}:
 {
   "code.linenisgreat.com/ringmaster" = {
     src = ringmaster.packages.${system}.go-pkgs;
+  };
+  "code.linenisgreat.com/purse-first/libs/dewey" = {
+    src = purse-first.packages.${system}.go-pkgs;
+    subPath = "libs/dewey";
   };
 }

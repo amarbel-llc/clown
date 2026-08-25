@@ -1,14 +1,13 @@
 package main
 
 import (
-	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 	"sort"
-	"text/tabwriter"
 	"time"
 
+	"code.linenisgreat.com/purse-first/libs/dewey/pkgs/mesa"
 	"code.linenisgreat.com/ringmaster/pkgs/jobwake"
 )
 
@@ -22,9 +21,12 @@ import (
 // Works identically inside and outside a spinclass session: a session with
 // no decoration (bare clown, no group-id resolved) still gets a row, with
 // an empty SPINCLASS column — see clown#169.
+//
+// --json now emits mesa NDJSON (RFC 0003 §1): a header record then one row
+// record per session, replacing the previous raw jobwake.Presence JSON.
 func runList(args []string) int {
 	fs := flag.NewFlagSet("clown list", flag.ContinueOnError)
-	asJSON := fs.Bool("json", false, "emit one JSON object per presence record")
+	asJSON := fs.Bool("json", false, "emit mesa NDJSON table stream (RFC 0003)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -45,19 +47,12 @@ func runList(args []string) int {
 		return listSortKey(ps[i]) < listSortKey(ps[j])
 	})
 
-	if *asJSON {
-		enc := json.NewEncoder(os.Stdout)
-		for _, p := range ps {
-			if err := enc.Encode(p); err != nil {
-				fmt.Fprintf(os.Stderr, "clown list: %v\n", err)
-				return 1
-			}
-		}
-		return 0
-	}
+	t := mesa.New().
+		Col("NAME", mesa.Pin).
+		Col("SESSION", mesa.Pin).
+		Col("SPINCLASS", mesa.Pin).
+		Col("DESCRIPTION", mesa.Flex)
 
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "NAME\tSESSION\tSPINCLASS\tDESCRIPTION")
 	for _, p := range ps {
 		name := p.ClownName
 		if name == "" {
@@ -71,9 +66,21 @@ func runList(args []string) int {
 		if desc == "" {
 			desc = "-"
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", name, p.SessionKey, spinclass, desc)
+		t.Row(mesa.Text(name), mesa.Text(p.SessionKey), mesa.Text(spinclass), mesa.Text(desc))
 	}
-	_ = w.Flush()
+
+	if *asJSON {
+		if err := mesa.EncodeStream(os.Stdout, t); err != nil {
+			fmt.Fprintf(os.Stderr, "clown list: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+
+	if err := t.Render(os.Stdout); err != nil {
+		fmt.Fprintf(os.Stderr, "clown list: %v\n", err)
+		return 1
+	}
 	return 0
 }
 
