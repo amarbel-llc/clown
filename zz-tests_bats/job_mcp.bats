@@ -56,7 +56,7 @@ teardown() {
   assert_equal "$count" "8"
 }
 
-# `troupe mcp` exposes only the four messaging tools and reports the clown-troupe
+# `troupe mcp` exposes only the six messaging tools and reports the clown-troupe
 # server identity (clown#144, RFC-0015 §6).
 @test "troupe mcp exposes only the messaging tools" {
   req='{"jsonrpc":"2.0","id":1,"method":"initialize"}'
@@ -67,14 +67,14 @@ teardown() {
   req='{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
   run bash -c "printf '%s\n' '$req' | '$TROUPE_BIN' mcp"
   assert_success
-  for tool in chat_send chat_read chat_list job_message; do
+  for tool in chat_send chat_read chat_list chat_history chat_get job_message; do
     assert_output --partial "\"$tool\""
   done
   for tool in job_start job_done job_status job_wait; do
     refute_output --partial "\"$tool\""
   done
   count="$(printf '%s' "$output" | jq -r '.result.tools | length')"
-  assert_equal "$count" "4"
+  assert_equal "$count" "6"
 }
 
 # RFC-0002 §5.4: prompts/list advertises the system-prompt-append prompt that
