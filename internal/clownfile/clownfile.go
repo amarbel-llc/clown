@@ -179,11 +179,12 @@ func (a Attach) Resolve(mode AttachMode, id string, entry []string) ([]string, e
 //
 // Title itself is a pure function of its arguments; which sessions get an id is
 // the caller's policy (cmd/clown/attach.go's emitSessionTitle). Today the caller
-// passes false only for a session whose group came from the git-repo fallback
-// and which is alone in its working directory — a real group always shows the id
-// (clown#230), and so does a session with no group at all, which is the case
-// clown#229 reports as a duplicate, since {group}'s own empty-group fallback
-// already renders the id.
+// passes false for a session whose group came from the git-repo fallback and
+// which is alone in its working directory, and for one with no group at all
+// whose template contains {group} — there the empty-group fallback above has
+// already rendered the id, so substituting it again duplicated it (clown#229).
+// A real group always shows the id (clown#230), and so does a {group}-less
+// template, which has no fallback to render the id in its place.
 func (a Attach) Title(id, group string, showID bool) string {
 	g := group
 	if g == "" {

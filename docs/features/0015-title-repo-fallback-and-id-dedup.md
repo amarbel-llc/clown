@@ -46,8 +46,14 @@ evaluated once per launch, immediately after the `[attach]` wrap decision
 The `{id}` segment (the clown-name) is shown except where it disambiguates
 nothing:
 
-- **True no-group case** (tier 3 above): `{id}` is ALWAYS shown — it is the
-  only identifying information available, so it is never suppressed.
+- **True no-group case** (tier 3 above): the clown-name is the only
+  identifying information available, so it always appears — but exactly ONCE.
+  When the template contains `{group}`, `{group}`'s own empty-group fallback
+  is what renders it, so the separate `{id}` placeholder is suppressed and the
+  burned-in `sc/{group}/{id}` renders `sc/bozo`, matching the Examples block
+  below. When the template has no `{group}` to fall back (e.g. a bare `{id}`),
+  nothing else would render the name, so `{id}` is kept. See the clown#229
+  amendment below.
 - **Tier 1** (a real spinclass group): `{id}` is ALWAYS shown. See the
   clown#230 amendment below — this reverses the original design.
 - **Tier 2** (the git-repo fallback): `{id}` is shown only when 2+ live clown
@@ -107,6 +113,27 @@ attached clown declines to re-wrap AND emits the title.
 third parameter: when `showID` is false, the literal substring `"/{id}"` (not
 just `"{id}"`) is dropped, so no dangling separator survives regardless of
 where `{id}` sits in the template relative to `{group}`.
+
+### Amendment (clown#229): tier 3 shows the clown-name once, not twice
+
+The Interface section originally said tier 3 shows `{id}` ALWAYS, and the caller
+implemented that literally. It contradicted this record's own Examples block
+(and RFC-0014 §3.1.1), both of which give `sc/bozo`: `Title` already falls
+`{group}` back to the id when the group is empty, so also substituting the
+separate `{id}` rendered the burned-in `sc/{group}/{id}` as `sc/bozo/bozo`.
+
+The fix is in the caller (`emitSessionTitle`), not the renderer: `Title`'s
+empty-group fallback stays, because a custom template using only `{group}` must
+still carry the name. The caller simply stops forcing `{id}` once `{group}` has
+already rendered it.
+
+"Already rendered it" is the load-bearing part, and it is a property of the
+TEMPLATE, not of the tier. A `{group}`-less template (a bare `{id}`, which
+`TestEmitSessionTitlePrefersClownName` exercises) has no fallback to supply the
+name, so suppressing `{id}` there would render the empty string — and since
+emission is skipped for an empty title, such a session would get no title at
+all. The caller therefore suppresses `{id}` in tier 3 only when the template
+contains `{group}`.
 
 ## Examples
 

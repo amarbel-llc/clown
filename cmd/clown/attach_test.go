@@ -267,6 +267,10 @@ func TestEmitSessionTitleSkippedWithoutTerminal(t *testing.T) {
 
 // clown-name preference (clown#169): the OSC-2 title's {id} should resolve to
 // the human-ergonomic clown-name rather than the raw per-instance UUID.
+//
+// This template has no {group}, so it also pins the other half of clown#229's
+// tier-3 rule: with nothing for {group}'s fallback to render, {id} must survive
+// or the title would be empty and no OSC-2 sequence would be emitted at all.
 func TestEmitSessionTitlePrefersClownName(t *testing.T) {
 	t.Setenv("CLOWN_ATTACH_FORCE", "1")
 
@@ -292,6 +296,35 @@ func TestEmitSessionTitlePrefersClownName(t *testing.T) {
 	}
 	if strings.Contains(captured, "raw-uuid-1234") {
 		t.Fatalf("emitted title leaked the raw UUID instead of preferring the clown-name: %q", captured)
+	}
+}
+
+// Tier 3 (no spinclass group, no git repo) with the SHIPPED default template:
+// the clown-name must appear exactly ONCE. Title's {group} fallback already
+// substitutes the name for an empty group, so the caller must not also force the
+// separate {id} — doing so rendered "sc/bozo/bozo" (clown#229). The neighbouring
+// tier-3 test uses a bare "{id}" template, where no {group} fallback fires at
+// all, so it cannot see this; the clownfile-level test passes showID=false by
+// hand rather than exercising the caller's own policy.
+func TestEmitSessionTitleNoGroupShowsClownNameOnce(t *testing.T) {
+	t.Setenv("CLOWN_ATTACH_FORCE", "1")
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	// Outside any git repo so gitRepoAndBranch() returns "" and titleGroup stays
+	// empty — the real tier-3 shape rather than a simulated one.
+	t.Chdir(hostTempDir(t))
+
+	cf := clownfile.Clownfile{Attach: clownfile.Attach{
+		Multiplexer: "zmx",
+		ResumeTitle: "sc/{group}/{id}",
+	}}
+	flags := parsedFlags{clownName: "bozo", identity: sessionIdentity{Key: "raw-uuid"}}
+
+	captured := captureTitle(t, cf, flags)
+	if want := "\033]2;sc/bozo\007"; !strings.Contains(captured, want) {
+		t.Fatalf("tier-3 default-template title = %q, want it to contain %q", captured, want)
+	}
+	if strings.Contains(captured, "bozo/bozo") {
+		t.Fatalf("tier-3 title duplicated the clown-name: %q", captured)
 	}
 }
 

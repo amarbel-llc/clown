@@ -212,8 +212,19 @@ e.g.
 .Ql sc/clown/deft-elm/bozo .
 The
 .Ql {id}
-segment is dropped only for a bare clown outside an orchestrator that is the
-sole session in its working directory, where it would distinguish nothing.
+segment is dropped where it would distinguish nothing: for a bare clown outside
+an orchestrator that is the sole session in its working directory, and for one
+outside any git repository, where
+.Ql {group}
+has already fallen back to the clown-name and repeating it would render
+.Ql sc/ Ns Ao clown-name Ac Ns / Ns Ao clown-name Ac .
+A
+.Sy resume-title
+with no
+.Ql {group}
+always keeps its
+.Ql {id} ,
+since nothing else would carry the name.
 .It Sy spawn
 The argv template for a detached-worker launch (RFC-0014 §5), resolved and
 executed when an orchestrator passes

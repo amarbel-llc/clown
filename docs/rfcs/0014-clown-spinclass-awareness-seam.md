@@ -220,7 +220,9 @@ chat). Design record: `docs/features/0015-title-repo-fallback-and-id-dedup.md`.
   3. else empty (not spinclass, not a git repo) — falls back to `{id}` as
      before.
 - **`{id}` is shown only when it disambiguates.** In the true no-group case
-  (tier 3) `{id}` is always shown (it is the only identifying info). Under a
+  (tier 3) the clown-name is the only identifying info, so it always appears —
+  but `{group}`'s own empty-group fallback is what renders it, so the separate
+  `{id}` placeholder is dropped rather than duplicating it (§3.1.4). Under a
   real group (tier 1) or the git fallback (tier 2), `{id}` is shown only when
   2+ live sessions share that scope — counted over the presence index (§4) by
   `decoration` for tier 1, or by a new title-only `cwd` presence field for
@@ -267,6 +269,32 @@ Three corrections to §3.1.2, all still **title-display only**. Design record:
   emission solely on the emitting process having an interactive terminal
   (`CLOWN_ATTACH_FORCE=1` overrides, as for the wrap): a spawn's inner clown
   passes with its pty; its outer, with `/dev/null` stdio, does not.
+
+##### 3.1.4 Amendment: tier 3 renders the clown-name once (clown#229)
+
+Correction to §3.1.2, title-display only. Design record:
+`docs/features/0015-title-repo-fallback-and-id-dedup.md`.
+
+§3.1.2's "in the true no-group case (tier 3) `{id}` is always shown" was
+implemented literally by the caller, contradicting §3.1.1's own `sc/bozo`: with
+`{group}` already falling back to `{id}` for an empty group, substituting the
+separate `{id}` too made the burned-in `"sc/{group}/{id}"` render
+`sc/bozo/bozo` — the very duplicate §3.1.2's erratum bullet claims to have
+fixed. The erratum was correct about `Attach.Title`, which gained `showID` for
+exactly this; the caller never passed it.
+
+- **The clown-name MUST appear exactly once in tier 3.** Where `{group}`'s
+  empty-group fallback renders it, the caller MUST pass `showID=false` so the
+  separate `{id}` is dropped.
+- **`Attach.Title`'s empty-group fallback is unchanged.** A custom
+  `resume-title` using only `{group}` MUST still carry the clown-name, so the
+  fix belongs in the caller, not the renderer.
+- **A `{group}`-less template keeps its `{id}`.** Whether the name was already
+  rendered is a property of the template, not of the tier: with no `{group}` to
+  fall back (e.g. a bare `"{id}"`), suppressing `{id}` would render the empty
+  string, and since emission is skipped for an empty title the session would
+  carry no title at all. The caller therefore suppresses `{id}` in tier 3 only
+  when the template contains `{group}`.
 
 ### 4. Presence index (clown → orchestrator)
 
@@ -507,8 +535,14 @@ Tests use binary injection via `bats-emo`:
   the clown-name, and the clown-name is shown only when 2+ live sessions share
   the scope. Backward-compatible and display-only: a session outside any git
   repo falls back to the prior `{id}` behavior, and none of it touches the
-  routing key, `decoration`, or grouping. Also fixes the `sc/bozo/bozo`
-  duplicate the pre-fix `Attach.Title` emitted for a bare clown.
+  routing key, `decoration`, or grouping. Gave `Attach.Title` the `showID`
+  parameter needed to fix the `sc/bozo/bozo` duplicate for a bare clown, though
+  the caller did not actually pass it until clown#229 (§3.1.4).
+- **Tier 3 renders the clown-name once (clown#229, §3.1.4).** The caller now
+  suppresses the separate `{id}` when `{group}`'s empty-group fallback has
+  already rendered the name, so a bare clown outside any git repo shows
+  `sc/bozo` rather than `sc/bozo/bozo`. Display-only; a `{group}`-less
+  `resume-title` is unaffected and keeps its `{id}`.
 - **Title always fully-qualified under an orchestrator, and emitted inside the
   multiplexer (clown#230/#231/#232, §3.1.3).** A spinclass session's title
   gains back its `<clown-name>` segment (tier 1's dedup could never fire, so
