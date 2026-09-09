@@ -76,6 +76,7 @@
     ringmaster.inputs.utils.follows = "utils";
     ringmaster.inputs.bats.follows = "bats";
     ringmaster.inputs.purse-first.follows = "purse-first";
+    ringmaster.inputs.conformist.follows = "conformist";
     # purse-first: table/NDJSON rendering library (mesa package). Direct input
     # so we get a version that includes pkgs/mesa (ringmaster's transitive pin
     # predates it). follows-align shared inputs to avoid a second closure eval.
