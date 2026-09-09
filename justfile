@@ -610,6 +610,38 @@ explore-agents-schema: build
     echo "$base}" > "$manifest"
     echo "=== Done ==="
 
+# Live end-to-end check of the OSC-2 title (clown#230/#231/#232). Drives the real
+# SPAWN path — the case that previously emitted no title from any process — and
+# reads back what posh's DAEMON holds for the session, which is the part a unit
+# test cannot reach: a title written pre-exec by the outer clown never enters the
+# mux session's terminal model, so a non-empty title here is itself the proof it
+# came from the inner clown inside the pty.
+#
+# Pins CLOWN_SESSION_ID so the posh session name is predictable (it is normally a
+# minted UUID), and isolates XDG_STATE_HOME so the run neither reads nor pollutes
+# the live fleet's presence and clown-name state. The spawned worker boots claude
+# with no prompt, so it sits idle at its TUI; the recipe kills the session on the
+# way out, including on failure.
+#
+# check the spawned session's title as posh's daemon holds it
+[group("explore")]
+explore-title-spawn-live: build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    name="title-live-check-$$"
+    export CLOWN_SESSION_ID="$name"
+    export XDG_STATE_HOME="$(mktemp -d)"
+    unset CLOWN_NAME CLAUDE_SESSION_ID
+    trap 'posh kill "$name" >/dev/null 2>&1 || true; rm -rf "$XDG_STATE_HOME"' EXIT
+    echo "=== spawning detached session $name (SPINCLASS_SESSION_ID=${SPINCLASS_SESSION_ID:-<unset>}) ==="
+    ./result/bin/clown --clown-attach=spawn </dev/null
+    echo "=== waiting for the inner clown to boot and emit ==="
+    sleep 20
+    echo "=== posh list --json (title is what the daemon captured from the pty) ==="
+    posh list --json | jq --arg n "$name" '.[] | select(.name == $n)'
+    echo "=== posh list (human) ==="
+    posh list
+
 # update all flake inputs and rebuild to verify
 update-inputs: && build
     nix flake update
