@@ -43,13 +43,17 @@ group-id     = "${SPINCLASS_SESSION_ID}"
 description  = "${SPINCLASS_DESCRIPTION}"
 start        = ["posh", "attach", "--create", "{id}", "{entry}"]
 resume       = ["posh", "attach", "--create", "{id}", "{entry}"]
-# resume-title is emitted on BOTH a fresh start and a reattach (clown#169;
-# previously resume-only). {id} prefers the human-ergonomic clown-name
-# (clown#169's mutex-allocated name pool, internal/clownname) over the raw
-# per-instance UUID, so under a spinclass session this renders as
-# "sc/<repo>/<branch>/<clown-name>" (e.g. "sc/clown/deft-elm/bozo") — the
-# literal "sc/" prefix is just a literal string here, not a placeholder; a
-# bare clown (empty {group}) falls back to "sc/<clown-name>".
+# resume-title is emitted on EVERY launch — a fresh start, a reattach, and a
+# detached spawn alike (clown#169, clown#232; it was resume-only, then
+# start/resume-only). It is written from INSIDE the multiplexer session's pty by
+# the inner clown, so the mux daemon holds the title and re-asserts it on attach,
+# session switch, and repaint (clown#231). {id} prefers the human-ergonomic
+# clown-name (clown#169's mutex-allocated name pool, internal/clownname) over the
+# raw per-instance UUID, so under a spinclass session this renders the canonical
+# fully-qualified host-local session id "sc/<repo>/<branch>/<clown-name>" (e.g.
+# "sc/clown/deft-elm/bozo") — the literal "sc/" prefix is just a literal string
+# here, not a placeholder. A bare clown (empty {group}) falls back to the git
+# repo/branch of its cwd, or to "sc/<clown-name>" outside a git repo.
 resume-title = "sc/{group}/{id}"
 spawn        = ["posh", "attach", "--create", "{id}", "--detach", "{entry}"]
 spawn-entry  = ["clown", "--", "{prompt}"]

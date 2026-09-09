@@ -26,7 +26,8 @@ disambiguate from.
 ## Interface
 
 The title's `{group}` segment now resolves through a three-tier cascade,
-evaluated once per interactive `[attach]` wrap (`maybeReexecMultiplexer`):
+evaluated once per launch, immediately after the `[attach]` wrap decision
+(`emitSessionTitle`):
 
 1. **Spinclass group-id** (`flags.groupID`, from `CLOWN_GROUP_ID` /
    `${SPINCLASS_SESSION_ID}` via the clownfile) — used as-is when non-empty.
@@ -42,19 +43,65 @@ evaluated once per interactive `[attach]` wrap (`maybeReexecMultiplexer`):
 3. **None** — not in spinclass, not in a git repo (or `git` is unavailable):
    the resolved group stays `""`, exactly as before this feature.
 
-The `{id}` segment (the clown-name) is shown only when it disambiguates:
+The `{id}` segment (the clown-name) is shown except where it disambiguates
+nothing:
 
 - **True no-group case** (tier 3 above): `{id}` is ALWAYS shown — it is the
   only identifying information available, so it is never suppressed.
-- **Tier 1 or 2** (a real spinclass group or a git-repo fallback): `{id}` is
-  shown only when 2+ live clown sessions share that same group/cwd. A solo
-  session's title omits it (and the redundant `/{id}` separator it would
-  have introduced).
-  - Tier 1's dedup counts live `jobwake.Presence` records by the existing
-    `Decoration` field (already scoped to the real group-id).
-  - Tier 2's dedup counts live `jobwake.Presence` records by a NEW `Cwd`
-    field (added specifically for this — see Limitations), since the
-    git-fallback group is never written to `Decoration`.
+- **Tier 1** (a real spinclass group): `{id}` is ALWAYS shown. See the
+  clown#230 amendment below — this reverses the original design.
+- **Tier 2** (the git-repo fallback): `{id}` is shown only when 2+ live clown
+  sessions share that same cwd. A solo session's title omits it (and the
+  redundant `/{id}` separator it would have introduced). The dedup counts
+  live `jobwake.Presence` records by a NEW `Cwd` field (added specifically
+  for this — see Limitations), since the git-fallback group is never written
+  to `Decoration`.
+
+### Amendment (clown#230): tier 1 always shows `{id}`
+
+As originally specified, tier 1 deduped exactly like tier 2, counting live
+presence records by `Decoration`. **That threshold was unsatisfiable by
+construction.** Under spinclass, `Decoration` is the group-id `<repo>/<branch>`
+and spinclass creates one clown per worktree, so the scope is 1:1 with a clown:
+the count is always 1, `showID` is always false, and the clown-name was stripped
+from the title of *every* live fleet session. The worked example below for "2+
+clowns in the same group" describes a configuration that does not occur.
+
+This fires the dedup-threshold lever's own change signal (see Tuning Levers).
+The title is the surface on which a session is identified, and bare clown-names
+collide across concurrent sessions — a single presence snapshot had `bozo` live
+twice in two different groups — so the fully-qualified
+`sc/<repo>/<spinclass-session>/<clown-name>` form must always be complete.
+Tier 1's dedup is therefore removed outright rather than made opt-out: there is
+no configuration in which it would have carried information.
+
+Tier 2 keeps its dedup unchanged. Its scope is a working directory, which
+genuinely can hold one clown or several, so the count is informative there.
+
+### Amendment (clown#231, clown#232): emitted from the inner clown, unconditionally by mode
+
+The title was emitted pre-exec by the OUTER clown, and only for `ModeStart` /
+`ModeResume`. Both halves were wrong:
+
+- **Emission point.** Writing before handing the terminal to the multiplexer
+  set the outer terminal's title only; nothing ever wrote an OSC sequence into
+  the multiplexer session's pty, so the mux daemon held no title for any clown
+  session — leaving a stale title on session switch and no title in its
+  activity view. The title is now emitted AFTER the `[attach]` wrap decision,
+  by whichever process goes on to run the provider: the inner clown inside the
+  mux pty, or an un-wrapped clown running inline. A successful wrap never
+  returns, so that is a single unambiguous call site.
+- **Mode gate.** `ModeSpawn` was excluded as a detached-worker launch with no
+  terminal to title. It has one — it just arrives later, when a human attaches
+  to the durable session the spawn created. Since essentially every fleet
+  session is spawned, essentially none got a title. The mode gate is removed;
+  emission is gated only on this process having an interactive terminal
+  (`CLOWN_ATTACH_FORCE=1` overrides, matching the wrap gate). A spawn's inner
+  clown passes that check with a real pty and its outer, with `/dev/null` stdio,
+  does not.
+
+Emission is consequently no longer coupled to the re-wrap loop guard: the inner
+attached clown declines to re-wrap AND emits the title.
 
 `internal/clownfile.Attach.Title(id, group string, showID bool) string` grew a
 third parameter: when `showID` is false, the literal substring `"/{id}"` (not
@@ -64,10 +111,7 @@ where `{id}` sits in the template relative to `{group}`.
 ## Examples
 
 ```
-# Spinclass session, solo (no other clown in this group):
-title: sc/clown/deft-elm
-
-# Spinclass session, 2+ clowns in the same group:
+# Spinclass session (always — one clown per worktree is the only shape):
 title: sc/clown/deft-elm/bozo
 
 # Bare clown in a git repo outside spinclass, solo:
@@ -90,9 +134,9 @@ human output, and must not be repurposed as a substitute for `Decoration` /
 group-id. Mirrors the narrow, single-purpose addition pattern used for
 `ClownName` (clown#179).
 
-**Two subprocess calls per interactive `[attach]` wrap when ungrouped.** The
-git fallback shells out to `git` twice (toplevel + branch) whenever
-`flags.groupID` is empty. Best-effort: any failure (not a git repo, `git`
+**Two subprocess calls per titled launch when ungrouped.** The git fallback
+shells out to `git` twice (toplevel + branch) whenever `flags.groupID` is
+empty. Best-effort: any failure (not a git repo, `git`
 missing) degrades silently to the true no-group tier, matching the rest of
 this subsystem's "never fail the launch over a cosmetic feature" contract
 (`internal/clownname.Claim`'s doc comment states the same policy).
@@ -113,8 +157,10 @@ does not re-emit the OSC-2 sequence.
 
 | Lever | Current | Rationale | Change signal |
 |---|---|---|---|
-| dedup threshold | 2+ live sessions | matches "only show id when it disambiguates something" | users want the id shown even solo (e.g. for muscle-memory copy-paste into `clown --naked` or scripts) |
+| dedup threshold (tier 2 only) | 2+ live sessions sharing a cwd | matches "only show id when it disambiguates something" | users want the id shown even solo (e.g. for muscle-memory copy-paste into `clown --naked` or scripts) |
+| ~~dedup threshold (tier 1)~~ | ~~2+ live sessions~~ | RETIRED by clown#230 — the threshold was unsatisfiable under spinclass, so the id was never shown; tier 1 now always shows it | — |
 | presence staleness reused for dedup | 2 minutes (existing `presenceStale`) | avoids a second, title-specific staleness constant | dedup false-positives from stale sessions become noticeably common |
+| emission gate | this process has an interactive terminal (`CLOWN_ATTACH_FORCE=1` overrides) | the emitter is whichever process owns the terminal; keeps OSC bytes out of a redirected stderr | non-interactive runs turn out to want a title anyway, or a mux gives the inner process a pty that fails TTY detection |
 
 ## More Information
 
@@ -123,7 +169,8 @@ does not re-emit the OSC-2 sequence.
   as an erratum, not a re-spec).
 - `internal/clownname`'s `Claim`/`Allocate` — the clown-name allocator whose
   output is `{id}` here; unaffected by this feature.
-- Implementation: `cmd/clown/attach.go` (`maybeReexecMultiplexer`'s title
-  block), `internal/clownfile/clownfile.go` (`Attach.Title`), and
+- Implementation: `cmd/clown/attach.go` (`emitSessionTitle`, called from
+  `runWithFlags` right after `maybeReexecMultiplexer`),
+  `internal/clownfile/clownfile.go` (`Attach.Title`), and
   `code.linenisgreat.com/ringmaster/pkgs/jobwake` (`Presence.Cwd`,
   `RegisterPresenceKey`).

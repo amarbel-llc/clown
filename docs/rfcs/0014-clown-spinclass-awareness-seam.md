@@ -235,6 +235,39 @@ chat). Design record: `docs/features/0015-title-repo-fallback-and-id-dedup.md`.
   (`cmd/clown/attach.go`) computes `showID` from the presence-based
   disambiguation count.
 
+##### 3.1.3 Amendment: the title is the canonical host-local session id, emitted from inside the multiplexer (clown#230/#231/#232)
+
+Three corrections to §3.1.2, all still **title-display only**. Design record:
+`docs/features/0015-title-repo-fallback-and-id-dedup.md`.
+
+- **`sc/<repo>/<spinclass-session>/<clown-name>` is the canonical
+  fully-qualified host-local session id**, and the title MUST render it in
+  full for a spinclass session (e.g. `sc/circus/keen-aspen/clarabell`). The
+  literal `sc/` prefix stays (§3.1.1); the burned-in default `resume-title`
+  remains `"sc/{group}/{id}"`.
+- **Tier 1 no longer dedups `{id}`.** §3.1.2's "shown only when 2+ live
+  sessions share that scope" now applies to tier 2 (the git fallback, counted
+  by `cwd`) ONLY. Under a real group (tier 1) `{id}` MUST always be shown: the
+  orchestrator creates one clown per worktree, so a `decoration` scope is 1:1
+  with a clown by construction and the threshold could never be met — the
+  clown-name was absent from every live session's title. Since sessions are
+  addressed by fully-qualified id precisely because bare clown-names collide
+  across concurrent sessions, the id segment MUST NOT be elided from the one
+  surface that identifies the session.
+- **The title MUST be emitted from inside the multiplexer session's pty**, not
+  written to the outer terminal before the wrap. clown emits it after the
+  `[attach]` wrap decision, from whichever process goes on to run the provider
+  — the inner attached clown, or an un-wrapped clown running inline. This lets
+  the multiplexer daemon's terminal model hold the title and re-assert it on
+  attach, session switch, and repaint; the previous pre-exec write left the mux
+  session with no title at all.
+- **Emission is no longer gated on the attach mode.** §5.1's `ModeSpawn` is a
+  detached-worker launch, but the session it creates is durable and attached to
+  interactively later, so it MUST be titled like any other. clown gates
+  emission solely on the emitting process having an interactive terminal
+  (`CLOWN_ATTACH_FORCE=1` overrides, as for the wrap): a spawn's inner clown
+  passes with its pty; its outer, with `/dev/null` stdio, does not.
+
 ### 4. Presence index (clown → orchestrator)
 
 clown publishes a presence index that the orchestrator consumes for session
@@ -476,6 +509,14 @@ Tests use binary injection via `bats-emo`:
   repo falls back to the prior `{id}` behavior, and none of it touches the
   routing key, `decoration`, or grouping. Also fixes the `sc/bozo/bozo`
   duplicate the pre-fix `Attach.Title` emitted for a bare clown.
+- **Title always fully-qualified under an orchestrator, and emitted inside the
+  multiplexer (clown#230/#231/#232, §3.1.3).** A spinclass session's title
+  gains back its `<clown-name>` segment (tier 1's dedup could never fire, so
+  the segment was always missing), the OSC sequence now lands in the mux
+  session's pty rather than the outer terminal, and spawned sessions get a
+  title at all. Display-only and backward-compatible; the emission-point change
+  is observable to a multiplexer daemon (it now holds a title for clown
+  sessions where it previously held none), which is the intent.
 
 ## References
 

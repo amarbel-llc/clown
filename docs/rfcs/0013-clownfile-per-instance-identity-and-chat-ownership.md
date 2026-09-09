@@ -168,9 +168,13 @@ flip and the `"posh"` value were amended post-acceptance; spinclass#201.)
 - `start` — argv template clown re-execs into for a **fresh** interactive launch.
 - `resume` — argv template clown re-execs into for a **reattach** (a forwarded
   `--resume`/`-r`/`--session-id`, or `clown resume`).
-- `resume-title` — a string clown emits as an OSC-2 terminal title immediately
-  before a `start` or `resume` attach (amended, clown#169: originally
-  `resume`-only; a fresh launch identifies its session to the terminal too).
+- `resume-title` — a string clown emits as an OSC-2 terminal title on every
+  launch (amended twice: clown#169 widened it from `resume`-only to
+  `start`+`resume`, since a fresh launch identifies its session to the terminal
+  too; clown#232 dropped the mode gate entirely, since a `spawn` creates a
+  durable session a human attaches to later). It is emitted from INSIDE the
+  multiplexer session's pty, so the mux daemon holds it (clown#231). See
+  RFC-0014 §3.1.3.
 - `spawn` — argv template for launching a **detached** worker session.
 - `spawn-entry` — the harness argv a spawned worker boots as its `{entry}`.
 - `spawn-window` — a fire-and-forget terminal-window opener for a spawned worker.
@@ -206,8 +210,11 @@ remains spinclass's (`internal/remote`, FDR-0011).
    subtree would inherit (reusing the §2 / clown#136 identity threading) — so the
    multiplexer session name (`{id}`) equals the inner clown's routing key and a
    later `resume` reattaches the same session.
-4. When `resume-title` is non-empty and clown drives a `resume` attach, clown
-   SHOULD emit it as an OSC-2 title before attaching.
+4. When `resume-title` is non-empty, clown SHOULD emit it as an OSC-2 title
+   after the wrap decision, from the process that goes on to run the provider —
+   the inner attached clown, or an un-wrapped clown running inline — so the
+   sequence reaches the multiplexer session's own pty (amended, clown#231/#232;
+   RFC-0014 §3.1.3).
 5. The `[attach]` table MUST NOT carry a `remote` mode in this revision; remote
    attach is out of scope (see Introduction) and remains spinclass's
    (`internal/remote`, FDR-0011).

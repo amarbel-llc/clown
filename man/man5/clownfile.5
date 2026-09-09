@@ -185,13 +185,35 @@ or
 or
 .Nm clown resume ) .
 .It Sy resume-title
-A string emitted as an OSC-2 terminal title before a resume attach.
+A string emitted as an OSC-2 terminal title on every launch \(em a fresh start, a
+reattach, and a detached
+.Sy spawn
+alike.
+It is written from inside the multiplexer session's pty, so the multiplexer
+daemon holds the title and re-asserts it when the session is attached, switched
+to, or repainted; a session launched detached carries it for whoever attaches
+later.
+Emission is skipped when the emitting process has no interactive terminal, so a
+non-interactive run does not write control bytes into a redirected stderr.
 .Ql {group}
-(the default) resolves to the group-id, falling back to
+resolves to the group-id, falling back to
 .Ql {id}
 when ungrouped;
 .Ql {id}
-is also available.
+resolves to this session's clown-name, falling back to the per-instance key when
+no name was allocated
+.Pq Fl -naked .
+The burned-in default is
+.Ql sc/{group}/{id} ,
+which under an orchestrator renders the session's canonical fully-qualified
+host-local id \(em
+.Ql sc/ Ns Ao repo Ac Ns / Ns Ao session Ac Ns / Ns Ao clown-name Ac ,
+e.g.
+.Ql sc/clown/deft-elm/bozo .
+The
+.Ql {id}
+segment is dropped only for a bare clown outside an orchestrator that is the
+sole session in its working directory, where it would distinguish nothing.
 .It Sy spawn
 The argv template for a detached-worker launch (RFC-0014 §5), resolved and
 executed when an orchestrator passes
@@ -505,7 +527,7 @@ group-id = "${SPINCLASS_SESSION_ID}"
 description = "${SPINCLASS_DESCRIPTION}"
 start = ["posh", "attach", "--create", "{id}", "{entry}"]
 resume = ["posh", "attach", "--create", "{id}", "{entry}"]
-resume-title = "{group}"
+resume-title = "sc/{group}/{id}"
 spawn = ["posh", "attach", "--create", "{id}", "--detach", "{entry}"]
 spawn-entry = ["clown", "--", "{prompt}"]
 .Ed
