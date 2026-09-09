@@ -137,7 +137,7 @@ rather than an external orchestrator invoking the template.
 multiplexer  = "posh"                                            # posh | zmx | none (default posh)
 start        = ["posh", "attach", "{id}", "{entry}"]             # fresh interactive launch (clown-native)
 resume       = ["posh", "attach", "{id}", "{entry}"]             # reattach (clown resume) (clown-native)
-resume-title = "{id}"                                            # OSC-2 title emitted before attach
+resume-title = "sc/{group}/{id}"                                 # OSC-2 title, emitted inside the mux pty
 spawn        = ["posh", "attach", "{id}", "--detach", "{entry}"] # detached-worker launch
 spawn-entry  = ["clown", "--", "{prompt}"]                       # harness argv a spawned worker boots
 # spawn-window has no default (unset = no window).

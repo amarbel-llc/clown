@@ -50,8 +50,9 @@ clown's per-session identity key (`flags.identity.Key`, `sessionIdentity`):
 3. **Resolution moved after the session-id decision.** The
    `resolveClownName` call in `runWithFlags` moved from before to AFTER
    `decideClaudeSession`, so the name binds to the FINAL `identity.Key`. It
-   still runs BEFORE the multiplexer re-exec, so the OSC-2 title bake and the
-   `[attach]`-inner process inherit `CLOWN_NAME` exactly as before.
+   still runs BEFORE the multiplexer re-exec, so the `[attach]`-inner process
+   inherits `CLOWN_NAME` exactly as before — and that inner process is what
+   emits the OSC-2 title (clown#231/#232), so the title still carries the name.
 
 4. **The binding is written for every provider.** The session-names journal
    write (formerly claude-only, keyed by `resumeHintID` for clown#192

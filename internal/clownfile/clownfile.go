@@ -63,7 +63,7 @@ type Attach struct {
 	Description string   `toml:"description"`  // presence label, env-interpolated (RFC-0014 §4.1)
 	Start       []string `toml:"start"`        // fresh interactive self-wrap argv
 	Resume      []string `toml:"resume"`       // reattach argv
-	ResumeTitle string   `toml:"resume-title"` // OSC-2 title emitted before a resume attach
+	ResumeTitle string   `toml:"resume-title"` // OSC-2 title, emitted on every launch from inside the mux pty
 	Spawn       []string `toml:"spawn"`        // detached-worker launch (RFC-0014 §5)
 	SpawnEntry  []string `toml:"spawn-entry"`  // harness argv a spawned worker boots (schema-only)
 	SpawnWindow []string `toml:"spawn-window"` // fire-and-forget window opener (schema-only)
@@ -164,21 +164,26 @@ func (a Attach) Resolve(mode AttachMode, id string, entry []string) ([]string, e
 	return out, nil
 }
 
-// Title renders ResumeTitle for emission as an OSC-2 terminal title before a
-// resume attach (RFC-0013 §1.3 rule 4, RFC-0014 §3.1). {group} resolves to the
-// group key, falling back to the per-instance id when the group is empty (so a
-// bare clown shows its key, never a literal "{group}").
+// Title renders ResumeTitle for emission as an OSC-2 terminal title, which the
+// caller writes on every launch from inside the multiplexer session's own pty
+// (RFC-0013 §1.3 rule 4, RFC-0014 §3.1/§3.1.3). {group} resolves to the group
+// key, falling back to the per-instance id when the group is empty (so a bare
+// clown shows its key, never a literal "{group}").
 //
 // showID controls the SEPARATE {id} placeholder (the burned-in default
-// combines both: "sc/{group}/{id}"). It exists to avoid showing the same
-// clown-name twice when {group}'s own fallback already displays it — the
-// caller (cmd/clown/attach.go) passes showID=false whenever id would be
-// redundant: group is empty (its fallback already shows id via {group}), or
-// group is non-empty but this is the only live session in that group (the id
-// would add no disambiguating information). When showID is false, the LITERAL
-// "/{id}" is dropped (not substituted with ""), so a trailing separator never
-// survives; a template with a bare {id} (no leading slash) drops just the
-// placeholder. Empty when no title is configured.
+// combines both: "sc/{group}/{id}"), for suppressing an id that would add
+// nothing. When it is false the LITERAL "/{id}" is dropped (not substituted
+// with ""), so a trailing separator never survives; a template with a bare
+// {id} (no leading slash) drops just the placeholder. Empty when no title is
+// configured.
+//
+// Title itself is a pure function of its arguments; which sessions get an id is
+// the caller's policy (cmd/clown/attach.go's emitSessionTitle). Today the caller
+// passes false only for a session whose group came from the git-repo fallback
+// and which is alone in its working directory — a real group always shows the id
+// (clown#230), and so does a session with no group at all, which is the case
+// clown#229 reports as a duplicate, since {group}'s own empty-group fallback
+// already renders the id.
 func (a Attach) Title(id, group string, showID bool) string {
 	g := group
 	if g == "" {

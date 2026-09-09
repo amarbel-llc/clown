@@ -100,12 +100,16 @@ func stringsCutPrefix(s, prefix string) (string, bool) {
 	return "", false
 }
 
-// titleTerminalAvailable reports whether this process has a terminal worth
-// titling. It is deliberately the SAME condition the [attach] wrap uses, so the
-// OSC-2 escape bytes never land in a redirected stderr (a non-interactive
-// `clown -p ... 2>log` would otherwise get control bytes in its log), and
-// CLOWN_ATTACH_FORCE=1 overrides it identically — the escape hatch for terminals
-// where detection misfires, and the seam the title tests drive.
+// titleTerminalAvailable reports whether this session has a terminal to title at
+// all. It is deliberately the SAME condition the [attach] wrap uses, down to the
+// CLOWN_ATTACH_FORCE=1 override (the escape hatch for terminals where detection
+// misfires, and the seam the title tests drive), so a session that wraps is a
+// session that titles.
+//
+// Note it asks about stdin/stdout while the write below goes to stderr, so a
+// redirected stderr under an otherwise interactive terminal still receives the
+// escape bytes. That mismatch predates the emission-point move and is left
+// as-is here rather than quietly diverging this gate from the wrap's.
 func titleTerminalAvailable() bool {
 	return isInteractiveTerminal() || os.Getenv("CLOWN_ATTACH_FORCE") == "1"
 }
