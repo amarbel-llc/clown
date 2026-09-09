@@ -227,7 +227,9 @@ chat). Design record: `docs/features/0015-title-repo-fallback-and-id-dedup.md`.
   2+ live sessions share that scope — counted over the presence index (§4) by
   `decoration` for tier 1, or by a new title-only `cwd` presence field for
   tier 2 (the git-fallback group is never in `decoration`). A solo session
-  omits `{id}` and the `/{id}` separator it would introduce.
+  omits `{id}` and the `/{id}` separator it would introduce. (§3.1.3 and
+  §3.1.5 supersede this dedup for tier 1 and tier 2 respectively; no tier
+  dedups today.)
 - **`Attach.Title` contract change.** `Title(id, group string, showID bool)`
   grew the `showID` parameter (superseding §3.1.1's "pure function, unchanged
   contract" clause). When `showID` is false the literal substring `"/{id}"`
@@ -249,7 +251,8 @@ Three corrections to §3.1.2, all still **title-display only**. Design record:
   remains `"sc/{group}/{id}"`.
 - **Tier 1 no longer dedups `{id}`.** §3.1.2's "shown only when 2+ live
   sessions share that scope" now applies to tier 2 (the git fallback, counted
-  by `cwd`) ONLY. Under a real group (tier 1) `{id}` MUST always be shown: the
+  by `cwd`) ONLY — and §3.1.5 subsequently retires it there too, leaving no
+  tier that dedups. Under a real group (tier 1) `{id}` MUST always be shown: the
   orchestrator creates one clown per worktree, so a `decoration` scope is 1:1
   with a clown by construction and the threshold could never be met — the
   clown-name was absent from every live session's title. Since sessions are
@@ -295,6 +298,24 @@ exactly this; the caller never passed it.
   string, and since emission is skipped for an empty title the session would
   carry no title at all. The caller therefore suppresses `{id}` in tier 3 only
   when the template contains `{group}`.
+
+##### 3.1.5 Amendment: tier 2 stops deduping too — no tier dedups (clown#234)
+
+Correction to §3.1.2 and §3.1.3, title-display only. Design record:
+`docs/features/0015-title-repo-fallback-and-id-dedup.md`.
+
+§3.1.3 narrowed §3.1.2's "shown only when 2+ live sessions share that scope" to
+tier 2 alone. That surviving dedup hid the clown-name from a lone bare clown in
+a git repo (`sc/<repo>/<branch>`), which is the same elision §3.1.3 rejected for
+tier 1 and for the same reason.
+
+- **`{id}` MUST be shown whenever a group resolved** — tier 1 and tier 2 alike.
+  No tier dedups; the presence index is not consulted when computing a title.
+- **Tier 3 is unchanged** (§3.1.4): the separate `{id}` is dropped only when the
+  template's `{group}` already rendered the clown-name.
+- **`cwd` in the presence record (§4.1) is no longer read by clown.** It was
+  added solely to feed tier 2's dedup. It remains in the schema; whether to
+  retire it is the presence index owner's decision, not this spec's.
 
 ### 4. Presence index (clown → orchestrator)
 
@@ -543,6 +564,11 @@ Tests use binary injection via `bats-emo`:
   already rendered the name, so a bare clown outside any git repo shows
   `sc/bozo` rather than `sc/bozo/bozo`. Display-only; a `{group}`-less
   `resume-title` is unaffected and keeps its `{id}`.
+- **Tier 2 stops deduping (clown#234, §3.1.5).** A bare clown alone in a git
+  repo now shows `sc/<repo>/<branch>/<clown-name>` instead of dropping the
+  name. With tier 1 (§3.1.3) and tier 2 both retired, no tier dedups and the
+  title no longer reads the presence index; the `cwd` field added for that
+  dedup is left in the schema but unused by clown.
 - **Title always fully-qualified under an orchestrator, and emitted inside the
   multiplexer (clown#230/#231/#232, §3.1.3).** A spinclass session's title
   gains back its `<clown-name>` segment (tier 1's dedup could never fire, so

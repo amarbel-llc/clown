@@ -56,12 +56,9 @@ nothing:
   amendment below.
 - **Tier 1** (a real spinclass group): `{id}` is ALWAYS shown. See the
   clown#230 amendment below — this reverses the original design.
-- **Tier 2** (the git-repo fallback): `{id}` is shown only when 2+ live clown
-  sessions share that same cwd. A solo session's title omits it (and the
-  redundant `/{id}` separator it would have introduced). The dedup counts
-  live `jobwake.Presence` records by a NEW `Cwd` field (added specifically
-  for this — see Limitations), since the git-fallback group is never written
-  to `Decoration`.
+- **Tier 2** (the git-repo fallback): `{id}` is ALWAYS shown. See the
+  clown#234 amendment below — like tier 1, this reverses the original design,
+  which showed it only when 2+ live sessions shared a cwd.
 
 ### Amendment (clown#230): tier 1 always shows `{id}`
 
@@ -135,16 +132,43 @@ emission is skipped for an empty title, such a session would get no title at
 all. The caller therefore suppresses `{id}` in tier 3 only when the template
 contains `{group}`.
 
+### Amendment (clown#234): tier 2 always shows `{id}` too — no tier dedups
+
+Tier 2 kept its dedup when clown#230 removed tier 1's, on the reasoning that a
+working directory genuinely can hold one clown or several, so the count carries
+information. In practice it meant a lone bare clown in a git repo rendered
+`sc/<repo>/<branch>` with no clown-name — the operator noticed the omission and
+asked for it back. That is the same change signal tier 1's lever fired, applied
+to the surviving one: a title is how a session is identified, and bare
+clown-names collide across concurrent sessions, so the id belongs in it whether
+or not a second session happens to share the directory right now.
+
+So `{id}` is now shown whenever a group resolved at all, tier 1 and tier 2
+alike. Tier 3's clown#229 rule is unchanged — it still drops the separate `{id}`
+when, and only when, the template's `{group}` already rendered the name.
+
+Consequences: `titleDisambiguationNeeded` is deleted (nothing calls it),
+`emitSessionTitle` no longer needs a `usingGitFallback` flag or a `Getwd`, and
+computing a title now reads no presence records at all. `jobwake.Presence.Cwd`
+was added solely to feed this dedup and is now unused by clown; it lives in
+ringmaster, so its removal is that repo's decision.
+
+**Testing note.** The tier-2 test that pinned the old behavior had never
+actually run: `git` was absent from the `clown-go-test` sandbox, so it hit
+`t.Skip` while the suite still reported `ok`. Inverting it alone would have
+verified nothing. `git` is now a `nativeCheckInputs` of that derivation, and the
+git-dependent tests build a throwaway repo in a temp dir rather than assuming
+the ambient cwd is a checkout — which is what makes them run in the nix lane
+(and hence in the pre-merge gate) at all.
+
 ## Examples
 
 ```
 # Spinclass session (always — one clown per worktree is the only shape):
 title: sc/clown/deft-elm/bozo
 
-# Bare clown in a git repo outside spinclass, solo:
-title: sc/clown/brave-banyan
-
-# Bare clown in a git repo outside spinclass, 2+ clowns in the same cwd:
+# Bare clown in a git repo outside spinclass — solo or not, since clown#234
+# retired the last dedup:
 title: sc/clown/brave-banyan/bozo
 
 # Bare clown, not in a git repo at all (e.g. /tmp):
@@ -153,13 +177,12 @@ title: sc/bozo
 
 ## Limitations
 
-**The git-fallback tier adds a new, narrowly-scoped presence field
-(`jobwake.Presence.Cwd`).** It exists ONLY to let the title's dedup count
-"how many live sessions are in this exact working directory" — it is not a
-general-purpose field, is not exposed in `clown presence list`'s default
-human output, and must not be repurposed as a substitute for `Decoration` /
-group-id. Mirrors the narrow, single-purpose addition pattern used for
-`ClownName` (clown#179).
+**~~The git-fallback tier adds a new, narrowly-scoped presence field
+(`jobwake.Presence.Cwd`).~~** RETIRED by clown#234. The field existed ONLY to
+let the title's dedup count "how many live sessions are in this exact working
+directory"; with tier 2's dedup gone, clown no longer reads it. The field still
+exists in ringmaster (`jobwake.Presence.Cwd`) and is now unused by clown —
+whether to remove it is ringmaster's call in its own repo, not clown's.
 
 **Two subprocess calls per titled launch when ungrouped.** The git fallback
 shells out to `git` twice (toplevel + branch) whenever `flags.groupID` is
@@ -168,13 +191,9 @@ missing) degrades silently to the true no-group tier, matching the rest of
 this subsystem's "never fail the launch over a cosmetic feature" contract
 (`internal/clownname.Claim`'s doc comment states the same policy).
 
-**Dedup is presence-based, so it inherits presence's own staleness window.**
-A session that crashed without cleanup is still "live" for up to
-`presenceStale` (2 minutes) after its last refresh, so a title computed
-during that window may count a stale session and show `{id}` when, in
-hindsight, there was really only one active session. Self-corrects on the
-next presence refresh cycle; not worth tracking more precisely for a
-cosmetic feature.
+**~~Dedup is presence-based, so it inherits presence's own staleness
+window.~~** RETIRED by clown#234: no tier dedups any more, so computing a title
+reads no presence records and cannot be skewed by a stale one.
 
 **Branch-rename does not retroactively update an already-emitted title.**
 The title is computed once, at attach time. Renaming the branch mid-session
@@ -184,9 +203,9 @@ does not re-emit the OSC-2 sequence.
 
 | Lever | Current | Rationale | Change signal |
 |---|---|---|---|
-| dedup threshold (tier 2 only) | 2+ live sessions sharing a cwd | matches "only show id when it disambiguates something" | users want the id shown even solo (e.g. for muscle-memory copy-paste into `clown --naked` or scripts) |
+| ~~dedup threshold (tier 2)~~ | ~~2+ live sessions sharing a cwd~~ | RETIRED by clown#234 — the lever's own change signal ("users want the id shown even solo") fired; tier 2 now always shows the id | — |
 | ~~dedup threshold (tier 1)~~ | ~~2+ live sessions~~ | RETIRED by clown#230 — the threshold was unsatisfiable under spinclass, so the id was never shown; tier 1 now always shows it | — |
-| presence staleness reused for dedup | 2 minutes (existing `presenceStale`) | avoids a second, title-specific staleness constant | dedup false-positives from stale sessions become noticeably common |
+| ~~presence staleness reused for dedup~~ | ~~2 minutes (existing `presenceStale`)~~ | RETIRED by clown#234 — no tier dedups any more, so the title reads no presence records at all | — |
 | emission gate | this process has an interactive terminal (`CLOWN_ATTACH_FORCE=1` overrides) | the emitter is whichever process owns the terminal; keeps OSC bytes out of a redirected stderr | non-interactive runs turn out to want a title anyway, or a mux gives the inner process a pty that fails TTY detection |
 
 ## More Information

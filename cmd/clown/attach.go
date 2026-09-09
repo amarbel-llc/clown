@@ -8,10 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
-	"time"
 
 	"code.linenisgreat.com/clown/internal/clownfile"
-	"code.linenisgreat.com/ringmaster/pkgs/jobwake"
 )
 
 // attachIDFlag is the hidden clown flag that pins the per-instance id across the
@@ -140,28 +138,6 @@ func gitRepoAndBranch() string {
 		return repo + "/" + b
 	}
 	return repo
-}
-
-// titleDisambiguationNeeded reports whether the clown-name ({id}) should appear
-// in the OSC-2 title of a session whose title group came from the git fallback —
-// true when 2+ live clown sessions share cwd, so the name distinguishes them
-// (clown#180, FDR-0015). It keys on the Cwd presence field because the
-// git-derived group is never written to Decoration. This is now the ONLY title
-// tier that dedups: a real spinclass group always shows the name (clown#230, see
-// emitSessionTitle). Best-effort — a presence-read failure degrades to true (show
-// the id rather than silently hide information on a read failure).
-func titleDisambiguationNeeded(cwd string) bool {
-	ps, err := jobwake.ListPresence(time.Now())
-	if err != nil {
-		return true
-	}
-	count := 0
-	for _, p := range ps {
-		if p.Cwd == cwd {
-			count++
-		}
-	}
-	return count >= 2
 }
 
 // maybeReexecMultiplexer wraps clown in the configured multiplexer per the
@@ -319,46 +295,36 @@ func emitSessionTitle(cf clownfile.Clownfile, flags parsedFlags) {
 	//      clowns in one repo do NOT become chat/presence-grouped;
 	//   3. else "" (not spinclass, not a git repo).
 	titleGroup := flags.groupID
-	usingGitFallback := false
 	if titleGroup == "" {
-		if g := gitRepoAndBranch(); g != "" {
-			titleGroup = g
-			usingGitFallback = true
-		}
+		titleGroup = gitRepoAndBranch()
 	}
 
-	// Tier 1 (a real spinclass group) always shows the clown-name ({id}). It used
-	// to dedup on the presence Decoration, but spinclass creates exactly one clown
-	// per worktree, so the Decoration scope is 1:1 with a clown BY CONSTRUCTION:
-	// the count was always 1 and the clown-name was dropped from every fleet
-	// session's title (clown#230). That reverses FDR-0015's dedup-threshold lever,
-	// whose own change signal ("users want the id shown even solo") has fired: the
-	// title is the surface on which sessions are identified, and bare clown-names
-	// collide across concurrent sessions, so the fully-qualified
+	// Whenever a group resolved at all — tiers 1 and 2 alike — the clown-name
+	// ({id}) is shown. Neither tier dedups any more: tier 1's threshold was
+	// unsatisfiable by construction, since spinclass creates one clown per
+	// worktree, so the count was always 1 and the name was stripped from every
+	// fleet session's title (clown#230); tier 2 then kept a cwd-keyed dedup that
+	// hid the name from any lone bare clown in a git repo (clown#234). Both
+	// retire FDR-0015's dedup-threshold lever on the same reasoning: the title is
+	// the surface on which a session is identified, and bare clown-names collide
+	// across concurrent sessions, so the fully-qualified
 	// sc/<repo>/<session>/<clown> form must always be complete.
 	//
-	// Tier 3 (no group at all) suppresses the SEPARATE {id} — not because the
-	// clown-name is unwanted there, but because Title's own empty-group fallback
-	// already substitutes it for {group}. Forcing {id} too rendered the default
-	// sc/{group}/{id} as sc/bozo/bozo (clown#229); dropping it leaves the name
-	// exactly once, and a custom template using only {group} still carries it.
+	// Tier 3 (no group at all) is the one case that still suppresses the SEPARATE
+	// {id} — not because the clown-name is unwanted, but because Title's own
+	// empty-group fallback already substitutes it for {group}. Forcing {id} too
+	// rendered the default sc/{group}/{id} as sc/bozo/bozo (clown#229); dropping
+	// it leaves the name exactly once, and a custom template using only {group}
+	// still carries it.
 	//
 	// That reasoning holds only when the template HAS a {group} to fall back —
 	// with a {group}-less template (e.g. a bare "{id}") nothing else renders the
 	// name, and suppressing {id} would empty the title and emit nothing at all. So
 	// the suppression is conditioned on the template actually containing {group},
 	// which is the only thing that makes the id redundant here.
-	//
-	// Tier 2 keeps the dedup: its scope is a working directory, which really can
-	// hold several unrelated clowns or exactly one, so the count carries
-	// information there. A Getwd failure degrades to always-show-id.
 	showID := true
 	if titleGroup == "" {
 		showID = !strings.Contains(cf.Attach.ResumeTitle, "{group}")
-	} else if usingGitFallback {
-		if cwd, err := os.Getwd(); err == nil {
-			showID = titleDisambiguationNeeded(cwd)
-		}
 	}
 
 	if title := cf.Attach.Title(titleID, titleGroup, showID); title != "" {

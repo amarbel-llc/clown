@@ -920,6 +920,13 @@
           subPackages = [ "cmd/clown" ];
           modules = ./gomod2nix.toml;
           doCheck = true;
+          # git is a CHECK-time dependency, not a build one: the OSC-2 title's
+          # tier-2 fallback shells out to git (gitRepoAndBranch), and its tests
+          # build a throwaway repo to exercise that. Without git on PATH those
+          # tests call t.Skip and the whole tier goes untested while the suite
+          # still reports ok — which is how clown#234's inverted assertion first
+          # passed against unchanged code (clown#234).
+          nativeCheckInputs = [ pkgs.git ];
           checkPhase = ''
             runHook preCheck
             go test -p $NIX_BUILD_CORES ./...

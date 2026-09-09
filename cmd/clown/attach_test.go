@@ -275,13 +275,10 @@ func TestEmitSessionTitlePrefersClownName(t *testing.T) {
 	t.Setenv("CLOWN_ATTACH_FORCE", "1")
 
 	// Run outside any git repo so gitRepoAndBranch() returns "" and titleGroup
-	// stays empty — the tier-3 "always show id" case. This test's flags carry no
-	// groupID, so without this the git-fallback tier would activate (this test
-	// binary's cwd is always inside the clown repo) and suppress {id} via
-	// titleDisambiguationNeeded's LIVE jobwake presence lookup — making the
-	// assertion below depend on ambient presence state (how many other clown
-	// sessions happen to share this cwd right now) rather than this test's own
-	// inputs (clown#186).
+	// stays empty — this test's flags carry no groupID, so otherwise the
+	// git-fallback tier would activate whenever the test binary happens to run
+	// inside a repo, and the case under test would silently be tier 2 rather than
+	// tier 3 (clown#186).
 	t.Chdir(hostTempDir(t))
 
 	cf := clownfile.Clownfile{Attach: clownfile.Attach{
@@ -328,38 +325,34 @@ func TestEmitSessionTitleNoGroupShowsClownNameOnce(t *testing.T) {
 	}
 }
 
-// The git-repo/branch fallback tier keeps its solo dedup (clown#180, FDR-0015):
-// outside spinclass (empty groupID) with no sibling presence records the title
-// collapses to "sc/<repo>/<branch>", dropping the clown-name that would
-// disambiguate nothing. Only the spinclass tier's dedup was dropped (clown#230).
-func TestEmitSessionTitleGitFallbackSolo(t *testing.T) {
+// The git-repo/branch fallback tier ALSO always shows the clown-name
+// (clown#234), matching tier 1 (clown#230): outside spinclass (empty groupID)
+// and alone in this cwd — precisely the case that used to collapse to
+// "sc/<repo>/<branch>" — the title keeps its trailing "/<clown-name>". A title
+// is how a session is identified, and bare clown-names collide across
+// concurrent sessions, so the id segment is never elided when a group exists.
+// Presence is isolated to an empty state dir so this really is the solo case.
+func TestEmitSessionTitleGitFallbackSoloAlwaysShowsClownName(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skipf("git not on PATH: %v", err)
 	}
-	repoBranch := gitRepoAndBranch()
-	if repoBranch == "" {
-		t.Skip("not inside a git worktree; git-fallback path not exercisable here")
-	}
+	dir, repoBranch := gitRepoFixture(t)
+	t.Chdir(dir)
 
 	t.Setenv("CLOWN_ATTACH_FORCE", "1")
-	// Isolate presence so the solo-dedup count is deterministic (no sibling
-	// sessions from the ambient state dir), and ensure no group-id is set.
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 
 	cf := clownfile.Clownfile{Attach: clownfile.Attach{
 		Multiplexer: "zmx",
 		ResumeTitle: "sc/{group}/{id}",
 	}}
-	// groupID empty → git fallback; clownName present but solo → dropped.
+	// groupID empty → git fallback; solo in this cwd, and the name survives anyway.
 	flags := parsedFlags{clownName: "bozo", identity: sessionIdentity{Key: "raw-uuid"}}
 
 	captured := captureTitle(t, cf, flags)
-	want := "\033]2;sc/" + repoBranch + "\007"
+	want := "\033]2;sc/" + repoBranch + "/bozo\007"
 	if !strings.Contains(captured, want) {
-		t.Fatalf("emitted title = %q, want it to contain %q (git fallback, solo id dropped)", captured, want)
-	}
-	if strings.Contains(captured, "/bozo\007") {
-		t.Fatalf("solo session leaked the redundant clown-name: %q", captured)
+		t.Fatalf("emitted title = %q, want it to contain %q (git fallback keeps the clown-name even when solo)", captured, want)
 	}
 }
 
@@ -641,59 +634,56 @@ func hostTempDir(t *testing.T) string {
 	return dir
 }
 
+// gitRepoFixture creates a real git repo in a fresh directory OUTSIDE any
+// existing repository and returns its path together with the "<repo>/<branch>"
+// gitRepoAndBranch must resolve for it.
+//
+// The git-fallback tests used to lean on the ambient cwd being clown's own
+// worktree. That holds in a dev checkout but NOT in the nix check sandbox,
+// where the source is an unpacked store path with no .git — so those tests
+// silently skipped and tier 2 went entirely untested (clown#234). Owning the
+// repo makes them run everywhere git is available, and pins the expected branch
+// instead of inheriting whatever branch the developer happens to be on.
+func gitRepoFixture(t *testing.T) (dir, repoBranch string) {
+	t.Helper()
+	dir = hostTempDir(t)
+	// An explicit initial branch and an empty commit keep the expectation exact:
+	// --show-current is what gitRepoAndBranch reads, and a repo with no commits
+	// at all is a needlessly unusual shape to assert against.
+	for _, args := range [][]string{
+		{"init", "--initial-branch=trunk"},
+		{"config", "user.email", "test@example.invalid"},
+		{"config", "user.name", "clown test"},
+		{"commit", "--allow-empty", "-m", "init"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Skipf("git %v in fixture repo: %v\n%s", args, err, out)
+		}
+	}
+	return dir, filepath.Base(dir) + "/trunk"
+}
+
 // gitRepoAndBranch resolves "<repo>/<branch>" for the OSC-2 title fallback
-// (clown#180). Inside a real git worktree (this test's own repo) it returns a
-// non-empty "<repo>/<branch>"; inside a non-git directory it returns "" so the
-// title degrades to the true no-group tier. It reads the PROCESS cwd, so the
-// non-git case chdir's into a bare temp dir.
+// (clown#180). Inside a real git worktree it returns "<repo>/<branch>"; inside
+// a non-git directory it returns "" so the title degrades to the true no-group
+// tier. It reads the PROCESS cwd, so each case chdir's into the directory it
+// means to test.
 func TestGitRepoAndBranch(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skipf("git not on PATH: %v", err)
 	}
 
-	// This test binary runs inside the clown git worktree, so the helper must
-	// resolve a repo, and (unless HEAD is detached) a "<repo>/<branch>".
-	if got := gitRepoAndBranch(); got == "" {
-		t.Error("gitRepoAndBranch() inside a git worktree = \"\", want a non-empty repo(/branch)")
-	} else if !strings.Contains(got, "/") {
-		// A detached HEAD legitimately yields just "<repo>"; a normal checkout
-		// has a branch. The test worktree is on a branch, so expect the slash.
-		t.Logf("gitRepoAndBranch() = %q (no branch segment — detached HEAD?)", got)
+	dir, want := gitRepoFixture(t)
+	t.Chdir(dir)
+	if got := gitRepoAndBranch(); got != want {
+		t.Errorf("gitRepoAndBranch() inside a git worktree = %q, want %q", got, want)
 	}
 
 	// A directory with no .git anywhere above it resolves to "".
 	t.Chdir(hostTempDir(t))
 	if got := gitRepoAndBranch(); got != "" {
 		t.Errorf("gitRepoAndBranch() in a non-git dir = %q, want \"\"", got)
-	}
-}
-
-// titleDisambiguationNeeded decides whether the clown-name {id} appears in a
-// git-fallback title: only when 2+ live sessions share the cwd (clown#180). It
-// keys on presence Cwd rather than Decoration, since the git-derived group is
-// never written to Decoration. The fixtures all register from this test
-// process's cwd, so two of them share a Cwd and trip the dedup.
-func TestTitleDisambiguationNeededByCwd(t *testing.T) {
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
-
-	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// One session in this cwd (group-id empty — the bare-clown case) → false.
-	registerPresenceFixture(t, "inst-a", "", "A")
-	if titleDisambiguationNeeded(wd) {
-		t.Error("single session in cwd: want false")
-	}
-	// A cwd with no matching session at all → still false.
-	if titleDisambiguationNeeded(filepath.Join(wd, "no-such-dir")) {
-		t.Error("no session in cwd: want false")
-	}
-
-	// A second session registered from the same cwd → true.
-	registerPresenceFixture(t, "inst-b", "", "B")
-	if !titleDisambiguationNeeded(wd) {
-		t.Error("two sessions sharing a cwd: want true")
 	}
 }
