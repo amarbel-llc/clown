@@ -614,6 +614,12 @@ func runWithFlags(flags parsedFlags) int {
 		return 1
 	}
 
+	// Reaching here means this process runs the provider itself: either it is the
+	// inner clown inside the multiplexer's pty, or no wrap applied. Either way it
+	// owns the terminal that should carry the session's title, so this is where
+	// the OSC-2 title is emitted (clown#231, clown#232) — see emitSessionTitle.
+	emitSessionTitle(cf, flags)
+
 	// Synchronously self-register presence under the FINAL identity key,
 	// right after it settles (decideClaudeSession above, and any [attach]
 	// re-exec has already either replaced this process or confirmed it is

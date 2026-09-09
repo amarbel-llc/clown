@@ -100,15 +100,14 @@ func stringsCutPrefix(s, prefix string) (string, bool) {
 	return "", false
 }
 
-// shouldEmitTitle reports whether maybeReexecMultiplexer should emit the
-// OSC-2 window title for mode (clown#169): both a fresh start and a
-// reattach identify the session to the terminal, so a title is worth
-// setting whenever one begins. ModeSpawn is excluded — it is a
-// non-interactive detached-worker launch (RFC-0014 §5.1) with no terminal
-// to title. Split out as a pure predicate so the mode-gating decision is
-// unit-testable without exec'ing a real multiplexer.
-func shouldEmitTitle(mode clownfile.AttachMode) bool {
-	return mode == clownfile.ModeStart || mode == clownfile.ModeResume
+// titleTerminalAvailable reports whether this process has a terminal worth
+// titling. It is deliberately the SAME condition the [attach] wrap uses, so the
+// OSC-2 escape bytes never land in a redirected stderr (a non-interactive
+// `clown -p ... 2>log` would otherwise get control bytes in its log), and
+// CLOWN_ATTACH_FORCE=1 overrides it identically — the escape hatch for terminals
+// where detection misfires, and the seam the title tests drive.
+func titleTerminalAvailable() bool {
+	return isInteractiveTerminal() || os.Getenv("CLOWN_ATTACH_FORCE") == "1"
 }
 
 // gitRepoAndBranch best-effort resolves "<repo-basename>/<branch>" for the
@@ -140,21 +139,21 @@ func gitRepoAndBranch() string {
 }
 
 // titleDisambiguationNeeded reports whether the clown-name ({id}) should appear
-// in the OSC-2 title — true when 2+ live clown sessions match sameScope, so the
-// name distinguishes them (clown#180, FDR-0015). The caller supplies the scope
-// predicate because the two title tiers key on different presence fields: the
-// git-fallback tier compares Cwd (the git-derived group is never written to
-// Decoration), a real spinclass group compares Decoration. Best-effort: a
-// presence-read failure degrades to true (show the id rather than silently hide
-// information on a read failure).
-func titleDisambiguationNeeded(sameScope func(jobwake.Presence) bool) bool {
+// in the OSC-2 title of a session whose title group came from the git fallback —
+// true when 2+ live clown sessions share cwd, so the name distinguishes them
+// (clown#180, FDR-0015). It keys on the Cwd presence field because the
+// git-derived group is never written to Decoration. This is now the ONLY title
+// tier that dedups: a real spinclass group always shows the name (clown#230, see
+// emitSessionTitle). Best-effort — a presence-read failure degrades to true (show
+// the id rather than silently hide information on a read failure).
+func titleDisambiguationNeeded(cwd string) bool {
 	ps, err := jobwake.ListPresence(time.Now())
 	if err != nil {
 		return true
 	}
 	count := 0
 	for _, p := range ps {
-		if sameScope(p) {
+		if p.Cwd == cwd {
 			count++
 		}
 	}
@@ -236,62 +235,6 @@ func maybeReexecMultiplexer(cf clownfile.Clownfile, flags parsedFlags, mode clow
 		return err
 	}
 
-	if shouldEmitTitle(mode) {
-		// {id} in the title prefers the human-ergonomic clown-name
-		// (clown#169) over the raw per-instance UUID — readability is the
-		// entire point of naming sessions. The mux session name/routing key
-		// above (id, used for Resolve/attachIDFlag) is UNAFFECTED: this
-		// titleID substitution is display-only. flags.clownName is normally
-		// non-empty (Claim never returns ""), but is deliberately left unset
-		// for --naked (runWithFlags skips the Claim call there, since a
-		// naked launch's monitor/presence path never consumes it) — the
-		// fallback below covers that case with the pre-clown#169 behavior.
-		titleID := flags.clownName
-		if titleID == "" {
-			titleID = id
-		}
-
-		// {group} resolves through a three-tier cascade (clown#180, FDR-0015):
-		//   1. the spinclass group-id (flags.groupID) when non-empty;
-		//   2. else a best-effort git "<repo>/<branch>" of the cwd, so a bare
-		//      clown outside spinclass still shows repo context. This is
-		//      TITLE-DISPLAY ONLY — it is never written to flags.groupID /
-		//      CLOWN_GROUP_ID / presence Decoration, so two unrelated bare
-		//      clowns in one repo do NOT become chat/presence-grouped;
-		//   3. else "" (not spinclass, not a git repo).
-		titleGroup := flags.groupID
-		usingGitFallback := false
-		if titleGroup == "" {
-			if g := gitRepoAndBranch(); g != "" {
-				titleGroup = g
-				usingGitFallback = true
-			}
-		}
-
-		// The clown-name ({id}) is shown only when it disambiguates. In the
-		// true no-group case (tier 3) it is the only identifying info, so it
-		// is always shown; under a real group or the git fallback it is shown
-		// only when 2+ live sessions share that group/cwd. The scope predicate
-		// keys on Cwd for the git fallback (its group is never in Decoration)
-		// and Decoration for a real spinclass group; a Getwd failure in the
-		// fallback path degrades to always-show-id.
-		showID := true
-		if titleGroup != "" {
-			if usingGitFallback {
-				if cwd, err := os.Getwd(); err == nil {
-					showID = titleDisambiguationNeeded(func(p jobwake.Presence) bool { return p.Cwd == cwd })
-				}
-			} else {
-				showID = titleDisambiguationNeeded(func(p jobwake.Presence) bool { return p.Decoration == titleGroup })
-			}
-		}
-
-		if title := cf.Attach.Title(titleID, titleGroup, showID); title != "" {
-			// OSC-2 window title; best-effort, before handing the terminal to the mux.
-			fmt.Fprintf(os.Stderr, "\033]2;%s\007", title)
-		}
-	}
-
 	muxBin, err := exec.LookPath(argv[0])
 	if err != nil {
 		// The configured multiplexer is not installed. Since [attach] ships as a
@@ -320,6 +263,92 @@ func maybeReexecMultiplexer(cf clownfile.Clownfile, flags parsedFlags, mode clow
 	}
 	os.Exit(code)
 	return nil // unreachable on success
+}
+
+// emitSessionTitle writes this session's OSC-2 window title (RFC-0014 §3.1.1).
+//
+// It MUST be called AFTER maybeReexecMultiplexer, because that is precisely what
+// makes the emitting process the one that owns the terminal being titled: a
+// successful wrap never returns (the outer os.Exits into the multiplexer), so the
+// only process that reaches here is either the INNER clown running inside the
+// multiplexer's pty or an un-wrapped clown running inline.
+//
+// Emitting from the inner process is the point (clown#231, clown#232). The escape
+// sequence lands in the multiplexer's pty, so the mux daemon's terminal model
+// holds the title and re-asserts it on attach, session switch, and repaint. The
+// previous pre-exec write from the outer process set the OUTER terminal's title
+// only, leaving the mux session itself titleless — which is why switching into a
+// clown session left the previous session's title on screen, and why the daemon's
+// activity view showed no title for any clown session.
+//
+// It is also why this is NOT gated on the attach mode. The old gate excluded
+// ModeSpawn as "a detached-worker launch with no terminal to title", but a spawn
+// creates a durable session a human attaches to interactively later — there is a
+// terminal, it just arrives after the launch (clown#232). Since a spawn's inner
+// clown reaches here with a real pty and its outer never does (no TTY, see
+// titleTerminalAvailable), the terminal check alone expresses the intent exactly,
+// and every launch mode gets a title.
+func emitSessionTitle(cf clownfile.Clownfile, flags parsedFlags) {
+	if flags.printLaunchPlan || !titleTerminalAvailable() {
+		return
+	}
+
+	// {id} in the title prefers the human-ergonomic clown-name (clown#169) over
+	// the raw per-instance UUID — readability is the entire point of naming
+	// sessions. The mux session name and routing key (flags.identity.Key, used
+	// for Resolve/attachIDFlag) are UNAFFECTED: this substitution is
+	// display-only. flags.clownName is normally non-empty (Claim never returns
+	// ""), but is deliberately left unset for --naked (runWithFlags skips the
+	// Claim call there, since a naked launch's monitor/presence path never
+	// consumes it) — the fallback covers that case with pre-clown#169 behavior.
+	titleID := flags.clownName
+	if titleID == "" {
+		titleID = flags.identity.Key
+	}
+
+	// {group} resolves through a three-tier cascade (clown#180, FDR-0015):
+	//   1. the spinclass group-id (flags.groupID) when non-empty;
+	//   2. else a best-effort git "<repo>/<branch>" of the cwd, so a bare
+	//      clown outside spinclass still shows repo context. This is
+	//      TITLE-DISPLAY ONLY — it is never written to flags.groupID /
+	//      CLOWN_GROUP_ID / presence Decoration, so two unrelated bare
+	//      clowns in one repo do NOT become chat/presence-grouped;
+	//   3. else "" (not spinclass, not a git repo).
+	titleGroup := flags.groupID
+	usingGitFallback := false
+	if titleGroup == "" {
+		if g := gitRepoAndBranch(); g != "" {
+			titleGroup = g
+			usingGitFallback = true
+		}
+	}
+
+	// The clown-name ({id}) is always shown under a real spinclass group and in
+	// the true no-group case; only the git-fallback tier still suppresses it
+	// when solo.
+	//
+	// Tier 1 used to dedup on the presence Decoration too, but spinclass creates
+	// exactly one clown per worktree, so the Decoration scope is 1:1 with a clown
+	// BY CONSTRUCTION: the count was always 1 and the clown-name was dropped from
+	// every fleet session's title (clown#230). That reverses FDR-0015's
+	// dedup-threshold lever, whose own change signal ("users want the id shown
+	// even solo") has fired: the title is the surface on which sessions are
+	// identified, and bare clown-names collide across concurrent sessions, so the
+	// fully-qualified sc/<repo>/<session>/<clown> form must always be complete.
+	//
+	// Tier 2 keeps the dedup: its scope is a working directory, which really can
+	// hold several unrelated clowns or exactly one, so the count carries
+	// information there. A Getwd failure degrades to always-show-id.
+	showID := true
+	if usingGitFallback {
+		if cwd, err := os.Getwd(); err == nil {
+			showID = titleDisambiguationNeeded(cwd)
+		}
+	}
+
+	if title := cf.Attach.Title(titleID, titleGroup, showID); title != "" {
+		fmt.Fprintf(os.Stderr, "\033]2;%s\007", title)
+	}
 }
 
 // runMultiplexer runs the resolved multiplexer argv as a child process, inherits

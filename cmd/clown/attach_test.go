@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	"code.linenisgreat.com/clown/internal/clownfile"
-	"code.linenisgreat.com/ringmaster/pkgs/jobwake"
 )
 
 func TestExtractAttachID(t *testing.T) {
@@ -171,85 +170,136 @@ func TestMaybeReexecSpawnBypassesTTYGate(t *testing.T) {
 	}
 }
 
-// The OSC-2 title fires on both a fresh start and a reattach (clown#169) —
-// previously resume-only, which meant a fresh `clown` launch inside a
-// spinclass session never got a title at all. ModeSpawn stays excluded (a
-// detached worker has no terminal to title).
-func TestShouldEmitTitle(t *testing.T) {
-	cases := []struct {
-		mode clownfile.AttachMode
-		want bool
-	}{
-		{clownfile.ModeStart, true},
-		{clownfile.ModeResume, true},
-		{clownfile.ModeSpawn, false},
-	}
-	for _, tc := range cases {
-		if got := shouldEmitTitle(tc.mode); got != tc.want {
-			t.Errorf("shouldEmitTitle(%v) = %v, want %v", tc.mode, got, tc.want)
-		}
-	}
-}
-
-// clown-name preference (clown#169): the OSC-2 title's {id} should resolve to
-// the human-ergonomic clown-name rather than the raw per-instance UUID.
-// maybeReexecMultiplexer writes the title to os.Stderr right before the
-// mux-absent degrade returns nil, so redirecting os.Stderr around the call
-// captures the REAL emitted escape sequence — not a re-derivation of the
-// production logic — proving titleID's preference actually ran.
-func TestMaybeReexecPrefersClownNameForTitle(t *testing.T) {
-	prev := attachedID
-	attachedID = ""
-	t.Cleanup(func() { attachedID = prev })
-	t.Setenv("CLOWN_ATTACH_FORCE", "1")
-
-	// Run outside any git repo so gitRepoAndBranch() (below) returns "" and
-	// titleGroup stays empty — the tier-3 "always show id" case (see the
-	// showID doc comment on maybeReexecMultiplexer). This test's flags carry
-	// no groupID, so without this the git-fallback tier would activate (this
-	// test binary's cwd is always inside the clown repo) and suppress {id}
-	// via titleDisambiguationNeeded's LIVE jobwake presence lookup — making
-	// the assertion below depend on ambient presence state (how many other
-	// clown sessions happen to share this cwd right now) rather than this
-	// test's own inputs (clown#186).
-	t.Chdir(hostTempDir(t))
-
-	cf := clownfile.Clownfile{Attach: clownfile.Attach{
-		Multiplexer: "zmx",
-		Start:       []string{"clown-nonexistent-mux-xyz-do-not-install", "{id}", "{entry}"},
-		ResumeTitle: "{id}",
-	}}
-	flags := parsedFlags{clownName: "bozo", identity: sessionIdentity{Key: "raw-uuid-1234"}}
-
+// captureTitle runs the real emitSessionTitle with os.Stderr redirected to a
+// pipe and returns exactly what it wrote — the actual emitted escape sequence,
+// not a re-derivation of the production logic.
+func captureTitle(t *testing.T, cf clownfile.Clownfile, flags parsedFlags) string {
+	t.Helper()
 	r, w, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
 	}
 	origStderr := os.Stderr
 	os.Stderr = w
-	reexecErr := maybeReexecMultiplexer(cf, flags, clownfile.ModeStart)
+	emitSessionTitle(cf, flags)
 	os.Stderr = origStderr
 	w.Close()
 	captured, _ := io.ReadAll(r)
+	return string(captured)
+}
 
-	if reexecErr != nil {
-		t.Fatalf("mux-absent degrade: want nil, got %v", reexecErr)
+// The title must be emitted by the INNER attached clown — the process running
+// inside the multiplexer's pty — so the mux daemon's terminal model holds it and
+// re-asserts it on attach, switch, and repaint (clown#231, clown#232). That
+// process is exactly the one the re-wrap loop guard turns away, so this asserts
+// both halves together: maybeReexecMultiplexer declines to wrap, and a title is
+// emitted anyway. Before the fix the guard suppressed the title with the wrap,
+// and a spawned worker (whose only clown IS the inner one) got no title at all.
+func TestEmitSessionTitleFromInnerAttachedProcess(t *testing.T) {
+	prev := attachedID
+	attachedID = "already-inside"
+	t.Cleanup(func() { attachedID = prev })
+	t.Setenv("CLOWN_ATTACH_FORCE", "1")
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+
+	cf := clownfile.Clownfile{Attach: clownfile.Attach{
+		Multiplexer: "posh",
+		Start:       []string{"posh", "attach", "--create", "{id}", "{entry}"},
+		ResumeTitle: "sc/{group}/{id}",
+	}}
+	flags := parsedFlags{
+		clownName: "bozo",
+		groupID:   "clown/loud-rowan",
+		identity:  sessionIdentity{Key: "raw-uuid"},
 	}
-	if !strings.Contains(string(captured), "\033]2;bozo\007") {
+
+	if err := maybeReexecMultiplexer(cf, flags, clownfile.ModeStart); err != nil {
+		t.Fatalf("inner process must not re-wrap: want nil, got %v", err)
+	}
+	if got, want := captureTitle(t, cf, flags), "\033]2;sc/clown/loud-rowan/bozo\007"; !strings.Contains(got, want) {
+		t.Fatalf("inner-process title = %q, want it to contain %q", got, want)
+	}
+}
+
+// A real spinclass group ALWAYS shows the clown-name (clown#230), even though
+// this is the only live session in the group. spinclass creates one clown per
+// worktree, so the old 2+-live-sessions dedup was unsatisfiable by construction
+// and stripped the name from every fleet session's title. The presence dir holds
+// exactly one record in this group, which is precisely the case that used to
+// suppress it.
+func TestEmitSessionTitleSpinclassGroupAlwaysShowsClownName(t *testing.T) {
+	t.Setenv("CLOWN_ATTACH_FORCE", "1")
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	registerPresenceFixture(t, "inst-a", "clown/loud-rowan", "A")
+
+	cf := clownfile.Clownfile{Attach: clownfile.Attach{
+		Multiplexer: "posh",
+		ResumeTitle: "sc/{group}/{id}",
+	}}
+	flags := parsedFlags{
+		clownName: "grock",
+		groupID:   "clown/loud-rowan",
+		identity:  sessionIdentity{Key: "raw-uuid"},
+	}
+
+	if got, want := captureTitle(t, cf, flags), "\033]2;sc/clown/loud-rowan/grock\007"; !strings.Contains(got, want) {
+		t.Fatalf("solo spinclass title = %q, want it to contain %q (the fully-qualified id)", got, want)
+	}
+}
+
+// No terminal to title (no TTY, no CLOWN_ATTACH_FORCE) ⇒ no emission, so a
+// non-interactive run never sprays OSC control bytes into a redirected stderr.
+func TestEmitSessionTitleSkippedWithoutTerminal(t *testing.T) {
+	t.Setenv("CLOWN_ATTACH_FORCE", "")
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+
+	cf := clownfile.Clownfile{Attach: clownfile.Attach{
+		Multiplexer: "posh",
+		ResumeTitle: "sc/{group}/{id}",
+	}}
+	flags := parsedFlags{clownName: "bozo", groupID: "clown/loud-rowan"}
+
+	// go test runs with no PTY, so isInteractiveTerminal() is false here.
+	if got := captureTitle(t, cf, flags); got != "" {
+		t.Fatalf("non-interactive emission = %q, want no output", got)
+	}
+}
+
+// clown-name preference (clown#169): the OSC-2 title's {id} should resolve to
+// the human-ergonomic clown-name rather than the raw per-instance UUID.
+func TestEmitSessionTitlePrefersClownName(t *testing.T) {
+	t.Setenv("CLOWN_ATTACH_FORCE", "1")
+
+	// Run outside any git repo so gitRepoAndBranch() returns "" and titleGroup
+	// stays empty — the tier-3 "always show id" case. This test's flags carry no
+	// groupID, so without this the git-fallback tier would activate (this test
+	// binary's cwd is always inside the clown repo) and suppress {id} via
+	// titleDisambiguationNeeded's LIVE jobwake presence lookup — making the
+	// assertion below depend on ambient presence state (how many other clown
+	// sessions happen to share this cwd right now) rather than this test's own
+	// inputs (clown#186).
+	t.Chdir(hostTempDir(t))
+
+	cf := clownfile.Clownfile{Attach: clownfile.Attach{
+		Multiplexer: "zmx",
+		ResumeTitle: "{id}",
+	}}
+	flags := parsedFlags{clownName: "bozo", identity: sessionIdentity{Key: "raw-uuid-1234"}}
+
+	captured := captureTitle(t, cf, flags)
+	if !strings.Contains(captured, "\033]2;bozo\007") {
 		t.Fatalf("emitted title = %q, want the OSC-2 sequence for the clown-name %q, not the raw UUID", captured, "bozo")
 	}
-	if strings.Contains(string(captured), "raw-uuid-1234") {
+	if strings.Contains(captured, "raw-uuid-1234") {
 		t.Fatalf("emitted title leaked the raw UUID instead of preferring the clown-name: %q", captured)
 	}
 }
 
-// End-to-end title emission through the real maybeReexecMultiplexer, using the
-// default-shaped "sc/{group}/{id}" template and the git-repo/branch fallback
-// (clown#180, FDR-0015). Outside spinclass (empty groupID) and with no sibling
-// presence records, the title collapses to "sc/<repo>/<branch>" — the git
-// context with the redundant clown-name dropped. Captures the actual OSC-2
-// bytes from os.Stderr rather than re-deriving the logic.
-func TestMaybeReexecTitleGitFallbackSolo(t *testing.T) {
+// The git-repo/branch fallback tier keeps its solo dedup (clown#180, FDR-0015):
+// outside spinclass (empty groupID) with no sibling presence records the title
+// collapses to "sc/<repo>/<branch>", dropping the clown-name that would
+// disambiguate nothing. Only the spinclass tier's dedup was dropped (clown#230).
+func TestEmitSessionTitleGitFallbackSolo(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skipf("git not on PATH: %v", err)
 	}
@@ -258,9 +308,6 @@ func TestMaybeReexecTitleGitFallbackSolo(t *testing.T) {
 		t.Skip("not inside a git worktree; git-fallback path not exercisable here")
 	}
 
-	prev := attachedID
-	attachedID = ""
-	t.Cleanup(func() { attachedID = prev })
 	t.Setenv("CLOWN_ATTACH_FORCE", "1")
 	// Isolate presence so the solo-dedup count is deterministic (no sibling
 	// sessions from the ambient state dir), and ensure no group-id is set.
@@ -268,31 +315,17 @@ func TestMaybeReexecTitleGitFallbackSolo(t *testing.T) {
 
 	cf := clownfile.Clownfile{Attach: clownfile.Attach{
 		Multiplexer: "zmx",
-		Start:       []string{"clown-nonexistent-mux-xyz-do-not-install", "{id}", "{entry}"},
 		ResumeTitle: "sc/{group}/{id}",
 	}}
 	// groupID empty → git fallback; clownName present but solo → dropped.
 	flags := parsedFlags{clownName: "bozo", identity: sessionIdentity{Key: "raw-uuid"}}
 
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	origStderr := os.Stderr
-	os.Stderr = w
-	reexecErr := maybeReexecMultiplexer(cf, flags, clownfile.ModeStart)
-	os.Stderr = origStderr
-	w.Close()
-	captured, _ := io.ReadAll(r)
-
-	if reexecErr != nil {
-		t.Fatalf("mux-absent degrade: want nil, got %v", reexecErr)
-	}
+	captured := captureTitle(t, cf, flags)
 	want := "\033]2;sc/" + repoBranch + "\007"
-	if !strings.Contains(string(captured), want) {
+	if !strings.Contains(captured, want) {
 		t.Fatalf("emitted title = %q, want it to contain %q (git fallback, solo id dropped)", captured, want)
 	}
-	if strings.Contains(string(captured), "/bozo\007") {
+	if strings.Contains(captured, "/bozo\007") {
 		t.Fatalf("solo session leaked the redundant clown-name: %q", captured)
 	}
 }
@@ -602,35 +635,11 @@ func TestGitRepoAndBranch(t *testing.T) {
 	}
 }
 
-// titleDisambiguationNeeded decides whether the clown-name {id} appears in the
-// title: only when 2+ live sessions match the caller's scope predicate
-// (clown#180). The non-git tier keys on presence Decoration (the real group-id).
-func TestTitleDisambiguationNeededByDecoration(t *testing.T) {
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	byGroup := func(g string) func(jobwake.Presence) bool {
-		return func(p jobwake.Presence) bool { return p.Decoration == g }
-	}
-
-	// One session in the group → the name adds nothing → no dedup needed.
-	registerPresenceFixture(t, "inst-a", "repo/feature", "A")
-	if titleDisambiguationNeeded(byGroup("repo/feature")) {
-		t.Error("single session in group: want false (no disambiguation needed)")
-	}
-	// A group with no matching session at all → still false.
-	if titleDisambiguationNeeded(byGroup("repo/absent")) {
-		t.Error("no session in group: want false")
-	}
-
-	// A second session in the SAME group → the name now disambiguates.
-	registerPresenceFixture(t, "inst-b", "repo/feature", "B")
-	if !titleDisambiguationNeeded(byGroup("repo/feature")) {
-		t.Error("two sessions in group: want true (disambiguation needed)")
-	}
-}
-
-// The git-fallback tier keys on presence Cwd instead of Decoration, since the
-// git-derived group is never written to Decoration. The fixtures all register
-// from this test process's cwd, so two of them share a Cwd and trip the dedup.
+// titleDisambiguationNeeded decides whether the clown-name {id} appears in a
+// git-fallback title: only when 2+ live sessions share the cwd (clown#180). It
+// keys on presence Cwd rather than Decoration, since the git-derived group is
+// never written to Decoration. The fixtures all register from this test
+// process's cwd, so two of them share a Cwd and trip the dedup.
 func TestTitleDisambiguationNeededByCwd(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 
@@ -638,17 +647,20 @@ func TestTitleDisambiguationNeededByCwd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	byCwd := func(p jobwake.Presence) bool { return p.Cwd == wd }
 
 	// One session in this cwd (group-id empty — the bare-clown case) → false.
 	registerPresenceFixture(t, "inst-a", "", "A")
-	if titleDisambiguationNeeded(byCwd) {
+	if titleDisambiguationNeeded(wd) {
 		t.Error("single session in cwd: want false")
+	}
+	// A cwd with no matching session at all → still false.
+	if titleDisambiguationNeeded(filepath.Join(wd, "no-such-dir")) {
+		t.Error("no session in cwd: want false")
 	}
 
 	// A second session registered from the same cwd → true.
 	registerPresenceFixture(t, "inst-b", "", "B")
-	if !titleDisambiguationNeeded(byCwd) {
+	if !titleDisambiguationNeeded(wd) {
 		t.Error("two sessions sharing a cwd: want true")
 	}
 }
