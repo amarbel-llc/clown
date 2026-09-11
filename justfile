@@ -7,7 +7,7 @@ mod? explore 'zz-explore/justfile'
 
 lint: lint-fmt lint-worktree lint-man
 
-test: test-go test-plugin-host test-stdio-bridge test-plugin-host-moxy test-plugin-host-moxy-disabled
+test: test-go test-go-godyn test-plugin-host test-stdio-bridge test-plugin-host-moxy test-plugin-host-moxy-disabled
 
 verify: verify-clown-openrouter verify-clown-tailnet verify-cover-bats verify-cover-bats-html verify-crush-tailnet verify-dev-tent verify-juggler verify-juggler-multi verify-opencode-against-openrouter verify-opencode-tailnet verify-plugin-agents verify-tailnet-url verify-tent-smoke
 
@@ -74,6 +74,46 @@ build-go:
 [group("go")]
 test-go:
     nix build .#clown-go-test --no-link --print-build-logs
+
+# Per-package godyn go test lane (igloo FDR 0007). The flake exposes it only
+# where buildGoAuto's default picks godyn (igloo's godynSystems), so other
+# systems skip; the bga clown-go-test lane above covers them.
+#
+# run the per-package godyn Go test lane (godyn systems only)
+[group("go")]
+test-go-godyn:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    system=$(nix eval --raw --impure --expr 'builtins.currentSystem')
+    if [[ "$(nix eval ".#packages.$system" --apply 'p: p ? clown-godyn-tests')" != true ]]; then
+        echo "test-go-godyn: skipped on $system (no godyn lane; buildGoAuto picks bga here)" >&2
+        exit 0
+    fi
+    nix build .#clown-godyn-tests --no-link --print-build-logs
+
+# Smoke-run every Go binary bundled in the default package (version/help)
+# and check juggler's burned-in llama-server path — the godyn-migration
+# check that the linked binaries run (igloo FDR 0007).
+#
+# run each bundled Go binary's version/help from the built default package
+[group("debug")]
+debug-godyn-binaries OUT="":
+    #!/usr/bin/env bash
+    set -uo pipefail
+    out="{{OUT}}"
+    if [[ -z "$out" ]]; then
+        out=$(nix build --no-link --print-out-paths)
+    fi
+    echo "== clown version"
+    "$out/bin/clown" version; echo "exit $?"
+    for b in clown-plugin-host clown-stdio-bridge clown-mcp-collapse juggler; do
+        echo "== $b --version"
+        "$out/bin/$b" --version 2>&1 | head -5; echo "exit ${PIPESTATUS[0]}"
+        echo "== $b --help"
+        "$out/bin/$b" --help 2>&1 | head -5; echo "exit ${PIPESTATUS[0]}"
+    done
+    echo "== juggler LlamaServerPath"
+    grep -a -o '/nix/store/[a-z0-9]*-llama-cpp[^[:space:]]*/bin/llama-server' "$out/bin/juggler" | head -1
 
 # Regenerate gomod2nix.toml after go.mod changes (uses the gomod2nix
 # binary from the devshell so the tool version matches the nix builder).

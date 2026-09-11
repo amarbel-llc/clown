@@ -139,11 +139,11 @@
         "treefmt-nix": "treefmt-nix"
       },
       "locked": {
-        "lastModified": 1788745159,
-        "narHash": "sha256-zxCue/vpiowGKW2h1YdMlxejEH7Zc+PFcISYXo9NDDw=",
-        "rev": "b13d154cb7125df8c584c1f5d7796a149152f025",
+        "lastModified": 1789151573,
+        "narHash": "sha256-Y0D3P7q/egseNQnMsWOQXShN6ZBXQG7f29kl51a9YhI=",
+        "rev": "42c4a101aeffb2416ec589f654cc11761072bcec",
         "type": "tarball",
-        "url": "https://code.linenisgreat.com/igloo/archive/b13d154cb7125df8c584c1f5d7796a149152f025.tar.gz"
+        "url": "https://code.linenisgreat.com/igloo/archive/42c4a101aeffb2416ec589f654cc11761072bcec.tar.gz"
       },
       "original": {
         "type": "tarball",

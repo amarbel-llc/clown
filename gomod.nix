@@ -16,9 +16,10 @@
 # (see igloo RFC-0001 § Consumer interface, "Staleness of the organic
 # version is the designed state").
 #
-# This value MUST be threaded identically into every buildGoApplication and
-# mkGoEnv call in flake.nix (via `inherit goFlakeInputs;`) — build and
-# devshell diverging silently reintroduces lockstep drift.
+# This value MUST be threaded identically into every Go build (buildClownGo,
+# the godyn test lane) and mkGoEnv call in flake.nix (via `inherit
+# goFlakeInputs;`) — build and devshell diverging silently reintroduces
+# lockstep drift.
 {
   ringmaster,
   purse-first,

@@ -83,7 +83,8 @@ override with `CLOWN_PROVIDER` env var, or pin one per-directory via a
 ```sh
 just build       # Default: nix build --show-trace — the authoritative check
 just build-go    # Build Go binaries; UNRELIABLE on bridged-dep drift, see above
-just test-go     # Run Go unit tests
+just test-go     # Run Go unit tests (bga lane, every system)
+just test-go-godyn  # Per-package godyn Go test lane (igloo godynSystems; x86_64-linux today)
 just clean-result  # delete result symlinks
 ```
 

@@ -59,7 +59,7 @@
 let
   # Naming anchor for the lane derivation — only consulted for
   # `${base.pname}-bats-${suffix}`. Use the underlying
-  # buildGoApplication (which has `pname = "clown"`) rather
+  # mkClownGo build (which has `pname = "clown"`) rather
   # than the symlinkJoin'd mkClownPkg, which has only `name`.
   # The actual binaries the tests invoke are exported via the
   # `binaries` attrset below.

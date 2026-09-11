@@ -16,6 +16,12 @@ import (
 var fakeServerBin string
 
 func TestMain(m *testing.M) {
+	// A prebuilt binary wins: the nix godyn test lane has no `go` on PATH.
+	if prebuilt := os.Getenv("CLOWN_TEST_FAKESERVER"); prebuilt != "" {
+		fakeServerBin = prebuilt
+		os.Exit(m.Run())
+	}
+
 	tmp, err := os.MkdirTemp("", "pluginhost-test-*")
 	if err != nil {
 		panic(err)
@@ -23,7 +29,7 @@ func TestMain(m *testing.M) {
 	defer os.RemoveAll(tmp)
 
 	bin := filepath.Join(tmp, "fakeserver")
-	cmd := exec.Command("go", "build", "-o", bin, "./testdata/fakeserver.go")
+	cmd := exec.Command("go", "build", "-o", bin, "./testdata/fakeserver")
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		panic("building fakeserver: " + err.Error())

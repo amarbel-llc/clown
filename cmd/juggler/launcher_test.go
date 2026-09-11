@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
@@ -15,6 +16,10 @@ import (
 // across tests in the package via TestMain (kept simple here — rebuilt per test).
 func buildFakeLlamaServer(t *testing.T) string {
 	t.Helper()
+	// A prebuilt binary wins: the nix godyn test lane has no `go` on PATH.
+	if prebuilt := os.Getenv("CLOWN_TEST_FAKE_LLAMA_SERVER"); prebuilt != "" {
+		return prebuilt
+	}
 	bin := filepath.Join(t.TempDir(), "fake-llama-server")
 	src, _ := filepath.Abs("./testdata/fake-llama-server")
 	cmd := exec.Command("go", "build", "-o", bin, src)

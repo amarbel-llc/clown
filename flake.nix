@@ -264,16 +264,41 @@
 
         # igloo flake-input-go_mod bridge (igloo RFC-0001): routes the
         # code.linenisgreat.com/ringmaster require onto the ringmaster flake
-        # input's go-pkgs output. See gomod.nix. Wrapping buildGoApplication
-        # and mkGoEnv threads the same goFlakeInputs into EVERY call site
-        # (all ~dozen Go builders + both devshell envs) — the protocol
-        # requires identical goFlakeInputs on every builder and the devshell,
-        # or go.mod/vendor drift between build and `nix develop`.
+        # input's go-pkgs output. See gomod.nix. buildClownGo and the mkGoEnv
+        # wrapper thread the same goFlakeInputs into EVERY call site (all
+        # ~dozen Go builders + both devshell envs) — the protocol requires
+        # identical goFlakeInputs on every builder and the devshell, or
+        # go.mod/vendor drift between build and `nix develop`.
         goFlakeInputs = import ./gomod.nix {
           inherit ringmaster purse-first system;
         };
-        buildGoApplication = args: pkgs.buildGoApplication (args // { inherit goFlakeInputs; });
         mkGoEnv = args: pkgs.mkGoEnv (args // { inherit goFlakeInputs; });
+
+        # Shared shape of every clown Go build: goSrc, the committed
+        # gomod2nix.toml pins and the goFlakeInputs bridges, no committed
+        # godyn graph (igloo FDR 0007/0008). buildGoAuto's default strategy
+        # follows igloo's godynSystems (godyn there, buildGoApplication
+        # elsewhere); both backends stay reachable as passthru.native /
+        # passthru.bga. `cc` keeps godyn's graph CGO_ENABLED=1 so its binaries
+        # match bga's (the stdlib's cgo net/os/user paths). bga-only extras
+        # ride in `bgaArgs`, passed through to buildGoAuto untouched.
+        buildClownGo =
+          {
+            nativeArgs ? { },
+            ...
+          }@args:
+          pkgs.buildGoAuto (
+            builtins.removeAttrs args [ "nativeArgs" ]
+            // {
+              src = goSrc;
+              modules = ./gomod2nix.toml;
+              inherit goFlakeInputs;
+              nativeArgs = {
+                cc = pkgs.stdenv.cc;
+              }
+              // nativeArgs;
+            }
+          );
 
         goSrc = lib.fileset.toSource {
           root = ./.;
@@ -299,12 +324,10 @@
           ];
         };
 
-        clown-plugin-host = buildGoApplication {
+        clown-plugin-host = buildClownGo {
           pname = "clown-plugin-host";
           version = clownVersion;
-          src = goSrc;
           subPackages = [ "cmd/clown-plugin-host" ];
-          modules = ./gomod2nix.toml;
           ldflags = [
             "-s"
             "-w"
@@ -317,12 +340,10 @@
           };
         };
 
-        clown-stdio-bridge = buildGoApplication {
+        clown-stdio-bridge = buildClownGo {
           pname = "clown-stdio-bridge";
           version = clownVersion;
-          src = goSrc;
           subPackages = [ "cmd/clown-stdio-bridge" ];
-          modules = ./gomod2nix.toml;
           ldflags = [
             "-s"
             "-w"
@@ -337,12 +358,10 @@
         # and collapses their tools behind three generic verbs
         # (mcp_list/mcp_describe/mcp_call). clown (--mcp-collapse, a later task)
         # spawns the upstreams and passes their names+URLs.
-        clown-mcp-collapse = buildGoApplication {
+        clown-mcp-collapse = buildClownGo {
           pname = "clown-mcp-collapse";
           version = clownVersion;
-          src = goSrc;
           subPackages = [ "cmd/clown-mcp-collapse" ];
-          modules = ./gomod2nix.toml;
           ldflags = [
             "-s"
             "-w"
@@ -354,15 +373,14 @@
         # Mock stdio MCP server used by the test-stdio-bridge integration
         # test. Built as a derivation so the test recipe consumes a store
         # path instead of dropping a binary into the worktree. The
-        # buildGoApplication output is wrapped in runCommand to preserve
-        # the historical "mock-stdio-mcp" binary name (Go's default
-        # would be "mockstdiomcp" — the leaf of the subPackage path).
-        mock-stdio-mcp-go = buildGoApplication {
-          pname = "mock-stdio-mcp";
+        # Go build output is wrapped in runCommand to preserve the
+        # historical "mock-stdio-mcp" binary name. pname is the subPackage
+        # leaf so bga (names by leaf) and godyn (names a single main by
+        # pname) agree on "mockstdiomcp".
+        mock-stdio-mcp-go = buildClownGo {
+          pname = "mockstdiomcp";
           version = clownVersion;
-          src = goSrc;
           subPackages = [ "internal/pluginhost/testdata/mockstdiomcp" ];
-          modules = ./gomod2nix.toml;
           ldflags = [
             "-s"
             "-w"
@@ -385,7 +403,7 @@
           patchShebangs $out
         '';
 
-        # Unified buildGoApplication holding the three binaries the
+        # Unified Go build holding the three binaries the
         # bats integration suite invokes (clown-plugin-host,
         # clown-stdio-bridge, mock-stdio-mcp). Used as the `base` of
         # buildGoCover — pkgs.buildGoCover rebuilds this with `-cover`
@@ -398,17 +416,18 @@
         # No buildcfg.StdioBridgePath ldflag here: the bats suite never
         # exercises the code path that consumes it (neither test makes
         # plugin-host spawn a stdio-bridge), so an empty value is fine.
-        clown-bats-bins = buildGoApplication {
+        clown-bats-bins = buildClownGo {
           pname = "clown-bats-bins";
           version = clownVersion;
-          src = goSrc;
+          # Its only consumer is clown-cover, whose buildGoCover rewrites bga's
+          # phases; forcing bga skips evaluating an unused godyn graph.
+          strategy = "bga";
           subPackages = [
             "cmd/clown-plugin-host"
             "cmd/clown-stdio-bridge"
             "cmd/clown-mcp-collapse"
             "internal/pluginhost/testdata/mockstdiomcp"
           ];
-          modules = ./gomod2nix.toml;
           ldflags = [
             "-s"
             "-w"
@@ -477,12 +496,11 @@
         # Compiled binary that the synthetic-plugin derivation embeds.
         # Not exposed as a top-level package — consumers should use
         # synthetic-plugin instead, which lays out the full plugin dir.
-        mock-mcp-server-go = buildGoApplication {
-          pname = "mock-mcp-server";
+        # pname is the subPackage leaf so both backends name it "mockserver".
+        mock-mcp-server-go = buildClownGo {
+          pname = "mockserver";
           version = clownVersion;
-          src = goSrc;
           subPackages = [ "internal/pluginhost/testdata/mockserver" ];
-          modules = ./gomod2nix.toml;
           ldflags = [
             "-s"
             "-w"
@@ -515,12 +533,10 @@
         # synthJobMonitorPluginDir (clown#130) — the live --plugin-dir hook
         # mechanism, not managed-settings (which claude does not read outside
         # --tent; clown#133).
-        clown-hook-allow = buildGoApplication {
+        clown-hook-allow = buildClownGo {
           pname = "clown-hook-allow";
           version = clownVersion;
-          src = goSrc;
           subPackages = [ "cmd/clown-hook-allow" ];
-          modules = ./gomod2nix.toml;
           ldflags = [
             "-s"
             "-w"
@@ -534,12 +550,10 @@
         # synthJobMonitorPluginDir, same live --plugin-dir hook mechanism as
         # clown-hook-allow; registration is gated at launch on the xmpp-native
         # transport with a minted credential.
-        clown-hook-tee = buildGoApplication {
+        clown-hook-tee = buildClownGo {
           pname = "clown-hook-tee";
           version = clownVersion;
-          src = goSrc;
           subPackages = [ "cmd/clown-hook-tee" ];
-          modules = ./gomod2nix.toml;
           ldflags = [
             "-s"
             "-w"
@@ -552,12 +566,10 @@
         # baked in via buildcfg.McpCollapseHookPath and shipped THROUGH THE
         # aggregator plugin by collapseBinding.synthAggregatorPluginDir — the same
         # live --plugin-dir hook mechanism clown-hook-allow uses.
-        clown-hook-collapse = buildGoApplication {
+        clown-hook-collapse = buildClownGo {
           pname = "clown-hook-collapse";
           version = clownVersion;
-          src = goSrc;
           subPackages = [ "cmd/clown-hook-collapse" ];
-          modules = ./gomod2nix.toml;
           ldflags = [
             "-s"
             "-w"
@@ -750,12 +762,10 @@
             ];
             limactlPath = if tentBackend == "lima" then "${pkgs.lima}/bin/limactl" else "";
           in
-          buildGoApplication {
+          buildClownGo {
             pname = "clown";
             version = clownVersion;
-            src = goSrc;
             subPackages = [ "cmd/clown" ];
-            modules = ./gomod2nix.toml;
             ldflags = [
               "-s"
               "-w"
@@ -828,12 +838,10 @@
         # build var — LlamaServerPath — is juggler-owned (cmd/juggler/buildcfg.go)
         # rather than clown's internal/buildcfg. Clean perforation line for a
         # future extraction into its own repo.
-        juggler-go = buildGoApplication {
+        juggler-go = buildClownGo {
           pname = "juggler";
           version = clownVersion;
-          src = goSrc;
           subPackages = [ "cmd/juggler" ];
-          modules = ./gomod2nix.toml;
           ldflags = [
             "-s"
             "-w"
@@ -889,12 +897,10 @@
         # against a real GGUF inside the nix sandbox. This serves
         # /health (200 OK) and /v1/models, which is all the launcher
         # waits on. Same source as cmd/juggler/testdata/fake-llama-server.
-        fake-llama-server-go = buildGoApplication {
+        fake-llama-server-go = buildClownGo {
           pname = "fake-llama-server";
           version = clownVersion;
-          src = goSrc;
           subPackages = [ "cmd/juggler/testdata/fake-llama-server" ];
-          modules = ./gomod2nix.toml;
           ldflags = [
             "-s"
             "-w"
@@ -907,31 +913,69 @@
         # builds and the mkGoEnv devShell (igloo RFC-0001 "no go build
         # outside Nix"); a bare `go test ./...` in the hermetic pre-merge hook
         # has neither and fails with "inconsistent vendoring" on the bridged
-        # module. buildGoApplication (wrapped with goFlakeInputs above)
+        # module. The bga backend (forced below, with goFlakeInputs)
         # materializes the merged go.mod in-sandbox, so the checkPhase's
         # `go test ./...` resolves ringmaster. The `test-go` recipe builds
         # this instead of invoking `go test` directly; `nix develop -c go
         # test ./...` still works for local dev (the devShell mkGoEnv carries
         # goFlakeInputs too). Modeled on madder/go/default.nix's checkPhase.
-        clown-go-test = buildGoApplication {
+        clown-go-test = buildClownGo {
           pname = "clown-go-test";
           version = clownVersion;
-          src = goSrc;
+          # The whole-module `go test ./...` checkPhase is bga's; forcing bga
+          # also skips evaluating an unused godyn graph for this pname.
+          strategy = "bga";
           subPackages = [ "cmd/clown" ];
+          bgaArgs = {
+            doCheck = true;
+            # git is a CHECK-time dependency, not a build one: the OSC-2 title's
+            # tier-2 fallback shells out to git (gitRepoAndBranch), and its tests
+            # build a throwaway repo to exercise that. Without git on PATH those
+            # tests call t.Skip and the whole tier goes untested while the suite
+            # still reports ok — which is how clown#234's inverted assertion first
+            # passed against unchanged code (clown#234).
+            nativeCheckInputs = [ pkgs.git ];
+            checkPhase = ''
+              runHook preCheck
+              go test -p $NIX_BUILD_CORES ./...
+              runHook postCheck
+            '';
+          };
+        };
+
+        # Prebuilt pluginhost test fixture: a per-package godyn test run has
+        # no `go` to build it.
+        fakeserver-go = buildClownGo {
+          pname = "fakeserver";
+          version = clownVersion;
+          subPackages = [ "internal/pluginhost/testdata/fakeserver" ];
+        };
+
+        # godyn's per-package go test lane (godyn systems only): each tested
+        # package's test binary is built and run in its own CA derivation.
+        # testEnv hands the fixture-spawning tests prebuilt binaries; git is on
+        # PATH for the OSC-2 title's git-backed tests (clown#234, see
+        # clown-go-test).
+        clownGodynTests = pkgs.buildGodynModule {
+          pname = "clown";
+          version = clownVersion;
+          inherit goFlakeInputs;
+          src = goSrc;
           modules = ./gomod2nix.toml;
-          doCheck = true;
-          # git is a CHECK-time dependency, not a build one: the OSC-2 title's
-          # tier-2 fallback shells out to git (gitRepoAndBranch), and its tests
-          # build a throwaway repo to exercise that. Without git on PATH those
-          # tests call t.Skip and the whole tier goes untested while the suite
-          # still reports ok — which is how clown#234's inverted assertion first
-          # passed against unchanged code (clown#234).
+          cc = pkgs.stdenv.cc;
+          tests = true;
           nativeCheckInputs = [ pkgs.git ];
-          checkPhase = ''
-            runHook preCheck
-            go test -p $NIX_BUILD_CORES ./...
-            runHook postCheck
-          '';
+          testEnv = {
+            CLOWN_TEST_FAKESERVER = "${fakeserver-go}/bin/fakeserver";
+            CLOWN_TEST_FAKE_LLAMA_SERVER = "${fake-llama-server-go}/bin/fake-llama-server";
+          };
+        };
+
+        # Exposed (packages + checks) only where buildGoAuto's default picks
+        # godyn (igloo's godynSystems), so extending that list turns the lane
+        # on here too.
+        godynTestOutputs = lib.optionalAttrs (clown-plugin-host.passthru.backend == "native") {
+          clown-godyn-tests = clownGodynTests.passthru.checkAll;
         };
 
         # clown ships NO managed-settings (clown#133). The delivery strategy was
@@ -1155,10 +1199,11 @@
         # as packages.clown-race; not a release artifact (race-
         # instrumented binaries are slower).
         clown-go-race = pkgs.buildGoRace {
-          base = mkClownGo {
-            defaultProvider = defaultDefaultProvider;
-            defaultProfile = defaultDefaultProfile;
-          };
+          base =
+            (mkClownGo {
+              defaultProvider = defaultDefaultProvider;
+              defaultProfile = defaultDefaultProfile;
+            }).passthru.bga;
         };
 
         batsLaneOutputs = import ./bats.nix {
@@ -1566,6 +1611,8 @@
           conformist-impure-config = conformistImpureEval.config.build.configFile;
         }
         // batsLaneOutputs
+        # The per-package godyn go test lane (`just test-go-godyn`).
+        // godynTestOutputs
         # Expose the tent container image as a named package on linux
         # systems so it can be built directly (e.g. as an
         # `aarch64-linux` cross-build from darwin via nix-darwin's
@@ -1586,7 +1633,8 @@
           # warrant reintroducing one.
           bats-default = batsLaneOutputs.bats-default;
           formatting = conformistEval.config.build.check self;
-        };
+        }
+        // godynTestOutputs;
 
         devShells.default = pkgs.mkShell {
           packages = [

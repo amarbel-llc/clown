@@ -47,7 +47,10 @@ a minimal Go HTTP stand-in that serves
 and
 .Pa /v1/models .
 The fake is rebuilt per test via
-.Sy buildFakeLlamaServer .
+.Sy buildFakeLlamaServer ,
+unless
+.Ev CLOWN_TEST_FAKE_LLAMA_SERVER
+names a prebuilt binary, as the nix godyn test lane does.
 .It Pa cmd/juggler/launcher_reap_test.go
 SIGKILL-mid-test verifies the reaper-on-exit path: the registry
 drains automatically when a child dies outside of
