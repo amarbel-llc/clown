@@ -2,9 +2,10 @@
 # Stages zz-tests_bats/ into the build sandbox, exports binaries under
 # stable env-var names, plumbs the bats-libs helper bundle onto
 # BATS_LIB_PATH, and runs `bats --jobs N [--filter-tags <filter>]
-# *.bats`. The base derivation is mkClownGo purely for naming — the lane
-# consumes the individual subpackages by store path so it doesn't rebuild
-# Go on filter changes.
+# *.bats`. The binaries map comes from flake.nix's batsBinaries, shared
+# with the clown-cover lane so the two can't drift apart (clown#237); the
+# lane consumes each binary by store path so it doesn't rebuild Go on
+# filter changes.
 #
 # Returns an attrset with one lane per unique `# bats file_tags=...`
 # directive plus a `bats-default` lane that runs everything except the
@@ -22,51 +23,16 @@
   lib,
   batsLane,
   bats-libs,
-  mkClownGo,
-  defaultDefaultProvider,
-  defaultDefaultProfile,
-  clown-stdio-bridge,
-  clown-mcp-collapse,
-  clown-plugin-host,
-  mock-stdio-mcp,
+  # The env var -> { base; name; } binaries map every lane exports
+  # (flake.nix batsBinaries).
+  batsBinaries,
   synthetic-plugin,
   # Shebang-patched copy of the inspect-compiled helper, lifted to
   # flake.nix so clown-cover's coverIntegrationCommand can stage the
   # same artifact this lane stages.
   inspectCompiledPatched,
-  # Ringmaster e2e lane fixtures: the daemon, its CLI client, and a
-  # http stand-in for llama-server. Plumbed into the binaries map
-  # below as RINGMASTER_BIN / JUGGLER_BIN / FAKE_LLAMA_SERVER_BIN.
-  ringmaster,
-  juggler,
-  fake-llama-server,
-  # The troupe binary (messaging surface, RFC-0015). Plumbed below as
-  # TROUPE_BIN; job_wakeup.bats / job_mcp.bats invoke `troupe send|read|mcp`.
-  troupe,
-  # Real opencode binary (same nixpkgs attr buildcfg.OpencodeCliPath binds
-  # to, flake.nix's igloo pkgs). Plumbed below as OPENCODE_BIN;
-  # opencode.bats invokes `opencode models custom` against a synthesized
-  # OPENCODE_CONFIG to verify clown's writeOpencodeConfigFile output
-  # actually resolves in a real opencode, not just a unit-test JSON check
-  # (clown#197).
-  opencode,
-  # Real crush binary (same nixpkgs-llm-agents attr buildcfg.CrushCliPath
-  # binds to). Plumbed below as CRUSH_BIN; provider_mcp.bats drives
-  # `clown --provider crush` and asserts the generated config lands in the
-  # workspace slot crush reads (FDR 0016 phase 0).
-  crush,
 }:
 let
-  # Naming anchor for the lane derivation — only consulted for
-  # `${base.pname}-bats-${suffix}`. Use the underlying
-  # mkClownGo build (which has `pname = "clown"`) rather
-  # than the symlinkJoin'd mkClownPkg, which has only `name`.
-  # The actual binaries the tests invoke are exported via the
-  # `binaries` attrset below.
-  clownBatsBase = mkClownGo {
-    defaultProvider = defaultDefaultProvider;
-    defaultProfile = defaultDefaultProfile;
-  };
 
   mkClownBatsLane =
     {
@@ -74,61 +40,12 @@ let
     }:
     batsLane {
       inherit filter;
-      base = clownBatsBase;
+      # Naming anchor only (`${base.pname}-bats-<suffix>`): the mkClownGo
+      # build behind CLOWN_BIN, whose pname is "clown" (the symlinkJoin'd
+      # mkClownPkg has only `name`).
+      base = batsBinaries.CLOWN_BIN.base;
       batsSrc = ./zz-tests_bats;
-      binaries = {
-        # The clown Go binary (cmd/clown). clownfile_attach.bats invokes it
-        # as `clown --provider …` via require_bin CLOWN_BIN. The job-wakeup
-        # producer/monitor surface moved to the ringmaster/troupe binaries
-        # (RFC-0015), which job_wakeup.bats / job_mcp.bats invoke via
-        # RINGMASTER_BIN / TROUPE_BIN below.
-        # clownBatsBase is mkClownGo, whose pname is "clown", so its
-        # $out/bin/clown is exactly the binary the suite expects.
-        CLOWN_BIN = {
-          base = clownBatsBase;
-          name = "clown";
-        };
-        CLOWN_STDIO_BRIDGE_BIN = {
-          base = clown-stdio-bridge;
-          name = "clown-stdio-bridge";
-        };
-        CLOWN_MCP_COLLAPSE_BIN = {
-          base = clown-mcp-collapse;
-          name = "clown-mcp-collapse";
-        };
-        CLOWN_PLUGIN_HOST_BIN = {
-          base = clown-plugin-host;
-          name = "clown-plugin-host";
-        };
-        MOCK_STDIO_MCP_BIN = {
-          base = mock-stdio-mcp;
-          name = "mock-stdio-mcp";
-        };
-        RINGMASTER_BIN = {
-          base = ringmaster;
-          name = "ringmaster";
-        };
-        TROUPE_BIN = {
-          base = troupe;
-          name = "troupe";
-        };
-        JUGGLER_BIN = {
-          base = juggler;
-          name = "juggler";
-        };
-        FAKE_LLAMA_SERVER_BIN = {
-          base = fake-llama-server;
-          name = "fake-llama-server";
-        };
-        OPENCODE_BIN = {
-          base = opencode;
-          name = "opencode";
-        };
-        CRUSH_BIN = {
-          base = crush;
-          name = "crush";
-        };
-      };
+      binaries = batsBinaries;
       # bats-libs ships bats-support, bats-assert, bats-emo, bats-island
       # under share/bats; surfacing batsLibPath here lets common.bash
       # call `bats_load_library bats-island` etc. from inside the lane.

@@ -444,6 +444,68 @@
         # set. batsLibPath is `${bats-libs}/share/bats`.
         batsLibs = bats.packages.${system}.bats-libs;
 
+        # The binaries every bats lane exports, as batsLane's binaries map
+        # (env var -> { base; name; }, exported as ${base}/bin/${name}). One
+        # table for bats.nix's lanes and clown-cover, so a suite added under
+        # zz-tests_bats/ can't find its binary in one lane and miss it in the
+        # other (clown#237).
+        batsBinaries = {
+          # cmd/clown: clownfile_attach, launch_plan, profile, provider_mcp.
+          # Its base doubles as the lanes' naming anchor (pname "clown").
+          CLOWN_BIN = {
+            base = mkClownGo {
+              defaultProvider = defaultDefaultProvider;
+              defaultProfile = defaultDefaultProfile;
+            };
+            name = "clown";
+          };
+          CLOWN_STDIO_BRIDGE_BIN = {
+            base = clown-stdio-bridge;
+            name = "clown-stdio-bridge";
+          };
+          CLOWN_MCP_COLLAPSE_BIN = {
+            base = clown-mcp-collapse;
+            name = "clown-mcp-collapse";
+          };
+          CLOWN_PLUGIN_HOST_BIN = {
+            base = clown-plugin-host;
+            name = "clown-plugin-host";
+          };
+          MOCK_STDIO_MCP_BIN = {
+            base = mock-stdio-mcp;
+            name = "mock-stdio-mcp";
+          };
+          # The job platform (RFC-0015): job_wakeup, job_mcp, job_output_spool.
+          RINGMASTER_BIN = {
+            base = ringmasterPkg;
+            name = "ringmaster";
+          };
+          TROUPE_BIN = {
+            base = troupePkg;
+            name = "troupe";
+          };
+          # `juggler daemon` (the llama-server control plane) against a Go
+          # stand-in for llama-server: juggler.bats.
+          JUGGLER_BIN = {
+            base = juggler-go;
+            name = "juggler";
+          };
+          FAKE_LLAMA_SERVER_BIN = {
+            base = fake-llama-server-go;
+            name = "fake-llama-server";
+          };
+          # The real provider binaries buildcfg.OpencodeCliPath /
+          # CrushCliPath bind to: opencode (clown#197), provider_mcp (FDR 0016).
+          OPENCODE_BIN = {
+            base = pkgs.opencode;
+            name = "opencode";
+          };
+          CRUSH_BIN = {
+            base = pkgs-llm-agents.crush;
+            name = "crush";
+          };
+        };
+
         # clown-cover: bats-suite coverage of clown-bats-bins.
         # buildGoCover rebuilds clown-bats-bins with `go build -cover`,
         # runs coverIntegrationCommand under a fresh $GOCOVERDIR, and
@@ -464,10 +526,22 @@
           cp ${inspectCompiledPatched} stage/zz-tests_bats/inspect-compiled
           chmod -R u+w stage
 
-          export CLOWN_PLUGIN_HOST_BIN="$out/bin/clown-plugin-host"
-          export CLOWN_STDIO_BRIDGE_BIN="$out/bin/clown-stdio-bridge"
-          export CLOWN_MCP_COLLAPSE_BIN="$out/bin/clown-mcp-collapse"
-          export MOCK_STDIO_MCP_BIN="$out/bin/mock-stdio-mcp"
+          # batsBinaries, with the binaries this lane measures pointed at the
+          # cover-instrumented builds in $out (clown-bats-bins).
+          ${lib.concatStringsSep "\n" (
+            lib.mapAttrsToList (
+              var: bin:
+              let
+                instrumented = lib.elem var [
+                  "CLOWN_PLUGIN_HOST_BIN"
+                  "CLOWN_STDIO_BRIDGE_BIN"
+                  "CLOWN_MCP_COLLAPSE_BIN"
+                  "MOCK_STDIO_MCP_BIN"
+                ];
+              in
+              ''export ${var}="${if instrumented then "$out" else bin.base}/bin/${bin.name}"''
+            ) batsBinaries
+          )}
           export SYNTHETIC_PLUGIN_DIR="${synthetic-plugin}"
           # common.bash bats_load_library calls resolve through this path.
           export BATS_LIB_PATH="${batsLibs.batsLibPath}"
@@ -1208,34 +1282,12 @@
           inherit
             pkgs
             lib
-            mkClownGo
-            defaultDefaultProvider
-            defaultDefaultProfile
-            clown-stdio-bridge
-            clown-mcp-collapse
-            clown-plugin-host
-            mock-stdio-mcp
+            batsBinaries
             synthetic-plugin
             inspectCompiledPatched
             ;
           batsLane = bats.lib.${system}.batsLane;
           bats-libs = batsLibs;
-          # The daemon e2e lane consumes juggler (`juggler daemon` — the
-          # re-homed llama-server control plane) and a Go fake llama-server
-          # (tiny http stand-in compiled from
-          # cmd/juggler/testdata/fake-llama-server, same source the
-          # launcher_test.go / server_test.go fixtures use). ringmaster is the
-          # ringmaster input's binary; troupe is the troupe input's binary (its
-          # own extracted output) — the job-platform bats lanes drive both.
-          ringmaster = ringmasterPkg;
-          troupe = troupePkg;
-          juggler = juggler-go;
-          fake-llama-server = fake-llama-server-go;
-          opencode = pkgs.opencode;
-          # Real crush binary, same source buildcfg.CrushCliPath binds to.
-          # provider_mcp.bats drives `clown --provider crush` to verify the
-          # generated config lands in the workspace slot crush actually reads.
-          crush = pkgs-llm-agents.crush;
         };
 
         mkJuggler =
