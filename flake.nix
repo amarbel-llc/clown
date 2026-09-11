@@ -374,11 +374,10 @@
         # test. Built as a derivation so the test recipe consumes a store
         # path instead of dropping a binary into the worktree. The
         # Go build output is wrapped in runCommand to preserve the
-        # historical "mock-stdio-mcp" binary name. pname is the subPackage
-        # leaf so bga (names by leaf) and godyn (names a single main by
-        # pname) agree on "mockstdiomcp".
+        # historical "mock-stdio-mcp" binary name (Go's default would be
+        # "mockstdiomcp" — the leaf of the subPackage path).
         mock-stdio-mcp-go = buildClownGo {
-          pname = "mockstdiomcp";
+          pname = "mock-stdio-mcp";
           version = clownVersion;
           subPackages = [ "internal/pluginhost/testdata/mockstdiomcp" ];
           ldflags = [
@@ -496,9 +495,8 @@
         # Compiled binary that the synthetic-plugin derivation embeds.
         # Not exposed as a top-level package — consumers should use
         # synthetic-plugin instead, which lays out the full plugin dir.
-        # pname is the subPackage leaf so both backends name it "mockserver".
         mock-mcp-server-go = buildClownGo {
-          pname = "mockserver";
+          pname = "mock-mcp-server";
           version = clownVersion;
           subPackages = [ "internal/pluginhost/testdata/mockserver" ];
           ldflags = [
