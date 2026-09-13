@@ -74,6 +74,42 @@ func TestSaveRoundTrip_NoContextSelectionOmitsFields(t *testing.T) {
 	}
 }
 
+func TestSavePreservesComments(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "profiles.toml")
+	orig := "# my profiles\n\n[[profile]]\n# daily driver\nname = \"or\"\ndisplay = \"old\"\nprovider = \"claude\"\nbackend = \"gateway\"\nmodel = \"\"\n"
+	if err := os.WriteFile(path, []byte(orig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	in := []Profile{
+		{
+			Name: "or", Display: "new", Provider: "claude", Backend: "gateway",
+			Env:             map[string]string{"FOO": "bar"},
+			ContextServers:  []string{"moxy"},
+			ContextExcluded: map[string][]string{"moxy": {"folio.read"}},
+		},
+		{Name: "second", Provider: "claude", Backend: "anthropic"},
+	}
+	if err := Save(path, in); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"# my profiles", "# daily driver", `"new"`} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("saved file missing %q:\n%s", want, raw)
+		}
+	}
+	out, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(in, out) {
+		t.Fatalf("round trip: %#v != %#v\nfile:\n%s", in, out, raw)
+	}
+}
+
 func TestUpsertAndRemove(t *testing.T) {
 	base := []Profile{{Name: "a"}, {Name: "b"}}
 	up := Upsert(base, Profile{Name: "b", Display: "B2"})
