@@ -62,8 +62,10 @@ func TestSaveRoundTrip_NoContextSelectionOmitsFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(raw), "context_servers") || strings.Contains(string(raw), "context_excluded") {
-		t.Errorf("omitempty failed; wrote context fields for a profile with no saved selection:\n%s", raw)
+	for _, key := range []string{"context_servers", "context_excluded", "url", "token", "env"} {
+		if strings.Contains(string(raw), key) {
+			t.Errorf("omitempty failed; wrote %q for a profile that leaves it empty:\n%s", key, raw)
+		}
 	}
 	out, err := Load(path)
 	if err != nil {
