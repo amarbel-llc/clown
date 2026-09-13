@@ -143,3 +143,48 @@ EOF
   run cat "$MUX_GROUP"
   [ "${lines[0]}" = "team-repo/branch" ] # ${SPINCLASS_SESSION_ID} composed into group-id
 }
+
+# clown#236: with group-id empty (no SPINCLASS_SESSION_ID — a shell-launched
+# clown), group-id-command supplies the group, keyed on the claude session id
+# decideClaudeSession settled. The stub echoes its args so the substitution of
+# {cwd} and {session-id} (the --resume id) is observed end to end.
+@test "clownfile [attach] group-id-command supplies CLOWN_GROUP_ID when group-id is empty" {
+  cat >"$STUB_BIN/group-key" <<EOF
+#!$(command -v bash)
+printf '%s/%s\n' "\$(basename "\$1")" "\$2"
+EOF
+  chmod +x "$STUB_BIN/group-key"
+  cat >"$HOME/clownfile" <<'EOF'
+[attach]
+multiplexer = "zmx"
+resume = ["zmx", "attach", "{id}", "{entry}"]
+group-id-command = ["group-key", "{cwd}", "{session-id}"]
+EOF
+
+  cd "$HOME"
+  run env -u SPINCLASS_SESSION_ID CLOWN_ATTACH_FORCE=1 CLOWN_SESSION_ID=gc-sess \
+    "$CLOWN_BIN" --provider claude -- --resume fixed-session
+  [ "$status" -eq 0 ]
+  [ -f "$MUX_GROUP" ]
+
+  run cat "$MUX_GROUP"
+  [ "${lines[0]}" = "$(basename "$HOME")/fixed-session" ]
+}
+
+@test "clownfile [attach] group-id-command failure leaves the session ungrouped" {
+  cat >"$HOME/clownfile" <<'EOF'
+[attach]
+multiplexer = "zmx"
+resume = ["zmx", "attach", "{id}", "{entry}"]
+group-id-command = ["false", "{session-id}"]
+EOF
+
+  cd "$HOME"
+  run env -u SPINCLASS_SESSION_ID CLOWN_ATTACH_FORCE=1 CLOWN_SESSION_ID=gf-sess \
+    "$CLOWN_BIN" --provider claude -- --resume fixed-session
+  [ "$status" -eq 0 ]
+  [ -f "$MUX_GROUP" ]
+
+  run cat "$MUX_GROUP"
+  [ -z "$output" ]
+}

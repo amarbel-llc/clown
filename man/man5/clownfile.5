@@ -168,7 +168,32 @@ clown exports it as
 empty means ungrouped.
 The default binds the orchestrator session key via
 .Ql ${SPINCLASS_SESSION_ID} ,
-gracefully empty for a bare clown.
+gracefully empty for a bare clown; see
+.Sy group-id-command
+for the fallback.
+.It Sy group-id-command
+An argv clown runs once at boot, only when
+.Sy group-id
+resolves empty (RFC-0014 §2.3).
+Its trimmed stdout, which must be a single line with no whitespace, becomes the
+group-id; a non-zero exit, a missing binary, a timeout, or any other output
+leaves the session ungrouped and never fails the launch.
+.Ql {cwd}
+expands to clown's working directory and
+.Ql {session-id}
+to the provider session id; the command is skipped when that id is unknown
+(claude
+.Fl -continue
+or
+.Fl -print ) .
+The burned-in default runs
+.Xr spinclass-implicit-session-key 1 ,
+so a clown launched from a shell in a main checkout advertises the implicit
+session key spinclass will materialize for it, e.g.
+.Ql eng/37a88d451d600bbb .
+Set
+.Ql group-id-command = []
+to disable.
 .It Sy description
 The human-readable presence label (RFC-0014 §4.1), env-interpolated like
 .Sy group-id ;

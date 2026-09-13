@@ -38,6 +38,16 @@ multiplexer  = "posh"
 # atomic: the same release that drops the hardcoded SPINCLASS_SESSION_ID read
 # also supplies this binding, so there is no no-group window.
 group-id     = "${SPINCLASS_SESSION_ID}"
+# group-id-command runs ONLY when group-id resolves empty (RFC-0014 §2.3,
+# clown#236): a clown launched from a shell in a main checkout has no
+# SPINCLASS_SESSION_ID at boot, because spinclass materializes its implicit
+# session later, from a SessionStart hook inside claude. spinclass publishes the
+# key that hook WILL materialize as a pure query (spinclass-implicit-session-key(1)),
+# so clown can advertise the same <repo>/<16hex> decoration from boot. A refusal
+# (worktree, subdirectory, detached HEAD, implicit sessions disabled), a missing
+# spinclass, or an unknown session id (claude --continue/--print) leaves the
+# session ungrouped. Set `group-id-command = []` to opt out.
+group-id-command = ["spinclass", "implicit-session-key", "--cwd", "{cwd}", "--claude-session-id", "{session-id}"]
 # description is the human-readable presence label (RFC-0014 §4.1), same
 # interpolation + graceful-empty contract as group-id.
 description  = "${SPINCLASS_DESCRIPTION}"

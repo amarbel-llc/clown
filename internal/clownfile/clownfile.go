@@ -58,15 +58,22 @@ type Profile struct {
 // SpawnWindow are parsed and held as the single-source schema but their executor
 // is unresolved (RFC §1.3 open question), so this revision does not run them.
 type Attach struct {
-	Multiplexer string   `toml:"multiplexer"`  // "zmx" | "posh" | "none"
-	GroupID     string   `toml:"group-id"`     // group key, env-interpolated (RFC-0014 §2); "" ⇒ ungrouped
-	Description string   `toml:"description"`  // presence label, env-interpolated (RFC-0014 §4.1)
-	Start       []string `toml:"start"`        // fresh interactive self-wrap argv
-	Resume      []string `toml:"resume"`       // reattach argv
-	ResumeTitle string   `toml:"resume-title"` // OSC-2 title, emitted on every launch from inside the mux pty
-	Spawn       []string `toml:"spawn"`        // detached-worker launch (RFC-0014 §5)
-	SpawnEntry  []string `toml:"spawn-entry"`  // harness argv a spawned worker boots (schema-only)
-	SpawnWindow []string `toml:"spawn-window"` // fire-and-forget window opener (schema-only)
+	Multiplexer string `toml:"multiplexer"` // "zmx" | "posh" | "none"
+	GroupID     string `toml:"group-id"`    // group key, env-interpolated (RFC-0014 §2); "" ⇒ ungrouped
+	Description string `toml:"description"` // presence label, env-interpolated (RFC-0014 §4.1)
+	// GroupIDCommand is the argv clown runs at boot when GroupID resolves empty
+	// (RFC-0014 §2.3, clown#236): its trimmed single-line stdout becomes the
+	// group key; a non-zero exit, a missing binary, or empty output leaves the
+	// session ungrouped. Placeholders: {cwd} (clown's working directory) and
+	// {session-id} (the provider session id). Like GroupID it names the
+	// orchestrator only as configuration, never in clown code.
+	GroupIDCommand []string `toml:"group-id-command"`
+	Start          []string `toml:"start"`        // fresh interactive self-wrap argv
+	Resume         []string `toml:"resume"`       // reattach argv
+	ResumeTitle    string   `toml:"resume-title"` // OSC-2 title, emitted on every launch from inside the mux pty
+	Spawn          []string `toml:"spawn"`        // detached-worker launch (RFC-0014 §5)
+	SpawnEntry     []string `toml:"spawn-entry"`  // harness argv a spawned worker boots (schema-only)
+	SpawnWindow    []string `toml:"spawn-window"` // fire-and-forget window opener (schema-only)
 	// PtySuspend opts the interactive provider run into the escape-to-shell pty
 	// proxy (internal/ptysuspend): clown runs the provider on an inner pty and
 	// intercepts the escape key (EscapeKey) before the raw-mode TUI swallows it,
@@ -91,6 +98,27 @@ type Attach struct {
 // purely textual substitution and never interprets the meaning of a variable,
 // which is what keeps clown orchestrator-agnostic.
 func ResolveEnv(s string) string { return os.ExpandEnv(s) }
+
+// ResolveGroupIDCommand renders GroupIDCommand into a concrete argv (RFC-0014
+// §2.3): {cwd} and {session-id} are string-substituted within any element, and
+// any other surviving {...} placeholder is rejected. It returns nil, nil — run
+// nothing — when the command is unset or the session id is unknown, since the
+// command exists to key the group on that id.
+func (a Attach) ResolveGroupIDCommand(cwd, sessionID string) ([]string, error) {
+	if len(a.GroupIDCommand) == 0 || sessionID == "" {
+		return nil, nil
+	}
+	out := make([]string, 0, len(a.GroupIDCommand))
+	for _, el := range a.GroupIDCommand {
+		s := strings.ReplaceAll(el, "{cwd}", cwd)
+		s = strings.ReplaceAll(s, "{session-id}", sessionID)
+		if m := placeholderRe.FindString(s); m != "" {
+			return nil, fmt.Errorf("clownfile [attach]: unrecognized or unavailable placeholder %s in group-id-command element %q", m, el)
+		}
+		out = append(out, s)
+	}
+	return out, nil
+}
 
 // AttachMode selects which executed template Resolve renders.
 type AttachMode int
@@ -472,6 +500,11 @@ func mergeInto(dst *Clownfile, src Clownfile) {
 	}
 	if src.Attach.Description != "" {
 		dst.Attach.Description = src.Attach.Description
+	}
+	// Non-nil (including an explicit `[]`) replaces, so a deeper clownfile can
+	// disable the burned-in group-id-command.
+	if src.Attach.GroupIDCommand != nil {
+		dst.Attach.GroupIDCommand = src.Attach.GroupIDCommand
 	}
 	if src.Attach.ResumeTitle != "" {
 		dst.Attach.ResumeTitle = src.Attach.ResumeTitle

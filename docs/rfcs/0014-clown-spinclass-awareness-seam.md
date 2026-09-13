@@ -148,6 +148,37 @@ After interpolation, the resolved `group-id` is the session's **group key**.
 - The group key MUST NOT participate in per-instance routing-key resolution
   (RFC-0013 §2.3 is unchanged): it names a *group*, not the instance.
 
+#### 2.3 Amendment: `group-id-command` fallback for orchestrator sessions clown was not launched into (clown#236)
+
+§8's "bare clown ⇒ ungrouped" left a gap. An orchestrator can own a session it
+did not launch: spinclass materializes an *implicit* session for a main
+checkout from its `SessionStart` hook, which runs inside the provider after
+clown has already resolved an empty `group-id`. That session had a key
+(`<repo>/<16hex>`) but its clown advertised no decoration, so peers could not
+form its fully-qualified session id and no group room was derived.
+
+- A new `[attach]` field `group-id-command` (argv) MAY be configured. When the
+  resolved `group-id` is empty, clown MUST run it once at boot, after the
+  provider session id is final, substituting `{cwd}` (clown's working
+  directory) and `{session-id}` (the provider session id). Any other
+  placeholder MUST be rejected.
+- clown MUST NOT run the command when `group-id` is non-empty or the session id
+  is unknown (e.g. claude `--continue` / `--print`).
+- The command's stdout, trimmed, becomes the group key only if it is a single
+  non-empty token with no whitespace. A missing binary, a non-zero exit, a
+  timeout, or any other output MUST leave the session ungrouped and MUST NOT
+  fail the launch.
+- §1's orchestrator-agnosticism is preserved: clown's burned-in default names
+  the orchestrator command as configuration
+  (`["spinclass", "implicit-session-key", "--cwd", "{cwd}",
+  "--claude-session-id", "{session-id}"]`), never in code. The key derivation
+  and its eligibility gates stay orchestrator-owned; the contract is
+  `spinclass-implicit-session-key(1)`.
+- The derived key is unique per provider session, so this does not group
+  unrelated bare clowns (the hazard §3.1.2 guards against).
+- `group-id-command` is an executable surface, subject to the same
+  clownfile-trust posture as the `[attach]` argv templates (RFC-0013 §1.3).
+
 ### 3. Surfaces keyed by `group-id`
 
 The resolved group key replaces every current use of the directly-read

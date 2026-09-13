@@ -408,16 +408,9 @@ func runWithFlags(flags parsedFlags) int {
 	// the runners don't re-read the clownfile. See internal/clownfile Providers.
 	flags.hermeticConfig = cf.Providers.HermeticConfigEnabled()
 
-	// RFC-0014 §2/§4: resolve the group-id and presence description from the
-	// clownfile via env interpolation, then export them as CLOWN_GROUP_ID /
-	// CLOWN_GROUP_DESCRIPTION. Unlike the per-instance key (threaded explicitly,
-	// clown#136), the group decoration SHOULD be shared, so it goes on clown's own
-	// env — jobwake (GroupKey), the producers, and the claude subtree's ad-hoc
-	// `troupe`/`ringmaster` all inherit the same group. Empty ⇒ ungrouped, no export.
-	flags.groupID = clownfile.ResolveEnv(cf.Attach.GroupID)
-	if flags.groupID != "" {
-		_ = os.Setenv("CLOWN_GROUP_ID", flags.groupID)
-	}
+	// RFC-0014 §4: the presence description is env-interpolated and exported as
+	// CLOWN_GROUP_DESCRIPTION. The group-id itself is resolved further down, once
+	// the provider session id is final (clown#236).
 	if desc := clownfile.ResolveEnv(cf.Attach.Description); desc != "" {
 		_ = os.Setenv("CLOWN_GROUP_DESCRIPTION", desc)
 	}
@@ -603,6 +596,25 @@ func runWithFlags(flags parsedFlags) int {
 	if !flags.naked {
 		flags.clownName = resolveClownName(attachedID, os.Getenv("CLOWN_NAME"), flags.identity.Key)
 		_ = os.Setenv("CLOWN_NAME", flags.clownName)
+	}
+
+	// RFC-0014 §2/§2.3: resolve the group-id and export it as CLOWN_GROUP_ID.
+	// Unlike the per-instance key (threaded explicitly, clown#136), the group
+	// decoration SHOULD be shared, so it goes on clown's own env — jobwake
+	// (GroupKey), the producers, and the claude subtree's ad-hoc
+	// `troupe`/`ringmaster` all inherit the same group. Resolved HERE, after
+	// decideClaudeSession, because the group-id-command fallback keys on the
+	// final claude --session-id / --resume id (clown#236); it still precedes the
+	// [attach] re-exec, the title, and presence registration, which all read it.
+	// Empty ⇒ ungrouped, no export.
+	var groupSessionID string
+	if flags.provider == "claude" && !flags.naked {
+		groupSessionID = claudeFlagValue(flags.forwarded, "--session-id", "--resume", "-r")
+	}
+	groupCwd, _ := os.Getwd()
+	flags.groupID = resolveGroupID(cf.Attach, groupCwd, groupSessionID, runGroupIDCommand)
+	if flags.groupID != "" {
+		_ = os.Setenv("CLOWN_GROUP_ID", flags.groupID)
 	}
 
 	// clownfile [attach] (RFC-0013 §1.3): wrap clown in the configured
