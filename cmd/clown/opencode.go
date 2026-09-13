@@ -72,19 +72,10 @@ func readOpencodeLocalConfig() (opencodeLocalConfig, error) {
 	return cfg, nil
 }
 
-// writeOpencodeLocalConfigFile writes a minimal ~/.config/clown/opencode.toml
-// (url + token) to path, creating the parent directory at 0o700 if missing.
-// The token is double-quoted to survive any shell-significant characters when
-// users hand-edit it later. URL goes through the same treatment for symmetry.
+// writeOpencodeLocalConfigFile writes ~/.config/clown/opencode.toml (url +
+// token) to path; see writeLocalGatewayConfigFile.
 func writeOpencodeLocalConfigFile(path, url, token string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return fmt.Errorf("create config dir: %w", err)
-	}
-	body := fmt.Sprintf("url = %q\ntoken = %q\n", url, token)
-	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
-		return fmt.Errorf("write %s: %w", path, err)
-	}
-	return nil
+	return writeLocalGatewayConfigFile(path, url, token)
 }
 
 // promptOpencodeLocalConfig walks the user through creating a missing

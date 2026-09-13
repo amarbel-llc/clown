@@ -12,6 +12,8 @@ import (
 // Save writes profiles to path as a `[[profile]]` TOML file, atomically
 // (temp file + rename), with a 0600 file in a 0700 directory. The file is
 // TUI-managed: a full re-encode, so hand-written comments are not preserved.
+// It stays on BurntSushi/toml until tommy can encode Profile's map fields
+// (tommy#141); the other clown-written TOML goes through tommy (clown#238).
 func Save(path string, profiles []Profile) error {
 	var buf bytes.Buffer
 	if err := toml.NewEncoder(&buf).Encode(file{Profile: profiles}); err != nil {

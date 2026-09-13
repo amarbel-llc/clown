@@ -85,6 +85,16 @@
     purse-first.inputs.igloo.follows = "igloo";
     purse-first.inputs.nixpkgs-master.follows = "nixpkgs-master";
     purse-first.inputs.utils.follows = "utils";
+    # tommy: CST-preserving TOML library. clown routes the TOML files it writes
+    # (juggler models registry, crush/opencode gateway configs) through it so
+    # hand-written comments and layout survive programmatic edits (clown#238).
+    # Consumed as a Go module via the goFlakeInputs bridge (see gomod.nix).
+    tommy.url = "https://code.linenisgreat.com/tommy/archive/master.tar.gz";
+    tommy.inputs.igloo.follows = "igloo";
+    tommy.inputs.nixpkgs-master.follows = "nixpkgs-master";
+    tommy.inputs.utils.follows = "utils";
+    tommy.inputs.bats.follows = "bats";
+    tommy.inputs.conformist.follows = "conformist";
     # troupe: the messaging binary (chat + `troupe agent` XMPP receiver + the
     # troupe MCP surface). clown's 2nd extracted dep — but BINARY-only: clown
     # runs the troupe binary and does NOT import its Go (jobwake comes from
@@ -116,6 +126,7 @@
       ringmaster,
       troupe,
       purse-first,
+      tommy,
     }:
     (utils.lib.eachDefaultSystem (
       system:
@@ -270,7 +281,12 @@
         # identical goFlakeInputs on every builder and the devshell, or
         # go.mod/vendor drift between build and `nix develop`.
         goFlakeInputs = import ./gomod.nix {
-          inherit ringmaster purse-first system;
+          inherit
+            ringmaster
+            purse-first
+            tommy
+            system
+            ;
         };
         mkGoEnv = args: pkgs.mkGoEnv (args // { inherit goFlakeInputs; });
 

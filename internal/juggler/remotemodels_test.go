@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -22,6 +23,37 @@ func TestSaveLoadRemoteModelsRoundTrip(t *testing.T) {
 	}
 	if info.Mode().Perm() != 0o600 {
 		t.Errorf("mode = %v, want 0600", info.Mode().Perm())
+	}
+	out, err := LoadRemoteModels(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(in, out) {
+		t.Fatalf("round trip: %#v != %#v", in, out)
+	}
+}
+
+func TestSaveRemoteModelsPreservesComments(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "models.toml")
+	orig := "# my gateways\n\n[[model]]\n# openrouter via env token\nname = \"a\"\nstyle = \"anthropic\"\nurl = \"https://old\"\ntoken = \"${TOK}\"\n"
+	if err := os.WriteFile(path, []byte(orig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	in := []RemoteModel{
+		{Name: "a", Style: "anthropic", URL: "https://new", Token: "${TOK}"},
+		{Name: "b", Style: "openai-compat", URL: "https://b", Token: "lit"},
+	}
+	if err := SaveRemoteModels(path, in); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"# my gateways", "# openrouter via env token", `"https://new"`} {
+		if !strings.Contains(string(got), want) {
+			t.Errorf("saved file missing %q:\n%s", want, got)
+		}
 	}
 	out, err := LoadRemoteModels(path)
 	if err != nil {

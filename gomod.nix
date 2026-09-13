@@ -23,9 +23,14 @@
 {
   ringmaster,
   purse-first,
+  tommy,
   system,
 }:
 {
+  # tommy (clown#238): CST-preserving TOML encode for clown-written config.
+  "code.linenisgreat.com/tommy" = {
+    src = tommy.packages.${system}.go-pkgs;
+  };
   "code.linenisgreat.com/ringmaster" = {
     src = ringmaster.packages.${system}.go-pkgs;
   };

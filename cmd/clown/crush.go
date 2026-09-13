@@ -117,14 +117,7 @@ func readCrushLocalConfig() (crushLocalConfig, error) {
 }
 
 func writeCrushLocalConfigFile(path, url, token string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return fmt.Errorf("create config dir: %w", err)
-	}
-	body := fmt.Sprintf("url = %q\ntoken = %q\n", url, token)
-	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
-		return fmt.Errorf("write %s: %w", path, err)
-	}
-	return nil
+	return writeLocalGatewayConfigFile(path, url, token)
 }
 
 func promptCrushLocalConfig(path string) (crushLocalConfig, error) {

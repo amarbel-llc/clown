@@ -1,10 +1,11 @@
 module code.linenisgreat.com/clown
 
-go 1.25.0
+go 1.26
 
 require (
 	code.linenisgreat.com/purse-first/libs/dewey v0.1.0
 	code.linenisgreat.com/ringmaster v0.1.0
+	code.linenisgreat.com/tommy v0.5.0
 	github.com/BurntSushi/toml v1.6.0
 	github.com/charmbracelet/bubbles v0.21.1-0.20250623103423-23b8fd6302d7
 	github.com/charmbracelet/bubbletea v1.3.6

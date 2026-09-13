@@ -1,11 +1,13 @@
 package juggler
 
 import (
-	"bytes"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 
+	"code.linenisgreat.com/tommy/pkg/marshal"
 	"github.com/BurntSushi/toml"
 )
 
@@ -41,12 +43,24 @@ func LoadRemoteModels(path string) ([]RemoteModel, error) {
 }
 
 // SaveRemoteModels writes models to path atomically (temp file + rename),
-// 0600 file in a 0700 directory. Mirrors internal/profile/store.go's
-// Save — this file is juggler-managed, hand-edited comments are not
-// preserved across a save.
+// 0600 file in a 0700 directory. The encode goes through tommy (clown#238),
+// editing the existing file's syntax tree in place, so hand-written comments
+// and layout survive a save. Entries are matched to existing [[model]] tables
+// by position: removing a middle entry shifts later values up, and a comment
+// stays with its table position rather than following the moved entry.
 func SaveRemoteModels(path string, models []RemoteModel) error {
-	var buf bytes.Buffer
-	if err := toml.NewEncoder(&buf).Encode(remoteModelsFile{Model: models}); err != nil {
+	existing, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("read %s: %w", path, err)
+	}
+	var f remoteModelsFile
+	handle, err := marshal.UnmarshalDocument(existing, &f)
+	if err != nil {
+		return fmt.Errorf("parse %s: %w", path, err)
+	}
+	f.Model = models
+	body, err := marshal.MarshalDocument(handle, &f)
+	if err != nil {
 		return fmt.Errorf("encode remote models: %w", err)
 	}
 	dir := filepath.Dir(path)
@@ -58,7 +72,7 @@ func SaveRemoteModels(path string, models []RemoteModel) error {
 		return fmt.Errorf("create temp file: %w", err)
 	}
 	defer os.Remove(tmp.Name())
-	if _, err := tmp.Write(buf.Bytes()); err != nil {
+	if _, err := tmp.Write(body); err != nil {
 		tmp.Close()
 		return fmt.Errorf("write %s: %w", tmp.Name(), err)
 	}
