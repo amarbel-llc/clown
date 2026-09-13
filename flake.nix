@@ -835,6 +835,9 @@
             # profile; today's build-time lever mirrors
             # podmanMachineName's shape so the migration is mechanical.
             tentBackend ? "podman",
+            # race builds a -race variant through buildGoAuto (igloo#34): godyn
+            # natively, bga via buildGoRace. Only clown-go-race sets it.
+            race ? false,
           }:
           let
             tentClaudeCliPath =
@@ -853,6 +856,7 @@
           buildClownGo {
             pname = "clown";
             version = clownVersion;
+            inherit race;
             subPackages = [ "cmd/clown" ];
             ldflags = [
               "-s"
@@ -1044,19 +1048,35 @@
         # testEnv hands the fixture-spawning tests prebuilt binaries; git is on
         # PATH for the OSC-2 title's git-backed tests (clown#234, see
         # clown-go-test).
-        clownGodynTests = pkgs.buildGodynModule {
-          pname = "clown";
-          version = clownVersion;
-          inherit goFlakeInputs;
-          src = goSrc;
-          modules = ./gomod2nix.toml;
-          cc = pkgs.stdenv.cc;
-          tests = true;
-          nativeCheckInputs = [ pkgs.git ];
-          testEnv = {
-            CLOWN_TEST_FAKESERVER = "${fakeserver-go}/bin/fakeserver";
-            CLOWN_TEST_FAKE_LLAMA_SERVER = "${fake-llama-server-go}/bin/fake-llama-server";
-          };
+        mkClownGodynTests =
+          extra:
+          pkgs.buildGodynModule (
+            {
+              pname = "clown";
+              version = clownVersion;
+              inherit goFlakeInputs;
+              src = goSrc;
+              modules = ./gomod2nix.toml;
+              cc = pkgs.stdenv.cc;
+              tests = true;
+              nativeCheckInputs = [ pkgs.git ];
+              testEnv = {
+                CLOWN_TEST_FAKESERVER = "${fakeserver-go}/bin/fakeserver";
+                CLOWN_TEST_FAKE_LLAMA_SERVER = "${fake-llama-server-go}/bin/fake-llama-server";
+              };
+            }
+            // extra
+          );
+        clownGodynTests = mkClownGodynTests { };
+
+        # The same per-package lane under -race (igloo#34): a race-instrumented
+        # stdlib, a `go list -race` graph, and -race on every compile and link,
+        # so a detected data race fails the run. `cc` above is required (race
+        # needs cgo). Built by `just test-go-race` on godyn hosts; clown-go-race
+        # is its bga counterpart.
+        clownGodynRaceTests = mkClownGodynTests {
+          pname = "clown-race";
+          race = true;
         };
 
         # Exposed (packages + checks) only where buildGoAuto's default picks
@@ -1064,6 +1084,11 @@
         # on here too.
         godynTestOutputs = lib.optionalAttrs (clown-plugin-host.passthru.backend == "native") {
           clown-godyn-tests = clownGodynTests.passthru.checkAll;
+        };
+        # The race lane is exposed under packages only, not checks: race runs
+        # are slow and stay opt-in (`just test-go-race`), as clown-race was.
+        godynRaceTestOutputs = lib.optionalAttrs (clown-plugin-host.passthru.backend == "native") {
+          clown-godyn-race-tests = clownGodynRaceTests.passthru.checkAll;
         };
 
         # clown ships NO managed-settings (clown#133). The delivery strategy was
@@ -1281,18 +1306,19 @@
             ];
           });
 
-        # Race-detector variant of clown-go. Built via the fork's
-        # buildGoRace helper — overrides clown-go with CGO_ENABLED=1
-        # and `go build -race`, plus a `-race` checkPhase. Surfaced
-        # as packages.clown-race; not a release artifact (race-
-        # instrumented binaries are slower).
-        clown-go-race = pkgs.buildGoRace {
-          base =
-            (mkClownGo {
-              defaultProvider = defaultDefaultProvider;
-              defaultProfile = defaultDefaultProfile;
-            }).passthru.bga;
-        };
+        # Race-detector variant of clown-go on the bga backend: buildGoAuto's
+        # `race` wraps bga in buildGoRace (CGO_ENABLED=1, `go build -race`, a
+        # `go test -race ./...` checkPhase). `just test-go-race` builds it only
+        # where clown's Go backend is bga; on godyn hosts clown-godyn-race-tests
+        # runs the per-package race lane instead. Surfaced as
+        # packages.clown-race; not a release artifact (race-instrumented
+        # binaries are slower).
+        clown-go-race =
+          (mkClownGo {
+            defaultProvider = defaultDefaultProvider;
+            defaultProfile = defaultDefaultProfile;
+            race = true;
+          }).passthru.bga;
 
         batsLaneOutputs = import ./bats.nix {
           inherit
@@ -1684,6 +1710,8 @@
         // batsLaneOutputs
         # The per-package godyn go test lane (`just test-go-godyn`).
         // godynTestOutputs
+        # Its -race variant (`just test-go-race`), packages only.
+        // godynRaceTestOutputs
         # Expose the tent container image as a named package on linux
         # systems so it can be built directly (e.g. as an
         # `aarch64-linux` cross-build from darwin via nix-darwin's

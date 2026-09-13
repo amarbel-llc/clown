@@ -69,8 +69,30 @@ build-go:
 # buildGoAuto): "native" (godyn, on igloo's godynSystems) runs `test-go-godyn`;
 # "bga" (buildGoApplication) runs `test-go`. The non-matching recipe prints a
 # skip line. Keyed off the backend, never a system name, so clown follows igloo
-# as it validates godyn on more systems (madder a39cfa7). The race/cover lanes
-# stay bga-based on every host (godyn has no -race stdlib variant).
+# as it validates godyn on more systems (madder a39cfa7). The race lane
+# (`test-go-race`) follows the same gate; the cover lane stays bga-based on
+# every host (godyn has no -cover mode).
+
+# Run the Go unit suite under the race detector, on the same backend gate as
+# test-go / test-go-godyn: "native" builds godyn's per-package race lane
+# (clown-godyn-race-tests, igloo buildGodynModule `race`), "bga" builds
+# clown-race (`go test -race ./...` via buildGoRace). Not part of `just test`:
+# race runs are slow, so invoke it explicitly.
+#
+# run the Go unit suite under the race detector (backend-gated)
+[group("go")]
+test-go-race:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    backend="$(nix eval --raw .#clown-plugin-host.passthru.backend)"
+    case "$backend" in
+        native) nix build .#clown-godyn-race-tests --no-link --print-build-logs ;;
+        bga) nix build .#clown-race --no-link --print-build-logs ;;
+        *)
+            echo "test-go-race: unknown Go backend '$backend'" >&2
+            exit 1
+            ;;
+    esac
 
 # Run Go tests across the whole module (internal + cmd packages) on the bga
 # backend, inside the clown-go-test derivation's checkPhase so the
