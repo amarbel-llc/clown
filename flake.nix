@@ -1642,10 +1642,15 @@
           clown-manpages = clown-manpages;
           clown-race = clown-go-race;
           clown-cover = clown-cover;
-          # clown-go-test: the Go unit suite run inside a nix sandbox (so
-          # the goFlakeInputs bridge applies). The `test-go` recipe builds
-          # this instead of a bare `go test ./...`.
+          # clown-go-test: the whole-module Go unit suite on the bga backend,
+          # run inside a nix sandbox (so the goFlakeInputs bridge applies). The
+          # `test-go` recipe builds it only where clown's Go backend is bga;
+          # where it is godyn, `test-go-godyn` runs clown-godyn-tests instead.
           clown-go-test = clown-go-test;
+          # clown-plugin-host: exposed so recipes can read the Go backend that
+          # buildGoAuto picked here (`.#clown-plugin-host.passthru.backend`),
+          # the same attribute godynTestOutputs gates on.
+          clown-plugin-host = clown-plugin-host;
           mock-stdio-mcp = mock-stdio-mcp;
           synthetic-plugin = synthetic-plugin;
           # ringmaster + troupe: re-exported from their respective extracted

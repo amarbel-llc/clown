@@ -64,32 +64,92 @@ build-ambient: build-go
 build-go:
     nix develop --command go build ./cmd/...
 
-# Run Go tests across the whole module (internal + cmd packages). Runs the
-# suite inside the clown-go-test nix derivation's checkPhase so the
+# The merge gate runs exactly ONE Go unit suite per host, chosen by the backend
+# clown's Go builds actually use (`clown-plugin-host.passthru.backend`, igloo
+# buildGoAuto): "native" (godyn, on igloo's godynSystems) runs `test-go-godyn`;
+# "bga" (buildGoApplication) runs `test-go`. The non-matching recipe prints a
+# skip line. Keyed off the backend, never a system name, so clown follows igloo
+# as it validates godyn on more systems (madder a39cfa7). The race/cover lanes
+# stay bga-based on every host (godyn has no -race stdlib variant).
+
+# Run Go tests across the whole module (internal + cmd packages) on the bga
+# backend, inside the clown-go-test derivation's checkPhase so the
 # goFlakeInputs bridge is applied — a bare `go test ./...` in the hermetic
-# hook hits "inconsistent vendoring" on the bridged ringmaster module. For
-# local iteration, `nix develop --command go test ./...` also works.
+# hook hits "inconsistent vendoring" on the bridged modules. Skipped where the
+# backend is godyn: `test-go-godyn` runs the same package set there. For local
+# iteration, `nix develop --command go test ./...` also works.
 #
-# run the Go test suite inside the clown-go-test derivation
+# run the Go unit suite in the nix sandbox (bga backend)
 [group("go")]
 test-go:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    backend="$(nix eval --raw .#clown-plugin-host.passthru.backend)"
+    if [[ "$backend" != "bga" ]]; then
+        echo "test-go: skipped (clown's Go backend is '$backend'; test-go-godyn runs the unit suite)"
+        exit 0
+    fi
     nix build .#clown-go-test --no-link --print-build-logs
 
-# Per-package godyn go test lane (igloo FDR 0007). The flake exposes it only
-# where buildGoAuto's default picks godyn (igloo's godynSystems), so other
-# systems skip; the bga clown-go-test lane above covers them.
+# Run the Go unit suite as godyn's per-package test lane (igloo FDR 0007): each
+# package's test binary is built and run in its own CA derivation, so only
+# changed cones re-run. Runs only where clown's Go backend is godyn; elsewhere
+# `test-go` carries the gate.
 #
-# run the per-package godyn Go test lane (godyn systems only)
+# run the Go unit suite via godyn's per-package test lane (godyn backend)
 [group("go")]
 test-go-godyn:
     #!/usr/bin/env bash
     set -euo pipefail
-    system=$(nix eval --raw --impure --expr 'builtins.currentSystem')
-    if [[ "$(nix eval ".#packages.$system" --apply 'p: p ? clown-godyn-tests')" != true ]]; then
-        echo "test-go-godyn: skipped on $system (no godyn lane; buildGoAuto picks bga here)" >&2
+    backend="$(nix eval --raw .#clown-plugin-host.passthru.backend)"
+    if [[ "$backend" != "native" ]]; then
+        echo "test-go-godyn: skipped (clown's Go backend is '$backend'; test-go runs the unit suite)"
         exit 0
     fi
     nix build .#clown-godyn-tests --no-link --print-build-logs
+
+# godyn discards a passing test's output, so a test that t.Skip()s only under
+# godyn (a missing fixture, git, or `go`) still reports ok. This re-runs every
+# per-package godyn test binary verbosely, outside the sandbox but with the
+# lane's fixtures and git on PATH, and prints each package's PASS/SKIP/FAIL
+# counts plus every skip reason: the parity check igloo asks for before the bga
+# lane stops gating a godyn host (madder a39cfa7). Extra flags go to each
+# binary (e.g. -test.run=^TestFoo$).
+#
+# re-run every godyn test binary verbosely and report skips
+[group("debug")]
+debug-godyn-tests-verbose *flags:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    input_drvs() { nix derivation show "$1" | jq -r '(.derivations // .) | to_entries[0].value | (.inputDrvs // .inputs.drvs) | keys[]' | sed 's|^\([^/]\)|/nix/store/\1|'; }
+    out() { nix build --no-link --print-out-paths "$1^out"; }
+    runs=$(input_drvs "$(nix eval --raw .#clown-godyn-tests.drvPath)" | grep -- '-godyn-test-')
+    fixtures=$(input_drvs "$(head -n1 <<<"$runs")")
+    fakeserver=$(out "$(grep -- '-fakeserver-' <<<"$fixtures")")
+    fakellama=$(out "$(grep -- '-fake-llama-server-' <<<"$fixtures")")
+    git=$(out "$(grep -- '-git-[0-9]' <<<"$fixtures")")
+    work=$(mktemp -d)
+    trap 'chmod -R u+w "$work"; rm -rf "$work"' EXIT
+    total_skip=0
+    while read -r run; do
+        cmd=$(nix derivation show "$run" | jq -r '(.derivations // .) | to_entries[0].value.env.buildCommand')
+        ip=$(grep -o 'echo "ok [^"]*"' <<<"$cmd" | sed 's/^echo "ok //; s/"$//')
+        cwd=$(sed -n 's/^cd //p' <<<"$cmd")
+        bin=$(ls "$(out "$(input_drvs "$run" | grep -- '-godyn-testbin-')")"/*.test)
+        rm -rf "$work/cwd"
+        cp -r --no-preserve=mode "$cwd" "$work/cwd"
+        log=$(cd "$work/cwd" && env HOME="$work" PATH="$git/bin:$PATH" \
+            CLOWN_TEST_FAKESERVER="$fakeserver/bin/fakeserver" \
+            CLOWN_TEST_FAKE_LLAMA_SERVER="$fakellama/bin/fake-llama-server" \
+            "$bin" -test.v {{flags}} 2>&1 || true)
+        pass=$(grep -cE '^ *--- PASS' <<<"$log" || true)
+        skip=$(grep -cE '^ *--- SKIP' <<<"$log" || true)
+        fail=$(grep -cE '^ *--- FAIL' <<<"$log" || true)
+        printf '%-52s pass %3s  skip %3s  fail %3s\n' "$ip" "$pass" "$skip" "$fail"
+        grep -E -A2 '^ *--- SKIP' <<<"$log" | sed 's/^/    /' || true
+        total_skip=$((total_skip + skip))
+    done <<<"$runs"
+    echo "total skips: $total_skip"
 
 # Smoke-run every Go binary bundled in the default package (version/help)
 # and check juggler's burned-in llama-server path — the godyn-migration
