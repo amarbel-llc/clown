@@ -96,6 +96,7 @@
     tommy.inputs.bats.follows = "bats";
     tommy.inputs.conformist.follows = "conformist";
     tommy.inputs.tap.inputs.gomod2nix.follows = "purse-first/gomod2nix";
+    tommy.inputs.tap.inputs.purse-first.follows = "purse-first";
     # troupe: the messaging binary (chat + `troupe agent` XMPP receiver + the
     # troupe MCP surface). clown's 2nd extracted dep — but BINARY-only: clown
     # runs the troupe binary and does NOT import its Go (jobwake comes from
