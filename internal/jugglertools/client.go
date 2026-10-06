@@ -6,12 +6,14 @@
 // Error taxonomy. Call distinguishes two failure planes:
 //
 //   - the returned error is a transport or protocol failure (network error,
-//     non-200, malformed JSON-RPC, JSON-RPC error envelope, oversized
-//     response). The agent loop treats it as a failed call it did not get a
-//     tool answer for.
+//     non-200, malformed JSON-RPC, JSON-RPC error envelope other than
+//     invalid params, oversized response). The agent loop treats it as a
+//     failed call it did not get a tool answer for.
 //   - isError == true is MCP's tool-level failure: the tool ran (or moxy
 //     answered on its behalf) and reported failure in the CallToolResult.
-//     The model should see the content as ordinary tool output.
+//     The model should see the content as ordinary tool output. A JSON-RPC
+//     invalid-params error (-32602) is reported this way too, with the
+//     error message as the content.
 //
 // Permission denial. Moxy's headless posture (any non-always-allow tier
 // resolves to deny for a juggler agent) is moxy's responsibility, not this
@@ -186,6 +188,13 @@ func (c *Client) Call(ctx context.Context, name string, args json.RawMessage) (j
 	}
 	result, err := c.rpc(ctx, "tools/call", params)
 	if err != nil {
+		// Invalid params means the model's arguments were unusable: the model
+		// can fix that, so it is a tool-level error, not a transport failure.
+		var rpcErr *rpcError
+		if errors.As(err, &rpcErr) && rpcErr.Code == codeInvalidParams {
+			content, _ := json.Marshal([]map[string]string{{"type": "text", "text": rpcErr.Message}})
+			return content, true, nil
+		}
 		return nil, false, fmt.Errorf("tools/call %q: %w", name, err)
 	}
 	var parsed struct {
@@ -196,6 +205,19 @@ func (c *Client) Call(ctx context.Context, name string, args json.RawMessage) (j
 		return nil, false, fmt.Errorf("tools/call %q: parsing result: %w", name, err)
 	}
 	return parsed.Content, parsed.IsError, nil
+}
+
+// codeInvalidParams is JSON-RPC's "invalid params" error code.
+const codeInvalidParams = -32602
+
+// rpcError is a JSON-RPC error envelope.
+type rpcError struct {
+	Code    int
+	Message string
+}
+
+func (e *rpcError) Error() string {
+	return fmt.Sprintf("upstream error %d: %s", e.Code, e.Message)
 }
 
 // rpc sends one JSON-RPC request and returns the "result" member. A
@@ -238,7 +260,7 @@ func (c *Client) rpc(ctx context.Context, method, params string) (json.RawMessag
 		return nil, fmt.Errorf("parsing JSON-RPC response: %w", err)
 	}
 	if env.Error != nil {
-		return nil, fmt.Errorf("upstream error %d: %s", env.Error.Code, env.Error.Message)
+		return nil, &rpcError{Code: env.Error.Code, Message: env.Error.Message}
 	}
 	if env.Result == nil {
 		return nil, errors.New("response has neither result nor error")

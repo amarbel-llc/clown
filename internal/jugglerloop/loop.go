@@ -236,6 +236,10 @@ func (r *run) loop(ctx context.Context, tools []ToolSpec) (EndReason, error) {
 			}
 		}
 		if len(calls) == 0 {
+			if reply.Stop == StopMaxTokens {
+				// Cut off by the provider's token limit: not a finished answer.
+				return EndMaxTokens, nil
+			}
 			return EndTurn, nil
 		}
 
@@ -245,6 +249,25 @@ func (r *run) loop(ctx context.Context, tools []ToolSpec) (EndReason, error) {
 			}
 		}
 	}
+}
+
+// validateToolArgs reports why args cannot be a tool call's arguments: they
+// must be a JSON object. The openai-compat codec keeps unparseable argument
+// text as a JSON string, so a string is re-parsed to surface the real parse
+// error.
+func validateToolArgs(args json.RawMessage) error {
+	var obj map[string]json.RawMessage
+	err := json.Unmarshal(args, &obj)
+	if err == nil {
+		return nil
+	}
+	var text string
+	if json.Unmarshal(args, &text) == nil {
+		if innerErr := json.Unmarshal([]byte(text), &obj); innerErr != nil {
+			return innerErr
+		}
+	}
+	return errors.New("arguments must be a JSON object")
 }
 
 // execute runs one tool_call turn and appends its tool_result. done reports
@@ -263,6 +286,17 @@ func (r *run) execute(ctx context.Context, callTurn Turn) (end EndReason, done b
 	entry := LedgerCall{Tool: call.Name, URIs: []string{}}
 	if kind, ok := r.kinds[call.Name]; ok {
 		entry.Kind = &kind
+	}
+
+	if argsErr := validateToolArgs(call.Args); argsErr != nil {
+		// The model can recover from unusable arguments (e.g. JSON cut off by
+		// a token limit), so the executor is not called and the run goes on.
+		content, _ := json.Marshal(map[string]string{"error": "invalid tool arguments: " + argsErr.Error()})
+		result := ToolResult{CallID: call.CallID, OK: false, Content: content}
+		entry.Error = toolResultText(result)
+		r.ledger.Calls = append(r.ledger.Calls, entry)
+		r.append(ToolResultBody(result), callTurn.ID)
+		return "", false
 	}
 
 	content, isError, err := r.cfg.Exec.Call(ctx, call.Name, call.Args)

@@ -118,6 +118,8 @@ func AgentVerdict(res jugglerloop.Result, runErr error, holderCancelled, evaluat
 			detail = res.Ledger.Calls[n-1].Error
 		}
 		return StateFailed, "tool_error: " + detail
+	case jugglerloop.EndMaxTokens:
+		return StateFailed, "reply truncated by max_tokens"
 	case jugglerloop.EndModelError:
 		detail := "the model endpoint failed"
 		if runErr != nil {

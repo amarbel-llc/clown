@@ -18,6 +18,11 @@ const (
 	// itself failed (HTTP error, unparseable reply) before the deadline.
 	// Run also returns a non-nil error in this case.
 	EndModelError EndReason = "model_error"
+	// EndMaxTokens is also outside FDR 0019's five reasons: the provider cut
+	// the model's reply off at its token limit and the reply carried no tool
+	// calls, so there is no finished answer for the evaluator to judge. (A
+	// truncated reply that does carry tool calls runs them as usual.)
+	EndMaxTokens EndReason = "max_tokens"
 )
 
 // Ledger is the runtime's measured record of a run, the evaluator's input.

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -366,6 +367,58 @@ func TestRun_ToolLevelErrorIsSeenByModel(t *testing.T) {
 	block := model.request(1)["messages"].([]any)[2].(map[string]any)["content"].([]any)[0].(map[string]any)
 	if block["is_error"] != true || block["content"] != "permission denied" {
 		t.Errorf("tool_result block = %v", block)
+	}
+}
+
+func TestRun_InvalidToolArgsAreAToolErrorTheModelSees(t *testing.T) {
+	truncated := `{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"create_issue","arguments":"{\"title\":\"x"}}]},"finish_reason":"length"}]}`
+	model, srv := newScriptedModel(t, "/v1/chat/completions", truncated, openAIEndTurnReply)
+	exec := createIssueExecutor()
+	cfg := baseConfig(rm.ResolveModelResult{Kind: rm.ModelKindRemote, URL: srv.URL + "/v1", Style: "openai-compat"}, exec)
+
+	res, err := Run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.End != EndTurn || res.Ledger.Steps != 2 {
+		t.Errorf("end = %q steps = %d, want the run to continue to end_turn", res.End, res.Ledger.Steps)
+	}
+	if len(exec.calls) != 0 {
+		t.Errorf("executor must not see invalid arguments: %v", exec.calls)
+	}
+	if len(res.Ledger.Calls) != 1 || res.Ledger.Calls[0].OK || !strings.Contains(res.Ledger.Calls[0].Error, "invalid tool arguments") {
+		t.Errorf("calls = %+v", res.Ledger.Calls)
+	}
+	tool := model.request(1)["messages"].([]any)[3].(map[string]any)
+	if tool["role"] != "tool" || !strings.Contains(tool["content"].(string), "invalid tool arguments") {
+		t.Errorf("tool message = %v", tool)
+	}
+}
+
+func TestValidateToolArgs(t *testing.T) {
+	for _, ok := range []string{`{}`, `{"a":1}`} {
+		if err := validateToolArgs(json.RawMessage(ok)); err != nil {
+			t.Errorf("%s: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{`"{\"title\":\"x"`, `[1]`, `"text"`, `3`} {
+		if err := validateToolArgs(json.RawMessage(bad)); err == nil {
+			t.Errorf("%s: want error", bad)
+		}
+	}
+}
+
+func TestRun_MaxTokensWithoutToolCallsEndsTheRun(t *testing.T) {
+	cut := `{"choices":[{"message":{"role":"assistant","content":"partial ans"},"finish_reason":"length"}]}`
+	_, srv := newScriptedModel(t, "/v1/chat/completions", cut)
+	cfg := baseConfig(rm.ResolveModelResult{Kind: rm.ModelKindRemote, URL: srv.URL + "/v1", Style: "openai-compat"}, createIssueExecutor())
+
+	res, err := Run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.End != EndMaxTokens || res.Ledger.End.Reason != EndMaxTokens {
+		t.Errorf("end = %q / %q, want max_tokens", res.End, res.Ledger.End.Reason)
 	}
 }
 

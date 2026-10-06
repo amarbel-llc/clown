@@ -160,6 +160,16 @@ func TestTransportErrors(t *testing.T) {
 		t.Errorf("err=%v isErr=%v", err, isErr)
 	}
 
+	// Invalid params is the model's fault: a tool-level error it can see.
+	invalid := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"jsonrpc":"2.0","id":1,"error":{"code":-32602,"message":"bad arguments"}}`)
+	}))
+	defer invalid.Close()
+	content, isErr, err := New(invalid.URL).Call(context.Background(), "t", nil)
+	if err != nil || !isErr || !strings.Contains(string(content), "bad arguments") {
+		t.Errorf("invalid params: content=%s err=%v isErr=%v", content, err, isErr)
+	}
+
 	// Unreachable server.
 	dead := httptest.NewServer(http.NotFoundHandler())
 	url := dead.URL

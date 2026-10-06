@@ -132,6 +132,11 @@ func RunAgent(ctx context.Context, deps AgentDeps, req AgentRequest) (AgentOutco
 	if req.EnvPrincipal != "" && req.EnvPrincipal != b.Principal {
 		return AgentOutcome{}, fmt.Errorf("CLOWN_SESSION_ID %q does not match brief.principal %q", req.EnvPrincipal, b.Principal)
 	}
+	// The brief's wall clock budgets the whole run, setup included: the unit's
+	// RuntimeMaxSec counts from unit start, so the deadline must too, or a slow
+	// setup lets systemd's SIGTERM land before it.
+	wallClock, _ := b.Limits.WallClockDuration()
+	deadline := deps.Now().Add(wallClock)
 	a := &agentRun{deps: deps, brief: b, target: b.Parent, job: req.Job}
 	// PLATFORM GAP (recorded, not fixed): this is where `juggler run` would
 	// take the ringmaster producer's advisory lock (RFC-0016 §2) on a.job, if
@@ -184,8 +189,9 @@ func RunAgent(ctx context.Context, deps AgentDeps, req AgentRequest) (AgentOutco
 		return out, nil
 	}
 
-	wallClock, _ := b.Limits.WallClockDuration()
-	deadline := deps.Now().Add(wallClock)
+	// Whatever setup left of the budget; an already-spent budget must still
+	// time out at once, not fall back to the loop's default.
+	loopWallClock := max(deadline.Sub(deps.Now()), time.Nanosecond)
 	// The time the parent ctx was cancelled (SIGTERM): a cancel at or past
 	// the brief's own deadline is systemd's RuntimeMaxSec backstop, not a
 	// holder, and stays `failed` per §6's table.
@@ -225,7 +231,7 @@ func RunAgent(ctx context.Context, deps AgentDeps, req AgentRequest) (AgentOutco
 		Tools:        tools,
 		Exec:         exec,
 		MaxSteps:     b.Limits.Steps,
-		WallClock:    wallClock,
+		WallClock:    loopWallClock,
 		Principal:    b.Principal,
 		BriefTurnID:  req.BriefStanza,
 		OnTurn:       a.postTurn,
@@ -263,7 +269,8 @@ type agentRun struct {
 	brief  *jugglerbrief.Brief
 	target string
 	job    string
-	// runCtx is the loop's context; per-turn posts are bound to it.
+	// runCtx is the loop's context; per-turn posts inherit its values but not
+	// its cancellation.
 	runCtx context.Context
 }
 
@@ -273,19 +280,17 @@ func (a *agentRun) logf(format string, args ...any) {
 
 // postTurn appends one turn to the run's room as a stanza and records a
 // progress record; the two run concurrently and both finish before it
-// returns, so turns stay ordered. Both are bound to the run's context
-// (capped at turnPostTimeout) so a hung troupe cannot hold the run past a
-// cancel; the terminal turn, appended after a cancel, keeps only the cap. A
-// failed post is logged, not fatal: the ledger, not the transcript, decides
-// success. The room copy of an oversized turn is truncated (roomStanza); the
-// ledger, the spool and the model's wire format keep it whole.
+// returns, so turns stay ordered. Every post is detached from the run's
+// cancellation, so a cancelled run still flushes its last turns (the failed
+// tool_result, the terminal turn) to the room and journal; turnPostTimeout
+// alone bounds a hung troupe. A failed post is logged, not fatal: the ledger,
+// not the transcript, decides success. The room copy of an oversized turn is
+// truncated (roomStanza); the ledger, the spool and the model's wire format
+// keep it whole.
 func (a *agentRun) postTurn(t jugglerloop.Turn) {
-	base := a.runCtx
-	if base == nil {
-		base = context.Background()
-	}
-	if t.Body.Type == jugglerloop.BodyTerminal {
-		base = context.WithoutCancel(base)
+	base := context.Background()
+	if a.runCtx != nil {
+		base = context.WithoutCancel(a.runCtx)
 	}
 	ctx, cancel := context.WithTimeout(base, turnPostTimeout)
 	defer cancel()

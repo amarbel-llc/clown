@@ -219,9 +219,16 @@ returned URIs and any error, plus the terminal facts (how the loop
 ended, whether `cannot_complete` was called and with what reason). The
 ledger carries a `schema` version. `end.reason` is one of `end_turn`,
 `cannot_complete`, `step_cap`, `timeout`, `tool_error` (a tool's
-transport failed), or `model_error` (the model endpoint returned a
-non-2xx or unparseable reply before the deadline). Only `end_turn` can
-lead to `succeeded`; every other reason is `failed` at the job level.
+transport failed), `model_error` (the model endpoint returned a
+non-2xx or unparseable reply before the deadline), or `max_tokens` (the
+provider cut the reply off at its token limit with no tool call to act
+on). Only `end_turn` can lead to `succeeded`; every other reason is
+`failed` at the job level. A tool call whose arguments are not valid
+JSON is answered with an error tool result the model can recover from,
+never a transport failure, under both codecs. The brief's wall clock
+starts when `juggler run` starts, so it also covers model resolution,
+the moxy launch and the tool handshake and always expires before the
+unit's `RuntimeMaxSec` backstop.
 The task itself is not a transcript turn — it is the brief stanza's
 content — so the agent's first recorded turn has the brief as its
 provenance parent.

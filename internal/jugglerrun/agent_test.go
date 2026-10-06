@@ -287,6 +287,74 @@ func TestRunAgent_SIGTERMPastTheDeadlineIsFailed(t *testing.T) {
 	}
 }
 
+func TestRunAgent_SetupTimeCountsAgainstTheWallClock(t *testing.T) {
+	h := newHarness(t)
+	t0 := time.Now()
+	var offset atomic.Int64
+	deps := h.agentDeps(openAIResolved(blockingModel(t)))
+	deps.Now = func() time.Time { return t0.Add(time.Duration(offset.Load())) }
+	// Setup eats all but 100ms of the brief's 30s wall clock.
+	deps.ConnectTools = func(ctx context.Context, url string) ([]jugglerloop.ToolSpec, jugglerloop.ToolExecutor, error) {
+		offset.Add(int64(30*time.Second - 100*time.Millisecond))
+		return ConnectMoxy(ctx, url)
+	}
+	start := time.Now()
+	out, err := RunAgent(context.Background(), deps, AgentRequest{Brief: parsedBrief(t, "agent-1"), MoxyURL: fakeMoxy(t).URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.State != StateFailed || !strings.HasPrefix(out.Message, "timeout:") {
+		t.Fatalf("outcome = %+v, want failed/timeout from the loop's own remaining budget", out)
+	}
+	if elapsed := time.Since(start); elapsed > 10*time.Second {
+		t.Errorf("run took %s; the loop was given the full wall clock instead of what setup left", elapsed)
+	}
+}
+
+type blockingExecutor struct{ started chan struct{} }
+
+func (b blockingExecutor) Call(ctx context.Context, _ string, _ json.RawMessage) (json.RawMessage, bool, error) {
+	close(b.started)
+	<-ctx.Done()
+	return nil, false, ctx.Err()
+}
+
+func TestRunAgent_CancelledRunStillPostsItsFailedToolResult(t *testing.T) {
+	h := newHarness(t)
+	exec := blockingExecutor{started: make(chan struct{})}
+	deps := h.agentDeps(openAIResolved(scriptedOpenAI(t, openAICreateIssue)))
+	deps.ConnectTools = func(context.Context, string) ([]jugglerloop.ToolSpec, jugglerloop.ToolExecutor, error) {
+		return []jugglerloop.ToolSpec{{Name: "ring_create_issue", Kind: "issue"}}, exec, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		<-exec.started
+		cancel()
+	}()
+	out, err := RunAgent(ctx, deps, AgentRequest{Brief: parsedBrief(t, "agent-1"), MoxyURL: "unused"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.State != StateAborted {
+		t.Fatalf("outcome = %+v", out)
+	}
+	var types []string
+	for _, p := range h.fakes.MUC(t) {
+		var turn jugglerloop.Turn
+		if err := json.Unmarshal([]byte(p.Subject), &turn); err != nil {
+			t.Fatalf("post subject is not a turn: %v", err)
+		}
+		if turn.Body.Type == jugglerloop.BodyToolResult && turn.Body.ToolResult != nil && turn.Body.ToolResult.OK {
+			t.Errorf("tool_result should be failed: %+v", turn.Body.ToolResult)
+		}
+		types = append(types, string(turn.Body.Type))
+	}
+	want := []string{"tool_call", "tool_result", "terminal"}
+	if strings.Join(types, ",") != strings.Join(want, ",") {
+		t.Errorf("posted turns = %v, want %v", types, want)
+	}
+}
+
 func TestAgentVerdict(t *testing.T) {
 	cc := jugglerloop.Result{End: jugglerloop.EndCannotComplete, Ledger: jugglerloop.Ledger{CannotComplete: &jugglerloop.CannotComplete{Reason: "r"}}}
 	cases := []struct {
@@ -304,6 +372,7 @@ func TestAgentVerdict(t *testing.T) {
 		{"timeout", jugglerloop.Result{End: jugglerloop.EndTimeout}, false, true, StateFailed, "timeout:"},
 		{"tool error", jugglerloop.Result{End: jugglerloop.EndToolError}, false, true, StateFailed, "tool_error:"},
 		{"model error", jugglerloop.Result{End: jugglerloop.EndModelError}, false, true, StateFailed, "model_error:"},
+		{"max tokens", jugglerloop.Result{End: jugglerloop.EndMaxTokens}, false, true, StateFailed, "reply truncated by max_tokens"},
 		{"holder cancel", jugglerloop.Result{End: jugglerloop.EndTimeout}, true, true, StateAborted, "cancelled"},
 	}
 	for _, tc := range cases {
