@@ -2,14 +2,10 @@ package jugglerrun
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -91,29 +87,11 @@ func (h *harness) agentDeps(resolved rm.ResolveModelResult) AgentDeps {
 
 // scriptedOpenAI answers request N with replies[N] (the last repeats).
 func scriptedOpenAI(t *testing.T, replies ...string) *httptest.Server {
-	t.Helper()
-	var mu sync.Mutex
-	n := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/chat/completions" {
-			t.Errorf("model path = %s", r.URL.Path)
-		}
-		_, _ = io.ReadAll(r.Body)
-		mu.Lock()
-		i := n
-		n++
-		mu.Unlock()
-		if i >= len(replies) {
-			i = len(replies) - 1
-		}
-		_, _ = io.WriteString(w, replies[i])
-	}))
-	t.Cleanup(srv.Close)
-	return srv
+	return jugglerruntest.ScriptedModel(t, replies...)
 }
 
 func openAIResolved(srv *httptest.Server) rm.ResolveModelResult {
-	return rm.ResolveModelResult{Kind: rm.ModelKindRemote, URL: srv.URL + "/v1", Token: "sk-test", Style: "openai-compat"}
+	return rm.ResolveModelResult{Kind: rm.ModelKindRemote, URL: srv.URL + "/v1", Token: "sk-test", Style: rm.StyleOpenAICompat}
 }
 
 const (
@@ -150,34 +128,10 @@ read line
 	return bin, log
 }
 
+const ringTools = `[{"name":"ring_create_issue","description":"File an issue","inputSchema":{"type":"object"},"_meta":{"kind":"issue"}},{"name":"ring_list_repos","inputSchema":{"type":"object"}}]`
+
 func fakeMoxyWith(t *testing.T, callResult string) *httptest.Server {
-	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		var req struct {
-			ID     json.RawMessage `json:"id"`
-			Method string          `json:"method"`
-		}
-		if err := json.Unmarshal(body, &req); err != nil {
-			t.Errorf("bad MCP request: %v", err)
-		}
-		var result string
-		switch req.Method {
-		case "initialize":
-			w.Header().Set("Mcp-Session-Id", "sess-1")
-			result = `{"protocolVersion":"2025-06-18","capabilities":{}}`
-		case "tools/list":
-			result = `{"tools":[{"name":"ring_create_issue","description":"File an issue","inputSchema":{"type":"object"},"_meta":{"kind":"issue"}},{"name":"ring_list_repos","inputSchema":{"type":"object"}}]}`
-		case "tools/call":
-			result = callResult
-		default:
-			result = `{}`
-		}
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"result":%s}`, req.ID, result)
-	}))
-	t.Cleanup(srv.Close)
-	return srv
+	return jugglerruntest.FakeMCP(t, ringTools, callResult)
 }
 
 func toJobRecords(recs []jugglerruntest.Record) []JobRecord {

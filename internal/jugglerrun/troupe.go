@@ -84,20 +84,15 @@ type Troupe interface {
 //	muc send --room R --subject <stanza JSON> --body "" --source S [--from K]
 //	message --target T --source S --message M [--from F] [--result-ref R]
 //
-// The muc send shape is cmd/juggler decide's: the stanza JSON has no blank
-// line, so all of it rides --subject with an empty --body and the wire body is
-// exactly the stanza.
+// The muc send shape (shared by run, spawn and decide) is clown-hook-tee's:
+// the stanza JSON has no blank line, so all of it rides --subject with an
+// empty --body and the wire body is exactly the stanza.
 type ExecTroupe struct {
-	Bin    string
-	Runner CommandRunner
+	Bin string
 }
 
 func (t ExecTroupe) run(ctx context.Context, env []string, args ...string) ([]byte, error) {
-	runner := t.Runner
-	if runner == nil {
-		runner = OSCommandRunner{}
-	}
-	return runner.Run(ctx, Command{Argv: append([]string{t.Bin}, args...), Env: env})
+	return runCommand(ctx, Command{Argv: append([]string{t.Bin}, args...), Env: env})
 }
 
 func (t ExecTroupe) Mint(ctx context.Context, sessionKey string) (Credential, error) {

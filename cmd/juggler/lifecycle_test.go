@@ -68,42 +68,10 @@ func writeBrief(t *testing.T, principal, parent string) string {
 	return path
 }
 
-func cmdModelServer(t *testing.T, replies ...string) *httptest.Server {
-	t.Helper()
-	n := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.ReadAll(r.Body)
-		i := n
-		if i >= len(replies) {
-			i = len(replies) - 1
-		}
-		n++
-		_, _ = io.WriteString(w, replies[i])
-	}))
-	t.Cleanup(srv.Close)
-	return srv
-}
-
 func cmdMoxyServer(t *testing.T) *httptest.Server {
-	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			ID     json.RawMessage `json:"id"`
-			Method string          `json:"method"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		result := `{}`
-		switch req.Method {
-		case "tools/list":
-			result = `{"tools":[{"name":"create_issue","inputSchema":{"type":"object"},"_meta":{"kind":"issue"}}]}`
-		case "tools/call":
-			result = `{"content":[{"type":"text","text":"{\"url\":\"https://x/1\"}"}]}`
-		}
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"result":%s}`, req.ID, result)
-	}))
-	t.Cleanup(srv.Close)
-	return srv
+	return jugglerruntest.FakeMCP(t,
+		`[{"name":"create_issue","inputSchema":{"type":"object"},"_meta":{"kind":"issue"}}]`,
+		`{"content":[{"type":"text","text":"{\"url\":\"https://x/1\"}"}]}`)
 }
 
 const (
@@ -113,10 +81,8 @@ const (
 
 func TestCmdRun_ExitCodeMirrorsTheVerdict(t *testing.T) {
 	f := lifecycleEnv(t)
-	model := cmdModelServer(t, cmdToolCallReply, cmdEndTurnReply)
-	resolve := func(context.Context, string) (rm.ResolveModelResult, error) {
-		return rm.ResolveModelResult{Kind: rm.ModelKindRemote, URL: model.URL + "/v1", Style: "openai-compat"}, nil
-	}
+	model := jugglerruntest.ScriptedModel(t, cmdToolCallReply, cmdEndTurnReply)
+	resolve := resolvedAs(rm.ResolveModelResult{Kind: rm.ModelKindRemote, URL: model.URL + "/v1", Style: rm.StyleOpenAICompat})
 	t.Setenv(jr.SessionIDEnv, "agent-1")
 	t.Setenv(jr.MoxyURLEnv, cmdMoxyServer(t).URL)
 
@@ -134,10 +100,8 @@ func TestCmdRun_ExitCodeMirrorsTheVerdict(t *testing.T) {
 	}
 
 	// The same agent with no successful call fails the evaluator: exit 2.
-	failing := cmdModelServer(t, cmdEndTurnReply)
-	resolveFailing := func(context.Context, string) (rm.ResolveModelResult, error) {
-		return rm.ResolveModelResult{Kind: rm.ModelKindRemote, URL: failing.URL + "/v1", Style: "openai-compat"}, nil
-	}
+	failing := jugglerruntest.ScriptedModel(t, cmdEndTurnReply)
+	resolveFailing := resolvedAs(rm.ResolveModelResult{Kind: rm.ModelKindRemote, URL: failing.URL + "/v1", Style: rm.StyleOpenAICompat})
 	out.Reset()
 	if code := cmdRun(context.Background(), resolveFailing, failing.Client(), []string{"--brief", writeBrief(t, "agent-1", "root-1")}, nil, &out, &errb); code != jr.ExitFailed {
 		t.Fatalf("exit = %d, want 2; stdout %s", code, out.String())
@@ -265,7 +229,7 @@ func TestCmdDecide_RunKeyRecordsRouteEntries(t *testing.T) {
 	decide := func(extra ...string) int {
 		args := append([]string{"--model", "jev", "--room", run.Room, "--parent", "rec-1", "--troupe", f.Troupe, "--run-key", "rec-9"}, extra...)
 		out.Reset()
-		return cmdDecide(fakeResolver{model: decideModel{URL: srv.URL}}, srv.Client(), args, strings.NewReader(decideTestPayload), &out, &errb)
+		return cmdDecide(decisionsAt(srv.URL), srv.Client(), args, strings.NewReader(decideTestPayload), &out, &errb)
 	}
 	if code := decide(); code != 0 {
 		t.Fatalf("usable decide exit = %d: %s", code, errb.String())
@@ -302,7 +266,7 @@ func TestCmdDecide_RunKeyRecordsRouteEntries(t *testing.T) {
 	if code := decide(); code != 1 {
 		t.Errorf("a resolved run's ledger is closed: decide exit = %d", code)
 	}
-	if code := cmdDecide(fakeResolver{}, nil, []string{"--model", "m", "--room", "r", "--parent", "p", "--run-key", "nope"}, strings.NewReader(decideTestPayload), &out, &errb); code != 1 {
+	if code := cmdDecide(mustNotResolve(t), nil, []string{"--model", "m", "--room", "r", "--parent", "p", "--run-key", "nope"}, strings.NewReader(decideTestPayload), &out, &errb); code != 1 {
 		t.Errorf("unknown run key: exit = %d", code)
 	}
 }

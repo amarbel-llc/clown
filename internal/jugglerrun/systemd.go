@@ -80,14 +80,9 @@ func SystemdCommandLine(argv []string) string {
 type ExecSystemdRun struct {
 	Bin         string
 	UserManager bool
-	Runner      CommandRunner
 }
 
 func (s ExecSystemdRun) Launch(ctx context.Context, u TransientUnit) error {
-	runner := s.Runner
-	if runner == nil {
-		runner = OSCommandRunner{}
-	}
-	_, err := runner.Run(ctx, Command{Argv: SystemdRunArgv(s.Bin, s.UserManager, u), Env: StripPrincipalEnv(os.Environ())})
+	_, err := runCommand(ctx, Command{Argv: SystemdRunArgv(s.Bin, s.UserManager, u), Env: StripPrincipalEnv(os.Environ())})
 	return err
 }

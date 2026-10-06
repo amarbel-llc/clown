@@ -138,3 +138,12 @@ type ResolveModelResult struct {
 	// (the registry `model` field). Empty: callers use the registry name.
 	ModelID string `json:"model_id,omitempty"`
 }
+
+// UpstreamModel is the model id sent to the provider: ModelID when the
+// registry entry aliases an upstream id, else the registry name itself.
+func (r ResolveModelResult) UpstreamModel(registryName string) string {
+	if r.ModelID != "" {
+		return r.ModelID
+	}
+	return registryName
+}

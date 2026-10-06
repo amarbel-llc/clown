@@ -41,24 +41,18 @@ func cmdExitWake(getenv func(string) string, args []string, stdout, stderr io.Wr
 	if from == "" {
 		from = getenv(jr.SessionIDEnv)
 	}
-	deps, err := bins.lifecycleDeps(false)
-	if err != nil {
-		fmt.Fprintf(stderr, "juggler: exit-wake: %v\n", err)
-		return jr.ExitUsage
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), exitWakeTimeout)
-	defer cancel()
-	out, err := jr.ExitWake(ctx, deps, jr.ExitWakeRequest{
-		Job:       job,
-		Target:    target,
-		From:      from,
-		LedgerRef: ledgerRef,
-		Service:   jr.ServiceResultFromEnv(getenv),
+	return withDeps(context.Background(), stderr, "exit-wake", bins, exitWakeTimeout, func(ctx context.Context, deps jr.LifecycleDeps) int {
+		out, err := jr.ExitWake(ctx, deps, jr.ExitWakeRequest{
+			Job:       job,
+			Target:    target,
+			From:      from,
+			LedgerRef: ledgerRef,
+			Service:   jr.ServiceResultFromEnv(getenv),
+		})
+		printJSON(stdout, out)
+		if err != nil {
+			return fail(stderr, "exit-wake", err)
+		}
+		return jr.ExitSucceeded
 	})
-	printJSON(stdout, out)
-	if err != nil {
-		fmt.Fprintf(stderr, "juggler: exit-wake: %v\n", err)
-		return 1
-	}
-	return 0
 }

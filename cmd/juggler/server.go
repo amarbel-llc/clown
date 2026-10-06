@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -288,18 +289,12 @@ func (s *server) dispatch(req rm.Envelope) rm.Envelope {
 		if err := json.Unmarshal(req.Params, &p); err != nil {
 			return rpcError(req.ID, -32602, fmt.Sprintf("invalid params: %v", err))
 		}
-		remote, err := rm.LoadRemoteModels(s.remoteModelsPath)
-		if err != nil {
-			return rpcError(req.ID, -32000, fmt.Sprintf("list remote models: %v", err))
+		res, err := rm.ResolveRemoteModelFromPath(s.remoteModelsPath, p.Name)
+		if err == nil {
+			return rpcResult(req.ID, res)
 		}
-		for _, m := range remote {
-			if m.Name == p.Name {
-				res, err := m.Resolve()
-				if err != nil {
-					return rpcError(req.ID, -32000, err.Error())
-				}
-				return rpcResult(req.ID, res)
-			}
+		if !errors.Is(err, rm.ErrDaemonRequired) {
+			return rpcError(req.ID, -32000, err.Error())
 		}
 		// Not a remote entry — try local. Reuse a running instance if the
 		// alias is already up; otherwise fall through to the same start

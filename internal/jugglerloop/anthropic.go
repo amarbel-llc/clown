@@ -58,7 +58,7 @@ func (AnthropicCodec) EncodeRequest(resolved rm.ResolveModelResult, model string
 	}
 
 	body := anthropicRequest{
-		Model:     upstreamModel(resolved, model),
+		Model:     resolved.UpstreamModel(model),
 		MaxTokens: req.MaxTokens,
 		System:    req.System,
 		Messages:  encodeAnthropicMessages(req.Agent, req.Turns),

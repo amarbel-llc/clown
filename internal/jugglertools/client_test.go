@@ -101,7 +101,7 @@ func TestCallToolHappyAndIsError(t *testing.T) {
 	if err := c.Initialize(ctx); err != nil {
 		t.Fatal(err)
 	}
-	content, isErr, err := c.CallTool(ctx, "t", json.RawMessage(`{"x":1}`))
+	content, isErr, err := c.Call(ctx, "t", json.RawMessage(`{"x":1}`))
 	if err != nil || isErr {
 		t.Fatalf("err=%v isErr=%v", err, isErr)
 	}
@@ -113,7 +113,7 @@ func TestCallToolHappyAndIsError(t *testing.T) {
 	}
 
 	f.callResult = `{"content":[{"type":"text","text":"permission denied"}],"isError":true}`
-	content, isErr, err = c.CallTool(ctx, "t", nil)
+	content, isErr, err = c.Call(ctx, "t", nil)
 	if err != nil {
 		t.Fatalf("tool-level error must not be a transport error: %v", err)
 	}
@@ -131,7 +131,7 @@ func TestCallToolSSE(t *testing.T) {
 	if err := c.Initialize(ctx); err != nil {
 		t.Fatal(err)
 	}
-	content, isErr, err := c.CallTool(ctx, "t", nil)
+	content, isErr, err := c.Call(ctx, "t", nil)
 	if err != nil || isErr {
 		t.Fatalf("err=%v isErr=%v", err, isErr)
 	}
@@ -146,7 +146,7 @@ func TestTransportErrors(t *testing.T) {
 	}))
 	defer srv.Close()
 	c := New(srv.URL)
-	if _, _, err := c.CallTool(context.Background(), "t", nil); err == nil {
+	if _, _, err := c.Call(context.Background(), "t", nil); err == nil {
 		t.Error("expected transport error on 500")
 	}
 
@@ -155,7 +155,7 @@ func TestTransportErrors(t *testing.T) {
 		io.WriteString(w, `{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"nope"}}`)
 	}))
 	defer rpcErr.Close()
-	_, isErr, err := New(rpcErr.URL).CallTool(context.Background(), "t", nil)
+	_, isErr, err := New(rpcErr.URL).Call(context.Background(), "t", nil)
 	if err == nil || isErr || !strings.Contains(err.Error(), "nope") {
 		t.Errorf("err=%v isErr=%v", err, isErr)
 	}
@@ -179,7 +179,7 @@ func TestCallTimeout(t *testing.T) {
 	defer srv.Close()
 	c := New(srv.URL, WithCallTimeout(50*time.Millisecond))
 	start := time.Now()
-	if _, _, err := c.CallTool(context.Background(), "t", nil); err == nil {
+	if _, _, err := c.Call(context.Background(), "t", nil); err == nil {
 		t.Fatal("expected timeout error")
 	}
 	if time.Since(start) > 2*time.Second {
@@ -193,7 +193,7 @@ func TestOversizedResponse(t *testing.T) {
 	srv := httptest.NewServer(f.handler(t))
 	defer srv.Close()
 	c := New(srv.URL, WithMaxResponseBytes(512))
-	_, _, err := c.CallTool(context.Background(), "t", nil)
+	_, _, err := c.Call(context.Background(), "t", nil)
 	if !errors.Is(err, ErrResponseTooLarge) {
 		t.Fatalf("err = %v, want ErrResponseTooLarge", err)
 	}

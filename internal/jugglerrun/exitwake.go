@@ -34,17 +34,17 @@ func ServiceResultFromEnv(getenv func(string) string) ServiceResult {
 //	                                  missing result)
 //
 // The interrupted messages carry the "killed: " / "crash: " prefix
-// ExitReasonFor reads back.
-func HookTerminal(sr ServiceResult) (state, message string, reason ExitReason) {
+// ExitReasonFor reads back, so the reason is recoverable from the journal.
+func HookTerminal(sr ServiceResult) (state, message string) {
 	switch sr.Result {
 	case "success":
-		return StateInterrupted, crashMessagePrefix + "unit exited cleanly without writing a terminal record", ReasonCrash
+		return StateInterrupted, crashMessagePrefix + "unit exited cleanly without writing a terminal record"
 	case "timeout":
-		return StateFailed, "wall clock (RuntimeMaxSec) expired", ReasonFailed
+		return StateFailed, "wall clock (RuntimeMaxSec) expired"
 	case "signal":
-		return StateInterrupted, killedMessagePrefix + "main process killed by signal " + orUnknown(sr.ExitStatus), ReasonKilled
+		return StateInterrupted, killedMessagePrefix + "main process killed by signal " + orUnknown(sr.ExitStatus)
 	}
-	return StateInterrupted, fmt.Sprintf("%sunit result %s (exit code %s, status %s)", crashMessagePrefix, orUnknown(sr.Result), orUnknown(sr.ExitCode), orUnknown(sr.ExitStatus)), ReasonCrash
+	return StateInterrupted, fmt.Sprintf("%sunit result %s (exit code %s, status %s)", crashMessagePrefix, orUnknown(sr.Result), orUnknown(sr.ExitCode), orUnknown(sr.ExitStatus))
 }
 
 func orUnknown(s string) string {
@@ -122,7 +122,7 @@ func ExitWake(ctx context.Context, deps LifecycleDeps, req ExitWakeRequest) (Exi
 	}
 	term, terminal := TerminalRecord(recs)
 	if !terminal {
-		state, message, _ := HookTerminal(req.Service)
+		state, message := HookTerminal(req.Service)
 		doneErr := deps.Ringmaster.Done(ctx, req.Target, req.Job, DoneRecord{State: state, Message: message, ResultRef: req.LedgerRef})
 		if doneErr == nil {
 			out.WroteTerminal = true
@@ -139,11 +139,8 @@ func ExitWake(ctx context.Context, deps LifecycleDeps, req ExitWakeRequest) (Exi
 	}
 	out.State, out.Message = term.Type, term.Message
 	out.Reason = ExitReasonFor(term.Type, term.Message)
-	if term.Type == StateInterrupted && req.Service.Result == "signal" {
-		out.Reason = ReasonKilled
-	}
 
-	woken, already, err := sendExitWakes(ctx, deps, exitWakeBatch{
+	out.Woken, out.AlreadyWoken, err = sendExitWakes(ctx, deps, exitWakeBatch{
 		Job:        req.Job,
 		From:       req.From,
 		Source:     ExitWakeSource,
@@ -153,7 +150,6 @@ func ExitWake(ctx context.Context, deps LifecycleDeps, req ExitWakeRequest) (Exi
 		ResultRef:  term.ResultRef,
 		Recipients: WakeRecipients(HoldersFromRecords(recs)),
 	})
-	out.Woken, out.AlreadyWoken = woken, already
 	return out, err
 }
 
@@ -175,18 +171,19 @@ func ExitWakeText(job, state string, reason ExitReason, message string) string {
 // sendExitWakes sends one wake per recipient unless the job's sent-wake
 // marker exists. The marker is written only after every send succeeded, so a
 // partial failure is retried whole (wakes are at-least-once; consumers dedupe
-// on (job, type), ringmaster(1) NOTIFICATION LINE).
+// on (job, type), ringmaster(1) NOTIFICATION LINE). woken is never nil.
 func sendExitWakes(ctx context.Context, deps LifecycleDeps, b exitWakeBatch) (woken []string, already bool, err error) {
+	woken = []string{}
 	marker := deps.Store.wakeMarkerPath(b.Job)
 	unlock, err := lock(marker + ".lock")
 	if err != nil {
-		return nil, false, err
+		return woken, false, err
 	}
 	defer unlock()
 	if _, err := os.Stat(marker); err == nil {
-		return nil, true, nil
+		return woken, true, nil
 	} else if !errors.Is(err, fs.ErrNotExist) {
-		return nil, false, err
+		return woken, false, err
 	}
 	text := ExitWakeText(b.Job, b.State, b.Reason, b.Message)
 	var errs []error

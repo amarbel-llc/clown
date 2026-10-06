@@ -62,10 +62,6 @@ func (v Verdict) ExitCode() int {
 	}
 }
 
-// ErrConfig marks a usage/config error detected before any HTTP call
-// (exit code 1).
-var ErrConfig = errors.New("jugglerdecide: config error")
-
 // Question is one entry of the request's "questions" map. Only the fields
 // needed to validate a choice are interpreted; the rest rides in the raw
 // questions JSON.
@@ -112,14 +108,14 @@ type Answer struct {
 	Probabilities map[string]float64 `json:"probabilities,omitempty"`
 }
 
-// Response is the Decisions API response. Answers stay raw so non-choice
-// answer types survive untouched.
+// Response is the Decisions API response. Answers stays the raw "answers"
+// object so non-choice answer types survive untouched.
 type Response struct {
-	Answers  map[string]json.RawMessage `json:"answers"`
-	ID       string                     `json:"id,omitempty"`
-	Model    string                     `json:"model,omitempty"`
-	Provider string                     `json:"provider,omitempty"`
-	Usage    *Usage                     `json:"usage,omitempty"`
+	Answers  json.RawMessage `json:"answers"`
+	ID       string          `json:"id,omitempty"`
+	Model    string          `json:"model,omitempty"`
+	Provider string          `json:"provider,omitempty"`
+	Usage    *Usage          `json:"usage,omitempty"`
 }
 
 // Outcome is the single classified result of a decision attempt.
@@ -141,12 +137,11 @@ type Outcome struct {
 	// Raw is the (truncated) raw response body, kept for no-choice output.
 	Raw string
 
-	Model        string // model id sent
-	StateDigest  string
-	Questions    json.RawMessage
-	Response     Response
-	AnswersJSON  json.RawMessage // the response's full "answers" object
-	haveResponse bool
+	Model       string // model id sent
+	StateDigest string
+	Questions   json.RawMessage
+	// Response is set once the gated answer parsed; until then it is zero.
+	Response Response
 }
 
 // EndpointFor turns a registry URL into the Decisions endpoint.
@@ -165,7 +160,7 @@ func StateDigest(state json.RawMessage) (string, error) {
 	if len(bytes.TrimSpace(state)) == 0 {
 		v = nil
 	} else if err := json.Unmarshal(state, &v); err != nil {
-		return "", fmt.Errorf("%w: state is not valid JSON: %v", ErrConfig, err)
+		return "", fmt.Errorf("jugglerdecide: state is not valid JSON: %v", err)
 	}
 	canon, err := json.Marshal(v)
 	if err != nil {
@@ -176,19 +171,19 @@ func StateDigest(state json.RawMessage) (string, error) {
 }
 
 // Decide sends the request and classifies the result. A non-nil error means
-// a config/usage problem before any call (wraps ErrConfig); every runtime
-// failure is a NoChoice Outcome instead.
+// a config/usage problem before any call (exit 1); every runtime failure is
+// a NoChoice Outcome instead.
 func Decide(ctx context.Context, req Request) (Outcome, error) {
 	var payload Payload
 	if err := json.Unmarshal(req.Payload, &payload); err != nil {
-		return Outcome{}, fmt.Errorf("%w: stdin is not a JSON object: %v", ErrConfig, err)
+		return Outcome{}, fmt.Errorf("jugglerdecide: stdin is not a JSON object: %v", err)
 	}
 	if len(payload.Questions) == 0 {
-		return Outcome{}, fmt.Errorf("%w: stdin has no \"questions\"", ErrConfig)
+		return Outcome{}, errors.New("jugglerdecide: stdin has no \"questions\"")
 	}
 	var questions map[string]json.RawMessage
 	if err := json.Unmarshal(payload.Questions, &questions); err != nil || len(questions) == 0 {
-		return Outcome{}, fmt.Errorf("%w: \"questions\" must be a non-empty object", ErrConfig)
+		return Outcome{}, errors.New("jugglerdecide: \"questions\" must be a non-empty object")
 	}
 	qid, err := gateQuestion(req.Question, questions)
 	if err != nil {
@@ -196,10 +191,10 @@ func Decide(ctx context.Context, req Request) (Outcome, error) {
 	}
 	var q Question
 	if err := json.Unmarshal(questions[qid], &q); err != nil {
-		return Outcome{}, fmt.Errorf("%w: question %q: %v", ErrConfig, qid, err)
+		return Outcome{}, fmt.Errorf("jugglerdecide: question %q: %v", qid, err)
 	}
 	if q.Type != "choice" {
-		return Outcome{}, fmt.Errorf("%w: question %q has type %q; only choice questions are gated", ErrConfig, qid, q.Type)
+		return Outcome{}, fmt.Errorf("jugglerdecide: question %q has type %q; only choice questions are gated", qid, q.Type)
 	}
 	digest, err := StateDigest(payload.State)
 	if err != nil {
@@ -220,12 +215,12 @@ func Decide(ctx context.Context, req Request) (Outcome, error) {
 		Questions json.RawMessage `json:"questions"`
 	}{req.Model, nonNull(payload.State), payload.Questions})
 	if err != nil {
-		return Outcome{}, fmt.Errorf("%w: marshal request: %v", ErrConfig, err)
+		return Outcome{}, fmt.Errorf("jugglerdecide: marshal request: %v", err)
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, req.Endpoint, bytes.NewReader(body))
 	if err != nil {
-		return Outcome{}, fmt.Errorf("%w: build request: %v", ErrConfig, err)
+		return Outcome{}, fmt.Errorf("jugglerdecide: build request: %v", err)
 	}
 	httpReq.Header.Set("content-type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+req.Token)
@@ -257,7 +252,13 @@ func Decide(ctx context.Context, req Request) (Outcome, error) {
 	if err := json.Unmarshal(raw, &parsed); err != nil {
 		return out.noChoice(fmt.Sprintf("unparseable response: %v", err)), nil
 	}
-	rawAnswer, ok := parsed.Answers[qid]
+	var answers map[string]json.RawMessage
+	if len(parsed.Answers) > 0 {
+		if err := json.Unmarshal(parsed.Answers, &answers); err != nil {
+			return out.noChoice(fmt.Sprintf("unparseable response: %v", err)), nil
+		}
+	}
+	rawAnswer, ok := answers[qid]
 	if !ok {
 		return out.noChoice(fmt.Sprintf("response has no answer for question %q", qid)), nil
 	}
@@ -266,10 +267,6 @@ func Decide(ctx context.Context, req Request) (Outcome, error) {
 		return out.noChoice(fmt.Sprintf("answer for %q unparseable: %v", qid, err)), nil
 	}
 	out.Response = parsed
-	out.haveResponse = true
-	if all, ok := rawAnswersObject(raw); ok {
-		out.AnswersJSON = all
-	}
 	out.Choice, out.Confidence = ans.Choice, ans.Confidence
 	if p, ok := ans.Probabilities[ans.Choice]; ok {
 		out.TopProbability = &p
@@ -312,7 +309,7 @@ func apiErrorMessage(body []byte) string {
 func gateQuestion(want string, questions map[string]json.RawMessage) (string, error) {
 	if want != "" {
 		if _, ok := questions[want]; !ok {
-			return "", fmt.Errorf("%w: --question %q is not among the request's questions", ErrConfig, want)
+			return "", fmt.Errorf("jugglerdecide: --question %q is not among the request's questions", want)
 		}
 		return want, nil
 	}
@@ -321,17 +318,7 @@ func gateQuestion(want string, questions map[string]json.RawMessage) (string, er
 			return id, nil
 		}
 	}
-	return "", fmt.Errorf("%w: %d questions given; --question is required to pick the gating one", ErrConfig, len(questions))
-}
-
-func rawAnswersObject(body []byte) (json.RawMessage, bool) {
-	var env struct {
-		Answers json.RawMessage `json:"answers"`
-	}
-	if json.Unmarshal(body, &env) != nil || len(env.Answers) == 0 {
-		return nil, false
-	}
-	return env.Answers, true
+	return "", fmt.Errorf("jugglerdecide: %d questions given; --question is required to pick the gating one", len(questions))
 }
 
 func nonNull(m json.RawMessage) json.RawMessage {
@@ -368,7 +355,7 @@ type Stanza struct {
 // Stanza builds the decision stanza for this outcome. parent is the
 // provenance parent (the recording stanza id) and may be empty.
 func (o Outcome) Stanza(parent string) Stanza {
-	answers := o.AnswersJSON
+	answers := o.Response.Answers
 	if len(answers) == 0 {
 		answers = json.RawMessage("null")
 	}
@@ -411,14 +398,14 @@ func marshalPlain(v any) ([]byte, error) {
 // that has a response prints the response form and additionally carries the
 // reason under "reason".
 func (o Outcome) StdoutJSON() ([]byte, error) {
-	if o.haveResponse {
+	if len(o.Response.Answers) > 0 {
 		return marshalPlain(struct {
 			Answers json.RawMessage `json:"answers"`
 			ID      string          `json:"id,omitempty"`
 			Model   string          `json:"model,omitempty"`
 			Usage   *Usage          `json:"usage,omitempty"`
 			Reason  string          `json:"reason,omitempty"`
-		}{o.AnswersJSON, o.Response.ID, o.Response.Model, o.Response.Usage, o.nonUsableReason()})
+		}{o.Response.Answers, o.Response.ID, o.Response.Model, o.Response.Usage, o.nonUsableReason()})
 	}
 	return marshalPlain(struct {
 		Reason     string `json:"reason"`

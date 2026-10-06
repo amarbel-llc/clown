@@ -2,6 +2,8 @@ package jugglerrun
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -325,4 +327,80 @@ func TestExtractURIsFromMCPContent(t *testing.T) {
 	if got := ExtractURIsFromMCPContent("t", json.RawMessage(`[]`)); got == nil {
 		t.Error("result must never be nil")
 	}
+}
+
+func wantTruncationMarker(t *testing.T, got json.RawMessage, original []byte) {
+	t.Helper()
+	var m struct {
+		Truncated bool   `json:"truncated"`
+		SHA256    string `json:"sha256"`
+		Bytes     int    `json:"bytes"`
+	}
+	sum := sha256.Sum256(original)
+	if err := json.Unmarshal(got, &m); err != nil || !m.Truncated || m.SHA256 != hex.EncodeToString(sum[:]) || m.Bytes != len(original) {
+		t.Errorf("marker = %s (%v), want sha256 %x bytes %d", got, err, sum, len(original))
+	}
+}
+
+// A tool_result past the argv cap reaches the room as a truncation marker
+// instead of failing the post with E2BIG; small turns post whole.
+func TestRunAgent_OversizedToolResultIsTruncatedInTheRoom(t *testing.T) {
+	h := newHarness(t)
+	content := `[{"type":"text","text":"` + strings.Repeat("x", 200<<10) + `"}]`
+	moxy := fakeMoxyWith(t, `{"content":`+content+`,"isError":false}`)
+	out, err := RunAgent(context.Background(), h.agentDeps(openAIResolved(scriptedOpenAI(t, openAICreateIssue, openAIEndTurn))), AgentRequest{
+		Brief: parsedBrief(t, "agent-1"), MoxyURL: moxy.URL,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Ledger.Calls) != 1 || !out.Ledger.Calls[0].OK {
+		t.Errorf("ledger calls = %+v", out.Ledger.Calls)
+	}
+	posts := h.fakes.MUC(t)
+	if len(posts) != 4 {
+		t.Fatalf("posts = %d, want tool_call, tool_result, text, terminal", len(posts))
+	}
+	var result struct {
+		Body struct {
+			Type       string `json:"type"`
+			ToolResult struct {
+				CallID  string          `json:"call_id"`
+				OK      bool            `json:"ok"`
+				Content json.RawMessage `json:"content"`
+			} `json:"tool_result"`
+		} `json:"body"`
+	}
+	if err := json.Unmarshal([]byte(posts[1].Subject), &result); err != nil || result.Body.Type != "tool_result" {
+		t.Fatalf("post 1 = %.200s (%v)", posts[1].Subject, err)
+	}
+	if len(posts[1].Subject) > maxRoomStanzaBytes || result.Body.ToolResult.CallID != "call_1" || !result.Body.ToolResult.OK {
+		t.Errorf("tool_result post = %.300s", posts[1].Subject)
+	}
+	wantTruncationMarker(t, result.Body.ToolResult.Content, []byte(content))
+}
+
+func TestRoomStanza(t *testing.T) {
+	small := jugglerloop.Turn{ID: "t1", Sender: "a", Parent: "p", Body: jugglerloop.TextBody("hi")}
+	want, _ := json.Marshal(small)
+	if got, err := roomStanza(small); err != nil || string(got) != string(want) {
+		t.Errorf("small turn = %s (%v), want %s", got, err, want)
+	}
+	text := strings.Repeat("y", maxRoomStanzaBytes)
+	big := jugglerloop.Turn{ID: "t2", Sender: "a", Parent: "t1", Body: jugglerloop.TextBody(text)}
+	got, err := roomStanza(big)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stanza struct {
+		ID   string `json:"id"`
+		Body struct {
+			Type string          `json:"type"`
+			Text json.RawMessage `json:"text"`
+		} `json:"body"`
+	}
+	if err := json.Unmarshal(got, &stanza); err != nil || stanza.ID != "t2" || stanza.Body.Type != "text" {
+		t.Fatalf("big text stanza = %.300s (%v)", got, err)
+	}
+	wantTruncationMarker(t, stanza.Body.Text, []byte(text))
 }

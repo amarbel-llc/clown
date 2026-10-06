@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"io"
 
 	jr "code.linenisgreat.com/clown/internal/jugglerrun"
@@ -17,21 +16,15 @@ func cmdHandles(args []string, stdout, stderr io.Writer) int {
 	if !ok {
 		return jr.ExitUsage
 	}
-	deps, err := bins.lifecycleDeps(false)
-	if err != nil {
-		fmt.Fprintf(stderr, "juggler: handles: %v\n", err)
-		return jr.ExitUsage
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), jobLookupTimeout)
-	defer cancel()
-	holders, err := jr.JobHandles(ctx, deps, job, target)
-	if err != nil {
-		fmt.Fprintf(stderr, "juggler: handles: %v\n", err)
-		return jr.ExitUsage
-	}
-	if holders == nil {
-		holders = []jr.Holder{}
-	}
-	printJSON(stdout, holders)
-	return 0
+	return withDeps(context.Background(), stderr, "handles", bins, jobLookupTimeout, func(ctx context.Context, deps jr.LifecycleDeps) int {
+		holders, err := jr.JobHandles(ctx, deps, job, target)
+		if err != nil {
+			return fail(stderr, "handles", err)
+		}
+		if holders == nil {
+			holders = []jr.Holder{}
+		}
+		printJSON(stdout, holders)
+		return jr.ExitSucceeded
+	})
 }

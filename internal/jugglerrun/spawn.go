@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"strings"
 	"time"
@@ -408,11 +409,11 @@ func SpawnChild(ctx context.Context, deps LifecycleDeps, req SpawnRequest) (rec 
 // The brief's own [env] (validated by jugglerbrief: no reserved keys) is
 // layered over the passthrough so moxy and its moxins inherit it.
 func agentUnit(rec *ChildRecord, cred Credential, req SpawnRequest, briefEnv map[string]string, runtimeMax time.Duration) TransientUnit {
-	env := map[string]string{}
-	for k, v := range req.UnitEnv {
-		if k != SessionIDEnv && k != "TROUPE_XMPP_USER" && k != "TROUPE_XMPP_PASSWORD_FILE" && k != "TROUPE_XMPP_DOMAIN" {
-			env[k] = v
-		}
+	// The passthrough keeps TROUPE_XMPP_HOST/PORT/INSECURE (connection
+	// settings, not identity); any identity key in it is overwritten below.
+	env := maps.Clone(req.UnitEnv)
+	if env == nil {
+		env = map[string]string{}
 	}
 	for k, v := range briefEnv {
 		if !jugglerbrief.ReservedEnvKey(k) {
@@ -519,34 +520,34 @@ func DefaultWaitTimeout(rec *ChildRecord, grace time.Duration) time.Duration {
 func WaitChild(ctx context.Context, deps LifecycleDeps, rec *ChildRecord, timeout time.Duration) (WaitRecord, error) {
 	out := WaitRecord{JID: rec.JID, Job: rec.Job, Room: rec.Room, Artifacts: []Artifact{}}
 	_ = deps.Ringmaster.WaitTerminal(ctx, rec.Parent, rec.Job, timeout)
-	st, err := deps.Ringmaster.Status(ctx, rec.Parent, rec.Job)
-	if err != nil {
-		return out, fmt.Errorf("status of %s: %w", rec.Job, err)
-	}
-	out.State = st.State
-	if !IsTerminalState(st.State) {
-		return out, nil
-	}
 	recs, err := deps.Ringmaster.Records(ctx, rec.Parent, rec.Job)
 	if err != nil {
 		return out, fmt.Errorf("reading %s: %w", rec.Job, err)
 	}
-	if term, ok := TerminalRecord(recs); ok {
-		out.State, out.Message, out.Ledger = term.Type, term.Message, term.ResultRef
+	if len(recs) == 0 {
+		return out, fmt.Errorf("job %s has no journal on %s's channel", rec.Job, rec.Parent)
 	}
+	term, terminal := TerminalRecord(recs)
+	if !terminal {
+		out.State = StateRunning
+		return out, nil
+	}
+	out.State, out.Message, out.Ledger = term.Type, term.Message, term.ResultRef
 	out.Reason = ExitReasonFor(out.State, out.Message)
-	if out.Ledger == "" {
+	l, found, err := readAgentLedger(out.Ledger)
+	if err != nil {
+		return out, err
+	}
+	if !found && out.Ledger == "" {
 		// A hook-written terminal carries no result_ref; the spool may still
 		// hold a ledger the agent wrote before it died.
 		if path, err := deps.Ringmaster.SpoolPath(ctx, rec.Parent, rec.Job); err == nil {
-			if _, ok, _ := readAgentLedger(path); ok {
+			if l, found, _ = readAgentLedger(path); found {
 				out.Ledger = path
 			}
 		}
 	}
-	if l, ok, err := readAgentLedger(out.Ledger); err != nil {
-		return out, err
-	} else if ok {
+	if found {
 		out.Artifacts = ArtifactsFromLedger(l)
 		out.CannotComplete = l.CannotComplete
 	}

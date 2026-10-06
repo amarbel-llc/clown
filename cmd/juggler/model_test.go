@@ -381,7 +381,7 @@ func TestCmdModelAdd_UnknownFlag(t *testing.T) {
 	}
 	var buf bytes.Buffer
 	_, _ = io.Copy(&buf, r)
-	if !strings.Contains(buf.String(), "unknown flag") {
+	if !strings.Contains(buf.String(), "flag provided but not defined: -bogus") {
 		t.Errorf("stderr should mention the unrecognized flag: %s", buf.String())
 	}
 }

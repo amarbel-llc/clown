@@ -4,87 +4,85 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
 	rm "code.linenisgreat.com/clown/internal/juggler"
+	"code.linenisgreat.com/clown/internal/jugglerrun/jugglerruntest"
 )
 
 const decideTestPayload = `{"state":{"t":"x"},"questions":{"filer":{"type":"choice","instructions":"?","criteria":{"issue":"a","note":"b"}}}}`
 
-type fakeResolver struct {
-	model decideModel
-	err   error
+// resolvedAs is a model resolver that always answers r.
+func resolvedAs(r rm.ResolveModelResult) func(context.Context, string) (rm.ResolveModelResult, error) {
+	return func(context.Context, string) (rm.ResolveModelResult, error) { return r, nil }
 }
 
-func (f fakeResolver) ResolveDecisionsModel(context.Context, string) (decideModel, error) {
-	return f.model, f.err
+// decisionsAt resolves every name to a decisions-style entry at url.
+func decisionsAt(url string) func(context.Context, string) (rm.ResolveModelResult, error) {
+	return resolvedAs(rm.ResolveModelResult{Kind: rm.ModelKindRemote, URL: url, Token: "tok", Style: rm.StyleDecisions})
 }
 
-// fakeTroupe writes a script that records its argv (one arg per line, NUL-free
-// test data) and $TROUPE_XMPP_USER into dir, then exits with code.
-func fakeTroupe(t *testing.T, code int) (bin, argvFile string) {
-	t.Helper()
-	dir := t.TempDir()
-	argvFile = filepath.Join(dir, "argv")
-	bin = filepath.Join(dir, "troupe")
-	script := fmt.Sprintf("#!/bin/sh\nfor a in \"$@\"; do printf '%%s\\n' \"$a\" >> %q; done\nprintf 'user=%%s\\n' \"$TROUPE_XMPP_USER\" >> %q\nexit %d\n", argvFile, argvFile, code)
-	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
+// mustNotResolve fails the test if decide reaches model resolution.
+func mustNotResolve(t *testing.T) func(context.Context, string) (rm.ResolveModelResult, error) {
+	return func(context.Context, string) (rm.ResolveModelResult, error) {
+		t.Error("resolution must not be reached")
+		return rm.ResolveModelResult{}, errors.New("unreachable")
 	}
-	return bin, argvFile
 }
 
-func runDecideTest(t *testing.T, body string, status int, troupeCode int, extra ...string) (code int, stdout, argv string) {
+// runDecideTest runs decide against an endpoint answering status/body, with
+// the fake troupe (JUGGLER_TROUPE_BIN) failing `muc send` when postFails.
+func runDecideTest(t *testing.T, body string, status int, postFails bool, extra ...string) (code int, stdout string, f *jugglerruntest.Fakes) {
 	t.Helper()
+	f = lifecycleEnv(t)
+	if postFails {
+		f.Fail(t, "troupe", "muc")
+	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(status)
 		_, _ = io.WriteString(w, body)
 	}))
 	t.Cleanup(srv.Close)
-	bin, argvFile := fakeTroupe(t, troupeCode)
 	t.Setenv("TROUPE_XMPP_USER", "root-user")
-	args := append([]string{"--model", "jev", "--room", "run@rooms.x", "--parent", "rec-1", "--troupe", bin}, extra...)
+	args := append([]string{"--model", "jev", "--room", "run@rooms.x", "--parent", "rec-1"}, extra...)
 	var out, errb bytes.Buffer
-	code = cmdDecide(fakeResolver{model: decideModel{URL: srv.URL, Token: "tok"}}, srv.Client(), args, strings.NewReader(decideTestPayload), &out, &errb)
-	data, _ := os.ReadFile(argvFile)
-	return code, out.String(), string(data)
+	code = cmdDecide(decisionsAt(srv.URL), srv.Client(), args, strings.NewReader(decideTestPayload), &out, &errb)
+	return code, out.String(), f
 }
 
 const decideOK = `{"answers":{"filer":{"type":"choice","choice":"issue","confidence":0.81}},"id":"g1","model":"m"}`
 
 func TestDecideExitCodes(t *testing.T) {
 	cases := []struct {
-		name       string
-		body       string
-		status     int
-		troupeCode int
-		extra      []string
-		want       int
+		name      string
+		body      string
+		status    int
+		postFails bool
+		extra     []string
+		want      int
 	}{
-		{"usable", decideOK, 200, 0, nil, 0},
-		{"below threshold", decideOK, 200, 0, []string{"--min-confidence", "0.95"}, 4},
-		{"no choice 500", "boom", 500, 0, nil, 2},
-		{"no choice bad option", `{"answers":{"filer":{"type":"choice","choice":"zzz","confidence":1}}}`, 200, 0, nil, 2},
-		{"post failed", decideOK, 200, 1, nil, 3},
-		{"post failed on no choice", "boom", 500, 1, nil, 3},
+		{"usable", decideOK, 200, false, nil, 0},
+		{"below threshold", decideOK, 200, false, []string{"--min-confidence", "0.95"}, 4},
+		{"no choice 500", "boom", 500, false, nil, 2},
+		{"no choice bad option", `{"answers":{"filer":{"type":"choice","choice":"zzz","confidence":1}}}`, 200, false, nil, 2},
+		{"post failed", decideOK, 200, true, nil, 3},
+		{"post failed on no choice", "boom", 500, true, nil, 3},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			code, stdout, argv := runDecideTest(t, tc.body, tc.status, tc.troupeCode, tc.extra...)
+			code, stdout, f := runDecideTest(t, tc.body, tc.status, tc.postFails, tc.extra...)
 			if code != tc.want {
 				t.Fatalf("exit = %d, want %d (stdout %s)", code, tc.want, stdout)
 			}
 			// The stanza post is attempted for every outcome, including no-choice.
-			if !strings.Contains(argv, "muc\nsend\n") {
-				t.Errorf("troupe not invoked: %q", argv)
+			if calls := f.Calls(t, "troupe"); len(calls) != 1 || !reflect.DeepEqual(calls[0].Argv[:2], []string{"muc", "send"}) {
+				t.Errorf("troupe calls = %+v", calls)
 			}
 			if !json.Valid([]byte(strings.TrimSpace(stdout))) {
 				t.Errorf("stdout not JSON: %q", stdout)
@@ -94,41 +92,33 @@ func TestDecideExitCodes(t *testing.T) {
 }
 
 func TestDecideMucSendArgvAndEnv(t *testing.T) {
-	code, stdout, argv := runDecideTest(t, decideOK, 200, 0)
+	code, stdout, f := runDecideTest(t, decideOK, 200, false)
 	if code != 0 {
 		t.Fatalf("exit = %d", code)
 	}
-	lines := strings.Split(strings.TrimSuffix(argv, "\n"), "\n")
-	// muc send --room R --subject <stanza> --body "" --source juggler-decide, then env probe.
-	if len(lines) != 11 {
-		t.Fatalf("argv lines = %d: %q", len(lines), lines)
+	calls := f.Calls(t, "troupe")
+	if len(calls) != 1 {
+		t.Fatalf("troupe calls = %+v", calls)
 	}
-	if !reflect.DeepEqual(lines[:4], []string{"muc", "send", "--room", "run@rooms.x"}) ||
-		lines[4] != "--subject" || lines[6] != "--body" || lines[7] != "" ||
-		lines[8] != "--source" || lines[9] != "juggler-decide" {
-		t.Errorf("argv = %q", lines)
+	argv := calls[0].Argv
+	// muc send --room R --subject <stanza> --body "" --source juggler-decide
+	if len(argv) != 10 || !reflect.DeepEqual(argv[:5], []string{"muc", "send", "--room", "run@rooms.x", "--subject"}) ||
+		!reflect.DeepEqual(argv[6:], []string{"--body", "", "--source", "juggler-decide"}) {
+		t.Errorf("argv = %q", argv)
 	}
 	var stanza map[string]any
-	if err := json.Unmarshal([]byte(lines[5]), &stanza); err != nil {
+	if err := json.Unmarshal([]byte(argv[5]), &stanza); err != nil {
 		t.Fatalf("subject not stanza JSON: %v", err)
 	}
 	if stanza["type"] != "decision" || stanza["parent"] != "rec-1" || stanza["verdict"] != "usable" {
 		t.Errorf("stanza = %v", stanza)
 	}
-	if lines[10] != "user=root-user" {
-		t.Errorf("ambient env not inherited: %q", lines[10])
+	if calls[0].Env["TROUPE_XMPP_USER"] != "root-user" {
+		t.Errorf("ambient env not inherited: %v", calls[0].Env)
 	}
 	var printed map[string]any
 	if err := json.Unmarshal([]byte(stdout), &printed); err != nil || printed["id"] != "g1" || printed["answers"] == nil {
 		t.Errorf("stdout = %q (%v)", stdout, err)
-	}
-}
-
-func TestMucSendArgvShape(t *testing.T) {
-	got := mucSendArgv("/bin/troupe", "r@x", []byte(`{"a":1}`))
-	want := []string{"/bin/troupe", "muc", "send", "--room", "r@x", "--subject", `{"a":1}`, "--body", "", "--source", "juggler-decide"}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("argv = %q", got)
 	}
 }
 
@@ -141,31 +131,34 @@ func TestDecideUsageErrors(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			var out, errb bytes.Buffer
-			if code := cmdDecide(fakeResolver{}, nil, args, strings.NewReader("{}"), &out, &errb); code != 1 {
+			if code := cmdDecide(mustNotResolve(t), nil, args, strings.NewReader("{}"), &out, &errb); code != 1 {
 				t.Errorf("exit = %d, want 1", code)
 			}
 		})
 	}
 }
 
-func TestDecisionsModelFrom(t *testing.T) {
-	if _, err := decisionsModelFrom("m", rm.ResolveModelResult{Kind: rm.ModelKindRemote, URL: "u", Token: "t", Style: "decisions"}); err != nil {
-		t.Errorf("decisions style: %v", err)
-	}
-	_, err := decisionsModelFrom("m", rm.ResolveModelResult{Kind: rm.ModelKindRemote, Style: "openai-compat"})
-	if err == nil || !strings.Contains(err.Error(), "openai-compat") {
-		t.Errorf("want error naming style, got %v", err)
-	}
-	if _, err := decisionsModelFrom("m", rm.ResolveModelResult{Kind: rm.ModelKindLocal}); err == nil {
-		t.Error("local must be rejected")
+func TestDecideRequiresARemoteDecisionsModel(t *testing.T) {
+	lifecycleEnv(t)
+	args := []string{"--model", "m", "--room", "r", "--parent", "p"}
+	for name, r := range map[string]rm.ResolveModelResult{
+		"openai-compat style": {Kind: rm.ModelKindRemote, Style: rm.StyleOpenAICompat},
+		"local":               {Kind: rm.ModelKindLocal},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var out, errb bytes.Buffer
+			if code := cmdDecide(resolvedAs(r), nil, args, strings.NewReader(decideTestPayload), &out, &errb); code != 1 {
+				t.Errorf("exit = %d, want 1", code)
+			}
+			if !strings.Contains(errb.String(), `"`+r.Style+`"`) || !strings.Contains(errb.String(), rm.StyleDecisions) {
+				t.Errorf("stderr must name the style: %s", errb.String())
+			}
+		})
 	}
 }
 
 func TestDecideSendsTheUpstreamModelID(t *testing.T) {
-	m, err := decisionsModelFrom("jev", rm.ResolveModelResult{Kind: rm.ModelKindRemote, URL: "u", Style: "decisions", ModelID: "typesafe/jev-1.13"})
-	if err != nil || m.ModelID != "typesafe/jev-1.13" {
-		t.Fatalf("model = %+v, err = %v", m, err)
-	}
+	lifecycleEnv(t)
 	var sent string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
@@ -176,17 +169,16 @@ func TestDecideSendsTheUpstreamModelID(t *testing.T) {
 		_, _ = io.WriteString(w, decideOK)
 	}))
 	t.Cleanup(srv.Close)
-	bin, _ := fakeTroupe(t, 0)
-	args := []string{"--model", "jev", "--room", "r@x", "--parent", "p", "--troupe", bin}
+	args := []string{"--model", "jev", "--room", "r@x", "--parent", "p"}
+	resolve := resolvedAs(rm.ResolveModelResult{Kind: rm.ModelKindRemote, URL: srv.URL, Style: rm.StyleDecisions, ModelID: "typesafe/jev-1.13"})
 	var out, errb bytes.Buffer
-	m.URL = srv.URL
-	if code := cmdDecide(fakeResolver{model: m}, srv.Client(), args, strings.NewReader(decideTestPayload), &out, &errb); code != 0 {
+	if code := cmdDecide(resolve, srv.Client(), args, strings.NewReader(decideTestPayload), &out, &errb); code != 0 {
 		t.Fatalf("exit = %d: %s", code, errb.String())
 	}
 	if sent != "typesafe/jev-1.13" {
 		t.Errorf("request model = %q, want the upstream id", sent)
 	}
-	if got := (decideModel{}).requestModel("jev"); got != "jev" {
+	if got := (rm.ResolveModelResult{}).UpstreamModel("jev"); got != "jev" {
 		t.Errorf("no ModelID must send the registry name: %q", got)
 	}
 }
@@ -194,8 +186,10 @@ func TestDecideSendsTheUpstreamModelID(t *testing.T) {
 func TestDecideResolveFailureIsConfigError(t *testing.T) {
 	var out, errb bytes.Buffer
 	args := []string{"--model", "m", "--room", "r", "--parent", "p"}
-	code := cmdDecide(fakeResolver{err: fmt.Errorf("nope")}, nil, args, strings.NewReader(decideTestPayload), &out, &errb)
-	if code != 1 {
+	failing := func(context.Context, string) (rm.ResolveModelResult, error) {
+		return rm.ResolveModelResult{}, errors.New("nope")
+	}
+	if code := cmdDecide(failing, nil, args, strings.NewReader(decideTestPayload), &out, &errb); code != 1 {
 		t.Errorf("exit = %d, want 1", code)
 	}
 }

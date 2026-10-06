@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	rm "code.linenisgreat.com/clown/internal/juggler"
 	"code.linenisgreat.com/clown/internal/jugglerbrief"
@@ -20,16 +21,22 @@ const runUsage = "usage: juggler run --brief <file|-> [--job <id>] [--brief-stan
 
 // platformBins are the consumed binaries' paths: flag, then
 // JUGGLER_{RINGMASTER,TROUPE,SYSTEMD_RUN}_BIN, then the bare name on PATH.
+// userManager selects `systemd-run --user` (spawn's --user).
 type platformBins struct {
 	ringmaster, troupe, systemdRun string
+	userManager                    bool
 }
 
 func (p *platformBins) register(fs *flag.FlagSet, withSystemdRun bool) {
 	fs.StringVar(&p.ringmaster, "ringmaster", "", "ringmaster binary (default $"+jr.RingmasterBinEnv+" or ringmaster)")
-	fs.StringVar(&p.troupe, "troupe", "", "troupe binary (default $"+jr.TroupeBinEnv+" or troupe)")
+	p.registerTroupe(fs)
 	if withSystemdRun {
 		fs.StringVar(&p.systemdRun, "systemd-run", "", "systemd-run binary (default $"+jr.SystemdRunBinEnv+" or systemd-run)")
 	}
+}
+
+func (p *platformBins) registerTroupe(fs *flag.FlagSet) {
+	fs.StringVar(&p.troupe, "troupe", "", "troupe binary (default $"+jr.TroupeBinEnv+" or troupe)")
 }
 
 func (p platformBins) ringmasterClient() jr.ExecRingmaster {
@@ -41,7 +48,7 @@ func (p platformBins) troupeClient() jr.ExecTroupe {
 }
 
 // lifecycleDeps wires the exec-backed collaborators and the default store.
-func (p platformBins) lifecycleDeps(userManager bool) (jr.LifecycleDeps, error) {
+func (p platformBins) lifecycleDeps() (jr.LifecycleDeps, error) {
 	store, err := jr.DefaultStore()
 	if err != nil {
 		return jr.LifecycleDeps{}, err
@@ -49,9 +56,32 @@ func (p platformBins) lifecycleDeps(userManager bool) (jr.LifecycleDeps, error) 
 	return jr.LifecycleDeps{
 		Ringmaster: p.ringmasterClient(),
 		Troupe:     p.troupeClient(),
-		Units:      jr.ExecSystemdRun{Bin: jr.ResolveBinary(p.systemdRun, jr.SystemdRunBinEnv, "systemd-run"), UserManager: userManager},
+		Units:      jr.ExecSystemdRun{Bin: jr.ResolveBinary(p.systemdRun, jr.SystemdRunBinEnv, "systemd-run"), UserManager: p.userManager},
 		Store:      store,
 	}, nil
+}
+
+// fail reports err as `juggler: <verb>: <err>` and returns the usage/config
+// exit code (1).
+func fail(stderr io.Writer, verb string, err error) int {
+	fmt.Fprintf(stderr, "juggler: %s: %v\n", verb, err)
+	return jr.ExitUsage
+}
+
+// withDeps wires bins' lifecycle collaborators and runs fn under a context
+// derived from parent, bounded by timeout when it is positive. A wiring
+// failure is reported as verb's and exits 1.
+func withDeps(parent context.Context, stderr io.Writer, verb string, bins platformBins, timeout time.Duration, fn func(context.Context, jr.LifecycleDeps) int) int {
+	deps, err := bins.lifecycleDeps()
+	if err != nil {
+		return fail(stderr, verb, err)
+	}
+	ctx, cancel := parent, context.CancelFunc(func() {})
+	if timeout > 0 {
+		ctx, cancel = context.WithTimeout(parent, timeout)
+	}
+	defer cancel()
+	return fn(ctx, deps)
 }
 
 // readInput reads path, or stdin for "-".
@@ -62,13 +92,29 @@ func readInput(path string, stdin io.Reader) ([]byte, error) {
 	return os.ReadFile(path)
 }
 
-// leadingArg splits a leading positional (a job id) from the flags after it,
-// so `juggler resolve <job> --state …` and `--state … <job>` both parse.
-func leadingArg(args []string) (string, []string) {
+// errExtraPositional is leadingJob's "more than one <job>" error.
+var errExtraPositional = errors.New("unexpected argument")
+
+// leadingJob parses args with fs, taking the job id from a leading
+// positional or the sole trailing one, so `juggler resolve <job> --state …`
+// and `--state … <job>` both parse. The job is "" when none was given; a
+// second positional is an error wrapping errExtraPositional, and a flag
+// error is fs.Parse's (already printed by fs).
+func leadingJob(fs *flag.FlagSet, args []string) (string, error) {
+	var job string
 	if len(args) > 0 && len(args[0]) > 0 && args[0][0] != '-' {
-		return args[0], args[1:]
+		job, args = args[0], args[1:]
 	}
-	return "", args
+	if err := fs.Parse(args); err != nil {
+		return "", err
+	}
+	switch {
+	case job == "" && fs.NArg() == 1:
+		return fs.Arg(0), nil
+	case fs.NArg() != 0:
+		return "", fmt.Errorf("%w %q", errExtraPositional, fs.Arg(0))
+	}
+	return job, nil
 }
 
 func printJSON(w io.Writer, v any) {
@@ -136,43 +182,36 @@ func cmdRun(ctx context.Context, resolve func(context.Context, string) (rm.Resol
 	}
 	data, err := readInput(briefPath, stdin)
 	if err != nil {
-		fmt.Fprintf(stderr, "juggler: run: reading brief: %v\n", err)
-		return jr.ExitUsage
+		return fail(stderr, "run", fmt.Errorf("reading brief: %w", err))
 	}
 	brief, err := jugglerbrief.Parse(data)
 	if err != nil {
-		fmt.Fprintf(stderr, "juggler: run: %v\n", err)
-		return jr.ExitUsage
+		return fail(stderr, "run", err)
 	}
 	if moxyURL == "" {
 		moxyURL = os.Getenv(jr.MoxyURLEnv)
 	}
-	store, err := jr.DefaultStore()
-	if err != nil {
-		fmt.Fprintf(stderr, "juggler: run: %v\n", err)
-		return jr.ExitUsage
-	}
-
-	out, err := jr.RunAgent(ctx, jr.AgentDeps{
-		Ringmaster:    bins.ringmasterClient(),
-		Troupe:        bins.troupeClient(),
-		ResolveModel:  resolve,
-		HTTPClient:    httpClient,
-		Stderr:        stderr,
-		Moxy:          jr.ExecMoxy{Bin: jr.ResolveBinary(moxyBin, jr.MoxyBinEnv, "moxy"), Stderr: stderr},
-		AgentStateDir: filepath.Join(store.Root, "agents", brief.Principal),
-	}, jr.AgentRequest{
-		Brief:        brief,
-		Job:          job,
-		BriefStanza:  stanza,
-		MoxyURL:      moxyURL,
-		EnvPrincipal: os.Getenv(jr.SessionIDEnv),
-		WatchCancel:  true,
+	return withDeps(ctx, stderr, "run", bins, 0, func(ctx context.Context, deps jr.LifecycleDeps) int {
+		out, err := jr.RunAgent(ctx, jr.AgentDeps{
+			Ringmaster:    deps.Ringmaster,
+			Troupe:        deps.Troupe,
+			ResolveModel:  resolve,
+			HTTPClient:    httpClient,
+			Stderr:        stderr,
+			Moxy:          jr.ExecMoxy{Bin: jr.ResolveBinary(moxyBin, jr.MoxyBinEnv, "moxy"), Stderr: stderr},
+			AgentStateDir: filepath.Join(deps.Store.Root, "agents", brief.Principal),
+		}, jr.AgentRequest{
+			Brief:        brief,
+			Job:          job,
+			BriefStanza:  stanza,
+			MoxyURL:      moxyURL,
+			EnvPrincipal: os.Getenv(jr.SessionIDEnv),
+			WatchCancel:  true,
+		})
+		if err != nil {
+			return fail(stderr, "run", err)
+		}
+		printJSON(stdout, runOutcomeJSON{Job: out.Job, State: out.State, Message: out.Message, Ledger: out.LedgerPath})
+		return out.ExitCode()
 	})
-	if err != nil {
-		fmt.Fprintf(stderr, "juggler: run: %v\n", err)
-		return jr.ExitUsage
-	}
-	printJSON(stdout, runOutcomeJSON{Job: out.Job, State: out.State, Message: out.Message, Ledger: out.LedgerPath})
-	return out.ExitCode()
 }

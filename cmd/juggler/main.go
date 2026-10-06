@@ -12,6 +12,7 @@ import (
 	"time"
 
 	rm "code.linenisgreat.com/clown/internal/juggler"
+	jr "code.linenisgreat.com/clown/internal/jugglerrun"
 )
 
 func main() {
@@ -21,12 +22,13 @@ func main() {
 func run(args []string) int {
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "usage: juggler <daemon|start|stop|status|list|models|model|prompt|decide|run|spawn|exit-wake|resolve|job-ledger|handles|mcp|download> [args]")
-		return 1
+		return jr.ExitUsage
 	}
 
 	switch args[0] {
-	// The FDR 0019 lifecycle verbs need no daemon: run resolves remote
-	// models from the models file and dials the daemon only for local ones.
+	// The FDR 0019 lifecycle verbs need no daemon: run and decide resolve
+	// remote models from the models file and dial the daemon only for local
+	// ones.
 	case "run":
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
@@ -77,14 +79,12 @@ func run(args []string) int {
 		Serve(os.Stdin, os.Stdout, cli)
 		return 0
 	case "decide":
-		return withClient(func(cli *rm.Client) int {
-			return cmdDecide(daemonDecideResolver{cli}, http.DefaultClient, args[1:], os.Stdin, os.Stdout, os.Stderr)
-		})
+		return cmdDecide(resolveAgentModel, http.DefaultClient, args[1:], os.Stdin, os.Stdout, os.Stderr)
 	case "download":
 		return cmdDownload(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "juggler: unknown command %q\n", args[0])
-		return 1
+		return jr.ExitUsage
 	}
 }
 

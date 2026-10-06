@@ -20,6 +20,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"code.linenisgreat.com/clown/internal/jugglerbrief"
 )
 
 // Environment overrides for the consumed binaries and the moxy upstream.
@@ -52,16 +54,9 @@ type Command struct {
 	Env []string
 }
 
-// CommandRunner runs a Command and returns its stdout.
-type CommandRunner interface {
-	Run(ctx context.Context, cmd Command) ([]byte, error)
-}
-
-// OSCommandRunner runs commands with os/exec, capturing stderr into the
-// returned *CommandError.
-type OSCommandRunner struct{}
-
-func (OSCommandRunner) Run(ctx context.Context, c Command) ([]byte, error) {
+// runCommand runs c with os/exec and returns its stdout, capturing stderr
+// into the returned *CommandError.
+func runCommand(ctx context.Context, c Command) ([]byte, error) {
 	if len(c.Argv) == 0 {
 		return nil, errors.New("jugglerrun: empty argv")
 	}
@@ -124,10 +119,9 @@ func EnvWith(base []string, overrides map[string]string) []string {
 	return out
 }
 
-// StripPrincipalEnv returns env without the principal's identity:
-// CLOWN_SESSION_ID (the per-instance key, FDR 0019 §2 / clown#136) and every
-// TROUPE_XMPP_* variable (the minted XMPP credential reference and its
-// connection settings). It is applied to every environment handed to a
+// StripPrincipalEnv returns env without the principal's identity
+// (jugglerbrief.IsPrincipalEnvKey: CLOWN_SESSION_ID, clown#136, and every
+// TROUPE_XMPP_* variable). It is applied to every environment handed to a
 // process outside the runtime scope — moxy's tool servers, and the
 // systemd-run client process `juggler spawn` execs, so the spawner's own
 // identity never leaks into a unit (the unit gets only what --setenv names).
@@ -135,7 +129,7 @@ func StripPrincipalEnv(env []string) []string {
 	out := make([]string, 0, len(env))
 	for _, kv := range env {
 		k, _, _ := strings.Cut(kv, "=")
-		if k == SessionIDEnv || strings.HasPrefix(k, "TROUPE_XMPP_") {
+		if jugglerbrief.IsPrincipalEnvKey(k) {
 			continue
 		}
 		out = append(out, kv)

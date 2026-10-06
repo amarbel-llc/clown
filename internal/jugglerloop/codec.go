@@ -57,26 +57,17 @@ type Codec interface {
 	DecodeResponse(body []byte) (ModelReply, error)
 }
 
-// upstreamModel is the model id a codec puts in the request body: the
-// registry entry's `model` alias target (resolved.ModelID) when set, else the
-// caller-supplied model (Config.Model, the registry name). Applied inside the
-// codecs so every caller of EncodeRequest/RoundTrip gets the alias.
-func upstreamModel(resolved rm.ResolveModelResult, model string) string {
-	if resolved.ModelID != "" {
-		return resolved.ModelID
-	}
-	return model
-}
-
 // CodecFor picks the codec the way cmd/juggler's sendPrompt picks a sender:
 // a local result or Style "anthropic" speaks Anthropic Messages, Style
 // "openai-compat" speaks OpenAI chat completions, anything else is refused
-// before any HTTP call.
+// before any HTTP call. A codec's model argument is the registry name
+// (Config.Model); the codec sends resolved.UpstreamModel(model), so every
+// caller of EncodeRequest/RoundTrip gets the alias.
 func CodecFor(resolved rm.ResolveModelResult) (Codec, error) {
 	switch {
-	case resolved.Kind == rm.ModelKindLocal || resolved.Style == "anthropic":
+	case resolved.Kind == rm.ModelKindLocal || resolved.Style == rm.StyleAnthropic:
 		return AnthropicCodec{}, nil
-	case resolved.Style == "openai-compat":
+	case resolved.Style == rm.StyleOpenAICompat:
 		return OpenAICompatCodec{}, nil
 	default:
 		return nil, fmt.Errorf("style %q has no loop codec", resolved.Style)

@@ -175,14 +175,12 @@ func cmdPrompt(cli *rm.Client, args []string) int {
 // guessed request would silently misbehave rather than error.
 func sendPrompt(ctx context.Context, httpClient *http.Client, resolved rm.ResolveModelResult, modelName, prompt string, maxTokens int) (string, error) {
 	// A registry entry's `model` field aliases the upstream model id; the
-	// registry name is only the fallback (see rm.ResolveModelResult.ModelID).
-	if resolved.ModelID != "" {
-		modelName = resolved.ModelID
-	}
+	// registry name is only the fallback.
+	modelName = resolved.UpstreamModel(modelName)
 	switch {
-	case resolved.Kind == rm.ModelKindLocal || resolved.Style == "anthropic":
+	case resolved.Kind == rm.ModelKindLocal || resolved.Style == rm.StyleAnthropic:
 		return sendAnthropicPrompt(ctx, httpClient, resolved, modelName, prompt, maxTokens)
-	case resolved.Style == "openai-compat":
+	case resolved.Style == rm.StyleOpenAICompat:
 		return sendOpenAICompatPrompt(ctx, httpClient, resolved, modelName, prompt, maxTokens)
 	default:
 		return "", fmt.Errorf("style %q not yet supported (only anthropic-compatible endpoints)", resolved.Style)

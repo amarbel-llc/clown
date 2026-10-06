@@ -20,21 +20,20 @@ const spawnUsage = `usage: juggler spawn --new-run [--run-key <key>] --input <fi
 const spawnTimeout = 2 * time.Minute
 
 type spawnOpts struct {
-	bins        platformBins
-	newRun      bool
-	runKey      string
-	input       string
-	issuer      string
-	room        string
-	roomDomain  string
-	brief       string
-	task        string
-	wait        bool
-	timeout     time.Duration
-	moxyURL     string
-	juggler     string
-	stopGrace   time.Duration
-	userManager bool
+	bins       platformBins
+	newRun     bool
+	runKey     string
+	input      string
+	issuer     string
+	room       string
+	roomDomain string
+	brief      string
+	task       string
+	wait       bool
+	timeout    time.Duration
+	moxyURL    string
+	juggler    string
+	stopGrace  time.Duration
 }
 
 func parseSpawnFlags(args []string, stderr io.Writer) (spawnOpts, error) {
@@ -54,7 +53,7 @@ func parseSpawnFlags(args []string, stderr io.Writer) (spawnOpts, error) {
 	fs.StringVar(&o.moxyURL, "moxy-url", "", "the agent's moxy upstream (default $"+jr.MoxyURLEnv+")")
 	fs.StringVar(&o.juggler, "juggler", "", "juggler binary the unit runs (default: this executable)")
 	fs.DurationVar(&o.stopGrace, "stop-grace", jr.DefaultStopGrace, "added to the wall clock for RuntimeMaxSec")
-	fs.BoolVar(&o.userManager, "user", false, "start the unit under the user service manager (systemd-run --user)")
+	fs.BoolVar(&o.bins.userManager, "user", false, "start the unit under the user service manager (systemd-run --user)")
 	o.bins.register(fs, true)
 	if err := fs.Parse(args); err != nil {
 		return o, err
@@ -92,24 +91,18 @@ func cmdSpawn(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		}
 		return jr.ExitUsage
 	}
-	deps, err := o.bins.lifecycleDeps(o.userManager)
-	if err != nil {
-		fmt.Fprintf(stderr, "juggler: spawn: %v\n", err)
-		return jr.ExitUsage
-	}
-	launchCtx, cancel := context.WithTimeout(context.Background(), spawnTimeout)
-	defer cancel()
-	if o.newRun {
-		return spawnNewRun(launchCtx, deps, o, stdin, stdout, stderr)
-	}
-	return spawnBrief(launchCtx, deps, o, stdin, stdout, stderr)
+	return withDeps(context.Background(), stderr, "spawn", o.bins, spawnTimeout, func(launchCtx context.Context, deps jr.LifecycleDeps) int {
+		if o.newRun {
+			return spawnNewRun(launchCtx, deps, o, stdin, stdout, stderr)
+		}
+		return spawnBrief(launchCtx, deps, o, stdin, stdout, stderr)
+	})
 }
 
 func spawnNewRun(ctx context.Context, deps jr.LifecycleDeps, o spawnOpts, stdin io.Reader, stdout, stderr io.Writer) int {
 	input, err := readInput(o.input, stdin)
 	if err != nil {
-		fmt.Fprintf(stderr, "juggler: spawn: reading input: %v\n", err)
-		return jr.ExitUsage
+		return fail(stderr, "spawn", fmt.Errorf("reading input: %w", err))
 	}
 	issuer := o.issuer
 	if issuer == "" {
@@ -117,31 +110,27 @@ func spawnNewRun(ctx context.Context, deps jr.LifecycleDeps, o spawnOpts, stdin 
 	}
 	res, err := jr.NewRun(ctx, deps, jr.NewRunRequest{RunKey: o.runKey, Issuer: issuer, Input: input, Room: o.room, RoomDomain: o.roomDomain})
 	if err != nil {
-		fmt.Fprintf(stderr, "juggler: spawn: %v\n", err)
-		return jr.ExitUsage
+		return fail(stderr, "spawn", err)
 	}
 	printJSON(stdout, res)
-	return 0
+	return jr.ExitSucceeded
 }
 
 func spawnBrief(ctx context.Context, deps jr.LifecycleDeps, o spawnOpts, stdin io.Reader, stdout, stderr io.Writer) int {
 	brief, err := readInput(o.brief, stdin)
 	if err != nil {
-		fmt.Fprintf(stderr, "juggler: spawn: reading brief: %v\n", err)
-		return jr.ExitUsage
+		return fail(stderr, "spawn", fmt.Errorf("reading brief: %w", err))
 	}
 	var task []byte
 	if o.task != "" {
 		if task, err = readInput(o.task, stdin); err != nil {
-			fmt.Fprintf(stderr, "juggler: spawn: reading task: %v\n", err)
-			return jr.ExitUsage
+			return fail(stderr, "spawn", fmt.Errorf("reading task: %w", err))
 		}
 	}
 	jugglerBin := o.juggler
 	if jugglerBin == "" {
 		if jugglerBin, err = os.Executable(); err != nil {
-			fmt.Fprintf(stderr, "juggler: spawn: resolving the juggler binary: %v\n", err)
-			return jr.ExitUsage
+			return fail(stderr, "spawn", fmt.Errorf("resolving the juggler binary: %w", err))
 		}
 	}
 	moxyURL := o.moxyURL
@@ -159,21 +148,20 @@ func spawnBrief(ctx context.Context, deps jr.LifecycleDeps, o spawnOpts, stdin i
 		UnitEnv:      jr.PassthroughUnitEnv(os.Environ()),
 	})
 	if err != nil {
-		fmt.Fprintf(stderr, "juggler: spawn: %v\n", err)
-		return jr.ExitUsage
+		return fail(stderr, "spawn", err)
 	}
 	if !o.wait {
 		printJSON(stdout, rec.Launch())
-		return 0
+		return jr.ExitSucceeded
 	}
 	timeout := o.timeout
 	if timeout <= 0 {
 		timeout = jr.DefaultWaitTimeout(rec, o.stopGrace)
 	}
+	// The wait outlives the launch bound (spawnTimeout).
 	w, err := jr.WaitChild(context.Background(), deps, rec, timeout)
 	if err != nil {
-		fmt.Fprintf(stderr, "juggler: spawn: waiting on %s: %v\n", rec.Job, err)
-		return jr.ExitUsage
+		return fail(stderr, "spawn", fmt.Errorf("waiting on %s: %w", rec.Job, err))
 	}
 	printJSON(stdout, w)
 	return w.ExitCode()

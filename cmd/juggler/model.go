@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"os"
 	"strings"
@@ -61,72 +62,31 @@ func cmdModelList(cli *rm.Client) int {
 }
 
 // cmdModelAdd parses argv for `juggler model add <name> --style <style>
-// --url <url> --token <token>` and issues an AddRemoteModel RPC. All
-// three flags are required; both space and `--flag=value` forms are
-// accepted (matching cmdStart's --alias/--bind convention). style is
-// validated against the "anthropic"/"openai-compat" enum before any RPC
-// call is attempted.
+// --url <url> (--token <token> | --token-file <path>) [--model <id>]` and
+// issues an AddRemoteModel RPC. The leading name is peeled first; the flags
+// (space and `--flag=value` forms alike) then go through a flag.FlagSet.
+// style is validated against rm.RemoteStyles before any RPC call.
 func cmdModelAdd(cli *rm.Client, args []string) int {
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, modelUsage)
 		return 1
 	}
 	name := args[0]
-	rest := args[1:]
 
 	var style, url, token, tokenFile, modelID string
-	for i := 0; i < len(rest); i++ {
-		a := rest[i]
-		switch {
-		case a == "--token-file":
-			if i+1 >= len(rest) {
-				fmt.Fprintln(os.Stderr, "juggler: --token-file requires an argument")
-				return 1
-			}
-			tokenFile = rest[i+1]
-			i++
-		case strings.HasPrefix(a, "--token-file="):
-			tokenFile = strings.TrimPrefix(a, "--token-file=")
-		case a == "--model":
-			if i+1 >= len(rest) {
-				fmt.Fprintln(os.Stderr, "juggler: --model requires an argument")
-				return 1
-			}
-			modelID = rest[i+1]
-			i++
-		case strings.HasPrefix(a, "--model="):
-			modelID = strings.TrimPrefix(a, "--model=")
-		case a == "--style":
-			if i+1 >= len(rest) {
-				fmt.Fprintln(os.Stderr, "juggler: --style requires an argument")
-				return 1
-			}
-			style = rest[i+1]
-			i++
-		case strings.HasPrefix(a, "--style="):
-			style = strings.TrimPrefix(a, "--style=")
-		case a == "--url":
-			if i+1 >= len(rest) {
-				fmt.Fprintln(os.Stderr, "juggler: --url requires an argument")
-				return 1
-			}
-			url = rest[i+1]
-			i++
-		case strings.HasPrefix(a, "--url="):
-			url = strings.TrimPrefix(a, "--url=")
-		case a == "--token":
-			if i+1 >= len(rest) {
-				fmt.Fprintln(os.Stderr, "juggler: --token requires an argument")
-				return 1
-			}
-			token = rest[i+1]
-			i++
-		case strings.HasPrefix(a, "--token="):
-			token = strings.TrimPrefix(a, "--token=")
-		default:
-			fmt.Fprintf(os.Stderr, "juggler: unknown flag %q\n", a)
-			return 1
-		}
+	fs := flag.NewFlagSet("model add", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	fs.StringVar(&style, "style", "", "remote style ("+strings.Join(rm.RemoteStyles(), ", ")+")")
+	fs.StringVar(&url, "url", "", "endpoint base URL")
+	fs.StringVar(&token, "token", "", "bearer token, literal or ${VAR}")
+	fs.StringVar(&tokenFile, "token-file", "", "file holding the bearer token")
+	fs.StringVar(&modelID, "model", "", "upstream model id the entry aliases")
+	if err := fs.Parse(args[1:]); err != nil {
+		return 1
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintf(os.Stderr, "juggler: unexpected argument %q\n%s\n", fs.Arg(0), modelUsage)
+		return 1
 	}
 	if style == "" || url == "" || (token == "" && tokenFile == "") {
 		fmt.Fprintln(os.Stderr, modelUsage)

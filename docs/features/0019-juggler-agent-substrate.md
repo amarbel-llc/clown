@@ -37,7 +37,10 @@ decoupled from it.
 
 **`juggler run`** is the agent. It is a headless process that:
 
-1. reads its **brief** (§3) as a stanza from the run's MUC (§7);
+1. reads its **brief** (§3) — in v1 from the file `juggler spawn` staged
+   in the agent's state directory, while the identical brief stanza in
+   the run's MUC (§7) is the provenance record; reading the brief FROM
+   the room is the XMPP-native form and arrives with signing;
 2. drives the model's tool-use protocol in a loop (§8) until the model
    ends its turn, calls `cannot_complete`, hits the step cap, or hits
    the wall-clock budget;
@@ -395,6 +398,14 @@ transcript and the one link the fallback note carries. Per-agent
 provenance survives because each stanza carries its sender's JID (and,
 later, its signature); the evaluator reads a per-agent slice by sender.
 MUC provisioning and teardown are troupe's and circus's lanes.
+
+A turn stanza travels in one `troupe muc send` argument, which Linux caps
+at 128 KiB per argv element. When a marshalled turn exceeds 64 KiB, the
+ROOM copy's tool-result content (or text) is replaced by
+`{"truncated":true,"sha256":"…","bytes":N}`; the ledger, the result
+spool and the model's own wire format are untouched, so the archive
+stays attributable and the digest lets the full content be matched to
+the spool later.
 
 ### 8. Internal representation and provider codecs
 

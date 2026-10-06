@@ -53,9 +53,6 @@ func Resolve(ctx context.Context, deps LifecycleDeps, req ResolveRequest) (Resol
 		return ResolveOutcome{}, err
 	}
 	defer unlock()
-	if run, err = deps.Store.LoadRun(run.RunKey); err != nil {
-		return ResolveOutcome{}, err
-	}
 	out := ResolveOutcome{RunKey: run.RunKey, RunJob: run.RunJob, Ledger: deps.Store.RunLedgerPath(run.RunKey), Woken: []string{}}
 	if run.Resolved != nil {
 		out.State, out.Reason, out.AlreadyResolved = run.Resolved.State, ExitReasonFor(run.Resolved.State, ""), true
@@ -101,7 +98,7 @@ func Resolve(ctx context.Context, deps LifecycleDeps, req ResolveRequest) (Resol
 	out.State = term.Type
 	out.Reason = ExitReasonFor(term.Type, term.Message)
 
-	woken, _, err := sendExitWakes(ctx, deps, exitWakeBatch{
+	out.Woken, _, err = sendExitWakes(ctx, deps, exitWakeBatch{
 		Job:        run.RunJob,
 		From:       run.RootPrincipal,
 		Source:     ResolveSource,
@@ -111,9 +108,6 @@ func Resolve(ctx context.Context, deps LifecycleDeps, req ResolveRequest) (Resol
 		ResultRef:  term.ResultRef,
 		Recipients: WakeRecipients(MergeHolders(run.Holders, HoldersFromRecords(recs))),
 	})
-	if woken != nil {
-		out.Woken = woken
-	}
 	if err != nil {
 		return out, err
 	}
@@ -124,21 +118,32 @@ func Resolve(ctx context.Context, deps LifecycleDeps, req ResolveRequest) (Resol
 	return out, nil
 }
 
+// lookupJob validates job and finds the store's record for it: the run whose
+// run job it is, else the subagent whose job it is; both are nil for a job
+// the store does not know.
+func lookupJob(store Store, job string) (*RunRecord, *ChildRecord, error) {
+	if err := validJobID(job); err != nil {
+		return nil, nil, err
+	}
+	run, err := store.FindRunByJob(job)
+	if err != nil || run != nil {
+		return run, nil, err
+	}
+	child, err := store.FindChildByJob(job)
+	return nil, child, err
+}
+
 // JobLedger returns a job's ledger document (FDR 0019 §1 `juggler
 // job-ledger`): a run job's run ledger, or an agent job's result spool.
 // target is needed only for a job the store does not know.
 func JobLedger(ctx context.Context, deps LifecycleDeps, job, target string) ([]byte, error) {
-	if err := validJobID(job); err != nil {
+	run, child, err := lookupJob(deps.Store, job)
+	switch {
+	case err != nil:
 		return nil, err
-	}
-	if run, err := deps.Store.FindRunByJob(job); err != nil {
-		return nil, err
-	} else if run != nil {
+	case run != nil:
 		return os.ReadFile(deps.Store.RunLedgerPath(run.RunKey))
-	}
-	if child, err := deps.Store.FindChildByJob(job); err != nil {
-		return nil, err
-	} else if child != nil {
+	case child != nil:
 		target = child.Parent
 	}
 	if target == "" {
@@ -158,17 +163,13 @@ func JobLedger(ctx context.Context, deps LifecycleDeps, job, target string) ([]b
 // JobHandles returns a job's handle table: the store's record for a known
 // juggler job, else the journal mirror on target's channel.
 func JobHandles(ctx context.Context, deps LifecycleDeps, job, target string) ([]Holder, error) {
-	if err := validJobID(job); err != nil {
+	run, child, err := lookupJob(deps.Store, job)
+	switch {
+	case err != nil:
 		return nil, err
-	}
-	if run, err := deps.Store.FindRunByJob(job); err != nil {
-		return nil, err
-	} else if run != nil {
+	case run != nil:
 		return run.Holders, nil
-	}
-	if child, err := deps.Store.FindChildByJob(job); err != nil {
-		return nil, err
-	} else if child != nil {
+	case child != nil:
 		return child.Holders, nil
 	}
 	if target == "" {

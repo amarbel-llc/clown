@@ -1,7 +1,6 @@
 package jugglerrun
 
 import (
-	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +10,8 @@ import (
 	"regexp"
 	"syscall"
 	"time"
+
+	"code.linenisgreat.com/ringmaster/pkgs/jobwake"
 )
 
 // RecordSchema is the version of the run and child records.
@@ -68,20 +69,19 @@ func digestFileName(digest string) string {
 	return string(b)
 }
 
-var runKeyPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+// idPattern is a safe single path segment: run keys and ringmaster job ids.
+var idPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 
 // ValidRunKey rejects a run key that is not a safe single path segment.
 func ValidRunKey(key string) error {
-	if !runKeyPattern.MatchString(key) {
-		return fmt.Errorf("run key %q must match %s", key, runKeyPattern)
+	if !idPattern.MatchString(key) {
+		return fmt.Errorf("run key %q must match %s", key, idPattern)
 	}
 	return nil
 }
 
-var jobIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
-
 func validJobID(job string) error {
-	if !jobIDPattern.MatchString(job) {
+	if !idPattern.MatchString(job) {
 		return fmt.Errorf("job id %q is not a valid ringmaster job id", job)
 	}
 	return nil
@@ -268,11 +268,6 @@ func writeFileAtomic(path string, data []byte) error {
 	return os.Rename(tmp.Name(), path)
 }
 
-// NewPrincipal mints a fresh per-instance key: a random UUIDv4 (FDR 0032 D1).
-func NewPrincipal() string {
-	var b [16]byte
-	_, _ = rand.Read(b[:])
-	b[6] = (b[6] & 0x0f) | 0x40
-	b[8] = (b[8] & 0x3f) | 0x80
-	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
-}
+// NewPrincipal mints a fresh per-instance key: a random UUIDv4 (FDR 0032 D1),
+// from the same generator clown uses for its own session keys.
+func NewPrincipal() string { return jobwake.NewUUID() }

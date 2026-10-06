@@ -2,11 +2,14 @@ package jugglerrun
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -199,6 +202,7 @@ func RunAgent(ctx context.Context, deps AgentDeps, req AgentRequest) (AgentOutco
 	}()
 	runCtx, cancelRun := context.WithCancel(ctx)
 	defer cancelRun()
+	a.runCtx = runCtx
 	var cancelObserved atomic.Bool
 	stopWatch := func() {}
 	if req.WatchCancel {
@@ -215,7 +219,7 @@ func RunAgent(ctx context.Context, deps AgentDeps, req AgentRequest) (AgentOutco
 	res, runErr := jugglerloop.Run(runCtx, jugglerloop.Config{
 		HTTPClient:   deps.HTTPClient,
 		Resolved:     resolved,
-		Model:        upstreamModel(resolved, b.Model),
+		Model:        b.Model,
 		SystemPrompt: b.System,
 		Task:         b.Task,
 		Tools:        tools,
@@ -254,20 +258,13 @@ func RunAgent(ctx context.Context, deps AgentDeps, req AgentRequest) (AgentOutco
 	return a.finish(state, message, res.Ledger), nil
 }
 
-// upstreamModel is the model id sent to the provider: the registry entry's
-// upstream id when it aliases one, else the brief's registry name.
-func upstreamModel(resolved rm.ResolveModelResult, registryName string) string {
-	if resolved.ModelID != "" {
-		return resolved.ModelID
-	}
-	return registryName
-}
-
 type agentRun struct {
 	deps   AgentDeps
 	brief  *jugglerbrief.Brief
 	target string
 	job    string
+	// runCtx is the loop's context; per-turn posts are bound to it.
+	runCtx context.Context
 }
 
 func (a *agentRun) logf(format string, args ...any) {
@@ -275,19 +272,36 @@ func (a *agentRun) logf(format string, args ...any) {
 }
 
 // postTurn appends one turn to the run's room as a stanza and records a
-// progress record. A failed post is logged, not fatal: the ledger, not the
-// transcript, decides success.
+// progress record; the two run concurrently and both finish before it
+// returns, so turns stay ordered. Both are bound to the run's context
+// (capped at turnPostTimeout) so a hung troupe cannot hold the run past a
+// cancel; the terminal turn, appended after a cancel, keeps only the cap. A
+// failed post is logged, not fatal: the ledger, not the transcript, decides
+// success. The room copy of an oversized turn is truncated (roomStanza); the
+// ledger, the spool and the model's wire format keep it whole.
 func (a *agentRun) postTurn(t jugglerloop.Turn) {
-	ctx, cancel := context.WithTimeout(context.Background(), turnPostTimeout)
+	base := a.runCtx
+	if base == nil {
+		base = context.Background()
+	}
+	if t.Body.Type == jugglerloop.BodyTerminal {
+		base = context.WithoutCancel(base)
+	}
+	ctx, cancel := context.WithTimeout(base, turnPostTimeout)
 	defer cancel()
-	stanza, err := json.Marshal(t)
+	stanza, err := roomStanza(t)
 	if err != nil {
 		a.logf("marshal turn %s: %v", t.ID, err)
 		return
 	}
-	if _, err := a.deps.Troupe.PostStanza(ctx, Identity{}, a.brief.Room, RunSource, stanza); err != nil {
-		a.logf("posting turn %s to %s: %v", t.ID, a.brief.Room, err)
-	}
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if _, err := a.deps.Troupe.PostStanza(ctx, Identity{}, a.brief.Room, RunSource, stanza); err != nil {
+			a.logf("posting turn %s to %s: %v", t.ID, a.brief.Room, err)
+		}
+	}()
 	progress := fmt.Sprintf("turn %s %s", t.ID, t.Body.Type)
 	if t.Body.Type == jugglerloop.BodyTerminal && t.Body.Terminal != nil {
 		progress += " " + string(t.Body.Terminal.Reason)
@@ -295,6 +309,54 @@ func (a *agentRun) postTurn(t jugglerloop.Turn) {
 	if err := a.deps.Ringmaster.Progress(ctx, a.target, a.job, progress); err != nil {
 		a.logf("progress for turn %s: %v", t.ID, err)
 	}
+	wg.Wait()
+}
+
+// maxRoomStanzaBytes bounds a turn stanza posted to the room. The stanza
+// rides `troupe muc send --subject` as one argv element, which Linux caps at
+// 128 KiB (MAX_ARG_STRLEN); past it the exec fails with E2BIG and the turn
+// would be silently missing from the room.
+const maxRoomStanzaBytes = 64 << 10
+
+// roomStanza is the turn's room stanza: its JSON, or — past
+// maxRoomStanzaBytes — the same turn with its tool_result content or text
+// replaced by a {"truncated":true,"sha256":"<hex>","bytes":N} marker of the
+// original. A still-oversized stanza (e.g. huge tool_call args) is returned
+// as is and its post fails loudly.
+func roomStanza(t jugglerloop.Turn) ([]byte, error) {
+	stanza, err := json.Marshal(t)
+	if err != nil || len(stanza) <= maxRoomStanzaBytes {
+		return stanza, err
+	}
+	switch {
+	case t.Body.Type == jugglerloop.BodyToolResult && t.Body.ToolResult != nil:
+		r := *t.Body.ToolResult
+		r.Content = truncationMarker(r.Content)
+		t.Body.ToolResult = &r
+		return json.Marshal(t)
+	case t.Body.Type == jugglerloop.BodyText:
+		// The outer fields shadow the embedded Turn.Body and Body.Text, so the
+		// field order and every other field are unchanged.
+		type truncatedText struct {
+			jugglerloop.Body
+			Text json.RawMessage `json:"text"`
+		}
+		return json.Marshal(struct {
+			jugglerloop.Turn
+			Body truncatedText `json:"body"`
+		}{t, truncatedText{t.Body, truncationMarker([]byte(t.Body.Text))}})
+	}
+	return stanza, nil
+}
+
+func truncationMarker(original []byte) json.RawMessage {
+	sum := sha256.Sum256(original)
+	marker, _ := json.Marshal(struct {
+		Truncated bool   `json:"truncated"`
+		SHA256    string `json:"sha256"`
+		Bytes     int    `json:"bytes"`
+	}{true, hex.EncodeToString(sum[:]), len(original)})
+	return marker
 }
 
 func (a *agentRun) evaluate(l jugglerloop.Ledger) (bool, error) {

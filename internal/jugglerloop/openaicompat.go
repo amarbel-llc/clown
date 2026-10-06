@@ -65,7 +65,7 @@ type openAIResponse struct {
 
 func (OpenAICompatCodec) EncodeRequest(resolved rm.ResolveModelResult, model string, req ModelRequest) (*http.Request, error) {
 	body := openAIRequest{
-		Model:     upstreamModel(resolved, model),
+		Model:     resolved.UpstreamModel(model),
 		MaxTokens: req.MaxTokens,
 		Messages:  encodeOpenAIMessages(req.System, req.Agent, req.Turns),
 	}

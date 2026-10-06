@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -20,7 +21,6 @@ const resolveTimeout = 60 * time.Second
 // Resolving an already-resolved run is a no-op that reports the stored
 // verdict and exits 0.
 func cmdResolve(args []string, stdout, stderr io.Writer) int {
-	job, rest := leadingArg(args)
 	var (
 		bins                 platformBins
 		state, reason, fbArt string
@@ -31,13 +31,11 @@ func cmdResolve(args []string, stdout, stderr io.Writer) int {
 	fs.StringVar(&reason, "reason", "", "why the run ended")
 	fs.StringVar(&fbArt, "fallback-artifacts", "", "the fallback's outcome as a JSON array of {tool, kind, uris}")
 	bins.register(fs, false)
-	if err := fs.Parse(rest); err != nil {
+	job, err := leadingJob(fs, args)
+	if errors.Is(err, errExtraPositional) {
+		fmt.Fprintf(stderr, "juggler: resolve: %v\n%s\n", err, resolveUsage)
 		return jr.ExitUsage
-	}
-	if job == "" && fs.NArg() == 1 {
-		job = fs.Arg(0)
-	} else if fs.NArg() != 0 {
-		fmt.Fprintf(stderr, "juggler: resolve: unexpected argument %q\n%s\n", fs.Arg(0), resolveUsage)
+	} else if err != nil {
 		return jr.ExitUsage
 	}
 	if job == "" || state == "" || reason == "" {
@@ -47,25 +45,18 @@ func cmdResolve(args []string, stdout, stderr io.Writer) int {
 	var artifacts []jr.Artifact
 	if fbArt != "" {
 		if err := json.Unmarshal([]byte(fbArt), &artifacts); err != nil {
-			fmt.Fprintf(stderr, "juggler: resolve: --fallback-artifacts: %v\n", err)
-			return jr.ExitUsage
+			return fail(stderr, "resolve", fmt.Errorf("--fallback-artifacts: %w", err))
 		}
 	}
-	deps, err := bins.lifecycleDeps(false)
-	if err != nil {
-		fmt.Fprintf(stderr, "juggler: resolve: %v\n", err)
-		return jr.ExitUsage
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), resolveTimeout)
-	defer cancel()
-	out, err := jr.Resolve(ctx, deps, jr.ResolveRequest{RunJob: job, State: state, Reason: reason, FallbackArtifacts: artifacts})
-	if err != nil {
-		fmt.Fprintf(stderr, "juggler: resolve: %v\n", err)
-		return jr.ExitUsage
-	}
-	if out.AlreadyResolved {
-		fmt.Fprintf(stderr, "juggler: resolve: run %s was already resolved %s; nothing written\n", out.RunKey, out.State)
-	}
-	printJSON(stdout, out)
-	return 0
+	return withDeps(context.Background(), stderr, "resolve", bins, resolveTimeout, func(ctx context.Context, deps jr.LifecycleDeps) int {
+		out, err := jr.Resolve(ctx, deps, jr.ResolveRequest{RunJob: job, State: state, Reason: reason, FallbackArtifacts: artifacts})
+		if err != nil {
+			return fail(stderr, "resolve", err)
+		}
+		if out.AlreadyResolved {
+			fmt.Fprintf(stderr, "juggler: resolve: run %s was already resolved %s; nothing written\n", out.RunKey, out.State)
+		}
+		printJSON(stdout, out)
+		return jr.ExitSucceeded
+	})
 }

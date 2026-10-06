@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+
+	"code.linenisgreat.com/clown/internal/jugglereval"
 )
 
 const (
@@ -28,7 +30,7 @@ const (
 	DefaultWallClock = "2m"
 
 	// EvaluatorKindJQ is the only evaluator kind implemented in this slice.
-	EvaluatorKindJQ = "jq"
+	EvaluatorKindJQ = jugglereval.KindJQ
 )
 
 // Brief is the FDR 0019 §3 field set.
@@ -69,10 +71,17 @@ type Brief struct {
 // run's input) before the filled brief is validated with Parse.
 var TemplateFields = []string{"principal", "parent", "room", "task"}
 
+// IsPrincipalEnvKey reports whether an environment key carries a principal's
+// identity: CLOWN_SESSION_ID (the per-instance key, FDR 0019 §2) or any
+// TROUPE_XMPP_* variable (the XMPP credential reference and its settings).
+func IsPrincipalEnvKey(key string) bool {
+	return key == "CLOWN_SESSION_ID" || strings.HasPrefix(key, "TROUPE_XMPP_")
+}
+
 // ReservedEnvKey reports whether an [env] key is one `juggler spawn` sets
 // itself and a brief therefore may not.
 func ReservedEnvKey(key string) bool {
-	return key == "CLOWN_SESSION_ID" || strings.HasPrefix(key, "TROUPE_XMPP_") || strings.HasPrefix(key, "JUGGLER_")
+	return IsPrincipalEnvKey(key) || strings.HasPrefix(key, "JUGGLER_")
 }
 
 // Evaluator names how the run ledger is collapsed into a boolean verdict.

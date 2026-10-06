@@ -9,6 +9,7 @@ import (
 	"os"
 	"time"
 
+	"code.linenisgreat.com/clown/internal/jugglerdecide"
 	"code.linenisgreat.com/clown/internal/jugglerloop"
 )
 
@@ -81,7 +82,7 @@ type RouteDecision struct {
 func RouteEntry(d RouteDecision) RunLedgerEntry {
 	conf, threshold := d.Confidence, d.Threshold
 	return RunLedgerEntry{
-		Tool: "route", Kind: "route", OK: d.Verdict == "usable", URIs: []string{},
+		Tool: "route", Kind: "route", OK: d.Verdict == string(jugglerdecide.Usable), URIs: []string{},
 		Reason: d.Reason, Choice: d.Choice, Confidence: &conf, TopProbability: d.TopProbability,
 		Threshold: &threshold, Verdict: d.Verdict, StanzaID: d.StanzaID,
 	}

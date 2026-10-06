@@ -3,7 +3,7 @@
 // streamable HTTP. It does initialize, tools/list and tools/call, reusing
 // internal/mcphttp for the transport and SSE framing.
 //
-// Error taxonomy. CallTool distinguishes two failure planes:
+// Error taxonomy. Call distinguishes two failure planes:
 //
 //   - the returned error is a transport or protocol failure (network error,
 //     non-200, malformed JSON-RPC, JSON-RPC error envelope, oversized
@@ -28,8 +28,14 @@ import (
 	"sync"
 	"time"
 
+	"code.linenisgreat.com/clown/internal/jugglerloop"
 	"code.linenisgreat.com/clown/internal/mcphttp"
 )
+
+// Client satisfies the loop's executor directly; its error taxonomy is the
+// loop's (a returned error ends the run with tool_error, isError is a
+// tool-level failure the model sees).
+var _ jugglerloop.ToolExecutor = (*Client)(nil)
 
 const (
 	// MaxResponseBytes bounds one upstream response body. Matches
@@ -47,15 +53,9 @@ const (
 // client's byte cap.
 var ErrResponseTooLarge = errors.New("jugglertools: upstream response exceeds byte cap")
 
-// ToolSpec is one tool as advertised by the upstream.
-type ToolSpec struct {
-	Name        string
-	Description string
-	InputSchema json.RawMessage
-	// Kind is the artifact kind the tool server declares for this tool,
-	// extracted by ExtractKind; "" when undeclared.
-	Kind string
-}
+// ToolSpec is one tool as advertised by the upstream: the loop's own spec,
+// with Kind extracted by ExtractKind ("" when undeclared).
+type ToolSpec = jugglerloop.ToolSpec
 
 // Option configures a Client.
 type Option func(*Client)
@@ -169,10 +169,10 @@ func ExtractKind(meta, annotations json.RawMessage) string {
 	return ""
 }
 
-// CallTool invokes one tool. content is the CallToolResult's raw "content"
-// array (nil if absent). isError is the tool-level isError flag; err is a
-// transport or protocol failure only.
-func (c *Client) CallTool(ctx context.Context, name string, args json.RawMessage) (json.RawMessage, bool, error) {
+// Call invokes one tool (tools/call). content is the CallToolResult's raw
+// "content" array (nil if absent). isError is the tool-level isError flag;
+// err is a transport or protocol failure only.
+func (c *Client) Call(ctx context.Context, name string, args json.RawMessage) (json.RawMessage, bool, error) {
 	if len(args) == 0 {
 		args = json.RawMessage(`{}`)
 	}

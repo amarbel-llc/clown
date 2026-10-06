@@ -54,7 +54,7 @@ type Ringmaster interface {
 	SpoolPath(ctx context.Context, target, job string) (string, error)
 	// WaitTerminal blocks until the job is terminal; timeout 0 blocks until
 	// terminal or ctx. A timeout and an unknown job both return an error —
-	// callers disambiguate with Status.
+	// callers disambiguate from the journal (Records) or Status.
 	WaitTerminal(ctx context.Context, target, job string, timeout time.Duration) error
 	// WaitCancelRequested blocks until the job carries a cancel-requested
 	// record (a holder's job_cancel, ringmaster RFC-0018) or a terminal.
@@ -72,16 +72,11 @@ type Ringmaster interface {
 //	spool-path <job> --target T
 //	wait <job> --target T [--timeout D] --json [--on-cancel]
 type ExecRingmaster struct {
-	Bin    string
-	Runner CommandRunner
+	Bin string
 }
 
 func (r ExecRingmaster) run(ctx context.Context, env []string, args ...string) ([]byte, error) {
-	runner := r.Runner
-	if runner == nil {
-		runner = OSCommandRunner{}
-	}
-	return runner.Run(ctx, Command{Argv: append([]string{r.Bin}, args...), Env: env})
+	return runCommand(ctx, Command{Argv: append([]string{r.Bin}, args...), Env: env})
 }
 
 func (r ExecRingmaster) Start(ctx context.Context, target, label, source string) (string, error) {

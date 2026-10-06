@@ -16,30 +16,8 @@ import (
 	"code.linenisgreat.com/clown/internal/pluginhost"
 )
 
-// MCPToolExecutor adapts the one moxy upstream's client to the loop's
-// ToolExecutor. The two packages share the error taxonomy: a returned error
-// is a transport failure (the run ends with tool_error), isError is a
-// tool-level failure the model sees.
-type MCPToolExecutor struct {
-	Client *jugglertools.Client
-}
-
-func (e MCPToolExecutor) Call(ctx context.Context, name string, args json.RawMessage) (json.RawMessage, bool, error) {
-	return e.Client.CallTool(ctx, name, args)
-}
-
-// LoopToolSpecs converts the upstream's tools to the loop's specs; the field
-// sets match one to one.
-func LoopToolSpecs(specs []jugglertools.ToolSpec) []jugglerloop.ToolSpec {
-	out := make([]jugglerloop.ToolSpec, len(specs))
-	for i, s := range specs {
-		out[i] = jugglerloop.ToolSpec{Name: s.Name, Description: s.Description, InputSchema: s.InputSchema, Kind: s.Kind}
-	}
-	return out
-}
-
 // ConnectMoxy initializes the MCP session with the moxy upstream at url and
-// lists its tools.
+// lists its tools; the client itself is the loop's ToolExecutor.
 func ConnectMoxy(ctx context.Context, url string) ([]jugglerloop.ToolSpec, jugglerloop.ToolExecutor, error) {
 	client := jugglertools.New(url)
 	if err := client.Initialize(ctx); err != nil {
@@ -49,7 +27,7 @@ func ConnectMoxy(ctx context.Context, url string) ([]jugglerloop.ToolSpec, juggl
 	if err != nil {
 		return nil, nil, fmt.Errorf("moxy upstream %s: %w", url, err)
 	}
-	return LoopToolSpecs(specs), MCPToolExecutor{Client: client}, nil
+	return specs, client, nil
 }
 
 // MoxyBinEnv overrides the moxy binary `juggler run` launches.
@@ -169,7 +147,7 @@ func FilterToolsToAllowlist(specs []jugglerloop.ToolSpec, allow []string) (kept 
 }
 
 // ExtractURIsFromMCPContent is the loop's URI extractor for MCP results.
-// CallTool returns the CallToolResult's content array, so the loop's default
+// jugglertools' Call returns the CallToolResult's content array, so the loop's default
 // top-level-field rule is applied to each text block that parses as JSON;
 // resource_link blocks contribute their uri and embedded resource blocks
 // their resource.uri. Non-array content falls back to the default rule. The

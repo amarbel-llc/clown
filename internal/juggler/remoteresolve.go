@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 )
 
@@ -24,14 +25,7 @@ func RemoteStyles() []string {
 }
 
 // IsRemoteStyle reports whether s is a valid remote entry style.
-func IsRemoteStyle(s string) bool {
-	for _, v := range RemoteStyles() {
-		if v == s {
-			return true
-		}
-	}
-	return false
-}
+func IsRemoteStyle(s string) bool { return slices.Contains(RemoteStyles(), s) }
 
 // ErrDaemonRequired is returned by ResolveRemoteModelFromFile when the name
 // is not a remote registry entry: local (GGUF) models can only be resolved
@@ -48,13 +42,15 @@ func ResolveRemoteModelFromFile(name string) (ResolveModelResult, error) {
 	if err != nil {
 		return ResolveModelResult{}, err
 	}
-	return resolveRemoteModelFromPath(path, name)
+	return ResolveRemoteModelFromPath(path, name)
 }
 
-func resolveRemoteModelFromPath(path, name string) (ResolveModelResult, error) {
+// ResolveRemoteModelFromPath is ResolveRemoteModelFromFile against an
+// explicit models file (the daemon's configured path).
+func ResolveRemoteModelFromPath(path, name string) (ResolveModelResult, error) {
 	models, err := LoadRemoteModels(path)
 	if err != nil {
-		return ResolveModelResult{}, err
+		return ResolveModelResult{}, fmt.Errorf("list remote models: %w", err)
 	}
 	for _, m := range models {
 		if m.Name == name {
