@@ -92,6 +92,10 @@ type Evaluator struct {
 	// Kind is "jq" in this slice. "predicate" and "agent" are reserved.
 	Kind    string `toml:"kind"`
 	Program string `toml:"program"`
+	// StopOnPass ends the run (end reason evaluator_pass) as soon as the
+	// program, run over the in-progress ledger after a successful tool
+	// result, first returns true. Off by default.
+	StopOnPass bool `toml:"stop_on_pass,omitempty"`
 }
 
 // Limits bounds a run.

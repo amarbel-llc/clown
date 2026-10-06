@@ -147,12 +147,45 @@ func FilterToolsToAllowlist(specs []jugglerloop.ToolSpec, allow []string) (kept 
 }
 
 // ExtractURIsFromMCPContent is the loop's URI extractor for MCP results.
-// jugglertools' Call returns the CallToolResult's content array, so the loop's default
-// top-level-field rule is applied to each text block that parses as JSON;
-// resource_link blocks contribute their uri and embedded resource blocks
-// their resource.uri. Non-array content falls back to the default rule. The
-// result is never nil.
+// jugglertools' Call returns the CallToolResult's content array, or the
+// object {"content", "structuredContent"} when the result carries MCP's
+// typed structuredContent. URIs are read, in order:
+//
+//  1. from structuredContent, by the loop's default top-level-field rule
+//     (uri/url, uris/urls);
+//  2. from the content array: the same rule on each text block that parses
+//     as JSON, a resource_link block's uri, an embedded resource block's
+//     resource.uri.
+//
+// Each URI appears once, at its first occurrence. Other non-array content
+// falls back to the default rule. The result is never nil.
 func ExtractURIsFromMCPContent(tool string, content json.RawMessage) []string {
+	var envelope struct {
+		Content           json.RawMessage `json:"content"`
+		StructuredContent json.RawMessage `json:"structuredContent"`
+	}
+	if json.Unmarshal(content, &envelope) == nil && len(envelope.StructuredContent) > 0 {
+		uris := jugglerloop.ExtractURIsFromTopLevelFields(tool, envelope.StructuredContent)
+		return dedupeURIs(append(uris, extractURIsFromBlocks(tool, envelope.Content)...))
+	}
+	return dedupeURIs(extractURIsFromBlocks(tool, content))
+}
+
+func dedupeURIs(uris []string) []string {
+	out := make([]string, 0, len(uris))
+	seen := map[string]bool{}
+	for _, u := range uris {
+		if !seen[u] {
+			seen[u] = true
+			out = append(out, u)
+		}
+	}
+	return out
+}
+
+// extractURIsFromBlocks applies step 2 of ExtractURIsFromMCPContent to an MCP
+// content array (non-array content: the default rule).
+func extractURIsFromBlocks(tool string, content json.RawMessage) []string {
 	var blocks []struct {
 		Type     string `json:"type"`
 		Text     string `json:"text"`

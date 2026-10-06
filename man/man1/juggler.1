@@ -442,8 +442,16 @@ launches one moxy instance from the brief's inline moxyfile and drives
 the model's tool-use loop through it until the model ends its turn,
 calls
 .Ql cannot_complete ,
-or hits the brief's step cap or wall clock.
-Every tool call is recorded in the ledger; at the end the brief's
+or hits the brief's step cap or wall clock \(em or, when the brief sets
+.Ql evaluator.stop_on_pass = true ,
+as soon as the evaluator, run over the in-progress ledger after a
+successful tool result, first passes
+.Pq end reason Ql evaluator_pass ;
+an error in that check is a ledger note and the run goes on.
+Every tool call is recorded in the ledger, its artifact URIs read from
+the result's
+.Ql structuredContent
+first and then from its content blocks; at the end the brief's
 evaluator
 .Pq a jq program
 collapses the ledger into the verdict, which becomes the ringmaster

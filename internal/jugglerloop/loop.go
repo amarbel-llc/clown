@@ -74,8 +74,14 @@ type Config struct {
 	OnTurn func(Turn)
 
 	URIExtractor URIExtractor
-	NewTurnID    func() string
-	Now          func() time.Time
+	// StopWhen, when set, is called with the in-progress ledger (the final
+	// ledger's shape, end reason empty) after each successful tool result; true
+	// ends the run with evaluator_pass. An error is recorded as a ledger note
+	// and the run goes on. The loop does not know what decides it (the brief's
+	// evaluator, for `juggler run`).
+	StopWhen  func(ledger json.RawMessage) (bool, error)
+	NewTurnID func() string
+	Now       func() time.Time
 }
 
 // Result is what a run recorded. The loop never decides success.
@@ -91,10 +97,12 @@ type run struct {
 	ledger     Ledger
 	kinds      map[string]string
 	lastTurnID string
+	start      time.Time
 }
 
 // Run drives the model's tool-use protocol until the model ends its turn
-// (a reply with no tool calls), calls cannot_complete, exhausts MaxSteps,
+// (a reply with no tool calls), calls cannot_complete, StopWhen passes after
+// a successful tool result, exhausts MaxSteps,
 // the wall clock or ctx expires, or the executor reports a transport
 // failure. The returned error is non-nil only for an invalid Config, a
 // model endpoint failure (End = model_error), or a cancelled parent ctx;
@@ -114,6 +122,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		ledger:     newLedger(),
 		kinds:      map[string]string{},
 		lastTurnID: cfg.BriefTurnID,
+		start:      start,
 	}
 	tools := toolsWithCannotComplete(cfg.Tools)
 	for _, t := range tools {
@@ -321,5 +330,27 @@ func (r *run) execute(ctx context.Context, callTurn Turn) (end EndReason, done b
 	}
 	r.ledger.Calls = append(r.ledger.Calls, entry)
 	r.append(ToolResultBody(result), callTurn.ID)
+	if entry.OK && r.stopNow() {
+		return EndEvaluatorPass, true
+	}
 	return "", false
+}
+
+// stopNow runs Config.StopWhen over the in-progress ledger; an error is a
+// note, never a stop.
+func (r *run) stopNow() bool {
+	if r.cfg.StopWhen == nil {
+		return false
+	}
+	snapshot := r.ledger
+	snapshot.ElapsedMS = r.cfg.Now().Sub(r.start).Milliseconds()
+	doc, err := json.Marshal(snapshot)
+	if err == nil {
+		var stop bool
+		if stop, err = r.cfg.StopWhen(doc); err == nil {
+			return stop
+		}
+	}
+	r.ledger.Notes = append(r.ledger.Notes, fmt.Sprintf("stop_on_pass check after call %d errored: %v", len(r.ledger.Calls), err))
+	return false
 }

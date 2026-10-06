@@ -87,14 +87,17 @@ func ExitReasonFor(state, message string) ExitReason {
 // AgentVerdict maps a finished loop to its terminal state and message (FDR
 // 0019 §4, §6). holderCancelled means the run's ctx was cancelled from
 // outside (SIGTERM, a holder's job_cancel): aborted. Otherwise succeeded iff
-// the loop ended with end_turn AND the evaluator returned true; every other
+// the loop ended with end_turn or evaluator_pass AND the final evaluation
+// returned true; every other
 // ending is failed, with the reason as the message.
 func AgentVerdict(res jugglerloop.Result, runErr error, holderCancelled, evaluatorPassed bool, evaluatorErr error) (state, message string) {
 	if holderCancelled {
 		return StateAborted, "cancelled by a holder"
 	}
 	switch res.End {
-	case jugglerloop.EndTurn:
+	case jugglerloop.EndTurn, jugglerloop.EndEvaluatorPass:
+		// evaluator_pass (brief evaluator.stop_on_pass) is judged by the same
+		// final evaluation as end_turn, not special-cased.
 		if evaluatorPassed {
 			return StateSucceeded, "evaluator passed"
 		}

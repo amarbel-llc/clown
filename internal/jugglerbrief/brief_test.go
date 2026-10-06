@@ -97,6 +97,30 @@ func TestRoundTripDeterministic(t *testing.T) {
 	}
 }
 
+func TestStopOnPassRoundTrips(t *testing.T) {
+	b, err := Parse([]byte(issueFilerBrief))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.Evaluator.StopOnPass {
+		t.Fatal("stop_on_pass defaults to false")
+	}
+	if out, _ := b.Marshal(); strings.Contains(string(out), "stop_on_pass") {
+		t.Errorf("an unset stop_on_pass is omitted:\n%s", out)
+	}
+	b2, err := Parse([]byte(strings.Replace(issueFilerBrief, "kind = \"jq\"\n", "kind = \"jq\"\nstop_on_pass = true\n", 1)))
+	if err != nil || !b2.Evaluator.StopOnPass {
+		t.Fatalf("stop_on_pass = %+v, %v", b2, err)
+	}
+	out, err := b2.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b3, err := Parse(out); err != nil || !b3.Evaluator.StopOnPass {
+		t.Errorf("stop_on_pass lost in Marshal:\n%s", out)
+	}
+}
+
 func TestValidationErrorsNameField(t *testing.T) {
 	cases := []struct {
 		name, from, to, wantField string

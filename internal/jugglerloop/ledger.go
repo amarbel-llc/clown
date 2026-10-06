@@ -23,6 +23,10 @@ const (
 	// calls, so there is no finished answer for the evaluator to judge. (A
 	// truncated reply that does carry tool calls runs them as usual.)
 	EndMaxTokens EndReason = "max_tokens"
+	// EndEvaluatorPass: Config.StopWhen (the brief's evaluator with
+	// evaluator.stop_on_pass) returned true after a successful tool result,
+	// so the run stopped without waiting for the model to end its turn.
+	EndEvaluatorPass EndReason = "evaluator_pass"
 )
 
 // Ledger is the runtime's measured record of a run, the evaluator's input.
@@ -34,6 +38,9 @@ type Ledger struct {
 	CannotComplete *CannotComplete `json:"cannot_complete"`
 	Steps          int             `json:"steps"`
 	ElapsedMS      int64           `json:"elapsed_ms"`
+	// Notes are loop facts that decide nothing, e.g. a per-step StopWhen
+	// check that errored (the run went on).
+	Notes []string `json:"notes,omitempty"`
 }
 
 // LedgerCall is one tool-server call. Kind is the artifact kind the tool

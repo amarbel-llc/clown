@@ -222,7 +222,18 @@ func RunAgent(ctx context.Context, deps AgentDeps, req AgentRequest) (AgentOutco
 		}()
 	}
 
+	var stopWhen func(json.RawMessage) (bool, error)
+	if b.Evaluator.StopOnPass {
+		// The brief's own evaluator over the in-progress ledger, after each
+		// successful tool result; the final evaluation below still decides.
+		stopWhen = func(ledger json.RawMessage) (bool, error) {
+			ctx, cancel := context.WithTimeout(context.Background(), jugglereval.DefaultTimeout)
+			defer cancel()
+			return deps.Evaluate(ctx, b.Evaluator.Kind, b.Evaluator.Program, ledger)
+		}
+	}
 	res, runErr := jugglerloop.Run(runCtx, jugglerloop.Config{
+		StopWhen:     stopWhen,
 		HTTPClient:   deps.HTTPClient,
 		Resolved:     resolved,
 		Model:        b.Model,
@@ -249,7 +260,7 @@ func RunAgent(ctx context.Context, deps AgentDeps, req AgentRequest) (AgentOutco
 		holderCancelled = true
 	}
 	passed, evalErr := false, error(nil)
-	if res.End == jugglerloop.EndTurn && !holderCancelled {
+	if (res.End == jugglerloop.EndTurn || res.End == jugglerloop.EndEvaluatorPass) && !holderCancelled {
 		passed, evalErr = a.evaluate(res.Ledger)
 	}
 	state, message := AgentVerdict(res, runErr, holderCancelled, passed, evalErr)

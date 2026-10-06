@@ -261,7 +261,10 @@ OpenAI-compatible chat completions and Anthropic Messages.
 One entry per tool call
 .Pq name, declared artifact kind, ok, URIs, error
 plus how the loop ended
-.Pq Ql end_turn , cannot_complete , step_cap , timeout , tool_error , model_error , max_tokens .
+.Pq Ql end_turn , cannot_complete , step_cap , timeout , tool_error , model_error , max_tokens , evaluator_pass .
+A call's URIs come from the MCP result's
+.Ql structuredContent
+first, then from its content blocks.
 Success is measured, never reported: the model never claims it.
 .It The evaluator
 A jq program, run embedded over the ledger JSON, that must produce exactly one
@@ -269,8 +272,17 @@ boolean
 .Pq an error, no output or a second output is false .
 Only an
 .Ql end_turn
-with a true verdict is
+or
+.Ql evaluator_pass
+with a true final verdict is
 .Ql succeeded .
+A brief that sets
+.Ql evaluator.stop_on_pass = true
+.Pq off by default
+ends the run with
+.Ql evaluator_pass
+as soon as the evaluator, run over the in-progress ledger after a
+successful tool result, first returns true.
 .It The lifecycle
 Each agent is one systemd transient unit started by
 .Cm juggler spawn ,

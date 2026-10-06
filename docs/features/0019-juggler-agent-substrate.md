@@ -305,7 +305,7 @@ into the run's MUC and is the agent's ONLY instruction source. Fields:
 | `moxyfile` | the agent's **inline moxyfile** as a TOML string (§5) |
 | `env` | string→string table passed into the agent's unit environment; how per-agent tool configuration (e.g. a target mode, `MOXIN_PATH`) reaches moxy and its moxins, which moxyfile(5) cannot carry. `CLOWN_SESSION_ID`, `TROUPE_XMPP_*`, `TROUPE_MINT_*` (the spawner's minter credential) and `JUGGLER_*` are reserved and rejected |
 | `tools` | REQUIRED allowlist of exact tool names as moxy advertises them (`<server>_<tool>`); `juggler run` offers the model only these. A listed name moxy does not advertise is a startup error; the list may not be empty |
-| `evaluator` | `{kind, program}`; first kind is `jq` (§4) |
+| `evaluator` | `{kind, program, stop_on_pass}`; first kind is `jq` (§4). `stop_on_pass` (default false) ends the run with `evaluator_pass` as soon as the program first passes after a successful tool result (§4) |
 | `limits` | `{steps, wall_clock, sandbox}`; `sandbox` is RESERVED and unused in this slice (§9) |
 
 At slice-0 strength the stanza is unsigned; the field set is what later
@@ -319,13 +319,28 @@ keeps a **ledger**: one entry per tool call with the tool name, the
 artifact `kind` the tool server declares for it, the success flag, the
 returned URIs and any error, plus the terminal facts (how the loop
 ended, whether `cannot_complete` was called and with what reason). The
-ledger carries a `schema` version. `end.reason` is one of `end_turn`,
+URIs of a successful MCP call are read first from the CallToolResult's
+`structuredContent` (MCP's typed result), then from its content blocks
+(text blocks that parse as JSON, `resource_link` uris, embedded
+resource uris); structuredContent and JSON text blocks both by the
+top-level-field rule (`uri`/`url`, `uris`/`urls`), each URI once. The
+ledger carries a `schema` version and, when the loop has any, `notes`
+(facts that decide nothing, e.g. a per-step evaluator check that
+errored). `end.reason` is one of `end_turn`,
 `cannot_complete`, `step_cap`, `timeout`, `tool_error` (a tool's
 transport failed), `model_error` (the model endpoint returned a
-non-2xx or unparseable reply before the deadline), or `max_tokens` (the
+non-2xx or unparseable reply before the deadline), `max_tokens` (the
 provider cut the reply off at its token limit with no tool call to act
-on). Only `end_turn` can lead to `succeeded`; every other reason is
-`failed` at the job level. A tool call whose arguments are not valid
+on), or `evaluator_pass` (the brief set `evaluator.stop_on_pass` and the
+evaluator, run over the in-progress ledger after a successful tool
+result, first returned true). Only `end_turn` and `evaluator_pass` can
+lead to `succeeded` — both through the same final evaluation, run once
+over the final ledger; every other reason is `failed` at the job level.
+With `stop_on_pass`, the per-step check uses the same evaluator and
+budget as the final one over a ledger of the final shape whose
+`end.reason` is still empty; an error in it is a ledger note and does
+not stop the run; the step cap, wall clock and `cannot_complete` are
+unchanged. A tool call whose arguments are not valid
 JSON is answered with an error tool result the model can recover from,
 never a transport failure, under both codecs. The brief's wall clock
 starts when `juggler run` starts, so it also covers model resolution,
@@ -851,6 +866,7 @@ The router, before any subagent exists:
 | default step cap | 12 (loop-enforced) | circus FDR-0039's first-bullet figure; the agents make 2–4 tool calls, the cap is headroom | real briefs routinely hit it |
 | default wall clock | 2 min (loop primary, `RuntimeMaxSec` backstop) | circus FDR-0039's first-bullet figure; matches `juggler prompt`'s budget | agents time out while a tool is legitimately slow |
 | spend control | one dedicated OpenRouter key per spawner with a hard monthly credit limit (circus: ~$10 to start) | smallest thing that bounds blast radius | per-child budgets are wanted: the spawner mints a child key carrying a subset of its own budget (OpenRouter key minting), which is FDR 0032 D19's spend quota — an ambient, monotone, drop-only right inherited at spawn as a subset of the parent's, with the provider as the enforcement point — made concrete. Not D13's `cap`, which is the right to shorten a child's lifetime (D5). The key goes in the brief as a credential reference, not a secret |
+| early stop on evaluator pass | off by default (`evaluator.stop_on_pass = true` opts in per brief) | an agent that keeps calling tools after the work is done spends steps and may duplicate artifacts, but stopping early is a behaviour change a brief author should choose | most briefs set it (→ make it the default) |
 | evaluator kinds | `jq` only | smallest signed-contract surface | the same count-of-kind jq appears in most briefs (→ `predicate`) or a task needs judgement (→ `agent`) |
 | headless permission posture | non-`always-allow` → deny | no human to ask | a moxin's tier is `ask` only because nobody set it, and agents keep failing on it |
 | account teardown | on by default in `juggler resolve`; `--keep-accounts` opts out | a run's accounts have no use after its result line is posted, and each one left is a credential that can still log in | debugging a run needs its identities alive afterwards (→ `--keep-accounts`, then a later `resolve` finishes the teardown) |

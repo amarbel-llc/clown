@@ -820,6 +820,56 @@ calls_since() { jq -s ".[$1:] | $2" "$FAKE_DIR/calls.jsonl"; }
   [[ $(ls "$FAKE_DIR/rm/issuer-5/"*.jsonl | wc -l) -eq 1 ]]
 }
 
+# --- juggler run -----------------------------------------------------------
+
+@test "run with evaluator.stop_on_pass ends evaluator_pass after the first passing call, reading structuredContent URIs" {
+  local agent_dir="$BATS_TEST_TMPDIR/agent"
+  mkdir -p "$agent_dir"
+  # Two tool-call replies, then end_turn: stop_on_pass must stop after the first.
+  local call='{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"c1","type":"function","function":{"name":"ring_create_issue","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}'
+  printf '[%s,%s,{"choices":[{"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}]}]' "$call" "$call" >"$agent_dir/replies.json"
+  printf '%s' '[{"name":"ring_create_issue","inputSchema":{"type":"object"},"_meta":{"kind":"issue"}}]' >"$agent_dir/tools.json"
+  # The URI rides structuredContent only; the text block is prose.
+  printf '%s' '{"content":[{"type":"text","text":"Filed issue #7."}],"structuredContent":{"uri":"https://forge.test/o/r/issues/7"},"isError":false}' >"$agent_dir/call-result.json"
+  "$FAKE_PLATFORM_BIN" serve-agent --dir "$agent_dir" >"$agent_dir/server.log" 2>&1 &
+  local pid=$!
+  wait_for_file "$agent_dir/port" 5
+  local port
+  port=$(<"$agent_dir/port")
+
+  local models="$BATS_TEST_TMPDIR/models.toml"
+  cat "$JUGGLER_MODELS_PATH" >"$models"
+  printf '\n[[model]]\nname = "agent"\nstyle = "openai-compat"\nurl = "http://127.0.0.1:%s/v1"\ntoken = "tok-agent"\n' "$port" >>"$models"
+  cat >"$agent_dir/brief.toml" <<'EOF'
+schema = 1
+principal = "agent-stop"
+parent = "root-stop"
+room = "room-stop@rooms.test"
+model = "agent"
+system = "You file one issue."
+task = "file it"
+tools = ["ring_create_issue"]
+
+[evaluator]
+kind = "jq"
+program = '([.calls[] | select(.kind == "issue" and .ok and (.uris | length) > 0)] | length) >= 1'
+stop_on_pass = true
+
+[limits]
+steps = 4
+wall_clock = "20s"
+EOF
+
+  run_jug_env "JUGGLER_MODELS_PATH=$models" -- run --brief "$agent_dir/brief.toml" --moxy-url "http://127.0.0.1:$port/mcp"
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  expect_status 0
+  [[ $(field .state) == succeeded ]]
+  [[ $(wc -l <"$agent_dir/model-requests") -eq 1 ]]
+  jq -e '.end.reason == "evaluator_pass" and .steps == 1 and (.calls | length) == 1
+    and .calls[0].uris == ["https://forge.test/o/r/issues/7"]' "$(field .ledger)" >/dev/null
+}
+
 # --- binary resolution -----------------------------------------------------
 
 @test "a --ringmaster flag overrides JUGGLER_RINGMASTER_BIN" {

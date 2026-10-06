@@ -122,6 +122,25 @@ func TestCallToolHappyAndIsError(t *testing.T) {
 	}
 }
 
+func TestCallToolStructuredContent(t *testing.T) {
+	f := &fakeServer{callResult: `{"content":[{"type":"text","text":"Filed #7"}],"structuredContent":{"uri":"https://f/7"},"isError":false}`}
+	srv := httptest.NewServer(f.handler(t))
+	defer srv.Close()
+	c := New(srv.URL)
+	ctx := context.Background()
+	if err := c.Initialize(ctx); err != nil {
+		t.Fatal(err)
+	}
+	content, isErr, err := c.Call(ctx, "t", nil)
+	if err != nil || isErr || string(content) != `{"content":[{"type":"text","text":"Filed #7"}],"structuredContent":{"uri":"https://f/7"}}` {
+		t.Fatalf("content = %s, isErr = %v, err = %v", content, isErr, err)
+	}
+	f.callResult = `{"structuredContent":{"uri":"https://f/8"}}`
+	if content, _, _ = c.Call(ctx, "t", nil); string(content) != `{"content":[],"structuredContent":{"uri":"https://f/8"}}` {
+		t.Errorf("structured-only content = %s", content)
+	}
+}
+
 func TestCallToolSSE(t *testing.T) {
 	f := &fakeServer{sse: true, callResult: `{"content":[{"type":"text","text":"sse"}]}`}
 	srv := httptest.NewServer(f.handler(t))

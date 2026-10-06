@@ -172,8 +172,11 @@ func ExtractKind(meta, annotations json.RawMessage) string {
 }
 
 // Call invokes one tool (tools/call). content is the CallToolResult's raw
-// "content" array (nil if absent). isError is the tool-level isError flag;
-// err is a transport or protocol failure only.
+// "content" array (nil if absent) — or, when the result also carries
+// "structuredContent" (MCP's typed result), the object
+// {"content": <array>, "structuredContent": <value>}, so the typed result
+// reaches the loop's URI extractor and the model alike. isError is the
+// tool-level isError flag; err is a transport or protocol failure only.
 func (c *Client) Call(ctx context.Context, name string, args json.RawMessage) (json.RawMessage, bool, error) {
 	if len(args) == 0 {
 		args = json.RawMessage(`{}`)
@@ -198,13 +201,28 @@ func (c *Client) Call(ctx context.Context, name string, args json.RawMessage) (j
 		return nil, false, fmt.Errorf("tools/call %q: %w", name, err)
 	}
 	var parsed struct {
-		Content json.RawMessage `json:"content"`
-		IsError bool            `json:"isError"`
+		Content           json.RawMessage `json:"content"`
+		StructuredContent json.RawMessage `json:"structuredContent"`
+		IsError           bool            `json:"isError"`
 	}
 	if err := json.Unmarshal(result, &parsed); err != nil {
 		return nil, false, fmt.Errorf("tools/call %q: parsing result: %w", name, err)
 	}
-	return parsed.Content, parsed.IsError, nil
+	if len(parsed.StructuredContent) == 0 || string(parsed.StructuredContent) == "null" {
+		return parsed.Content, parsed.IsError, nil
+	}
+	content := parsed.Content
+	if len(content) == 0 {
+		content = json.RawMessage(`[]`)
+	}
+	both, err := json.Marshal(struct {
+		Content           json.RawMessage `json:"content"`
+		StructuredContent json.RawMessage `json:"structuredContent"`
+	}{content, parsed.StructuredContent})
+	if err != nil {
+		return nil, false, fmt.Errorf("tools/call %q: %w", name, err)
+	}
+	return both, parsed.IsError, nil
 }
 
 // codeInvalidParams is JSON-RPC's "invalid params" error code.

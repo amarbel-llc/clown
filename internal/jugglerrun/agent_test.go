@@ -398,6 +398,27 @@ func TestExtractURIsFromMCPContent(t *testing.T) {
 	}
 }
 
+func TestExtractURIsFromMCPContent_StructuredContent(t *testing.T) {
+	for name, tc := range map[string]struct {
+		content string
+		want    []string
+	}{
+		"structured only": {`{"content":[{"type":"text","text":"Filed issue #7."}],"structuredContent":{"uri":"https://f/7"}}`, []string{"https://f/7"}},
+		"structured first, deduped against blocks": {
+			`{"content":[{"type":"text","text":"{\"url\":\"https://f/7\"}"},{"type":"resource_link","uri":"https://g"}],"structuredContent":{"uri":"https://f/7","uris":["https://h"]}}`,
+			[]string{"https://f/7", "https://h", "https://g"},
+		},
+		"nested structured field is not read": {`{"content":[],"structuredContent":{"issue":{"uri":"https://n"}}}`, []string{}},
+		"no content array":                    {`{"structuredContent":{"url":"https://u"}}`, []string{"https://u"}},
+		"blocks repeat a URI":                 {`[{"type":"text","text":"{\"uri\":\"https://r\"}"},{"type":"resource_link","uri":"https://r"}]`, []string{"https://r"}},
+	} {
+		got := ExtractURIsFromMCPContent("t", json.RawMessage(tc.content))
+		if got == nil || strings.Join(got, ",") != strings.Join(tc.want, ",") {
+			t.Errorf("%s: uris = %v, want %v", name, got, tc.want)
+		}
+	}
+}
+
 func wantTruncationMarker(t *testing.T, got json.RawMessage, original []byte) {
 	t.Helper()
 	var m struct {
