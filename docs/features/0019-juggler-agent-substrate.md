@@ -33,7 +33,7 @@ decoupled from it.
 
 ## Interface
 
-### 1. Three verbs
+### 1. The verbs
 
 **`juggler run`** is the agent. It is a headless process that:
 
@@ -82,6 +82,38 @@ decision, the subagent spawns, the fallback — executes as the run root.
 The run job's terminal record is written when the run is resolved
 (`succeeded`, or `failed` when the fallback ran), and its exit wake goes
 to the issuer.
+
+**Glue-facing contract** (settled with circus FDR-0039's interface asks;
+the glue is a short-lived webhook handler, not a daemon with a wake
+channel, and it never parses the room):
+
+- `--new-run --run-key <key>`: caller-supplied idempotency key (derived
+  from the recording). An existing run with that key is returned
+  unchanged with `"existing": true`, nothing created. A subagent spawn
+  with the same brief digest within a run is likewise idempotent. Without
+  `--run-key` a fresh key is minted.
+- `--wait [--timeout <dur>]`: block until the subagent's job
+  terminalizes and print `{"jid","job","room","state","reason","message",
+  "ledger":"<path>","artifacts":[{"tool","kind","uris"}],
+  "cannot_complete":null|{"reason"}}` where `state` is the ringmaster
+  state and `reason` the D6 reason (§6). Exit code mirrors the state:
+  0 `succeeded`, 2 `failed`, 3 `aborted`, 4 `interrupted`, 1 usage, 5
+  timeout with the job still running. Without `--wait`, the launch JSON
+  `{"jid","job","room"}` is printed immediately.
+- `juggler job-ledger <job>`: print a job's ledger (the result spool)
+  for a run the caller did not wait on.
+- **`juggler resolve <run-job> --state succeeded|failed --reason <text>
+  [--fallback-artifacts <json>]`**: the run's last call, always. Writes
+  the run job's terminal record, appends a `fallback` entry to the run
+  ledger carrying the fallback's own outcome, and emits the run's exit
+  wake to the issuer. (Not named `run-…` to avoid confusion with
+  `juggler run`.)
+- Every reason is on stdout and in a ledger: `cannot_complete.reason`
+  in the subagent ledger and the `--wait` output; `juggler decide`'s
+  reason in its stdout object and the decision stanza.
+- The run root has **no MCP tools**: it is a principal with a credential
+  and a budget slice, not an agent. The glue's result line to the fleet
+  canary room is a `troupe muc send` as the root, not a tool call.
 
 **`juggler decide`** is the router. It is a synchronous verb, not an
 agent: one request to a **Decisions-API**-style model (OpenRouter's
@@ -400,7 +432,8 @@ inference for these agents.
 and the post-stop hook for worktree-less agents, as §1, §6 and §9
 describe. The run root (§2) is modelled in juggler and ringmaster;
 spinclass has no group above sessions and cannot represent a session
-without a repo today.
+without a repo today. FDR 0032 with these decisions is on spinclass
+master (gate sha 3f42f8d, 2026-10-06); v2 is tracked as spinclass#354.
 
 **v2 (operator decision, 2026-10-06, recorded in FDR 0032 D7):** the
 lifecycle moves to a **spinclass unit session** — a session kind with no
