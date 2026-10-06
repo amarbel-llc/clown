@@ -39,12 +39,21 @@ func (p *platformBins) registerTroupe(fs *flag.FlagSet) {
 	fs.StringVar(&p.troupe, "troupe", "", "troupe binary (default $"+jr.TroupeBinEnv+" or troupe)")
 }
 
+// resolveBin is jr.ResolveBinary with the build-time path as the default
+// ahead of the bare name: flag, then env, then burned-in, then PATH.
+func resolveBin(flagValue, envVar, burnedIn, bareName string) string {
+	if burnedIn != "" {
+		bareName = burnedIn
+	}
+	return jr.ResolveBinary(flagValue, envVar, bareName)
+}
+
 func (p platformBins) ringmasterClient() jr.ExecRingmaster {
-	return jr.ExecRingmaster{Bin: jr.ResolveBinary(p.ringmaster, jr.RingmasterBinEnv, "ringmaster")}
+	return jr.ExecRingmaster{Bin: resolveBin(p.ringmaster, jr.RingmasterBinEnv, RingmasterPath, "ringmaster")}
 }
 
 func (p platformBins) troupeClient() jr.ExecTroupe {
-	return jr.ExecTroupe{Bin: jr.ResolveBinary(p.troupe, jr.TroupeBinEnv, "troupe")}
+	return jr.ExecTroupe{Bin: resolveBin(p.troupe, jr.TroupeBinEnv, TroupePath, "troupe")}
 }
 
 // lifecycleDeps wires the exec-backed collaborators and the default store.
@@ -56,7 +65,7 @@ func (p platformBins) lifecycleDeps() (jr.LifecycleDeps, error) {
 	return jr.LifecycleDeps{
 		Ringmaster: p.ringmasterClient(),
 		Troupe:     p.troupeClient(),
-		Units:      jr.ExecSystemdRun{Bin: jr.ResolveBinary(p.systemdRun, jr.SystemdRunBinEnv, "systemd-run"), UserManager: p.userManager},
+		Units:      jr.ExecSystemdRun{Bin: resolveBin(p.systemdRun, jr.SystemdRunBinEnv, SystemdRunPath, "systemd-run"), UserManager: p.userManager},
 		Store:      store,
 	}, nil
 }
@@ -198,7 +207,7 @@ func cmdRun(ctx context.Context, resolve func(context.Context, string) (rm.Resol
 			ResolveModel:  resolve,
 			HTTPClient:    httpClient,
 			Stderr:        stderr,
-			Moxy:          jr.ExecMoxy{Bin: jr.ResolveBinary(moxyBin, jr.MoxyBinEnv, "moxy"), Stderr: stderr},
+			Moxy:          jr.ExecMoxy{Bin: resolveBin(moxyBin, jr.MoxyBinEnv, MoxyPath, "moxy"), Stderr: stderr},
 			AgentStateDir: filepath.Join(deps.Store.Root, "agents", brief.Principal),
 		}, jr.AgentRequest{
 			Brief:        brief,

@@ -1,5 +1,9 @@
 # Juggler Subagent-Delegation Tool — Design
 
+> **Superseded as the subagent path by FDR 0019**
+> (`docs/features/0019-juggler-agent-substrate.md`); `juggler mcp` /
+> `juggler-prompt` remain as the single-turn delegation tool.
+
 Date: 2026-07-11
 Status: approved (brainstorm with Sasha, session live-catalpa)
 

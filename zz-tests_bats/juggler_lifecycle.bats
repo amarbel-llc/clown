@@ -1,0 +1,665 @@
+# End-to-end lane for the juggler agent-substrate verbs (FDR 0019):
+# `spawn --new-run`, `decide`, `spawn --brief` (with and without --wait),
+# `handles`, `job-ledger`, `resolve` and `exit-wake`, driven through the BUILT
+# juggler binary.
+#
+# The platform binaries juggler consumes are stand-ins: fake-platform wrapped
+# as `ringmaster`, `troupe` and `systemd-run` (a stateful per-target journal,
+# a troupe that records MUC posts and wakes, a systemd-run that records its
+# argv and succeeds), reached through JUGGLER_{RINGMASTER,TROUPE,
+# SYSTEMD_RUN}_BIN, plus a fake OpenRouter Decisions endpoint on loopback
+# that `juggler decide` resolves straight from the models file (no daemon).
+# fake-platform reuses the Go tests' fakes (internal/jugglerrun/
+# jugglerruntest), so this lane and the unit tests agree on the platform's
+# shape. systemd never runs the unit: the agent inside it is played by the
+# tests, which write the terminal record the way `juggler run` or the post-stop
+# hook would.
+#
+# Binds loopback only; no capability escalation (docs/adrs/0007).
+
+setup_file() {
+  load 'lib/common.bash'
+
+  # The tests share one state directory and one fake platform and run in
+  # order: a later test reads the run an earlier one created.
+  export BATS_NO_PARALLELIZE_WITHIN_FILE=true
+
+  require_bin JUGGLER_BIN juggler
+  require_bin FAKE_PLATFORM_BIN fake-platform
+
+  export FAKE_DIR="$BATS_FILE_TMPDIR/fake"
+  export FAKE_BIN="$BATS_FILE_TMPDIR/fakebin"
+  export DEC_DIR="$BATS_FILE_TMPDIR/decisions"
+  mkdir -p "$FAKE_DIR" "$FAKE_BIN" "$DEC_DIR"
+
+  # One tiny wrapper per platform binary name.
+  local tool
+  for tool in ringmaster troupe systemd-run; do
+    printf '#!%s\nJUGGLERRUNTEST_FAKE=%s JUGGLERRUNTEST_DIR=%s exec %s "$@"\n' \
+      "$BASH" "$tool" "$FAKE_DIR" "$FAKE_PLATFORM_BIN" >"$FAKE_BIN/$tool"
+    chmod +x "$FAKE_BIN/$tool"
+  done
+  export JUGGLER_RINGMASTER_BIN="$FAKE_BIN/ringmaster"
+  export JUGGLER_TROUPE_BIN="$FAKE_BIN/troupe"
+  export JUGGLER_SYSTEMD_RUN_BIN="$FAKE_BIN/systemd-run"
+
+  # juggler's lifecycle state and models file live in the scratch dir, never
+  # in the real ~/.local/state or ~/.local/share.
+  export XDG_STATE_HOME="$BATS_FILE_TMPDIR/state"
+  export JUGGLER_MODELS_PATH="$BATS_FILE_TMPDIR/models.toml"
+  unset CLOWN_SESSION_ID TROUPE_XMPP_USER TROUPE_XMPP_PASSWORD_FILE TROUPE_XMPP_DOMAIN
+
+  "$FAKE_PLATFORM_BIN" serve-decisions --dir "$DEC_DIR" >"$DEC_DIR/server.log" 2>&1 &
+  export DEC_PID=$!
+  wait_for_file "$DEC_DIR/port" 5
+  if [[ ! -s $DEC_DIR/port ]]; then
+    echo "fake decisions server never wrote its port; log:" >&2
+    cat "$DEC_DIR/server.log" >&2
+    return 1
+  fi
+
+  # A decisions-style remote entry pointing at the fake endpoint: resolved
+  # from this file directly, so no juggler daemon runs anywhere in this lane.
+  cat >"$JUGGLER_MODELS_PATH" <<EOF
+[[model]]
+name = "jev"
+style = "decisions"
+url = "http://127.0.0.1:$(<"$DEC_DIR/port")"
+token = "tok-test"
+model = "typesafe/jev-test"
+EOF
+
+  # The brief template the subagent tests spawn from.
+  cat >"$BATS_FILE_TMPDIR/issue-filer.toml" <<'EOF'
+schema = 1
+model = "jev"
+system = "You file one issue per actionable item."
+tools = ["ring_create_issue"]
+
+[evaluator]
+kind = "jq"
+program = ".cannot_complete == null"
+
+[limits]
+steps = 3
+wall_clock = "20s"
+EOF
+}
+
+teardown_file() {
+  if [[ -n ${DEC_PID:-} ]]; then
+    kill "$DEC_PID" 2>/dev/null || true
+    wait "$DEC_PID" 2>/dev/null || true
+  fi
+}
+
+setup() {
+  load 'lib/common.bash'
+}
+
+# --- helpers ---------------------------------------------------------------
+
+# _exec_capture <cmd>...: run cmd, leaving its exit code in $status, stdout in
+# $output and stderr in $stderr (stdout carries JSON, so the two are never
+# merged the way bats's `run` does).
+_exec_capture() {
+  status=0
+  output=$("$@" 2>"$BATS_TEST_TMPDIR/stderr") || status=$?
+  stderr=$(<"$BATS_TEST_TMPDIR/stderr")
+}
+
+# run_jug_env VAR=value... -- <juggler args>
+run_jug_env() {
+  local envs=()
+  while [[ $1 != -- ]]; do
+    envs+=("$1")
+    shift
+  done
+  shift
+  _exec_capture env "${envs[@]}" "$JUGGLER_BIN" "$@"
+}
+
+# run_jug <juggler args>: with no principal in the environment.
+run_jug() { run_jug_env -- "$@"; }
+
+# run_jug_as <principal> <juggler args>: as that principal (the glue runs as
+# the run root, so it passes the root's CLOWN_SESSION_ID).
+run_jug_as() {
+  local principal=$1
+  shift
+  run_jug_env "CLOWN_SESSION_ID=$principal" -- "$@"
+}
+
+expect_status() {
+  if [[ $status -ne $1 ]]; then
+    {
+      echo "expected exit $1, got $status"
+      echo "stdout: $output"
+      echo "stderr: $stderr"
+    } >&2
+    return 1
+  fi
+}
+
+# field <jq filter>: a field of the last command's stdout JSON (-e: fails on
+# false/null).
+field() { jq -er "$1" <<<"$output"; }
+
+# expect_json <jq filter>: the filter holds for the last command's stdout.
+expect_json() {
+  if ! jq -e "$1" <<<"$output" >/dev/null; then
+    echo "stdout does not satisfy: $1" >&2
+    echo "stdout: $output" >&2
+    return 1
+  fi
+}
+
+# stored_run <name> <jq filter>: a field of a saved `spawn --new-run` object.
+stored_run() { jq -er "$2" "$BATS_FILE_TMPDIR/$1.json"; }
+
+# fake_calls <jq filter>: the recorded platform invocations, slurped.
+fake_calls() { jq -s "$1" "$FAKE_DIR/calls.jsonl"; }
+
+# journal_types <target> <job>: the job's journal record types, one per line.
+journal_types() { jq -r .type "$FAKE_DIR/rm/$1/$2.jsonl"; }
+
+# set_decision <http status> <body>: the Decisions endpoint's next answer.
+set_decision() {
+  printf '%s' "$1" >"$DEC_DIR/status"
+  printf '%s' "$2" >"$DEC_DIR/body"
+}
+
+DECIDE_PAYLOAD='{"state":"file an issue on moxy that restart should reconnect","questions":{"route":{"type":"choice","instructions":"Which kind of capture is it?","criteria":{"issue":"File, open or log an issue against a project.","note":"Anything else."}}}}'
+
+# decision_body <confidence>: a usable-shaped answer choosing "issue".
+decision_body() {
+  printf '{"answers":{"route":{"type":"choice","choice":"issue","probabilities":{"issue":0.9,"note":0.1},"confidence":%s}},"id":"gen-dec-1","model":"typesafe/jev-test","usage":{"cost":0,"input_tokens":5,"output_tokens":1}}' "$1"
+}
+
+# launch_child <root principal> <task>: `spawn --brief` without --wait; the
+# launch JSON is left in $output.
+launch_child() {
+  run_jug_as "$1" spawn --brief "$BATS_FILE_TMPDIR/issue-filer.toml" --task - <<<"$2"
+  expect_status 0
+}
+
+# finish_job_later <root> <job> <state> <message> [result-ref]: after a
+# moment, write the job's terminal record the way the agent or the post-stop
+# hook would (so a --wait in progress sees it).
+finish_job_later() {
+  local root=$1 job=$2 state=$3 message=$4 ref=${5:-}
+  (
+    sleep 0.5
+    args=("done" "$job" --target "$root" --state "$state" --message "$message")
+    if [[ -n $ref ]]; then args+=(--result-ref "$ref"); fi
+    "$FAKE_BIN/ringmaster" "${args[@]}"
+  ) >/dev/null 2>&1 3>&- &
+}
+
+# abort_on_cancel <root> <job>: play a producer that tears down when a holder
+# cancels: once the journal carries cancel-requested, write aborted.
+abort_on_cancel() {
+  local root=$1 job=$2
+  (
+    for _ in $(seq 1 100); do
+      if grep -q '"type":"cancel-requested"' "$FAKE_DIR/rm/$root/$job.jsonl" 2>/dev/null; then
+        "$FAKE_BIN/ringmaster" "done" "$job" --target "$root" --state aborted --message "cancelled by a holder"
+        break
+      fi
+      sleep 0.1
+    done
+  ) >/dev/null 2>&1 3>&- &
+}
+
+# --- spawn --new-run -------------------------------------------------------
+
+@test "spawn --new-run mints a run root, posts the input and starts the run job" {
+  run_jug spawn --new-run --run-key rk1 --input - --issuer issuer-1 --room room-1@rooms.test \
+    <<<'{"recording":"file an issue on moxy"}'
+  expect_status 0
+  printf '%s' "$output" >"$BATS_FILE_TMPDIR/rk1.json"
+
+  [[ $(field .run_key) == rk1 ]]
+  [[ $(field .room) == room-1@rooms.test ]]
+  [[ $(field .existing) == false ]]
+  [[ $(field .resolved) == false ]]
+  [[ $(field .torn_down) == false ]]
+  [[ $(field .root_stanza) == chat-* ]]
+  [[ $(field .root_jid) == "$(field .root_principal)@xmpp.test" ]]
+
+  # The credential is by reference: one password file per identity, under the
+  # run's own state directory.
+  local pw
+  pw=$(field .root_credential_ref)
+  [[ $pw == "$XDG_STATE_HOME/juggler/runs/rk1/$(field .root_principal).pw" ]]
+  [[ -s $pw ]]
+
+  # The run job lives on the issuer's channel; the run input is the room's
+  # root stanza.
+  run_job=$(field .run_job)
+  [[ -f $FAKE_DIR/rm/issuer-1/$run_job.jsonl ]]
+  fake_calls '[.[] | select(.tool=="troupe" and .argv[0]=="mint")] | length == 1' | grep -qx true
+  jq -se --arg stanza "$(field .root_stanza)" '
+    map(select(.id == $stanza)) | length == 1
+    and (.[0].room == "room-1@rooms.test")
+    and (.[0].subject | fromjson | .type == "run_input" and .run_key == "rk1" and .input.recording == "file an issue on moxy")
+  ' "$FAKE_DIR/muc.jsonl" >/dev/null
+}
+
+@test "spawn --new-run with the same --run-key returns the existing run and creates nothing" {
+  local posts_before
+  posts_before=$(wc -l <"$FAKE_DIR/muc.jsonl")
+
+  run_jug spawn --new-run --run-key rk1 --input - --issuer issuer-1 --room room-1@rooms.test \
+    <<<'{"recording":"a redelivery"}'
+  expect_status 0
+  [[ $(field .existing) == true ]]
+  [[ $(field .run_job) == "$(stored_run rk1 .run_job)" ]]
+  [[ $(field .root_stanza) == "$(stored_run rk1 .root_stanza)" ]]
+  [[ $(field .root_principal) == "$(stored_run rk1 .root_principal)" ]]
+  [[ $(field .resolved) == false ]]
+  [[ $(field .torn_down) == false ]]
+  [[ $(wc -l <"$FAKE_DIR/muc.jsonl") -eq $posts_before ]]
+}
+
+@test "spawn --new-run --room-domain fails (room provisioning is troupe's lane) and revokes the mint" {
+  run_jug spawn --new-run --run-key rk-domain --input - --issuer issuer-1 --room-domain rooms.test <<<'x'
+  expect_status 1
+  [[ $stderr == *"troupe's lane"* ]]
+  fake_calls '[.[] | select(.tool=="troupe" and .argv[0]=="mint-revoke")] | length >= 1' | grep -qx true
+}
+
+# --- decide ----------------------------------------------------------------
+
+@test "decide exits 0 on a usable choice, posts the decision stanza and records a route entry" {
+  set_decision 200 "$(decision_body 0.8)"
+  local stanza
+  stanza=$(stored_run rk1 .root_stanza)
+
+  run_jug decide --run-key rk1 --model jev --room room-1@rooms.test --parent "$stanza" --min-confidence 0.5 \
+    <<<"$DECIDE_PAYLOAD"
+  expect_status 0
+  [[ $(field .answers.route.choice) == issue ]]
+  [[ $(field .id) == gen-dec-1 ]]
+
+  # The request went to the registry entry: upstream model id, the entry's
+  # token, and the state/questions from stdin.
+  [[ $(<"$DEC_DIR/last-auth") == "Bearer tok-test" ]]
+  jq -e '.model == "typesafe/jev-test" and (.state | startswith("file an issue")) and (.questions.route.type == "choice")' \
+    "$DEC_DIR/last-request" >/dev/null
+
+  # ONE decision stanza, parented on the recording.
+  jq -se --arg parent "$stanza" '
+    map(select(.source == "juggler-decide")) | length == 1
+    and (.[0].subject | fromjson | .type == "decision" and .parent == $parent and .verdict == "usable")
+  ' "$FAKE_DIR/muc.jsonl" >/dev/null
+
+  # The route entry is on the run ledger, readable through job-ledger.
+  run_jug job-ledger "$(stored_run rk1 .run_job)"
+  expect_status 0
+  expect_json '[.calls[] | select(.tool == "route")] | length == 1
+    and .[0].ok == true and .[0].kind == "route" and .[0].choice == "issue"
+    and .[0].verdict == "usable" and (.[0].stanza_id | startswith("chat-"))'
+}
+
+@test "decide exits 4 when the choice is below the threshold" {
+  set_decision 200 "$(decision_body 0.2)"
+  run_jug decide --run-key rk1 --model jev --room room-1@rooms.test --parent "$(stored_run rk1 .root_stanza)" \
+    --min-confidence 0.5 <<<"$DECIDE_PAYLOAD"
+  expect_status 4
+  [[ $(field .answers.route.choice) == issue ]]
+  [[ $(field .reason) == *"below threshold"* ]]
+
+  run_jug job-ledger "$(stored_run rk1 .run_job)"
+  expect_json '[.calls[] | select(.tool == "route")] | length == 2
+    and .[1].ok == false and .[1].verdict == "below-threshold" and .[1].choice == "issue"'
+}
+
+@test "decide exits 2 when the endpoint fails and records a failed route entry" {
+  set_decision 500 '{"error":{"message":"upstream down"}}'
+  run_jug decide --run-key rk1 --model jev --room room-1@rooms.test --parent "$(stored_run rk1 .root_stanza)" \
+    <<<"$DECIDE_PAYLOAD"
+  expect_status 2
+  [[ $(field .http_status) -eq 500 ]]
+  [[ $(field .reason) == *"upstream down"* ]]
+
+  run_jug job-ledger "$(stored_run rk1 .run_job)"
+  expect_json '[.calls[] | select(.tool == "route")] | length == 3
+    and .[2].ok == false and .[2].verdict == "no-choice"'
+}
+
+@test "decide exits 3 when the decision stanza cannot be posted" {
+  set_decision 200 "$(decision_body 0.8)"
+  mkdir -p "$FAKE_DIR/fail"
+  : >"$FAKE_DIR/fail/troupe-muc"
+  run_jug decide --run-key rk1 --model jev --room room-1@rooms.test --parent "$(stored_run rk1 .root_stanza)" \
+    <<<"$DECIDE_PAYLOAD"
+  rm -f "$FAKE_DIR/fail/troupe-muc"
+  expect_status 3
+  # The decision itself is still printed and recorded.
+  [[ $(field .answers.route.choice) == issue ]]
+  [[ $stderr == *"posting stanza"* ]]
+}
+
+@test "decide exits 1 on a usage error before any call" {
+  run_jug decide --model jev --parent x <<<"$DECIDE_PAYLOAD"
+  expect_status 1
+  [[ $stderr == *"--room is required"* ]]
+}
+
+# --- spawn --brief ---------------------------------------------------------
+
+@test "spawn --brief launches the child as a transient unit under the run root" {
+  local root
+  root=$(stored_run rk1 .root_principal)
+  launch_child "$root" "task one"
+
+  local jid job principal
+  jid=$(field .jid)
+  job=$(field .job)
+  principal=${jid%@*}
+  [[ $(field .room) == room-1@rooms.test ]]
+  printf '%s' "$output" >"$BATS_FILE_TMPDIR/child-one.json"
+
+  # The agent job lives on the run root's channel (its parent), and the root
+  # holds the first handle.
+  [[ -f $FAKE_DIR/rm/$root/$job.jsonl ]]
+  run_jug handles "$job"
+  expect_status 0
+  expect_json 'length == 1 and .[0].holder != "" and .[0].rights == "observe,close" and .[0].status == "accepted"'
+  [[ $(jq -r '.[0].holder' <<<"$output") == "$root" ]]
+
+  # The brief is staged for the unit and dropped into the room as a stanza.
+  local staged
+  staged=$(ls "$XDG_STATE_HOME"/juggler/runs/rk1/children/*.brief.toml)
+  grep -qF "$principal" "$staged"
+  grep -qF "task one" "$staged"
+  jq -se --arg principal "$principal" --arg job "$job" '
+    map(select(.subject | fromjson | .type == "brief" and .principal == $principal and .job == $job)) | length == 1
+  ' "$FAKE_DIR/muc.jsonl" >/dev/null
+
+  # The unit: RuntimeMaxSec is the 20s wall clock plus the 30s default grace,
+  # ExecStopPost is the exit-wake hook (the sole emitter), and the unit's
+  # environment is the CHILD's identity, never the spawner's.
+  local unit
+  unit=$(fake_calls '[.[] | select(.tool == "systemd-run")][-1]')
+  jq -e --arg p "$principal" --arg job "$job" --arg root "$root" '
+    (.argv | index("--unit") as $i | .[$i + 1] == "juggler-agent-" + $p)
+    and (.argv | index("--collect") != null)
+    and (.argv | index("--property=Type=exec") != null)
+    and (.argv | index("--property=Delegate=yes") != null)
+    and (.argv | index("--property=RuntimeMaxSec=50") != null)
+    and ([.argv[] | select(startswith("--property=ExecStopPost="))] | length == 1)
+    and ([.argv[] | select(startswith("--property=ExecStopPost="))][0] | contains("exit-wake --job " + $job + " --target " + $root))
+    and (.argv | index("--setenv=CLOWN_SESSION_ID=" + $p) != null)
+    and (.argv | index("--setenv=TROUPE_XMPP_USER=" + $p) != null)
+    and (.argv | index("--setenv=TROUPE_XMPP_DOMAIN=xmpp.test") != null)
+    and ([.argv[] | select(startswith("--setenv=TROUPE_XMPP_PASSWORD_FILE="))] | length == 1)
+    and (.argv | index("--setenv=XDG_STATE_HOME=" + env.XDG_STATE_HOME) != null)
+    and (.argv | index("--setenv=JUGGLER_MODELS_PATH=" + env.JUGGLER_MODELS_PATH) != null)
+    and (.argv | index("--setenv=JUGGLER_RINGMASTER_BIN=" + env.JUGGLER_RINGMASTER_BIN) != null)
+    and ([.argv[] | select(startswith("--setenv=CLOWN_SESSION_ID=")) ] | length == 1)
+    and (.argv | index("run") != null and index("--brief") != null and index("--job") != null)
+  ' <<<"$unit" >/dev/null
+  # The systemd-run client process never saw the spawner's principal.
+  jq -e '.env == {}' <<<"$unit" >/dev/null
+}
+
+@test "spawn --brief with the same brief and task returns the same child and starts no second unit" {
+  local root units_before
+  root=$(stored_run rk1 .root_principal)
+  units_before=$(fake_calls '[.[] | select(.tool == "systemd-run")] | length')
+
+  launch_child "$root" "task one"
+  [[ $(field .job) == "$(jq -r .job "$BATS_FILE_TMPDIR/child-one.json")" ]]
+  [[ $(fake_calls '[.[] | select(.tool == "systemd-run")] | length') -eq $units_before ]]
+}
+
+@test "spawn --brief --wait mirrors a succeeded job: exit 0, reason normal, artifacts from the ledger" {
+  local root job spool
+  root=$(stored_run rk1 .root_principal)
+  job=$(jq -r .job "$BATS_FILE_TMPDIR/child-one.json")
+  spool="$FAKE_DIR/rm/$root/$job.out"
+  printf '%s' '{"schema":1,"calls":[{"tool":"ring_create_issue","kind":"issue","ok":true,"uris":["https://forge.test/o/r/issues/1"]}],"end":{"reason":"end_turn"},"cannot_complete":null,"steps":2,"elapsed_ms":10}' >"$spool"
+  finish_job_later "$root" "$job" succeeded "evaluator passed" "$spool"
+
+  run_jug_as "$root" spawn --brief "$BATS_FILE_TMPDIR/issue-filer.toml" --task - --wait --timeout 30s <<<"task one"
+  expect_status 0
+  [[ $(field .job) == "$job" ]]
+  [[ $(field .state) == succeeded ]]
+  [[ $(field .reason) == normal ]]
+  [[ $(field .ledger) == "$spool" ]]
+  expect_json '.artifacts == [{"tool":"ring_create_issue","kind":"issue","uris":["https://forge.test/o/r/issues/1"]}] and .cannot_complete == null'
+}
+
+@test "spawn --brief --wait exits 2 for a failed job and carries cannot_complete" {
+  local root job spool
+  root=$(stored_run rk1 .root_principal)
+  launch_child "$root" "task two"
+  job=$(field .job)
+  spool="$FAKE_DIR/rm/$root/$job.out"
+  printf '%s' '{"schema":1,"calls":[],"end":{"reason":"cannot_complete"},"cannot_complete":{"reason":"no repo matches"},"steps":1,"elapsed_ms":5}' >"$spool"
+  finish_job_later "$root" "$job" failed 'cannot_complete: "no repo matches"' "$spool"
+
+  run_jug_as "$root" spawn --brief "$BATS_FILE_TMPDIR/issue-filer.toml" --task - --wait --timeout 30s <<<"task two"
+  expect_status 2
+  [[ $(field .state) == failed ]]
+  [[ $(field .reason) == failed ]]
+  [[ $(field .message) == *"no repo matches"* ]]
+  expect_json '.cannot_complete == {"reason":"no repo matches"} and .artifacts == []'
+}
+
+@test "spawn --brief --wait exits 3 for an aborted job" {
+  local root job
+  root=$(stored_run rk1 .root_principal)
+  launch_child "$root" "task aborted"
+  job=$(field .job)
+  finish_job_later "$root" "$job" aborted "cancelled by a holder"
+
+  run_jug_as "$root" spawn --brief "$BATS_FILE_TMPDIR/issue-filer.toml" --task - --wait --timeout 30s <<<"task aborted"
+  expect_status 3
+  [[ $(field .state) == aborted ]]
+  [[ $(field .reason) == shutdown ]]
+}
+
+@test "spawn --brief --wait exits 4 for an interrupted job" {
+  local root job
+  root=$(stored_run rk1 .root_principal)
+  launch_child "$root" "task interrupted"
+  job=$(field .job)
+  finish_job_later "$root" "$job" interrupted "crash: unit result exit-code"
+
+  run_jug_as "$root" spawn --brief "$BATS_FILE_TMPDIR/issue-filer.toml" --task - --wait --timeout 30s <<<"task interrupted"
+  expect_status 4
+  [[ $(field .state) == interrupted ]]
+  [[ $(field .reason) == crash ]]
+}
+
+@test "spawn --brief --wait at --timeout cancels the job and exits 3 when it aborts within the stop grace" {
+  local root job
+  root=$(stored_run rk1 .root_principal)
+  launch_child "$root" "task timeout-abort"
+  job=$(field .job)
+  abort_on_cancel "$root" "$job"
+
+  run_jug_as "$root" spawn --brief "$BATS_FILE_TMPDIR/issue-filer.toml" --task - --wait --timeout 1s --stop-grace 10s \
+    <<<"task timeout-abort"
+  expect_status 3
+  [[ $(field .state) == aborted ]]
+  [[ $(field .reason) == shutdown ]]
+  journal_types "$root" "$job" | grep -qx cancel-requested
+  fake_calls '[.[] | select(.tool == "ringmaster" and .argv[0] == "cancel" and .argv[1] == "'"$job"'")] | length >= 1' | grep -qx true
+}
+
+@test "spawn --brief --wait at --timeout exits 5 when the cancelled job is still running after the stop grace" {
+  local root job
+  root=$(stored_run rk1 .root_principal)
+  launch_child "$root" "task stuck"
+  job=$(field .job)
+  printf '%s' "$job" >"$BATS_FILE_TMPDIR/stuck-job"
+
+  run_jug_as "$root" spawn --brief "$BATS_FILE_TMPDIR/issue-filer.toml" --task - --wait --timeout 1s --stop-grace 1s \
+    <<<"task stuck"
+  expect_status 5
+  [[ $(field .state) == running ]]
+  journal_types "$root" "$job" | grep -qx cancel-requested
+}
+
+# --- job-ledger ------------------------------------------------------------
+
+@test "job-ledger prints an agent job's result spool" {
+  local job
+  job=$(jq -r .job "$BATS_FILE_TMPDIR/child-one.json")
+  run_jug job-ledger "$job"
+  expect_status 0
+  expect_json '.calls[0].tool == "ring_create_issue" and .end.reason == "end_turn"'
+}
+
+@test "job-ledger on an unknown job without --target exits 1" {
+  run_jug job-ledger nope-12345678
+  expect_status 1
+  [[ $stderr == *"--target"* ]]
+}
+
+# --- resolve ---------------------------------------------------------------
+
+@test "resolve stops live children, records the fallback and wakes the issuer" {
+  local root run_job live
+  root=$(stored_run rk1 .root_principal)
+  run_job=$(stored_run rk1 .run_job)
+  launch_child "$root" "task live"
+  live=$(field .job)
+  abort_on_cancel "$root" "$live"
+
+  run_jug resolve "$run_job" --state failed --reason "router below threshold" \
+    --fallback-artifacts '[{"tool":"orgzly_note","kind":"note","uris":["orgzly://note/1"]}]' --stop-grace 2s
+  expect_status 0
+  [[ $(field .state) == failed ]]
+  [[ $(field .reason) == failed ]]
+  [[ $(field .already_resolved) == false ]]
+  expect_json '.woken == ["issuer-1"]'
+
+  # Two children were still live: one aborted inside the grace, the stuck one
+  # did not. Each is a subagent_stop entry, then the fallback closes the ledger.
+  run_jug job-ledger "$run_job"
+  expect_status 0
+  local stuck
+  stuck=$(<"$BATS_FILE_TMPDIR/stuck-job")
+  expect_json '([.calls[] | select(.tool == "subagent_stop")] | length) == 2
+    and ([.calls[] | select(.tool == "subagent_stop" and .ok == true and .stopped_by_resolve == true and .job == "'"$live"'")] | length) == 1
+    and ([.calls[] | select(.tool == "subagent_stop" and .ok == false and .job == "'"$stuck"'")] | length) == 1'
+  expect_json '([.calls[] | select(.tool == "fallback")] | length) == 1
+    and .calls[-1].tool == "fallback" and .calls[-1].ok == true and .calls[-1].ran == true
+    and .calls[-1].uris == ["orgzly://note/1"] and .calls[-1].reason == "router below threshold"
+    and .resolved.state == "failed"'
+
+  # The run job is terminal failed, and the issuer got ONE wake.
+  [[ $(journal_types issuer-1 "$run_job" | tail -n1) == failed ]]
+  jq -se --arg job "$run_job" '
+    map(select(.target == "issuer-1" and (.message | startswith("exit " + $job + " failed reason=failed")))) | length == 1
+  ' "$FAKE_DIR/wakes.jsonl" >/dev/null
+}
+
+@test "resolve on an already-resolved run is a no-op that reports the stored verdict" {
+  local wakes_before
+  wakes_before=$(wc -l <"$FAKE_DIR/wakes.jsonl")
+  run_jug resolve "$(stored_run rk1 .run_job)" --state succeeded --reason "second try"
+  expect_status 0
+  [[ $stderr == *"already resolved"* ]]
+  [[ $(field .state) == failed ]]
+  [[ $(field .already_resolved) == true ]]
+  [[ $(wc -l <"$FAKE_DIR/wakes.jsonl") -eq $wakes_before ]]
+}
+
+@test "spawn --brief on a resolved run is refused" {
+  run_jug_as "$(stored_run rk1 .root_principal)" spawn --brief "$BATS_FILE_TMPDIR/issue-filer.toml" --task - <<<"too late"
+  expect_status 1
+  [[ $stderr == *"already resolved"* ]]
+}
+
+# --- exit-wake -------------------------------------------------------------
+
+@test "exit-wake writes the terminal the unit result implies and wakes the holder once" {
+  run_jug spawn --new-run --run-key rk2 --input - --issuer issuer-2 --room room-2@rooms.test <<<'{"recording":"second"}'
+  expect_status 0
+  printf '%s' "$output" >"$BATS_FILE_TMPDIR/rk2.json"
+  local root
+  root=$(stored_run rk2 .root_principal)
+
+  # SERVICE_RESULT=timeout: RuntimeMaxSec expired -> failed / failed.
+  launch_child "$root" "wake timeout"
+  local job
+  job=$(field .job)
+  printf '%s' "$job" >"$BATS_FILE_TMPDIR/wake-timeout-job"
+  run_jug_env SERVICE_RESULT=timeout -- exit-wake --job "$job" --target "$root"
+  expect_status 0
+  [[ $(field .state) == failed ]]
+  [[ $(field .reason) == failed ]]
+  [[ $(field .wrote_terminal) == true ]]
+  expect_json ".woken == [\"$root\"]"
+  [[ $(journal_types "$root" "$job" | tail -n1) == failed ]]
+  jq -se --arg job "$job" --arg root "$root" '
+    map(select(.target == $root and (.message | startswith("exit " + $job + " failed reason=failed")))) | length == 1
+  ' "$FAKE_DIR/wakes.jsonl" >/dev/null
+  [[ -f $XDG_STATE_HOME/juggler/exit-wakes/$job ]]
+
+  # A second run of the hook is idempotent: no second terminal, no second wake.
+  local wakes_before
+  wakes_before=$(wc -l <"$FAKE_DIR/wakes.jsonl")
+  run_jug_env SERVICE_RESULT=timeout -- exit-wake --job "$job" --target "$root"
+  expect_status 0
+  [[ $(field .already_woken) == true ]]
+  [[ $(field .wrote_terminal) == false ]]
+  expect_json '.woken == []'
+  [[ $(wc -l <"$FAKE_DIR/wakes.jsonl") -eq $wakes_before ]]
+}
+
+@test "exit-wake maps a signal death to interrupted/killed" {
+  local root job
+  root=$(stored_run rk2 .root_principal)
+  launch_child "$root" "wake signal"
+  job=$(field .job)
+  run_jug_env SERVICE_RESULT=signal EXIT_STATUS=KILL -- exit-wake --job "$job" --target "$root"
+  expect_status 0
+  [[ $(field .state) == interrupted ]]
+  [[ $(field .reason) == killed ]]
+  [[ $(field .message) == *"signal KILL"* ]]
+  [[ $(journal_types "$root" "$job" | tail -n1) == interrupted ]]
+}
+
+@test "exit-wake maps a non-zero exit to interrupted/crash" {
+  local root job
+  root=$(stored_run rk2 .root_principal)
+  launch_child "$root" "wake exit-code"
+  job=$(field .job)
+  run_jug_env SERVICE_RESULT=exit-code EXIT_CODE=exited EXIT_STATUS=3 -- exit-wake --job "$job" --target "$root"
+  expect_status 0
+  [[ $(field .state) == interrupted ]]
+  [[ $(field .reason) == crash ]]
+  [[ $(field .message) == *"exit code exited"* ]]
+}
+
+@test "exit-wake relays the verdict the agent already wrote and does not rewrite it" {
+  local root job
+  root=$(stored_run rk2 .root_principal)
+  launch_child "$root" "wake success"
+  job=$(field .job)
+  "$FAKE_BIN/ringmaster" "done" "$job" --target "$root" --state succeeded --message "evaluator passed"
+
+  run_jug_env SERVICE_RESULT=success -- exit-wake --job "$job" --target "$root"
+  expect_status 0
+  [[ $(field .state) == succeeded ]]
+  [[ $(field .reason) == normal ]]
+  [[ $(field .wrote_terminal) == false ]]
+  expect_json ".woken == [\"$root\"]"
+  [[ $(journal_types "$root" "$job" | grep -cE '^(succeeded|failed|aborted|interrupted)$') -eq 1 ]]
+}
+
+# --- binary resolution -----------------------------------------------------
+
+@test "a --ringmaster flag overrides JUGGLER_RINGMASTER_BIN" {
+  run_jug spawn --new-run --run-key rk-flag --input - --issuer issuer-3 --room room-3@rooms.test \
+    --ringmaster /nonexistent/ringmaster <<<'x'
+  expect_status 1
+  [[ $stderr == *"ringmaster"* ]]
+}

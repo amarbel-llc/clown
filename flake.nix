@@ -498,6 +498,13 @@
             base = fake-llama-server-go;
             name = "fake-llama-server";
           };
+          # The juggler agent-substrate verbs (FDR 0019) against fake
+          # ringmaster/troupe/systemd-run and a fake Decisions endpoint:
+          # juggler_lifecycle.bats.
+          FAKE_PLATFORM_BIN = {
+            base = fake-platform-go;
+            name = "fake-platform";
+          };
           # The real provider binaries buildcfg.OpencodeCliPath /
           # CrushCliPath bind to: opencode (clown#197), provider_mcp (FDR 0016).
           OPENCODE_BIN = {
@@ -922,11 +929,11 @@
           };
 
         # juggler: the llama-server control-plane binary (client + `juggler
-        # daemon`). A self-contained subsystem (cmd/juggler + internal/juggler +
-        # internal/jugglermodels) that imports nothing from clown, so its one
-        # build var — LlamaServerPath — is juggler-owned (cmd/juggler/buildcfg.go)
-        # rather than clown's internal/buildcfg. Clean perforation line for a
-        # future extraction into its own repo.
+        # daemon`) and the FDR 0019 agent-substrate verbs. Its build vars —
+        # LlamaServerPath and the consumed platform binaries' paths — are
+        # juggler-owned (cmd/juggler/buildcfg.go) rather than clown's
+        # internal/buildcfg. Clean perforation line for a future extraction
+        # into its own repo.
         juggler-go = buildClownGo {
           pname = "juggler";
           version = clownVersion;
@@ -935,8 +942,16 @@
             "-s"
             "-w"
           ];
+          # The agent-substrate verbs (FDR 0019) consume ringmaster, troupe and
+          # systemd-run as binaries: burn their store paths in as the defaults
+          # behind --ringmaster/--troupe/--systemd-run and JUGGLER_*_BIN. moxy
+          # is not an input of this flake, so MoxyPath stays empty and `juggler
+          # run` resolves moxy from PATH (or --moxy / JUGGLER_MOXY_BIN).
           ldflagsX = {
             "main.LlamaServerPath" = llamaServerPath;
+            "main.RingmasterPath" = "${ringmasterPkg}/bin/ringmaster";
+            "main.TroupePath" = "${troupePkg}/bin/troupe";
+            "main.SystemdRunPath" = "${pkgs.systemd}/bin/systemd-run";
           };
         };
 
@@ -990,6 +1005,21 @@
           pname = "fake-llama-server";
           version = clownVersion;
           subPackages = [ "cmd/juggler/testdata/fake-llama-server" ];
+          ldflags = [
+            "-s"
+            "-w"
+          ];
+        };
+
+        # fake-platform: the juggler_lifecycle.bats lane's stand-in for the
+        # agent substrate's platform binaries (a stateful fake ringmaster,
+        # troupe and systemd-run, selected by JUGGLERRUNTEST_FAKE, plus a fake
+        # OpenRouter Decisions endpoint). Reuses the Go tests' fakes in
+        # internal/jugglerrun/jugglerruntest.
+        fake-platform-go = buildClownGo {
+          pname = "fake-platform";
+          version = clownVersion;
+          subPackages = [ "cmd/juggler/testdata/fake-platform" ];
           ldflags = [
             "-s"
             "-w"

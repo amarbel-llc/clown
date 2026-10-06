@@ -5,7 +5,7 @@
 .Os
 .Sh NAME
 .Nm juggler
-.Nd CLI client for the juggler llama-server control plane
+.Nd llama-server control plane client and agent substrate
 .Sh SYNOPSIS
 .Nm
 .Cm start Ar model
@@ -23,7 +23,9 @@
 .Nm
 .Cm model list
 .Nm
-.Cm model add Ar name Fl -style Ar style Fl -url Ar url Fl -token Ar token
+.Cm model add Ar name Fl -style Ar style Fl -url Ar url
+.Bro Fl -token Ar token | Fl -token-file Ar path Brc
+.Op Fl -model Ar id
 .Nm
 .Cm model remove Ar name
 .Nm
@@ -33,39 +35,114 @@
 .Cm download Ar name Op Fl Fl url Ar url Op Fl Fl sha256 Ar hex Op Fl Fl size Ar bytes
 .Nm
 .Cm mcp
+.Nm
+.Cm run Fl -brief Ar file
+.Op Fl -job Ar id
+.Op Fl -brief-stanza Ar id
+.Op Fl -moxy Ar path | Fl -moxy-url Ar url
+.Nm
+.Cm spawn Fl -new-run
+.Op Fl -run-key Ar key
+.Fl -input Ar file
+.Op Fl -issuer Ar principal
+.Fl -room Ar jid
+.Nm
+.Cm spawn Fl -brief Ar template
+.Op Fl -task Ar file
+.Op Fl -run-key Ar key
+.Op Fl -wait Op Fl -timeout Ar dur
+.Op Fl -stop-grace Ar dur
+.Op Fl -moxy-url Ar url
+.Op Fl -juggler Ar path
+.Op Fl -user
+.Nm
+.Cm exit-wake Fl -job Ar id Fl -target Ar principal
+.Op Fl -run-ledger Ar path
+.Op Fl -from Ar principal
+.Nm
+.Cm resolve Ar run-job Fl -state Ar succeeded|failed Fl -reason Ar text
+.Op Fl -fallback-artifacts Ar json
+.Op Fl -stop-grace Ar dur
+.Nm
+.Cm job-ledger Ar job
+.Op Fl -target Ar principal
+.Nm
+.Cm handles Ar job
+.Op Fl -target Ar principal
+.Nm
+.Cm decide Fl -model Ar name Fl -room Ar jid Fl -parent Ar stanza-id
+.Op Fl -min-confidence Ar n
+.Op Fl -question Ar id
+.Op Fl -run-key Ar key
 .Sh DESCRIPTION
 .Nm
-is a thin CLI client of the
+is the CLI of two things that share one binary: the
 .Cm juggler daemon
-control plane.
-Every subcommand other than
-.Cm download
-issues a single JSON-RPC call over the juggler control socket and
-pretty-prints the result.
+llama-server control plane, and the agent substrate of FDR 0019
+.Pq Pa docs/features/0019-juggler-agent-substrate.md ,
+the headless, tool-using agents launched by
+.Cm spawn .
 .Pp
-A
+The instance-management and registry subcommands
+.Pq Cm start , stop , status , list , models , model , prompt , mcp
+dial the control socket, issue JSON-RPC calls and pretty-print the
+result; a
 .Cm juggler daemon
-must be running before any
-.Nm
-subcommand other than
-.Cm download
-can complete.
+must be running before they can complete.
 The
 .Sx programs.juggler
 home-manager module starts and supervises it; users without
 home-manager must invoke
 .Cm juggler daemon
 themselves.
-.Pp
 If the control socket is missing or refuses connections,
 .Nm
 prints a one-paragraph hint pointing at the home-manager module before
 returning a non-zero exit code.
+.Pp
+The agent-substrate subcommands
+.Pq Cm run , spawn , exit-wake , resolve , job-ledger , handles , decide
+do not need the daemon for the common case.
+.Cm run , decide
+and
+.Cm spawn
+resolve a
+.Em remote
+registry entry
+.Pq see Xr juggler 7 Sx MODEL REGISTRY
+straight from the models file
+.Pq Ev JUGGLER_MODELS_PATH ;
+only a
+.Em local
+GGUF model sends them to the daemon, which owns the llama-server
+process.
+.Cm exit-wake , resolve , job-ledger
+and
+.Cm handles
+never dial the daemon.
+Like
+.Cm download ,
+none of these is a JSON-RPC call.
+They consume
+.Xr ringmaster 1
+(jobs; protocol version 2 or later, for
+.Ql aborted ,
+.Ql cancel-requested ,
+.Ic cancel
+and
+.Ic wait Fl -on-cancel ) ,
+.Xr troupe 1
+(identity and the run's MUC; a version with
+.Ic mint Fl -password-file )
+and
+.Xr systemd-run 1
+(one transient unit per agent) as external binaries; see
+.Sx ENVIRONMENT .
 .Sh SUBCOMMANDS
 .Bl -tag -width Ds
 .It Cm daemon Op Fl -socket Ar path Op Fl -llama-server Ar path
-Run the llama-server control-plane daemon that every other subcommand
-dials.
+Run the llama-server control-plane daemon that the instance-management
+and registry subcommands dial.
 Binds the control socket
 .Pq Pa ~/.local/state/juggler/control.sock ,
 overridable with
@@ -155,6 +232,8 @@ RPC so the same file is seen by both juggler and clown.
 .It Cm model Cm list , Cm add Ar name , No or Cm remove Ar name
 Manage the unified model registry
 .Pq local and remote; see Xr juggler 7 Sx MODEL REGISTRY .
+These dial the daemon, which owns the models file; the substrate verbs
+read the same file directly.
 Deliberately a separate command from
 .Cm models
 .Pq plural, above, which stays local-GGUF-only, one name per line
@@ -173,7 +252,7 @@ or
 .Sq remote ;
 .Sy STYLE
 is populated only for remote entries.
-.It Cm add Ar name Fl -style Ar style Fl -url Ar url Fl -token Ar token
+.It Cm add Ar name Fl -style Ar style Fl -url Ar url Bro Fl -token Ar token | Fl -token-file Ar path Brc Op Fl -model Ar id
 Register
 .Pq or replace
 a remote model in the registry via the
@@ -181,11 +260,44 @@ a remote model in the registry via the
 RPC.
 .Ar style
 is
-.Sq anthropic
+.Sq anthropic ,
+.Sq openai-compat
 or
-.Sq openai-compat ;
+.Sq decisions ;
 any other value is rejected before any RPC call is attempted.
-All three flags are required.
+.Sq decisions
+entries are consumed only by
+.Cm decide
+and are rejected by
+.Cm prompt
+and the agent loop.
+.Fl -style
+and
+.Fl -url
+are required, and exactly one of
+.Fl -token
+and
+.Fl -token-file
+must be given.
+.Fl -token
+is a literal secret or a
+.Ql ${VAR}
+reference expanded when the entry is resolved.
+.Fl -token-file
+names a file
+.Po
+.Ql ~/
+and
+.Ql $VAR
+expanded
+.Pc
+whose trimmed contents are the token: the by-reference credential a
+hardened headless host uses instead of a secret in the models file.
+.Fl -model
+is the upstream model id sent to the provider; the registry
+.Ar name
+is then a stable alias for it
+.Pq default: Ar name No itself .
 Both
 .Sq Fl -style Ar value
 and
@@ -318,6 +430,490 @@ This tool makes real, and for remote models potentially paid,
 third-party API calls, so the plugin ships no auto-allow hook for it;
 every call defers to Claude Code's own permission prompt
 .Pq see Pa docs/plans/2026-07-11-juggler-subagent-tool-design.md for the reasoning .
+.It Cm run Fl -brief Ar file Op Fl -job Ar id Op Fl -brief-stanza Ar id Op Fl -moxy Ar path | Fl -moxy-url Ar url
+The agent.
+Reads its brief
+.Pq TOML; Ar file No or Sq Fl No for stdin ,
+resolves the brief's model
+.Pq daemon-free for a remote registry entry ,
+launches one moxy instance from the brief's inline moxyfile and drives
+the model's tool-use loop through it until the model ends its turn,
+calls
+.Ql cannot_complete ,
+or hits the brief's step cap or wall clock.
+Every tool call is recorded in the ledger; at the end the brief's
+evaluator
+.Pq a jq program
+collapses the ledger into the verdict, which becomes the ringmaster
+job's terminal record.
+It is a ringmaster
+.Em producer ,
+not a ringmaster-spawned process.
+Normally started by
+.Cm spawn
+as a transient unit rather than by hand.
+.Bl -tag -width Ds
+.It Fl -job Ar id
+Adopt this pre-started ringmaster job
+.Pq Cm spawn No passes it
+instead of starting one.
+.It Fl -brief-stanza Ar id
+The brief's stanza id in the run's room; the first recorded turn's
+provenance parent.
+.It Fl -moxy Ar path
+The moxy binary launched
+.Pq default Ev JUGGLER_MOXY_BIN ,
+.It Fl -moxy-url Ar url
+Use this already-running MCP upstream instead of launching moxy
+.Pq default Ev JUGGLER_MOXY_URL ; No for tests .
+.It Fl -ringmaster Ar path , Fl -troupe Ar path
+The consumed binaries; see
+.Sx ENVIRONMENT .
+.El
+The principal is the brief's
+.Ql principal ;
+.Ev CLOWN_SESSION_ID ,
+when set, must equal it.
+That variable and every
+.Ev TROUPE_XMPP_*
+variable are stripped from the environment handed to moxy and its tool
+servers.
+SIGTERM or SIGINT
+.Pq Ql systemctl stop ,
+or a holder's
+.Ql ringmaster cancel ,
+terminalizes the job
+.Ql aborted .
+The moxyfile is written under
+.Pa agents/<principal>/
+in the state directory.
+Prints one JSON object
+.Sy {"job","state","message","ledger"}
+and exits with the state: 0
+.Ql succeeded ,
+2
+.Ql failed ,
+3
+.Ql aborted ,
+4
+.Ql interrupted ;
+1 is a usage or identity error with no job written.
+.It Cm spawn Fl -new-run Op Fl -run-key Ar key Fl -input Ar file Op Fl -issuer Ar principal Fl -room Ar jid
+The issuer's entry for a new tree: start a
+.Em run .
+Mints the run's root principal
+.Pq Ql troupe mint Fl -session-key Fl -password-file ;
+the credential is kept by reference, in one password file per identity
+under the run's state directory, never in argv or stdout ,
+posts the run's input
+.Pq Ar file No or Sq Fl No for stdin ; JSON is embedded as is, anything else as a string
+as the room's root stanza, and starts a run-level ringmaster job on the
+issuer's channel with the issuer as its first handle holder.
+Every later step of the run executes as the run root.
+.Bl -tag -width Ds
+.It Fl -run-key Ar key
+Caller-supplied idempotency key
+.Pq derived from the recording .
+An existing run with that key is returned unchanged with
+.Ql "existing": true
+and nothing is created.
+Without it a fresh key is minted.
+.It Fl -issuer Ar principal
+The issuer
+.Pq default Ev CLOWN_SESSION_ID .
+.It Fl -room Ar jid
+An existing, already-configured run MUC.
+.It Fl -room-domain Ar domain
+Create the run's MUC on this component.
+Unavailable until troupe grows a verb to create a room with the
+operator as owner: it fails with a troupe's-lane error and revokes
+what the call minted.
+.El
+Prints
+.Sy {"run_key","root_principal","root_credential_ref","root_jid","room","root_stanza","run_job","existing","resolved","torn_down"} .
+.Ql root_stanza
+is the run-input stanza id that
+.Cm decide Fl -parent
+takes; on an existing run,
+.Ql resolved
+and
+.Ql torn_down
+tell a redelivery how far the first delivery got, so one that crashed
+before
+.Cm resolve
+can be finished instead of dropped.
+Exit status 0, or 1 on a usage or launch failure
+.Pq everything minted or posted is undone .
+.It Cm spawn Fl -brief Ar template Op Fl -task Ar file Op Fl -run-key Ar key Op Fl -wait Op Fl -timeout Ar dur Op Fl -stop-grace Ar dur Op Fl -moxy-url Ar url Op Fl -juggler Ar path Op Fl -user
+Launch one subagent into a run.
+.Ar template
+is a brief
+.Pq TOML; Ar file No or Sq Fl No for stdin
+without
+.Ql principal ,
+.Ql parent ,
+.Ql room
+and
+.Ql task ;
+the spawner fills them
+.Pq a minted child key, the run root, the run's room, the task content ,
+then validates the filled brief strictly.
+.Ql model ,
+.Ql system ,
+.Ql tools ,
+.Ql evaluator
+and
+.Ql limits
+must be in the template; its
+.Ql model
+is the author's choice of registry entry, which the spawner's models
+file must define for the agent to start.
+The run is the one named by
+.Fl -run-key ,
+else the one that owns the template's
+.Ql room ,
+else the one whose root principal is
+.Ev CLOWN_SESSION_ID
+.Pq the glue runs as the run root .
+A resolved run refuses new subagents.
+.Pp
+The child's principal and JID are minted, the brief is staged under the
+run's
+.Pa children/
+directory and dropped into the room as a stanza, the child's job is
+started on the run root's channel with the root as first holder, and
+the child runs as a systemd transient unit
+.Pq Ql juggler-agent-<principal> ,
+started with
+.Xr systemd-run 1
+.Fl -collect
+.Fl -property=Type=exec
+.Fl -property=Delegate=yes
+.Fl -property=RuntimeMaxSec=<wall clock + stop grace>
+and
+.Fl -property=ExecStopPost=<juggler> exit-wake --job <job> --target <run root> ,
+which makes the unit's post-stop hook the sole exit-wake emitter.
+If any step fails, everything created so far is undone and the room is
+left with a withdrawal stanza, never an orphan brief.
+A subagent spawned with the same brief and task into the same run is
+idempotent: it returns the existing child and starts no second unit.
+.Pp
+The unit's environment is exactly: the child's identity
+.Pq Ev CLOWN_SESSION_ID No = the child's principal, and Ev TROUPE_XMPP_USER , TROUPE_XMPP_PASSWORD_FILE , TROUPE_XMPP_DOMAIN No of its minted account ,
+the brief's own
+.Ql [env]
+table
+.Pq keys CLOWN_SESSION_ID , TROUPE_XMPP_* No and JUGGLER_* are reserved and rejected ,
+.Ev JUGGLER_MOXY_URL
+when
+.Fl -moxy-url
+or the variable is set, and these variables of the spawner's when set:
+.Ev XDG_STATE_HOME ,
+.Ev XDG_RUNTIME_DIR ,
+.Ev JUGGLER_MODELS_PATH ,
+.Ev JUGGLER_RINGMASTER_BIN ,
+.Ev JUGGLER_TROUPE_BIN ,
+.Ev JUGGLER_MOXY_BIN ,
+.Ev TROUPE_TRANSPORT ,
+.Ev TROUPE_XMPP_HOST ,
+.Ev TROUPE_XMPP_PORT
+and
+.Ev TROUPE_XMPP_INSECURE .
+The spawner's own
+.Ev CLOWN_SESSION_ID
+and
+.Ev TROUPE_XMPP_*
+identity are stripped from the environment of the
+.Xr systemd-run 1
+client process, so they never reach a unit.
+.Bl -tag -width Ds
+.It Fl -task Ar file
+The brief's task text
+.Pq Sq Fl No for stdin ;
+default: the template's own.
+.Fl -brief
+and
+.Fl -task
+cannot both read stdin.
+.It Fl -wait
+Block until the subagent's job terminalizes and print its verdict,
+exiting with its state; see below.
+Without it the launch object
+.Sy {"jid","job","room"}
+is printed immediately and the exit status is 0.
+.It Fl -timeout Ar dur
+Bound for
+.Fl -wait
+.Pq default: the brief's wall clock plus twice the stop grace ,
+the point past which the unit's backstop has written the terminal.
+At the timeout the child job is asked to cancel
+.Pq Ql ringmaster cancel
+and given
+.Fl -stop-grace
+to terminalize, so a caller that falls back never races a late agent.
+Only a wait that really used up its timeout cancels the job.
+.It Fl -stop-grace Ar dur
+Default 30s.
+Added to the brief's wall clock for the unit's
+.Ql RuntimeMaxSec
+backstop, and the time a cancelled job is given to terminalize.
+.It Fl -juggler Ar path
+The juggler binary the unit runs
+.Pq default: this executable .
+.It Fl -user
+Start the unit under the user service manager
+.Pq Ql systemd-run Fl -user ;
+for a hardened service user that cannot ask the system manager for a
+transient unit.
+.It Fl -ringmaster Ar path , Fl -troupe Ar path , Fl -systemd-run Ar path
+The consumed binaries; see
+.Sx ENVIRONMENT .
+.El
+.Pp
+With
+.Fl -wait ,
+prints
+.Sy {"jid","job","room","state","reason","message","ledger","artifacts":[{"tool","kind","uris"}],"cannot_complete":null|{"reason"}} .
+.Ql state
+is the ringmaster state
+.Pq or Ql running ,
+.Ql reason
+the FDR 0032 D6 exit reason
+.Pq Ql normal , failed , shutdown , crash , killed ,
+.Ql ledger
+the path of the result spool, and
+.Ql artifacts
+the URIs the successful tool calls returned.
+Exit status:
+.Bl -tag -width Ds -compact -offset indent
+.It 0
+launched, or
+.Ql succeeded
+.It 1
+usage or launch failure
+.It 2
+.Ql failed
+.It 3
+.Ql aborted
+.Pq including a cancel at the timeout that terminalized within the stop grace
+.It 4
+.Ql interrupted
+.It 5
+the timeout elapsed, a cancel was requested, and the job was still not
+terminal after the stop grace
+.Pq Ql state No is Ql running
+.El
+.It Cm exit-wake Fl -job Ar id Fl -target Ar principal Op Fl -run-ledger Ar path Op Fl -from Ar principal
+The agent unit's
+.Ql ExecStopPost
+hook and the sole exit-wake emitter.
+systemd runs it as a fresh process after the main process is gone, on
+every ending, and tells it how the unit ended in
+.Ev SERVICE_RESULT ,
+.Ev EXIT_CODE
+and
+.Ev EXIT_STATUS .
+.Fl -job
+is the agent's job and
+.Fl -target
+the channel that holds it
+.Pq the agent's parent principal .
+When the main process left no terminal record the hook writes one:
+.Bl -tag -width "exit-code, core-dump, oom-kill" -offset indent
+.It Ql success
+the terminal
+.Cm run
+already wrote
+.Pq Ql succeeded No or Ql failed
+is relayed, reason
+.Ql normal
+or
+.Ql failed ;
+if it wrote none, the hook writes
+.Ql interrupted
+.Pq crash
+.It Ql timeout
+.Ql failed ,
+reason
+.Ql failed
+.Pq the unit's Ql RuntimeMaxSec No backstop expired
+.It Ql signal
+.Ql interrupted ,
+reason
+.Ql killed
+.It Ql exit-code , core-dump , oom-kill
+.Ql interrupted ,
+reason
+.Ql crash
+.El
+.Pp
+It then sends ONE wake
+.Pq Ql troupe message
+to every accepted holder on the job's journal, carrying
+.Ql exit <job> <state> reason=<reason> [<message>]
+and the terminal's
+.Ql result_ref .
+A pending or released handle is sent nothing.
+The hook is idempotent: it never writes a second terminal record, and a
+marker file
+.Pa exit-wakes/<job>
+in the state directory, written once every send succeeded, stops a rerun
+from waking again.
+.Fl -run-ledger
+is the
+.Ql result_ref
+to attach when the hook writes the terminal itself;
+.Fl -from
+the exiting principal
+.Pq default Ev CLOWN_SESSION_ID .
+Prints
+.Sy {"job","state","reason","message","wrote_terminal","woken","already_woken"} ;
+exit status 0, or 1 when a record or wake could not be written.
+.It Cm resolve Ar run-job Fl -state Ar succeeded|failed Fl -reason Ar text Op Fl -fallback-artifacts Ar json Op Fl -stop-grace Ar dur
+The run's last call, always.
+First cancels every child job of the run that is not yet terminal and
+waits up to
+.Fl -stop-grace
+.Pq default 30s
+for each, so a later account teardown never deletes an account under a
+running agent; each one it had to stop is a
+.Ql subagent_stop
+entry
+.Pq Ql stopped_by_resolve ,
+ok exactly when the job terminalized within the grace
+.Pq a child whose journal cannot be read is recorded as not ok, never fatal .
+Then appends a
+.Ql fallback
+entry to the run ledger, writes the ledger to the run job's result spool,
+writes the run job's terminal record
+.Pq Ar state , with Ar text No as its message
+and sends the run's exit wake to the run job's holders
+.Pq the issuer .
+.Fl -state
+is
+.Ql succeeded ,
+or
+.Ql failed
+when the fallback ran; the fallback is expected to run exactly when the
+run resolves
+.Ql failed .
+.Fl -fallback-artifacts
+is the fallback's own outcome as a JSON array of
+.Sy {"tool","kind","uris"} :
+its entry is ok when it did not need to run, or ran and produced at
+least one URI.
+Resolving an already-resolved run is a no-op: the stored verdict is
+printed, a notice goes to stderr, and the exit status is 0.
+Prints
+.Sy {"run_key","run_job","state","reason","ledger","woken","already_resolved"} .
+.It Cm job-ledger Ar job Op Fl -target Ar principal
+Print a job's ledger: a run job's run ledger, or an agent job's result
+spool
+.Pq Ql ringmaster spool-path ,
+for a caller that did not
+.Fl -wait .
+.Fl -target
+names the channel holding a job juggler's state directory does not know.
+Exit status 1 for an unknown job or an empty spool.
+.It Cm handles Ar job Op Fl -target Ar principal
+Print a job's handle table as a JSON array of
+.Sy {"holder","rights","status","granted_by","granted_at"} :
+a holder is a principal string, rights a comma-separated list
+.Pq default Ql observe,close ,
+status
+.Ql pending
+.Pq confers nothing, and no exit wake, until first use ,
+.Ql accepted
+or
+.Ql released .
+Read-only: this version has no grant, accept or release verb.
+.It Cm decide Fl -model Ar name Fl -room Ar jid Fl -parent Ar stanza-id Op Fl -min-confidence Ar n Op Fl -question Ar id Op Fl -run-key Ar key
+The router.
+A synchronous verb, not an agent: one request to an OpenRouter
+Decisions-API-style model
+.Pq Ql POST /api/alpha/decisions ,
+with no loop and no ringmaster job of its own.
+Reads the Decisions request minus
+.Ql model
+and authentication from stdin,
+.Sy {"state":\&...,"questions":{\&...}} ,
+resolves
+.Fl -model
+from the registry
+.Pq a remote entry with style Ql decisions ; No daemon-free ,
+sends the request with the entry's upstream model id and token, applies
+the confidence threshold, posts ONE
+.Em decision stanza
+into
+.Fl -room
+as the ambient
+.Ev TROUPE_XMPP_*
+identity
+.Pq source Ql juggler-decide ,
+whose provenance parent is
+.Fl -parent
+.Pq the recording's stanza id ,
+and prints the answers.
+The stanza carries the model, a digest of
+.Ql state ,
+the questions, the full answers, the threshold and its verdict, and
+usage; it is posted for every outcome, including a failed attempt.
+.Bl -tag -width Ds
+.It Fl -min-confidence Ar n
+The usable threshold in [0,1], inclusive
+.Pq default 0.5 .
+The API's
+.Ql confidence
+is the MARGIN over the runner-up, not the winning probability
+.Pq 0.63 against 0.37 is 0.26 ,
+so with two options 0.5 means roughly 0.75 or better; the stanza and
+the ledger entry also carry the chosen option's probability.
+It is used verbatim, never recomputed.
+.It Fl -question Ar id
+The question to gate on; required when the request has several.
+Only
+.Ql choice
+questions are gated.
+.It Fl -run-key Ar key
+Record the outcome as a
+.Ql route
+entry
+.Pq tool, kind Ql route ; ok exactly when usable
+in this run's ledger
+.Pq see Cm spawn Fl -new-run ,
+so the glue never writes ledger entries itself.
+The run must exist and be unresolved; checked before any call.
+.It Fl -troupe Ar path
+The troupe binary; see
+.Sx ENVIRONMENT .
+.El
+Exit status:
+.Bl -tag -width Ds -compact -offset indent
+.It 0
+a usable choice
+.Pq confidence at or above the threshold ,
+stanza posted
+.It 4
+a valid choice below the threshold; stdout and the stanza carry the
+choice and its confidence
+.It 2
+no choice: an HTTP failure, an unparseable response, or a
+.Ql choice
+that is not one of the question's
+.Ql criteria ;
+stdout carries
+.Sy {"reason","http_status","raw"}
+.It 3
+decided, but the room post failed
+.Pq the provenance chain is broken ;
+stdout and the route entry are still produced
+.It 1
+usage or configuration error before any call
+.El
+.Pp
+Every non-zero exit is a failed
+.Ql route
+entry in the run ledger, and the run resolves to the fallback.
 .El
 .Sh ENVIRONMENT
 .Bl -tag -width Ds
@@ -329,9 +925,56 @@ Read by both
 and the
 .Cm juggler daemon ,
 so setting it consistently is sufficient.
+.It Ev JUGGLER_MODELS_PATH
+The remote-model registry file
+.Pq Pa ~/.local/share/juggler/models.toml No by default .
+Read by the daemon and, directly, by
+.Cm run , decide
+and
+.Cm spawn .
+.It Ev JUGGLER_RINGMASTER_BIN , Ev JUGGLER_TROUPE_BIN , Ev JUGGLER_SYSTEMD_RUN_BIN , Ev JUGGLER_MOXY_BIN
+The binaries the substrate verbs execute.
+Precedence: the
+.Fl -ringmaster ,
+.Fl -troupe ,
+.Fl -systemd-run
+or
+.Fl -moxy
+flag, then the variable, then the store path burned in at build time,
+then the bare name on
+.Ev PATH .
+In the nix build ringmaster, troupe and systemd-run are burned in; moxy is
+not, and is looked up on
+.Ev PATH .
+.It Ev JUGGLER_MOXY_URL
+An already-running MCP upstream for
+.Cm run
+to use instead of launching moxy
+.Pq tests .
+.Cm spawn
+passes it into the unit.
+.It Ev CLOWN_SESSION_ID
+The caller's principal: the issuer for
+.Cm spawn Fl -new-run ,
+the run root for
+.Cm spawn Fl -brief ,
+the exiting principal for
+.Cm exit-wake .
+A unit gets its own, the child's.
+.It Ev TROUPE_XMPP_*
+The ambient XMPP identity that
+.Cm decide
+and the brief stanza post as.
+.It Ev XDG_STATE_HOME
+Root of juggler's state directory; see
+.Sx FILES .
+.It Ev SERVICE_RESULT , Ev EXIT_CODE , Ev EXIT_STATUS
+Set by systemd for
+.Cm exit-wake ;
+see above.
 .El
 .Sh FILES
-.Bl -tag -width "~/.local/share/juggler/models/*.gguf"
+.Bl -tag -width "$XDG_STATE_HOME/juggler/runs/<run-key>/children/<digest>.brief.toml"
 .It Pa ~/.local/state/juggler/control.sock
 Juggler control socket.
 .It Pa ~/.local/share/juggler/models/*.gguf
@@ -340,7 +983,37 @@ GGUF models visible to
 .Cm start ,
 and
 .Cm download .
+.It Pa ~/.local/share/juggler/models.toml
+The remote-model registry.
+.It Pa $XDG_STATE_HOME/juggler/runs/<run-key>.json
+A run's record: issuer, root principal and JID, credential reference,
+room, root stanza, run job, holders, resolution.
+.It Pa $XDG_STATE_HOME/juggler/runs/<run-key>/ledger.json
+The run ledger:
+.Ql route ,
+.Ql subagent_stop
+and
+.Ql fallback
+entries, closed by
+.Cm resolve .
+.It Pa $XDG_STATE_HOME/juggler/runs/<run-key>/children/<digest>.json
+A subagent's record; the digest is that of the template and task.
+.It Pa $XDG_STATE_HOME/juggler/runs/<run-key>/children/<digest>.brief.toml
+The filled brief staged for the unit.
+.It Pa $XDG_STATE_HOME/juggler/runs/<run-key>/<principal>.pw
+The troupe password of one identity minted for the run, mode 0600 in a
+mode 0700 directory.
+.It Pa $XDG_STATE_HOME/juggler/agents/<principal>/moxyfile
+An agent's moxyfile, and the working directory of its moxy.
+.It Pa $XDG_STATE_HOME/juggler/exit-wakes/<job>
+The sent-wake marker that keeps
+.Cm exit-wake
+idempotent.
 .El
+.Pp
+.Ev XDG_STATE_HOME
+defaults to
+.Pa ~/.local/state .
 .Sh EXIT STATUS
 .Bl -tag -width Ds
 .It 0
@@ -352,6 +1025,19 @@ control socket was unreachable.
 .Nm
 prints a one-line diagnostic to stderr before exiting.
 .El
+.Pp
+The substrate verbs use 1 the same way and add their own meanings for
+2 to 5, documented per verb above:
+.Cm run
+and
+.Cm spawn Fl -wait
+mirror the job state
+.Pq 2 failed, 3 aborted, 4 interrupted ,
+.Cm spawn Fl -wait
+adds 5 for a cancelled job still running, and
+.Cm decide
+uses 4 for below threshold, 2 for no choice and 3 for a failed room
+post.
 .Sh EXAMPLES
 Start a coder model with the default alias, bound to localhost:
 .Bd -literal -offset indent
@@ -410,6 +1096,9 @@ Hello! How can I help you today?
 .Sh SEE ALSO
 .Xr clown 1 ,
 .Xr llama-server 1 ,
+.Xr ringmaster 1 ,
+.Xr systemd-run 1 ,
+.Xr troupe 1 ,
 .Xr juggler 7 ,
 .Xr juggler-testing 7
 .Sh AUTHORS
@@ -417,7 +1106,7 @@ Hello! How can I help you today?
 .Sh CAVEATS
 The
 .Cm download
-subcommand is the only one that does not go through juggler.
+subcommand never goes through the daemon.
 This is intentional: juggler's
 .Cm DownloadModel
 RPC is synchronous, and the bubbletea progress UI lives in

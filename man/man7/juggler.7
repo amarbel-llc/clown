@@ -155,6 +155,44 @@ for the
 .Cm model
 CLI that drives them.
 .Pp
+Each
+.Ql [[model]]
+entry has these keys:
+.Bl -tag -width "token_file" -offset indent -compact
+.It Sy name
+the registry name.
+.It Sy style
+.Ql anthropic ,
+.Ql openai-compat
+or
+.Ql decisions
+.Pq the last is consumed only by Cm juggler decide ; No it is not a loop codec and Cm prompt No rejects it .
+.It Sy url
+the endpoint base URL.
+.It Sy token
+a literal secret or a
+.Ql ${VAR}
+reference.
+.It Sy token_file
+a path
+.Po
+.Ql ~/
+and
+.Ql $VAR
+expanded
+.Pc
+to a file whose trimmed contents are the token: the by-reference credential
+for a host with no secret in its models file.
+When set it takes precedence over
+.Sy token ;
+setting both is a configuration error.
+.It Sy model
+the upstream model id sent to the provider; the registry
+.Sy name
+is then a stable alias for it.
+Empty means the name itself.
+.El
+.Pp
 .Cm ResolveModel
 turns a bare model name into a runnable endpoint, checking in order:
 .Bl -enum -compact -offset indent
@@ -162,11 +200,16 @@ turns a bare model name into a runnable endpoint, checking in order:
 the remote registry
 .Po
 an exact name match returns its registered
-.Sy style No unchanged and its
-.Sy url No / Sy token
+.Sy style No unchanged, its
+.Sy url ,
+its
+.Sy token
+.Pq read from Sy token_file No when set
+and its upstream
+.Sy model ,
 with any
 .Ql ${VAR}
-references expanded against the daemon's environment
+references expanded against the resolving process's environment
 .Pc \&;
 .It
 an already-running local instance of that name
@@ -182,6 +225,86 @@ If none match,
 .Cm ResolveModel
 returns
 .Sy -32001 .
+.Pp
+The first step needs no daemon.
+.Cm juggler run ,
+.Cm juggler decide
+and
+.Cm juggler spawn
+resolve a remote entry directly from the models file
+.Pq Ev JUGGLER_MODELS_PATH ,
+with the same expansion and
+.Sy token_file
+handling, so a system-service user needs only a models file and a
+credential reference in its own state directory.
+A name with no remote entry sends them to the daemon, which remains
+required for local llama-server instances because it owns the process.
+.Sh AGENT SUBSTRATE
+FDR 0019
+.Pq Pa docs/features/0019-juggler-agent-substrate.md
+makes juggler the substrate for short, headless, tool-using agents with no
+worktree and no terminal, each under its own principal.
+This page documents only the shape; the verbs are in
+.Xr juggler 1 .
+.Bl -tag -width "evaluator" -offset indent
+.It The loop
+.Cm juggler run
+reads a brief
+.Pq the contract the spawner signs: principal, parent, room, model, system, task, inline moxyfile, REQUIRED tool allowlist, evaluator, limits
+and drives the model's tool-use protocol through one moxy upstream
+until the model ends its turn, calls the mandatory
+.Ql cannot_complete
+tool, or hits the step cap or the wall clock.
+Two codecs project the loop's stanza-shaped turns onto a provider's wire:
+OpenAI-compatible chat completions and Anthropic Messages.
+.It The ledger
+One entry per tool call
+.Pq name, declared artifact kind, ok, URIs, error
+plus how the loop ended
+.Pq Ql end_turn , cannot_complete , step_cap , timeout , tool_error , model_error , max_tokens .
+Success is measured, never reported: the model never claims it.
+.It The evaluator
+A jq program, run embedded over the ledger JSON, that must produce exactly one
+boolean
+.Pq an error, no output or a second output is false .
+Only an
+.Ql end_turn
+with a true verdict is
+.Ql succeeded .
+.It The lifecycle
+Each agent is one systemd transient unit started by
+.Cm juggler spawn ,
+its principal minted under a per-run root.
+.Cm juggler run
+is a ringmaster producer
+.Pq start at boot, progress per turn, done at the end ;
+the unit's
+.Ql ExecStopPost
+hook
+.Cm juggler exit-wake
+is the sole exit-wake emitter, writing the terminal record when the main
+process left none and waking every holder of the job once.
+.El
+.Pp
+Ringmaster's four terminal states map onto FDR 0032 D6's exit reasons:
+.Bl -column "interrupted" "normal" "when" -offset indent
+.It Sy state Ta Sy reason Ta Sy when
+.It succeeded Ta normal Ta loop ended cleanly and the evaluator was true
+.It failed Ta failed Ta evaluator false, cannot_complete, step cap, wall clock, unrecovered tool error
+.It aborted Ta shutdown Ta a holder cancelled the job
+.It interrupted Ta crash Ta the unit died without a verdict
+.It interrupted Ta killed Ta the unit's main process died on a signal
+.El
+.Pp
+The router,
+.Cm juggler decide ,
+is not an agent: one Decisions-API request whose outcome is a
+.Ql route
+entry in the run ledger, kept by the lifecycle owner.
+The run ends with
+.Cm juggler resolve ,
+which stops whatever is still running, closes the ledger with the
+fallback's own outcome and wakes the issuer.
 .Sh JSON-RPC ERROR CODES
 Codes follow JSON-RPC 2.0 §5.1.
 .Nm
