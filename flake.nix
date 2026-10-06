@@ -3,9 +3,9 @@
 
   inputs = {
     # Main nixpkgs is the amarbel-llc fork at master. The fork's
-    # overlays.default contributes buildGoApplication, mkGoEnv,
-    # gomod2nix (CLI), fetchGgufModel, and other amarbel-packages
-    # additions to pkgs. See overlays/amarbel-packages.nix in the fork.
+    # overlays.default contributes buildGoAuto/buildGodynModule (godyn),
+    # fetchGgufModel, and other amarbel-packages additions to pkgs. See
+    # overlays/amarbel-packages.nix in the fork.
     igloo.url = "https://code.linenisgreat.com/igloo/archive/master.tar.gz";
     # Secondary pinned views — same SHAs we used against upstream, just
     # served by the fork. Each fork commit upstream's master, so these
@@ -66,7 +66,7 @@
     igloo.inputs.nixpkgs-master.follows = "nixpkgs-master";
     # ringmaster: the extracted job platform (jobwake + jobmcp packages,
     # ringmaster + troupe binaries). Forge-hosted; consumed as a Go module
-    # via igloo's goFlakeInputs bridge (see gomod.nix). The flake input is
+    # via go.nix's flakeInputs bridge (igloo RFC-0001). The flake input is
     # the single source of truth for the pinned rev. follows-align the
     # shared amarbel inputs so the closure doesn't carry a second igloo /
     # nixpkgs-master / utils / bats evaluation.
@@ -88,7 +88,7 @@
     # tommy: CST-preserving TOML library. clown routes the TOML files it writes
     # (juggler models registry, crush/opencode gateway configs) through it so
     # hand-written comments and layout survive programmatic edits (clown#238).
-    # Consumed as a Go module via the goFlakeInputs bridge (see gomod.nix).
+    # Consumed as a Go module via go.nix's flakeInputs bridge.
     tommy.url = "https://code.linenisgreat.com/tommy/archive/master.tar.gz";
     tommy.inputs.igloo.follows = "igloo";
     tommy.inputs.nixpkgs-master.follows = "nixpkgs-master";
@@ -100,7 +100,7 @@
     # troupe: the messaging binary (chat + `troupe agent` XMPP receiver + the
     # troupe MCP surface). clown's 2nd extracted dep — but BINARY-only: clown
     # runs the troupe binary and does NOT import its Go (jobwake comes from
-    # ringmaster), so no goFlakeInputs bridge / go.mod require, just the input +
+    # ringmaster), so no go.nix flakeInputs entry, just the input +
     # a burned-in TroupePath. troupe's own inputs (nixpkgs=igloo, utils,
     # treefmt-nix, ringmaster) follow clown's so the closure shares one eval —
     # notably troupe's ringmaster follows clown's, aligning the jobwake pin.
@@ -114,7 +114,7 @@
   };
 
   outputs =
-    {
+    inputs@{
       self,
       igloo,
       nixpkgs-master,
@@ -134,9 +134,9 @@
       system:
       let
         # The fork's default.nix shim auto-applies its overlay on
-        # `import nixpkgs { ... }`, so pkgs gets buildGoApplication,
-        # mkGoEnv, gomod2nix (CLI), fetchGgufModel, etc. without an
-        # explicit overlays pass.
+        # `import nixpkgs { ... }`, so pkgs gets buildGoAuto,
+        # buildGodynModule, fetchGgufModel, etc. without an explicit
+        # overlays pass.
         pkgs = import igloo {
           inherit system;
         };
@@ -275,31 +275,19 @@
         };
         mdocDate = "${monthNames.${flakeMonth}} ${toString (lib.toIntBase10 flakeDay)}, ${flakeYear}";
 
-        # igloo flake-input-go_mod bridge (igloo RFC-0001): routes the
-        # code.linenisgreat.com/ringmaster require onto the ringmaster flake
-        # input's go-pkgs output. See gomod.nix. buildClownGo and the mkGoEnv
-        # wrapper thread the same goFlakeInputs into EVERY call site (all
-        # ~dozen Go builders + both devshell envs) — the protocol requires
-        # identical goFlakeInputs on every builder and the devshell, or
-        # go.mod/vendor drift between build and `nix develop`.
-        goFlakeInputs = import ./gomod.nix {
-          inherit
-            ringmaster
-            purse-first
-            tommy
-            system
-            ;
-        };
-        mkGoEnv = args: pkgs.mkGoEnv (args // { inherit goFlakeInputs; });
-
-        # Shared shape of every clown Go build: goSrc, the committed
-        # gomod2nix.toml pins and the goFlakeInputs bridges, no committed
-        # godyn graph (igloo FDR 0007/0008). buildGoAuto's default strategy
-        # follows igloo's godynSystems (godyn there, buildGoApplication
-        # elsewhere); both backends stay reachable as passthru.native /
-        # passthru.bga. `cc` keeps godyn's graph CGO_ENABLED=1 so its binaries
-        # match bga's (the stdlib's cgo net/os/user paths). bga-only extras
-        # ride in `bgaArgs`, passed through to buildGoAuto untouched.
+        # Shared shape of every clown Go build: goSrc plus the go.nix
+        # manifest (igloo FDR 0008), which is the only source of truth for
+        # the module's dependencies. igloo renders go.mod and gomod2nix.toml
+        # from it inside nix, resolves its flakeInputs (ringmaster, tommy,
+        # purse-first's dewey) to `inputs.<name>.packages.<system>.go-pkgs`
+        # (igloo RFC-0001), and derives the godyn package graph from the
+        # render — no go.mod, go.sum, gomod2nix.toml or graph in the
+        # checkout. buildGoAuto's default strategy follows igloo's
+        # godynSystems (godyn there, buildGoApplication elsewhere); both
+        # backends stay reachable as passthru.native / passthru.bga. `cc`
+        # keeps godyn's graph CGO_ENABLED=1 so its binaries match bga's (the
+        # stdlib's cgo net/os/user paths). bga-only extras ride in `bgaArgs`,
+        # passed through to buildGoAuto untouched.
         buildClownGo =
           {
             nativeArgs ? { },
@@ -309,8 +297,8 @@
             builtins.removeAttrs args [ "nativeArgs" ]
             // {
               src = goSrc;
-              modules = ./gomod2nix.toml;
-              inherit goFlakeInputs;
+              manifest = ./go.nix;
+              inherit inputs;
               nativeArgs = {
                 cc = pkgs.stdenv.cc;
               }
@@ -321,8 +309,6 @@
         goSrc = lib.fileset.toSource {
           root = ./.;
           fileset = lib.fileset.unions [
-            ./go.mod
-            ./gomod2nix.toml
             ./cmd
             ./internal
           ];
@@ -530,8 +516,11 @@
         # persists the textfmt profile to $out/coverage.out (plus
         # binary covdata fragments under $out/covdata/).
         #
-        # View the report with `go tool cover -html=result/coverage.out`
-        # or `just cover-bats-html`. Distinct from `go test -cover`,
+        # The HTML report is rendered in the same sandbox (where the rendered
+        # go.mod and vendor tree resolve the profile's source files) to
+        # $out/coverage.html; `just verify-cover-bats-html` opens it. There
+        # is no checkout go.mod to run `go tool cover` against (igloo FDR
+        # 0008). Distinct from `go test -cover`,
         # which only measures unit-test reachability — this lane shows
         # what code paths the bats integration suite exercises through
         # the real CLI.
@@ -571,18 +560,24 @@
           cd "$NIX_BUILD_TOP"
         '';
 
-        clown-cover = pkgs.buildGoCover {
-          base = clown-bats-bins;
-          extraNativeInstallCheckInputs = with pkgs; [
-            curl
-            jq
-            coreutils
-            # bats-island's setup_test_home invokes `git config`; provide
-            # git on PATH so the lane's per-test isolation hook works.
-            git
-          ];
-          coverIntegrationCommand = clownCoverIntegrationCommand;
-        };
+        clown-cover =
+          (pkgs.buildGoCover {
+            base = clown-bats-bins;
+            extraNativeInstallCheckInputs = with pkgs; [
+              curl
+              jq
+              coreutils
+              # bats-island's setup_test_home invokes `git config`; provide
+              # git on PATH so the lane's per-test isolation hook works.
+              git
+            ];
+            coverIntegrationCommand = clownCoverIntegrationCommand;
+          }).overrideAttrs
+            {
+              postInstallCheck = ''
+                (cd "$NIX_BUILD_TOP/$sourceRoot" && go tool cover -html="$out/coverage.out" -o "$out/coverage.html")
+              '';
+            };
 
         # Compiled binary that the synthetic-plugin derivation embeds.
         # Not exposed as a top-level package — consumers should use
@@ -1001,42 +996,6 @@
           ];
         };
 
-        # clown-go-test runs the whole Go unit suite (`go test ./...`) INSIDE
-        # a nix sandbox so the goFlakeInputs bridge is applied. The bridge's
-        # `replace` for the external ringmaster module exists only inside nix
-        # builds and the mkGoEnv devShell (igloo RFC-0001 "no go build
-        # outside Nix"); a bare `go test ./...` in the hermetic pre-merge hook
-        # has neither and fails with "inconsistent vendoring" on the bridged
-        # module. The bga backend (forced below, with goFlakeInputs)
-        # materializes the merged go.mod in-sandbox, so the checkPhase's
-        # `go test ./...` resolves ringmaster. The `test-go` recipe builds
-        # this instead of invoking `go test` directly; `nix develop -c go
-        # test ./...` still works for local dev (the devShell mkGoEnv carries
-        # goFlakeInputs too). Modeled on madder/go/default.nix's checkPhase.
-        clown-go-test = buildClownGo {
-          pname = "clown-go-test";
-          version = clownVersion;
-          # The whole-module `go test ./...` checkPhase is bga's; forcing bga
-          # also skips evaluating an unused godyn graph for this pname.
-          strategy = "bga";
-          subPackages = [ "cmd/clown" ];
-          bgaArgs = {
-            doCheck = true;
-            # git is a CHECK-time dependency, not a build one: the OSC-2 title's
-            # tier-2 fallback shells out to git (gitRepoAndBranch), and its tests
-            # build a throwaway repo to exercise that. Without git on PATH those
-            # tests call t.Skip and the whole tier goes untested while the suite
-            # still reports ok — which is how clown#234's inverted assertion first
-            # passed against unchanged code (clown#234).
-            nativeCheckInputs = [ pkgs.git ];
-            checkPhase = ''
-              runHook preCheck
-              go test -p $NIX_BUILD_CORES ./...
-              runHook postCheck
-            '';
-          };
-        };
-
         # Prebuilt pluginhost test fixture: a per-package godyn test run has
         # no `go` to build it.
         fakeserver-go = buildClownGo {
@@ -1047,18 +1006,20 @@
 
         # godyn's per-package go test lane (godyn systems only): each tested
         # package's test binary is built and run in its own CA derivation.
-        # testEnv hands the fixture-spawning tests prebuilt binaries; git is on
-        # PATH for the OSC-2 title's git-backed tests (clown#234, see
-        # clown-go-test).
+        # testEnv hands the fixture-spawning tests prebuilt binaries; git is a
+        # CHECK-time dependency for the OSC-2 title's tier-2 fallback
+        # (gitRepoAndBranch), whose tests build a throwaway repo and t.Skip
+        # without git — which is how clown#234's inverted assertion first
+        # passed against unchanged code.
         mkClownGodynTests =
           extra:
           pkgs.buildGodynModule (
             {
               pname = "clown";
               version = clownVersion;
-              inherit goFlakeInputs;
               src = goSrc;
-              modules = ./gomod2nix.toml;
+              manifest = ./go.nix;
+              inherit inputs;
               cc = pkgs.stdenv.cc;
               tests = true;
               nativeCheckInputs = [ pkgs.git ];
@@ -1364,7 +1325,6 @@
             };
             devShells.default = pkgs.mkShell {
               packages = [
-                (mkGoEnv { pwd = ./.; })
                 pkgs-master.just
                 pkgs.fish
                 pkgs-llm-agents.claude-code
@@ -1373,7 +1333,6 @@
                 pkgs-llm-agents.crush
                 pkgs.bun
                 pkgs.mitmproxy
-                pkgs.gomod2nix
               ];
             };
           };
@@ -1670,11 +1629,6 @@
           clown-manpages = clown-manpages;
           clown-race = clown-go-race;
           clown-cover = clown-cover;
-          # clown-go-test: the whole-module Go unit suite on the bga backend,
-          # run inside a nix sandbox (so the goFlakeInputs bridge applies). The
-          # `test-go` recipe builds it only where clown's Go backend is bga;
-          # where it is godyn, `test-go-godyn` runs clown-godyn-tests instead.
-          clown-go-test = clown-go-test;
           # clown-plugin-host: exposed so recipes can read the Go backend that
           # buildGoAuto picked here (`.#clown-plugin-host.passthru.backend`),
           # the same attribute godynTestOutputs gates on.
@@ -1738,14 +1692,10 @@
         // godynTestOutputs;
 
         devShells.default = pkgs.mkShell {
+          # No Go toolchain: Go builds and tests run only inside nix (igloo
+          # FDR 0007/0008); go commands that need a module (go get, go mod
+          # tidy) run through godyn's escape hatch (`just run-godyn-go`).
           packages = [
-            # mkGoEnv from the fork's overlay supersedes a bare
-            # `pkgs.go`: it materializes the module dependency tree
-            # from gomod2nix.toml so `go test ./...` from the
-            # devshell resolves modules through the same nix-built
-            # vendor closure as buildGoApplication does, instead of
-            # reaching out to GOPROXY for every fresh checkout.
-            (mkGoEnv { pwd = ./.; })
             pkgs-master.just
             pkgs.fish
             pkgs-llm-agents.claude-code
@@ -1754,7 +1704,6 @@
             pkgs-llm-agents.crush
             pkgs.bun
             pkgs.mitmproxy
-            pkgs.gomod2nix
             conformistPkg
             conformistEval.config.build.preCommit
             conformistEval.config.build.repair

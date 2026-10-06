@@ -1,31 +1,6 @@
 # Throwaway investigation recipes. Live here, not the root justfile, to
 # keep top-level `just --list` legible. Invoked as
-# `just explore <recipe>` (e.g. `just explore run-go-test`).
-
-# Run go unit tests for specific packages in the ambient devshell (agent
-# dev-loop for per-package TDD iteration; the sandboxed `just test-go`
-# remains the full-suite lane). Plain `go test` fails: the bridged
-# ringmaster module (gomod.nix, igloo RFC-0001) is absent from vendor/,
-# so vendor mode aborts with "inconsistent vendoring" and -mod=mod alone
-# hits the network for the proxy-unreachable forge module. Mirror the
-# bridge with a throwaway modfile carrying the store replace (same path
-# the merged-go.mod derivation bakes in; re-derive it from a fresh
-# `nix develop` if the ringmaster input gets bumped). Set the RACE env var to 1
-# to run the race detector (e.g.
-# `RACE=1 just explore run-go-test ./internal/mcpcollapse/...`), which the
-# concurrency-bearing packages' TDD wants as a matter of course.
-run-go-test *PKGS='./...':
-    #!/usr/bin/env bash
-    set -euo pipefail
-    cd "$(git rev-parse --show-toplevel)"
-    tmp=.tmp/go-test-bridge
-    mkdir -p "$tmp"
-    cp go.mod "$tmp/merged.mod" && chmod +w "$tmp/merged.mod"
-    cp go.sum "$tmp/merged.sum" && chmod +w "$tmp/merged.sum"
-    printf '\nreplace code.linenisgreat.com/ringmaster => /nix/store/j1nxw2brqq239qi0jcb4p2q2inqykbqk-ringmaster-go-pkgs\n' >> "$tmp/merged.mod"
-    race=""
-    [ "${RACE:-0}" = "1" ] && race="-race"
-    go test -mod=mod -modfile="$tmp/merged.mod" $race {{PKGS}}
+# `just explore <recipe>` (e.g. `just explore explore-crush-local`).
 
 # Smoke-test the new crush provider against the local juggler llama-server.
 # Starts juggler (idempotent — attaches to existing daemon), waits for the
@@ -1225,18 +1200,17 @@ debug-ctrlz-tty:
 # Ctrl-Z: you should land in a fresh $SHELL (run commands; `exit` to return);
 # back in the demo, type to see `cat` echo your input; Ctrl-D inside cat exits.
 # (This is a shell-out, not a job-control suspend, so it works the same inline or
-# under a multiplexer.) Requires a built clown (./result/bin/clown) or `go run`.
+# under a multiplexer.) Requires a built clown (./result/bin/clown; `just build`).
 # Usage: just explore pty-suspend-demo
 run-pty-suspend-demo:
     #!/usr/bin/env bash
     set -uo pipefail
     cd "$(git rev-parse --show-toplevel)"
-    if [[ -x ./result/bin/clown ]]; then
-        clown=(./result/bin/clown)
-    else
-        echo "note: ./result/bin/clown not found; using 'go run ./cmd/clown' (slower)" >&2
-        clown=(go run ./cmd/clown)
+    if [[ ! -x ./result/bin/clown ]]; then
+        echo "FAIL: ./result/bin/clown missing — run 'just build' first" >&2
+        exit 2
     fi
+    clown=(./result/bin/clown)
     inner='stty raw -echo -isig 2>/dev/null; exec cat'
     echo "Direct equivalent (run this in your shell for the cleanest demo):"
     printf '  %q ' "${clown[@]}"; printf 'pty-suspend -- bash -c %q\n\n' "$inner"

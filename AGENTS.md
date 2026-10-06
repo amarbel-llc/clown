@@ -40,17 +40,20 @@ touching any of it.
   for their implementation in this repo; `cmd/clown/jobmonitor.go` is just
   the synthesis point that wires those binaries into the
   `clown-builtin-jobs` plugin.
-- **`just build` is the only fully-trustworthy build check — `just
-  build-go` and `just update-gomod2nix` can fail/hang for reasons unrelated to
-  your change (clown#174).** clown consumes the external `ringmaster` Go
-  module via a Nix-injected `replace` (igloo's `goFlakeInputs` bridge,
-  `gomod.nix`); that replace only exists inside `nix build` and the
-  `mkGoEnv` devShell. If `vendor/`/`gomod2nix.toml` drift from `go.mod`
-  for that bridged require, `build-go` fails with "inconsistent
-  vendoring" and `gomod2nix generate` can hang indefinitely trying to
-  resolve the module over the network — neither is a signal about your
-  code. When either misbehaves, confirm against `just build` before
-  concluding anything is broken. Worse: once `gomod2nix.toml` lacks a module
+- **There is no go.mod, go.sum, gomod2nix.toml or vendor/ — dependencies
+  live in `go.nix` (igloo FDR 0008), and Go builds/tests run only inside
+  nix.** The devShell has no Go toolchain; `go build`/`go test` in the
+  checkout cannot work. igloo renders go.mod from `go.nix` inside each
+  derivation; fleet modules (ringmaster, tommy, purse-first's dewey) are
+  `flakeInputs` entries resolved to the flake inputs' `go-pkgs`, so the
+  flake.lock rev IS their version. To add or bump a third-party dep, run
+  `just run-godyn-go go get <mod>@<ver>` (godyn's escape hatch; needs the
+  host's impure-derivations feature), or edit `go.nix` by hand: `version`,
+  `hash` (the NAR hash — copy it from a sibling repo's go.nix, or put a
+  dummy and take the real one from the failed build's hash-mismatch
+  message), and the module's own `go` version. Unit tests:
+  `just test-go-godyn`. Editors: `just debug-render-go-mod` writes the
+  nix-side go.mod to `.tmp/gomod/` (gopls/dlv are otherwise unsupported). Worse: once `gomod2nix.toml` lacks a module
   that tracked Go code imports, `just update-gomod2nix` cannot run at all
   (entering the devShell evaluates the godyn graph, which fails on the
   missing module) — add the entry by hand, copying `version`/`hash` from a
@@ -59,8 +62,8 @@ touching any of it.
 - **New untracked files are invisible to `nix build` (and hence `just
   build`).** `nix build` reads the git-tracked snapshot, not the working
   tree — a new `.go` file (or new directory) that hasn't been `git add`ed
-  will compile fine under `go build` but fail `nix build` with a
-  misleading "undefined: X" or "cannot find package" error. `git add` the
+  is simply absent from the build, which fails with a misleading
+  "undefined: X" or "cannot find package" error. `git add` the
   new path before building (staging is enough; no commit needed).
 - **`huh` (`charmbracelet/huh`) can't do live cross-field cascades or
   seamless multi-field arrow-key scrolling — reach for a bare
@@ -95,10 +98,9 @@ touching any of it.
 
 ```sh
 just build       # Default: nix build --show-trace — the authoritative check
-just build-go    # Build Go binaries; UNRELIABLE on bridged-dep drift, see above
-just test-go     # Go unit suite on the bga backend (skips where clown builds with godyn)
-just test-go-godyn  # Go unit suite on godyn's per-package lane (skips where the backend is bga)
-just test-go-race   # Go unit suite under -race, same backend gate (not part of `just test`)
+just test-go-godyn  # Go unit suite on godyn's per-package lane (the only unit lane)
+just test-go-race   # Go unit suite under -race (not part of `just test`)
+just run-godyn-go go get <mod>@<ver>  # go commands needing a module, ingested into go.nix
 just clean-result  # delete result symlinks
 ```
 

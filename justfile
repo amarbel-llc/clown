@@ -7,7 +7,7 @@ mod? explore 'zz-explore/justfile'
 
 lint: lint-fmt lint-worktree lint-man
 
-test: test-go test-go-godyn test-plugin-host test-stdio-bridge test-plugin-host-moxy test-plugin-host-moxy-disabled
+test: test-go-godyn test-plugin-host test-stdio-bridge test-plugin-host-moxy test-plugin-host-moxy-disabled
 
 verify: verify-clown-openrouter verify-clown-tailnet verify-cover-bats verify-cover-bats-html verify-crush-tailnet verify-dev-tent verify-juggler verify-juggler-multi verify-opencode-against-openrouter verify-opencode-tailnet verify-plugin-agents verify-tailnet-url verify-tent-smoke
 
@@ -25,7 +25,7 @@ lint-fmt:
     nix build ".#checks.${system}.formatting" --no-link --print-build-logs
 
 # Impure worktree state checks via conformist (git-remotes, sweatfile,
-# agents-md, gomod2nix). Runs against the working tree, not the sandbox.
+# agents-md). Runs against the working tree, not the sandbox.
 #
 # run the impure conformist worktree-state checks
 [group('lint')]
@@ -42,39 +42,16 @@ codemod-fmt:
 
 build: build-nix build-man
 
-build-ambient: build-go
+# Go builds and tests run only inside nix (igloo FDR 0007/0008): there is no
+# go.mod in the checkout and no Go toolchain in the devShell; dependencies
+# live in go.nix. The unit suite is godyn's per-package lane (`test-go-godyn`),
+# keyed off the backend clown's Go builds actually use
+# (`clown-plugin-host.passthru.backend`, igloo buildGoAuto), never a system
+# name. The race lane (`test-go-race`) follows the same gate; the cover lane
+# stays bga-based on every host (godyn has no -cover mode).
 
-# Build Go binaries. Routed through `nix develop` because clown consumes
-# the external ringmaster module via igloo's goFlakeInputs bridge, whose
-# `replace` only exists inside nix builds and the devShell mkGoEnv — a
-# bare `go build ./cmd/...` outside the devShell can't resolve it
-# (igloo RFC-0001 "no go build outside Nix").
-#
-# KNOWN UNRELIABLE (clown#174): if vendor/modules.txt drifts from go.mod
-# for the bridged ringmaster require (as happened after the 1b16421
-# module-path rename), this fails with "inconsistent vendoring" for
-# reasons UNRELATED to your change. `just build` (full nix build) is the
-# only build check that reliably threads goFlakeInputs everywhere — treat
-# a build-go failure as suspect and confirm against `just build` before
-# concluding your code is broken. For that reason it's grouped under
-# `build-ambient`, not `build` — it must never gate `default`/pre-merge.
-#
-# build the Go binaries through nix develop
-[group("go")]
-build-go:
-    nix develop --command go build ./cmd/...
-
-# The merge gate runs exactly ONE Go unit suite per host, chosen by the backend
-# clown's Go builds actually use (`clown-plugin-host.passthru.backend`, igloo
-# buildGoAuto): "native" (godyn, on igloo's godynSystems) runs `test-go-godyn`;
-# "bga" (buildGoApplication) runs `test-go`. The non-matching recipe prints a
-# skip line. Keyed off the backend, never a system name, so clown follows igloo
-# as it validates godyn on more systems (madder a39cfa7). The race lane
-# (`test-go-race`) follows the same gate; the cover lane stays bga-based on
-# every host (godyn has no -cover mode).
-
-# Run the Go unit suite under the race detector, on the same backend gate as
-# test-go / test-go-godyn: "native" builds godyn's per-package race lane
+# Run the Go unit suite under the race detector, keyed off the same backend
+# as test-go-godyn: "native" builds godyn's per-package race lane
 # (clown-godyn-race-tests, igloo buildGodynModule `race`), "bga" builds
 # clown-race (`go test -race ./...` via buildGoRace). Not part of `just test`:
 # race runs are slow, so invoke it explicitly.
@@ -94,39 +71,21 @@ test-go-race:
             ;;
     esac
 
-# Run Go tests across the whole module (internal + cmd packages) on the bga
-# backend, inside the clown-go-test derivation's checkPhase so the
-# goFlakeInputs bridge is applied — a bare `go test ./...` in the hermetic
-# hook hits "inconsistent vendoring" on the bridged modules. Skipped where the
-# backend is godyn: `test-go-godyn` runs the same package set there. For local
-# iteration, `nix develop --command go test ./...` also works.
-#
-# run the Go unit suite in the nix sandbox (bga backend)
-[group("go")]
-test-go:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    backend="$(nix eval --raw .#clown-plugin-host.passthru.backend)"
-    if [[ "$backend" != "bga" ]]; then
-        echo "test-go: skipped (clown's Go backend is '$backend'; test-go-godyn runs the unit suite)"
-        exit 0
-    fi
-    nix build .#clown-go-test --no-link --print-build-logs
-
 # Run the Go unit suite as godyn's per-package test lane (igloo FDR 0007): each
 # package's test binary is built and run in its own CA derivation, so only
-# changed cones re-run. Runs only where clown's Go backend is godyn; elsewhere
-# `test-go` carries the gate.
+# changed cones re-run. godyn is the only unit-suite lane: on a host where
+# buildGoAuto picks buildGoApplication (outside igloo's godynSystems) there is
+# no lane, and this fails rather than skipping silently.
 #
-# run the Go unit suite via godyn's per-package test lane (godyn backend)
+# run the Go unit suite via godyn's per-package test lane
 [group("go")]
 test-go-godyn:
     #!/usr/bin/env bash
     set -euo pipefail
     backend="$(nix eval --raw .#clown-plugin-host.passthru.backend)"
     if [[ "$backend" != "native" ]]; then
-        echo "test-go-godyn: skipped (clown's Go backend is '$backend'; test-go runs the unit suite)"
-        exit 0
+        echo "test-go-godyn: clown's Go backend is '$backend', not godyn; there is no unit-suite lane on this host" >&2
+        exit 1
     fi
     nix build .#clown-godyn-tests --no-link --print-build-logs
 
@@ -197,20 +156,35 @@ debug-godyn-binaries OUT="":
     echo "== juggler LlamaServerPath"
     grep -a -o '/nix/store/[a-z0-9]*-llama-cpp[^[:space:]]*/bin/llama-server' "$out/bin/juggler" | head -1
 
-# Regenerate gomod2nix.toml after go.mod changes (uses the gomod2nix
-# binary from the devshell so the tool version matches the nix builder).
+# Editors only (gopls/dlv are unsupported under igloo FDR 0008): render the
+# go.mod nix builds from go.nix — fleet modules replaced to their go-pkgs
+# store paths — into .tmp/gomod/go.mod, e.g. for `gopls -modfile`. Never
+# written into the checkout; re-run after editing go.nix or bumping an input.
 #
-# KNOWN UNRELIABLE (clown#174): observed hanging indefinitely (300s+, no
-# output) when go.mod carries the bridged code.linenisgreat.com/ringmaster
-# require — gomod2nix appears to attempt normal network/proxy resolution
-# of a module the goFlakeInputs bridge deliberately keeps proxy-unreachable.
-# Don't block on this recipe finishing; `just build` doesn't depend on it
-# and remains the authoritative check after a go.mod change.
+# render the nix-side go.mod from go.nix into .tmp/gomod/ for editors
+[group("debug")]
+debug-render-go-mod:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    merged=$(nix build --no-link --print-out-paths .#clown-plugin-host.passthru.bga.passthru.mergedGoMod)
+    mkdir -p .tmp/gomod
+    cp --no-preserve=mode "$merged" .tmp/gomod/go.mod
+    echo ".tmp/gomod/go.mod (from $merged)"
+
+# godyn's escape hatch (igloo FDR 0008): run a go command that needs a module
+# (`go get example.com/m@v1.2.3`, `go mod tidy`) inside an impure nix
+# derivation against the go.mod rendered from go.nix, apply its patch to the
+# checkout and rewrite go.nix (requires, hashes, per-module go versions). The
+# host needs the impure-derivations (+ ca-derivations) experimental features.
+# A new file must be `git add -N`'d before the run sees it.
 #
-# regenerate gomod2nix.toml after a go.mod change
+# run a go command through godyn-go and ingest the result into go.nix
 [group("go")]
-update-gomod2nix:
-    gomod2nix generate
+run-godyn-go *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    system=$(nix eval --raw --impure --expr 'builtins.currentSystem')
+    nix run --inputs-from . igloo#godyn-go -- -A "packages.$system.clown-plugin-host" -- {{ARGS}}
 
 # Integration test: launch clown-stdio-bridge wrapping a mock stdio
 # MCP server. Verifies handshake/healthcheck and the streamable-HTTP
@@ -307,8 +281,9 @@ test-plugin-host:
 verify-cover-bats:
     nix build .#clown-cover --no-link --print-build-logs
 
-# Build clown-cover and open the HTML coverage report. Falls back
-# to printing the path if no $BROWSER is available.
+# Build clown-cover and open its HTML coverage report (rendered inside the
+# derivation, since the checkout has no go.mod for `go tool cover`). Falls
+# back to printing the path if no $BROWSER is available.
 #
 # build clown-cover and open the HTML coverage report
 [group("test")]
@@ -316,12 +291,11 @@ verify-cover-bats-html:
     #!/usr/bin/env bash
     set -euo pipefail
     nix build .#clown-cover
-    profile=$(readlink -f result)/coverage.out
+    report=$(readlink -f result)/coverage.html
     if [[ -n "${BROWSER:-}" ]]; then
-        go tool cover -html="$profile"
+        "$BROWSER" "$report"
     else
-        echo "coverage profile: $profile"
-        echo "open with: go tool cover -html=$profile"
+        echo "coverage report: $report"
     fi
 
 # Integration test: launch clown-plugin-host with the real moxy MCP server as
@@ -1835,13 +1809,12 @@ debug-stdio-bridge-plugin PLUGIN_DIR=".tmp/stdio-bridge-plugin": build
         -- "$plugin_dir/probe.sh"
 
 # Smoke the dynamic system-prompt fetch path (RFC-0002 §dynamic fragments)
-# locally with NO nix and NO claude: go-build clown + the stdio bridge (go
-# build sees the working tree, so untracked files compile), launch the bridge
-# wrapping the REAL `ringmaster mcp`, then GET /clown/system-prompt and print the
+# locally with NO claude: from the `just build` result, launch the stdio
+# bridge wrapping the REAL `ringmaster mcp`, then GET /clown/system-prompt and print the
 # live fragment. The fragment embeds CLOWN_SESSION_ID + the mcp server's own tool
 # catalog, so it proves the bridge->prompts/get->HTTP dogfood end to end.
 #
-# smoke the dynamic system-prompt fetch path without nix or claude
+# smoke the dynamic system-prompt fetch path without claude
 [group("debug")]
 debug-system-prompt-fetch SESSION="local-smoke":
     #!/usr/bin/env bash
@@ -1849,13 +1822,12 @@ debug-system-prompt-fetch SESSION="local-smoke":
     tmp="$(mktemp -d)"
     bridge_pid=
     trap 'kill "${bridge_pid:-}" 2>/dev/null || true; rm -rf "$tmp"' EXIT
-    # `ringmaster mcp` now ships from the external ringmaster module, so
-    # build it via nix rather than `go build ./cmd/ringmaster` (deleted).
-    # Requires `just build` to have produced ./result/bin/ringmaster.
-    ringmaster_bin="$PWD/result/bin/ringmaster"
-    [[ -x "$ringmaster_bin" ]] || { echo "FAIL: run 'just build' first ($ringmaster_bin missing)" >&2; exit 1; }
-    cp "$ringmaster_bin" "$tmp/ringmaster"
-    go build -o "$tmp/clown-stdio-bridge" ./cmd/clown-stdio-bridge
+    # Both binaries come from the nix build (no Go toolchain outside nix,
+    # igloo FDR 0007). Requires `just build` to have produced ./result/bin/.
+    for b in ringmaster clown-stdio-bridge; do
+        [[ -x "$PWD/result/bin/$b" ]] || { echo "FAIL: run 'just build' first ($PWD/result/bin/$b missing)" >&2; exit 1; }
+        cp "$PWD/result/bin/$b" "$tmp/$b"
+    done
     export CLOWN_SESSION_ID="{{SESSION}}"
     "$tmp/clown-stdio-bridge" --command "$tmp/ringmaster" -- mcp \
         >"$tmp/handshake" 2>"$tmp/bridge.log" &

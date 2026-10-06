@@ -34,7 +34,6 @@
   linters.eng-versioning.key = "CLOWN_VERSION";
 
   settings.excludes = [
-    "vendor/**"
     "flake.lock"
     "*.md"
     "result"

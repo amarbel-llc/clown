@@ -208,11 +208,14 @@ Place prompt fragments anywhere in your directory hierarchy:
 
 ## Building
 
-Requires Nix with flakes enabled.
+Requires Nix with flakes enabled. Go is built and tested only inside Nix
+(godyn, igloo FDR 0007/0008): the module's dependencies live in `go.nix`,
+and there is no `go.mod` in the checkout.
 
 ```sh
-just build    # nix build --show-trace
-just clean    # rm -rf result
+just build          # nix build --show-trace
+just test-go-godyn  # Go unit suite (godyn per-package lane)
+just clean-result   # delete result symlinks
 ```
 
 ## License
