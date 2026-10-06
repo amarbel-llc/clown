@@ -198,6 +198,20 @@ fallback. The completion facts (created artifact URIs, the reason, the
 room JID) ride the job's `result_ref` spool so the launcher reads them
 without parsing prose.
 
+**Mapping to FDR 0032 D6's exit reasons** (five, as the operator settled
+them): `succeeded` = `normal`, `failed` = `failed` ("ended on its own
+without doing what it was asked", measured by the runtime, never reported
+by the agent), `aborted` = `shutdown`, `interrupted` = crash.
+
+**Force-reap (`killed`).** A juggler agent CAN be force-reaped: a holder,
+or systemd on `RuntimeMaxSec`, kills the transient unit. The producer
+then never writes `job_done`, so ringmaster's terminal state is
+`interrupted`, the same as a crash. The two are told apart by the
+exit-wake emitter, not by the ringmaster state: the runtime's exit wake
+reports D6's `killed` when the unit's result is a signal death it did
+not cause, and crash otherwise. ringmaster's four states therefore do
+not grow a fifth; D6's fifth reason is derived at emission.
+
 ### 7. Transcript — one MUC per run
 
 A run (webhook → router → issue-filer → maybe a note-filer agent) has
@@ -238,6 +252,11 @@ Two scopes (clown#244):
 
 The tier-2 signer (piggy) accepts callers in the runtime scope and
 refuses the agent scope. The signer's rule stays binary.
+
+This is juggler's answer only. FDR 0032 and piggy FDR 0006 keep "which
+scope a tier-2 key binds to" fully open by the operator's choice; this
+section MUST NOT be cited as closing that question, and the Claude Code
+case (where git and the tee sign from under `claude`) remains undecided.
 
 ### 10. The daemon is optional for remote models
 
@@ -340,25 +359,25 @@ The router, same mechanism, one tool:
 | transcript layout | one MUC per run | one link for the fallback note; brief in the same transcript | runs grow long enough that per-agent rooms read better |
 | daemon for remote models | optional | krone's webhook user has no user session | a host needs local inference for these agents (→ system-service daemon) |
 
-## FDR 0032 touch-points (being taken to the operator by spinclass)
+## FDR 0032 touch-points (operator-resolved 2026-10-06; FDR 0032 edited at spinclass 1647787, unmerged)
 
-1. **Handle table ownership.** This record's "the handle table lives with
-   whichever platform owns the principal's lifecycle" vs D7's "spinclass
-   owns … the handle table".
-2. **Exit reasons.** D6's `normal` / `shutdown` / crash / `killed` vs the
-   ringmaster states here. `aborted`=`shutdown` and `interrupted`=crash
-   line up; D6 has no reason for "ended on its own, unsuccessfully"
-   (`failed`), and `killed` collapses into `interrupted`. Proposal: D6
-   carries the ringmaster terminal state alongside the reason.
-3. **Who emits the exit wake.** D6 says spinclass; here the agent's
-   runtime emits it from the ringmaster terminal record.
-4. **Scope binding.** FDR 0032 and piggy FDR 0006 hold open which scope a
-   tier-2 key binds to; §9 answers it for juggler agents. The Claude Code
-   case stays open.
-
-One operator-level discrepancy is also open: whether the bottom-most
-fallback is a script (as circus reports) or a simpler note-filer agent (as
-spinclass was told). This record assumes the script.
+1. **Handle table ownership and exit-wake emitter: generalised.** D7 now
+   reads that the handle table and exit-wake emission live with whichever
+   platform owns the principal's lifecycle; for a juggler agent that is
+   the juggler runtime and ringmaster, with the journal holding accepted
+   grants as a rebuildable cache. D6 is now "emitted by the lifecycle
+   owner". §6 here is the realisation.
+2. **Exit reasons: D6 gained `failed`.** D6 now has five reasons:
+   `normal`, `failed`, `shutdown`, crash, `killed`. The mapping and the
+   force-reap answer are in §6. (An earlier draft of this record
+   mis-stated spinclass's position as "carry the ringmaster state
+   alongside the reason" and "`killed` collapses into `interrupted`";
+   neither was theirs, and the operator chose the `failed` reason.)
+3. **Scope binding: kept fully open.** §9 is not cited by FDR 0032 and
+   does not close its open limitation; see the note at the end of §9.
+4. **Fallback: a script.** The bottom-most fallback is a plain script
+   writing to orgzly, not an agent. §6's "runs the fallback" means that
+   script.
 
 ## More Information
 
