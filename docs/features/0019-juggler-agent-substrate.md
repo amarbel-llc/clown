@@ -92,7 +92,13 @@ channel, and it never parses the room):
 
 - `--new-run --run-key <key>`: caller-supplied idempotency key (derived
   from the recording). An existing run with that key is returned
-  unchanged with `"existing": true`, nothing created. A subagent spawn
+  unchanged with `"existing": true`, nothing created, plus `"resolved"`
+  and `"torn_down"` so a redelivery can finish a run whose first delivery
+  crashed before `resolve` instead of dropping it. The output also
+  carries `"root_stanza"`, the run-input stanza id `juggler decide
+  --parent` takes. Every identity the run mints gets its own troupe
+  password file under the run's state directory (`--password-file`), so
+  a child's mint can never overwrite the root's credential. A subagent spawn
   with the same brief digest within a run is likewise idempotent. Without
   `--run-key` a fresh key is minted.
 - `--wait [--timeout <dur>]`: block until the subagent's job
@@ -100,9 +106,12 @@ channel, and it never parses the room):
   "ledger":"<path>","artifacts":[{"tool","kind","uris"}],
   "cannot_complete":null|{"reason"}}` where `state` is the ringmaster
   state and `reason` the D6 reason (§6). Exit code mirrors the state:
-  0 `succeeded`, 2 `failed`, 3 `aborted`, 4 `interrupted`, 1 usage, 5
-  timeout with the job still running. Without `--wait`, the launch JSON
-  `{"jid","job","room"}` is printed immediately.
+  0 `succeeded`, 2 `failed`, 3 `aborted`, 4 `interrupted`, 1 usage. At
+  `--timeout` the child job is asked to cancel (`ringmaster cancel`) and
+  given `--stop-grace` (default 30s) to terminalize: exit 3 if it
+  aborted in time, else 5 ("cancel requested, still running"), so a
+  caller that falls back never races a late agent. Without `--wait`,
+  the launch JSON `{"jid","job","room"}` is printed immediately.
 - `juggler job-ledger <job>`: print a job's ledger (the result spool)
   for a run the caller did not wait on.
 - **Templates.** Brief authors ship a template without `principal`,
@@ -113,7 +122,11 @@ channel, and it never parses the room):
   template; `model` is the author's choice of registry entry, which the
   spawner's models file must define.
 - **`juggler resolve <run-job> --state succeeded|failed --reason <text>
-  [--fallback-artifacts <json>]`**: the run's last call, always. Writes
+  [--fallback-artifacts <json>] [--stop-grace <dur>]`**: the run's last
+  call, always. First cancels every child job of the run that is not yet
+  terminal and waits up to the stop grace for each (one `subagent_stop`
+  ledger entry per child, `stopped_by_resolve`), so a later account
+  teardown never deletes an account under a running agent; then writes
   the run job's terminal record, appends a `fallback` entry to the run
   ledger carrying the fallback's own outcome, and emits the run's exit
   wake to the issuer. (Not named `run-…` to avoid confusion with

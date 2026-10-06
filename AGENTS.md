@@ -53,12 +53,7 @@ touching any of it.
   dummy and take the real one from the failed build's hash-mismatch
   message), and the module's own `go` version. Unit tests:
   `just test-go-godyn`. Editors: `just debug-render-go-mod` writes the
-  nix-side go.mod to `.tmp/gomod/` (gopls/dlv are otherwise unsupported). Worse: once `gomod2nix.toml` lacks a module
-  that tracked Go code imports, `just update-gomod2nix` cannot run at all
-  (entering the devShell evaluates the godyn graph, which fails on the
-  missing module) — add the entry by hand, copying `version`/`hash` from a
-  sibling repo that already pins it. The planned godyn `go.nix` migration
-  (igloo FDR 0008) removes `gomod2nix.toml` and `vendor/` entirely.
+  nix-side go.mod to `.tmp/gomod/` (gopls/dlv are otherwise unsupported).
 - **New untracked files are invisible to `nix build` (and hence `just
   build`).** `nix build` reads the git-tracked snapshot, not the working
   tree — a new `.go` file (or new directory) that hasn't been `git add`ed
