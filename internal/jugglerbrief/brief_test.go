@@ -10,7 +10,7 @@ import (
 const issueFilerBrief = `
 schema = 1
 principal = "3f1c"
-parent    = "pebble-webhook@krone"
+parent    = "pebble-webhook@example-host"
 room      = "pebble-9f3a@rooms.xmpp.example"
 model     = "openrouter/anthropic/claude-sonnet"
 system    = "You file one issue per actionable item."
@@ -42,7 +42,7 @@ func TestParseIssueFiler(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if b.Principal != "3f1c" || b.Parent != "pebble-webhook@krone" || b.Model == "" {
+	if b.Principal != "3f1c" || b.Parent != "pebble-webhook@example-host" || b.Model == "" {
 		t.Errorf("unexpected brief: %+v", b)
 	}
 	if !strings.Contains(b.Moxyfile, `name = "smith"`) {
@@ -103,7 +103,7 @@ func TestValidationErrorsNameField(t *testing.T) {
 	}{
 		{"schema", "schema = 1", "schema = 2", "schema"},
 		{"principal", `principal = "3f1c"`, `principal = ""`, "principal"},
-		{"parent", `parent    = "pebble-webhook@krone"`, `parent = ""`, "parent"},
+		{"parent", `parent    = "pebble-webhook@example-host"`, `parent = ""`, "parent"},
 		{"model", `model     = "openrouter/anthropic/claude-sonnet"`, `model = ""`, "model"},
 		{"task", `task      = "<transcription text>"`, `task = ""`, "task"},
 		{"steps", "steps = 12", "steps = -1", "limits.steps"},
@@ -194,7 +194,7 @@ func TestToolsAndEnv(t *testing.T) {
 
 func TestParseTemplate(t *testing.T) {
 	tmpl := issueFilerBrief
-	for _, line := range []string{`principal = "3f1c"`, `parent    = "pebble-webhook@krone"`, `room      = "pebble-9f3a@rooms.xmpp.example"`, `task      = "<transcription text>"`} {
+	for _, line := range []string{`principal = "3f1c"`, `parent    = "pebble-webhook@example-host"`, `room      = "pebble-9f3a@rooms.xmpp.example"`, `task      = "<transcription text>"`} {
 		tmpl = strings.Replace(tmpl, line, "", 1)
 	}
 	b, err := ParseTemplate([]byte(tmpl))

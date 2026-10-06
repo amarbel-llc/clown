@@ -228,8 +228,8 @@ Boundaries the operator set with the decision (context, **not** clown's work):
   module with the mint beside it; circus keeps DNS/certs/placement/firewall. Its
   own later slice with a dual-architecture period — clown does not fold it in and
   does not design against its existence.
-- **krone's bridge prosody** (slidge/Snikket/canary) stays circus-owned; krone
-  participates in the mesh as-is.
+- **The bridge host's prosody** (slidge/Snikket/canary) stays circus-owned;
+  that host participates in the mesh as-is.
 - **circus FDR-0019** is revised for the ownership split by the operator, not here.
 
 ## 9. Live-test loop

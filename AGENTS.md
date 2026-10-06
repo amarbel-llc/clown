@@ -16,6 +16,14 @@ override with `CLOWN_PROVIDER` env var, or pin one per-directory via a
 `clownfile`). Built entirely with Nix flakes; no standalone test suite
 (pre-merge validation via `just build`, which runs `nix build --show-trace`).
 
+`juggler` is also the fleet's **headless agent substrate** (FDR 0019,
+`docs/features/0019-juggler-agent-substrate.md`): `juggler run` drives a
+tool-use loop against moxy under a spawner-minted principal, `juggler spawn`
+launches it as a systemd transient unit with a ringmaster job and a
+post-stop exit wake, `juggler decide` is the Decisions-API router. Code lives
+in `internal/juggler{loop,brief,eval,tools,decide,run}`; read the FDR before
+touching any of it.
+
 ## Agent gotchas specific to this repo
 
 - **Skills vs `.clown/` are different things.** Skills (`/eng:fdr`,
@@ -42,7 +50,12 @@ override with `CLOWN_PROVIDER` env var, or pin one per-directory via a
   vendoring" and `gomod2nix generate` can hang indefinitely trying to
   resolve the module over the network — neither is a signal about your
   code. When either misbehaves, confirm against `just build` before
-  concluding anything is broken.
+  concluding anything is broken. Worse: once `gomod2nix.toml` lacks a module
+  that tracked Go code imports, `just update-gomod2nix` cannot run at all
+  (entering the devShell evaluates the godyn graph, which fails on the
+  missing module) — add the entry by hand, copying `version`/`hash` from a
+  sibling repo that already pins it. The planned godyn `go.nix` migration
+  (igloo FDR 0008) removes `gomod2nix.toml` and `vendor/` entirely.
 - **New untracked files are invisible to `nix build` (and hence `just
   build`).** `nix build` reads the git-tracked snapshot, not the working
   tree — a new `.go` file (or new directory) that hasn't been `git add`ed

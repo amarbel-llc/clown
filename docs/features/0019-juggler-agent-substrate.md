@@ -2,7 +2,7 @@
 status: proposed
 date: 2026-10-06
 promotion-criteria: >
-  experimental once a real Pebble recording on krone launches an issue-filer
+  experimental once a real Pebble recording on the webhook host launches an issue-filer
   agent through `juggler spawn`, the agent files an issue through moxy, the
   run's transcript lands in the run's MUC, the ringmaster job terminalizes
   with the evaluator's verdict, and a forced failure (zero artifacts or
@@ -21,7 +21,7 @@ promotion-criteria: >
 ## Problem Statement
 
 Every agent the fleet can launch today is a Claude Code harness inside a
-spinclass worktree session. The Pebble webhook on krone (circus#288) needs
+spinclass worktree session. The Pebble webhook host (circus#288) needs
 short, headless, tool-using agents with no worktree, no repo and no
 terminal, launched by a system service, each under its own principal so
 FDR 0032's handles, exit wakes and provenance apply to it. juggler already
@@ -507,7 +507,7 @@ An issue-filer brief (unsigned, slice-0 shape):
 
     schema = 1
     principal = "3f1c…"           # minted by the spawner
-    parent    = "pebble-webhook@krone"
+    parent    = "pebble-webhook@example-host"
     room      = "pebble-9f3a@rooms.xmpp.example"
     model     = "openrouter/anthropic/claude-sonnet"
     system    = "You file one issue per actionable item in the transcription…"
@@ -589,7 +589,7 @@ The router, before any subagent exists:
   before briefs arrive from less trusted principals.
 - **Transient units need authority.** A system-service user cannot ask
   the system manager for a transient unit without a polkit rule or
-  `Delegate=yes` on its own unit. Which one krone uses is circus's lane.
+  `Delegate=yes` on its own unit. Which one the webhook host uses is circus's lane.
 - **What systemd failing costs, by case.** The success verdict (ledger +
   evaluator), tool permissions (moxy) and identity (troupe) do not
   depend on systemd and fail closed. What does depend on it:
@@ -678,7 +678,7 @@ The router, before any subagent exists:
 | evaluator kinds | `jq` only | smallest signed-contract surface | the same count-of-kind jq appears in most briefs (→ `predicate`) or a task needs judgement (→ `agent`) |
 | headless permission posture | non-`always-allow` → deny | no human to ask | a moxin's tier is `ask` only because nobody set it, and agents keep failing on it |
 | transcript layout | one MUC per run | one link for the fallback note; brief in the same transcript | runs grow long enough that per-agent rooms read better |
-| daemon for remote models | optional | krone's webhook user has no user session | a host needs local inference for these agents (→ system-service daemon) |
+| daemon for remote models | optional | the webhook host's service user has no user session | a host needs local inference for these agents (→ system-service daemon) |
 | agent-scope realisation | open: sub-cgroup vs sibling unit | the bullet needs neither namespaces nor the choice | signing lands, or a non-fixed-surface tool server appears (→ sibling unit + `limits.sandbox`) |
 | exit-wake emitter | the unit's `ExecStopPost` hook, sole emitter | survives every ending the main process does not | a holder needs a wake on the systemd-dead path (→ holder-side timeout or a cross-host watcher) |
 | router confidence threshold | 0.5 (`--min-confidence`, overridable per brief) | operator's first-bullet figure; below it the subagent is skipped and the fallback note records the choice and confidence. NOTE (two live calls, 2026-10-06): the API's `confidence` is the MARGIN over the runner-up (0.63 vs 0.37 → confidence 0.26), not the winning probability, so with two options 0.5 means roughly "0.75 or better"; semantics for 3+ options unverified. The stanza carries both `confidence` and the chosen option's probability | mirror-phase data shows good choices rejected or bad ones accepted |
@@ -734,5 +734,5 @@ The router, before any subagent exists:
   single-turn `juggler-prompt` tool this record supersedes as "the
   subagent path".
 - Lanes: moxy (narrowing merge, principal → effective moxyfile), troupe
-  (MUC provisioning, grant grammar, signing), circus (krone deployment,
+  (MUC provisioning, grant grammar, signing), circus (webhook-host deployment,
   FDR 0023 amendment), clown (this record and `juggler run`/`spawn`).
