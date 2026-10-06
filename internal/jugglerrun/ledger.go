@@ -164,7 +164,7 @@ func AppendRunLedgerEntry(store Store, runKey string, e RunLedgerEntry) error {
 		return fmt.Errorf("no run with key %q", runKey)
 	}
 	if run.Pending {
-		return fmt.Errorf("run %s is pending: its spawn --new-run failed; retry it with the same --run-key", runKey)
+		return run.CheckOpen()
 	}
 	l, err := store.loadRunLedger(runKey)
 	if err != nil {

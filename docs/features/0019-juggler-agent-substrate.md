@@ -94,9 +94,10 @@ withdraws a posted run input, fails a started run job, and saves a
 **pending** run record. A retry with the same `--run-key` resumes it:
 the same root is re-minted (same key and file: troupe answers
 `created=false`), still owns `<run-key>@D` so `muc create` is
-idempotent, re-posts the input and starts a fresh run job. Only a
-complete record answers `"existing": true`; a pending run takes no
-subagents and no ledger entries. Every later step of the run — the
+idempotent, re-posts the input and starts a fresh run job (see the
+three run states in the glue-facing contract below). A pending run takes
+no subagents and no route entries (`juggler decide --run-key` refuses it
+before any model call). Every later step of the run — the
 decision, the subagent spawns, the fallback — executes as the run root.
 The run job's terminal record is written when the run is resolved
 (`succeeded`, or `failed` when the fallback ran), and its exit wake goes
@@ -107,10 +108,21 @@ the glue is a short-lived webhook handler, not a daemon with a wake
 channel, and it never parses the room):
 
 - `--new-run --run-key <key>`: caller-supplied idempotency key (derived
-  from the recording). An existing run with that key is returned
-  unchanged with `"existing": true`, nothing created, plus `"resolved"`
-  and `"torn_down"` so a redelivery can finish a run whose first delivery
-  crashed before `resolve` instead of dropping it. The output also
+  from the recording). A run key is in one of three states, and the
+  output says which:
+  - **new / resumed** — exit 0 with the full object; `"existing": false`,
+    and `"resumed": true` when this call finished a pending run (absent
+    otherwise).
+  - **pending** — the call failed after the root's mint: exit 1, the
+    cause on stderr, and ONE stdout line `{"run_key", "pending": true,
+    "root_principal", "room"}`; the same call resumes it. (A failure of
+    the mint itself saves nothing and prints nothing on stdout.)
+  - **existing** — a complete run with that key is returned unchanged
+    with `"existing": true`, nothing created, plus `"resolved"` and
+    `"torn_down"` so a redelivery can finish a run whose first delivery
+    crashed before `resolve` instead of dropping it.
+
+  The output also
   carries `"root_stanza"`, the run-input stanza id `juggler decide
   --parent` takes. Every identity the run mints gets its own troupe
   password file under the run's state directory (`--password-file`), so
@@ -172,6 +184,17 @@ channel, and it never parses the room):
      root keeps its own while any child account remains. One entry per
      account: `{tool:"teardown", kind:"account", ok, principal, jid,
      reason}`. `RunRecord.torn_down` is set when every account is gone.
+     **The minter credential is required here:** troupe's `mint-revoke`
+     takes the privilege-free self-removal path only when a minter
+     credential is named, and juggler hands troupe its own environment,
+     so `juggler resolve` (like `spawn --new-run` and `spawn --brief`,
+     whose mints need it too) MUST run with `TROUPE_MINT_PASSWORD_FILE`
+     (and `TROUPE_MINT_USER`) set. Without `--keep-accounts`, resolve
+     refuses (exit 1) when `TROUPE_MINT_PASSWORD_FILE` is unset, before
+     the canary post and before stopping any child. This is the
+     spawner's side only: the same variables are stripped from every
+     agent's unit and tool servers and rejected in a brief's `[env]`
+     (§3, §5).
 
   Resolving a resolved run rewrites nothing, posts no canary line and
   sends no wake: it only performs a teardown still pending (accounts with
@@ -182,8 +205,11 @@ channel, and it never parses the room):
   holds the run lock from its resolved check through the child's record
   and unit launch, so a spawn racing `resolve` is either refused or seen
   (and stopped, or kept as still running) by the teardown — never left
-  live in a torn-down run. stdout gains `"torn_down"` and `"teardown"` (this
-  call's entries). (Not named `run-…` to avoid confusion with `juggler
+  live in a torn-down run. stdout gains `"torn_down"`, `"teardown"` (this
+  call's entries; absent when it handled no account) and, when
+  `--canary-room` was given, `"canary": {"room", "posted", "stanza"}` —
+  `posted` is true also when an earlier attempt posted the line, and
+  `stanza` is then that post's id. (Not named `run-…` to avoid confusion with `juggler
   run`.)
 - Every reason is on stdout and in a ledger: `cannot_complete.reason`
   in the subagent ledger and the `--wait` output; `juggler decide`'s
@@ -419,7 +445,12 @@ object it names:
   stanza to every holder listed on the job.
 
 ringmaster is the file-descriptor table on the host; troupe is the
-capability token. At slice-0 strength (one host, no crypto) the grant
+capability token. Account teardown at the end of a run (§1 `juggler
+resolve` step 4) needs the spawner's minter credential
+(`TROUPE_MINT_PASSWORD_FILE`/`TROUPE_MINT_USER`) in `resolve`'s
+environment, as the mints in `spawn --new-run`/`--brief` do; the agents
+themselves never see it — it is stripped from their units and tool
+servers. At slice-0 strength (one host, no crypto) the grant
 stanza degenerates to a journal record carrying the holder's principal.
 
 **Terminal states** are ringmaster's four, derived by the runtime:

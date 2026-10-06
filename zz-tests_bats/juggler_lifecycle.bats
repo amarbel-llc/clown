@@ -48,6 +48,9 @@ setup_file() {
   export XDG_STATE_HOME="$BATS_FILE_TMPDIR/state"
   export JUGGLER_MODELS_PATH="$BATS_FILE_TMPDIR/models.toml"
   unset CLOWN_SESSION_ID TROUPE_XMPP_USER TROUPE_XMPP_PASSWORD_FILE TROUPE_XMPP_DOMAIN
+  # resolve's teardown requires the minter credential (troupe's privilege-free
+  # mint-revoke path); the fake troupe ignores it.
+  export TROUPE_MINT_PASSWORD_FILE="$BATS_FILE_TMPDIR/minter.pw" TROUPE_MINT_USER=troupe-minter
 
   "$FAKE_PLATFORM_BIN" serve-decisions --dir "$DEC_DIR" >"$DEC_DIR/server.log" 2>&1 &
   export DEC_PID=$!
@@ -525,6 +528,16 @@ abort_on_cancel() {
 
 # --- resolve ---------------------------------------------------------------
 
+@test "resolve without the minter credential refuses before touching anything" {
+  local calls_before
+  calls_before=$(wc -l <"$FAKE_DIR/calls.jsonl")
+  run_jug_env TROUPE_MINT_PASSWORD_FILE= TROUPE_MINT_USER= -- resolve "$(stored_run rk1 .run_job)" \
+    --state failed --reason x --result-line "rk1: x" --canary-room canary@rooms.test
+  expect_status 1
+  [[ $stderr == *TROUPE_MINT_PASSWORD_FILE* && $stderr == *--keep-accounts* ]]
+  [[ $(wc -l <"$FAKE_DIR/calls.jsonl") -eq $calls_before ]]
+}
+
 @test "resolve stops live children, records the fallback and wakes the issuer" {
   local root run_job live
   root=$(stored_run rk1 .root_principal)
@@ -724,6 +737,9 @@ calls_since() { jq -s ".[$1:] | $2" "$FAKE_DIR/calls.jsonl"; }
     --result-line "rk3: issue filed" --canary-room canary@rooms.test
   expect_status 0
   [[ $(field .torn_down) == true ]]
+  expect_json '.canary.room == "canary@rooms.test" and .canary.posted == true and (.canary.stanza | startswith("chat-"))'
+  local canary_stanza
+  canary_stanza=$(field .canary.stanza)
 
   # The canary post is resolve's FIRST troupe call, made as the run root.
   calls_since "$calls_before" '[.[] | select(.tool == "troupe")]' >"$BATS_TEST_TMPDIR/troupe.json"
@@ -763,6 +779,9 @@ calls_since() { jq -s ".[$1:] | $2" "$FAKE_DIR/calls.jsonl"; }
   run_jug resolve "$run_job" --state succeeded --reason "again" --result-line "x" --canary-room canary@rooms.test
   expect_status 0
   [[ $(field .already_resolved) == true ]]
+  [[ $(field .canary.posted) == true ]]
+  [[ $(field .canary.stanza) == "$canary_stanza" ]]
+  expect_json 'has("teardown") | not'
   [[ $(wc -l <"$FAKE_DIR/calls.jsonl") -eq $calls_before ]]
 }
 
@@ -774,11 +793,16 @@ calls_since() { jq -s ".[$1:] | $2" "$FAKE_DIR/calls.jsonl"; }
   rm -f "$FAKE_DIR/fail/troupe-muc-send"
   expect_status 1
   [[ $stderr == *"posting the run input"* ]]
+  # stdout names the pending run, so the glue knows a retry resumes it.
+  expect_json '.run_key == "rk4" and .pending == true and .room == "rk4@rooms.test" and (.root_principal | length) == 36'
+  local pending_root
+  pending_root=$(field .root_principal)
 
   # The root is kept for the retry: a pending record, its password file, no revoke.
   local record=$XDG_STATE_HOME/juggler/runs/rk4.json root
   jq -e '.pending == true and .room_created == true and .run_job == ""' "$record" >/dev/null
   root=$(jq -r .root_principal "$record")
+  [[ $root == "$pending_root" ]]
   [[ -s $XDG_STATE_HOME/juggler/runs/rk4/$root.pw ]]
   fake_calls '[.[] | select(.tool == "troupe" and .argv[0] == "mint-revoke" and (.argv | index("'"$root"'") != null))] | length == 0' | grep -qx true
 
@@ -786,6 +810,7 @@ calls_since() { jq -s ".[$1:] | $2" "$FAKE_DIR/calls.jsonl"; }
     --operator-jid operator@xmpp.test <<<'{"recording":"fourth"}'
   expect_status 0
   [[ $(field .existing) == false ]]
+  [[ $(field .resumed) == true ]]
   [[ $(field .root_principal) == "$root" ]]
   [[ $(field .room) == rk4@rooms.test ]]
   jq -e '.pending == null' "$record" >/dev/null

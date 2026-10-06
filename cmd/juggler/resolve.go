@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -14,6 +15,12 @@ import (
 )
 
 const resolveUsage = `usage: juggler resolve <run-job> --state succeeded|failed --reason <text> [--fallback-artifacts '[{"tool","kind","uris"}]'] [--stop-grace <dur>] [--result-line <text> --canary-room <jid>] [--keep-accounts]`
+
+// The minter credential troupe's mint/mint-revoke read from the environment.
+const (
+	minterPasswordFileEnv = "TROUPE_MINT_PASSWORD_FILE"
+	minterUserEnv         = "TROUPE_MINT_USER"
+)
 
 // resolveTimeout bounds the run's last call.
 const resolveTimeout = 60 * time.Second
@@ -57,6 +64,14 @@ func cmdResolve(args []string, stdout, stderr io.Writer) int {
 	}
 	if strings.ContainsAny(resultLine, "\r\n") {
 		fmt.Fprintln(stderr, "juggler: resolve: --result-line must be one line")
+		return jr.ExitUsage
+	}
+	// troupe's mint-revoke takes the privilege-free self-removal path only
+	// when a minter credential is named, and juggler hands troupe its own
+	// environment: refuse before the canary post and before stopping any
+	// child, rather than fail every revoke after the run is resolved.
+	if !keepAccounts && os.Getenv(minterPasswordFileEnv) == "" {
+		fmt.Fprintf(stderr, "juggler: resolve: $%s is unset: the account teardown needs the minter credential (troupe mint-revoke's self-removal path); set it (and $%s) or pass --keep-accounts\n", minterPasswordFileEnv, minterUserEnv)
 		return jr.ExitUsage
 	}
 	var artifacts []jr.Artifact

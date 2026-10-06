@@ -118,6 +118,12 @@ func spawnNewRun(ctx context.Context, deps jr.LifecycleDeps, o spawnOpts, stdin 
 	}
 	res, err := jr.NewRun(ctx, deps, jr.NewRunRequest{RunKey: o.runKey, Issuer: issuer, Input: input, Room: o.room, RoomDomain: o.roomDomain, OperatorJID: o.operator})
 	if err != nil {
+		// A failure that saved a pending run tells the glue so on stdout: the
+		// same call with the same --run-key resumes it.
+		var pending *jr.PendingRunError
+		if errors.As(err, &pending) {
+			printJSON(stdout, pending)
+		}
 		return fail(stderr, "spawn", err)
 	}
 	printJSON(stdout, res)

@@ -92,8 +92,10 @@ func TestNewRun_RetryAfterAFailurePastRoomCreationResumesTheSameRoot(t *testing.
 	h := newHarness(t) // the real NewRootPrincipal: derived from the run key
 	h.fakes.Fail(t, "ringmaster", "start")
 	req := NewRunRequest{RunKey: "k", Issuer: testIssuer, Input: []byte("x"), RoomDomain: "rooms.test", OperatorJID: testOperator}
-	if _, err := NewRun(context.Background(), h.deps, req); err == nil {
-		t.Fatal("want an error")
+	_, err := NewRun(context.Background(), h.deps, req)
+	var pending *PendingRunError
+	if !errors.As(err, &pending) || pending.RunKey != "k" || pending.RootPrincipal != NewRootPrincipal("k") || pending.Room != "k@rooms.test" || !strings.Contains(err.Error(), "starting the run job") {
+		t.Fatalf("err = %#v", err)
 	}
 	root := NewRootPrincipal("k")
 	if _, ok := h.fakes.Room(t, "k@rooms.test"); !ok {
@@ -117,7 +119,7 @@ func TestNewRun_RetryAfterAFailurePastRoomCreationResumesTheSameRoot(t *testing.
 	if err != nil {
 		t.Fatalf("retry: %v", err)
 	}
-	if res.Existing || res.RootPrincipal != root || res.Room != "k@rooms.test" || res.RunJob == "" {
+	if res.Existing || !res.Resumed || res.RootPrincipal != root || res.Room != "k@rooms.test" || res.RunJob == "" {
 		t.Fatalf("retry result = %+v", res)
 	}
 	var creates []string
@@ -215,6 +217,9 @@ func TestResolve_PostsTheCanaryFirstThenTearsDownEveryAccount(t *testing.T) {
 	}
 	if !out.TornDown || len(out.Teardown) != 2 {
 		t.Fatalf("outcome = %+v", out)
+	}
+	if out.Canary == nil || out.Canary.Room != testCanary || !out.Canary.Posted || !strings.HasPrefix(out.Canary.Stanza, "chat-") {
+		t.Errorf("canary = %+v", out.Canary)
 	}
 	calls := h.fakes.Calls(t, "troupe")[before:]
 	if c := calls[0]; c.Argv[0] != "muc" || c.Argv[1] != "send" || !hasArg(c.Argv, testCanary) || !hasArg(c.Argv, "rec-42: issue filed") ||
@@ -426,8 +431,12 @@ func TestResolve_RetriedPartialResolvePostsTheCanaryOnce(t *testing.T) {
 	res := newProvisionedRun(t, h, "rec-42")
 	h.fakes.Fail(t, "troupe", "message") // the exit wake
 	req := ResolveRequest{RunJob: res.RunJob, State: StateSucceeded, Reason: "done", ResultLine: "rec-42: done", CanaryRoom: testCanary}
-	if _, err := Resolve(context.Background(), h.deps, req); err == nil {
+	first, err := Resolve(context.Background(), h.deps, req)
+	if err == nil {
 		t.Fatal("want the exit-wake failure")
+	}
+	if first.Canary == nil || !first.Canary.Posted || first.Canary.Stanza == "" {
+		t.Fatalf("first canary = %+v", first.Canary)
 	}
 	if err := os.Remove(h.fakes.Dir + "/fail/troupe-message"); err != nil {
 		t.Fatal(err)
@@ -435,6 +444,12 @@ func TestResolve_RetriedPartialResolvePostsTheCanaryOnce(t *testing.T) {
 	out, err := Resolve(context.Background(), h.deps, req)
 	if err != nil || out.AlreadyResolved || !out.TornDown || len(out.Woken) != 1 {
 		t.Fatalf("retry = %+v, %v", out, err)
+	}
+	if out.Canary == nil || !out.Canary.Posted || out.Canary.Stanza != first.Canary.Stanza {
+		t.Errorf("retry canary = %+v, want the first attempt's %s", out.Canary, first.Canary.Stanza)
+	}
+	if again, err := Resolve(context.Background(), h.deps, req); err != nil || !again.AlreadyResolved || again.Canary == nil || again.Canary.Stanza != first.Canary.Stanza {
+		t.Errorf("resolved re-run canary = %+v, %v", again.Canary, err)
 	}
 	var posts int
 	for _, p := range h.fakes.MUC(t) {
@@ -510,6 +525,9 @@ func TestResolve_CanaryFailureDoesNotChangeTheOutcome(t *testing.T) {
 	out, err := Resolve(context.Background(), h.deps, ResolveRequest{RunJob: res.RunJob, State: StateSucceeded, Reason: "done", ResultLine: "ok", CanaryRoom: testCanary})
 	if err != nil || out.State != StateSucceeded || !out.TornDown {
 		t.Fatalf("outcome = %+v, %v", out, err)
+	}
+	if out.Canary == nil || out.Canary.Posted || out.Canary.Stanza != "" {
+		t.Errorf("canary = %+v", out.Canary)
 	}
 	if c := runLedger(t, h, res.RunJob).Calls[0]; c.Tool != CanaryTool || c.OK || !strings.Contains(c.Reason, "posting to "+testCanary+" failed") {
 		t.Errorf("canary note = %+v", c)

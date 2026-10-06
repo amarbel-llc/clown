@@ -82,11 +82,14 @@ func cmdDecide(resolve func(context.Context, string) (rm.ResolveModelResult, err
 	}
 	var store jr.Store
 	if opts.runKey != "" {
-		// Fail before any call when the run does not exist.
+		// Fail before any call when the run does not exist, is pending or is
+		// resolved (its ledger would refuse the route entry anyway).
 		if store, err = jr.DefaultStore(); err == nil {
 			var run *jr.RunRecord
 			if run, err = store.LoadRun(opts.runKey); err == nil && run == nil {
 				err = fmt.Errorf("no run with key %q", opts.runKey)
+			} else if err == nil {
+				err = run.CheckOpen()
 			}
 		}
 		if err != nil {

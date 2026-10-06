@@ -34,7 +34,83 @@ func lifecycleEnv(t *testing.T) *jugglerruntest.Fakes {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv(jr.SessionIDEnv, "")
 	t.Setenv(jr.MoxyURLEnv, "")
+	// The minter credential resolve's teardown requires (the fake ignores it).
+	t.Setenv(minterPasswordFileEnv, filepath.Join(t.TempDir(), "minter.pw"))
+	t.Setenv(minterUserEnv, "troupe-minter")
 	return f
+}
+
+func TestCmdSpawn_FailedNewRunPrintsThePendingRun(t *testing.T) {
+	f := lifecycleEnv(t)
+	f.Fail(t, "ringmaster", "start")
+	args := []string{"--new-run", "--run-key", "rec-p", "--input", "-", "--issuer", "webhook", "--room", "run@rooms.test"}
+	var out, errb bytes.Buffer
+	if code := cmdSpawn(args, strings.NewReader("{}"), &out, &errb); code != 1 {
+		t.Fatalf("exit = %d", code)
+	}
+	var p map[string]any
+	if err := json.Unmarshal(out.Bytes(), &p); err != nil || p["run_key"] != "rec-p" || p["pending"] != true || p["root_principal"] != jr.NewRootPrincipal("rec-p") || p["room"] != "run@rooms.test" {
+		t.Fatalf("stdout = %q (%v)", out.String(), err)
+	}
+	if !strings.Contains(errb.String(), "starting the run job") {
+		t.Errorf("stderr must carry the cause: %s", errb.String())
+	}
+
+	// decide on the pending run refuses before any model call.
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++; _, _ = io.WriteString(w, decideOK) }))
+	t.Cleanup(srv.Close)
+	out.Reset()
+	errb.Reset()
+	code := cmdDecide(decisionsAt(srv.URL), srv.Client(), []string{"--model", "jev", "--room", "run@rooms.test", "--parent", "p", "--troupe", f.Troupe, "--run-key", "rec-p"}, strings.NewReader(decideTestPayload), &out, &errb)
+	if code != 1 || calls != 0 || !strings.Contains(errb.String(), "pending") {
+		t.Errorf("decide on a pending run: exit = %d, model calls = %d, stderr = %s", code, calls, errb.String())
+	}
+	for _, c := range f.Calls(t, "troupe") {
+		if c.Argv[0] == "muc" && c.Argv[1] == "send" && strings.Contains(strings.Join(c.Argv, " "), `"decision"`) {
+			t.Errorf("no decision stanza may be posted: %q", c.Argv)
+		}
+	}
+
+	// The retry resumes: existing false, resumed true.
+	if err := os.Remove(f.Dir + "/fail/ringmaster-start"); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := cmdSpawn(args, strings.NewReader("{}"), &out, &errb); code != 0 || !strings.Contains(out.String(), `"existing":false`) || !strings.Contains(out.String(), `"resumed":true`) {
+		t.Fatalf("retry exit = %d, stdout = %s", code, out.String())
+	}
+	out.Reset()
+	if code := cmdSpawn(args, strings.NewReader("{}"), &out, &errb); code != 0 || !strings.Contains(out.String(), `"existing":true`) || strings.Contains(out.String(), `"resumed"`) {
+		t.Fatalf("complete run: exit = %d, stdout = %s", code, out.String())
+	}
+}
+
+func TestCmdResolve_RequiresTheMinterCredential(t *testing.T) {
+	f := lifecycleEnv(t)
+	var out, errb bytes.Buffer
+	if code := cmdSpawn([]string{"--new-run", "--run-key", "rec-m", "--input", "-", "--issuer", "webhook", "--room", "run@rooms.test"}, strings.NewReader("{}"), &out, &errb); code != 0 {
+		t.Fatalf("new-run: %s", errb.String())
+	}
+	var run jr.NewRunResult
+	if err := json.Unmarshal(out.Bytes(), &run); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(minterPasswordFileEnv, "")
+	t.Setenv(minterUserEnv, "")
+	before := len(f.Calls(t, ""))
+	out.Reset()
+	errb.Reset()
+	if code := cmdResolve([]string{run.RunJob, "--state", "succeeded", "--reason", "r", "--result-line", "x", "--canary-room", "canary@rooms.test"}, &out, &errb); code != 1 || !strings.Contains(errb.String(), minterPasswordFileEnv) {
+		t.Fatalf("exit = %d, stderr = %s", code, errb.String())
+	}
+	if n := len(f.Calls(t, "")); n != before {
+		t.Errorf("nothing may run before the refusal: %d calls became %d", before, n)
+	}
+	out.Reset()
+	if code := cmdResolve([]string{run.RunJob, "--state", "succeeded", "--reason", "r", "--keep-accounts"}, &out, &errb); code != 0 {
+		t.Errorf("--keep-accounts needs no minter credential: exit = %d, stderr = %s", code, errb.String())
+	}
 }
 
 const cmdBrief = `schema = 1

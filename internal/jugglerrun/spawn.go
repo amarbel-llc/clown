@@ -86,6 +86,9 @@ type NewRunResult struct {
 	// OperatorJID is the created room's operator owner, when one was given.
 	OperatorJID string `json:"operator_jid,omitempty"`
 	Existing    bool   `json:"existing"`
+	// Resumed: this call finished a pending run (an earlier --new-run with
+	// the same key failed after the mint); Existing is false then.
+	Resumed bool `json:"resumed,omitempty"`
 	// Resolved and TornDown tell a caller that finds an existing run how far
 	// it got: a crashed first delivery leaves it unresolved.
 	Resolved bool `json:"resolved"`
@@ -99,6 +102,23 @@ func newRunResult(rec *RunRecord, existing bool) NewRunResult {
 		Resolved: rec.Resolved != nil, TornDown: rec.TornDown,
 	}
 }
+
+// PendingRunError is a `spawn --new-run` failure after the root's mint that
+// saved the run as pending (FDR 0019 §1): the same call with the same run
+// key resumes it. Err is the cause.
+type PendingRunError struct {
+	RunKey        string `json:"run_key"`
+	Pending       bool   `json:"pending"`
+	RootPrincipal string `json:"root_principal"`
+	Room          string `json:"room"`
+	Err           error  `json:"-"`
+}
+
+func (e *PendingRunError) Error() string {
+	return fmt.Sprintf("%v (run %s saved as pending; retry with the same --run-key)", e.Err, e.RunKey)
+}
+
+func (e *PendingRunError) Unwrap() error { return e.Err }
 
 // runInputStanza is the room's root stanza.
 type runInputStanza struct {
@@ -179,9 +199,9 @@ func NewRun(ctx context.Context, deps LifecycleDeps, req NewRunRequest) (NewRunR
 		pending := *rec
 		pending.Pending, pending.RootStanza, pending.RunJob, pending.Holders = true, "", "", nil
 		if saveErr := deps.Store.SaveRun(&pending); saveErr != nil {
-			err = fmt.Errorf("%w (saving the pending run record also failed: %v)", err, saveErr)
+			return NewRunResult{}, fmt.Errorf("%w (saving the pending run record also failed: %v)", err, saveErr)
 		}
-		return NewRunResult{}, err
+		return NewRunResult{}, &PendingRunError{RunKey: pending.RunKey, Pending: true, RootPrincipal: pending.RootPrincipal, Room: pending.Room, Err: err}
 	}
 
 	rec.Room = req.Room
@@ -227,7 +247,9 @@ func NewRun(ctx context.Context, deps LifecycleDeps, req NewRunRequest) (NewRunR
 	if err := deps.Store.SaveRun(rec); err != nil {
 		return failed(fmt.Errorf("saving the run record: %w", err))
 	}
-	return newRunResult(rec, false), nil
+	res := newRunResult(rec, false)
+	res.Resumed = prior != nil
+	return res, nil
 }
 
 func failJobUndo(rmc Ringmaster, target, job string) func(ctx context.Context, cause error) error {
@@ -396,11 +418,8 @@ func SpawnChild(ctx context.Context, deps LifecycleDeps, req SpawnRequest) (rec 
 	} else if run == nil {
 		return nil, false, errors.New("the run record vanished")
 	}
-	if run.Resolved != nil {
-		return nil, false, fmt.Errorf("run %s is already resolved (%s)", run.RunKey, run.Resolved.State)
-	}
-	if run.Pending {
-		return nil, false, fmt.Errorf("run %s is pending: its spawn --new-run failed; retry it with the same --run-key", run.RunKey)
+	if err := run.CheckOpen(); err != nil {
+		return nil, false, err
 	}
 	if prior, err := deps.Store.LoadChild(run.RunKey, digest); err != nil {
 		return nil, false, err

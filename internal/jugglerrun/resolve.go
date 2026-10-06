@@ -40,6 +40,8 @@ type ResolveOutcome struct {
 	// AlreadyResolved: the run was resolved before; nothing but a pending
 	// teardown was done.
 	AlreadyResolved bool `json:"already_resolved"`
+	// Canary is set when a canary room was given.
+	Canary *CanaryOutcome `json:"canary,omitempty"`
 	// TornDown: every account of the run is gone (RunRecord.TornDown).
 	TornDown bool `json:"torn_down"`
 	// Teardown is the teardown entries this call appended to the run ledger.
@@ -79,13 +81,22 @@ func Resolve(ctx context.Context, deps LifecycleDeps, req ResolveRequest) (Resol
 	out := ResolveOutcome{RunKey: run.RunKey, RunJob: run.RunJob, Ledger: deps.Store.RunLedgerPath(run.RunKey), Woken: []string{}}
 	if run.Resolved != nil {
 		out.State, out.Reason, out.AlreadyResolved = run.Resolved.State, ExitReasonFor(run.Resolved.State, ""), true
+		if req.CanaryRoom != "" {
+			canary, err := recordedCanary(deps.Store, run.RunKey, req.CanaryRoom)
+			if err != nil {
+				return out, err
+			}
+			out.Canary = &canary
+		}
 		return finishTeardown(ctx, deps, run, req.KeepAccounts, out)
 	}
 
 	if req.CanaryRoom != "" {
-		if err := postCanaryOnce(ctx, deps, run, req.CanaryRoom, req.ResultLine); err != nil {
+		canary, err := postCanaryOnce(ctx, deps, run, req.CanaryRoom, req.ResultLine)
+		if err != nil {
 			return out, err
 		}
+		out.Canary = &canary
 	}
 
 	ledger, err := deps.Store.loadRunLedger(run.RunKey)
@@ -170,28 +181,48 @@ func persistLedger(ctx context.Context, deps LifecycleDeps, run *RunRecord, ledg
 // note is appended to the run ledger whatever its resolved state, so a resolve
 // retried after any later failure neither posts again nor loses the note. A
 // failed post is noted too, writes no marker, and changes nothing else.
-func postCanaryOnce(ctx context.Context, deps LifecycleDeps, run *RunRecord, room, line string) error {
-	marker := deps.Store.canaryMarkerPath(run.RunKey)
-	if _, err := os.Stat(marker); err == nil {
-		return nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
+func postCanaryOnce(ctx context.Context, deps LifecycleDeps, run *RunRecord, room, line string) (CanaryOutcome, error) {
+	if prior, err := recordedCanary(deps.Store, run.RunKey, room); err != nil || prior.Posted {
+		return prior, err
 	}
+	out := CanaryOutcome{Room: room}
 	id, postErr := deps.Troupe.PostStanza(ctx, run.rootIdentity(), room, ResolveSource, []byte(line))
 	if postErr == nil {
-		if err := writeFileAtomic(marker, []byte(id+"\n")); err != nil {
-			return fmt.Errorf("writing the canary marker (the line was posted as %s): %w", id, err)
+		out.Posted, out.Stanza = true, id
+		if err := writeFileAtomic(deps.Store.canaryMarkerPath(run.RunKey), []byte(id+"\n")); err != nil {
+			return out, fmt.Errorf("writing the canary marker (the line was posted as %s): %w", id, err)
 		}
 	}
 	ledger, err := deps.Store.loadRunLedger(run.RunKey)
 	if err != nil {
-		return err
+		return out, err
 	}
 	ledger.Calls = append(ledger.Calls, CanaryEntry(room, id, postErr))
 	if err := writeJSONAtomic(deps.Store.RunLedgerPath(run.RunKey), ledger); err != nil {
-		return fmt.Errorf("writing the run ledger: %w", err)
+		return out, fmt.Errorf("writing the run ledger: %w", err)
 	}
-	return nil
+	return out, nil
+}
+
+// CanaryOutcome is `juggler resolve`'s report of the canary line: posted by
+// this call or an earlier attempt (Stanza is then that post's id), or not.
+type CanaryOutcome struct {
+	Room   string `json:"room"`
+	Posted bool   `json:"posted"`
+	Stanza string `json:"stanza,omitempty"`
+}
+
+// recordedCanary reads the run's canary marker: Posted with the stanza id
+// when an earlier attempt posted the line.
+func recordedCanary(store Store, runKey, room string) (CanaryOutcome, error) {
+	data, err := os.ReadFile(store.canaryMarkerPath(runKey))
+	if errors.Is(err, os.ErrNotExist) {
+		return CanaryOutcome{Room: room}, nil
+	}
+	if err != nil {
+		return CanaryOutcome{Room: room}, err
+	}
+	return CanaryOutcome{Room: room, Posted: true, Stanza: strings.TrimSpace(string(data))}, nil
 }
 
 // finishTeardown runs a resolved run's pending teardown unless keep, and

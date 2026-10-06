@@ -155,6 +155,18 @@ type RunRecord struct {
 	TornDown bool `json:"torn_down"`
 }
 
+// CheckOpen refuses a run that takes no more work: a resolved one, or a
+// pending one (its `spawn --new-run` failed and must be retried first).
+func (r *RunRecord) CheckOpen() error {
+	switch {
+	case r.Resolved != nil:
+		return fmt.Errorf("run %s is already resolved (%s)", r.RunKey, r.Resolved.State)
+	case r.Pending:
+		return fmt.Errorf("run %s is pending: its spawn --new-run failed; retry it with the same --run-key", r.RunKey)
+	}
+	return nil
+}
+
 // rootIdentity is the run root as a troupe caller.
 func (r *RunRecord) rootIdentity() Identity {
 	return IdentityFor(r.RootPrincipal, Credential{JID: r.RootJID, PasswordFile: r.RootCredentialRef})

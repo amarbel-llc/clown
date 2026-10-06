@@ -560,8 +560,15 @@ required with
 .Fl -room-domain .
 .El
 Prints
-.Sy {"run_key","root_principal","root_credential_ref","root_jid","room","root_stanza","run_job","operator_jid","existing","resolved","torn_down"}
-.Pq Ql operator_jid No only when set .
+.Sy {"run_key","root_principal","root_credential_ref","root_jid","room","root_stanza","run_job","operator_jid","existing","resumed","resolved","torn_down"}
+.Pq Ql operator_jid No and Ql resumed No only when set .
+.Ql existing
+is true exactly for a complete run found under the key;
+.Ql resumed
+is true when this call finished a
+.Ql pending
+run
+.Pq Ql existing No is false then .
 .Ql root_stanza
 is the run-input stanza id that
 .Cm decide Fl -parent
@@ -582,7 +589,14 @@ job and saves the run as
 the same command with the same
 .Fl -run-key
 resumes it, re-minting the same root.
-A pending run takes no subagents.
+Such a failure prints one line
+.Sy {"run_key","pending":true,"root_principal","room"}
+on stdout
+.Pq the cause on stderr ;
+a failure of the mint itself saves nothing and prints nothing on stdout.
+A pending run takes no subagents, and
+.Cm decide Fl -run-key
+refuses it before any model call.
 One that is never retried leaves the root and room for the retention
 sweep.
 .It Cm spawn Fl -brief Ar template Op Fl -task Ar file Op Fl -run-key Ar key Op Fl -wait Op Fl -timeout Ar dur Op Fl -stop-grace Ar dur Op Fl -moxy-url Ar url Op Fl -juggler Ar path Op Fl -user
@@ -914,8 +928,36 @@ racing
 holds the run lock through its launch, so it is either refused or seen by
 the teardown.
 Prints
-.Sy {"run_key","run_job","state","reason","ledger","woken","already_resolved","torn_down","teardown"}
-.Pq Ql teardown : No this call's entries, omitted when empty .
+.Sy {"run_key","run_job","state","reason","ledger","woken","already_resolved","canary","torn_down","teardown"} .
+.Ql canary
+is present when
+.Fl -canary-room
+was given:
+.Sy {"room","posted","stanza"} ,
+with
+.Ql posted
+true also when an earlier attempt posted the line
+.Pq Ql stanza No is then that post's id .
+.Ql teardown
+is this call's teardown entries; it is absent when the call handled no
+account
+.Pq none was kept by an earlier call, or Fl -keep-accounts .
+.Pp
+The teardown needs the minter credential:
+.Ql troupe mint-revoke
+takes its privilege-free self-removal path only when a minter credential
+is named, and
+.Nm
+hands troupe its own environment.
+.Cm resolve
+therefore requires
+.Ev TROUPE_MINT_PASSWORD_FILE
+.Pq and Ev TROUPE_MINT_USER ;
+without
+.Fl -keep-accounts
+it exits 1 when
+.Ev TROUPE_MINT_PASSWORD_FILE
+is unset, before the canary post and before stopping any child.
 .It Cm job-ledger Ar job Op Fl -target Ar principal
 Print a job's ledger: a run job's run ledger, or an agent job's result
 spool
@@ -1077,6 +1119,21 @@ A unit gets its own, the child's.
 .It Ev JUGGLER_OPERATOR_JID
 The default of
 .Cm spawn Fl -new-run Fl -operator-jid .
+.It Ev TROUPE_MINT_PASSWORD_FILE , Ev TROUPE_MINT_USER
+The spawner's minter credential, read by troupe from the environment
+.Nm
+passes it.
+Required by
+.Cm spawn Fl -new-run
+and
+.Cm spawn Fl -brief
+.Pq the mints
+and by
+.Cm resolve
+.Pq the account teardown; checked up front unless Fl -keep-accounts .
+Stripped from every agent's unit, moxy and tool servers, and rejected in
+a brief's
+.Ql [env] .
 .It Ev TROUPE_XMPP_*
 The ambient XMPP identity that
 .Cm decide
