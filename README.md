@@ -93,6 +93,11 @@ It returns `{ packages.default, devShells.default, checks }`.
           { flake = moxy; dirs = [ "share/purse-first/moxy" ]; }
           { flake = bob;  dirs = [ "share/purse-first/*" ]; }
         ];
+        # Optional: burn this moxy's store path into the juggler binary so
+        # `juggler run` launches it instead of resolving `moxy` from PATH.
+        # Precedence: explicit `moxy` > the first plugin flake exposing
+        # `packages.<system>.moxy` > PATH.
+        moxy = moxy.packages.${system}.moxy;
       };
     in {
       packages.${system}.default = juggler.packages.default;

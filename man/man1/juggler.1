@@ -944,8 +944,11 @@ flag, then the variable, then the store path burned in at build time,
 then the bare name on
 .Ev PATH .
 In the nix build ringmaster, troupe and systemd-run are burned in; moxy is
-not, and is looked up on
-.Ev PATH .
+looked up on
+.Ev PATH
+unless the juggler was built by
+.Cm mkJuggler
+with a moxy, which burns that moxy in.
 .It Ev JUGGLER_MOXY_URL
 An already-running MCP upstream for
 .Cm run

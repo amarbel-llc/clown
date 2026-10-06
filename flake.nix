@@ -842,6 +842,9 @@
             # race builds a -race variant through buildGoAuto (igloo#34): godyn
             # natively, bga via buildGoRace. Only clown-go-race sets it.
             race ? false,
+            # jugglerGo is the juggler binary whose path is burned in as
+            # JugglerCliPath; mkJuggler passes one with moxy burned in.
+            jugglerGo ? juggler-go,
           }:
           let
             tentClaudeCliPath =
@@ -869,7 +872,7 @@
             ldflagsX = {
               "code.linenisgreat.com/clown/internal/buildcfg.ClaudeCliPath" = claudeCliPath;
               "code.linenisgreat.com/clown/internal/buildcfg.CodexCliPath" = codexCliPath;
-              "code.linenisgreat.com/clown/internal/buildcfg.JugglerCliPath" = "${juggler-go}/bin/juggler";
+              "code.linenisgreat.com/clown/internal/buildcfg.JugglerCliPath" = "${jugglerGo}/bin/juggler";
               "code.linenisgreat.com/clown/internal/buildcfg.AgentsFile" = agents-file;
               "code.linenisgreat.com/clown/internal/buildcfg.DisallowedToolsFile" = disallowed-tools-file;
               "code.linenisgreat.com/clown/internal/buildcfg.SystemPromptAppendD" = "${./system-prompt-append.d}";
@@ -934,26 +937,42 @@
         # juggler-owned (cmd/juggler/buildcfg.go) rather than clown's
         # internal/buildcfg. Clean perforation line for a future extraction
         # into its own repo.
-        juggler-go = buildClownGo {
-          pname = "juggler";
-          version = clownVersion;
-          subPackages = [ "cmd/juggler" ];
-          ldflags = [
-            "-s"
-            "-w"
-          ];
-          # The agent-substrate verbs (FDR 0019) consume ringmaster, troupe and
-          # systemd-run as binaries: burn their store paths in as the defaults
-          # behind --ringmaster/--troupe/--systemd-run and JUGGLER_*_BIN. moxy
-          # is not an input of this flake, so MoxyPath stays empty and `juggler
-          # run` resolves moxy from PATH (or --moxy / JUGGLER_MOXY_BIN).
-          ldflagsX = {
-            "main.LlamaServerPath" = llamaServerPath;
-            "main.RingmasterPath" = "${ringmasterPkg}/bin/ringmaster";
-            "main.TroupePath" = "${troupePkg}/bin/troupe";
-            "main.SystemdRunPath" = "${pkgs.systemd}/bin/systemd-run";
+        #
+        # mkJugglerGo { moxyPath } builds it. The agent-substrate verbs
+        # (FDR 0019) consume ringmaster, troupe and systemd-run as binaries:
+        # their store paths are burned in as the defaults behind
+        # --ringmaster/--troupe/--systemd-run and JUGGLER_*_BIN. moxy is NOT an
+        # input of this flake (moxy's flake pins clown, so that would pin the
+        # two repos mutually), so MoxyPath is empty by default and `juggler run`
+        # resolves moxy from PATH (or --moxy / JUGGLER_MOXY_BIN). mkJuggler
+        # passes the consumer's moxy as `moxyPath` to burn it in per-juggler.
+        mkJugglerGo =
+          {
+            moxyPath ? "",
+          }:
+          buildClownGo {
+            pname = "juggler";
+            version = clownVersion;
+            subPackages = [ "cmd/juggler" ];
+            ldflags = [
+              "-s"
+              "-w"
+            ];
+            ldflagsX = {
+              "main.LlamaServerPath" = llamaServerPath;
+              "main.RingmasterPath" = "${ringmasterPkg}/bin/ringmaster";
+              "main.TroupePath" = "${troupePkg}/bin/troupe";
+              # pkgs.systemd is linux-only; an empty path falls through to the
+              # bare name (resolveBin) where there is no systemd (darwin).
+              "main.SystemdRunPath" =
+                lib.optionalString pkgs.stdenv.hostPlatform.isLinux "${pkgs.systemd}/bin/systemd-run";
+            }
+            // lib.optionalAttrs (moxyPath != "") { "main.MoxyPath" = moxyPath; };
           };
-        };
+
+        # PATH-resolved-moxy default: packages.juggler, the hm module, tests
+        # and the godyn lanes.
+        juggler-go = mkJugglerGo { };
 
         # ringmaster + troupe binaries now come from the extracted
         # code.linenisgreat.com/ringmaster flake input (the job platform:
@@ -1270,6 +1289,7 @@
             enableTentClaude ? tentClaudeEnabled,
             podmanMachineName ? "",
             tentBackend ? "podman",
+            jugglerGo ? juggler-go,
           }:
           let
             clownGoBin = mkClownGo {
@@ -1279,6 +1299,7 @@
                 enableTentClaude
                 podmanMachineName
                 tentBackend
+                jugglerGo
                 ;
             };
           in
@@ -1289,7 +1310,7 @@
               clown-plugin-host
               clown-stdio-bridge
               clown-mcp-collapse
-              juggler-go
+              jugglerGo
               # jobPlatformBins = bin/ringmaster (from the ringmaster input) +
               # bin/troupe (from the troupe input) + their manpages, collision-
               # resolved (troupe wins the transitional bin/troupe overlap).
@@ -1338,9 +1359,33 @@
             # See mkClownGo for the tentBackend contract. Recognized:
             # "podman" (default) and "lima".
             tentBackend ? "podman",
+            # moxy: a package providing bin/moxy. Its store path is burned into
+            # this juggler (main.MoxyPath), so `juggler run` launches that
+            # pinned moxy instead of resolving `moxy` from PATH. moxy is not an
+            # input of clown's flake (moxy pins clown, so that would pin the two
+            # mutually); the consumer supplies it, e.g.
+            # `moxy = moxy.packages.${system}.moxy;`. Precedence: explicit
+            # `moxy` > the first plugin whose flake exposes
+            # `packages.<system>.moxy` > PATH resolution (null).
+            moxy ? null,
           }:
           let
             pluginMeta = if plugins == [ ] then emptyPluginMeta else resolvePlugins plugins;
+            pluginMoxies = lib.concatMap (
+              plugin: lib.optional (plugin.flake.packages.${system} ? moxy) plugin.flake.packages.${system}.moxy
+            ) plugins;
+            effectiveMoxy =
+              if moxy != null then
+                moxy
+              else if pluginMoxies != [ ] then
+                builtins.head pluginMoxies
+              else
+                null;
+            jugglerGo =
+              if effectiveMoxy == null then
+                juggler-go
+              else
+                mkJugglerGo { moxyPath = "${effectiveMoxy}/bin/moxy"; };
           in
           {
             packages.default = mkClownPkg {
@@ -1351,6 +1396,7 @@
                 enableTentClaude
                 podmanMachineName
                 tentBackend
+                jugglerGo
                 ;
             };
             devShells.default = pkgs.mkShell {

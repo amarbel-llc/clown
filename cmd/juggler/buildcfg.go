@@ -19,8 +19,9 @@ var LlamaServerPath string
 // are the defaults behind --ringmaster/--troupe/--systemd-run/--moxy and
 // JUGGLER_{RINGMASTER,TROUPE,SYSTEMD_RUN,MOXY}_BIN, which still override
 // them (flag, then env, then the burned-in path, then the bare name on PATH).
-// Empty in dev builds, and MoxyPath is empty in nix builds too: moxy is not
-// an input of this flake, so it stays PATH-resolved.
+// Empty in dev builds. MoxyPath is also empty in the standalone nix package
+// (moxy is not an input of this flake, so it stays PATH-resolved); mkJuggler
+// sets it per-juggler from the consumer's moxy.
 var (
 	RingmasterPath string
 	TroupePath     string
