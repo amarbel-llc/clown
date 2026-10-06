@@ -50,7 +50,12 @@ func cmdResolve(args []string, stdout, stderr io.Writer) int {
 			return fail(stderr, "resolve", fmt.Errorf("--fallback-artifacts: %w", err))
 		}
 	}
-	return withDeps(context.Background(), stderr, "resolve", bins, resolveTimeout, func(ctx context.Context, deps jr.LifecycleDeps) int {
+	// The stop grace is spent inside the budget, so it extends it.
+	budget := resolveTimeout
+	if stopGrace > 0 {
+		budget += stopGrace
+	}
+	return withDeps(context.Background(), stderr, "resolve", bins, budget, func(ctx context.Context, deps jr.LifecycleDeps) int {
 		out, err := jr.Resolve(ctx, deps, jr.ResolveRequest{RunJob: job, State: state, Reason: reason, FallbackArtifacts: artifacts, StopGrace: stopGrace})
 		if err != nil {
 			return fail(stderr, "resolve", err)

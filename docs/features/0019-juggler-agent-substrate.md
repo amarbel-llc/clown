@@ -673,10 +673,14 @@ The router, before any subagent exists:
   backstop" is therefore aspirational until ringmaster grows a lock verb
   (ringmaster#27). The hook is idempotent and is the only emitter in
   practice.
-- **ringmaster protocol ≥ 2 is required** for `aborted`, `cancel-requested`
-  and `wait --on-cancel`; an older installed ringmaster (which spelled the
-  state `cancelled`) will not interoperate. The nix-pinned binary (brief 6)
-  must be protocol 2 or later.
+- **ringmaster protocol ≥ 2 is required** for `aborted`, `cancel-requested`,
+  `cancel` and `wait --on-cancel`; an older installed ringmaster (which
+  spelled the state `cancelled`) will not interoperate. **troupe ≥ 4c52b3b
+  is required** for `mint --password-file` (and, when provisioning lands,
+  `muc create`/`muc affiliate`); an older troupe rejects the flag and every
+  mint fails. In v1 both binaries are found on PATH or via
+  `JUGGLER_{RINGMASTER,TROUPE}_BIN`; the nix-pinned paths (brief 6,
+  clown#246) must satisfy both minimums.
 - **Room provisioning is unavailable in v1.** troupe has no verb to create
   a MUC with the operator as owner (troupe#44), so `juggler spawn
   --new-run` requires `--room` naming an existing room; `--room-domain`

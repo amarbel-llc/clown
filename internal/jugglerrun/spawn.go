@@ -540,7 +540,9 @@ func DefaultWaitTimeout(rec *ChildRecord, grace time.Duration) time.Duration {
 // never races a late agent; a job still not terminal after that is running.
 func WaitChild(ctx context.Context, deps LifecycleDeps, rec *ChildRecord, timeout, grace time.Duration) (WaitRecord, error) {
 	out := WaitRecord{JID: rec.JID, Job: rec.Job, Room: rec.Room, Artifacts: []Artifact{}}
-	_ = deps.Ringmaster.WaitTerminal(ctx, rec.Parent, rec.Job, timeout)
+	waitStart := time.Now()
+	waitErr := deps.Ringmaster.WaitTerminal(ctx, rec.Parent, rec.Job, timeout)
+	timedOut := timeout > 0 && time.Since(waitStart) >= timeout
 	recs, err := deps.Ringmaster.Records(ctx, rec.Parent, rec.Job)
 	if err != nil {
 		return out, fmt.Errorf("reading %s: %w", rec.Job, err)
@@ -549,13 +551,19 @@ func WaitChild(ctx context.Context, deps LifecycleDeps, rec *ChildRecord, timeou
 		return out, fmt.Errorf("job %s has no journal on %s's channel", rec.Job, rec.Parent)
 	}
 	term, terminal := TerminalRecord(recs)
-	if !terminal {
+	if !terminal && timedOut {
+		// Only a wait that genuinely used up its timeout may cancel the job; any
+		// earlier return (ringmaster failing to exec, a transient read error)
+		// must leave a healthy agent running.
 		if recs, terminal, err = requestStop(ctx, deps.Ringmaster, rec.Parent, rec.Job, "juggler spawn --wait timed out", grace); err != nil {
 			return out, err
 		}
 		term, _ = TerminalRecord(recs)
 	}
 	if !terminal {
+		if waitErr != nil && !timedOut {
+			return out, fmt.Errorf("waiting for %s: %w", rec.Job, waitErr)
+		}
 		out.State = StateRunning
 		return out, nil
 	}

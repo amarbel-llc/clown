@@ -141,7 +141,6 @@ func stopLiveChildren(ctx context.Context, deps LifecycleDeps, runKey string, gr
 		return nil, err
 	}
 	entries := make([]*RunLedgerEntry, len(children))
-	errs := make([]error, len(children))
 	var wg sync.WaitGroup
 	for i, child := range children {
 		wg.Add(1)
@@ -149,7 +148,11 @@ func stopLiveChildren(ctx context.Context, deps LifecycleDeps, runKey string, gr
 			defer wg.Done()
 			recs, err := deps.Ringmaster.Records(ctx, child.Parent, child.Job)
 			if err != nil {
-				errs[i] = fmt.Errorf("reading %s: %w", child.Job, err)
+				// Resolve gates teardown: an unreadable child journal is
+				// recorded, never fatal. The cancel is still tried.
+				_ = deps.Ringmaster.Cancel(ctx, child.Parent, child.Job, "run resolved")
+				e := ChildStopFailureEntry(child, err)
+				entries[i] = &e
 				return
 			}
 			if _, terminal := TerminalRecord(recs); terminal || len(recs) == 0 {
@@ -157,7 +160,8 @@ func stopLiveChildren(ctx context.Context, deps LifecycleDeps, runKey string, gr
 			}
 			_, terminalized, err := requestStop(ctx, deps.Ringmaster, child.Parent, child.Job, "run resolved", grace)
 			if err != nil {
-				errs[i] = err
+				e := ChildStopFailureEntry(child, err)
+				entries[i] = &e
 				return
 			}
 			e := ChildStopEntry(child, terminalized)
@@ -165,9 +169,6 @@ func stopLiveChildren(ctx context.Context, deps LifecycleDeps, runKey string, gr
 		}(i, child)
 	}
 	wg.Wait()
-	if err := errors.Join(errs...); err != nil {
-		return nil, err
-	}
 	var out []RunLedgerEntry
 	for _, e := range entries {
 		if e != nil {

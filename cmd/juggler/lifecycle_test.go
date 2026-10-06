@@ -210,6 +210,26 @@ func TestCmdSpawn_RunKeyIdempotencyWaitAndResolve(t *testing.T) {
 	}
 }
 
+func TestCmdResolve_StopGraceLongerThanTheBaseBudget(t *testing.T) {
+	lifecycleEnv(t)
+	input := filepath.Join(t.TempDir(), "rec.json")
+	if err := os.WriteFile(input, []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := cmdSpawn([]string{"--new-run", "--run-key", "rec-7", "--input", input, "--issuer", "webhook", "--room", "run@rooms.test"}, nil, &out, &errb); code != 0 {
+		t.Fatalf("new-run: %s", errb.String())
+	}
+	var run jr.NewRunResult
+	if err := json.Unmarshal(out.Bytes(), &run); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if code := cmdResolve([]string{run.RunJob, "--state", "succeeded", "--reason", "done", "--stop-grace", "90s"}, &out, &errb); code != 0 {
+		t.Fatalf("resolve exit = %d, stderr = %s", code, errb.String())
+	}
+}
+
 func TestCmdDecide_RunKeyRecordsRouteEntries(t *testing.T) {
 	f := lifecycleEnv(t)
 	input := filepath.Join(t.TempDir(), "rec.json")

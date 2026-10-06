@@ -107,6 +107,16 @@ func ChildStopEntry(child *ChildRecord, terminalized bool) RunLedgerEntry {
 	}
 }
 
+// ChildStopFailureEntry is the run ledger's entry for a subagent whose journal
+// could not be read while resolving: never ok, the error in the reason.
+func ChildStopFailureEntry(child *ChildRecord, err error) RunLedgerEntry {
+	return RunLedgerEntry{
+		Tool: "subagent_stop", Kind: "subagent", OK: false, URIs: []string{},
+		Reason: fmt.Sprintf("journal unreadable: %v", err),
+		Job:    child.Job, Principal: child.Principal, StoppedByResolve: true,
+	}
+}
+
 // AppendRunLedgerEntry appends e to run runKey's ledger, under the run's
 // lock. A resolved run's ledger is closed and refuses new entries.
 func AppendRunLedgerEntry(store Store, runKey string, e RunLedgerEntry) error {

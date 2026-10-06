@@ -221,6 +221,63 @@ func TestResolve_ChildThatIgnoresTheCancelIsRecordedNotStopped(t *testing.T) {
 	}
 }
 
+// flakyRingmaster fails WaitTerminal immediately and/or Records for one job.
+type flakyRingmaster struct {
+	ExecRingmaster
+	waitErr   error
+	recordsOf string
+}
+
+func (f flakyRingmaster) WaitTerminal(ctx context.Context, target, job string, timeout time.Duration) error {
+	if f.waitErr != nil {
+		return f.waitErr
+	}
+	return f.ExecRingmaster.WaitTerminal(ctx, target, job, timeout)
+}
+
+func (f flakyRingmaster) Records(ctx context.Context, target, job string) ([]JobRecord, error) {
+	if job == f.recordsOf {
+		return nil, errors.New("journal exploded")
+	}
+	return f.ExecRingmaster.Records(ctx, target, job)
+}
+
+func TestWaitChild_NonTimeoutWaitFailureDoesNotCancel(t *testing.T) {
+	h := newHarness(t)
+	pinPrincipals(h, testRoot, "child-1")
+	newRun(t, h, "rec-42")
+	live := spawnChild(t, h)
+	h.deps.Ringmaster = flakyRingmaster{ExecRingmaster: h.deps.Ringmaster.(ExecRingmaster), waitErr: errors.New("exec failed")}
+
+	_, err := WaitChild(context.Background(), h.deps, live, time.Minute, time.Second)
+	if err == nil {
+		t.Fatal("want the wait error surfaced")
+	}
+	if got := h.fakes.Cancelled(t); len(got) != 0 {
+		t.Errorf("a healthy job must not be cancelled: %v", got)
+	}
+}
+
+func TestResolve_UnreadableChildJournalIsRecordedNotFatal(t *testing.T) {
+	h := newHarness(t)
+	pinPrincipals(h, testRoot, "child-1")
+	res := newRun(t, h, "rec-42")
+	live := spawnChild(t, h)
+	h.deps.Ringmaster = flakyRingmaster{ExecRingmaster: h.deps.Ringmaster.(ExecRingmaster), recordsOf: live.Job}
+
+	if _, err := Resolve(context.Background(), h.deps, ResolveRequest{RunJob: res.RunJob, State: StateFailed, Reason: "x", StopGrace: 100 * time.Millisecond}); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.fakes.Cancelled(t); len(got) != 1 || got[0] != live.Job {
+		t.Errorf("the cancel is still attempted: %v", got)
+	}
+	var ledger RunLedger
+	data, _ := JobLedger(context.Background(), h.deps, res.RunJob, "")
+	if err := json.Unmarshal(data, &ledger); err != nil || len(ledger.Calls) != 2 || ledger.Calls[0].OK || ledger.Calls[0].Tool != "subagent_stop" || !strings.Contains(ledger.Calls[0].Reason, "journal unreadable: ") {
+		t.Errorf("run ledger = %s (%v)", data, err)
+	}
+}
+
 func TestNewRun_RoomProvisioningIsTroupesLane(t *testing.T) {
 	h := newHarness(t)
 	pinPrincipals(h, testRoot)
