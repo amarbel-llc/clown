@@ -33,7 +33,7 @@ decoupled from it.
 
 ## Interface
 
-### 1. Two verbs
+### 1. Three verbs
 
 **`juggler run`** is the agent. It is a headless process that:
 
@@ -72,6 +72,52 @@ with the same brief reuses idempotently (the mint already is; the room
 and brief drop must be too). An orphan room holding a brief and no agent
 is a bug, not an accepted state.
 
+`juggler spawn --new-run` is the **issuer's** entry for a new tree: it
+mints the run's **root principal** (§2) and certifies it under the
+issuer, creates the run's MUC, posts the recording (or whatever the
+run's input is) as the room's root stanza, starts a **run-level**
+ringmaster job owned by the root, and returns the root's credential
+reference, room JID and run job id. Every later step of the run — the
+decision, the subagent spawns, the fallback — executes as the run root.
+The run job's terminal record is written when the run is resolved
+(`succeeded`, or `failed` when the fallback ran), and its exit wake goes
+to the issuer.
+
+**`juggler decide`** is the router. It is a synchronous verb, not an
+agent: one request to a **Decisions-API**-style model (OpenRouter's
+`POST /api/alpha/decisions`, which the first bullet's router model
+`typesafe/jev-1.13` runs on; it generates no text and has no tool
+calls), no loop, no ringmaster job of its own. Given the Decisions
+request shape on stdin minus `model` and auth (`{"state": …,
+"questions": {…}}`, exactly as OpenRouter documents it), plus
+`--model <registry name>`, `--room`, `--parent <recording stanza id>`
+and `--min-confidence <0..1>`, it:
+
+1. resolves the model from the registry (a new `style = "decisions"`,
+   URL and credential reference from the entry, §10's daemon-free path);
+2. sends the request and parses `answers`;
+3. applies the confidence threshold;
+4. posts ONE **decision stanza** into the run's room as the run root,
+   provenance parent = the recording, body = {model, digest of `state`,
+   the `questions`, the full `answers` incl. confidence and
+   per-option probabilities, the threshold and its verdict, usage};
+5. prints the full `answers` object (plus `id`, `model`, `usage`) on
+   stdout and exits with one of:
+
+| exit | meaning | glue's action |
+|---|---|---|
+| 0 | usable choice (confidence ≥ threshold), stanza posted | spawn the chosen subagent; its brief's provenance parent is the decision stanza |
+| 4 | valid choice but **below threshold**; stdout and stanza carry choice + confidence | fallback note recording the router's choice and confidence |
+| 2 | **no choice**: HTTP failure, unparseable response, or `choice` not in `criteria`; stdout carries `{reason, http_status?, raw?}`; a stanza records the attempt | fallback note with the reason |
+| 3 | decided but the room post failed (provenance chain broken) | treat as failure |
+| 1 | usage/config error before any call | treat as failure |
+
+Every non-zero exit is a `failed` entry of kind `route` in the **run
+ledger**, recorded by the lifecycle owner (the glue in v1, §11), and the
+run resolves to the fallback. The router therefore keeps "success is
+measured, never reported": its outcome is a recorded, mechanical fact,
+not a model's claim.
+
 The spawner is the FDR 0032 **D2 issuer** for the tree it starts. juggler
 never invents a principal and never touches troupe certificates.
 
@@ -84,6 +130,19 @@ is **stripped** from the environment handed to moxy and every tool
 server (clown#136 hygiene). The parent's principal and JID are passed in
 the environment too (FDR 0032 D7), so the agent knows whom its exit wake
 and any certificate request go to.
+
+**The run root.** Per FDR 0032 D2, each run (one recording, one tree)
+gets a **fresh root principal**, minted and certified by the issuer
+(`juggler spawn --new-run`). The root is a member of the run's room
+(the operator is its owner), signs the decision stanza and every
+subagent brief, holds the handles on the subagents, carries the run's
+D19 budget slice, and expires with the run; D5's cap means its lifetime
+bounds every child's. The issuer's long-lived process acts as several
+run roots concurrently by holding one credential reference per run.
+This is preferred over the issuer acting as root for every run because
+it gives per-run budgets and handles, bounds blast radius to one run,
+and makes each provenance DAG single-rooted. The root's credential and
+room are swept together at the run's retention point (circus: 30 days).
 
 ### 3. The brief
 
@@ -138,9 +197,13 @@ verifier over the same ledger: the runtime over the job's result spool
 on the host, troupe over the per-agent slice of the room's archive. That
 is FDR 0032 D16's mechanical attestation.
 
-The **router's typed choice is itself a tool call** (`route(choice)`,
-kind `route`), so the one rule has no exception and the router is a live
-unit test of the whole path.
+The **router's choice is a `route` entry in the run ledger**, recorded
+from `juggler decide`'s exit (§1) by the lifecycle owner, so the one
+rule has no exception and the router is a live unit test of the whole
+path. (An earlier draft had the router as a model-emitted `route(choice)`
+tool call inside an agent loop; the first bullet's router model runs on
+a Decisions API with no tool calls, so the choice is recorded by the
+glue instead — same ledger shape, different recorder.)
 
 The ledger carries both the tool **name** and the declared **kind**, so
 an evaluator may count by either. circus FDR-0039 settles that the
@@ -278,6 +341,11 @@ entries) and Anthropic Messages (local llama-server). The existing
 `fake-llama-server` fixture and the dumbo mock API (RFC 0017) are the
 test doubles, one per shape.
 
+The registry's third style, `decisions`, is NOT a loop codec. It is used
+only by `juggler decide` (§1): a decision has no turns, no text and no
+tools, so it never enters the loop or the stanza-shaped turn type; its
+only artefact is the decision stanza.
+
 ### 9. Supervision and scopes
 
 `juggler run` is supervised by **systemd as a transient unit** per agent
@@ -326,6 +394,41 @@ reference in its own state directory. The daemon remains required for
 system-service form of the daemon arrives when a host needs local
 inference for these agents.
 
+### 11. Lifecycle ownership — v1 juggler, v2 spinclass
+
+**v1 (this record):** `juggler spawn` owns spawn, supervision, handles
+and the post-stop hook for worktree-less agents, as §1, §6 and §9
+describe. The run root (§2) is modelled in juggler and ringmaster;
+spinclass has no group above sessions and cannot represent a session
+without a repo today.
+
+**v2 (operator decision, 2026-10-06, recorded in FDR 0032 D7):** the
+lifecycle moves to a **spinclass unit session** — a session kind with no
+worktree and no branch whose process is a systemd transient unit — and
+`juggler spawn` disappears; `juggler run` becomes that kind's
+spawn-entry exactly as `clown` is the worktree kind's. Operator's words:
+spinclass is "eventually … the sole isolation boundary / enforcer for
+worktree and unit agents and scripts" — the end state covers non-agent
+processes such as the fallback script too. Whether the run root is then
+a unit session whose process is the glue, or a new group record, is open
+in FDR 0032. The trigger for starting v2, per FDR 0032: **the first
+handle held across the two kinds** (e.g. a worktree session holding a
+handle on a juggler agent).
+
+**Constraint on v1 so v2 is a relocation, not a migration** (FDR 0032
+D7): v1's handle records and exit reasons MUST keep spinclass's field
+meanings — a holder is a principal string; a granted handle is pending
+and confers nothing until first use; release removes only the caller;
+rights are recorded per holder as a comma-separated list defaulting to
+`observe,close`; exit reasons are D6's five.
+
+Note from spinclass's survey: spinclass's own exit-wake emitter does not
+yet outlive the principal, and its spawn does not mint the child's
+principal (the child's harness does) nor launch through systemd. §6's
+post-stop hook is therefore the first emitter in the fleet that
+satisfies D6's "must outlive the principal" rule, and launcher-minted
+identity (§2, §3) is new for both sides.
+
 ## Examples
 
 An issue-filer brief (unsigned, slice-0 shape):
@@ -373,10 +476,23 @@ The launcher's side:
     #   job-7a21 failed: cannot_complete: "no repo matches 'the router thing'"
     # → the fallback script writes the note, linking the room and the reason.
 
-The router, same mechanism, one tool:
+The router, before any subagent exists:
 
-    .cannot_complete == null
-    and ([.calls[] | select(.kind == "route" and .ok)] | length) == 1
+    $ echo '{"state": {"transcription": "..."},
+             "questions": {"filer": {"type": "choice",
+               "instructions": "Which filer handles this recording?",
+               "criteria": {"issue": "an actionable engineering item",
+                            "note":  "anything else worth keeping"}}}}' \
+      | juggler decide --model jev --room pebble-9f3a@rooms.xmpp.example \
+          --parent <recording-stanza-id> --min-confidence 0.5
+    {"answers": {"filer": {"type": "choice", "choice": "issue",
+                 "confidence": 0.81, "probabilities": {"issue": 0.86, "note": 0.14}}},
+     "id": "gen-dec-…", "model": "typesafe/jev-1.13", "usage": {...}}
+    $ echo $?
+    0
+    # → the glue records {tool: "route", kind: "route", ok: true} in the run
+    #   ledger and spawns the issue-filer with the decision stanza as parent.
+    # exit 4 (below 0.5) or 2 (no choice) → a failed route entry → fallback note.
 
 ## Limitations
 
@@ -427,6 +543,17 @@ The router, same mechanism, one tool:
   sandboxing is the intended weight (not a container: tent exists for
   arbitrary Bash, these are known binaries), chosen per brief and
   narrowed like the moxyfile, never a fixed image.
+- **The Decisions API is alpha.** OpenRouter marks `/api/alpha/decisions`
+  alpha, so the router's request/response shape may move; the
+  `decisions` registry style isolates that to `juggler decide`. Its
+  reported probabilities also vary by up to ~0.08 on identical input per
+  OpenRouter's own cookbook, so the threshold is a soft gate, not a
+  deterministic one. Everything here about the router is from
+  documentation; no authenticated call has been made yet.
+- **Per-run credentials accumulate.** A run root's troupe credential and
+  room outlive the run until the retention sweep (circus's 30-day job,
+  itself deferred). Until that sweep exists, every recording leaves one
+  credential and one room behind.
 - **Toolset granularity is the moxyfile's.** A brief that wants fewer
   tools than a server exposes needs a tool allowlist in the runtime,
   which is a later addition.
@@ -449,6 +576,8 @@ The router, same mechanism, one tool:
 | daemon for remote models | optional | krone's webhook user has no user session | a host needs local inference for these agents (→ system-service daemon) |
 | agent-scope realisation | open: sub-cgroup vs sibling unit | the bullet needs neither namespaces nor the choice | signing lands, or a non-fixed-surface tool server appears (→ sibling unit + `limits.sandbox`) |
 | exit-wake emitter | the unit's `ExecStopPost` hook, sole emitter | survives every ending the main process does not | a holder needs a wake on the systemd-dead path (→ holder-side timeout or a cross-host watcher) |
+| router confidence threshold | 0.5 (`--min-confidence`, overridable per brief) | operator's first-bullet figure; below it the subagent is skipped and the fallback note records the choice and confidence | mirror-phase data shows good choices rejected or bad ones accepted |
+| lifecycle owner | v1: `juggler spawn` | spinclass cannot represent a repo-less session today | the first handle held across the two session kinds (→ v2 spinclass unit session, §11) |
 
 ## FDR 0032 touch-points (operator-resolved 2026-10-06; FDR 0032 edited at spinclass 1647787, unmerged)
 
