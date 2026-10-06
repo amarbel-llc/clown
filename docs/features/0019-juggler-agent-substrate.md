@@ -142,6 +142,13 @@ The **router's typed choice is itself a tool call** (`route(choice)`,
 kind `route`), so the one rule has no exception and the router is a live
 unit test of the whole path.
 
+The ledger carries both the tool **name** and the declared **kind**, so
+an evaluator may count by either. circus FDR-0039 settles that the
+Pebble tools are narrow purpose-built wrappers (never cutting-garden's
+generic create/patch/delete), so counting successful `create_issue` or
+note-write calls by name is sufficient there; `kind` is for briefs whose
+toolset is not hand-built per agent.
+
 ### 5. Tool plane — moxy, narrowed per agent
 
 `juggler run` speaks to exactly one MCP upstream: a **moxy** instance
@@ -165,6 +172,13 @@ subset of the spawner's own effective moxyfile. That is FDR 0032 D13's
 Headless posture: any moxy permission tier other than `always-allow`
 resolves to **deny** for a juggler agent; the agent sees the denial as a
 tool error it can route around or `cannot_complete` on.
+
+Per-agent configuration of the tool servers themselves (circus
+FDR-0039's real-vs-shadow target switch for the mirror phase, for
+example) travels **inside the inline moxyfile** as the servers'
+arguments or environment. The brief has no separate field for it; the
+moxyfile is the one carrier for "what the agent's tools are and how
+they are set", and it is signed with the rest of the brief.
 
 ### 6. Lifecycle — ringmaster enforces, troupe authorises
 
@@ -324,8 +338,8 @@ An issue-filer brief (unsigned, slice-0 shape):
     system    = "You file one issue per actionable item in the transcription…"
     task      = "<transcription text>"
     [limits]
-    steps = 8
-    wall_clock = "120s"
+    steps = 12
+    wall_clock = "2m"
     [evaluator]
     kind = "jq"
     program = '''
@@ -426,8 +440,9 @@ The router, same mechanism, one tool:
 
 | Lever | Current | Rationale | Change signal |
 |---|---|---|---|
-| default step cap | 8 | the bullet's agents make 2–4 tool calls | real briefs routinely hit it |
-| default wall clock | 120s | matches `juggler prompt`'s budget | agents time out while a tool is legitimately slow |
+| default step cap | 12 (loop-enforced) | circus FDR-0039's first-bullet figure; the agents make 2–4 tool calls, the cap is headroom | real briefs routinely hit it |
+| default wall clock | 2 min (loop primary, `RuntimeMaxSec` backstop) | circus FDR-0039's first-bullet figure; matches `juggler prompt`'s budget | agents time out while a tool is legitimately slow |
+| spend control | one dedicated OpenRouter key per spawner with a hard monthly credit limit (circus: ~$10 to start) | smallest thing that bounds blast radius | per-child budgets are wanted: the spawner mints a child key carrying a subset of its own budget (OpenRouter key minting), which is FDR 0032 D13's `cap` right made concrete — goes in the brief as a credential reference, not a secret |
 | evaluator kinds | `jq` only | smallest signed-contract surface | the same count-of-kind jq appears in most briefs (→ `predicate`) or a task needs judgement (→ `agent`) |
 | headless permission posture | non-`always-allow` → deny | no human to ask | a moxin's tier is `ask` only because nobody set it, and agents keep failing on it |
 | transcript layout | one MUC per run | one link for the fallback note; brief in the same transcript | runs grow long enough that per-agent rooms read better |
@@ -462,8 +477,20 @@ The router, same mechanism, one tool:
 - clown#245 — the placeholder this record fills; clown#244 — the
   agent/frontend scope companion note.
 - circus#288 — the Pebble webhook-only path this is the first bullet
-  for; circus FDR 0023 — the earlier ephemeral-clown sketch whose
-  "launch mechanism" question this answers as "juggler agent".
+  for. circus FDR-0039 (`docs/features/0039-pebble-webhook-agent-graph.md`,
+  commit 27c3a0f0 on `fair-linden`) is the consumer-side record,
+  superseding circus FDR-0023 (the earlier ephemeral-clown sketch whose
+  "launch mechanism" question is answered as "juggler agent"). Its
+  first bullet has TWO agents on this substrate — an issue-filer
+  (`list_repos`, `list_issues`, `create_issue`) and a minimal note-filer
+  (one note-writing tool) — both carrying `cannot_complete`, with a
+  script as the bottom fallback.
+- Open on circus's side and possibly returning here: how the hardened
+  `pebble-webhook` system user starts transient units and gets a troupe
+  identity; and how the router model ("Jev", documented as a
+  `POST /v1/systemone` endpoint) is called — if it is not reachable as
+  an OpenAI-compatible or Anthropic endpoint, the models file needs a
+  third style, which touches §8's codecs and §10's daemon-free path.
 - FDR 0010 / FDR 0011 — the juggler daemon lineage; the daemon becomes
   optional here for remote models.
 - RFC 0009 / RFC 0010 / RFC 0011 / RFC 0013 — job-wakeup channel,
