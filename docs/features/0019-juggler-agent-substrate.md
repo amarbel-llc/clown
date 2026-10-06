@@ -60,9 +60,17 @@ assembling the pieces by hand. Given a brief, it:
    and drops the signed brief into the room as its first stanza;
 3. starts `juggler run` as a **systemd transient unit** (§9) with the
    principal, the credential reference, the room JID and the ringmaster
-   target in its environment;
+   target in its environment, and with `ExecStopPost=juggler exit-wake`
+   on the unit as the exit-wake emitter (§6);
 4. records the spawner's **handle** on the job (§6) — the first grant;
 5. returns the agent's JID and ringmaster job id to the caller.
+
+If step 3 fails (systemd refuses the unit, D-Bus or polkit is down,
+delegation is unavailable), `juggler spawn` MUST fail synchronously and
+MUST clean up what steps 1–2 created, or leave them in a state a retry
+with the same brief reuses idempotently (the mint already is; the room
+and brief drop must be too). An orphan room holding a brief and no agent
+is a bug, not an accepted state.
 
 The spawner is the FDR 0032 **D2 issuer** for the tree it starts. juggler
 never invents a principal and never touches troupe certificates.
@@ -93,7 +101,7 @@ into the run's MUC and is the agent's ONLY instruction source. Fields:
 | `task` | the task text |
 | `moxyfile` | the agent's **inline moxyfile** (§5) |
 | `evaluator` | `{kind, program}`; first kind is `jq` (§4) |
-| `limits` | `{steps, wall_clock}` |
+| `limits` | `{steps, wall_clock, sandbox}`; `sandbox` is RESERVED and unused in this slice (§9) |
 
 At slice-0 strength the stanza is unsigned; the field set is what later
 gets signed under the operator chain (FDR 0032 D10), so nothing is
@@ -177,8 +185,8 @@ object it names:
   source of truth.
 - Exercise flows **inward**: holder → stanza to the agent's JID → the
   runtime verifies the right → ringmaster. Exit flows **outward**:
-  ringmaster terminal record → the runtime → an exit-wake stanza to
-  every holder listed on the job.
+  ringmaster terminal record → the unit's post-stop hook → an exit-wake
+  stanza to every holder listed on the job.
 
 ringmaster is the file-descriptor table on the host; troupe is the
 capability token. At slice-0 strength (one host, no crypto) the grant
@@ -203,14 +211,35 @@ them): `succeeded` = `normal`, `failed` = `failed` ("ended on its own
 without doing what it was asked", measured by the runtime, never reported
 by the agent), `aborted` = `shutdown`, `interrupted` = crash.
 
-**Force-reap (`killed`).** A juggler agent CAN be force-reaped: a holder,
-or systemd on `RuntimeMaxSec`, kills the transient unit. The producer
-then never writes `job_done`, so ringmaster's terminal state is
-`interrupted`, the same as a crash. The two are told apart by the
-exit-wake emitter, not by the ringmaster state: the runtime's exit wake
-reports D6's `killed` when the unit's result is a signal death it did
-not cause, and crash otherwise. ringmaster's four states therefore do
-not grow a fifth; D6's fifth reason is derived at emission.
+**The exit-wake emitter is the unit's post-stop hook, and it is the
+only emitter.** `juggler run` never emits the wake itself: on the paths
+where it is alive it writes the ledger verdict into `job_done` and
+exits. The transient unit carries `ExecStopPost=juggler exit-wake`,
+which systemd runs as a fresh process after the main process is gone,
+on EVERY ending (clean exit, non-zero exit, signal death, `RuntimeMaxSec`
+expiry, OOM kill), with the unit's result in `$SERVICE_RESULT` and
+`$EXIT_CODE`/`$EXIT_STATUS` (systemd.service(5), systemd.exec(5)). The
+hook reads the job's holders from the journal, writes the terminal
+record if the main process did not, and sends one reason-tagged
+exit-wake stanza to every holder. It runs inside the unit's cgroup, so
+it is in the runtime scope (§9).
+
+The mapping from the unit's result is mechanical:
+
+| `$SERVICE_RESULT` | ringmaster state | D6 reason |
+|---|---|---|
+| `success` | whatever `juggler run` already wrote (`succeeded` or `failed`) | `normal` or `failed`, relayed |
+| `timeout` (`RuntimeMaxSec`) | `failed`, written by the hook | `failed` — the wall clock is the brief's own limit |
+| `signal` | `interrupted`, written by the hook | `killed` (force-reap by a holder or the platform) |
+| `exit-code`, `core-dump`, `oom-kill` | `interrupted`, written by the hook | crash |
+
+ringmaster's four states therefore do not grow a fifth; D6's fifth
+reason is derived at emission from the unit result. A force-reap IS
+possible for a juggler agent (a holder stops or kills the unit) and is
+what `signal` covers. The ringmaster liveness reaper remains the
+backstop that writes `interrupted` when the hook itself cannot run
+(systemd gone, hook crashed); on that path no D6 wake is sent (see
+Limitations).
 
 ### 7. Transcript — one MUC per run
 
@@ -238,20 +267,35 @@ test doubles, one per shape.
 ### 9. Supervision and scopes
 
 `juggler run` is supervised by **systemd as a transient unit** per agent
-(`RuntimeMaxSec` for the wall clock), started by `juggler spawn`. No
-daemon is involved. The unit carries `Delegate=yes` so the runtime can
-create a sub-cgroup.
+(`RuntimeMaxSec` as the wall-clock BACKSTOP; the loop's own budget from
+the brief is the primary limit and cancels itself first), started by
+`juggler spawn`. No daemon is involved.
 
 Two scopes (clown#244):
 
 - **runtime scope** — the transient unit itself: `juggler run` (XMPP
-  connection owner, ledger, evaluator, job records) **and moxy**. The
-  enforcer belongs with the enforcers.
-- **agent scope** — a sub-cgroup for the tool servers moxy spawns: the
-  only thing the model can drive.
+  connection owner, ledger, evaluator, job records), the post-stop
+  hook, **and moxy**. The enforcer belongs with the enforcers.
+- **agent scope** — a scope under the unit for the tool servers moxy
+  spawns: the only thing the model can drive.
 
 The tier-2 signer (piggy) accepts callers in the runtime scope and
-refuses the agent scope. The signer's rule stays binary.
+refuses the agent scope. The signer's rule stays binary. It MUST fail
+closed: when it cannot positively verify a caller's scope it refuses,
+because cgroup attribution is the one place systemd sits on the trust
+path rather than the liveness path (see Limitations).
+
+**How the agent scope is realised is deliberately left open** between a
+sub-cgroup `juggler run` creates (needs `Delegate=yes` on the unit) and
+a sibling transient unit the tool servers run in. Only the second can
+carry systemd's namespace sandboxing (`PrivateTmp=`, `ProtectHome=`,
+`ProtectSystem=`, `InaccessiblePaths=`, `SystemCallFilter=`, …), which
+is DEFERRED from this slice but must stay reachable; the brief's
+reserved `limits.sandbox` field is where per-brief unit properties will
+land. Which shape, and whether moxy spawns each child through
+`systemd-run`, is decided with the moxy session alongside the narrowing
+merge (§5). Nothing in this slice may build the sub-cgroup in a way that
+forecloses the sibling-unit shape.
 
 This is juggler's answer only. FDR 0032 and piggy FDR 0006 keep "which
 scope a tier-2 key binds to" fully open by the operator's choice; this
@@ -339,6 +383,36 @@ The router, same mechanism, one tool:
 - **Transient units need authority.** A system-service user cannot ask
   the system manager for a transient unit without a polkit rule or
   `Delegate=yes` on its own unit. Which one krone uses is circus's lane.
+- **What systemd failing costs, by case.** The success verdict (ledger +
+  evaluator), tool permissions (moxy) and identity (troupe) do not
+  depend on systemd and fail closed. What does depend on it:
+  - *systemd dies* (= the host dies): every agent dies, no emitter is
+    alive, no D6 wake is sent. Holders on other hosts learn nothing until
+    they time out, and no holder-side timeout is designed. Liveness
+    loss, not safety: a dead agent cannot act. Whether the reaper marks
+    the open jobs `interrupted` after a reboot is unverified.
+  - *systemd degraded* (refuses transient units, D-Bus/polkit down,
+    delegation broken): `juggler spawn` fails synchronously before an
+    agent exists and the fallback runs. A legible stop. `juggler spawn`
+    SHOULD check `systemctl is-system-running` as a precondition.
+  - *systemd regresses*: a wall clock not enforced loses only the
+    backstop (the loop's own budget is primary); a post-stop hook not
+    run loses the wake, not the verdict (the reaper still writes
+    `interrupted`, and the launcher rule works from the journal state
+    alone); a mislabelled result degrades the D6 reason tag, not the
+    success decision; a misreported cgroup is the ONE safety loss,
+    because the signer authenticates by cgroup — moot at slice-0 (nothing
+    is signed), mitigated later by the fail-closed signer (§9) and by
+    deny-by-reachability once namespace sandboxing lands.
+- **Namespace sandboxing is deferred.** The tool servers in this slice
+  are bounded by moxy's permission tiers and the narrowed moxyfile, not
+  by namespaces; the accepted exposure is resource exhaustion by a tool
+  server and reachability of host sockets from the agent scope. The
+  deferral MUST be lifted when either signing lands or an agent's tool
+  servers include anything that is not a fixed-surface MCP binary. Unit
+  sandboxing is the intended weight (not a container: tent exists for
+  arbitrary Bash, these are known binaries), chosen per brief and
+  narrowed like the moxyfile, never a fixed image.
 - **Toolset granularity is the moxyfile's.** A brief that wants fewer
   tools than a server exposes needs a tool allowlist in the runtime,
   which is a later addition.
@@ -358,6 +432,8 @@ The router, same mechanism, one tool:
 | headless permission posture | non-`always-allow` → deny | no human to ask | a moxin's tier is `ask` only because nobody set it, and agents keep failing on it |
 | transcript layout | one MUC per run | one link for the fallback note; brief in the same transcript | runs grow long enough that per-agent rooms read better |
 | daemon for remote models | optional | krone's webhook user has no user session | a host needs local inference for these agents (→ system-service daemon) |
+| agent-scope realisation | open: sub-cgroup vs sibling unit | the bullet needs neither namespaces nor the choice | signing lands, or a non-fixed-surface tool server appears (→ sibling unit + `limits.sandbox`) |
+| exit-wake emitter | the unit's `ExecStopPost` hook, sole emitter | survives every ending the main process does not | a holder needs a wake on the systemd-dead path (→ holder-side timeout or a cross-host watcher) |
 
 ## FDR 0032 touch-points (operator-resolved 2026-10-06; FDR 0032 edited at spinclass 1647787, unmerged)
 
