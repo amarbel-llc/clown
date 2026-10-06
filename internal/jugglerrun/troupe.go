@@ -83,7 +83,9 @@ type Troupe interface {
 // ExecTroupe shells the troupe binary (troupe(1)). Argv shapes:
 //
 //	mint --session-key K --password-file P   -> {"jid","password_file"}
-//	mint-revoke --session-key K --password-file P
+//	mint-revoke --session-key K --password-file P   (file absent: exit 0, server
+//	                                                 not contacted; login failure:
+//	                                                 exit 1, see IsLoginFailure)
 //	muc send --room R --subject <stanza JSON> --body "" --source S [--from K]
 //	message --target T --source S --message M [--from F] [--result-ref R]
 //
@@ -148,26 +150,98 @@ func (t ExecTroupe) SendWake(ctx context.Context, w Wake) error {
 	return err
 }
 
-// ErrRoomProvisioningUnavailable: troupe has no verb that creates a MUC room,
-// configures it (non-anonymous, unlocked) and makes the operator its owner.
-// MUC provisioning is troupe's and circus's lane (FDR 0019 §7); until a verb
-// exists, a run must be given an existing, already-configured room.
-var ErrRoomProvisioningUnavailable = errors.New("creating a run MUC with the operator as owner is not available: troupe's lane (no troupe verb exists yet); pass an existing room with --room")
+// loginFailureMarkers are the stderr fragments of a troupe verb that could
+// not log in as the account it was handed. troupe (4c52b3b) cannot tell "no
+// such account" from "wrong password", so at teardown both mean the account
+// is already gone.
+var loginFailureMarkers = []string{"xmpp: negotiate", "not-authorized"}
 
-// RoomProvisioner creates and tears down a run's MUC.
+// IsLoginFailure reports whether err is a troupe exit 1 whose stderr says the
+// login itself failed (see loginFailureMarkers), as opposed to the server
+// being unreachable or the call being refused.
+func IsLoginFailure(err error) bool {
+	var ce *CommandError
+	if !errors.As(err, &ce) || ce.ExitCode != 1 {
+		return false
+	}
+	for _, m := range loginFailureMarkers {
+		if strings.Contains(ce.Stderr, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// MUC affiliations `troupe muc affiliate` sets.
+const (
+	AffiliationOwner  = "owner"
+	AffiliationMember = "member"
+	AffiliationNone   = "none"
+)
+
+// RoomInfo is `troupe muc create`'s stdout object.
+type RoomInfo struct {
+	Room    string   `json:"room"`
+	Created bool     `json:"created"`
+	Owners  []string `json:"owners"`
+	Members []string `json:"members"`
+}
+
+// RoomProvisioner provisions a run's MUC (FDR 0019 §7). Every call acts as
+// `as`, which must own the room for anything but the create of a new one.
 type RoomProvisioner interface {
-	CreateRoom(ctx context.Context, room string) error
-	DestroyRoom(ctx context.Context, room string) error
+	// CreateRoom creates room persistent, with `as` as its creator-owner and
+	// owners as further owners; it is idempotent on a room `as` owns.
+	CreateRoom(ctx context.Context, as Identity, room string, owners []string) (RoomInfo, error)
+	// Affiliate sets the affiliation of every jid; none removes it. The last
+	// owner cannot set its own affiliation to none.
+	Affiliate(ctx context.Context, as Identity, room, affiliation string, jids ...string) error
 }
 
-// UnavailableRoomProvisioner is the only production RoomProvisioner: every
-// call fails with ErrRoomProvisioningUnavailable.
-type UnavailableRoomProvisioner struct{}
-
-func (UnavailableRoomProvisioner) CreateRoom(context.Context, string) error {
-	return ErrRoomProvisioningUnavailable
+// ExecRoomProvisioner shells troupe's MUC administration verbs (troupe ≥
+// 4c52b3b). Argv shapes, run with `as`'s TROUPE_XMPP_* identity:
+//
+//	muc create --room R [--owner J]...            -> {"room","created","owners","members"}
+//	muc affiliate --room R --affiliation A --jid J [--jid J]...
+type ExecRoomProvisioner struct {
+	Bin string
 }
 
-func (UnavailableRoomProvisioner) DestroyRoom(context.Context, string) error {
-	return ErrRoomProvisioningUnavailable
+func (p ExecRoomProvisioner) CreateRoom(ctx context.Context, as Identity, room string, owners []string) (RoomInfo, error) {
+	args := []string{"muc", "create", "--room", room}
+	for _, o := range owners {
+		args = append(args, "--owner", o)
+	}
+	out, err := ExecTroupe(p).run(ctx, as.environ(), args...)
+	if err != nil {
+		return RoomInfo{}, err
+	}
+	var info RoomInfo
+	if err := json.Unmarshal(bytes.TrimSpace(out), &info); err != nil {
+		return RoomInfo{}, fmt.Errorf("troupe muc create: parsing output: %w", err)
+	}
+	return info, nil
+}
+
+// missingRoomProvisioner stands in when LifecycleDeps names no RoomProvisioner
+// and its Troupe is not an ExecTroupe to derive one from.
+type missingRoomProvisioner struct{}
+
+var errNoRoomProvisioner = errors.New("no room provisioner is configured")
+
+func (missingRoomProvisioner) CreateRoom(context.Context, Identity, string, []string) (RoomInfo, error) {
+	return RoomInfo{}, errNoRoomProvisioner
+}
+
+func (missingRoomProvisioner) Affiliate(context.Context, Identity, string, string, ...string) error {
+	return errNoRoomProvisioner
+}
+
+func (p ExecRoomProvisioner) Affiliate(ctx context.Context, as Identity, room, affiliation string, jids ...string) error {
+	args := []string{"muc", "affiliate", "--room", room, "--affiliation", affiliation}
+	for _, j := range jids {
+		args = append(args, "--jid", j)
+	}
+	_, err := ExecTroupe(p).run(ctx, as.environ(), args...)
+	return err
 }

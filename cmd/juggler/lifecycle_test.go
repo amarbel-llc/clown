@@ -280,7 +280,9 @@ func TestCmdDecide_RunKeyRecordsRouteEntries(t *testing.T) {
 	}
 	out.Reset()
 	_ = cmdJobLedger([]string{run.RunJob}, &out, &errb)
-	if err := json.Unmarshal(out.Bytes(), &ledger); err != nil || len(ledger.Calls) != 3 || ledger.Calls[2].Tool != "fallback" {
+	// fallback, then the root's account teardown (the run has no children).
+	if err := json.Unmarshal(out.Bytes(), &ledger); err != nil || len(ledger.Calls) != 4 || ledger.Calls[2].Tool != "fallback" ||
+		ledger.Calls[3].Tool != jr.TeardownTool || !ledger.Calls[3].OK {
 		t.Fatalf("resolved ledger = %s", out.String())
 	}
 	if code := decide(); code != 1 {
@@ -309,8 +311,47 @@ func TestCmdSpawn_UsageErrors(t *testing.T) {
 	}
 	var out, errb bytes.Buffer
 	code := cmdSpawn([]string{"--new-run", "--input", "-", "--issuer", "w", "--room-domain", "rooms.test"}, strings.NewReader("x"), &out, &errb)
-	if code != 1 || !strings.Contains(errb.String(), "troupe's lane") {
-		t.Errorf("room creation: exit = %d, stderr = %s", code, errb.String())
+	if code != 1 || !strings.Contains(errb.String(), "--operator-jid") {
+		t.Errorf("room creation without an operator: exit = %d, stderr = %s", code, errb.String())
+	}
+}
+
+func TestCmdSpawn_RoomDomainWithTheOperatorFromTheEnvironment(t *testing.T) {
+	f := lifecycleEnv(t)
+	t.Setenv(operatorJIDEnv, "operator@xmpp.test")
+	var out, errb bytes.Buffer
+	if code := cmdSpawn([]string{"--new-run", "--run-key", "rk-9", "--input", "-", "--issuer", "w", "--room-domain", "rooms.test"}, strings.NewReader("x"), &out, &errb); code != 0 {
+		t.Fatalf("exit = %d, stderr = %s", code, errb.String())
+	}
+	var run jr.NewRunResult
+	if err := json.Unmarshal(out.Bytes(), &run); err != nil || run.Room != "rk-9@rooms.test" || run.OperatorJID != "operator@xmpp.test" {
+		t.Fatalf("stdout = %s", out.String())
+	}
+	if room, ok := f.Room(t, run.Room); !ok || room.Affiliations["operator@xmpp.test"] != jr.AffiliationOwner {
+		t.Errorf("room = %+v", room)
+	}
+
+	out.Reset()
+	code := cmdResolve([]string{run.RunJob, "--state", "succeeded", "--reason", "r", "--result-line", "rk-9 done", "--canary-room", "canary@rooms.test"}, &out, &errb)
+	if code != 0 || !strings.Contains(out.String(), `"torn_down":true`) {
+		t.Fatalf("resolve exit = %d, stdout = %s, stderr = %s", code, out.String(), errb.String())
+	}
+	if posts := f.MUC(t); posts[len(posts)-1].Room != "canary@rooms.test" || posts[len(posts)-1].Subject != "rk-9 done" {
+		t.Errorf("canary post = %+v", posts[len(posts)-1])
+	}
+}
+
+func TestCmdResolve_CanaryAndKeepAccountsFlags(t *testing.T) {
+	lifecycleEnv(t)
+	var out, errb bytes.Buffer
+	for name, args := range map[string][]string{
+		"line without room": {"job-1", "--state", "failed", "--reason", "r", "--result-line", "x"},
+		"room without line": {"job-1", "--state", "failed", "--reason", "r", "--canary-room", "c@rooms.test"},
+		"multi-line":        {"job-1", "--state", "failed", "--reason", "r", "--result-line", "a\nb", "--canary-room", "c@rooms.test"},
+	} {
+		if code := cmdResolve(args, &out, &errb); code != 1 {
+			t.Errorf("%s: exit = %d", name, code)
+		}
 	}
 }
 

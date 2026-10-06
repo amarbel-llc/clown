@@ -262,11 +262,13 @@ abort_on_cancel() {
   [[ $(wc -l <"$FAKE_DIR/muc.jsonl") -eq $posts_before ]]
 }
 
-@test "spawn --new-run --room-domain fails (room provisioning is troupe's lane) and revokes the mint" {
+@test "spawn --new-run --room-domain without --operator-jid is a usage error and mints nothing" {
+  local calls_before
+  calls_before=$(wc -l <"$FAKE_DIR/calls.jsonl")
   run_jug spawn --new-run --run-key rk-domain --input - --issuer issuer-1 --room-domain rooms.test <<<'x'
   expect_status 1
-  [[ $stderr == *"troupe's lane"* ]]
-  fake_calls '[.[] | select(.tool=="troupe" and .argv[0]=="mint-revoke")] | length >= 1' | grep -qx true
+  [[ $stderr == *"--operator-jid"* ]]
+  [[ $(wc -l <"$FAKE_DIR/calls.jsonl") -eq $calls_before ]]
 }
 
 # --- decide ----------------------------------------------------------------
@@ -549,9 +551,15 @@ abort_on_cancel() {
     and ([.calls[] | select(.tool == "subagent_stop" and .ok == true and .stopped_by_resolve == true and .job == "'"$live"'")] | length) == 1
     and ([.calls[] | select(.tool == "subagent_stop" and .ok == false and .job == "'"$stuck"'")] | length) == 1'
   expect_json '([.calls[] | select(.tool == "fallback")] | length) == 1
-    and .calls[-1].tool == "fallback" and .calls[-1].ok == true and .calls[-1].ran == true
-    and .calls[-1].uris == ["orgzly://note/1"] and .calls[-1].reason == "router below threshold"
+    and ([.calls[] | select(.tool == "fallback")][0] | .ok == true and .ran == true
+      and .uris == ["orgzly://note/1"] and .reason == "router below threshold")
     and .resolved.state == "failed"'
+
+  # Teardown follows the fallback: the stuck child keeps its account, so the
+  # root keeps its own and the run is not torn down.
+  expect_json '([.calls[] | select(.tool == "teardown" and .ok == false and .reason == "still running")] | length) == 1
+    and ([.calls[] | select(.tool == "teardown")][-1] | .principal == "'"$root"'" and .ok == false)'
+  [[ -s $(stored_run rk1 .root_credential_ref) ]]
 
   # The run job is terminal failed, and the issuer got ONE wake.
   [[ $(journal_types issuer-1 "$run_job" | tail -n1) == failed ]]
@@ -653,6 +661,138 @@ abort_on_cancel() {
   [[ $(field .wrote_terminal) == false ]]
   expect_json ".woken == [\"$root\"]"
   [[ $(journal_types "$root" "$job" | grep -cE '^(succeeded|failed|aborted|interrupted)$') -eq 1 ]]
+}
+
+# --- room provisioning and teardown ----------------------------------------
+
+# calls_since <n> <jq filter>: the filter over the platform calls recorded
+# after the first n.
+calls_since() { jq -s ".[$1:] | $2" "$FAKE_DIR/calls.jsonl"; }
+
+@test "spawn --new-run --room-domain --operator-jid creates <run-key>@<domain> as the root with the operator as owner" {
+  run_jug spawn --new-run --run-key rk3 --input - --issuer issuer-4 --room-domain rooms.test \
+    --operator-jid operator@xmpp.test <<<'{"recording":"third"}'
+  expect_status 0
+  printf '%s' "$output" >"$BATS_FILE_TMPDIR/rk3.json"
+  [[ $(field .room) == rk3@rooms.test ]]
+  [[ $(field .operator_jid) == operator@xmpp.test ]]
+
+  local root
+  root=$(field .root_principal)
+  fake_calls '[.[] | select(.tool == "troupe" and .argv[0] == "muc" and .argv[1] == "create")]' >"$BATS_TEST_TMPDIR/create.json"
+  jq -e --arg root "$root" --arg pw "$(field .root_credential_ref)" '
+    length == 1
+    and .[0].argv == ["muc", "create", "--room", "rk3@rooms.test", "--owner", "operator@xmpp.test"]
+    and .[0].env.TROUPE_XMPP_USER == $root and .[0].env.TROUPE_XMPP_PASSWORD_FILE == $pw
+  ' "$BATS_TEST_TMPDIR/create.json" >/dev/null
+  jq -e --arg root "$root@xmpp.test" '.affiliations == {($root): "owner", "operator@xmpp.test": "owner"}' \
+    "$FAKE_DIR/rooms/rk3@rooms.test.json" >/dev/null
+}
+
+@test "spawn --brief into a created room affiliates the child as a member before the unit starts" {
+  local root calls_before
+  root=$(stored_run rk3 .root_principal)
+  calls_before=$(wc -l <"$FAKE_DIR/calls.jsonl")
+  launch_child "$root" "task rooms"
+  printf '%s' "$output" >"$BATS_FILE_TMPDIR/child-rooms.json"
+  local jid
+  jid=$(field .jid)
+
+  calls_since "$calls_before" '[.[] | select((.tool == "troupe" and .argv[0] == "muc" and .argv[1] == "affiliate") or .tool == "systemd-run") | .tool + " " + (.argv | join(" "))]' \
+    >"$BATS_TEST_TMPDIR/order.json"
+  jq -e --arg jid "$jid" '
+    length == 2
+    and .[0] == "troupe muc affiliate --room rk3@rooms.test --affiliation member --jid " + $jid
+    and (.[1] | startswith("systemd-run "))
+  ' "$BATS_TEST_TMPDIR/order.json" >/dev/null
+  jq -e --arg jid "$jid" '.affiliations[$jid] == "member"' "$FAKE_DIR/rooms/rk3@rooms.test.json" >/dev/null
+}
+
+@test "resolve --result-line --canary-room posts the canary first, then revokes every account" {
+  local root run_job job child_jid child_pw root_pw calls_before
+  root=$(stored_run rk3 .root_principal)
+  run_job=$(stored_run rk3 .run_job)
+  root_pw=$(stored_run rk3 .root_credential_ref)
+  job=$(jq -r .job "$BATS_FILE_TMPDIR/child-rooms.json")
+  child_jid=$(jq -r .jid "$BATS_FILE_TMPDIR/child-rooms.json")
+  child_pw="$XDG_STATE_HOME/juggler/runs/rk3/${child_jid%@*}.pw"
+  [[ -s $child_pw ]]
+  "$FAKE_BIN/ringmaster" "done" "$job" --target "$root" --state succeeded --message "evaluator passed"
+
+  calls_before=$(wc -l <"$FAKE_DIR/calls.jsonl")
+  run_jug resolve "$run_job" --state succeeded --reason "issue filed" \
+    --result-line "rk3: issue filed" --canary-room canary@rooms.test
+  expect_status 0
+  [[ $(field .torn_down) == true ]]
+
+  # The canary post is resolve's FIRST troupe call, made as the run root.
+  calls_since "$calls_before" '[.[] | select(.tool == "troupe")]' >"$BATS_TEST_TMPDIR/troupe.json"
+  jq -e --arg root "$root" '
+    .[0].argv[0:4] == ["muc", "send", "--room", "canary@rooms.test"]
+    and (.[0].argv | index("rk3: issue filed") != null and index("juggler-resolve") != null)
+    and .[0].env.TROUPE_XMPP_USER == $root
+  ' "$BATS_TEST_TMPDIR/troupe.json" >/dev/null
+
+  # Each child: de-affiliated, then revoked; then the root steps down and is
+  # revoked. The password files are gone; only the operator owns the room.
+  jq -e --arg cj "$child_jid" --arg rj "$root@xmpp.test" --arg root "$root" --arg cpw "$child_pw" --arg rpw "$root_pw" '
+    [.[] | select(.argv[0] != "message") | .argv | join(" ")][1:] == [
+      "muc affiliate --room rk3@rooms.test --affiliation none --jid " + $cj,
+      "mint-revoke --session-key " + ($cj | split("@")[0]) + " --password-file " + $cpw,
+      "muc affiliate --room rk3@rooms.test --affiliation none --jid " + $rj,
+      "mint-revoke --session-key " + $root + " --password-file " + $rpw
+    ]
+  ' "$BATS_TEST_TMPDIR/troupe.json" >/dev/null
+  [[ ! -e $child_pw ]]
+  [[ ! -e $root_pw ]]
+  jq -e '.affiliations == {"operator@xmpp.test": "owner"}' "$FAKE_DIR/rooms/rk3@rooms.test.json" >/dev/null
+
+  run_jug job-ledger "$run_job"
+  expect_json '.calls[0].tool == "canary" and .calls[0].ok == true
+    and ([.calls[] | select(.tool == "teardown" and .kind == "account" and .ok == true)] | length) == 2'
+
+  # A redelivery sees the run finished; resolving again touches nothing.
+  run_jug spawn --new-run --run-key rk3 --input - --issuer issuer-4 --room-domain rooms.test \
+    --operator-jid operator@xmpp.test <<<'{"recording":"third"}'
+  expect_status 0
+  [[ $(field .existing) == true ]]
+  [[ $(field .resolved) == true ]]
+  [[ $(field .torn_down) == true ]]
+
+  calls_before=$(wc -l <"$FAKE_DIR/calls.jsonl")
+  run_jug resolve "$run_job" --state succeeded --reason "again" --result-line "x" --canary-room canary@rooms.test
+  expect_status 0
+  [[ $(field .already_resolved) == true ]]
+  [[ $(wc -l <"$FAKE_DIR/calls.jsonl") -eq $calls_before ]]
+}
+
+@test "spawn --new-run that fails after creating the room is resumed by a retry with the same --run-key" {
+  mkdir -p "$FAKE_DIR/fail"
+  : >"$FAKE_DIR/fail/troupe-muc-send"
+  run_jug spawn --new-run --run-key rk4 --input - --issuer issuer-5 --room-domain rooms.test \
+    --operator-jid operator@xmpp.test <<<'{"recording":"fourth"}'
+  rm -f "$FAKE_DIR/fail/troupe-muc-send"
+  expect_status 1
+  [[ $stderr == *"posting the run input"* ]]
+
+  # The root is kept for the retry: a pending record, its password file, no revoke.
+  local record=$XDG_STATE_HOME/juggler/runs/rk4.json root
+  jq -e '.pending == true and .room_created == true and .run_job == ""' "$record" >/dev/null
+  root=$(jq -r .root_principal "$record")
+  [[ -s $XDG_STATE_HOME/juggler/runs/rk4/$root.pw ]]
+  fake_calls '[.[] | select(.tool == "troupe" and .argv[0] == "mint-revoke" and (.argv | index("'"$root"'") != null))] | length == 0' | grep -qx true
+
+  run_jug spawn --new-run --run-key rk4 --input - --issuer issuer-5 --room-domain rooms.test \
+    --operator-jid operator@xmpp.test <<<'{"recording":"fourth"}'
+  expect_status 0
+  [[ $(field .existing) == false ]]
+  [[ $(field .root_principal) == "$root" ]]
+  [[ $(field .room) == rk4@rooms.test ]]
+  jq -e '.pending == null' "$record" >/dev/null
+
+  # The same root created the room twice (idempotently); one run job is open.
+  fake_calls '[.[] | select(.tool == "troupe" and .argv[0] == "muc" and .argv[1] == "create" and .argv[3] == "rk4@rooms.test") | .env.TROUPE_XMPP_USER] | . == ["'"$root"'", "'"$root"'"]' | grep -qx true
+  [[ $(ls "$FAKE_DIR/rm/issuer-5/"*.jsonl | wc -l) -eq 1 ]]
 }
 
 # --- binary resolution -----------------------------------------------------

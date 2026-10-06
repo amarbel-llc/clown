@@ -62,6 +62,11 @@ type RunLedgerEntry struct {
 	Principal        string `json:"principal,omitempty"`
 	StoppedByResolve bool   `json:"stopped_by_resolve,omitempty"`
 
+	// Teardown-entry field (Principal above names the account): OK is
+	// whether the account is gone (revoked, or already gone) with its
+	// password file deleted.
+	JID string `json:"jid,omitempty"`
+
 	// Route-entry fields (`juggler decide --run-key`).
 	Choice         string   `json:"choice,omitempty"`
 	Confidence     *float64 `json:"confidence,omitempty"`
@@ -117,6 +122,29 @@ func ChildStopFailureEntry(child *ChildRecord, err error) RunLedgerEntry {
 	}
 }
 
+// Run-ledger tool names `juggler resolve` records besides fallback and
+// subagent_stop.
+const (
+	CanaryTool   = "canary"
+	TeardownTool = "teardown"
+)
+
+// CanaryEntry is the run ledger's note of the result line `juggler resolve`
+// posted to the canary room as the root: never part of the outcome.
+func CanaryEntry(room, stanzaID string, err error) RunLedgerEntry {
+	e := RunLedgerEntry{Tool: CanaryTool, Kind: "note", OK: err == nil, URIs: []string{}, StanzaID: stanzaID, Reason: "posted to " + room}
+	if err != nil {
+		e.Reason = fmt.Sprintf("posting to %s failed: %v", room, err)
+	}
+	return e
+}
+
+// TeardownEntry is the run ledger's entry for one account `juggler resolve`
+// tore down (or could not): ok exactly when the account is gone.
+func TeardownEntry(principal, jid string, ok bool, reason string) RunLedgerEntry {
+	return RunLedgerEntry{Tool: TeardownTool, Kind: "account", OK: ok, URIs: []string{}, Principal: principal, JID: jid, Reason: reason}
+}
+
 // AppendRunLedgerEntry appends e to run runKey's ledger, under the run's
 // lock. A resolved run's ledger is closed and refuses new entries.
 func AppendRunLedgerEntry(store Store, runKey string, e RunLedgerEntry) error {
@@ -134,6 +162,9 @@ func AppendRunLedgerEntry(store Store, runKey string, e RunLedgerEntry) error {
 	}
 	if run == nil {
 		return fmt.Errorf("no run with key %q", runKey)
+	}
+	if run.Pending {
+		return fmt.Errorf("run %s is pending: its spawn --new-run failed; retry it with the same --run-key", runKey)
 	}
 	l, err := store.loadRunLedger(runKey)
 	if err != nil {

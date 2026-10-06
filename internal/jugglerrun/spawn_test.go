@@ -23,13 +23,30 @@ func newRun(t *testing.T, h *harness, key string) NewRunResult {
 	return res
 }
 
-// pinPrincipals makes deps mint the given principals in order.
+// pinPrincipals makes deps mint principals[0] as every run root and the rest
+// as children, in order (cycling; principals[0] when there are none).
 func pinPrincipals(h *harness, principals ...string) {
+	h.deps.NewRootPrincipal = func(string) string { return principals[0] }
+	children := principals[1:]
+	if len(children) == 0 {
+		children = principals[:1]
+	}
 	i := 0
 	h.deps.NewPrincipal = func() string {
-		p := principals[i%len(principals)]
+		p := children[i%len(children)]
 		i++
 		return p
+	}
+}
+
+func TestNewRootPrincipal_IsUUIDv5OfTheRunKey(t *testing.T) {
+	// RFC 9562 Appendix A.4: the DNS namespace and "www.example.com".
+	if got := uuidV5(mustParseUUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8"), "www.example.com"); got != "2ed6657d-e927-568b-95e1-2665a8aea6a2" {
+		t.Errorf("uuidV5 = %s", got)
+	}
+	a, b := NewRootPrincipal("rec-42"), NewRootPrincipal("rec-42")
+	if a != b || a == NewRootPrincipal("rec-43") || a[14] != '5' {
+		t.Errorf("root principals = %s, %s", a, b)
 	}
 }
 
@@ -81,13 +98,35 @@ func TestNewRun_ExistingRunReportsResolvedAndTornDown(t *testing.T) {
 		t.Fatal(err)
 	}
 	again := newRun(t, h, "rec-42")
-	if !again.Existing || !again.Resolved || again.TornDown {
+	if !again.Existing || !again.Resolved || !again.TornDown {
 		t.Errorf("repeated run key after Resolve = %+v", again)
 	}
 	b, _ := json.Marshal(again)
-	if !containsAll(string(b), `"resolved":true`, `"torn_down":false`, `"existing":true`) {
+	if !containsAll(string(b), `"resolved":true`, `"torn_down":true`, `"existing":true`) {
 		t.Errorf("JSON = %s", b)
 	}
+}
+
+// callsExcept is the run ledger's entries without those of tool.
+func callsExcept(l RunLedger, tool string) []RunLedgerEntry {
+	var out []RunLedgerEntry
+	for _, e := range l.Calls {
+		if e.Tool != tool {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// callsOf is the run ledger's entries of tool.
+func callsOf(l RunLedger, tool string) []RunLedgerEntry {
+	var out []RunLedgerEntry
+	for _, e := range l.Calls {
+		if e.Tool == tool {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 func TestMint_PerIdentityPasswordFiles(t *testing.T) {
@@ -198,7 +237,7 @@ func TestResolve_StopsLiveChildren(t *testing.T) {
 	if err := json.Unmarshal(data, &ledger); err != nil {
 		t.Fatal(err)
 	}
-	if len(ledger.Calls) != 2 || ledger.Calls[0].Job != live.Job || !ledger.Calls[0].StoppedByResolve || !ledger.Calls[0].OK || ledger.Calls[1].Tool != "fallback" {
+	if calls := callsExcept(ledger, TeardownTool); len(calls) != 2 || calls[0].Job != live.Job || !calls[0].StoppedByResolve || !calls[0].OK || calls[1].Tool != "fallback" {
 		t.Errorf("run ledger = %s", data)
 	}
 }
@@ -216,8 +255,11 @@ func TestResolve_ChildThatIgnoresTheCancelIsRecordedNotStopped(t *testing.T) {
 	}
 	var ledger RunLedger
 	data, _ := JobLedger(context.Background(), h.deps, res.RunJob, "")
-	if err := json.Unmarshal(data, &ledger); err != nil || len(ledger.Calls) != 2 || ledger.Calls[0].OK || !ledger.Calls[0].StoppedByResolve {
-		t.Errorf("run ledger = %s (%v)", data, err)
+	if err := json.Unmarshal(data, &ledger); err != nil {
+		t.Fatal(err)
+	}
+	if calls := callsExcept(ledger, TeardownTool); len(calls) != 2 || calls[0].OK || !calls[0].StoppedByResolve {
+		t.Errorf("run ledger = %s", data)
 	}
 }
 
@@ -273,23 +315,23 @@ func TestResolve_UnreadableChildJournalIsRecordedNotFatal(t *testing.T) {
 	}
 	var ledger RunLedger
 	data, _ := JobLedger(context.Background(), h.deps, res.RunJob, "")
-	if err := json.Unmarshal(data, &ledger); err != nil || len(ledger.Calls) != 2 || ledger.Calls[0].OK || ledger.Calls[0].Tool != "subagent_stop" || !strings.Contains(ledger.Calls[0].Reason, "journal unreadable: ") {
-		t.Errorf("run ledger = %s (%v)", data, err)
+	if err := json.Unmarshal(data, &ledger); err != nil {
+		t.Fatal(err)
+	}
+	if calls := callsExcept(ledger, TeardownTool); len(calls) != 2 || calls[0].OK || calls[0].Tool != "subagent_stop" || !strings.Contains(calls[0].Reason, "journal unreadable: ") {
+		t.Errorf("run ledger = %s", data)
 	}
 }
 
-func TestNewRun_RoomProvisioningIsTroupesLane(t *testing.T) {
+func TestNewRun_RoomDomainRequiresAnOperator(t *testing.T) {
 	h := newHarness(t)
 	pinPrincipals(h, testRoot)
 	_, err := NewRun(context.Background(), h.deps, NewRunRequest{RunKey: "k", Issuer: testIssuer, Input: []byte("x"), RoomDomain: "rooms.test"})
-	if !errors.Is(err, ErrRoomProvisioningUnavailable) {
+	if err == nil || !strings.Contains(err.Error(), "operator JID") {
 		t.Fatalf("err = %v", err)
 	}
-	if got := h.fakes.Revoked(t); len(got) != 1 || got[0] != testRoot {
-		t.Errorf("the minted root must be revoked: %v", got)
-	}
-	if rec, _ := h.deps.Store.LoadRun("k"); rec != nil {
-		t.Errorf("no run record may remain: %+v", rec)
+	if n := len(h.fakes.Calls(t, "")); n != 0 {
+		t.Errorf("nothing may be minted or created: %d calls", n)
 	}
 }
 
@@ -304,11 +346,18 @@ func TestNewRun_FailureAfterPostCleansUp(t *testing.T) {
 	if len(posts) != 2 || !strings.Contains(posts[1].Subject, `"type":"withdrawn"`) || !strings.Contains(posts[1].Subject, posts[0].ID) {
 		t.Errorf("the root stanza must be withdrawn: %+v", posts)
 	}
-	if len(h.fakes.Revoked(t)) != 1 {
-		t.Error("the minted root must be revoked")
+	if len(h.fakes.Revoked(t)) != 0 {
+		t.Error("the root is kept for the retry")
 	}
-	if rec, _ := h.deps.Store.LoadRun("k"); rec != nil {
-		t.Error("no run record may remain")
+	rec, _ := h.deps.Store.LoadRun("k")
+	if rec == nil || !rec.Pending || rec.RootPrincipal != testRoot || rec.RunJob != "" || rec.RootStanza != "" {
+		t.Fatalf("a pending run record must remain: %+v", rec)
+	}
+	if _, err := os.Stat(rec.RootCredentialRef); err != nil {
+		t.Errorf("the root's password file is kept: %v", err)
+	}
+	if _, _, err := SpawnChild(context.Background(), h.deps, SpawnRequest{Brief: templateBytes(), Task: []byte(testTask), RunKey: "k", JugglerBin: "/bin/juggler"}); err == nil || !strings.Contains(err.Error(), "pending") {
+		t.Errorf("a pending run takes no agents: %v", err)
 	}
 }
 
@@ -615,8 +664,9 @@ func TestResolve(t *testing.T) {
 	if err := json.Unmarshal(data, &ledger); err != nil {
 		t.Fatal(err)
 	}
-	if len(ledger.Calls) != 1 || ledger.Calls[0].Tool != "fallback" || ledger.Calls[0].Ran == nil || !*ledger.Calls[0].Ran ||
-		!ledger.Calls[0].OK || ledger.Calls[0].URIs[0] != "orgzly://inbox/1" || ledger.Resolved == nil || ledger.Resolved.State != StateFailed {
+	calls := callsExcept(ledger, TeardownTool)
+	if len(calls) != 1 || calls[0].Tool != "fallback" || calls[0].Ran == nil || !*calls[0].Ran ||
+		!calls[0].OK || calls[0].URIs[0] != "orgzly://inbox/1" || ledger.Resolved == nil || ledger.Resolved.State != StateFailed {
 		t.Errorf("run ledger = %s", data)
 	}
 
@@ -717,7 +767,7 @@ func TestSystemdRunArgvAndCommandLine(t *testing.T) {
 }
 
 func TestStripPrincipalEnv(t *testing.T) {
-	got := StripPrincipalEnv([]string{"PATH=/bin", "CLOWN_SESSION_ID=k", "TROUPE_XMPP_USER=u", "TROUPE_XMPP_PASSWORD_FILE=/p", "TROUPE_TRANSPORT=xmpp-native"})
+	got := StripPrincipalEnv([]string{"PATH=/bin", "CLOWN_SESSION_ID=k", "TROUPE_XMPP_USER=u", "TROUPE_XMPP_PASSWORD_FILE=/p", "TROUPE_MINT_PASSWORD_FILE=/m", "TROUPE_MINT_USER=troupe-minter", "TROUPE_TRANSPORT=xmpp-native"})
 	if strings.Join(got, ",") != "PATH=/bin,TROUPE_TRANSPORT=xmpp-native" {
 		t.Errorf("env = %v", got)
 	}

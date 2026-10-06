@@ -7,8 +7,12 @@
 // identity environment is recorded to <dir>/calls.jsonl. The ringmaster fake
 // keeps a per-target journal on disk, so start/progress/done/read/status/
 // spool-path/wait behave like the real verbs; the troupe fake records MUC
-// posts and wakes; the systemd-run fake records and succeeds. A file
-// <dir>/fail/<tool>-<verb> makes that verb exit 1.
+// posts and wakes and keeps room affiliations (`muc create`/`muc affiliate`,
+// with troupe's owner and last-owner rules); the systemd-run fake records and
+// succeeds. A file <dir>/fail/<tool>-<verb> makes that verb exit 1;
+// <dir>/fail/troupe-muc-<sub> fails one muc subverb, and
+// <dir>/fail/troupe-mint-revoke-login makes mint-revoke fail the way a login
+// failure does (exit 1, "xmpp: negotiate" on stderr, the file kept).
 package jugglerruntest
 
 import (
@@ -19,6 +23,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -502,10 +507,32 @@ func fakeTroupe(dir string, args []string) int {
 		if pw == "" {
 			pw = filepath.Join(dir, "creds", fl["session-key"])
 		}
+		if _, err := os.Stat(pw); err != nil {
+			return 0 // file absent: troupe does not contact the server
+		}
+		if failKnob(dir, "troupe-mint-revoke-login") {
+			// troupe 4c52b3b: the login failed; "no such account" and "wrong
+			// password" look the same, and the file is kept.
+			fmt.Fprintln(os.Stderr, "troupe mint-revoke: xmpp: negotiate: sasl: not-authorized")
+			return 1
+		}
 		_ = os.Remove(pw)
 		return 0
 	case "muc":
-		if len(args) < 2 || args[1] != "send" {
+		if len(args) < 2 {
+			return 2
+		}
+		if failKnob(dir, "troupe-muc-"+args[1]) {
+			fmt.Fprintf(os.Stderr, "troupe muc %s: injected failure\n", args[1])
+			return 1
+		}
+		switch args[1] {
+		case "create":
+			return fakeMUCCreate(dir, args[2:])
+		case "affiliate":
+			return fakeMUCAffiliate(dir, args[2:])
+		case "send":
+		default:
 			return 2
 		}
 		fl := parseFlags(args[2:])
@@ -529,4 +556,175 @@ func fakeTroupe(dir string, args []string) int {
 	}
 	fmt.Fprintf(os.Stderr, "fake troupe: unknown verb %q\n", args[0])
 	return 2
+}
+
+func failKnob(dir, name string) bool {
+	_, err := os.Stat(filepath.Join(dir, "fail", name))
+	return err == nil
+}
+
+// FakeRoom is one room the troupe fake's `muc create` made: every affiliated
+// bare JID and its affiliation (owner, admin, member, outcast).
+type FakeRoom struct {
+	Room         string            `json:"room"`
+	Affiliations map[string]string `json:"affiliations"`
+}
+
+// Room returns the fake's state of room, or ok=false if it was never created.
+func (f *Fakes) Room(t testing.TB, room string) (FakeRoom, bool) {
+	t.Helper()
+	r, ok, err := loadRoom(f.Dir, room)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r, ok
+}
+
+// With lists the JIDs holding affiliation, sorted.
+func (r FakeRoom) With(affiliation string) []string {
+	out := []string{}
+	for jid, a := range r.Affiliations {
+		if a == affiliation {
+			out = append(out, jid)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func roomPath(dir, room string) string { return filepath.Join(dir, "rooms", room+".json") }
+
+func loadRoom(dir, room string) (FakeRoom, bool, error) {
+	data, err := os.ReadFile(roomPath(dir, room))
+	if os.IsNotExist(err) {
+		return FakeRoom{}, false, nil
+	}
+	if err != nil {
+		return FakeRoom{}, false, err
+	}
+	var r FakeRoom
+	if err := json.Unmarshal(data, &r); err != nil {
+		return FakeRoom{}, false, err
+	}
+	if r.Affiliations == nil {
+		r.Affiliations = map[string]string{}
+	}
+	return r, true, nil
+}
+
+func saveRoom(dir string, r FakeRoom) error {
+	if err := os.MkdirAll(filepath.Join(dir, "rooms"), 0o755); err != nil {
+		return err
+	}
+	b, err := json.Marshal(r)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(roomPath(dir, r.Room), b, 0o644)
+}
+
+// callerJID is the fake's view of who a troupe call acts as.
+func callerJID() string {
+	user, domain := os.Getenv("TROUPE_XMPP_USER"), os.Getenv("TROUPE_XMPP_DOMAIN")
+	if user == "" || domain == "" {
+		return ""
+	}
+	return user + "@" + domain
+}
+
+// flagValues collects every value of a repeated --name flag.
+func flagValues(args []string, name string) []string {
+	var out []string
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == "--"+name {
+			out = append(out, args[i+1])
+			i++
+		}
+	}
+	return out
+}
+
+// fakeMUCCreate is troupe 4c52b3b's `muc create`: the caller becomes owner of
+// a new persistent room, --owner/--member JIDs are affiliated; idempotent on
+// a room the caller owns, exit 1 on one it does not.
+func fakeMUCCreate(dir string, args []string) int {
+	room, caller := parseFlags(args)["room"], callerJID()
+	if room == "" {
+		fmt.Fprintln(os.Stderr, "troupe muc create: --room is required")
+		return 2
+	}
+	if caller == "" {
+		fmt.Fprintln(os.Stderr, "troupe muc create: no XMPP identity (TROUPE_XMPP_USER/DOMAIN)")
+		return 1
+	}
+	r, exists, err := loadRoom(dir, room)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if exists && r.Affiliations[caller] != "owner" {
+		fmt.Fprintf(os.Stderr, "troupe muc create: %s exists and %s does not own it: forbidden\n", room, caller)
+		return 1
+	}
+	if !exists {
+		r = FakeRoom{Room: room, Affiliations: map[string]string{caller: "owner"}}
+	}
+	for _, j := range flagValues(args, "owner") {
+		r.Affiliations[j] = "owner"
+	}
+	for _, j := range flagValues(args, "member") {
+		if r.Affiliations[j] != "owner" {
+			r.Affiliations[j] = "member"
+		}
+	}
+	if err := saveRoom(dir, r); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	b, _ := json.Marshal(map[string]any{"room": room, "created": !exists, "owners": r.With("owner"), "members": r.With("member")})
+	fmt.Println(string(b))
+	return 0
+}
+
+// fakeMUCAffiliate is troupe 4c52b3b's `muc affiliate`: an owner sets each
+// --jid's affiliation (none removes it); the last owner cannot step down.
+func fakeMUCAffiliate(dir string, args []string) int {
+	fl := parseFlags(args)
+	room, aff, caller := fl["room"], fl["affiliation"], callerJID()
+	jids := flagValues(args, "jid")
+	switch aff {
+	case "owner", "admin", "member", "none", "outcast":
+	default:
+		fmt.Fprintf(os.Stderr, "troupe muc affiliate: bad --affiliation %q\n", aff)
+		return 2
+	}
+	if room == "" || len(jids) == 0 {
+		fmt.Fprintln(os.Stderr, "troupe muc affiliate: --room and --jid are required")
+		return 2
+	}
+	r, exists, err := loadRoom(dir, room)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if !exists {
+		fmt.Fprintf(os.Stderr, "troupe muc affiliate: %s: item-not-found\n", room)
+		return 1
+	}
+	if r.Affiliations[caller] != "owner" {
+		fmt.Fprintf(os.Stderr, "troupe muc affiliate: %s does not own %s: forbidden\n", caller, room)
+		return 1
+	}
+	for _, j := range jids {
+		if r.Affiliations[j] == "owner" && aff != "owner" && len(r.With("owner")) == 1 {
+			fmt.Fprintf(os.Stderr, "troupe muc affiliate: %s is the last owner of %s: conflict\n", j, room)
+			return 1
+		}
+		if aff == "none" {
+			delete(r.Affiliations, j)
+		} else {
+			r.Affiliations[j] = aff
+		}
+	}
+	return exitFor(saveRoom(dir, r))
 }

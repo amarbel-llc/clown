@@ -59,7 +59,8 @@ type Brief struct {
 
 	// Env is passed into the agent's transient unit (and so to moxy and its
 	// moxins, which moxyfile(5) cannot configure). Keys spawn owns —
-	// CLOWN_SESSION_ID, TROUPE_XMPP_* and JUGGLER_* — are rejected.
+	// CLOWN_SESSION_ID, TROUPE_XMPP_*, TROUPE_MINT_* and JUGGLER_* — are
+	// rejected.
 	Env map[string]string `toml:"env,omitempty"`
 
 	Evaluator Evaluator `toml:"evaluator"`
@@ -72,10 +73,12 @@ type Brief struct {
 var TemplateFields = []string{"principal", "parent", "room", "task"}
 
 // IsPrincipalEnvKey reports whether an environment key carries a principal's
-// identity: CLOWN_SESSION_ID (the per-instance key, FDR 0019 §2) or any
-// TROUPE_XMPP_* variable (the XMPP credential reference and its settings).
+// identity: CLOWN_SESSION_ID (the per-instance key, FDR 0019 §2), any
+// TROUPE_XMPP_* variable (the XMPP credential reference and its settings),
+// or any TROUPE_MINT_* variable (the spawner's minter credential, which no
+// agent or tool server may inherit).
 func IsPrincipalEnvKey(key string) bool {
-	return key == "CLOWN_SESSION_ID" || strings.HasPrefix(key, "TROUPE_XMPP_")
+	return key == "CLOWN_SESSION_ID" || strings.HasPrefix(key, "TROUPE_XMPP_") || strings.HasPrefix(key, "TROUPE_MINT_")
 }
 
 // ReservedEnvKey reports whether an [env] key is one `juggler spawn` sets

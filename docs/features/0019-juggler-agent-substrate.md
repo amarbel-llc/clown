@@ -77,10 +77,26 @@ is a bug, not an accepted state.
 
 `juggler spawn --new-run` is the **issuer's** entry for a new tree: it
 mints the run's **root principal** (§2) and certifies it under the
-issuer, creates the run's MUC, posts the recording (or whatever the
-run's input is) as the room's root stanza, starts a **run-level**
-ringmaster job owned by the root, and returns the root's credential
-reference, room JID and run job id. Every later step of the run — the
+issuer, creates the run's MUC (`--room-domain <D> --operator-jid <jid>`:
+the root runs `troupe muc create --room <run-key>@<D> --owner <jid>`,
+§7; `--operator-jid` defaults to `$JUGGLER_OPERATOR_JID` and is
+REQUIRED with `--room-domain`, because the root must never be the
+room's only owner) or takes a pre-created one (`--room <jid>`), posts
+the recording (or whatever the run's input is) as the room's root
+stanza, starts a **run-level** ringmaster job owned by the root, and
+returns the root's credential reference, room JID, run job id and, when
+set, `"operator_jid"`. The root's principal is **derived from the run
+key** (UUIDv5 of the key under juggler's fixed namespace
+`b5a2c9e0-7d14-4f3a-9c6e-1f8d2a0b4e57`; children stay random), so a
+`--new-run` that fails after the mint keeps the root — account and
+password file — and the room it may have created (rooms are persistent),
+withdraws a posted run input, fails a started run job, and saves a
+**pending** run record. A retry with the same `--run-key` resumes it:
+the same root is re-minted (same key and file: troupe answers
+`created=false`), still owns `<run-key>@D` so `muc create` is
+idempotent, re-posts the input and starts a fresh run job. Only a
+complete record answers `"existing": true`; a pending run takes no
+subagents and no ledger entries. Every later step of the run — the
 decision, the subagent spawns, the fallback — executes as the run root.
 The run job's terminal record is written when the run is resolved
 (`succeeded`, or `failed` when the fallback ran), and its exit wake goes
@@ -122,21 +138,52 @@ channel, and it never parses the room):
   template; `model` is the author's choice of registry entry, which the
   spawner's models file must define.
 - **`juggler resolve <run-job> --state succeeded|failed --reason <text>
-  [--fallback-artifacts <json>] [--stop-grace <dur>]`**: the run's last
-  call, always. First cancels every child job of the run that is not yet
-  terminal and waits up to the stop grace for each (one `subagent_stop`
-  ledger entry per child, `stopped_by_resolve`), so a later account
-  teardown never deletes an account under a running agent; then writes
-  the run job's terminal record, appends a `fallback` entry to the run
-  ledger carrying the fallback's own outcome, and emits the run's exit
-  wake to the issuer. (Not named `run-…` to avoid confusion with
-  `juggler run`.)
+  [--fallback-artifacts <json>] [--stop-grace <dur>] [--result-line
+  <text> --canary-room <jid>] [--keep-accounts]`**: the run's last call,
+  always. In order:
+  1. with `--result-line`/`--canary-room`, post the one-line result into
+     the canary room **as the run root** (`troupe muc send --source
+     juggler-resolve`) — first, because the root's account dies in step
+     4; a failed post is a `canary` ledger note
+     (`{tool:"canary", kind:"note", ok, reason, stanza_id}`) and changes
+     nothing else;
+  2. cancel every child job of the run that is not yet terminal and wait
+     up to the stop grace for each (one `subagent_stop` ledger entry per
+     child, `stopped_by_resolve`);
+  3. append the `fallback` entry (the fallback's own outcome) to the run
+     ledger, write the run job's terminal record and emit the run's exit
+     wake to the issuer;
+  4. **tear the run's accounts down** (default; `--keep-accounts` skips
+     it): for each child whose job is terminal, `troupe muc affiliate
+     --affiliation none --jid <child>` as the root (rooms the run created;
+     best effort), `troupe mint-revoke --session-key <child>
+     --password-file <its file>`, then delete the file; then, once no
+     child account remains, the root sets its own affiliation to `none`
+     (only when the run created the room with an operator owner — the
+     last owner cannot step down; otherwise skipped and said so in the
+     entry), revokes itself and deletes its file. troupe cannot tell "no
+     such account" from "wrong password", so a login failure at revoke is
+     "already gone" and juggler deletes the file itself; any other revoke
+     failure keeps the account and its file. A child still running after
+     the grace keeps its account (`ok:false`, `"still running"`), and the
+     root keeps its own while any child account remains. One entry per
+     account: `{tool:"teardown", kind:"account", ok, principal, jid,
+     reason}`. `RunRecord.torn_down` is set when every account is gone.
+
+  Resolving a resolved run rewrites nothing, posts no canary line and
+  sends no wake: it only performs a teardown still pending (accounts with
+  an ok entry are skipped), so a re-run after the stuck child ended
+  finishes the job. stdout gains `"torn_down"` and `"teardown"` (this
+  call's entries). (Not named `run-…` to avoid confusion with `juggler
+  run`.)
 - Every reason is on stdout and in a ledger: `cannot_complete.reason`
   in the subagent ledger and the `--wait` output; `juggler decide`'s
   reason in its stdout object and the decision stanza.
 - The run root has **no MCP tools**: it is a principal with a credential
-  and a budget slice, not an agent. The glue's result line to the fleet
-  canary room is a `troupe muc send` as the root, not a tool call.
+  and a budget slice, not an agent. The result line to the fleet canary
+  room is a `troupe muc send` as the root, not a tool call; `juggler
+  resolve --result-line --canary-room` makes it, so the glue never needs
+  the root's credential after `resolve`.
 
 **`juggler decide`** is the router. It is a synchronous verb, not an
 agent: one request to a **Decisions-API**-style model (OpenRouter's
@@ -188,7 +235,8 @@ and any certificate request go to.
 
 **The run root.** Per FDR 0032 D2, each run (one recording, one tree)
 gets a **fresh root principal**, minted and certified by the issuer
-(`juggler spawn --new-run`). The root is a member of the run's room
+(`juggler spawn --new-run`); it is fresh per run but deterministic per
+run key (UUIDv5, §1), so a retried `--new-run` resumes the same root. The root is a member of the run's room
 (the operator is its owner), signs the decision stanza and every
 subagent brief, holds the handles on the subagents, carries the run's
 D19 budget slice, and expires with the run; D5's cap means its lifetime
@@ -196,8 +244,14 @@ bounds every child's. The issuer's long-lived process acts as several
 run roots concurrently by holding one credential reference per run.
 This is preferred over the issuer acting as root for every run because
 it gives per-run budgets and handles, bounds blast radius to one run,
-and makes each provenance DAG single-rooted. The root's credential and
-room are swept together at the run's retention point (circus: 30 days).
+and makes each provenance DAG single-rooted. **The root's lifetime ends
+at `juggler resolve`**: its account (and every child's) is revoked and
+its password file deleted there (§1), after it has posted the run's
+result line. The room outlives it, owned by the operator, and is swept
+at the run's retention point (circus: 30 days). The troupe certificate
+record that names the root MUST outlive the account, so the run's
+signed stanzas stay verifiable after teardown; keeping it is troupe's
+lane.
 
 ### 3. The brief
 
@@ -214,7 +268,7 @@ into the run's MUC and is the agent's ONLY instruction source. Fields:
 | `system` | the system prompt |
 | `task` | the task text |
 | `moxyfile` | the agent's **inline moxyfile** as a TOML string (§5) |
-| `env` | string→string table passed into the agent's unit environment; how per-agent tool configuration (e.g. a target mode, `MOXIN_PATH`) reaches moxy and its moxins, which moxyfile(5) cannot carry. `CLOWN_SESSION_ID`, `TROUPE_XMPP_*` and `JUGGLER_*` are reserved and rejected |
+| `env` | string→string table passed into the agent's unit environment; how per-agent tool configuration (e.g. a target mode, `MOXIN_PATH`) reaches moxy and its moxins, which moxyfile(5) cannot carry. `CLOWN_SESSION_ID`, `TROUPE_XMPP_*`, `TROUPE_MINT_*` (the spawner's minter credential) and `JUGGLER_*` are reserved and rejected |
 | `tools` | REQUIRED allowlist of exact tool names as moxy advertises them (`<server>_<tool>`); `juggler run` offers the model only these. A listed name moxy does not advertise is a startup error; the list may not be empty |
 | `evaluator` | `{kind, program}`; first kind is `jq` (§4) |
 | `limits` | `{steps, wall_clock, sandbox}`; `sandbox` is RESERVED and unused in this slice (§9) |
@@ -417,7 +471,29 @@ with its own JID and posts its turns there. The room's MAM is the run
 transcript and the one link the fallback note carries. Per-agent
 provenance survives because each stanza carries its sender's JID (and,
 later, its signature); the evaluator reads a per-agent slice by sender.
-MUC provisioning and teardown are troupe's and circus's lanes.
+
+**Provisioning** (troupe ≥ 4c52b3b, run as the run root:
+`TROUPE_XMPP_USER`/`TROUPE_XMPP_PASSWORD_FILE` are the root's):
+
+1. `juggler spawn --new-run --room-domain D --operator-jid O`: the root
+   runs `troupe muc create --room <run-key>@D --owner O`. The creator is
+   owner automatically and the room is forced persistent; the call is
+   idempotent on a room the caller owns and fails on one it does not.
+   The operator is the second owner from the start because MUC's
+   last-owner rule forbids the only owner stepping down.
+2. Before each `juggler spawn --brief`, after the child's mint and
+   before its brief is posted or its unit started, the root runs `troupe
+   muc affiliate --room R --affiliation member --jid <child>`; a failed
+   spawn undoes it with `--affiliation none`. Affiliation does not join
+   the room, so the child need not be online.
+3. At `juggler resolve` (§1) each child is set back to `none`, then the
+   root sets ITS OWN affiliation to `none`, leaving the operator the sole
+   owner of the archived room.
+
+A pre-created `--room` is the operator's: juggler neither affiliates
+children into it nor steps the root down from it (its membership is its
+owner's business). Destroying rooms is the retention sweep's job
+(circus), never juggler's.
 
 A turn stanza travels in one `troupe muc send` argument, which Linux caps
 at 128 KiB per argv element. When a marshalled turn exceeds 64 KiB, the
@@ -661,10 +737,28 @@ The router, before any subagent exists:
   differs from the docs and is unstable, that integers appear where
   floats are expected, and that a chat-completions call to the slug is
   refused with HTTP 400; `juggler decide` parses by name only.
-- **Per-run credentials accumulate.** A run root's troupe credential and
-  room outlive the run until the retention sweep (circus's 30-day job,
-  itself deferred). Until that sweep exists, every recording leaves one
-  credential and one room behind.
+- **Per-run rooms accumulate; credentials end at resolve.** `juggler
+  resolve` revokes every account of the run (§1), but the room outlives
+  the run, owned by the operator, until the retention sweep (circus's
+  30-day job, itself deferred). Until that sweep exists every recording
+  leaves one room behind — and one root account too when a child was
+  still running at resolve or `--keep-accounts` was passed, until a later
+  `resolve` finishes the teardown. A run that never reaches `resolve`
+  (the glue crashed and no redelivery came) keeps all its accounts.
+- **A failed `--new-run` that is never retried leaks its root.** To make
+  the retry resumable (§1: the root is derived from the run key and kept
+  on failure), a `--new-run` that fails after the mint leaves the root's
+  account, its password file, a pending run record and possibly the
+  room. If no retry ever comes, nothing revokes them; like the rooms,
+  they are the retention sweep's to remove. Because the root is a
+  function of the run key, a run key must never be reused for a
+  different run.
+- **"Already gone" is inferred from stderr.** troupe 4c52b3b exits 1 for
+  both a failed login and an unreachable server; juggler treats exit 1
+  with `xmpp: negotiate` or `not-authorized` on stderr as a login failure
+  (the account is gone, the file is deleted) and anything else as a
+  failure that keeps the account and its file. If troupe changes that
+  wording, every teardown keeps its accounts (fails safe, not open).
 - **The ringmaster reaper does not back-stop juggler jobs today.** RFC-0018
   reaps a job only when the producer's advisory lock is released, and
   there is no CLI verb for a producer to take that lock, so `juggler run`
@@ -676,19 +770,19 @@ The router, before any subagent exists:
 - **ringmaster protocol ≥ 2 is required** for `aborted`, `cancel-requested`,
   `cancel` and `wait --on-cancel`; an older installed ringmaster (which
   spelled the state `cancelled`) will not interoperate. **troupe ≥ 4c52b3b
-  is required** for `mint --password-file` (and, when provisioning lands,
-  `muc create`/`muc affiliate`); an older troupe rejects the flag and every
-  mint fails. In v1 both binaries are found on PATH or via
+  is required** for `mint --password-file`, `mint-revoke --password-file`,
+  `muc create` and `muc affiliate`; an older troupe rejects the flag and
+  every mint fails. In v1 both binaries are found on PATH or via
   `JUGGLER_{RINGMASTER,TROUPE}_BIN`; the nix-pinned paths (brief 6,
   clown#246) must satisfy both minimums.
-- **Room provisioning is unavailable in v1.** troupe has no verb to create
-  a MUC with the operator as owner (troupe#44), so `juggler spawn
-  --new-run` requires `--room` naming an existing room; `--room-domain`
-  fails with a troupe's-lane error. Minting itself cannot run from a
-  hardened system service today (troupe#43: `sudo -n prosodyctl register`
-  under `NoNewPrivileges`, password in argv, no domain / password-file /
-  c2s inputs), so on such a host the bullet is blocked until troupe
-  ships a privilege-free mint. Supervision on such a host uses `juggler
+- **The hardened webhook host.** troupe 4c52b3b's privilege-free mint
+  (troupe#43: a minter credential instead of `sudo -n prosodyctl
+  register`, password to a file, domain and c2s inputs) is what a
+  hardened system service mints with; juggler passes `--session-key` and
+  `--password-file` and leaves the domain, c2s host/port and minter
+  credential to the inherited `TROUPE_XMPP_*`/`TROUPE_MINT_*`
+  environment. Deploying that on the webhook host is circus's lane.
+  Supervision on such a host uses `juggler
   spawn --user` against a lingering user manager for the service user;
   a polkit grant for arbitrary transient-unit properties on the system
   manager is root-equivalent and is rejected. Exit wakes are slice-0 journal messages to the
@@ -712,6 +806,7 @@ The router, before any subagent exists:
 | spend control | one dedicated OpenRouter key per spawner with a hard monthly credit limit (circus: ~$10 to start) | smallest thing that bounds blast radius | per-child budgets are wanted: the spawner mints a child key carrying a subset of its own budget (OpenRouter key minting), which is FDR 0032 D19's spend quota — an ambient, monotone, drop-only right inherited at spawn as a subset of the parent's, with the provider as the enforcement point — made concrete. Not D13's `cap`, which is the right to shorten a child's lifetime (D5). The key goes in the brief as a credential reference, not a secret |
 | evaluator kinds | `jq` only | smallest signed-contract surface | the same count-of-kind jq appears in most briefs (→ `predicate`) or a task needs judgement (→ `agent`) |
 | headless permission posture | non-`always-allow` → deny | no human to ask | a moxin's tier is `ask` only because nobody set it, and agents keep failing on it |
+| account teardown | on by default in `juggler resolve`; `--keep-accounts` opts out | a run's accounts have no use after its result line is posted, and each one left is a credential that can still log in | debugging a run needs its identities alive afterwards (→ `--keep-accounts`, then a later `resolve` finishes the teardown) |
 | transcript layout | one MUC per run | one link for the fallback note; brief in the same transcript | runs grow long enough that per-agent rooms read better |
 | daemon for remote models | optional | the webhook host's service user has no user session | a host needs local inference for these agents (→ system-service daemon) |
 | agent-scope realisation | open: sub-cgroup vs sibling unit | the bullet needs neither namespaces nor the choice | signing lands, or a non-fixed-surface tool server appears (→ sibling unit + `limits.sandbox`) |
@@ -769,5 +864,6 @@ The router, before any subagent exists:
   single-turn `juggler-prompt` tool this record supersedes as "the
   subagent path".
 - Lanes: moxy (narrowing merge, principal → effective moxyfile), troupe
-  (MUC provisioning, grant grammar, signing), circus (webhook-host deployment,
-  FDR 0023 amendment), clown (this record and `juggler run`/`spawn`).
+  (the MUC verbs juggler calls, grant grammar, signing, certificate
+  records that outlive revoked accounts), circus (room retention sweep,
+  webhook-host deployment, FDR 0023 amendment), clown (this record and `juggler run`/`spawn`).

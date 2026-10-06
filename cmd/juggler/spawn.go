@@ -12,9 +12,12 @@ import (
 	jr "code.linenisgreat.com/clown/internal/jugglerrun"
 )
 
-const spawnUsage = `usage: juggler spawn --new-run [--run-key <key>] --input <file|-> [--issuer <principal>] (--room <jid> | --room-domain <domain>)
+const spawnUsage = `usage: juggler spawn --new-run [--run-key <key>] --input <file|-> [--issuer <principal>] (--room <jid> | --room-domain <domain> --operator-jid <jid>)
        juggler spawn --brief <template|-> [--task <file|->] [--run-key <key>] [--wait [--timeout <dur>]] [--moxy-url <url>] [--juggler <path>] [--stop-grace <dur>] [--user]
   common: [--ringmaster <path>] [--troupe <path>] [--systemd-run <path>]`
+
+// operatorJIDEnv is --operator-jid's default.
+const operatorJIDEnv = "JUGGLER_OPERATOR_JID"
 
 // spawnTimeout bounds the launch (mints, posts, systemd-run), not --wait.
 const spawnTimeout = 2 * time.Minute
@@ -27,6 +30,7 @@ type spawnOpts struct {
 	issuer     string
 	room       string
 	roomDomain string
+	operator   string
 	brief      string
 	task       string
 	wait       bool
@@ -45,7 +49,8 @@ func parseSpawnFlags(args []string, stderr io.Writer) (spawnOpts, error) {
 	fs.StringVar(&o.input, "input", "", "--new-run: the run's input (the recording), file or -")
 	fs.StringVar(&o.issuer, "issuer", "", "--new-run: the issuer principal (default $CLOWN_SESSION_ID)")
 	fs.StringVar(&o.room, "room", "", "--new-run: an existing, configured run MUC JID")
-	fs.StringVar(&o.roomDomain, "room-domain", "", "--new-run: create the run MUC on this component (troupe's lane; unavailable)")
+	fs.StringVar(&o.roomDomain, "room-domain", "", "--new-run: create the run MUC <run-key>@<domain> as the run root (requires --operator-jid)")
+	fs.StringVar(&o.operator, "operator-jid", os.Getenv(operatorJIDEnv), "--new-run: the operator's bare JID, made a second owner of a created room (default $"+operatorJIDEnv+")")
 	fs.StringVar(&o.brief, "brief", "", "the subagent brief template (TOML), file or -")
 	fs.StringVar(&o.task, "task", "", "the brief's task text, file or - (default: the template's own task)")
 	fs.BoolVar(&o.wait, "wait", false, "block until the subagent's job terminalizes and print its verdict; at --timeout the job is cancelled (ringmaster cancel) and given --stop-grace to terminalize: exit 3 if it aborted, else 5 (still running, cancel requested)")
@@ -67,6 +72,8 @@ func parseSpawnFlags(args []string, stderr io.Writer) (spawnOpts, error) {
 		return o, errors.New("one of --new-run or --brief is required")
 	case o.newRun && o.input == "":
 		return o, errors.New("--new-run requires --input")
+	case o.newRun && o.roomDomain != "" && o.operator == "":
+		return o, errors.New("--room-domain requires --operator-jid (or $" + operatorJIDEnv + "): the run root must never be the room's only owner")
 	case o.newRun && o.task != "":
 		return o, errors.New("--task applies to --brief only")
 	case o.brief == "-" && o.task == "-":
@@ -109,7 +116,7 @@ func spawnNewRun(ctx context.Context, deps jr.LifecycleDeps, o spawnOpts, stdin 
 	if issuer == "" {
 		issuer = os.Getenv(jr.SessionIDEnv)
 	}
-	res, err := jr.NewRun(ctx, deps, jr.NewRunRequest{RunKey: o.runKey, Issuer: issuer, Input: input, Room: o.room, RoomDomain: o.roomDomain})
+	res, err := jr.NewRun(ctx, deps, jr.NewRunRequest{RunKey: o.runKey, Issuer: issuer, Input: input, Room: o.room, RoomDomain: o.roomDomain, OperatorJID: o.operator})
 	if err != nil {
 		return fail(stderr, "spawn", err)
 	}

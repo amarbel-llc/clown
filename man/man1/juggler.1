@@ -45,7 +45,7 @@
 .Op Fl -run-key Ar key
 .Fl -input Ar file
 .Op Fl -issuer Ar principal
-.Fl -room Ar jid
+.Fl -room Ar jid | Fl -room-domain Ar domain Fl -operator-jid Ar jid
 .Nm
 .Cm spawn Fl -brief Ar template
 .Op Fl -task Ar file
@@ -63,6 +63,8 @@
 .Cm resolve Ar run-job Fl -state Ar succeeded|failed Fl -reason Ar text
 .Op Fl -fallback-artifacts Ar json
 .Op Fl -stop-grace Ar dur
+.Op Fl -result-line Ar text Fl -canary-room Ar jid
+.Op Fl -keep-accounts
 .Nm
 .Cm job-ledger Ar job
 .Op Fl -target Ar principal
@@ -476,6 +478,8 @@ The principal is the brief's
 when set, must equal it.
 That variable and every
 .Ev TROUPE_XMPP_*
+and
+.Ev TROUPE_MINT_*
 variable are stripped from the environment handed to moxy and its tool
 servers.
 SIGTERM or SIGINT
@@ -498,7 +502,7 @@ and exits with the state: 0
 4
 .Ql interrupted ;
 1 is a usage or identity error with no job written.
-.It Cm spawn Fl -new-run Op Fl -run-key Ar key Fl -input Ar file Op Fl -issuer Ar principal Fl -room Ar jid
+.It Cm spawn Fl -new-run Op Fl -run-key Ar key Fl -input Ar file Op Fl -issuer Ar principal Fl -room Ar jid | Fl -room-domain Ar domain Fl -operator-jid Ar jid
 The issuer's entry for a new tree: start a
 .Em run .
 Mints the run's root principal
@@ -518,19 +522,46 @@ An existing run with that key is returned unchanged with
 .Ql "existing": true
 and nothing is created.
 Without it a fresh key is minted.
+The root principal is the UUIDv5 of the key under juggler's fixed
+namespace, so the key must never be reused for a different run.
 .It Fl -issuer Ar principal
 The issuer
 .Pq default Ev CLOWN_SESSION_ID .
 .It Fl -room Ar jid
 An existing, already-configured run MUC.
+It stays its owner's: children are not affiliated into it and the root
+does not step down from it.
 .It Fl -room-domain Ar domain
-Create the run's MUC on this component.
-Unavailable until troupe grows a verb to create a room with the
-operator as owner: it fails with a troupe's-lane error and revokes
-what the call minted.
+Create the run's MUC
+.Ar run-key Ns @ Ns Ar domain
+.Pq run key lowercased
+as the run root:
+.Ql troupe muc create Fl -room Ar room Fl -owner Ar operator-jid ,
+with the root's
+.Ev TROUPE_XMPP_USER
+and
+.Ev TROUPE_XMPP_PASSWORD_FILE .
+The root owns the room it creates; the operator is its second owner,
+so the root can step down at
+.Cm resolve
+.Pq the last owner cannot .
+Each later
+.Cm spawn Fl -brief
+affiliates its child as a member before the unit starts.
+A failure after the room exists leaves it
+.Pq rooms are persistent; the retention sweep removes them ;
+a retry with the same
+.Fl -run-key
+re-creates it idempotently as the same root.
+.It Fl -operator-jid Ar jid
+The operator's bare JID
+.Pq default Ev JUGGLER_OPERATOR_JID ;
+required with
+.Fl -room-domain .
 .El
 Prints
-.Sy {"run_key","root_principal","root_credential_ref","root_jid","room","root_stanza","run_job","existing","resolved","torn_down"} .
+.Sy {"run_key","root_principal","root_credential_ref","root_jid","room","root_stanza","run_job","operator_jid","existing","resolved","torn_down"}
+.Pq Ql operator_jid No only when set .
 .Ql root_stanza
 is the run-input stanza id that
 .Cm decide Fl -parent
@@ -542,8 +573,18 @@ tell a redelivery how far the first delivery got, so one that crashed
 before
 .Cm resolve
 can be finished instead of dropped.
-Exit status 0, or 1 on a usage or launch failure
-.Pq everything minted or posted is undone .
+Exit status 0, or 1 on a usage or launch failure.
+A failure after the root's mint keeps the root
+.Pq its account and password file
+and any created room, withdraws a posted run input, fails a started run
+job and saves the run as
+.Ql pending ;
+the same command with the same
+.Fl -run-key
+resumes it, re-minting the same root.
+A pending run takes no subagents.
+One that is never retried leaves the root and room for the retention
+sweep.
 .It Cm spawn Fl -brief Ar template Op Fl -task Ar file Op Fl -run-key Ar key Op Fl -wait Op Fl -timeout Ar dur Op Fl -stop-grace Ar dur Op Fl -moxy-url Ar url Op Fl -juggler Ar path Op Fl -user
 Launch one subagent into a run.
 .Ar template
@@ -577,7 +618,12 @@ else the one whose root principal is
 .Pq the glue runs as the run root .
 A resolved run refuses new subagents.
 .Pp
-The child's principal and JID are minted, the brief is staged under the
+The child's principal and JID are minted; in a room the run created,
+the root then admits the JID
+.Pq Ql troupe muc affiliate Fl -room Ar room Fl -affiliation No member Fl -jid Ar child ,
+undone with
+.Ql none
+if the spawn fails; the brief is staged under the
 run's
 .Pa children/
 directory and dropped into the room as a stanza, the child's job is
@@ -603,7 +649,7 @@ The unit's environment is exactly: the child's identity
 the brief's own
 .Ql [env]
 table
-.Pq keys CLOWN_SESSION_ID , TROUPE_XMPP_* No and JUGGLER_* are reserved and rejected ,
+.Pq keys CLOWN_SESSION_ID , TROUPE_XMPP_* , TROUPE_MINT_* No and JUGGLER_* are reserved and rejected ,
 .Ev JUGGLER_MOXY_URL
 when
 .Fl -moxy-url
@@ -620,10 +666,11 @@ or the variable is set, and these variables of the spawner's when set:
 and
 .Ev TROUPE_XMPP_INSECURE .
 The spawner's own
-.Ev CLOWN_SESSION_ID
-and
+.Ev CLOWN_SESSION_ID ,
 .Ev TROUPE_XMPP_*
-identity are stripped from the environment of the
+identity and
+.Ev TROUPE_MINT_*
+minter credential are stripped from the environment of the
 .Xr systemd-run 1
 client process, so they never reach a unit.
 .Bl -tag -width Ds
@@ -769,9 +816,19 @@ the exiting principal
 Prints
 .Sy {"job","state","reason","message","wrote_terminal","woken","already_woken"} ;
 exit status 0, or 1 when a record or wake could not be written.
-.It Cm resolve Ar run-job Fl -state Ar succeeded|failed Fl -reason Ar text Op Fl -fallback-artifacts Ar json Op Fl -stop-grace Ar dur
+.It Cm resolve Ar run-job Fl -state Ar succeeded|failed Fl -reason Ar text Op Fl -fallback-artifacts Ar json Op Fl -stop-grace Ar dur Op Fl -result-line Ar text Fl -canary-room Ar jid Op Fl -keep-accounts
 The run's last call, always.
-First cancels every child job of the run that is not yet terminal and
+With
+.Fl -result-line
+and
+.Fl -canary-room
+.Pq given together; the line must be one line ,
+its first act is to post the line into the canary room as the run root
+.Pq Ql troupe muc send Fl -source No juggler-resolve ,
+before the root's account is torn down; the post is a
+.Ql canary
+note in the run ledger, and a failed post changes nothing else.
+It then cancels every child job of the run that is not yet terminal and
 waits up to
 .Fl -stop-grace
 .Pq default 30s
@@ -802,10 +859,42 @@ is the fallback's own outcome as a JSON array of
 .Sy {"tool","kind","uris"} :
 its entry is ok when it did not need to run, or ran and produced at
 least one URI.
-Resolving an already-resolved run is a no-op: the stored verdict is
-printed, a notice goes to stderr, and the exit status is 0.
+.Pp
+Last, unless
+.Fl -keep-accounts ,
+it tears the run's accounts down.
+For each child whose job is terminal: in a room the run created,
+.Ql troupe muc affiliate Fl -affiliation No none Fl -jid Ar child
+as the root
+.Pq best effort ;
+then
+.Ql troupe mint-revoke Fl -session-key Ar child Fl -password-file Ar file ;
+then the password file is deleted.
+Then, once no child account remains, the root sets its own affiliation
+to
+.Ql none
+.Pq only in a room the run created with an operator owner; otherwise skipped and noted ,
+revokes itself and deletes its file.
+A login failure at revoke means the account is already gone
+.Pq troupe cannot tell it from a wrong password
+and the file is deleted anyway; any other revoke failure keeps the
+account and its file.
+A child still running after the grace keeps its account
+.Pq Dq still running ,
+and the root keeps its own while any child account remains.
+Each account handled is a
+.Sy {"tool":"teardown","kind":"account","ok","principal","jid","reason"}
+run-ledger entry; the run is
+.Ql torn_down
+once every account is gone.
+.Pp
+Resolving an already-resolved run rewrites nothing, posts no canary
+line and sends no wake: it only performs a teardown still pending
+.Pq accounts already gone are skipped ,
+prints the stored verdict with a notice on stderr, and exits 0.
 Prints
-.Sy {"run_key","run_job","state","reason","ledger","woken","already_resolved"} .
+.Sy {"run_key","run_job","state","reason","ledger","woken","already_resolved","torn_down","teardown"}
+.Pq Ql teardown : No this call's entries, omitted when empty .
 .It Cm job-ledger Ar job Op Fl -target Ar principal
 Print a job's ledger: a run job's run ledger, or an agent job's result
 spool
@@ -964,10 +1053,17 @@ the run root for
 the exiting principal for
 .Cm exit-wake .
 A unit gets its own, the child's.
+.It Ev JUGGLER_OPERATOR_JID
+The default of
+.Cm spawn Fl -new-run Fl -operator-jid .
 .It Ev TROUPE_XMPP_*
 The ambient XMPP identity that
 .Cm decide
 and the brief stanza post as.
+Room administration, the canary post and the run input are made as the
+run root instead; the host, port and minter variables
+.Pq Ev TROUPE_XMPP_HOST , TROUPE_XMPP_PORT , TROUPE_MINT_*
+are inherited by every troupe call.
 .It Ev XDG_STATE_HOME
 Root of juggler's state directory; see
 .Sx FILES .
@@ -994,18 +1090,24 @@ room, root stanza, run job, holders, resolution.
 .It Pa $XDG_STATE_HOME/juggler/runs/<run-key>/ledger.json
 The run ledger:
 .Ql route ,
+.Ql canary ,
 .Ql subagent_stop
 and
 .Ql fallback
 entries, closed by
-.Cm resolve .
+.Cm resolve ,
+then its
+.Ql teardown
+entries.
 .It Pa $XDG_STATE_HOME/juggler/runs/<run-key>/children/<digest>.json
 A subagent's record; the digest is that of the template and task.
 .It Pa $XDG_STATE_HOME/juggler/runs/<run-key>/children/<digest>.brief.toml
 The filled brief staged for the unit.
 .It Pa $XDG_STATE_HOME/juggler/runs/<run-key>/<principal>.pw
 The troupe password of one identity minted for the run, mode 0600 in a
-mode 0700 directory.
+mode 0700 directory; deleted when
+.Cm resolve
+tears the account down.
 .It Pa $XDG_STATE_HOME/juggler/agents/<principal>/moxyfile
 An agent's moxyfile, and the working directory of its moxy.
 .It Pa $XDG_STATE_HOME/juggler/exit-wakes/<job>

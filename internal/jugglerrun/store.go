@@ -1,6 +1,8 @@
 package jugglerrun
 
 import (
+	"crypto/sha1"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"syscall"
 	"time"
 
@@ -117,22 +120,38 @@ func validJobID(job string) error {
 
 // RunRecord is one run (FDR 0019 §2): its root principal, room and run job.
 type RunRecord struct {
-	Schema            int         `json:"schema"`
-	RunKey            string      `json:"run_key"`
-	Issuer            string      `json:"issuer"`
-	RootPrincipal     string      `json:"root_principal"`
-	RootJID           string      `json:"root_jid"`
-	RootCredentialRef string      `json:"root_credential_ref"`
-	Room              string      `json:"room"`
-	RoomCreated       bool        `json:"room_created"`
-	RootStanza        string      `json:"root_stanza"`
-	RunJob            string      `json:"run_job"`
-	Holders           []Holder    `json:"holders"`
-	CreatedAt         time.Time   `json:"created_at"`
-	Resolved          *Resolution `json:"resolved,omitempty"`
-	// TornDown is set by the teardown brief once the run's accounts and
-	// credentials are gone; false until then.
+	Schema            int    `json:"schema"`
+	RunKey            string `json:"run_key"`
+	Issuer            string `json:"issuer"`
+	RootPrincipal     string `json:"root_principal"`
+	RootJID           string `json:"root_jid"`
+	RootCredentialRef string `json:"root_credential_ref"`
+	Room              string `json:"room"`
+	// RoomCreated: juggler provisioned the room (`troupe muc create` as the
+	// root), so the root owns it and affiliates the run's agents.
+	RoomCreated bool `json:"room_created"`
+	// OperatorJID is the room's other owner, which lets the root step down
+	// at teardown (the last owner cannot).
+	OperatorJID string      `json:"operator_jid,omitempty"`
+	RootStanza  string      `json:"root_stanza"`
+	RunJob      string      `json:"run_job"`
+	Holders     []Holder    `json:"holders"`
+	CreatedAt   time.Time   `json:"created_at"`
+	Resolved    *Resolution `json:"resolved,omitempty"`
+	// Pending marks a run whose `spawn --new-run` failed after the root was
+	// minted: the root (account and password file) and any created room are
+	// kept, there is no run job or root stanza, and a `--new-run` with the
+	// same key resumes it.
+	Pending bool `json:"pending,omitempty"`
+	// TornDown is set by `juggler resolve`'s teardown once every account of
+	// the run (each child's, then the root's) is revoked or already gone and
+	// its password file deleted; false until then.
 	TornDown bool `json:"torn_down"`
+}
+
+// rootIdentity is the run root as a troupe caller.
+func (r *RunRecord) rootIdentity() Identity {
+	return IdentityFor(r.RootPrincipal, Credential{JID: r.RootJID, PasswordFile: r.RootCredentialRef})
 }
 
 // ChildRecord is one subagent spawned into a run.
@@ -302,3 +321,36 @@ func writeFileAtomic(path string, data []byte) error {
 // NewPrincipal mints a fresh per-instance key: a random UUIDv4 (FDR 0032 D1),
 // from the same generator clown uses for its own session keys.
 func NewPrincipal() string { return jobwake.NewUUID() }
+
+// rootPrincipalNamespace is juggler's UUIDv5 namespace for run-root
+// principals (a fixed random UUID, never to be changed: it would re-key every
+// pending run).
+var rootPrincipalNamespace = mustParseUUID("b5a2c9e0-7d14-4f3a-9c6e-1f8d2a0b4e57")
+
+// NewRootPrincipal is the run root's per-instance key: the UUIDv5 of runKey
+// under rootPrincipalNamespace, so a retried `spawn --new-run` re-mints the
+// same root (FDR 0019 §2). Children stay random (NewPrincipal).
+func NewRootPrincipal(runKey string) string { return uuidV5(rootPrincipalNamespace, runKey) }
+
+// uuidV5 is RFC 9562 §5.5: SHA-1 of the namespace bytes and the name, with
+// the version (5) and variant (10xx) bits set.
+func uuidV5(namespace [16]byte, name string) string {
+	h := sha1.New()
+	h.Write(namespace[:])
+	h.Write([]byte(name))
+	var u [16]byte
+	copy(u[:], h.Sum(nil))
+	u[6] = u[6]&0x0f | 0x50
+	u[8] = u[8]&0x3f | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", u[0:4], u[4:6], u[6:8], u[8:10], u[10:16])
+}
+
+func mustParseUUID(s string) [16]byte {
+	var u [16]byte
+	b, err := hex.DecodeString(strings.ReplaceAll(s, "-", ""))
+	if err != nil || len(b) != 16 {
+		panic("jugglerrun: bad UUID " + s)
+	}
+	copy(u[:], b)
+	return u
+}

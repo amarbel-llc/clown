@@ -60,11 +60,16 @@ type LifecycleDeps struct {
 	Ringmaster Ringmaster
 	Troupe     Troupe
 	Units      UnitLauncher
-	Rooms      RoomProvisioner
-	Store      Store
-	Now        func() time.Time
-	// NewPrincipal defaults to NewPrincipal.
+	// Rooms defaults to ExecRoomProvisioner on the Troupe binary when Troupe
+	// is an ExecTroupe.
+	Rooms RoomProvisioner
+	Store Store
+	Now   func() time.Time
+	// NewPrincipal (children, fresh run keys) defaults to NewPrincipal.
 	NewPrincipal func() string
+	// NewRootPrincipal (a run root, from its run key) defaults to
+	// NewRootPrincipal.
+	NewRootPrincipal func(runKey string) string
 }
 
 func (d LifecycleDeps) withDefaults() LifecycleDeps {
@@ -74,8 +79,15 @@ func (d LifecycleDeps) withDefaults() LifecycleDeps {
 	if d.NewPrincipal == nil {
 		d.NewPrincipal = NewPrincipal
 	}
+	if d.NewRootPrincipal == nil {
+		d.NewRootPrincipal = NewRootPrincipal
+	}
 	if d.Rooms == nil {
-		d.Rooms = UnavailableRoomProvisioner{}
+		if t, ok := d.Troupe.(ExecTroupe); ok {
+			d.Rooms = ExecRoomProvisioner(t)
+		} else {
+			d.Rooms = missingRoomProvisioner{}
+		}
 	}
 	return d
 }

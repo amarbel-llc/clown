@@ -62,9 +62,11 @@ func (p platformBins) lifecycleDeps() (jr.LifecycleDeps, error) {
 	if err != nil {
 		return jr.LifecycleDeps{}, err
 	}
+	troupe := p.troupeClient()
 	return jr.LifecycleDeps{
 		Ringmaster: p.ringmasterClient(),
-		Troupe:     p.troupeClient(),
+		Troupe:     troupe,
+		Rooms:      jr.ExecRoomProvisioner(troupe),
 		Units:      jr.ExecSystemdRun{Bin: resolveBin(p.systemdRun, jr.SystemdRunBinEnv, SystemdRunPath, "systemd-run"), UserManager: p.userManager},
 		Store:      store,
 	}, nil

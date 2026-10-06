@@ -6,7 +6,7 @@
 //
 // The job platform (ringmaster), the XMPP surface (troupe) and systemd are
 // consumed as external binaries. Every exec sits behind a small interface
-// (Ringmaster, Troupe, UnitLauncher, RoomProvisioner) whose Exec*
+// (Ringmaster, Troupe, UnitLauncher, RoomProvisioner — troupe's MUC verbs) whose Exec*
 // implementation shells the binary, so the logic is testable with fakes.
 package jugglerrun
 
@@ -120,8 +120,9 @@ func EnvWith(base []string, overrides map[string]string) []string {
 }
 
 // StripPrincipalEnv returns env without the principal's identity
-// (jugglerbrief.IsPrincipalEnvKey: CLOWN_SESSION_ID, clown#136, and every
-// TROUPE_XMPP_* variable). It is applied to every environment handed to a
+// (jugglerbrief.IsPrincipalEnvKey: CLOWN_SESSION_ID, clown#136, every
+// TROUPE_XMPP_* variable and the TROUPE_MINT_* minter credential). It is
+// applied to every environment handed to a
 // process outside the runtime scope — moxy's tool servers, and the
 // systemd-run client process `juggler spawn` execs, so the spawner's own
 // identity never leaks into a unit (the unit gets only what --setenv names).

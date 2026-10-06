@@ -64,9 +64,12 @@ type NewRunRequest struct {
 	// Room names an existing, already-configured run MUC. Exactly one of Room
 	// and RoomDomain is set.
 	Room string
-	// RoomDomain is the MUC component a new room would be created on; it
-	// needs a RoomProvisioner, which troupe does not yet back.
+	// RoomDomain is the MUC component the run's room <run-key>@<domain> is
+	// created on, by the root (`troupe muc create`); it requires OperatorJID.
 	RoomDomain string
+	// OperatorJID is made a second owner of a created room, so the root is
+	// never its only owner and can step down at teardown.
+	OperatorJID string
 }
 
 // NewRunResult is `juggler spawn --new-run`'s stdout object.
@@ -80,7 +83,9 @@ type NewRunResult struct {
 	// provenance parent `juggler decide --parent` takes.
 	RootStanza string `json:"root_stanza"`
 	RunJob     string `json:"run_job"`
-	Existing   bool   `json:"existing"`
+	// OperatorJID is the created room's operator owner, when one was given.
+	OperatorJID string `json:"operator_jid,omitempty"`
+	Existing    bool   `json:"existing"`
 	// Resolved and TornDown tell a caller that finds an existing run how far
 	// it got: a crashed first delivery leaves it unresolved.
 	Resolved bool `json:"resolved"`
@@ -90,7 +95,7 @@ type NewRunResult struct {
 func newRunResult(rec *RunRecord, existing bool) NewRunResult {
 	return NewRunResult{
 		RunKey: rec.RunKey, RootPrincipal: rec.RootPrincipal, RootCredentialRef: rec.RootCredentialRef,
-		RootJID: rec.RootJID, Room: rec.Room, RootStanza: rec.RootStanza, RunJob: rec.RunJob, Existing: existing,
+		RootJID: rec.RootJID, Room: rec.Room, RootStanza: rec.RootStanza, RunJob: rec.RunJob, OperatorJID: rec.OperatorJID, Existing: existing,
 		Resolved: rec.Resolved != nil, TornDown: rec.TornDown,
 	}
 }
@@ -109,6 +114,12 @@ type runInputStanza struct {
 // run-level job on the issuer's channel with the issuer as first holder, and
 // the run record. An existing RunKey returns the stored run unchanged with
 // Existing set and creates nothing.
+//
+// The root principal is derived from the run key (NewRootPrincipal), so a
+// retry re-mints the same root, which still owns a room the failed attempt
+// created. A failure after the mint therefore keeps the root's account and
+// password file, withdraws a posted input and fails a started run job, and
+// saves a Pending run record; NewRun on a pending record resumes it.
 func NewRun(ctx context.Context, deps LifecycleDeps, req NewRunRequest) (NewRunResult, error) {
 	deps = deps.withDefaults()
 	if req.Issuer == "" {
@@ -116,6 +127,12 @@ func NewRun(ctx context.Context, deps LifecycleDeps, req NewRunRequest) (NewRunR
 	}
 	if (req.Room == "") == (req.RoomDomain == "") {
 		return NewRunResult{}, errors.New("exactly one of an existing room or a room domain is required")
+	}
+	if req.RoomDomain != "" && req.OperatorJID == "" {
+		return NewRunResult{}, errors.New("creating the run's room requires an operator JID (--operator-jid): the run root must never be the room's only owner")
+	}
+	if req.OperatorJID != "" && !strings.Contains(req.OperatorJID, "@") {
+		return NewRunResult{}, fmt.Errorf("operator JID %q is not a bare JID (local@domain)", req.OperatorJID)
 	}
 	if req.RunKey == "" {
 		req.RunKey = "run-" + deps.NewPrincipal()
@@ -128,66 +145,87 @@ func NewRun(ctx context.Context, deps LifecycleDeps, req NewRunRequest) (NewRunR
 		return NewRunResult{}, err
 	}
 	defer unlock()
-	if rec, err := deps.Store.LoadRun(req.RunKey); err != nil {
+	prior, err := deps.Store.LoadRun(req.RunKey)
+	if err != nil {
 		return NewRunResult{}, err
-	} else if rec != nil {
-		return newRunResult(rec, true), nil
+	}
+	if prior != nil && !prior.Pending {
+		return newRunResult(prior, true), nil
 	}
 
 	var undo undoStack
-	rec := &RunRecord{Schema: RecordSchema, RunKey: req.RunKey, Issuer: req.Issuer, CreatedAt: deps.Now().UTC()}
-	rec.RootPrincipal = deps.NewPrincipal()
+	rec := &RunRecord{Schema: RecordSchema, RunKey: req.RunKey, Issuer: req.Issuer, OperatorJID: req.OperatorJID, CreatedAt: deps.Now().UTC()}
+	rec.RootPrincipal = deps.NewRootPrincipal(req.RunKey)
+	if prior != nil {
+		// Resume: the derived root is the pending record's own.
+		rec.RootPrincipal, rec.CreatedAt = prior.RootPrincipal, prior.CreatedAt
+	}
 
 	rootPW, err := deps.Store.CredentialPath(req.RunKey, rec.RootPrincipal)
 	if err != nil {
 		return NewRunResult{}, fmt.Errorf("preparing the run root's credential file: %w", err)
 	}
+	// Same key, same file: on a retry troupe answers created=false.
 	cred, err := deps.Troupe.Mint(ctx, rec.RootPrincipal, rootPW)
 	if err != nil {
 		return NewRunResult{}, fmt.Errorf("minting the run root: %w", err)
 	}
-	undo.push(func(ctx context.Context, _ error) error {
-		return deps.Troupe.RevokeMint(ctx, rec.RootPrincipal, rootPW)
-	})
 	rec.RootJID, rec.RootCredentialRef = cred.JID, cred.PasswordFile
 	root := IdentityFor(rec.RootPrincipal, cred)
+	// From here a failure keeps the root (account and file) for the retry
+	// and saves the run as pending, after the undo of everything else.
+	failed := func(cause error) (NewRunResult, error) {
+		err := undo.unwind(cause)
+		pending := *rec
+		pending.Pending, pending.RootStanza, pending.RunJob, pending.Holders = true, "", "", nil
+		if saveErr := deps.Store.SaveRun(&pending); saveErr != nil {
+			err = fmt.Errorf("%w (saving the pending run record also failed: %v)", err, saveErr)
+		}
+		return NewRunResult{}, err
+	}
 
 	rec.Room = req.Room
 	if rec.Room == "" {
-		rec.Room = "juggler-" + roomLocalpart(req.RunKey) + "@" + req.RoomDomain
-		if err := deps.Rooms.CreateRoom(ctx, rec.Room); err != nil {
-			return NewRunResult{}, undo.unwind(fmt.Errorf("creating room %s: %w", rec.Room, err))
+		// The root creates the room and owns it; the operator is the second
+		// owner. Nothing undoes the create: rooms are persistent, the
+		// operator owns this one, and the retention sweep removes it (FDR
+		// 0019 Limitations); a retry's create is idempotent for the same
+		// root. The withdrawal stanza below voids its input.
+		rec.Room = roomLocalpart(req.RunKey) + "@" + req.RoomDomain
+		info, err := deps.Rooms.CreateRoom(ctx, root, rec.Room, []string{req.OperatorJID})
+		if err != nil {
+			return failed(fmt.Errorf("creating room %s as the run root: %w", rec.Room, err))
+		}
+		if info.Room != "" {
+			rec.Room = info.Room
 		}
 		rec.RoomCreated = true
-		undo.push(func(ctx context.Context, _ error) error { return deps.Rooms.DestroyRoom(ctx, rec.Room) })
 	}
 
 	stanza, err := json.Marshal(runInputStanza{Type: "run_input", RunKey: rec.RunKey, Issuer: rec.Issuer, Root: rec.RootPrincipal, Input: inputAsJSON(req.Input)})
 	if err != nil {
-		return NewRunResult{}, undo.unwind(err)
+		return failed(err)
 	}
 	if rec.RootStanza, err = deps.Troupe.PostStanza(ctx, root, rec.Room, SpawnSource, stanza); err != nil {
-		return NewRunResult{}, undo.unwind(fmt.Errorf("posting the run input to %s: %w", rec.Room, err))
+		return failed(fmt.Errorf("posting the run input to %s: %w", rec.Room, err))
 	}
-	if !rec.RoomCreated {
-		undo.push(func(ctx context.Context, cause error) error {
-			_, err := deps.Troupe.PostStanza(ctx, root, rec.Room, SpawnSource, withdrawalStanza(rec.RootStanza, cause))
-			return err
-		})
-	}
+	undo.push(func(ctx context.Context, cause error) error {
+		_, err := deps.Troupe.PostStanza(ctx, root, rec.Room, SpawnSource, withdrawalStanza(rec.RootStanza, cause))
+		return err
+	})
 
 	if rec.RunJob, err = deps.Ringmaster.Start(ctx, rec.Issuer, RunJobLabel, SpawnSource); err != nil {
-		return NewRunResult{}, undo.unwind(fmt.Errorf("starting the run job on %s: %w", rec.Issuer, err))
+		return failed(fmt.Errorf("starting the run job on %s: %w", rec.Issuer, err))
 	}
 	undo.push(failJobUndo(deps.Ringmaster, rec.Issuer, rec.RunJob))
 
 	holder := FirstHolder(rec.Issuer, deps.Now())
 	if err := mirrorHolder(ctx, deps.Ringmaster, rec.Issuer, rec.RunJob, holder); err != nil {
-		return NewRunResult{}, undo.unwind(err)
+		return failed(err)
 	}
 	rec.Holders = []Holder{holder}
 	if err := deps.Store.SaveRun(rec); err != nil {
-		return NewRunResult{}, undo.unwind(fmt.Errorf("saving the run record: %w", err))
+		return failed(fmt.Errorf("saving the run record: %w", err))
 	}
 	return newRunResult(rec, false), nil
 }
@@ -207,11 +245,13 @@ func inputAsJSON(input []byte) json.RawMessage {
 	return quoted
 }
 
-// roomLocalpart lowercases key and maps anything outside [a-z0-9-] to '-'.
+// roomLocalpart is a run key as a MUC room localpart: lowercased (XMPP
+// localparts are case-insensitive) with anything outside [a-z0-9._-] mapped
+// to '-'. A valid run key only holds [A-Za-z0-9._-], so this only lowercases.
 func roomLocalpart(key string) string {
 	var b strings.Builder
 	for _, c := range strings.ToLower(key) {
-		if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' {
+		if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '.' || c == '_' {
 			b.WriteRune(c)
 		} else {
 			b.WriteByte('-')
@@ -311,7 +351,8 @@ type briefStanza struct {
 }
 
 // SpawnChild is `juggler spawn --brief` (FDR 0019 §1): it mints the child
-// principal and JID, fills brief.principal, stages the brief, starts the
+// principal and JID, affiliates the JID as a member of a room the run
+// created, fills brief.principal, stages the brief, starts the
 // child's job on the parent's channel with the parent as first holder, drops
 // the brief into the room as the run root (the ambient TROUPE_XMPP_*
 // identity), saves the child record and starts the transient unit. A brief
@@ -339,6 +380,9 @@ func SpawnChild(ctx context.Context, deps LifecycleDeps, req SpawnRequest) (rec 
 	}
 	if run.Resolved != nil {
 		return nil, false, fmt.Errorf("run %s is already resolved (%s)", run.RunKey, run.Resolved.State)
+	}
+	if run.Pending {
+		return nil, false, fmt.Errorf("run %s is pending: its spawn --new-run failed; retry it with the same --run-key", run.RunKey)
 	}
 
 	unlock, err := lock(deps.Store.childPath(run.RunKey, digest) + ".lock")
@@ -373,6 +417,19 @@ func SpawnChild(ctx context.Context, deps LifecycleDeps, req SpawnRequest) (rec 
 	}
 	undo.push(func(ctx context.Context, _ error) error { return deps.Troupe.RevokeMint(ctx, rec.Principal, childPW) })
 	rec.JID, rec.CredentialRef = cred.JID, cred.PasswordFile
+
+	if run.RoomCreated {
+		// The root owns a room juggler provisioned, so it admits the child
+		// before the child can join. A pre-created room's membership is its
+		// owner's business.
+		root := run.rootIdentity()
+		if err := deps.Rooms.Affiliate(ctx, root, run.Room, AffiliationMember, rec.JID); err != nil {
+			return nil, false, undo.unwind(fmt.Errorf("affiliating %s as a member of %s: %w", rec.JID, run.Room, err))
+		}
+		undo.push(func(ctx context.Context, _ error) error {
+			return deps.Rooms.Affiliate(ctx, root, run.Room, AffiliationNone, rec.JID)
+		})
+	}
 
 	rec.BriefPath = deps.Store.stagedBriefPath(run.RunKey, digest)
 	if err := writeFileAtomic(rec.BriefPath, canonical); err != nil {

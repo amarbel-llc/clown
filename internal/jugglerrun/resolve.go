@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -20,6 +21,12 @@ type ResolveRequest struct {
 	// StopGrace bounds the wait for each live child to terminalize;
 	// DefaultStopGrace when zero.
 	StopGrace time.Duration
+	// ResultLine, when CanaryRoom is set, is posted into CanaryRoom as the
+	// run root before anything else: the root's account dies at teardown.
+	ResultLine string
+	CanaryRoom string
+	// KeepAccounts skips the account teardown (debugging).
+	KeepAccounts bool
 }
 
 // ResolveOutcome is `juggler resolve`'s stdout object.
@@ -30,20 +37,28 @@ type ResolveOutcome struct {
 	Reason ExitReason `json:"reason"`
 	Ledger string     `json:"ledger"`
 	Woken  []string   `json:"woken"`
-	// AlreadyResolved: the run was resolved before; nothing was rewritten.
+	// AlreadyResolved: the run was resolved before; nothing but a pending
+	// teardown was done.
 	AlreadyResolved bool `json:"already_resolved"`
+	// TornDown: every account of the run is gone (RunRecord.TornDown).
+	TornDown bool `json:"torn_down"`
+	// Teardown is the teardown entries this call appended to the run ledger.
+	Teardown []RunLedgerEntry `json:"teardown,omitempty"`
 }
 
-// Resolve is the run's last call (FDR 0019 §1): it first asks every child job
-// of the run that is not yet terminal to cancel and waits up to the stop grace
-// for each (a `subagent_stop` ledger entry, stopped_by_resolve, records the
-// outcome), so an account teardown never deletes one under a running agent;
-// then it appends the `fallback` entry to the run ledger, writes the ledger to the store and the run job's
-// spool, writes the run job's terminal record and sends the run's exit wake
-// to the run job's holders (the issuer). Every step is retry-safe: the
-// ledger entry is appended once (the ledger's resolved field gates it), an
-// existing terminal record is relayed, and the wake marker prevents a
-// second wake.
+// Resolve is the run's last call (FDR 0019 §1). With a canary room it first
+// posts the result line there as the run root (a `canary` ledger note; a
+// failed post changes nothing else). It then asks every child job of the run
+// that is not yet terminal to cancel and waits up to the stop grace for each
+// (a `subagent_stop` ledger entry, stopped_by_resolve, records the outcome);
+// appends the `fallback` entry to the run ledger, writes the ledger to the
+// store and the run job's spool, writes the run job's terminal record and
+// sends the run's exit wake to the run job's holders (the issuer). Last,
+// unless KeepAccounts, it tears the run's accounts down (teardownAccounts).
+// Every step is retry-safe: the ledger entries are appended once (the
+// ledger's resolved field gates them), an existing terminal record is
+// relayed, the wake marker prevents a second wake, and resolving a resolved
+// run performs only a teardown still pending.
 func Resolve(ctx context.Context, deps LifecycleDeps, req ResolveRequest) (ResolveOutcome, error) {
 	deps = deps.withDefaults()
 	if req.State != StateSucceeded && req.State != StateFailed {
@@ -64,7 +79,13 @@ func Resolve(ctx context.Context, deps LifecycleDeps, req ResolveRequest) (Resol
 	out := ResolveOutcome{RunKey: run.RunKey, RunJob: run.RunJob, Ledger: deps.Store.RunLedgerPath(run.RunKey), Woken: []string{}}
 	if run.Resolved != nil {
 		out.State, out.Reason, out.AlreadyResolved = run.Resolved.State, ExitReasonFor(run.Resolved.State, ""), true
-		return out, nil
+		return finishTeardown(ctx, deps, run, req.KeepAccounts, out)
+	}
+
+	var canary []RunLedgerEntry
+	if req.CanaryRoom != "" {
+		id, err := deps.Troupe.PostStanza(ctx, run.rootIdentity(), req.CanaryRoom, ResolveSource, []byte(req.ResultLine))
+		canary = append(canary, CanaryEntry(req.CanaryRoom, id, err))
 	}
 
 	ledger, err := deps.Store.loadRunLedger(run.RunKey)
@@ -80,6 +101,7 @@ func Resolve(ctx context.Context, deps LifecycleDeps, req ResolveRequest) (Resol
 		if err != nil {
 			return out, err
 		}
+		ledger.Calls = append(ledger.Calls, canary...)
 		ledger.Calls = append(ledger.Calls, stops...)
 		ledger.Calls = append(ledger.Calls, FallbackEntry(req.State, req.Reason, artifacts))
 		ledger.Resolved = &Resolution{State: req.State, Reason: req.Reason, At: deps.Now().UTC()}
@@ -128,7 +150,151 @@ func Resolve(ctx context.Context, deps LifecycleDeps, req ResolveRequest) (Resol
 	if err := deps.Store.SaveRun(run); err != nil {
 		return out, fmt.Errorf("saving the run record: %w", err)
 	}
+	return finishTeardown(ctx, deps, run, req.KeepAccounts, out)
+}
+
+// finishTeardown runs a resolved run's pending teardown unless keep, and
+// reports it in out.
+func finishTeardown(ctx context.Context, deps LifecycleDeps, run *RunRecord, keep bool, out ResolveOutcome) (ResolveOutcome, error) {
+	if !keep && !run.TornDown {
+		entries, err := teardownAccounts(ctx, deps, run)
+		out.Teardown = entries
+		if err != nil {
+			return out, err
+		}
+	}
+	out.TornDown = run.TornDown
 	return out, nil
+}
+
+// teardownAccounts deletes the run's accounts (FDR 0019 §1): for each child
+// whose job is terminal, its room affiliation (a room the run created; best
+// effort), its account (`troupe mint-revoke`; a login failure means already
+// gone) and its password file; then, once no child account remains, the
+// root's own affiliation (only when an operator owner remains to keep the
+// room), account and file. A child still running keeps its account (not ok,
+// "still running"), and so does the root while any child account remains.
+// One `teardown` entry per account handled is appended to the run ledger
+// (and the run job's spool); accounts with an ok entry already are skipped,
+// so a retry does only what is left. run.TornDown is set and saved when every
+// account is gone.
+func teardownAccounts(ctx context.Context, deps LifecycleDeps, run *RunRecord) ([]RunLedgerEntry, error) {
+	ledger, err := deps.Store.loadRunLedger(run.RunKey)
+	if err != nil {
+		return nil, err
+	}
+	gone := map[string]bool{}
+	for _, e := range ledger.Calls {
+		if e.Tool == TeardownTool && e.OK {
+			gone[e.Principal] = true
+		}
+	}
+	children, err := deps.Store.runChildren(run.RunKey)
+	if err != nil {
+		return nil, err
+	}
+	root := run.rootIdentity()
+	var entries []RunLedgerEntry
+	childrenGone := true
+	for _, child := range children {
+		if gone[child.Principal] {
+			continue
+		}
+		e := teardownChild(ctx, deps, run, root, child)
+		entries = append(entries, e)
+		childrenGone = childrenGone && e.OK
+	}
+	rootGone := gone[run.RootPrincipal]
+	if !rootGone {
+		e := TeardownEntry(run.RootPrincipal, run.RootJID, false, "kept: a child account of the run remains")
+		if childrenGone {
+			e = teardownRoot(ctx, deps, run, root)
+		}
+		entries = append(entries, e)
+		rootGone = e.OK
+	}
+	if len(entries) > 0 {
+		ledger.Calls = append(ledger.Calls, entries...)
+		path := deps.Store.RunLedgerPath(run.RunKey)
+		if err := writeJSONAtomic(path, ledger); err != nil {
+			return entries, fmt.Errorf("writing the run ledger: %w", err)
+		}
+		if doc, err := marshalDocument(ledger); err == nil {
+			if _, err := writeSpool(ctx, deps.Ringmaster, run.Issuer, run.RunJob, doc); err != nil {
+				fmt.Fprintf(os.Stderr, "juggler: resolve: %v\n", err)
+			}
+		}
+	}
+	run.TornDown = childrenGone && rootGone
+	if err := deps.Store.SaveRun(run); err != nil {
+		return entries, fmt.Errorf("saving the run record: %w", err)
+	}
+	return entries, nil
+}
+
+func teardownChild(ctx context.Context, deps LifecycleDeps, run *RunRecord, root Identity, child *ChildRecord) RunLedgerEntry {
+	recs, err := deps.Ringmaster.Records(ctx, child.Parent, child.Job)
+	if err != nil {
+		return TeardownEntry(child.Principal, child.JID, false, fmt.Sprintf("kept: journal unreadable: %v", err))
+	}
+	if _, terminal := TerminalRecord(recs); !terminal && len(recs) > 0 {
+		return TeardownEntry(child.Principal, child.JID, false, "still running")
+	}
+	var notes []string
+	if run.RoomCreated {
+		if err := deps.Rooms.Affiliate(ctx, root, run.Room, AffiliationNone, child.JID); err != nil {
+			notes = append(notes, fmt.Sprintf("room affiliation not removed: %v", err))
+		}
+	}
+	ok, reason := revokeAccount(ctx, deps, child.Principal, child.CredentialRef)
+	return TeardownEntry(child.Principal, child.JID, ok, joinNotes(reason, notes))
+}
+
+func teardownRoot(ctx context.Context, deps LifecycleDeps, run *RunRecord, root Identity) RunLedgerEntry {
+	var notes []string
+	switch {
+	case !run.RoomCreated:
+		notes = append(notes, "root affiliation kept: the room was not provisioned by juggler")
+	case run.OperatorJID == "":
+		notes = append(notes, "root affiliation kept: the room has no operator owner")
+	default:
+		if err := deps.Rooms.Affiliate(ctx, root, run.Room, AffiliationNone, run.RootJID); err != nil {
+			notes = append(notes, fmt.Sprintf("root affiliation not removed: %v", err))
+		}
+	}
+	ok, reason := revokeAccount(ctx, deps, run.RootPrincipal, run.RootCredentialRef)
+	return TeardownEntry(run.RootPrincipal, run.RootJID, ok, joinNotes(reason, notes))
+}
+
+// revokeAccount deletes one minted account and its password file. An absent
+// file means the account is already gone (troupe would not contact the
+// server); a login failure means the same, as troupe cannot tell a deleted
+// account from a wrong password.
+func revokeAccount(ctx context.Context, deps LifecycleDeps, principal, passwordFile string) (bool, string) {
+	if passwordFile == "" {
+		return false, "kept: no credential reference recorded"
+	}
+	if _, err := os.Stat(passwordFile); errors.Is(err, os.ErrNotExist) {
+		return true, "already gone: no password file"
+	}
+	reason := "revoked"
+	if err := deps.Troupe.RevokeMint(ctx, principal, passwordFile); err != nil {
+		if !IsLoginFailure(err) {
+			return false, fmt.Sprintf("kept: mint-revoke failed: %v", err)
+		}
+		reason = "already gone: login failed"
+	}
+	if err := removeIfExists(passwordFile); err != nil {
+		return false, fmt.Sprintf("%s, but deleting the password file failed: %v", reason, err)
+	}
+	return true, reason
+}
+
+func joinNotes(reason string, notes []string) string {
+	if len(notes) == 0 {
+		return reason
+	}
+	return reason + "; " + strings.Join(notes, "; ")
 }
 
 // stopLiveChildren requests cancellation of every child job of the run that is
