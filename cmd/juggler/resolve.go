@@ -1,0 +1,71 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"io"
+	"time"
+
+	jr "code.linenisgreat.com/clown/internal/jugglerrun"
+)
+
+const resolveUsage = `usage: juggler resolve <run-job> --state succeeded|failed --reason <text> [--fallback-artifacts '[{"tool","kind","uris"}]']`
+
+// resolveTimeout bounds the run's last call.
+const resolveTimeout = 60 * time.Second
+
+// cmdResolve is `juggler resolve`, the run's last call (FDR 0019 §1).
+// Resolving an already-resolved run is a no-op that reports the stored
+// verdict and exits 0.
+func cmdResolve(args []string, stdout, stderr io.Writer) int {
+	job, rest := leadingArg(args)
+	var (
+		bins                 platformBins
+		state, reason, fbArt string
+	)
+	fs := flag.NewFlagSet("resolve", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	fs.StringVar(&state, "state", "", "succeeded, or failed when the fallback ran")
+	fs.StringVar(&reason, "reason", "", "why the run ended")
+	fs.StringVar(&fbArt, "fallback-artifacts", "", "the fallback's outcome as a JSON array of {tool, kind, uris}")
+	bins.register(fs, false)
+	if err := fs.Parse(rest); err != nil {
+		return jr.ExitUsage
+	}
+	if job == "" && fs.NArg() == 1 {
+		job = fs.Arg(0)
+	} else if fs.NArg() != 0 {
+		fmt.Fprintf(stderr, "juggler: resolve: unexpected argument %q\n%s\n", fs.Arg(0), resolveUsage)
+		return jr.ExitUsage
+	}
+	if job == "" || state == "" || reason == "" {
+		fmt.Fprintln(stderr, "juggler: resolve: <run-job>, --state and --reason are required\n"+resolveUsage)
+		return jr.ExitUsage
+	}
+	var artifacts []jr.Artifact
+	if fbArt != "" {
+		if err := json.Unmarshal([]byte(fbArt), &artifacts); err != nil {
+			fmt.Fprintf(stderr, "juggler: resolve: --fallback-artifacts: %v\n", err)
+			return jr.ExitUsage
+		}
+	}
+	deps, err := bins.lifecycleDeps(false)
+	if err != nil {
+		fmt.Fprintf(stderr, "juggler: resolve: %v\n", err)
+		return jr.ExitUsage
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), resolveTimeout)
+	defer cancel()
+	out, err := jr.Resolve(ctx, deps, jr.ResolveRequest{RunJob: job, State: state, Reason: reason, FallbackArtifacts: artifacts})
+	if err != nil {
+		fmt.Fprintf(stderr, "juggler: resolve: %v\n", err)
+		return jr.ExitUsage
+	}
+	if out.AlreadyResolved {
+		fmt.Fprintf(stderr, "juggler: resolve: run %s was already resolved %s; nothing written\n", out.RunKey, out.State)
+	}
+	printJSON(stdout, out)
+	return 0
+}

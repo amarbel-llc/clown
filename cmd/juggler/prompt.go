@@ -174,6 +174,11 @@ func cmdPrompt(cli *rm.Client, args []string) int {
 // any HTTP call is attempted — sending an unrecognized-shape endpoint a
 // guessed request would silently misbehave rather than error.
 func sendPrompt(ctx context.Context, httpClient *http.Client, resolved rm.ResolveModelResult, modelName, prompt string, maxTokens int) (string, error) {
+	// A registry entry's `model` field aliases the upstream model id; the
+	// registry name is only the fallback (see rm.ResolveModelResult.ModelID).
+	if resolved.ModelID != "" {
+		modelName = resolved.ModelID
+	}
 	switch {
 	case resolved.Kind == rm.ModelKindLocal || resolved.Style == "anthropic":
 		return sendAnthropicPrompt(ctx, httpClient, resolved, modelName, prompt, maxTokens)

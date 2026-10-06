@@ -34,6 +34,24 @@ func encodedBody(t *testing.T, codec Codec, resolved rm.ResolveModelResult, req 
 	return out
 }
 
+func TestCodecs_ResolvedModelIDOverridesModel(t *testing.T) {
+	turns := []Turn{{Body: TextBody("task")}}
+	for _, tc := range []struct {
+		codec Codec
+		style string
+	}{{AnthropicCodec{}, "anthropic"}, {OpenAICompatCodec{}, "openai-compat"}} {
+		req := ModelRequest{Agent: agent, Turns: turns, MaxTokens: 10}
+		withID := rm.ResolveModelResult{Kind: rm.ModelKindRemote, URL: "http://x/", Style: tc.style, ModelID: "upstream/id"}
+		if got := encodedBody(t, tc.codec, withID, req)["model"]; got != "upstream/id" {
+			t.Errorf("%s: model = %v, want upstream/id", tc.style, got)
+		}
+		noID := rm.ResolveModelResult{Kind: rm.ModelKindRemote, URL: "http://x/", Style: tc.style}
+		if got := encodedBody(t, tc.codec, noID, req)["model"]; got != "m" {
+			t.Errorf("%s: model = %v, want m (fallback)", tc.style, got)
+		}
+	}
+}
+
 func TestAnthropicCodec_ToolCallRoundTrip(t *testing.T) {
 	codec := AnthropicCodec{}
 	reply, err := codec.DecodeResponse([]byte(anthropicCreateIssueReply))

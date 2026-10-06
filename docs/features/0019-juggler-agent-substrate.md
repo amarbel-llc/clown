@@ -102,6 +102,13 @@ channel, and it never parses the room):
   `{"jid","job","room"}` is printed immediately.
 - `juggler job-ledger <job>`: print a job's ledger (the result spool)
   for a run the caller did not wait on.
+- **Templates.** Brief authors ship a template without `principal`,
+  `parent`, `room` and `task`; `juggler spawn --brief <template> --task
+  <file|->` fills those four (minted child key, the run root, the run's
+  room, the task content) and then validates the filled brief strictly.
+  `model`, `system`, `tools`, `evaluator` and `limits` must be in the
+  template; `model` is the author's choice of registry entry, which the
+  spawner's models file must define.
 - **`juggler resolve <run-job> --state succeeded|failed --reason <text>
   [--fallback-artifacts <json>]`**: the run's last call, always. Writes
   the run job's terminal record, appends a `fallback` entry to the run
@@ -190,7 +197,9 @@ into the run's MUC and is the agent's ONLY instruction source. Fields:
 | `model` | a juggler registry name (local GGUF or remote entry) |
 | `system` | the system prompt |
 | `task` | the task text |
-| `moxyfile` | the agent's **inline moxyfile** (§5) |
+| `moxyfile` | the agent's **inline moxyfile** as a TOML string (§5) |
+| `env` | string→string table passed into the agent's unit environment; how per-agent tool configuration (e.g. a target mode, `MOXIN_PATH`) reaches moxy and its moxins, which moxyfile(5) cannot carry. `CLOWN_SESSION_ID`, `TROUPE_XMPP_*` and `JUGGLER_*` are reserved and rejected |
+| `tools` | REQUIRED allowlist of exact tool names as moxy advertises them (`<server>_<tool>`); `juggler run` offers the model only these. A listed name moxy does not advertise is a startup error; the list may not be empty |
 | `evaluator` | `{kind, program}`; first kind is `jq` (§4) |
 | `limits` | `{steps, wall_clock, sandbox}`; `sandbox` is RESERVED and unused in this slice (§9) |
 
@@ -275,12 +284,31 @@ Headless posture: any moxy permission tier other than `always-allow`
 resolves to **deny** for a juggler agent; the agent sees the denial as a
 tool error it can route around or `cannot_complete` on.
 
-Per-agent configuration of the tool servers themselves (circus
-FDR-0039's real-vs-shadow target switch for the mirror phase, for
-example) travels **inside the inline moxyfile** as the servers'
-arguments or environment. The brief has no separate field for it; the
-moxyfile is the one carrier for "what the agent's tools are and how
-they are set", and it is signed with the rest of the brief.
+**How `juggler run` reaches moxy.** It writes the brief's moxyfile to the
+agent's state directory and launches `moxy serve-http
+--name-template '{server}_{tool}'` with that directory as CWD, so by
+moxyfile(5)'s hierarchy the agent's file is the innermost layer and the
+spawner's global moxyfile is the ceiling. moxy binds an ephemeral
+loopback port and prints the clown-plugin handshake, which gives the URL.
+The underscore template is mandatory: moxy's default `{server}.{tool}`
+contains a dot, which neither provider's tool-name grammar accepts. Tool
+names in the ledger and in the brief's `tools` allowlist are therefore
+`<server>_<tool>`, e.g. `ring_create_issue`.
+
+**Per-agent tool configuration travels in the brief's `env` table**, not
+in the moxyfile: moxyfile(5) has no environment key, cannot configure a
+moxin, and cannot set `MOXIN_PATH`. `juggler spawn` passes `env` into the
+unit, and moxy and its moxins inherit it. (An earlier draft said "inside
+the moxyfile as the servers' arguments or environment"; that is only
+true for `[[servers]]` entries, not moxins, and is withdrawn.)
+
+**Allowlist, not deny-list.** moxyfile narrowing is additive deny-lists
+(`disable-moxins`, `disable-servers`), which fail OPEN when a tool is
+added to a moxin later. The brief's REQUIRED `tools` allowlist, enforced
+by `juggler run` before the model sees any tool, is what makes "anything
+not explicitly allowed is denied" true for the first bullet; the
+moxy-side narrowing merge (above) remains the second, authoritative
+layer when it lands.
 
 ### 6. Lifecycle — ringmaster enforces, troupe authorises
 
@@ -525,21 +553,23 @@ The launcher's side:
 
 The router, before any subagent exists:
 
-    $ echo '{"state": {"transcription": "..."},
-             "questions": {"filer": {"type": "choice",
-               "instructions": "Which filer handles this recording?",
-               "criteria": {"issue": "an actionable engineering item",
-                            "note":  "anything else worth keeping"}}}}' \
+    $ echo '{"state": "file an issue on moxy that the restart tool should reconnect automatically",
+             "questions": {"route": {"type": "choice",
+               "instructions": "A short voice request. Which kind of capture is it?",
+               "criteria": {"issue": "The speaker wants to file, open or log an issue, bug or ticket against a named software project or repository.",
+                            "note":  "Anything else: a note, idea, question or thought to save as spoken."}}}}' \
       | juggler decide --model jev --room pebble-9f3a@rooms.xmpp.example \
-          --parent <recording-stanza-id> --min-confidence 0.5
-    {"answers": {"filer": {"type": "choice", "choice": "issue",
-                 "confidence": 0.81, "probabilities": {"issue": 0.86, "note": 0.14}}},
-     "id": "gen-dec-…", "model": "typesafe/jev-1.13", "usage": {...}}
+          --parent <recording-stanza-id> --run-key <key> --min-confidence 0.5
+    {"answers": {"route": {"type": "choice", "choice": "issue",
+                 "probabilities": {"issue": 1, "note": 0}, "confidence": 1}},
+     "id": "gen-dec-…", "model": "typesafe/jev-1.13-20260917", "usage": {...}}
     $ echo $?
     0
-    # → the glue records {tool: "route", kind: "route", ok: true} in the run
-    #   ledger and spawns the issue-filer with the decision stanza as parent.
+    # → decide itself appends {tool: "route", kind: "route", ok: true, choice,
+    #   confidence, top_probability, …} to the run ledger (--run-key) and the
+    #   glue spawns the issue-filer with the decision stanza as parent.
     # exit 4 (below 0.5) or 2 (no choice) → a failed route entry → fallback note.
+    # (Shapes are the two live Jev calls circus made on 2026-10-06.)
 
 ## Limitations
 
@@ -604,6 +634,31 @@ The router, before any subagent exists:
   room outlive the run until the retention sweep (circus's 30-day job,
   itself deferred). Until that sweep exists, every recording leaves one
   credential and one room behind.
+- **The ringmaster reaper does not back-stop juggler jobs today.** RFC-0018
+  reaps a job only when the producer's advisory lock is released, and
+  there is no CLI verb for a producer to take that lock, so `juggler run`
+  cannot. If the post-stop hook cannot run (systemd gone, hook crashed),
+  NOTHING writes `interrupted` and the job stays open. §6's "reaper as
+  backstop" is therefore aspirational until ringmaster grows a lock verb
+  (ringmaster#27). The hook is idempotent and is the only emitter in
+  practice.
+- **ringmaster protocol ≥ 2 is required** for `aborted`, `cancel-requested`
+  and `wait --on-cancel`; an older installed ringmaster (which spelled the
+  state `cancelled`) will not interoperate. The nix-pinned binary (brief 6)
+  must be protocol 2 or later.
+- **Room provisioning is unavailable in v1.** troupe has no verb to create
+  a MUC with the operator as owner (troupe#44), so `juggler spawn
+  --new-run` requires `--room` naming an existing room; `--room-domain`
+  fails with a troupe's-lane error. Minting itself cannot run from a
+  hardened system service today (troupe#43: `sudo -n prosodyctl register`
+  under `NoNewPrivileges`, password in argv, no domain / password-file /
+  c2s inputs), so on such a host the bullet is blocked until troupe
+  ships a privilege-free mint. Supervision on such a host uses `juggler
+  spawn --user` against a lingering user manager for the service user;
+  a polkit grant for arbitrary transient-unit properties on the system
+  manager is root-equivalent and is rejected. Exit wakes are slice-0 journal messages to the
+  holder's session key (`troupe message`), not stanzas to a holder JID,
+  and the parent's JID is not yet passed into the unit (FDR 0032 D7).
 - **Toolset granularity is the moxyfile's.** A brief that wants fewer
   tools than a server exposes needs a tool allowlist in the runtime,
   which is a later addition.

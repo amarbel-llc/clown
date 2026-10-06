@@ -70,6 +70,41 @@ func TestSendPrompt_SingleTextBlock(t *testing.T) {
 	}
 }
 
+// TestSendPrompt_ModelIDOverridesName verifies that a resolved ModelID is the
+// model sent upstream for both styles, and the registry name when it is empty.
+func TestSendPrompt_ModelIDOverridesName(t *testing.T) {
+	var gotModel string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Model string `json:"model"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		gotModel = req.Model
+		if r.URL.Path == "/v1/messages" {
+			_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"ok"}]}`))
+		} else {
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+		}
+	}))
+	defer srv.Close()
+
+	for _, tc := range []struct{ style, url, modelID, want string }{
+		{"anthropic", srv.URL, "upstream/id", "upstream/id"},
+		{"anthropic", srv.URL, "", "alias"},
+		{"openai-compat", srv.URL + "/v1", "upstream/id", "upstream/id"},
+		{"openai-compat", srv.URL + "/v1", "", "alias"},
+	} {
+		gotModel = ""
+		resolved := rm.ResolveModelResult{Kind: rm.ModelKindRemote, URL: tc.url, Token: "t", Style: tc.style, ModelID: tc.modelID}
+		if _, err := sendPrompt(context.Background(), srv.Client(), resolved, "alias", "hi", 8); err != nil {
+			t.Fatalf("%s: %v", tc.style, err)
+		}
+		if gotModel != tc.want {
+			t.Errorf("%s modelID=%q: model = %q, want %q", tc.style, tc.modelID, gotModel, tc.want)
+		}
+	}
+}
+
 // TestSendPrompt_MultipleTextBlocksConcatenated verifies multi-block
 // responses are concatenated in order.
 func TestSendPrompt_MultipleTextBlocksConcatenated(t *testing.T) {

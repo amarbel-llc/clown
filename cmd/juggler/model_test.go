@@ -270,6 +270,67 @@ func TestCmdModelAdd_EqualsForms(t *testing.T) {
 	}
 }
 
+// TestCmdModelAdd_TokenFileModelAndDecisionsStyle verifies --token-file and
+// --model reach the RPC (no --token needed) and that --style decisions is
+// accepted.
+func TestCmdModelAdd_TokenFileModelAndDecisionsStyle(t *testing.T) {
+	socket := shortTempSocket(t)
+	ln, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	gotParams := make(chan rm.AddRemoteModelParams, 1)
+	go func() {
+		conn, _ := ln.Accept()
+		defer conn.Close()
+		br := bufio.NewReader(conn)
+		req, _ := rm.ReadFrame(br)
+		var p rm.AddRemoteModelParams
+		_ = json.Unmarshal(req.Params, &p)
+		gotParams <- p
+		_ = rm.WriteFrame(conn, rm.Envelope{JSONRPC: "2.0", ID: req.ID, Result: []byte(`{}`)})
+	}()
+	t.Setenv("JUGGLER_SOCKET", socket)
+
+	cli, err := dialClient()
+	if err != nil {
+		t.Fatalf("dialClient: %v", err)
+	}
+	rc := cmdModelAdd(cli, []string{
+		"jev", "--style", "decisions", "--url=https://x.test",
+		"--token-file", "/run/secrets/k", "--model=typesafe/jev-1.13",
+	})
+	cli.Close()
+	if rc != 0 {
+		t.Errorf("rc=%d", rc)
+	}
+	p := <-gotParams
+	if p.Style != "decisions" || p.Token != "" || p.TokenFile != "/run/secrets/k" || p.ModelID != "typesafe/jev-1.13" {
+		t.Errorf("params: %+v", p)
+	}
+}
+
+// TestCmdModelAdd_TokenAndTokenFileExclusive: setting both is a usage error
+// with no RPC (nil client).
+func TestCmdModelAdd_TokenAndTokenFileExclusive(t *testing.T) {
+	oldStderr := os.Stderr
+	r, w, _ := os.Pipe()
+	os.Stderr = w
+	rc := cmdModelAdd(nil, []string{"m", "--style", "anthropic", "--url", "u", "--token", "t", "--token-file", "/f"})
+	os.Stderr = oldStderr
+	w.Close()
+	if rc == 0 {
+		t.Errorf("expected nonzero rc")
+	}
+	var buf bytes.Buffer
+	_, _ = io.Copy(&buf, r)
+	if !strings.Contains(buf.String(), "mutually exclusive") {
+		t.Errorf("stderr: %s", buf.String())
+	}
+}
+
 // TestCmdModelAdd_InvalidStyle exercises cmdModelAdd's --style enum
 // validation: a style that is neither "anthropic" nor "openai-compat"
 // should be a usage error, no RPC call. Passing a nil client makes "no

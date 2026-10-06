@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -522,6 +523,47 @@ func TestDispatchResolveModel_Remote(t *testing.T) {
 	}
 	if res.Kind != rm.ModelKindRemote || res.URL != "https://gw.example.com" || res.Token != "resolved-secret" || res.Style != "anthropic" {
 		t.Fatalf("res = %+v", res)
+	}
+}
+
+func TestDispatchResolveModel_TokenFileAndModelID(t *testing.T) {
+	dir := shortTempDir(t)
+	keyPath := filepath.Join(dir, "key")
+	if err := os.WriteFile(keyPath, []byte("file-secret\n"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	remotePath := filepath.Join(dir, "models.toml")
+	if err := rm.SaveRemoteModels(remotePath, []rm.RemoteModel{
+		{Name: "jev", Style: "decisions", URL: "https://gw.example.com", TokenFile: keyPath, ModelID: "typesafe/jev-1.13"},
+		{Name: "bad", Style: "anthropic", URL: "u", Token: "lit", TokenFile: keyPath},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s := newServer(rm.NewRegistry(), nil)
+	s.modelsDir = shortTempDir(t)
+	s.remoteModelsPath = remotePath
+
+	resp := s.dispatch(rm.Envelope{
+		JSONRPC: "2.0", ID: "1", Method: rm.MethodResolveModel,
+		Params: mustJSON(t, rm.ResolveModelParams{Name: "jev"}),
+	})
+	if resp.Error != nil {
+		t.Fatalf("ResolveModel error: %+v", resp.Error)
+	}
+	var res rm.ResolveModelResult
+	if err := json.Unmarshal(resp.Result, &res); err != nil {
+		t.Fatal(err)
+	}
+	if res.Token != "file-secret" || res.ModelID != "typesafe/jev-1.13" {
+		t.Fatalf("res = %+v", res)
+	}
+
+	resp = s.dispatch(rm.Envelope{
+		JSONRPC: "2.0", ID: "2", Method: rm.MethodResolveModel,
+		Params: mustJSON(t, rm.ResolveModelParams{Name: "bad"}),
+	})
+	if resp.Error == nil || !strings.Contains(resp.Error.Message, `"bad"`) {
+		t.Fatalf("both-set resp = %#v, want config error naming entry", resp)
 	}
 }
 

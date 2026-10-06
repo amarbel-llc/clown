@@ -24,6 +24,14 @@ type RemoteModel struct {
 	Style string `toml:"style"`
 	URL   string `toml:"url"`
 	Token string `toml:"token"`
+	// TokenFile is a path (`~/` and `$VAR` expanded) to a file whose trimmed
+	// contents are the token: the by-reference credential a hardened headless
+	// host uses instead of a literal or env var (FDR 0019 §10). Mutually
+	// exclusive with Token.
+	TokenFile string `toml:"token_file"`
+	// ModelID is the upstream model id sent in requests; the registry Name is
+	// then a stable alias. Empty means "use Name" (legacy behaviour).
+	ModelID string `toml:"model"`
 }
 
 type remoteModelsFile struct {

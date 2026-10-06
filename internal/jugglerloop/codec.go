@@ -57,6 +57,17 @@ type Codec interface {
 	DecodeResponse(body []byte) (ModelReply, error)
 }
 
+// upstreamModel is the model id a codec puts in the request body: the
+// registry entry's `model` alias target (resolved.ModelID) when set, else the
+// caller-supplied model (Config.Model, the registry name). Applied inside the
+// codecs so every caller of EncodeRequest/RoundTrip gets the alias.
+func upstreamModel(resolved rm.ResolveModelResult, model string) string {
+	if resolved.ModelID != "" {
+		return resolved.ModelID
+	}
+	return model
+}
+
 // CodecFor picks the codec the way cmd/juggler's sendPrompt picks a sender:
 // a local result or Style "anthropic" speaks Anthropic Messages, Style
 // "openai-compat" speaks OpenAI chat completions, anything else is refused

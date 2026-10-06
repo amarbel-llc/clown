@@ -50,8 +50,29 @@ type Brief struct {
 	// uses. It is never a secret itself.
 	BudgetKeyRef string `toml:"budget_key_ref,omitempty"`
 
+	// Tools is the REQUIRED allowlist of exact tool names as moxy advertises
+	// them (e.g. "ring_create_issue"); anything not listed is never offered
+	// to the model.
+	Tools []string `toml:"tools"`
+
+	// Env is passed into the agent's transient unit (and so to moxy and its
+	// moxins, which moxyfile(5) cannot configure). Keys spawn owns —
+	// CLOWN_SESSION_ID, TROUPE_XMPP_* and JUGGLER_* — are rejected.
+	Env map[string]string `toml:"env,omitempty"`
+
 	Evaluator Evaluator `toml:"evaluator"`
 	Limits    Limits    `toml:"limits"`
+}
+
+// TemplateFields are the fields a brief template may leave empty: the
+// spawner fills them (principal, parent, room from the run; task from the
+// run's input) before the filled brief is validated with Parse.
+var TemplateFields = []string{"principal", "parent", "room", "task"}
+
+// ReservedEnvKey reports whether an [env] key is one `juggler spawn` sets
+// itself and a brief therefore may not.
+func ReservedEnvKey(key string) bool {
+	return key == "CLOWN_SESSION_ID" || strings.HasPrefix(key, "TROUPE_XMPP_") || strings.HasPrefix(key, "JUGGLER_")
 }
 
 // Evaluator names how the run ledger is collapsed into a boolean verdict.
@@ -85,6 +106,30 @@ func (l Limits) WallClockDuration() (time.Duration, error) {
 // Unknown keys are rejected: the brief is a signed contract, so a typo must
 // not be silently ignored.
 func Parse(data []byte) (*Brief, error) {
+	b, err := decode(data)
+	if err != nil {
+		return nil, err
+	}
+	if err := b.Validate(); err != nil {
+		return nil, err
+	}
+	return b, nil
+}
+
+// ParseTemplate is Parse for a brief template: it applies the same checks
+// except that the TemplateFields may be empty.
+func ParseTemplate(data []byte) (*Brief, error) {
+	b, err := decode(data)
+	if err != nil {
+		return nil, err
+	}
+	if err := b.ValidateTemplate(); err != nil {
+		return nil, err
+	}
+	return b, nil
+}
+
+func decode(data []byte) (*Brief, error) {
 	var b Brief
 	md, err := toml.NewDecoder(bytes.NewReader(data)).Decode(&b)
 	if err != nil {
@@ -103,9 +148,6 @@ func Parse(data []byte) (*Brief, error) {
 		return nil, fmt.Errorf("jugglerbrief: unknown field(s): %s", strings.Join(unknown, ", "))
 	}
 	b.applyDefaults()
-	if err := b.Validate(); err != nil {
-		return nil, err
-	}
 	return &b, nil
 }
 
@@ -119,7 +161,12 @@ func (b *Brief) applyDefaults() {
 }
 
 // Validate checks the brief. Every error names the offending field.
-func (b *Brief) Validate() error {
+func (b *Brief) Validate() error { return b.validate(false) }
+
+// ValidateTemplate is Validate with the TemplateFields allowed empty.
+func (b *Brief) ValidateTemplate() error { return b.validate(true) }
+
+func (b *Brief) validate(template bool) error {
 	if b.Schema != SchemaVersion {
 		return fmt.Errorf("jugglerbrief: schema: must be %d, got %d", SchemaVersion, b.Schema)
 	}
@@ -132,8 +179,32 @@ func (b *Brief) Validate() error {
 		{"task", b.Task},
 	}
 	for _, r := range required {
+		if template && isTemplateField(r.field) {
+			continue
+		}
 		if strings.TrimSpace(r.value) == "" {
 			return fmt.Errorf("jugglerbrief: %s: must not be empty", r.field)
+		}
+	}
+	if len(b.Tools) == 0 {
+		return fmt.Errorf("jugglerbrief: tools: must list at least one tool name")
+	}
+	seen := map[string]bool{}
+	for _, t := range b.Tools {
+		if strings.TrimSpace(t) == "" {
+			return fmt.Errorf("jugglerbrief: tools: tool names must not be empty")
+		}
+		if seen[t] {
+			return fmt.Errorf("jugglerbrief: tools: %q is listed twice", t)
+		}
+		seen[t] = true
+	}
+	for k := range b.Env {
+		if k == "" || strings.Contains(k, "=") {
+			return fmt.Errorf("jugglerbrief: env: invalid key %q", k)
+		}
+		if ReservedEnvKey(k) {
+			return fmt.Errorf("jugglerbrief: env: %q is set by juggler spawn and may not appear in a brief", k)
 		}
 	}
 	switch b.Evaluator.Kind {
@@ -159,6 +230,15 @@ func (b *Brief) Validate() error {
 		return fmt.Errorf("jugglerbrief: limits.wall_clock: must be positive, got %q", b.Limits.WallClock)
 	}
 	return nil
+}
+
+func isTemplateField(field string) bool {
+	for _, f := range TemplateFields {
+		if f == field {
+			return true
+		}
+	}
+	return false
 }
 
 // Marshal validates the brief and serialises it to TOML. Output is

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 )
 
 // Remote entry styles. StyleDecisions is consumed ONLY by `juggler decide`
@@ -57,13 +58,43 @@ func resolveRemoteModelFromPath(path, name string) (ResolveModelResult, error) {
 	}
 	for _, m := range models {
 		if m.Name == name {
-			return ResolveModelResult{
-				Kind:  ModelKindRemote,
-				Style: m.Style,
-				URL:   os.ExpandEnv(m.URL),
-				Token: os.ExpandEnv(m.Token),
-			}, nil
+			return m.Resolve()
 		}
 	}
 	return ResolveModelResult{}, fmt.Errorf("model %q is not a remote registry entry: %w", name, ErrDaemonRequired)
+}
+
+// Resolve turns a registry entry into a ResolveModelResult. The token comes
+// from token_file (read by path, trailing whitespace trimmed) when set, else
+// from token (literal or ${VAR}, os.ExpandEnv); setting both is a config
+// error. Errors name the entry and the path, never the token.
+func (m RemoteModel) Resolve() (ResolveModelResult, error) {
+	token := os.ExpandEnv(m.Token)
+	if m.TokenFile != "" {
+		if m.Token != "" {
+			return ResolveModelResult{}, fmt.Errorf("remote model %q: set only one of token and token_file", m.Name)
+		}
+		path := expandTokenFilePath(m.TokenFile)
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return ResolveModelResult{}, fmt.Errorf("remote model %q: read token_file %s: %w", m.Name, path, err)
+		}
+		token = strings.TrimSpace(string(b))
+	}
+	return ResolveModelResult{
+		Kind:    ModelKindRemote,
+		Style:   m.Style,
+		URL:     os.ExpandEnv(m.URL),
+		Token:   token,
+		ModelID: m.ModelID,
+	}, nil
+}
+
+func expandTokenFilePath(p string) string {
+	if p == "~" || strings.HasPrefix(p, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			p = home + p[1:]
+		}
+	}
+	return os.ExpandEnv(p)
 }

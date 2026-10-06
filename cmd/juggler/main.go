@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"text/tabwriter"
 	"time"
 
@@ -18,11 +20,27 @@ func main() {
 
 func run(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: juggler <daemon|start|stop|status|list|models|model|prompt|decide|mcp|download> [args]")
+		fmt.Fprintln(os.Stderr, "usage: juggler <daemon|start|stop|status|list|models|model|prompt|decide|run|spawn|exit-wake|resolve|job-ledger|handles|mcp|download> [args]")
 		return 1
 	}
 
 	switch args[0] {
+	// The FDR 0019 lifecycle verbs need no daemon: run resolves remote
+	// models from the models file and dials the daemon only for local ones.
+	case "run":
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		return cmdRun(ctx, resolveAgentModel, http.DefaultClient, args[1:], os.Stdin, os.Stdout, os.Stderr)
+	case "spawn":
+		return cmdSpawn(args[1:], os.Stdin, os.Stdout, os.Stderr)
+	case "exit-wake":
+		return cmdExitWake(os.Getenv, args[1:], os.Stdout, os.Stderr)
+	case "resolve":
+		return cmdResolve(args[1:], os.Stdout, os.Stderr)
+	case "job-ledger":
+		return cmdJobLedger(args[1:], os.Stdout, os.Stderr)
+	case "handles":
+		return cmdHandles(args[1:], os.Stdout, os.Stderr)
 	case "daemon":
 		// The llama-server control-plane daemon (FDR-0010). Runs the
 		// server the other verbs dial via withClient. The daemon stays

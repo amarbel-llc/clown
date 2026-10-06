@@ -20,6 +20,10 @@ moxyfile  = '''
 name = "smith"
 '''
 budget_key_ref = "/run/secrets/openrouter-key"
+tools = ["smith_list_repos", "smith_create_issue"]
+
+[env]
+PEBBLE_TARGET_MODE = "shadow"
 
 [limits]
 steps = 12
@@ -152,6 +156,61 @@ func TestUnknownFieldRejected(t *testing.T) {
 	_, err := Parse([]byte(issueFilerBrief + "\nstepz = 3\n"))
 	if err == nil || !strings.Contains(err.Error(), "stepz") {
 		t.Errorf("got %v", err)
+	}
+}
+
+func TestToolsAndEnv(t *testing.T) {
+	b, err := Parse([]byte(issueFilerBrief))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(b.Tools) != 2 || b.Tools[1] != "smith_create_issue" || b.Env["PEBBLE_TARGET_MODE"] != "shadow" {
+		t.Errorf("tools/env = %v %v", b.Tools, b.Env)
+	}
+	out, err := b.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b2, err := Parse(out)
+	if err != nil || b2.Env["PEBBLE_TARGET_MODE"] != "shadow" || len(b2.Tools) != 2 {
+		t.Errorf("round trip: %+v %v", b2, err)
+	}
+	for name, src := range map[string]string{
+		"no tools":    strings.Replace(issueFilerBrief, `tools = ["smith_list_repos", "smith_create_issue"]`, "", 1),
+		"empty tools": strings.Replace(issueFilerBrief, `tools = ["smith_list_repos", "smith_create_issue"]`, "tools = []", 1),
+		"dup tools":   strings.Replace(issueFilerBrief, `"smith_list_repos", "smith_create_issue"`, `"a", "a"`, 1),
+	} {
+		if _, err := Parse([]byte(src)); err == nil || !strings.Contains(err.Error(), "tools") {
+			t.Errorf("%s: got %v", name, err)
+		}
+	}
+	for _, key := range []string{"CLOWN_SESSION_ID", "TROUPE_XMPP_USER", "JUGGLER_MOXY_URL"} {
+		src := strings.Replace(issueFilerBrief, "PEBBLE_TARGET_MODE", key, 1)
+		if _, err := Parse([]byte(src)); err == nil || !strings.Contains(err.Error(), "env") {
+			t.Errorf("reserved env key %s: got %v", key, err)
+		}
+	}
+}
+
+func TestParseTemplate(t *testing.T) {
+	tmpl := issueFilerBrief
+	for _, line := range []string{`principal = "3f1c"`, `parent    = "pebble-webhook@krone"`, `room      = "pebble-9f3a@rooms.xmpp.example"`, `task      = "<transcription text>"`} {
+		tmpl = strings.Replace(tmpl, line, "", 1)
+	}
+	b, err := ParseTemplate([]byte(tmpl))
+	if err != nil {
+		t.Fatalf("ParseTemplate: %v", err)
+	}
+	if _, err := Parse([]byte(tmpl)); err == nil {
+		t.Error("Parse must stay strict on an unfilled template")
+	}
+	b.Principal, b.Parent, b.Room, b.Task = "p", "q", "r@x", "t"
+	if err := b.Validate(); err != nil {
+		t.Errorf("filled template: %v", err)
+	}
+	noModel := strings.Replace(tmpl, `model     = "openrouter/anthropic/claude-sonnet"`, "", 1)
+	if _, err := ParseTemplate([]byte(noModel)); err == nil || !strings.Contains(err.Error(), "model") {
+		t.Errorf("template without model: %v", err)
 	}
 }
 

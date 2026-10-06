@@ -13,7 +13,7 @@ import (
 
 // modelUsage is printed on any `juggler model` usage error — missing or
 // unknown subcommand, or a missing required flag on `add`/`remove`.
-const modelUsage = "usage: juggler model <list|add <name> --style <anthropic|openai-compat> --url <url> --token <token>|remove <name>>"
+const modelUsage = "usage: juggler model <list|add <name> --style <anthropic|openai-compat|decisions> --url <url> (--token <token> | --token-file <path>) [--model <upstream-id>]|remove <name>>"
 
 // cmdModel dispatches the `juggler model` subcommand family: the unified
 // (local + remote) model registry surface, distinct from the legacy
@@ -74,10 +74,28 @@ func cmdModelAdd(cli *rm.Client, args []string) int {
 	name := args[0]
 	rest := args[1:]
 
-	var style, url, token string
+	var style, url, token, tokenFile, modelID string
 	for i := 0; i < len(rest); i++ {
 		a := rest[i]
 		switch {
+		case a == "--token-file":
+			if i+1 >= len(rest) {
+				fmt.Fprintln(os.Stderr, "juggler: --token-file requires an argument")
+				return 1
+			}
+			tokenFile = rest[i+1]
+			i++
+		case strings.HasPrefix(a, "--token-file="):
+			tokenFile = strings.TrimPrefix(a, "--token-file=")
+		case a == "--model":
+			if i+1 >= len(rest) {
+				fmt.Fprintln(os.Stderr, "juggler: --model requires an argument")
+				return 1
+			}
+			modelID = rest[i+1]
+			i++
+		case strings.HasPrefix(a, "--model="):
+			modelID = strings.TrimPrefix(a, "--model=")
 		case a == "--style":
 			if i+1 >= len(rest) {
 				fmt.Fprintln(os.Stderr, "juggler: --style requires an argument")
@@ -110,22 +128,28 @@ func cmdModelAdd(cli *rm.Client, args []string) int {
 			return 1
 		}
 	}
-	if style == "" || url == "" || token == "" {
+	if style == "" || url == "" || (token == "" && tokenFile == "") {
 		fmt.Fprintln(os.Stderr, modelUsage)
 		return 1
 	}
-	if style != "anthropic" && style != "openai-compat" {
-		fmt.Fprintf(os.Stderr, "juggler: --style must be \"anthropic\" or \"openai-compat\", got %q\n", style)
+	if token != "" && tokenFile != "" {
+		fmt.Fprintln(os.Stderr, "juggler: --token and --token-file are mutually exclusive")
+		return 1
+	}
+	if !rm.IsRemoteStyle(style) {
+		fmt.Fprintf(os.Stderr, "juggler: --style must be one of %s, got %q\n", strings.Join(rm.RemoteStyles(), ", "), style)
 		return 1
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := cli.AddRemoteModel(ctx, rm.AddRemoteModelParams{
-		Name:  name,
-		Style: style,
-		URL:   url,
-		Token: token,
+		Name:      name,
+		Style:     style,
+		URL:       url,
+		Token:     token,
+		TokenFile: tokenFile,
+		ModelID:   modelID,
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "juggler: model add: %v\n", err)
 		return 1

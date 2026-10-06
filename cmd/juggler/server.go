@@ -255,6 +255,7 @@ func (s *server) dispatch(req rm.Envelope) rm.Envelope {
 		}
 		remote = rm.UpsertRemoteModel(remote, rm.RemoteModel{
 			Name: p.Name, Style: p.Style, URL: p.URL, Token: p.Token,
+			TokenFile: p.TokenFile, ModelID: p.ModelID,
 		})
 		if err := rm.SaveRemoteModels(s.remoteModelsPath, remote); err != nil {
 			return rpcError(req.ID, -32000, fmt.Sprintf("save remote models: %v", err))
@@ -293,10 +294,11 @@ func (s *server) dispatch(req rm.Envelope) rm.Envelope {
 		}
 		for _, m := range remote {
 			if m.Name == p.Name {
-				return rpcResult(req.ID, rm.ResolveModelResult{
-					Kind: rm.ModelKindRemote, Style: m.Style,
-					URL: os.ExpandEnv(m.URL), Token: os.ExpandEnv(m.Token),
-				})
+				res, err := m.Resolve()
+				if err != nil {
+					return rpcError(req.ID, -32000, err.Error())
+				}
+				return rpcResult(req.ID, res)
 			}
 		}
 		// Not a remote entry — try local. Reuse a running instance if the

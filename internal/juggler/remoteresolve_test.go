@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -53,6 +54,53 @@ func TestResolveRemoteModelFromFileLocalNeedsDaemon(t *testing.T) {
 	}
 	if _, err := ResolveRemoteModelFromFile("x"); !errors.Is(err, ErrDaemonRequired) {
 		t.Fatalf("absent file: err = %v, want ErrDaemonRequired", err)
+	}
+}
+
+func TestResolveRemoteModelFromFile_TokenFileAndModelID(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "models.toml")
+	t.Setenv("JUGGLER_MODELS_PATH", path)
+	t.Setenv("RESOLVE_TEST_DIR", dir)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.WriteFile(filepath.Join(dir, "key"), []byte("from-file\n"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "homekey"), []byte("from-home\n"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveRemoteModels(path, []RemoteModel{
+		{Name: "a", Style: StyleDecisions, URL: "u", TokenFile: "$RESOLVE_TEST_DIR/key", ModelID: "typesafe/jev-1.13"},
+		{Name: "b", Style: StyleAnthropic, URL: "u", TokenFile: "~/homekey"},
+		{Name: "both", Style: StyleAnthropic, URL: "u", Token: "lit", TokenFile: "$RESOLVE_TEST_DIR/key"},
+		{Name: "missing", Style: StyleAnthropic, URL: "u", TokenFile: "$RESOLVE_TEST_DIR/nope"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	a, err := ResolveRemoteModelFromFile("a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Token != "from-file" || a.ModelID != "typesafe/jev-1.13" {
+		t.Errorf("a = %+v", a)
+	}
+	b, err := ResolveRemoteModelFromFile("b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.Token != "from-home" || b.ModelID != "" {
+		t.Errorf("b = %+v", b)
+	}
+
+	_, err = ResolveRemoteModelFromFile("both")
+	if err == nil || !strings.Contains(err.Error(), `"both"`) || strings.Contains(err.Error(), "lit") {
+		t.Errorf("both-set err = %v", err)
+	}
+	_, err = ResolveRemoteModelFromFile("missing")
+	if err == nil || !strings.Contains(err.Error(), filepath.Join(dir, "nope")) {
+		t.Errorf("missing-file err = %v", err)
 	}
 }
 

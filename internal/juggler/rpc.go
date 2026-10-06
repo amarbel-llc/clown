@@ -108,6 +108,9 @@ type AddRemoteModelParams struct {
 	Style string `json:"style"`
 	URL   string `json:"url"`
 	Token string `json:"token"`
+	// TokenFile and ModelID mirror RemoteModel's token_file / model fields.
+	TokenFile string `json:"token_file,omitempty"`
+	ModelID   string `json:"model_id,omitempty"`
 }
 type AddRemoteModelResult struct{}
 
@@ -131,4 +134,7 @@ type ResolveModelResult struct {
 	URL   string    `json:"url"`
 	Token string    `json:"token,omitempty"`
 	Style string    `json:"style,omitempty"`
+	// ModelID is the upstream model id for a remote entry that aliases one
+	// (the registry `model` field). Empty: callers use the registry name.
+	ModelID string `json:"model_id,omitempty"`
 }

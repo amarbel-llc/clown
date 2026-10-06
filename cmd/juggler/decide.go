@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -9,13 +10,15 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	rm "code.linenisgreat.com/clown/internal/juggler"
 	jd "code.linenisgreat.com/clown/internal/jugglerdecide"
+	jr "code.linenisgreat.com/clown/internal/jugglerrun"
 )
 
-const decideUsage = "usage: juggler decide --model <name> --room <muc-jid> --parent <stanza-id> [--min-confidence 0.5] [--question <id>] [--troupe <path>]  (payload {\"state\",\"questions\"} on stdin)"
+const decideUsage = "usage: juggler decide --model <name> --room <muc-jid> --parent <stanza-id> [--min-confidence 0.5] [--question <id>] [--run-key <key>] [--troupe <path>]  (payload {\"state\",\"questions\"} on stdin)"
 
 // decideTimeout spans model resolution and the Decisions call.
 const decideTimeout = 60 * time.Second
@@ -31,6 +34,18 @@ const decideModelStyle = "decisions"
 type decideModel struct {
 	URL   string
 	Token string
+	// ModelID is the upstream id the entry aliases; empty sends the
+	// registry name.
+	ModelID string
+}
+
+// requestModel is the "model" sent upstream: the entry's upstream id when
+// it has one, else the registry name.
+func (m decideModel) requestModel(registryName string) string {
+	if m.ModelID != "" {
+		return m.ModelID
+	}
+	return registryName
 }
 
 // decideResolver resolves a registry name to a Decisions endpoint. It is the
@@ -60,7 +75,7 @@ func decisionsModelFrom(name string, r rm.ResolveModelResult) (decideModel, erro
 	if r.Style != decideModelStyle {
 		return decideModel{}, fmt.Errorf("model %q has style %q; decide requires style %q", name, r.Style, decideModelStyle)
 	}
-	return decideModel{URL: r.URL, Token: r.Token}, nil
+	return decideModel{URL: r.URL, Token: r.Token, ModelID: r.ModelID}, nil
 }
 
 // decideOpts is the parsed flag set.
@@ -70,6 +85,7 @@ type decideOpts struct {
 	parent        string
 	question      string
 	troupe        string
+	runKey        string
 	minConfidence float64
 }
 
@@ -82,6 +98,7 @@ func parseDecideFlags(args []string, stderr io.Writer) (decideOpts, error) {
 	fs.StringVar(&o.parent, "parent", "", "provenance parent stanza id (the recording)")
 	fs.StringVar(&o.question, "question", "", "question id to gate on (default: the single question)")
 	fs.StringVar(&o.troupe, "troupe", "troupe", "path to the troupe binary")
+	fs.StringVar(&o.runKey, "run-key", "", "record the outcome as a route entry in this run's ledger (juggler spawn --new-run's key)")
 	fs.Float64Var(&o.minConfidence, "min-confidence", jd.DefaultMinConfidence, "usable confidence threshold in [0,1]")
 	if err := fs.Parse(args); err != nil {
 		return o, err
@@ -117,6 +134,20 @@ func cmdDecide(resolver decideResolver, httpClient *http.Client, args []string, 
 		fmt.Fprintf(stderr, "juggler: decide: reading stdin: %v\n", err)
 		return jd.ExitUsageConfig
 	}
+	var store jr.Store
+	if opts.runKey != "" {
+		// Fail before any call when the run does not exist.
+		if store, err = jr.DefaultStore(); err == nil {
+			var run *jr.RunRecord
+			if run, err = store.LoadRun(opts.runKey); err == nil && run == nil {
+				err = fmt.Errorf("no run with key %q", opts.runKey)
+			}
+		}
+		if err != nil {
+			fmt.Fprintf(stderr, "juggler: decide: --run-key: %v\n", err)
+			return jd.ExitUsageConfig
+		}
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), decideTimeout)
 	defer cancel()
@@ -131,7 +162,7 @@ func cmdDecide(resolver decideResolver, httpClient *http.Client, args []string, 
 		HTTPClient:    httpClient,
 		Endpoint:      jd.EndpointFor(model.URL),
 		Token:         model.Token,
-		Model:         opts.model,
+		Model:         model.requestModel(opts.model),
 		Payload:       payload,
 		MinConfidence: opts.minConfidence,
 		Question:      opts.question,
@@ -147,10 +178,22 @@ func cmdDecide(resolver decideResolver, httpClient *http.Client, args []string, 
 		fmt.Fprintf(stderr, "juggler: decide: marshal stanza: %v\n", err)
 		return jd.ExitUsageConfig
 	}
-	postErr := postDecisionStanza(opts.troupe, opts.room, stanza, stderr)
+	stanzaID, postErr := postDecisionStanza(opts.troupe, opts.room, stanza, stderr)
 
 	if line, err := out.StdoutJSON(); err == nil {
 		fmt.Fprintln(stdout, string(line))
+	}
+	if opts.runKey != "" {
+		// The lifecycle owner's route entry (FDR 0019 §1, §4), so the glue
+		// never writes ledger entries itself.
+		entry := jr.RouteEntry(jr.RouteDecision{
+			Choice: out.Choice, Confidence: out.Confidence, TopProbability: out.TopProbability,
+			Threshold: out.Threshold, Verdict: string(out.Verdict), Reason: out.Reason, StanzaID: stanzaID,
+		})
+		if err := jr.AppendRunLedgerEntry(store, opts.runKey, entry); err != nil {
+			fmt.Fprintf(stderr, "juggler: decide: recording the route entry: %v\n", err)
+			return jd.ExitUsageConfig
+		}
 	}
 	if postErr != nil {
 		fmt.Fprintf(stderr, "juggler: decide: posting stanza to %s: %v\n", opts.room, postErr)
@@ -177,16 +220,18 @@ func mucSendArgv(troupe, room string, stanza []byte) []string {
 // postDecisionStanza runs `troupe muc send` synchronously with the ambient
 // environment (TROUPE_XMPP_USER/PASSWORD_FILE/DOMAIN, nick resolution), like
 // the hook tee but waiting so a failed post is detectable.
-func postDecisionStanza(troupe, room string, stanza []byte, stderr io.Writer) error {
+// It returns the posted stanza's id (troupe muc send's stdout).
+func postDecisionStanza(troupe, room string, stanza []byte, stderr io.Writer) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), decidePostTimeout)
 	defer cancel()
 	argv := mucSendArgv(troupe, room, stanza)
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Env = os.Environ()
-	cmd.Stdout = stderr
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
 	cmd.Stderr = stderr
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("%s muc send: %w", troupe, err)
+		return "", fmt.Errorf("%s muc send: %w", troupe, err)
 	}
-	return nil
+	return strings.TrimSpace(stdout.String()), nil
 }

@@ -161,6 +161,36 @@ func TestDecisionsModelFrom(t *testing.T) {
 	}
 }
 
+func TestDecideSendsTheUpstreamModelID(t *testing.T) {
+	m, err := decisionsModelFrom("jev", rm.ResolveModelResult{Kind: rm.ModelKindRemote, URL: "u", Style: "decisions", ModelID: "typesafe/jev-1.13"})
+	if err != nil || m.ModelID != "typesafe/jev-1.13" {
+		t.Fatalf("model = %+v, err = %v", m, err)
+	}
+	var sent string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Model string `json:"model"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		sent = body.Model
+		_, _ = io.WriteString(w, decideOK)
+	}))
+	t.Cleanup(srv.Close)
+	bin, _ := fakeTroupe(t, 0)
+	args := []string{"--model", "jev", "--room", "r@x", "--parent", "p", "--troupe", bin}
+	var out, errb bytes.Buffer
+	m.URL = srv.URL
+	if code := cmdDecide(fakeResolver{model: m}, srv.Client(), args, strings.NewReader(decideTestPayload), &out, &errb); code != 0 {
+		t.Fatalf("exit = %d: %s", code, errb.String())
+	}
+	if sent != "typesafe/jev-1.13" {
+		t.Errorf("request model = %q, want the upstream id", sent)
+	}
+	if got := (decideModel{}).requestModel("jev"); got != "jev" {
+		t.Errorf("no ModelID must send the registry name: %q", got)
+	}
+}
+
 func TestDecideResolveFailureIsConfigError(t *testing.T) {
 	var out, errb bytes.Buffer
 	args := []string{"--model", "m", "--room", "r", "--parent", "p"}
