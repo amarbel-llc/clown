@@ -766,6 +766,23 @@ func TestSystemdRunArgvAndCommandLine(t *testing.T) {
 	}
 }
 
+func TestIdentityEnvironOverridesTheNick(t *testing.T) {
+	t.Setenv("TROUPE_XMPP_NICK", "clown-session-nick")
+	env := IdentityFor("root-1", Credential{JID: "root-1@xmpp.test", PasswordFile: "/pw"}).environ()
+	var nicks []string
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "TROUPE_XMPP_NICK=") {
+			nicks = append(nicks, kv)
+		}
+	}
+	if len(nicks) != 1 || nicks[0] != "TROUPE_XMPP_NICK=root-1" {
+		t.Errorf("nick env = %q, want exactly TROUPE_XMPP_NICK=root-1", nicks)
+	}
+	if (Identity{}).environ() != nil {
+		t.Error("the ambient identity inherits the environment unchanged")
+	}
+}
+
 func TestStripPrincipalEnv(t *testing.T) {
 	got := StripPrincipalEnv([]string{"PATH=/bin", "CLOWN_SESSION_ID=k", "TROUPE_XMPP_USER=u", "TROUPE_XMPP_PASSWORD_FILE=/p", "TROUPE_MINT_PASSWORD_FILE=/m", "TROUPE_MINT_USER=troupe-minter", "TROUPE_TRANSPORT=xmpp-native"})
 	if strings.Join(got, ",") != "PATH=/bin,TROUPE_TRANSPORT=xmpp-native" {

@@ -50,8 +50,13 @@ func (id Identity) environ() []string {
 	if id.isAmbient() {
 		return nil
 	}
+	// TROUPE_XMPP_NICK too: a clown session exports its own nick (clownfile
+	// [messaging]), and every principal joining a room under that one nick
+	// from different bare JIDs is a XEP-0045 409 conflict. Each principal
+	// joins as its own session key (troupe's default nick).
 	return EnvWith(os.Environ(), map[string]string{
 		SessionIDEnv:                id.SessionKey,
+		"TROUPE_XMPP_NICK":          id.SessionKey,
 		"TROUPE_XMPP_USER":          id.User,
 		"TROUPE_XMPP_PASSWORD_FILE": id.PasswordFile,
 		"TROUPE_XMPP_DOMAIN":        id.Domain,

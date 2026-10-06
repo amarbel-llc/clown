@@ -528,7 +528,11 @@ Limitations).
 A run (webhook → router → issue-filer → maybe a note-filer agent) has
 **one MUC**, created by the spawner and named for the run. The spawner's
 first act is dropping the brief into it. Every agent in the run joins
-with its own JID and posts its turns there. The room's MAM is the run
+with its own JID and posts its turns there. Each principal joins under
+its own session key as nick: juggler overrides `TROUPE_XMPP_NICK` per
+principal (an inherited clown-session nick would make every principal
+join under one nick from different bare JIDs, a XEP-0045 409 conflict),
+and agent units never inherit it. The room's MAM is the run
 transcript and the one link the fallback note carries. Per-agent
 provenance survives because each stanza carries its sender's JID (and,
 later, its signature); the evaluator reads a per-agent slice by sender.
