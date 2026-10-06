@@ -339,8 +339,14 @@ over the final ledger; every other reason is `failed` at the job level.
 With `stop_on_pass`, the per-step check uses the same evaluator and
 budget as the final one over a ledger of the final shape whose
 `end.reason` is still empty; an error in it is a ledger note and does
-not stop the run; the step cap, wall clock and `cannot_complete` are
-unchanged. A tool call whose arguments are not valid
+not stop the run. When the check passes mid-reply, the reply's remaining
+tool calls are not executed and get no tool_result and no ledger entry:
+the transcript shows them requested and unanswered, exactly as after
+`cannot_complete` or a `tool_error`. The step cap and `cannot_complete`
+are unchanged. The per-call check runs under its own 2 s evaluator
+budget, not the run's wall clock, so a run whose pass coincides with its
+deadline can end `evaluator_pass` up to ~2 s past it; a holder's cancel
+(observed via the job's cancel-requested record) is unaffected. A tool call whose arguments are not valid
 JSON is answered with an error tool result the model can recover from,
 never a transport failure, under both codecs. The brief's wall clock
 starts when `juggler run` starts, so it also covers model resolution,

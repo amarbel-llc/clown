@@ -254,7 +254,13 @@ reads a brief
 and drives the model's tool-use protocol through one moxy upstream
 until the model ends its turn, calls the mandatory
 .Ql cannot_complete
-tool, or hits the step cap or the wall clock.
+tool, hits the step cap or the wall clock, or \(em with
+.Ql evaluator.stop_on_pass
+\(em the evaluator first passes.
+A run that ends inside a reply
+.Pq cannot_complete , a tool transport failure, an evaluator pass
+leaves that reply's remaining tool calls requested and unanswered: not
+executed, no tool_result, no ledger entry.
 Two codecs project the loop's stanza-shaped turns onto a provider's wire:
 OpenAI-compatible chat completions and Anthropic Messages.
 .It The ledger
@@ -283,6 +289,9 @@ ends the run with
 .Ql evaluator_pass
 as soon as the evaluator, run over the in-progress ledger after a
 successful tool result, first returns true.
+That per-call check has its own 2-second evaluator budget, not the run's
+wall clock, so a pass that coincides with the deadline can end the run
+up to about 2 seconds late; a holder's cancel is unaffected.
 .It The lifecycle
 Each agent is one systemd transient unit started by
 .Cm juggler spawn ,

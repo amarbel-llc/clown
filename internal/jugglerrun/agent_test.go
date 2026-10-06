@@ -123,6 +123,47 @@ func TestRunAgent_EvaluatorFalseFails(t *testing.T) {
 	}
 }
 
+func TestRunAgent_StopOnPass(t *testing.T) {
+	for _, finalVerdict := range []bool{true, false} {
+		h := newHarness(t)
+		// Two tool-call replies: the per-call check passes after the first.
+		model := scriptedOpenAI(t, openAICreateIssue, openAICreateIssue, openAIEndTurn)
+		deps := h.agentDeps(openAIResolved(model))
+		var perCall, final int
+		deps.Evaluate = func(_ context.Context, _, _ string, doc json.RawMessage) (bool, error) {
+			var l jugglerloop.Ledger
+			if err := json.Unmarshal(doc, &l); err != nil {
+				t.Fatal(err)
+			}
+			if l.End.Reason == "" {
+				perCall++
+				return true, nil
+			}
+			final++
+			if l.End.Reason != jugglerloop.EndEvaluatorPass {
+				t.Errorf("final evaluation over end reason %q", l.End.Reason)
+			}
+			return finalVerdict, nil
+		}
+		brief := parsedBrief(t, "agent-1")
+		brief.Evaluator.StopOnPass = true
+		out, err := RunAgent(context.Background(), deps, AgentRequest{Brief: brief, MoxyURL: fakeMoxy(t).URL})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if perCall != 1 || final != 1 || out.Ledger.End.Reason != jugglerloop.EndEvaluatorPass || len(out.Ledger.Calls) != 1 {
+			t.Errorf("verdict %v: per-call = %d, final = %d, ledger = %+v", finalVerdict, perCall, final, out.Ledger)
+		}
+		want := StateSucceeded
+		if !finalVerdict {
+			want = StateFailed
+		}
+		if out.State != want {
+			t.Errorf("final verdict %v: state = %s (%s), want %s", finalVerdict, out.State, out.Message, want)
+		}
+	}
+}
+
 func TestRunAgent_UsesPreStartedJob(t *testing.T) {
 	h := newHarness(t)
 	job, err := h.deps.Ringmaster.Start(context.Background(), testRoot, AgentJobLabel, SpawnSource)
