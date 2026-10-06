@@ -171,7 +171,7 @@ func TestCmdSpawn_RunKeyIdempotencyWaitAndResolve(t *testing.T) {
 
 	out.Reset()
 	brief := writeBrief(t, "", run.RootPrincipal)
-	code := cmdSpawn([]string{"--brief", brief, "--wait", "--timeout", "100ms", "--juggler", "/bin/juggler", "--user"}, nil, &out, &errb)
+	code := cmdSpawn([]string{"--brief", brief, "--wait", "--timeout", "100ms", "--stop-grace", "200ms", "--juggler", "/bin/juggler", "--user"}, nil, &out, &errb)
 	if code != jr.ExitWaitTimeout {
 		t.Fatalf("--wait exit = %d, want 5 (no agent runs under the fake systemd-run); stderr %s", code, errb.String())
 	}
@@ -198,7 +198,7 @@ func TestCmdSpawn_RunKeyIdempotencyWaitAndResolve(t *testing.T) {
 	}
 
 	out.Reset()
-	if code := cmdResolve([]string{run.RunJob, "--state", "failed", "--reason", "no choice", "--fallback-artifacts", `[{"tool":"note","kind":"note","uris":["orgzly://1"]}]`}, &out, &errb); code != 0 {
+	if code := cmdResolve([]string{run.RunJob, "--state", "failed", "--reason", "no choice", "--stop-grace", "200ms", "--fallback-artifacts", `[{"tool":"note","kind":"note","uris":["orgzly://1"]}]`}, &out, &errb); code != 0 {
 		t.Fatalf("resolve exit = %d, stderr = %s", code, errb.String())
 	}
 	if wakes := f.Wakes(t); len(wakes) != 1 || wakes[0].Target != "webhook" {

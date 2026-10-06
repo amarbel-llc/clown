@@ -48,7 +48,7 @@ func parseSpawnFlags(args []string, stderr io.Writer) (spawnOpts, error) {
 	fs.StringVar(&o.roomDomain, "room-domain", "", "--new-run: create the run MUC on this component (troupe's lane; unavailable)")
 	fs.StringVar(&o.brief, "brief", "", "the subagent brief template (TOML), file or -")
 	fs.StringVar(&o.task, "task", "", "the brief's task text, file or - (default: the template's own task)")
-	fs.BoolVar(&o.wait, "wait", false, "block until the subagent's job terminalizes and print its verdict")
+	fs.BoolVar(&o.wait, "wait", false, "block until the subagent's job terminalizes and print its verdict; at --timeout the job is cancelled (ringmaster cancel) and given --stop-grace to terminalize: exit 3 if it aborted, else 5 (still running, cancel requested)")
 	fs.DurationVar(&o.timeout, "timeout", 0, "--wait bound (default: the brief's wall clock plus twice the stop grace)")
 	fs.StringVar(&o.moxyURL, "moxy-url", "", "the agent's moxy upstream (default $"+jr.MoxyURLEnv+")")
 	fs.StringVar(&o.juggler, "juggler", "", "juggler binary the unit runs (default: this executable)")
@@ -82,7 +82,8 @@ func parseSpawnFlags(args []string, stderr io.Writer) (spawnOpts, error) {
 // cmdSpawn is `juggler spawn` (FDR 0019 §1's launcher glue and glue-facing
 // contract). Exit codes: --new-run and plain --brief 0 or 1; --brief --wait
 // mirrors the job state (0/2/3/4), 5 when the job is still running at the
-// timeout, 1 on a usage or launch failure.
+// timeout and the cancel requested at it did not terminalize it within the
+// stop grace, 1 on a usage or launch failure.
 func cmdSpawn(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	o, err := parseSpawnFlags(args, stderr)
 	if err != nil {
@@ -159,7 +160,7 @@ func spawnBrief(ctx context.Context, deps jr.LifecycleDeps, o spawnOpts, stdin i
 		timeout = jr.DefaultWaitTimeout(rec, o.stopGrace)
 	}
 	// The wait outlives the launch bound (spawnTimeout).
-	w, err := jr.WaitChild(context.Background(), deps, rec, timeout)
+	w, err := jr.WaitChild(context.Background(), deps, rec, timeout, o.stopGrace)
 	if err != nil {
 		return fail(stderr, "spawn", fmt.Errorf("waiting on %s: %w", rec.Job, err))
 	}

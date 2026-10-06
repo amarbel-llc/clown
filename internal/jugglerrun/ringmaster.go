@@ -59,6 +59,10 @@ type Ringmaster interface {
 	// WaitCancelRequested blocks until the job carries a cancel-requested
 	// record (a holder's job_cancel, ringmaster RFC-0018) or a terminal.
 	WaitCancelRequested(ctx context.Context, target, job string) error
+	// Cancel writes a cancel-requested record (ringmaster RFC-0018): the
+	// owning producer tears down and writes its own aborted terminal. An
+	// already-terminal job is an error; callers re-read the journal.
+	Cancel(ctx context.Context, target, job, message string) error
 }
 
 // ExecRingmaster shells the ringmaster binary (ringmaster(1); the verbs are
@@ -71,6 +75,7 @@ type Ringmaster interface {
 //	status <job> --target T --json
 //	spool-path <job> --target T
 //	wait <job> --target T [--timeout D] --json [--on-cancel]
+//	cancel <job> --target T --message M
 type ExecRingmaster struct {
 	Bin string
 }
@@ -164,6 +169,29 @@ func (r ExecRingmaster) WaitTerminal(ctx context.Context, target, job string, ti
 func (r ExecRingmaster) WaitCancelRequested(ctx context.Context, target, job string) error {
 	_, err := r.run(ctx, nil, "wait", job, "--target", target, "--json", "--on-cancel")
 	return err
+}
+
+func (r ExecRingmaster) Cancel(ctx context.Context, target, job, message string) error {
+	_, err := r.run(ctx, nil, "cancel", job, "--target", target, "--message", message)
+	return err
+}
+
+// requestStop asks job to cancel and waits up to grace for its terminal
+// record. It reports the journal as read afterwards and whether a terminal
+// record is present; a failed cancel (an already-terminal job, a race with
+// the producer's own done) is not an error, the journal decides.
+func requestStop(ctx context.Context, rmc Ringmaster, target, job, message string, grace time.Duration) ([]JobRecord, bool, error) {
+	if grace <= 0 {
+		grace = DefaultStopGrace
+	}
+	_ = rmc.Cancel(ctx, target, job, message)
+	_ = rmc.WaitTerminal(ctx, target, job, grace)
+	recs, err := rmc.Records(ctx, target, job)
+	if err != nil {
+		return nil, false, fmt.Errorf("reading %s: %w", job, err)
+	}
+	_, terminal := TerminalRecord(recs)
+	return recs, terminal, nil
 }
 
 // IsTerminalState reports whether state is a ringmaster terminal state:

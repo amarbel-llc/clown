@@ -76,14 +76,22 @@ type NewRunResult struct {
 	RootCredentialRef string `json:"root_credential_ref"`
 	RootJID           string `json:"root_jid"`
 	Room              string `json:"room"`
-	RunJob            string `json:"run_job"`
-	Existing          bool   `json:"existing"`
+	// RootStanza is the id of the run-input stanza posted to the room: the
+	// provenance parent `juggler decide --parent` takes.
+	RootStanza string `json:"root_stanza"`
+	RunJob     string `json:"run_job"`
+	Existing   bool   `json:"existing"`
+	// Resolved and TornDown tell a caller that finds an existing run how far
+	// it got: a crashed first delivery leaves it unresolved.
+	Resolved bool `json:"resolved"`
+	TornDown bool `json:"torn_down"`
 }
 
 func newRunResult(rec *RunRecord, existing bool) NewRunResult {
 	return NewRunResult{
 		RunKey: rec.RunKey, RootPrincipal: rec.RootPrincipal, RootCredentialRef: rec.RootCredentialRef,
-		RootJID: rec.RootJID, Room: rec.Room, RunJob: rec.RunJob, Existing: existing,
+		RootJID: rec.RootJID, Room: rec.Room, RootStanza: rec.RootStanza, RunJob: rec.RunJob, Existing: existing,
+		Resolved: rec.Resolved != nil, TornDown: rec.TornDown,
 	}
 }
 
@@ -130,11 +138,17 @@ func NewRun(ctx context.Context, deps LifecycleDeps, req NewRunRequest) (NewRunR
 	rec := &RunRecord{Schema: RecordSchema, RunKey: req.RunKey, Issuer: req.Issuer, CreatedAt: deps.Now().UTC()}
 	rec.RootPrincipal = deps.NewPrincipal()
 
-	cred, err := deps.Troupe.Mint(ctx, rec.RootPrincipal)
+	rootPW, err := deps.Store.CredentialPath(req.RunKey, rec.RootPrincipal)
+	if err != nil {
+		return NewRunResult{}, fmt.Errorf("preparing the run root's credential file: %w", err)
+	}
+	cred, err := deps.Troupe.Mint(ctx, rec.RootPrincipal, rootPW)
 	if err != nil {
 		return NewRunResult{}, fmt.Errorf("minting the run root: %w", err)
 	}
-	undo.push(func(ctx context.Context, _ error) error { return deps.Troupe.RevokeMint(ctx, rec.RootPrincipal) })
+	undo.push(func(ctx context.Context, _ error) error {
+		return deps.Troupe.RevokeMint(ctx, rec.RootPrincipal, rootPW)
+	})
 	rec.RootJID, rec.RootCredentialRef = cred.JID, cred.PasswordFile
 	root := IdentityFor(rec.RootPrincipal, cred)
 
@@ -349,11 +363,15 @@ func SpawnChild(ctx context.Context, deps LifecycleDeps, req SpawnRequest) (rec 
 	wallClock, _ := brief.Limits.WallClockDuration()
 
 	var undo undoStack
-	cred, err := deps.Troupe.Mint(ctx, rec.Principal)
+	childPW, err := deps.Store.CredentialPath(run.RunKey, rec.Principal)
+	if err != nil {
+		return nil, false, fmt.Errorf("preparing the agent's credential file: %w", err)
+	}
+	cred, err := deps.Troupe.Mint(ctx, rec.Principal, childPW)
 	if err != nil {
 		return nil, false, fmt.Errorf("minting the agent principal: %w", err)
 	}
-	undo.push(func(ctx context.Context, _ error) error { return deps.Troupe.RevokeMint(ctx, rec.Principal) })
+	undo.push(func(ctx context.Context, _ error) error { return deps.Troupe.RevokeMint(ctx, rec.Principal, childPW) })
 	rec.JID, rec.CredentialRef = cred.JID, cred.PasswordFile
 
 	rec.BriefPath = deps.Store.stagedBriefPath(run.RunKey, digest)
@@ -517,7 +535,10 @@ func DefaultWaitTimeout(rec *ChildRecord, grace time.Duration) time.Duration {
 // WaitChild blocks until the child's job is terminal or timeout elapses and
 // reads the verdict, reason and ledger artifacts back from the journal and
 // the result spool (`ringmaster wait` polls; it has no wake subscription).
-func WaitChild(ctx context.Context, deps LifecycleDeps, rec *ChildRecord, timeout time.Duration) (WaitRecord, error) {
+// When timeout elapses first, the job is asked to cancel and given grace
+// (DefaultStopGrace when zero) to terminalize, so a caller that falls back
+// never races a late agent; a job still not terminal after that is running.
+func WaitChild(ctx context.Context, deps LifecycleDeps, rec *ChildRecord, timeout, grace time.Duration) (WaitRecord, error) {
 	out := WaitRecord{JID: rec.JID, Job: rec.Job, Room: rec.Room, Artifacts: []Artifact{}}
 	_ = deps.Ringmaster.WaitTerminal(ctx, rec.Parent, rec.Job, timeout)
 	recs, err := deps.Ringmaster.Records(ctx, rec.Parent, rec.Job)
@@ -528,6 +549,12 @@ func WaitChild(ctx context.Context, deps LifecycleDeps, rec *ChildRecord, timeou
 		return out, fmt.Errorf("job %s has no journal on %s's channel", rec.Job, rec.Parent)
 	}
 	term, terminal := TerminalRecord(recs)
+	if !terminal {
+		if recs, terminal, err = requestStop(ctx, deps.Ringmaster, rec.Parent, rec.Job, "juggler spawn --wait timed out", grace); err != nil {
+			return out, err
+		}
+		term, _ = TerminalRecord(recs)
+	}
 	if !terminal {
 		out.State = StateRunning
 		return out, nil

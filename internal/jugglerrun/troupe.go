@@ -69,8 +69,11 @@ type Wake struct {
 
 // Troupe is the messaging surface juggler consumes.
 type Troupe interface {
-	Mint(ctx context.Context, sessionKey string) (Credential, error)
-	RevokeMint(ctx context.Context, sessionKey string) error
+	// Mint creates the account for sessionKey and writes its password to
+	// passwordFile: one file per identity, so a mint never overwrites the
+	// ambient identity's credential (TROUPE_XMPP_PASSWORD_FILE).
+	Mint(ctx context.Context, sessionKey, passwordFile string) (Credential, error)
+	RevokeMint(ctx context.Context, sessionKey, passwordFile string) error
 	// PostStanza posts one stanza into a MUC room as `as` and returns the
 	// posted message id.
 	PostStanza(ctx context.Context, as Identity, room, source string, stanza []byte) (string, error)
@@ -79,8 +82,8 @@ type Troupe interface {
 
 // ExecTroupe shells the troupe binary (troupe(1)). Argv shapes:
 //
-//	mint --session-key K                     -> {"jid","password_file"}
-//	mint-revoke --session-key K
+//	mint --session-key K --password-file P   -> {"jid","password_file"}
+//	mint-revoke --session-key K --password-file P
 //	muc send --room R --subject <stanza JSON> --body "" --source S [--from K]
 //	message --target T --source S --message M [--from F] [--result-ref R]
 //
@@ -95,8 +98,8 @@ func (t ExecTroupe) run(ctx context.Context, env []string, args ...string) ([]by
 	return runCommand(ctx, Command{Argv: append([]string{t.Bin}, args...), Env: env})
 }
 
-func (t ExecTroupe) Mint(ctx context.Context, sessionKey string) (Credential, error) {
-	out, err := t.run(ctx, nil, "mint", "--session-key", sessionKey)
+func (t ExecTroupe) Mint(ctx context.Context, sessionKey, passwordFile string) (Credential, error) {
+	out, err := t.run(ctx, nil, "mint", "--session-key", sessionKey, "--password-file", passwordFile)
 	if err != nil {
 		return Credential{}, err
 	}
@@ -110,8 +113,8 @@ func (t ExecTroupe) Mint(ctx context.Context, sessionKey string) (Credential, er
 	return c, nil
 }
 
-func (t ExecTroupe) RevokeMint(ctx context.Context, sessionKey string) error {
-	_, err := t.run(ctx, nil, "mint-revoke", "--session-key", sessionKey)
+func (t ExecTroupe) RevokeMint(ctx context.Context, sessionKey, passwordFile string) error {
+	_, err := t.run(ctx, nil, "mint-revoke", "--session-key", sessionKey, "--password-file", passwordFile)
 	return err
 }
 

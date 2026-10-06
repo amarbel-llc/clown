@@ -181,6 +181,18 @@ func (f *Fakes) Wakes(t testing.TB) []WakeMsg {
 	return readLines[WakeMsg](t, filepath.Join(f.Dir, "wakes.jsonl"))
 }
 
+// Cancelled lists the job ids passed to `ringmaster cancel`.
+func (f *Fakes) Cancelled(t testing.TB) []string {
+	t.Helper()
+	var out []string
+	for _, c := range f.Calls(t, "ringmaster") {
+		if len(c.Argv) > 1 && c.Argv[0] == "cancel" {
+			out = append(out, c.Argv[1])
+		}
+	}
+	return out
+}
+
 // Revoked lists the session keys passed to `troupe mint-revoke`.
 func (f *Fakes) Revoked(t testing.TB) []string {
 	t.Helper()
@@ -471,8 +483,11 @@ func fakeTroupe(dir string, args []string) int {
 	}
 	switch args[0] {
 	case "mint":
-		key := parseFlags(args[1:])["session-key"]
-		pw := filepath.Join(dir, "creds", key)
+		fl := parseFlags(args[1:])
+		key, pw := fl["session-key"], fl["password-file"]
+		if pw == "" {
+			pw = filepath.Join(dir, "creds", key)
+		}
 		_ = os.MkdirAll(filepath.Dir(pw), 0o700)
 		if err := os.WriteFile(pw, []byte("secret\n"), 0o600); err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -482,7 +497,12 @@ func fakeTroupe(dir string, args []string) int {
 		fmt.Println(string(b))
 		return 0
 	case "mint-revoke":
-		_ = os.Remove(filepath.Join(dir, "creds", parseFlags(args[1:])["session-key"]))
+		fl := parseFlags(args[1:])
+		pw := fl["password-file"]
+		if pw == "" {
+			pw = filepath.Join(dir, "creds", fl["session-key"])
+		}
+		_ = os.Remove(pw)
 		return 0
 	case "muc":
 		if len(args) < 2 || args[1] != "send" {

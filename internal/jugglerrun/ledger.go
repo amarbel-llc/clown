@@ -56,6 +56,12 @@ type RunLedgerEntry struct {
 	Ran       *bool      `json:"ran,omitempty"`
 	Artifacts []Artifact `json:"artifacts,omitempty"`
 
+	// Child-stop entry fields (`juggler resolve` stopping a live subagent):
+	// OK is whether the child's job terminalized within the stop grace.
+	Job              string `json:"job,omitempty"`
+	Principal        string `json:"principal,omitempty"`
+	StoppedByResolve bool   `json:"stopped_by_resolve,omitempty"`
+
 	// Route-entry fields (`juggler decide --run-key`).
 	Choice         string   `json:"choice,omitempty"`
 	Confidence     *float64 `json:"confidence,omitempty"`
@@ -85,6 +91,19 @@ func RouteEntry(d RouteDecision) RunLedgerEntry {
 		Tool: "route", Kind: "route", OK: d.Verdict == string(jugglerdecide.Usable), URIs: []string{},
 		Reason: d.Reason, Choice: d.Choice, Confidence: &conf, TopProbability: d.TopProbability,
 		Threshold: &threshold, Verdict: d.Verdict, StanzaID: d.StanzaID,
+	}
+}
+
+// ChildStopEntry is the run ledger's entry for a subagent still live when the
+// run resolved: ok exactly when the job terminalized within the stop grace.
+func ChildStopEntry(child *ChildRecord, terminalized bool) RunLedgerEntry {
+	reason := "stopped by resolve"
+	if !terminalized {
+		reason = "still running after the stop grace"
+	}
+	return RunLedgerEntry{
+		Tool: "subagent_stop", Kind: "subagent", OK: terminalized, URIs: []string{}, Reason: reason,
+		Job: child.Job, Principal: child.Principal, StoppedByResolve: true,
 	}
 }
 

@@ -58,6 +58,34 @@ func (s Store) stagedBriefPath(key, digest string) string {
 }
 func (s Store) wakeMarkerPath(job string) string { return filepath.Join(s.Root, "exit-wakes", job) }
 
+// CredentialPath is where principal's troupe password is written:
+// <run dir>/<principal>.pw, one file per identity, in a 0700 directory it
+// creates. The run key is the run's own, so a teardown can delete them all.
+func (s Store) CredentialPath(runKey, principal string) (string, error) {
+	if err := os.MkdirAll(s.runDir(runKey), 0o700); err != nil {
+		return "", err
+	}
+	return filepath.Join(s.runDir(runKey), principal+".pw"), nil
+}
+
+// runChildren lists the run's subagent records.
+func (s Store) runChildren(runKey string) ([]*ChildRecord, error) {
+	paths, err := filepath.Glob(filepath.Join(s.childrenDir(runKey), "*.json"))
+	if err != nil {
+		return nil, err
+	}
+	var out []*ChildRecord
+	for _, p := range paths {
+		var rec ChildRecord
+		if ok, err := readJSONFile(p, &rec); err != nil {
+			return nil, err
+		} else if ok {
+			out = append(out, &rec)
+		}
+	}
+	return out, nil
+}
+
 // digestFileName turns "sha256:<hex>" into a filename-safe "sha256-<hex>".
 func digestFileName(digest string) string {
 	b := []byte(digest)
@@ -102,6 +130,9 @@ type RunRecord struct {
 	Holders           []Holder    `json:"holders"`
 	CreatedAt         time.Time   `json:"created_at"`
 	Resolved          *Resolution `json:"resolved,omitempty"`
+	// TornDown is set by the teardown brief once the run's accounts and
+	// credentials are gone; false until then.
+	TornDown bool `json:"torn_down"`
 }
 
 // ChildRecord is one subagent spawned into a run.

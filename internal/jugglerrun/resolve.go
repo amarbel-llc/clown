@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync"
+	"time"
 )
 
 // ResolveRequest is `juggler resolve`.
@@ -15,6 +17,9 @@ type ResolveRequest struct {
 	Reason string
 	// FallbackArtifacts is the fallback script's own outcome.
 	FallbackArtifacts []Artifact
+	// StopGrace bounds the wait for each live child to terminalize;
+	// DefaultStopGrace when zero.
+	StopGrace time.Duration
 }
 
 // ResolveOutcome is `juggler resolve`'s stdout object.
@@ -29,8 +34,11 @@ type ResolveOutcome struct {
 	AlreadyResolved bool `json:"already_resolved"`
 }
 
-// Resolve is the run's last call (FDR 0019 §1): it appends the `fallback`
-// entry to the run ledger, writes the ledger to the store and the run job's
+// Resolve is the run's last call (FDR 0019 §1): it first asks every child job
+// of the run that is not yet terminal to cancel and waits up to the stop grace
+// for each (a `subagent_stop` ledger entry, stopped_by_resolve, records the
+// outcome), so an account teardown never deletes one under a running agent;
+// then it appends the `fallback` entry to the run ledger, writes the ledger to the store and the run job's
 // spool, writes the run job's terminal record and sends the run's exit wake
 // to the run job's holders (the issuer). Every step is retry-safe: the
 // ledger entry is appended once (the ledger's resolved field gates it), an
@@ -68,6 +76,11 @@ func Resolve(ctx context.Context, deps LifecycleDeps, req ResolveRequest) (Resol
 		if artifacts == nil {
 			artifacts = []Artifact{}
 		}
+		stops, err := stopLiveChildren(ctx, deps, run.RunKey, req.StopGrace)
+		if err != nil {
+			return out, err
+		}
+		ledger.Calls = append(ledger.Calls, stops...)
 		ledger.Calls = append(ledger.Calls, FallbackEntry(req.State, req.Reason, artifacts))
 		ledger.Resolved = &Resolution{State: req.State, Reason: req.Reason, At: deps.Now().UTC()}
 		if err := writeJSONAtomic(out.Ledger, ledger); err != nil {
@@ -114,6 +127,52 @@ func Resolve(ctx context.Context, deps LifecycleDeps, req ResolveRequest) (Resol
 	run.Resolved = ledger.Resolved
 	if err := deps.Store.SaveRun(run); err != nil {
 		return out, fmt.Errorf("saving the run record: %w", err)
+	}
+	return out, nil
+}
+
+// stopLiveChildren requests cancellation of every child job of the run that is
+// not yet terminal and waits up to grace for each (concurrently), so a later
+// account teardown never deletes an account under a running agent. It returns
+// one ledger entry per child it had to stop.
+func stopLiveChildren(ctx context.Context, deps LifecycleDeps, runKey string, grace time.Duration) ([]RunLedgerEntry, error) {
+	children, err := deps.Store.runChildren(runKey)
+	if err != nil {
+		return nil, err
+	}
+	entries := make([]*RunLedgerEntry, len(children))
+	errs := make([]error, len(children))
+	var wg sync.WaitGroup
+	for i, child := range children {
+		wg.Add(1)
+		go func(i int, child *ChildRecord) {
+			defer wg.Done()
+			recs, err := deps.Ringmaster.Records(ctx, child.Parent, child.Job)
+			if err != nil {
+				errs[i] = fmt.Errorf("reading %s: %w", child.Job, err)
+				return
+			}
+			if _, terminal := TerminalRecord(recs); terminal || len(recs) == 0 {
+				return
+			}
+			_, terminalized, err := requestStop(ctx, deps.Ringmaster, child.Parent, child.Job, "run resolved", grace)
+			if err != nil {
+				errs[i] = err
+				return
+			}
+			e := ChildStopEntry(child, terminalized)
+			entries[i] = &e
+		}(i, child)
+	}
+	wg.Wait()
+	if err := errors.Join(errs...); err != nil {
+		return nil, err
+	}
+	var out []RunLedgerEntry
+	for _, e := range entries {
+		if e != nil {
+			out = append(out, *e)
+		}
 	}
 	return out, nil
 }

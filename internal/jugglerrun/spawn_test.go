@@ -67,6 +67,160 @@ func TestNewRun_CreatesAndIsIdempotentOnRunKey(t *testing.T) {
 	}
 }
 
+func TestNewRun_ExistingRunReportsResolvedAndTornDown(t *testing.T) {
+	h := newHarness(t)
+	pinPrincipals(h, testRoot)
+	res := newRun(t, h, "rec-42")
+	if res.Resolved || res.TornDown {
+		t.Fatalf("a fresh run is neither resolved nor torn down: %+v", res)
+	}
+	if again := newRun(t, h, "rec-42"); !again.Existing || again.Resolved || again.TornDown {
+		t.Fatalf("existing unresolved run = %+v", again)
+	}
+	if _, err := Resolve(context.Background(), h.deps, ResolveRequest{RunJob: res.RunJob, State: StateSucceeded, Reason: "done"}); err != nil {
+		t.Fatal(err)
+	}
+	again := newRun(t, h, "rec-42")
+	if !again.Existing || !again.Resolved || again.TornDown {
+		t.Errorf("repeated run key after Resolve = %+v", again)
+	}
+	b, _ := json.Marshal(again)
+	if !containsAll(string(b), `"resolved":true`, `"torn_down":false`, `"existing":true`) {
+		t.Errorf("JSON = %s", b)
+	}
+}
+
+func TestMint_PerIdentityPasswordFiles(t *testing.T) {
+	h := newHarness(t)
+	pinPrincipals(h, testRoot, "child-1")
+	res := newRun(t, h, "rec-42")
+	rootPW := h.deps.Store.runDir("rec-42") + "/" + testRoot + ".pw"
+	if res.RootCredentialRef != rootPW {
+		t.Errorf("root credential ref = %q, want %q", res.RootCredentialRef, rootPW)
+	}
+	if fi, err := os.Stat(h.deps.Store.runDir("rec-42")); err != nil || fi.Mode().Perm() != 0o700 {
+		t.Errorf("run dir = %v, %v", fi, err)
+	}
+	rec := spawnChild(t, h)
+	childPW := h.deps.Store.runDir("rec-42") + "/child-1.pw"
+	if rec.CredentialRef != childPW {
+		t.Errorf("child credential ref = %q, want %q", rec.CredentialRef, childPW)
+	}
+	var mints [][]string
+	for _, c := range h.fakes.Calls(t, "troupe") {
+		if c.Argv[0] == "mint" {
+			mints = append(mints, c.Argv)
+		}
+	}
+	want := [][]string{
+		{"mint", "--session-key", testRoot, "--password-file", rootPW},
+		{"mint", "--session-key", "child-1", "--password-file", childPW},
+	}
+	if strings.Join(flatten(mints), "|") != strings.Join(flatten(want), "|") {
+		t.Errorf("mint argv = %q, want %q", mints, want)
+	}
+	units := h.fakes.Calls(t, "systemd-run")
+	if !hasArg(units[0].Argv, "--setenv=TROUPE_XMPP_PASSWORD_FILE="+childPW) {
+		t.Errorf("the unit must read the child's own file: %q", units[0].Argv)
+	}
+	for _, p := range []string{rootPW, childPW} {
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("a successful spawn keeps %s: %v", p, err)
+		}
+	}
+}
+
+func TestSpawnChild_FailureRevokesTheChildsOwnFile(t *testing.T) {
+	h := newHarness(t)
+	pinPrincipals(h, testRoot, "child-1")
+	newRun(t, h, "rec-42")
+	h.fakes.Fail(t, "systemd-run", "launch")
+	if _, _, err := SpawnChild(context.Background(), h.deps, SpawnRequest{Brief: templateBytes(), Task: []byte(testTask), RunKey: "rec-42", JugglerBin: "/bin/juggler"}); err == nil {
+		t.Fatal("want an error")
+	}
+	childPW := h.deps.Store.runDir("rec-42") + "/child-1.pw"
+	var revoke []string
+	for _, c := range h.fakes.Calls(t, "troupe") {
+		if c.Argv[0] == "mint-revoke" {
+			revoke = c.Argv
+		}
+	}
+	if strings.Join(revoke, "|") != strings.Join([]string{"mint-revoke", "--session-key", "child-1", "--password-file", childPW}, "|") {
+		t.Errorf("mint-revoke argv = %q", revoke)
+	}
+	if _, err := os.Stat(h.deps.Store.runDir("rec-42") + "/" + testRoot + ".pw"); err != nil {
+		t.Errorf("the root's credential must survive a child's failure: %v", err)
+	}
+}
+
+func flatten(argvs [][]string) []string {
+	var out []string
+	for _, a := range argvs {
+		out = append(out, strings.Join(a, " "))
+	}
+	return out
+}
+
+func TestResolve_StopsLiveChildren(t *testing.T) {
+	h := newHarness(t)
+	pinPrincipals(h, testRoot, "child-1", "child-2")
+	res := newRun(t, h, "rec-42")
+	live := spawnChild(t, h)
+	done, _, err := SpawnChild(context.Background(), h.deps, SpawnRequest{Brief: templateBytes(), Task: []byte("second"), RunKey: "rec-42", JugglerBin: "/bin/juggler"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.fakes.AppendRecord(t, done.Parent, done.Job, StateSucceeded, "evaluator passed", "")
+	go func() {
+		for len(h.fakes.Cancelled(t)) == 0 {
+			time.Sleep(10 * time.Millisecond)
+		}
+		h.fakes.AppendRecord(t, live.Parent, live.Job, StateAborted, "cancelled by a holder", "")
+	}()
+
+	if _, err := Resolve(context.Background(), h.deps, ResolveRequest{RunJob: res.RunJob, State: StateSucceeded, Reason: "done", StopGrace: 5 * time.Second}); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.fakes.Cancelled(t); len(got) != 1 || got[0] != live.Job {
+		t.Errorf("only the live child may be cancelled: %v", got)
+	}
+	if term := lastRecord(t, h.fakes.Records(t, testIssuer, res.RunJob)); term.Type != StateSucceeded {
+		t.Errorf("run terminal = %+v", term)
+	}
+	if countTerminals(h.fakes.Records(t, live.Parent, live.Job)) != 1 {
+		t.Error("the live child must terminalize exactly once")
+	}
+	var ledger RunLedger
+	data, err := JobLedger(context.Background(), h.deps, res.RunJob, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &ledger); err != nil {
+		t.Fatal(err)
+	}
+	if len(ledger.Calls) != 2 || ledger.Calls[0].Job != live.Job || !ledger.Calls[0].StoppedByResolve || !ledger.Calls[0].OK || ledger.Calls[1].Tool != "fallback" {
+		t.Errorf("run ledger = %s", data)
+	}
+}
+
+func TestResolve_ChildThatIgnoresTheCancelIsRecordedNotStopped(t *testing.T) {
+	h := newHarness(t)
+	pinPrincipals(h, testRoot, "child-1")
+	res := newRun(t, h, "rec-42")
+	live := spawnChild(t, h)
+	if _, err := Resolve(context.Background(), h.deps, ResolveRequest{RunJob: res.RunJob, State: StateFailed, Reason: "x", StopGrace: 100 * time.Millisecond}); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.fakes.Cancelled(t); len(got) != 1 || got[0] != live.Job {
+		t.Errorf("cancelled = %v", got)
+	}
+	var ledger RunLedger
+	data, _ := JobLedger(context.Background(), h.deps, res.RunJob, "")
+	if err := json.Unmarshal(data, &ledger); err != nil || len(ledger.Calls) != 2 || ledger.Calls[0].OK || !ledger.Calls[0].StoppedByResolve {
+		t.Errorf("run ledger = %s (%v)", data, err)
+	}
+}
+
 func TestNewRun_RoomProvisioningIsTroupesLane(t *testing.T) {
 	h := newHarness(t)
 	pinPrincipals(h, testRoot)
@@ -296,7 +450,7 @@ func TestWaitChild(t *testing.T) {
 		newRun(t, h, "rec-42")
 		rec := spawnChild(t, h)
 		time.AfterFunc(50*time.Millisecond, func() { finishAgent(t, h, rec, StateSucceeded, "evaluator passed", succeeded) })
-		w, err := WaitChild(context.Background(), h.deps, rec, 5*time.Second)
+		w, err := WaitChild(context.Background(), h.deps, rec, 5*time.Second, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -317,7 +471,7 @@ func TestWaitChild(t *testing.T) {
 		newRun(t, h, "rec-42")
 		rec := spawnChild(t, h)
 		finishAgent(t, h, rec, StateFailed, `cannot_complete: "no repo matches"`, cannot)
-		w, err := WaitChild(context.Background(), h.deps, rec, time.Second)
+		w, err := WaitChild(context.Background(), h.deps, rec, time.Second, 0)
 		if err != nil || w.ExitCode() != ExitFailed || w.Reason != ReasonFailed || w.CannotComplete == nil || w.CannotComplete.Reason != "no repo matches" || len(w.Artifacts) != 0 {
 			t.Fatalf("wait = %+v, err = %v", w, err)
 		}
@@ -330,7 +484,7 @@ func TestWaitChild(t *testing.T) {
 		if _, err := ExitWake(context.Background(), h.deps, ExitWakeRequest{Job: rec.Job, Target: rec.Parent, Service: ServiceResult{Result: "signal", ExitStatus: "KILL"}}); err != nil {
 			t.Fatal(err)
 		}
-		w, err := WaitChild(context.Background(), h.deps, rec, time.Second)
+		w, err := WaitChild(context.Background(), h.deps, rec, time.Second, 0)
 		if err != nil || w.ExitCode() != ExitInterrupted || w.Reason != ReasonKilled {
 			t.Fatalf("wait = %+v, err = %v", w, err)
 		}
@@ -341,7 +495,7 @@ func TestWaitChild(t *testing.T) {
 		newRun(t, h, "rec-42")
 		rec := spawnChild(t, h)
 		h.fakes.AppendRecord(t, rec.Parent, rec.Job, StateAborted, "cancelled by a holder", "")
-		w, err := WaitChild(context.Background(), h.deps, rec, time.Second)
+		w, err := WaitChild(context.Background(), h.deps, rec, time.Second, 0)
 		if err != nil || w.ExitCode() != ExitAborted || w.Reason != ReasonShutdown {
 			t.Fatalf("wait = %+v, err = %v", w, err)
 		}
@@ -351,9 +505,31 @@ func TestWaitChild(t *testing.T) {
 		pinPrincipals(h, testRoot, "child-1")
 		newRun(t, h, "rec-42")
 		rec := spawnChild(t, h)
-		w, err := WaitChild(context.Background(), h.deps, rec, 50*time.Millisecond)
+		w, err := WaitChild(context.Background(), h.deps, rec, 50*time.Millisecond, 200*time.Millisecond)
 		if err != nil || w.State != StateRunning || w.ExitCode() != ExitWaitTimeout {
 			t.Fatalf("wait = %+v, err = %v", w, err)
+		}
+		if got := h.fakes.Cancelled(t); len(got) != 1 || got[0] != rec.Job {
+			t.Errorf("a timed-out wait must request cancellation of the job: %v", got)
+		}
+	})
+	t.Run("timeout then the agent aborts within the grace", func(t *testing.T) {
+		h := newHarness(t)
+		pinPrincipals(h, testRoot, "child-1")
+		newRun(t, h, "rec-42")
+		rec := spawnChild(t, h)
+		go func() {
+			for len(h.fakes.Cancelled(t)) == 0 {
+				time.Sleep(10 * time.Millisecond)
+			}
+			h.fakes.AppendRecord(t, rec.Parent, rec.Job, StateAborted, "cancelled by a holder", "")
+		}()
+		w, err := WaitChild(context.Background(), h.deps, rec, 50*time.Millisecond, 5*time.Second)
+		if err != nil || w.State != StateAborted || w.ExitCode() != ExitAborted {
+			t.Fatalf("wait = %+v, err = %v", w, err)
+		}
+		if got := h.fakes.Cancelled(t); len(got) != 1 || got[0] != rec.Job {
+			t.Errorf("cancelled = %v", got)
 		}
 	})
 }
