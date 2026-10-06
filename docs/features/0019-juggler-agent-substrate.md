@@ -482,9 +482,12 @@ An issue-filer brief (unsigned, slice-0 shape):
       .cannot_complete == null
       and ([.calls[] | select(.kind == "issue" and .ok)] | length) >= 1
     '''
-    [moxyfile]
+    # the agent's moxyfile travels as a TOML STRING (canonical bytes, so it
+    # can be signed verbatim), not as a nested table:
+    moxyfile = '''
     # narrows the spawner's moxyfile to smith's three verbs, always-allow
     …
+    '''
 
 The ledger the evaluator sees:
 
@@ -581,8 +584,11 @@ The router, before any subagent exists:
   `decisions` registry style isolates that to `juggler decide`. Its
   reported probabilities also vary by up to ~0.08 on identical input per
   OpenRouter's own cookbook, so the threshold is a soft gate, not a
-  deterministic one. Everything here about the router is from
-  documentation; no authenticated call has been made yet.
+  deterministic one. Two authenticated calls (circus, 2026-10-06)
+  confirmed the documented request/response shape, that field order
+  differs from the docs and is unstable, that integers appear where
+  floats are expected, and that a chat-completions call to the slug is
+  refused with HTTP 400; `juggler decide` parses by name only.
 - **Per-run credentials accumulate.** A run root's troupe credential and
   room outlive the run until the retention sweep (circus's 30-day job,
   itself deferred). Until that sweep exists, every recording leaves one
@@ -609,7 +615,7 @@ The router, before any subagent exists:
 | daemon for remote models | optional | krone's webhook user has no user session | a host needs local inference for these agents (→ system-service daemon) |
 | agent-scope realisation | open: sub-cgroup vs sibling unit | the bullet needs neither namespaces nor the choice | signing lands, or a non-fixed-surface tool server appears (→ sibling unit + `limits.sandbox`) |
 | exit-wake emitter | the unit's `ExecStopPost` hook, sole emitter | survives every ending the main process does not | a holder needs a wake on the systemd-dead path (→ holder-side timeout or a cross-host watcher) |
-| router confidence threshold | 0.5 (`--min-confidence`, overridable per brief) | operator's first-bullet figure; below it the subagent is skipped and the fallback note records the choice and confidence | mirror-phase data shows good choices rejected or bad ones accepted |
+| router confidence threshold | 0.5 (`--min-confidence`, overridable per brief) | operator's first-bullet figure; below it the subagent is skipped and the fallback note records the choice and confidence. NOTE (two live calls, 2026-10-06): the API's `confidence` is the MARGIN over the runner-up (0.63 vs 0.37 → confidence 0.26), not the winning probability, so with two options 0.5 means roughly "0.75 or better"; semantics for 3+ options unverified. The stanza carries both `confidence` and the chosen option's probability | mirror-phase data shows good choices rejected or bad ones accepted |
 | lifecycle owner | v1: `juggler spawn` | spinclass cannot represent a repo-less session today | the first handle held across the two session kinds (→ v2 spinclass unit session, §11) |
 
 ## FDR 0032 touch-points (operator-resolved 2026-10-06; FDR 0032 edited at spinclass 1647787, unmerged)

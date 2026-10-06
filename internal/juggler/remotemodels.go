@@ -18,8 +18,10 @@ import (
 // reference, resolved with os.ExpandEnv at ResolveModel time (Task 4) —
 // not resolved here, so the on-disk file never needs the ambient env.
 type RemoteModel struct {
-	Name  string `toml:"name"`
-	Style string `toml:"style"` // "anthropic" | "openai-compat"
+	Name string `toml:"name"`
+	// "anthropic" | "openai-compat" | "decisions" (see StyleDecisions: used
+	// only by `juggler decide`, never by the agent loop or `juggler prompt`).
+	Style string `toml:"style"`
 	URL   string `toml:"url"`
 	Token string `toml:"token"`
 }

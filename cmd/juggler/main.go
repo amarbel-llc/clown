@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 	"text/tabwriter"
@@ -17,7 +18,7 @@ func main() {
 
 func run(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: juggler <daemon|start|stop|status|list|models|model|prompt|mcp|download> [args]")
+		fmt.Fprintln(os.Stderr, "usage: juggler <daemon|start|stop|status|list|models|model|prompt|decide|mcp|download> [args]")
 		return 1
 	}
 
@@ -57,6 +58,10 @@ func run(args []string) int {
 		}
 		Serve(os.Stdin, os.Stdout, cli)
 		return 0
+	case "decide":
+		return withClient(func(cli *rm.Client) int {
+			return cmdDecide(daemonDecideResolver{cli}, http.DefaultClient, args[1:], os.Stdin, os.Stdout, os.Stderr)
+		})
 	case "download":
 		return cmdDownload(args[1:])
 	default:
