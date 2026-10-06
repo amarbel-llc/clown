@@ -11,8 +11,10 @@
 // with troupe's owner and last-owner rules); the systemd-run fake records and
 // succeeds. A file <dir>/fail/<tool>-<verb> makes that verb exit 1;
 // <dir>/fail/troupe-muc-<sub> fails one muc subverb, and
-// <dir>/fail/troupe-mint-revoke-login makes mint-revoke fail the way a login
-// failure does (exit 1, "xmpp: negotiate" on stderr, the file kept).
+// <dir>/fail/troupe-mint-revoke-login makes mint-revoke fail the way a SASL
+// login refusal does (exit 1, Prosody's refusal text after "xmpp: negotiate:",
+// the file kept), and <dir>/fail/troupe-mint-revoke-tls the way a TLS failure
+// during negotiation does.
 package jugglerruntest
 
 import (
@@ -511,9 +513,15 @@ func fakeTroupe(dir string, args []string) int {
 			return 0 // file absent: troupe does not contact the server
 		}
 		if failKnob(dir, "troupe-mint-revoke-login") {
-			// troupe 4c52b3b: the login failed; "no such account" and "wrong
-			// password" look the same, and the file is kept.
-			fmt.Fprintln(os.Stderr, "troupe mint-revoke: xmpp: negotiate: sasl: not-authorized")
+			// troupe 4c52b3b against Prosody: the SASL login was refused; "no
+			// such account" and "wrong password" look the same, and the file
+			// is kept.
+			fmt.Fprintln(os.Stderr, "troupe mint-revoke: mint: xmpp: negotiate: Unable to authorize you with the authentication credentials you've sent.")
+			return 1
+		}
+		if failKnob(dir, "troupe-mint-revoke-tls") {
+			// A negotiation failure that is not a login refusal.
+			fmt.Fprintln(os.Stderr, "troupe mint-revoke: xmpp: negotiate: tls: failed to verify certificate")
 			return 1
 		}
 		_ = os.Remove(pw)

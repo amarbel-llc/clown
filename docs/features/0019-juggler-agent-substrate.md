@@ -144,9 +144,11 @@ channel, and it never parses the room):
   1. with `--result-line`/`--canary-room`, post the one-line result into
      the canary room **as the run root** (`troupe muc send --source
      juggler-resolve`) — first, because the root's account dies in step
-     4; a failed post is a `canary` ledger note
-     (`{tool:"canary", kind:"note", ok, reason, stanza_id}`) and changes
-     nothing else;
+     4; the post is recorded at once (a `canary-posted` marker in the
+     run's state directory, then a `canary` ledger note
+     `{tool:"canary", kind:"note", ok, reason, stanza_id}`), so a resolve
+     retried after any later failure never posts it again; a failed post
+     is a not-ok note, writes no marker, and changes nothing else;
   2. cancel every child job of the run that is not yet terminal and wait
      up to the stop grace for each (one `subagent_stop` ledger entry per
      child, `stopped_by_resolve`);
@@ -162,9 +164,10 @@ channel, and it never parses the room):
      (only when the run created the room with an operator owner — the
      last owner cannot step down; otherwise skipped and said so in the
      entry), revokes itself and deletes its file. troupe cannot tell "no
-     such account" from "wrong password", so a login failure at revoke is
-     "already gone" and juggler deletes the file itself; any other revoke
-     failure keeps the account and its file. A child still running after
+     such account" from "wrong password", so a SASL login refusal at
+     revoke is "already gone" and juggler deletes the file itself; any
+     other revoke failure — including a TLS or stream failure during
+     negotiation — keeps the account and its file. A child still running after
      the grace keeps its account (`ok:false`, `"still running"`), and the
      root keeps its own while any child account remains. One entry per
      account: `{tool:"teardown", kind:"account", ok, principal, jid,
@@ -173,7 +176,13 @@ channel, and it never parses the room):
   Resolving a resolved run rewrites nothing, posts no canary line and
   sends no wake: it only performs a teardown still pending (accounts with
   an ok entry are skipped), so a re-run after the stuck child ended
-  finishes the job. stdout gains `"torn_down"` and `"teardown"` (this
+  finishes the job. A retried *partial* resolve (one that failed after
+  posting, e.g. on the exit wake) posts no second canary line either and
+  relays the terminal record already written. `juggler spawn --brief`
+  holds the run lock from its resolved check through the child's record
+  and unit launch, so a spawn racing `resolve` is either refused or seen
+  (and stopped, or kept as still running) by the teardown — never left
+  live in a torn-down run. stdout gains `"torn_down"` and `"teardown"` (this
   call's entries). (Not named `run-…` to avoid confusion with `juggler
   run`.)
 - Every reason is on stdout and in a ledger: `cannot_complete.reason`
@@ -752,13 +761,20 @@ The router, before any subagent exists:
   room. If no retry ever comes, nothing revokes them; like the rooms,
   they are the retention sweep's to remove. Because the root is a
   function of the run key, a run key must never be reused for a
-  different run.
+  different run. The pending record drops the failed attempt's run job
+  id: if failing that job during the undo itself fails, the job stays open
+  and the resumed run opens a second one.
 - **"Already gone" is inferred from stderr.** troupe 4c52b3b exits 1 for
-  both a failed login and an unreachable server; juggler treats exit 1
-  with `xmpp: negotiate` or `not-authorized` on stderr as a login failure
-  (the account is gone, the file is deleted) and anything else as a
-  failure that keeps the account and its file. If troupe changes that
-  wording, every teardown keeps its accounts (fails safe, not open).
+  a refused login, an unreachable server and a TLS or stream failure
+  alike, and wraps every negotiation failure as `xmpp: negotiate: <err>`.
+  juggler treats as a login refusal only exit 1 whose stderr has the SASL
+  `<failure/>` right after that prefix — mellium renders it as the
+  server's text (Prosody: `Unable to authorize you with the
+  authentication credentials you've sent.`) or the bare condition
+  (`not-authorized`) — or `sasl: not-authorized`; then the account is
+  gone and the file is deleted. Anything else keeps the account and its
+  file. If troupe or Prosody change that wording, every teardown keeps its
+  accounts (fails safe, not open).
 - **The ringmaster reaper does not back-stop juggler jobs today.** RFC-0018
   reaps a job only when the producer's advisory lock is released, and
   there is no CLI verb for a producer to take that lock, so `juggler run`

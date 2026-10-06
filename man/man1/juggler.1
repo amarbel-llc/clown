@@ -875,10 +875,20 @@ to
 .Ql none
 .Pq only in a room the run created with an operator owner; otherwise skipped and noted ,
 revokes itself and deletes its file.
-A login failure at revoke means the account is already gone
+A SASL login refusal at revoke means the account is already gone
 .Pq troupe cannot tell it from a wrong password
-and the file is deleted anyway; any other revoke failure keeps the
-account and its file.
+and the file is deleted anyway: exit 1 with the refusal right after
+.Ql xmpp: negotiate:
+on stderr
+.Po Prosody's
+.Dq Unable to authorize you with the authentication credentials ,
+or
+.Ql not-authorized
+.Pc ,
+or
+.Ql sasl: not-authorized .
+Any other revoke failure, a TLS or stream failure during negotiation
+included, keeps the account and its file.
 A child still running after the grace keeps its account
 .Pq Dq still running ,
 and the root keeps its own while any child account remains.
@@ -892,6 +902,17 @@ Resolving an already-resolved run rewrites nothing, posts no canary
 line and sends no wake: it only performs a teardown still pending
 .Pq accounts already gone are skipped ,
 prints the stored verdict with a notice on stderr, and exits 0.
+A retried partial resolve
+.Pq one that failed after the canary post, e.g. on the exit wake
+posts no second canary line either: the post is recorded in
+.Pa $XDG_STATE_HOME/juggler/runs/<run-key>/canary-posted
+and in the run ledger the moment it succeeds.
+A
+.Cm spawn Fl -brief
+racing
+.Cm resolve
+holds the run lock through its launch, so it is either refused or seen by
+the teardown.
 Prints
 .Sy {"run_key","run_job","state","reason","ledger","woken","already_resolved","torn_down","teardown"}
 .Pq Ql teardown : No this call's entries, omitted when empty .

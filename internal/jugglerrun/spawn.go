@@ -378,18 +378,30 @@ func SpawnChild(ctx context.Context, deps LifecycleDeps, req SpawnRequest) (rec 
 	if err != nil {
 		return nil, false, err
 	}
+
+	// The run lock is held through the child record's save and the unit's
+	// launch, so Resolve (which lists the children and tears their accounts
+	// down under the same lock) sees either no trace of this child or a
+	// launched one: never a child saved and launched after its teardown
+	// listing. It also serialises same-digest spawns. Lock order, everywhere:
+	// the run lock, then the exit-wake marker lock (sendExitWakes); nothing
+	// takes the run lock while holding another.
+	unlock, err := lock(deps.Store.runPath(run.RunKey) + ".lock")
+	if err != nil {
+		return nil, false, err
+	}
+	defer unlock()
+	if run, err = deps.Store.LoadRun(run.RunKey); err != nil {
+		return nil, false, err
+	} else if run == nil {
+		return nil, false, errors.New("the run record vanished")
+	}
 	if run.Resolved != nil {
 		return nil, false, fmt.Errorf("run %s is already resolved (%s)", run.RunKey, run.Resolved.State)
 	}
 	if run.Pending {
 		return nil, false, fmt.Errorf("run %s is pending: its spawn --new-run failed; retry it with the same --run-key", run.RunKey)
 	}
-
-	unlock, err := lock(deps.Store.childPath(run.RunKey, digest) + ".lock")
-	if err != nil {
-		return nil, false, err
-	}
-	defer unlock()
 	if prior, err := deps.Store.LoadChild(run.RunKey, digest); err != nil {
 		return nil, false, err
 	} else if prior != nil {

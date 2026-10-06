@@ -150,15 +150,26 @@ func (t ExecTroupe) SendWake(ctx context.Context, w Wake) error {
 	return err
 }
 
-// loginFailureMarkers are the stderr fragments of a troupe verb that could
-// not log in as the account it was handed. troupe (4c52b3b) cannot tell "no
-// such account" from "wrong password", so at teardown both mean the account
-// is already gone.
-var loginFailureMarkers = []string{"xmpp: negotiate", "not-authorized"}
+// loginFailureMarkers are the stderr fragments of a troupe verb whose SASL
+// login was refused, and nothing broader. troupe 4c52b3b wraps the whole
+// session negotiation (TLS, stream errors, an EOF on a server restart) as
+// "xmpp: negotiate: <err>", and for a SASL <failure/> <err> is mellium's
+// saslerr.Error, whose text is the server's <text> when it sent one (Prosody's
+// plain/scram refusal: "Unable to authorize you with the authentication
+// credentials you've sent.") or else the bare condition ("not-authorized").
+// So each marker anchors the SASL refusal to the negotiate prefix; a TLS or
+// stream failure never matches. "sasl: not-authorized" covers a troupe that
+// prefixes the condition. troupe cannot tell "no such account" from "wrong
+// password", so at teardown a match means the account is already gone.
+var loginFailureMarkers = []string{
+	"xmpp: negotiate: not-authorized",
+	"xmpp: negotiate: Unable to authorize you with the authentication credentials",
+	"sasl: not-authorized",
+}
 
 // IsLoginFailure reports whether err is a troupe exit 1 whose stderr says the
-// login itself failed (see loginFailureMarkers), as opposed to the server
-// being unreachable or the call being refused.
+// SASL login itself was refused (see loginFailureMarkers), as opposed to the
+// server being unreachable, TLS failing or the call being refused.
 func IsLoginFailure(err error) bool {
 	var ce *CommandError
 	if !errors.As(err, &ce) || ce.ExitCode != 1 {

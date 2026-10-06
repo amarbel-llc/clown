@@ -3,6 +3,7 @@ package jugglerrun
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -384,6 +385,106 @@ func TestResolve_LoginFailureAtRevokeMeansAlreadyGone(t *testing.T) {
 	}
 	if _, err := os.Stat(res.RootCredentialRef); !os.IsNotExist(err) {
 		t.Errorf("resolve deletes the file itself: %v", err)
+	}
+}
+
+func TestIsLoginFailure(t *testing.T) {
+	for stderr, want := range map[string]bool{
+		"troupe mint-revoke: mint: xmpp: negotiate: Unable to authorize you with the authentication credentials you've sent.": true,
+		"troupe mint-revoke: mint: xmpp: negotiate: not-authorized":                                                           true,
+		"troupe mint-revoke: xmpp: negotiate: sasl: not-authorized":                                                           true,
+		"troupe mint-revoke: xmpp: negotiate: tls: failed to verify certificate":                                              false,
+		"troupe mint-revoke: xmpp: negotiate: EOF":                                                                            false,
+		"troupe mint-revoke: xmpp: dial 127.0.0.1:5222: connection refused":                                                   false,
+	} {
+		if got := IsLoginFailure(&CommandError{Argv: []string{"troupe", "mint-revoke"}, ExitCode: 1, Stderr: stderr, Err: errors.New("exit status 1")}); got != want {
+			t.Errorf("IsLoginFailure(%q) = %v, want %v", stderr, got, want)
+		}
+	}
+	if IsLoginFailure(&CommandError{Argv: []string{"troupe"}, ExitCode: 2, Stderr: "xmpp: negotiate: not-authorized"}) {
+		t.Error("only exit 1 is a login failure")
+	}
+}
+
+func TestResolve_NegotiationFailureAtRevokeKeepsTheAccount(t *testing.T) {
+	h := newHarness(t)
+	pinPrincipals(h, testRoot)
+	res := newProvisionedRun(t, h, "rec-42")
+	h.fakes.Fail(t, "troupe", "mint-revoke-tls")
+	out, err := Resolve(context.Background(), h.deps, ResolveRequest{RunJob: res.RunJob, State: StateSucceeded, Reason: "done"})
+	if err != nil || out.TornDown || len(out.Teardown) != 1 || out.Teardown[0].OK || !strings.Contains(out.Teardown[0].Reason, "tls: failed to verify certificate") {
+		t.Fatalf("outcome = %+v, %v", out, err)
+	}
+	if _, err := os.Stat(res.RootCredentialRef); err != nil {
+		t.Errorf("a TLS failure must not cost the credential: %v", err)
+	}
+}
+
+func TestResolve_RetriedPartialResolvePostsTheCanaryOnce(t *testing.T) {
+	h := newHarness(t)
+	pinPrincipals(h, testRoot)
+	res := newProvisionedRun(t, h, "rec-42")
+	h.fakes.Fail(t, "troupe", "message") // the exit wake
+	req := ResolveRequest{RunJob: res.RunJob, State: StateSucceeded, Reason: "done", ResultLine: "rec-42: done", CanaryRoom: testCanary}
+	if _, err := Resolve(context.Background(), h.deps, req); err == nil {
+		t.Fatal("want the exit-wake failure")
+	}
+	if err := os.Remove(h.fakes.Dir + "/fail/troupe-message"); err != nil {
+		t.Fatal(err)
+	}
+	out, err := Resolve(context.Background(), h.deps, req)
+	if err != nil || out.AlreadyResolved || !out.TornDown || len(out.Woken) != 1 {
+		t.Fatalf("retry = %+v, %v", out, err)
+	}
+	var posts int
+	for _, p := range h.fakes.MUC(t) {
+		if p.Room == testCanary {
+			posts++
+		}
+	}
+	if posts != 1 {
+		t.Errorf("canary posts = %d, want 1", posts)
+	}
+	if n := len(callsOf(runLedger(t, h, res.RunJob), CanaryTool)); n != 1 {
+		t.Errorf("canary ledger entries = %d, want 1", n)
+	}
+}
+
+func TestSpawnChild_RacingResolveIsRefusedOrTornDown(t *testing.T) {
+	for i := 0; i < 5; i++ {
+		h := newHarness(t)
+		pinPrincipals(h, testRoot, "child-1")
+		res := newProvisionedRun(t, h, "rec-42")
+		var (
+			child   *ChildRecord
+			spawnEr error
+			done    = make(chan struct{})
+		)
+		go func() {
+			defer close(done)
+			child, _, spawnEr = SpawnChild(context.Background(), h.deps, SpawnRequest{Brief: templateBytes(), Task: []byte(testTask), RunKey: "rec-42", JugglerBin: "/bin/juggler"})
+		}()
+		if _, err := Resolve(context.Background(), h.deps, ResolveRequest{RunJob: res.RunJob, State: StateFailed, Reason: "x", StopGrace: 50 * time.Millisecond}); err != nil {
+			t.Fatal(err)
+		}
+		<-done
+		run, _ := h.deps.Store.LoadRun("rec-42")
+		switch {
+		case spawnEr != nil:
+			if !strings.Contains(spawnEr.Error(), "already resolved") {
+				t.Fatalf("spawn error = %v", spawnEr)
+			}
+		case run.TornDown:
+			if _, err := os.Stat(child.CredentialRef); !os.IsNotExist(err) {
+				t.Fatalf("run torn down with a live child account: %v", err)
+			}
+		default:
+			// The child won the lock and is still running: resolve kept its
+			// account (and the root's) rather than tearing down around it.
+			if _, err := os.Stat(child.CredentialRef); err != nil {
+				t.Fatalf("a kept child must keep its file: %v", err)
+			}
+		}
 	}
 }
 

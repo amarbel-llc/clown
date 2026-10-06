@@ -61,6 +61,12 @@ func (s Store) stagedBriefPath(key, digest string) string {
 }
 func (s Store) wakeMarkerPath(job string) string { return filepath.Join(s.Root, "exit-wakes", job) }
 
+// canaryMarkerPath records that `juggler resolve` posted the run's canary
+// line (the stanza id), so a retried resolve never posts it twice.
+func (s Store) canaryMarkerPath(key string) string {
+	return filepath.Join(s.runDir(key), "canary-posted")
+}
+
 // CredentialPath is where principal's troupe password is written:
 // <run dir>/<principal>.pw, one file per identity, in a 0700 directory it
 // creates. The run key is the run's own, so a teardown can delete them all.

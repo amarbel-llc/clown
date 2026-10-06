@@ -82,10 +82,10 @@ func Resolve(ctx context.Context, deps LifecycleDeps, req ResolveRequest) (Resol
 		return finishTeardown(ctx, deps, run, req.KeepAccounts, out)
 	}
 
-	var canary []RunLedgerEntry
 	if req.CanaryRoom != "" {
-		id, err := deps.Troupe.PostStanza(ctx, run.rootIdentity(), req.CanaryRoom, ResolveSource, []byte(req.ResultLine))
-		canary = append(canary, CanaryEntry(req.CanaryRoom, id, err))
+		if err := postCanaryOnce(ctx, deps, run, req.CanaryRoom, req.ResultLine); err != nil {
+			return out, err
+		}
 	}
 
 	ledger, err := deps.Store.loadRunLedger(run.RunKey)
@@ -101,21 +101,13 @@ func Resolve(ctx context.Context, deps LifecycleDeps, req ResolveRequest) (Resol
 		if err != nil {
 			return out, err
 		}
-		ledger.Calls = append(ledger.Calls, canary...)
 		ledger.Calls = append(ledger.Calls, stops...)
 		ledger.Calls = append(ledger.Calls, FallbackEntry(req.State, req.Reason, artifacts))
 		ledger.Resolved = &Resolution{State: req.State, Reason: req.Reason, At: deps.Now().UTC()}
-		if err := writeJSONAtomic(out.Ledger, ledger); err != nil {
-			return out, fmt.Errorf("writing the run ledger: %w", err)
-		}
-	}
-	doc, err := marshalDocument(ledger)
-	if err != nil {
-		return out, err
 	}
 	resultRef := out.Ledger
-	if spool, err := writeSpool(ctx, deps.Ringmaster, run.Issuer, run.RunJob, doc); err != nil {
-		fmt.Fprintf(os.Stderr, "juggler: resolve: %v\n", err)
+	if spool, err := persistLedger(ctx, deps, run, ledger); err != nil {
+		return out, err
 	} else if spool != "" {
 		resultRef = spool
 	}
@@ -151,6 +143,55 @@ func Resolve(ctx context.Context, deps LifecycleDeps, req ResolveRequest) (Resol
 		return out, fmt.Errorf("saving the run record: %w", err)
 	}
 	return finishTeardown(ctx, deps, run, req.KeepAccounts, out)
+}
+
+// persistLedger writes the run ledger to the store and, best effort, to the
+// run job's result spool, returning the spool path ("" when there is none or
+// the spool write failed, which is logged).
+func persistLedger(ctx context.Context, deps LifecycleDeps, run *RunRecord, ledger RunLedger) (string, error) {
+	if err := writeJSONAtomic(deps.Store.RunLedgerPath(run.RunKey), ledger); err != nil {
+		return "", fmt.Errorf("writing the run ledger: %w", err)
+	}
+	doc, err := marshalDocument(ledger)
+	if err != nil {
+		return "", err
+	}
+	spool, err := writeSpool(ctx, deps.Ringmaster, run.Issuer, run.RunJob, doc)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "juggler: resolve: %v\n", err)
+		return "", nil
+	}
+	return spool, nil
+}
+
+// postCanaryOnce posts the result line into the canary room as the run root,
+// unless the run's canary marker says an earlier (partial) resolve already
+// did. The marker is written right after a successful post, then the canary
+// note is appended to the run ledger whatever its resolved state, so a resolve
+// retried after any later failure neither posts again nor loses the note. A
+// failed post is noted too, writes no marker, and changes nothing else.
+func postCanaryOnce(ctx context.Context, deps LifecycleDeps, run *RunRecord, room, line string) error {
+	marker := deps.Store.canaryMarkerPath(run.RunKey)
+	if _, err := os.Stat(marker); err == nil {
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	id, postErr := deps.Troupe.PostStanza(ctx, run.rootIdentity(), room, ResolveSource, []byte(line))
+	if postErr == nil {
+		if err := writeFileAtomic(marker, []byte(id+"\n")); err != nil {
+			return fmt.Errorf("writing the canary marker (the line was posted as %s): %w", id, err)
+		}
+	}
+	ledger, err := deps.Store.loadRunLedger(run.RunKey)
+	if err != nil {
+		return err
+	}
+	ledger.Calls = append(ledger.Calls, CanaryEntry(room, id, postErr))
+	if err := writeJSONAtomic(deps.Store.RunLedgerPath(run.RunKey), ledger); err != nil {
+		return fmt.Errorf("writing the run ledger: %w", err)
+	}
+	return nil
 }
 
 // finishTeardown runs a resolved run's pending teardown unless keep, and
@@ -215,14 +256,8 @@ func teardownAccounts(ctx context.Context, deps LifecycleDeps, run *RunRecord) (
 	}
 	if len(entries) > 0 {
 		ledger.Calls = append(ledger.Calls, entries...)
-		path := deps.Store.RunLedgerPath(run.RunKey)
-		if err := writeJSONAtomic(path, ledger); err != nil {
-			return entries, fmt.Errorf("writing the run ledger: %w", err)
-		}
-		if doc, err := marshalDocument(ledger); err == nil {
-			if _, err := writeSpool(ctx, deps.Ringmaster, run.Issuer, run.RunJob, doc); err != nil {
-				fmt.Fprintf(os.Stderr, "juggler: resolve: %v\n", err)
-			}
+		if _, err := persistLedger(ctx, deps, run, ledger); err != nil {
+			return entries, err
 		}
 	}
 	run.TornDown = childrenGone && rootGone

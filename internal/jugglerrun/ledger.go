@@ -62,9 +62,8 @@ type RunLedgerEntry struct {
 	Principal        string `json:"principal,omitempty"`
 	StoppedByResolve bool   `json:"stopped_by_resolve,omitempty"`
 
-	// Teardown-entry field (Principal above names the account): OK is
-	// whether the account is gone (revoked, or already gone) with its
-	// password file deleted.
+	// Teardown-entry field: the account's JID (Principal above names its
+	// key).
 	JID string `json:"jid,omitempty"`
 
 	// Route-entry fields (`juggler decide --run-key`).
@@ -140,7 +139,8 @@ func CanaryEntry(room, stanzaID string, err error) RunLedgerEntry {
 }
 
 // TeardownEntry is the run ledger's entry for one account `juggler resolve`
-// tore down (or could not): ok exactly when the account is gone.
+// tore down (or could not): ok exactly when the account is gone (revoked, or
+// already gone) with its password file deleted.
 func TeardownEntry(principal, jid string, ok bool, reason string) RunLedgerEntry {
 	return RunLedgerEntry{Tool: TeardownTool, Kind: "account", OK: ok, URIs: []string{}, Principal: principal, JID: jid, Reason: reason}
 }
