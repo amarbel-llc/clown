@@ -205,7 +205,14 @@ keeps a **ledger**: one entry per tool call with the tool name, the
 artifact `kind` the tool server declares for it, the success flag, the
 returned URIs and any error, plus the terminal facts (how the loop
 ended, whether `cannot_complete` was called and with what reason). The
-ledger carries a `schema` version.
+ledger carries a `schema` version. `end.reason` is one of `end_turn`,
+`cannot_complete`, `step_cap`, `timeout`, `tool_error` (a tool's
+transport failed), or `model_error` (the model endpoint returned a
+non-2xx or unparseable reply before the deadline). Only `end_turn` can
+lead to `succeeded`; every other reason is `failed` at the job level.
+The task itself is not a transcript turn — it is the brief stanza's
+content — so the agent's first recorded turn has the brief as its
+provenance parent.
 
 Every agent is given a mandatory **`cannot_complete(reason)`** tool. Calling
 it ends the run; the reason is recorded in the ledger and in the job's
@@ -434,6 +441,10 @@ describe. The run root (§2) is modelled in juggler and ringmaster;
 spinclass has no group above sessions and cannot represent a session
 without a repo today. FDR 0032 with these decisions is on spinclass
 master (gate sha 3f42f8d, 2026-10-06); v2 is tracked as spinclass#354.
+spinclass's own decomposition (v1: the handle-record contract as a
+normative FDR 0032 section, D6's five reasons as constants, docs/tests;
+v2: outline only) is `docs/plans/2026-10-06-fdr-0032-spinclass-decomposition.md`
+in spinclass. circus's is in circus FDR-0039's lane.
 
 **v2 (operator decision, 2026-10-06, recorded in FDR 0032 D7):** the
 lifecycle moves to a **spinclass unit session** — a session kind with no
