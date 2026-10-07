@@ -676,6 +676,31 @@ abort_on_cancel() {
   [[ $(journal_types "$root" "$job" | grep -cE '^(succeeded|failed|aborted|interrupted)$') -eq 1 ]]
 }
 
+# --- moxin identity ----------------------------------------------------------
+
+@test "spawn --brief pins the unit's MOXIN_PATH to the spawner's, made absolute, and drops MOXY_*" {
+  local root
+  root=$(stored_run rk2 .root_principal)
+  mkdir -p "$BATS_TEST_TMPDIR/work"
+  _exec_capture env -C "$BATS_TEST_TMPDIR/work" CLOWN_SESSION_ID="$root" MOXIN_PATH="rel/moxins:/abs/moxins" \
+    MOXY_PARENT_MOXYFILE=/fake "$JUGGLER_BIN" spawn --brief "$BATS_FILE_TMPDIR/issue-filer.toml" --task - <<<"moxin task"
+  expect_status 0
+  local want="$BATS_TEST_TMPDIR/work/rel/moxins:/abs/moxins"
+  [[ $(field .moxin_path) == "$want" ]]
+  fake_calls '[.[] | select(.tool == "systemd-run")][-1].argv' >"$BATS_TEST_TMPDIR/argv.json"
+  jq -e --arg want "--setenv=MOXIN_PATH=$want" '
+    ([.[] | select(startswith("--setenv=MOXIN_PATH="))] == [$want])
+    and ([.[] | select(startswith("--setenv=MOXY_"))] | length) == 0
+  ' "$BATS_TEST_TMPDIR/argv.json" >/dev/null
+
+  # A spawner without MOXIN_PATH: the unit gets none.
+  _exec_capture env -u MOXIN_PATH CLOWN_SESSION_ID="$root" \
+    "$JUGGLER_BIN" spawn --brief "$BATS_FILE_TMPDIR/issue-filer.toml" --task - <<<"moxin task unset"
+  expect_status 0
+  [[ $(jq -r .moxin_path <<<"$output") == "" ]]
+  fake_calls '[.[] | select(.tool == "systemd-run")][-1].argv | map(select(startswith("--setenv=MOXIN_PATH="))) | length == 0' | grep -qx true
+}
+
 # --- room provisioning and teardown ----------------------------------------
 
 # calls_since <n> <jq filter>: the filter over the platform calls recorded

@@ -208,7 +208,7 @@ func TestToolsAndEnv(t *testing.T) {
 			t.Errorf("%s: got %v", name, err)
 		}
 	}
-	for _, key := range []string{"CLOWN_SESSION_ID", "TROUPE_XMPP_USER", "JUGGLER_MOXY_URL"} {
+	for _, key := range []string{"CLOWN_SESSION_ID", "TROUPE_XMPP_USER", "JUGGLER_MOXY_URL", "MOXIN_PATH", "MOXY_PARENT_MOXYFILE", "MOXY_ANYTHING"} {
 		src := strings.Replace(issueFilerBrief, "PEBBLE_TARGET_MODE", key, 1)
 		if _, err := Parse([]byte(src)); err == nil || !strings.Contains(err.Error(), "env") {
 			t.Errorf("reserved env key %s: got %v", key, err)

@@ -151,6 +151,10 @@ func spawnBrief(ctx context.Context, deps jr.LifecycleDeps, o spawnOpts, stdin i
 	if moxyURL == "" {
 		moxyURL = os.Getenv(jr.MoxyURLEnv)
 	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fail(stderr, "spawn", fmt.Errorf("resolving MOXIN_PATH against the working directory: %w", err))
+	}
 	rec, _, err := jr.SpawnChild(ctx, deps, jr.SpawnRequest{
 		Brief:        brief,
 		Task:         task,
@@ -160,6 +164,7 @@ func spawnBrief(ctx context.Context, deps jr.LifecycleDeps, o spawnOpts, stdin i
 		JugglerBin:   jugglerBin,
 		StopGrace:    o.stopGrace,
 		UnitEnv:      jr.PassthroughUnitEnv(os.Environ()),
+		MoxinPath:    jr.SpawnerMoxinPath(os.Getenv("MOXIN_PATH"), cwd),
 	})
 	if err != nil {
 		return fail(stderr, "spawn", err)

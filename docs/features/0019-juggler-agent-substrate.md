@@ -139,7 +139,8 @@ channel, and it never parses the room):
   given `--stop-grace` (default 30s) to terminalize: exit 3 if it
   aborted in time, else 5 ("cancel requested, still running"), so a
   caller that falls back never races a late agent. Without `--wait`,
-  the launch JSON `{"jid","job","room"}` is printed immediately.
+  the launch JSON `{"jid","job","room","moxin_path"}` is printed
+  immediately (`moxin_path`: the `MOXIN_PATH` the unit got, §5).
 - `juggler job-ledger <job>`: print a job's ledger (the result spool)
   for a run the caller did not wait on.
 - **Templates.** Brief authors ship a template without `principal`,
@@ -303,7 +304,7 @@ into the run's MUC and is the agent's ONLY instruction source. Fields:
 | `system` | the system prompt |
 | `task` | the task text |
 | `moxyfile` | the agent's **inline moxyfile** as a TOML string (§5) |
-| `env` | string→string table passed into the agent's unit environment; how per-agent tool configuration (e.g. a target mode, `MOXIN_PATH`) reaches moxy and its moxins, which moxyfile(5) cannot carry. `CLOWN_SESSION_ID`, `TROUPE_XMPP_*`, `TROUPE_MINT_*` (the spawner's minter credential) and `JUGGLER_*` are reserved and rejected |
+| `env` | string→string table passed into the agent's unit environment; how per-agent tool configuration (e.g. a target mode) reaches moxy and its moxins, which moxyfile(5) cannot carry. `CLOWN_SESSION_ID`, `TROUPE_XMPP_*`, `TROUPE_MINT_*` (the spawner's minter credential), `MOXIN_PATH` and `MOXY_*` (moxin identity, pinned by the launcher, §5) and `JUGGLER_*` are reserved and rejected |
 | `tools` | REQUIRED allowlist of exact tool names as moxy advertises them (`<server>_<tool>`); `juggler run` offers the model only these. A listed name moxy does not advertise is a startup error; the list may not be empty |
 | `evaluator` | `{kind, program, stop_on_pass}`; first kind is `jq` (§4). `stop_on_pass` (default false) ends the run with `evaluator_pass` as soon as the program first passes after a successful tool result (§4) |
 | `limits` | `{steps, wall_clock, sandbox}`; `sandbox` is RESERVED and unused in this slice (§9) |
@@ -429,11 +430,30 @@ names in the ledger and in the brief's `tools` allowlist are therefore
 `<server>_<tool>`, e.g. `ring_create_issue`.
 
 **Per-agent tool configuration travels in the brief's `env` table**, not
-in the moxyfile: moxyfile(5) has no environment key, cannot configure a
-moxin, and cannot set `MOXIN_PATH`. `juggler spawn` passes `env` into the
-unit, and moxy and its moxins inherit it. (An earlier draft said "inside
-the moxyfile as the servers' arguments or environment"; that is only
-true for `[[servers]]` entries, not moxins, and is withdrawn.)
+in the moxyfile: moxyfile(5) has no environment key and cannot configure a
+moxin. `juggler spawn` passes `env` into the unit, and moxy and its moxins
+inherit it. (An earlier draft said "inside the moxyfile as the servers'
+arguments or environment"; that is only true for `[[servers]]` entries,
+not moxins, and is withdrawn.)
+
+**Moxin identity is pinned by the launcher: `MOXIN_PATH` is inherited
+from the spawner, never from the brief.** A moxin's permission tiers are
+per-tool `perms-request` keys in the moxin's own TOML, found through
+`MOXIN_PATH` (plus moxy's system moxin dir), not in the moxyfile — so the
+only way an agent's toolset could widen past its spawner's is its moxy
+discovering different moxins. `juggler spawn` therefore sets the unit's
+`MOXIN_PATH` to the spawner's own value with every entry made absolute
+(against the spawner's working directory), or leaves it unset when the
+spawner's is unset; no `MOXY_*` variable reaches the unit. `MOXIN_PATH`,
+`MOXY_*` (`MOXY_PARENT_MOXYFILE`, which juggler will set itself once moxy
+checks a parent reference, among them) are reserved in a brief's `[env]`.
+The value the unit got is the child record's and the launch output's
+`moxin_path`. A spawner whose tools are moxins (circus's wrapper tools)
+must therefore carry their directory on its own `MOXIN_PATH`. With
+`MOXIN_PATH` unset, moxy falls back to its legacy hierarchy relative to
+the agent's state directory (`~/.config/moxy/moxins` of the same user plus
+`.moxy/moxins` dirs on the way down, which juggler never creates) — the
+same user's global moxins, not a brief's choice.
 
 **Allowlist, not deny-list.** moxyfile narrowing is additive deny-lists
 (`disable-moxins`, `disable-servers`), which fail OPEN when a tool is

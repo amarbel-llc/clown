@@ -174,21 +174,23 @@ func (r *RunRecord) rootIdentity() Identity {
 
 // ChildRecord is one subagent spawned into a run.
 type ChildRecord struct {
-	Schema        int       `json:"schema"`
-	RunKey        string    `json:"run_key"`
-	BriefDigest   string    `json:"brief_digest"`
-	Principal     string    `json:"principal"`
-	JID           string    `json:"jid"`
-	CredentialRef string    `json:"credential_ref"`
-	Parent        string    `json:"parent"`
-	Room          string    `json:"room"`
-	Job           string    `json:"job"`
-	BriefStanza   string    `json:"brief_stanza"`
-	BriefPath     string    `json:"brief_path"`
-	Unit          string    `json:"unit"`
-	WallClock     string    `json:"wall_clock"`
-	Holders       []Holder  `json:"holders"`
-	CreatedAt     time.Time `json:"created_at"`
+	Schema        int    `json:"schema"`
+	RunKey        string `json:"run_key"`
+	BriefDigest   string `json:"brief_digest"`
+	Principal     string `json:"principal"`
+	JID           string `json:"jid"`
+	CredentialRef string `json:"credential_ref"`
+	Parent        string `json:"parent"`
+	Room          string `json:"room"`
+	Job           string `json:"job"`
+	BriefStanza   string `json:"brief_stanza"`
+	BriefPath     string `json:"brief_path"`
+	Unit          string `json:"unit"`
+	WallClock     string `json:"wall_clock"`
+	// MoxinPath is the MOXIN_PATH the unit got from its spawner ("" = unset).
+	MoxinPath string    `json:"moxin_path"`
+	Holders   []Holder  `json:"holders"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 func (s Store) LoadRun(key string) (*RunRecord, error) {

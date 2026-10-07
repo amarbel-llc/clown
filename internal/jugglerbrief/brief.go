@@ -59,8 +59,8 @@ type Brief struct {
 
 	// Env is passed into the agent's transient unit (and so to moxy and its
 	// moxins, which moxyfile(5) cannot configure). Keys spawn owns —
-	// CLOWN_SESSION_ID, TROUPE_XMPP_*, TROUPE_MINT_* and JUGGLER_* — are
-	// rejected.
+	// CLOWN_SESSION_ID, TROUPE_XMPP_*, TROUPE_MINT_*, MOXIN_PATH, MOXY_* and
+	// JUGGLER_* — are rejected.
 	Env map[string]string `toml:"env,omitempty"`
 
 	Evaluator Evaluator `toml:"evaluator"`
@@ -81,10 +81,18 @@ func IsPrincipalEnvKey(key string) bool {
 	return key == "CLOWN_SESSION_ID" || strings.HasPrefix(key, "TROUPE_XMPP_") || strings.HasPrefix(key, "TROUPE_MINT_")
 }
 
+// IsMoxinIdentityEnvKey reports whether an environment key decides which
+// moxins (and so which tools and permission tiers) an agent's moxy
+// discovers: MOXIN_PATH, or any MOXY_* variable (MOXY_PARENT_MOXYFILE among
+// them). The launcher pins these; a brief may not (FDR 0019 §5).
+func IsMoxinIdentityEnvKey(key string) bool {
+	return key == "MOXIN_PATH" || strings.HasPrefix(key, "MOXY_")
+}
+
 // ReservedEnvKey reports whether an [env] key is one `juggler spawn` sets
 // itself and a brief therefore may not.
 func ReservedEnvKey(key string) bool {
-	return IsPrincipalEnvKey(key) || strings.HasPrefix(key, "JUGGLER_")
+	return IsPrincipalEnvKey(key) || IsMoxinIdentityEnvKey(key) || strings.HasPrefix(key, "JUGGLER_")
 }
 
 // Evaluator names how the run ledger is collapsed into a boolean verdict.

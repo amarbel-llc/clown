@@ -766,6 +766,73 @@ func TestSystemdRunArgvAndCommandLine(t *testing.T) {
 	}
 }
 
+func TestSpawnerMoxinPath(t *testing.T) {
+	if got := SpawnerMoxinPath("/a/moxins::rel/moxins:/b/../c", "/work"); got != "/a/moxins:/work/rel/moxins:/c" {
+		t.Errorf("resolved = %q", got)
+	}
+	if got := SpawnerMoxinPath("", "/work"); got != "" {
+		t.Errorf("unset must stay unset: %q", got)
+	}
+}
+
+// unitSetenvs is every --setenv=<key>=… argument of the last systemd-run
+// call whose key is key.
+func unitSetenvs(t *testing.T, h *harness, key string) []string {
+	t.Helper()
+	units := h.fakes.Calls(t, "systemd-run")
+	var out []string
+	for _, a := range units[len(units)-1].Argv {
+		if strings.HasPrefix(a, "--setenv="+key+"=") {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+func TestSpawnChild_PinsTheSpawnersMoxinPath(t *testing.T) {
+	h := newHarness(t)
+	pinPrincipals(h, testRoot, "child-1", "child-2")
+	newRun(t, h, "rec-42")
+	unitEnv := map[string]string{"MOXIN_PATH": "/smuggled", "MOXY_PARENT_MOXYFILE": "/fake", "XDG_STATE_HOME": "/state"}
+
+	rec, _, err := SpawnChild(context.Background(), h.deps, SpawnRequest{
+		Brief: templateBytes(), Task: []byte(testTask), RunKey: "rec-42", JugglerBin: "/bin/juggler",
+		UnitEnv: unitEnv, MoxinPath: "/spawner/moxins:/nix/store/x-pebble/share/moxy/moxins",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := unitSetenvs(t, h, "MOXIN_PATH"); len(got) != 1 || got[0] != "--setenv=MOXIN_PATH=/spawner/moxins:/nix/store/x-pebble/share/moxy/moxins" {
+		t.Errorf("unit MOXIN_PATH = %q", got)
+	}
+	if got := unitSetenvs(t, h, "MOXY_PARENT_MOXYFILE"); len(got) != 0 {
+		t.Errorf("no MOXY_* may reach the unit: %q", got)
+	}
+	if rec.MoxinPath != "/spawner/moxins:/nix/store/x-pebble/share/moxy/moxins" || rec.Launch().MoxinPath != rec.MoxinPath {
+		t.Errorf("record / launch = %+v / %+v", rec, rec.Launch())
+	}
+
+	// A spawner without MOXIN_PATH: the unit has none, whatever else offered one.
+	if _, _, err := SpawnChild(context.Background(), h.deps, SpawnRequest{
+		Brief: templateBytes(), Task: []byte("second"), RunKey: "rec-42", JugglerBin: "/bin/juggler", UnitEnv: unitEnv,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := unitSetenvs(t, h, "MOXIN_PATH"); len(got) != 0 {
+		t.Errorf("unset in the spawner must be unset in the unit: %q", got)
+	}
+
+	// And a brief that tries is refused before anything is minted.
+	calls := len(h.fakes.Calls(t, ""))
+	tmpl := strings.Replace(string(templateBytes()), "PEBBLE_TARGET_MODE", "MOXIN_PATH", 1)
+	if _, _, err := SpawnChild(context.Background(), h.deps, SpawnRequest{Brief: []byte(tmpl), Task: []byte("third"), RunKey: "rec-42", JugglerBin: "/bin/juggler"}); err == nil || !strings.Contains(err.Error(), "MOXIN_PATH") {
+		t.Errorf("a brief setting MOXIN_PATH: %v", err)
+	}
+	if n := len(h.fakes.Calls(t, "")); n != calls {
+		t.Errorf("a refused brief must create nothing: %d calls became %d", calls, n)
+	}
+}
+
 func TestIdentityEnvironOverridesTheNick(t *testing.T) {
 	t.Setenv("TROUPE_XMPP_NICK", "clown-session-nick")
 	env := IdentityFor("root-1", Credential{JID: "root-1@xmpp.test", PasswordFile: "/pw"}).environ()

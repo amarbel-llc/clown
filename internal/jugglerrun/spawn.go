@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -300,8 +301,30 @@ type SpawnRequest struct {
 	// DefaultStopGrace when zero.
 	StopGrace time.Duration
 	// UnitEnv is passed to the unit as-is (see PassthroughUnitEnv); identity
-	// variables in it are ignored.
+	// and moxin-identity variables in it are ignored.
 	UnitEnv map[string]string
+	// MoxinPath is the spawner's effective MOXIN_PATH (SpawnerMoxinPath):
+	// the unit's moxy discovers exactly these moxin dirs (plus moxy's own
+	// system dir). Empty leaves MOXIN_PATH unset in the unit.
+	MoxinPath string
+}
+
+// SpawnerMoxinPath is the MOXIN_PATH a unit inherits from its spawner: the
+// spawner's value (os.Getenv) with every entry made absolute against cwd and
+// empty entries dropped, so the child can never discover a moxin dir the
+// spawner could not (FDR 0019 §5). An unset or empty value stays "".
+func SpawnerMoxinPath(value, cwd string) string {
+	var dirs []string
+	for _, d := range filepath.SplitList(value) {
+		if d == "" {
+			continue
+		}
+		if !filepath.IsAbs(d) {
+			d = filepath.Join(cwd, d)
+		}
+		dirs = append(dirs, filepath.Clean(d))
+	}
+	return strings.Join(dirs, string(filepath.ListSeparator))
 }
 
 // LaunchResult is `juggler spawn --brief`'s stdout object without --wait.
@@ -309,11 +332,13 @@ type LaunchResult struct {
 	JID  string `json:"jid"`
 	Job  string `json:"job"`
 	Room string `json:"room"`
+	// MoxinPath is the MOXIN_PATH the unit got ("" = unset).
+	MoxinPath string `json:"moxin_path"`
 }
 
 // Launch is the launch JSON for rec.
 func (rec *ChildRecord) Launch() LaunchResult {
-	return LaunchResult{JID: rec.JID, Job: rec.Job, Room: rec.Room}
+	return LaunchResult{JID: rec.JID, Job: rec.Job, Room: rec.Room, MoxinPath: rec.MoxinPath}
 }
 
 // BriefDigest is the subagent idempotency key within a run: the SHA-256 of
@@ -435,6 +460,7 @@ func SpawnChild(ctx context.Context, deps LifecycleDeps, req SpawnRequest) (rec 
 		return nil, false, err
 	}
 	rec.WallClock = brief.Limits.WallClock
+	rec.MoxinPath = req.MoxinPath
 	wallClock, _ := brief.Limits.WallClockDuration()
 
 	var undo undoStack
@@ -525,6 +551,16 @@ func agentUnit(rec *ChildRecord, cred Credential, req SpawnRequest, briefEnv map
 		if !jugglerbrief.ReservedEnvKey(k) {
 			env[k] = v
 		}
+	}
+	// Moxin identity is the launcher's: the spawner's MOXIN_PATH or none,
+	// and no MOXY_* from anywhere (FDR 0019 §5).
+	for k := range env {
+		if jugglerbrief.IsMoxinIdentityEnvKey(k) {
+			delete(env, k)
+		}
+	}
+	if rec.MoxinPath != "" {
+		env["MOXIN_PATH"] = rec.MoxinPath
 	}
 	env[SessionIDEnv] = rec.Principal
 	env["TROUPE_XMPP_USER"] = cred.Localpart()

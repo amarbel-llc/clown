@@ -671,7 +671,10 @@ The unit's environment is exactly: the child's identity
 the brief's own
 .Ql [env]
 table
-.Pq keys CLOWN_SESSION_ID , TROUPE_XMPP_* , TROUPE_MINT_* No and JUGGLER_* are reserved and rejected ,
+.Pq keys CLOWN_SESSION_ID , TROUPE_XMPP_* , TROUPE_MINT_* , MOXIN_PATH , MOXY_* No and JUGGLER_* are reserved and rejected ,
+the spawner's own
+.Ev MOXIN_PATH
+.Pq entries made absolute; absent when the spawner has none ,
 .Ev JUGGLER_MOXY_URL
 when
 .Fl -moxy-url
@@ -708,8 +711,9 @@ cannot both read stdin.
 Block until the subagent's job terminalizes and print its verdict,
 exiting with its state; see below.
 Without it the launch object
-.Sy {"jid","job","room"}
-is printed immediately and the exit status is 0.
+.Sy {"jid","job","room","moxin_path"}
+is printed immediately and the exit status is 0
+.Pq Ql moxin_path No is the Ev MOXIN_PATH No the unit got, empty when unset .
 .It Fl -timeout Ar dur
 Bound for
 .Fl -wait
@@ -1127,6 +1131,21 @@ A unit gets its own, the child's.
 .It Ev JUGGLER_OPERATOR_JID
 The default of
 .Cm spawn Fl -new-run Fl -operator-jid .
+.It Ev MOXIN_PATH
+Read by
+.Cm spawn Fl -brief :
+the agent unit's moxy discovers exactly the spawner's moxin directories
+.Pq each entry made absolute against the spawner's working directory ,
+or, when the spawner's is unset, none set explicitly
+.Pq moxy's legacy hierarchy then applies .
+A brief cannot set it, nor any
+.Ev MOXY_*
+variable
+.Pq Ev MOXY_PARENT_MOXYFILE No included ,
+and no
+.Ev MOXY_*
+variable reaches a unit: moxin identity, and with it every tool's
+permission tier, is the launcher's, never the brief's.
 .It Ev TROUPE_MINT_PASSWORD_FILE , Ev TROUPE_MINT_USER
 The spawner's minter credential, read by troupe from the environment
 .Nm

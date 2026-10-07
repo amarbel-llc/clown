@@ -264,7 +264,7 @@ func TestCmdSpawn_RunKeyIdempotencyWaitAndResolve(t *testing.T) {
 		t.Fatal("idempotent spawn failed")
 	}
 	var launch map[string]string
-	if err := json.Unmarshal(out.Bytes(), &launch); err != nil || launch["job"] != waited.Job || len(launch) != 3 {
+	if err := json.Unmarshal(out.Bytes(), &launch); err != nil || launch["job"] != waited.Job || len(launch) != 4 {
 		t.Fatalf("launch stdout = %s", out.String())
 	}
 
