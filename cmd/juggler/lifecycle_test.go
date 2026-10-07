@@ -31,6 +31,7 @@ func lifecycleEnv(t *testing.T) *jugglerruntest.Fakes {
 	t.Setenv(jr.RingmasterBinEnv, f.Ringmaster)
 	t.Setenv(jr.TroupeBinEnv, f.Troupe)
 	t.Setenv(jr.SystemdRunBinEnv, f.SystemdRun)
+	t.Setenv(jr.MoxyBinEnv, f.Moxy)
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv(jr.SessionIDEnv, "")
 	t.Setenv(jr.MoxyURLEnv, "")
@@ -264,7 +265,7 @@ func TestCmdSpawn_RunKeyIdempotencyWaitAndResolve(t *testing.T) {
 		t.Fatal("idempotent spawn failed")
 	}
 	var launch map[string]string
-	if err := json.Unmarshal(out.Bytes(), &launch); err != nil || launch["job"] != waited.Job || len(launch) != 4 {
+	if err := json.Unmarshal(out.Bytes(), &launch); err != nil || launch["job"] != waited.Job || len(launch) != 5 || !strings.HasPrefix(launch["parent_moxyfile_digest"], "sha256:") {
 		t.Fatalf("launch stdout = %s", out.String())
 	}
 

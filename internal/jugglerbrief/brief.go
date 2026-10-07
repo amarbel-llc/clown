@@ -3,7 +3,8 @@
 // MUC as an agent's only instruction source.
 //
 // The package is schema-only. It does not interpret the inline moxyfile
-// (moxy's lane), does not run evaluators (internal/jugglereval) and does not
+// (moxy's lane) beyond reading its allow-tools key to check the tools
+// allowlist against it, does not run evaluators (internal/jugglereval) and does not
 // sign anything; Marshal is deterministic so a later signer can sign its bytes.
 package jugglerbrief
 
@@ -223,6 +224,9 @@ func (b *Brief) validate(template bool) error {
 		}
 		seen[t] = true
 	}
+	if err := checkToolsCoveredByAllowTools(b.Tools, b.Moxyfile); err != nil {
+		return err
+	}
 	for k := range b.Env {
 		if k == "" || strings.Contains(k, "=") {
 			return fmt.Errorf("jugglerbrief: env: invalid key %q", k)
@@ -252,6 +256,44 @@ func (b *Brief) validate(template bool) error {
 	}
 	if d <= 0 {
 		return fmt.Errorf("jugglerbrief: limits.wall_clock: must be positive, got %q", b.Limits.WallClock)
+	}
+	return nil
+}
+
+// checkToolsCoveredByAllowTools requires every entry of tools to be offered by
+// the moxyfile's top-level allow-tools, when the moxyfile sets that key (moxy
+// would otherwise never advertise it). An entry is a bare server/moxin name,
+// covering every "<name>_<tool>", or a dotted "<server>.<tool>", covering
+// exactly "<server>_<tool>" (juggler's {server}_{tool} name template). An
+// unset allow-tools leaves tools unchecked.
+func checkToolsCoveredByAllowTools(tools []string, moxyfile string) error {
+	if strings.TrimSpace(moxyfile) == "" {
+		return nil
+	}
+	var doc struct {
+		AllowTools *[]string `toml:"allow-tools"`
+	}
+	if _, err := toml.Decode(moxyfile, &doc); err != nil {
+		return fmt.Errorf("jugglerbrief: moxyfile: not valid TOML: %w", err)
+	}
+	if doc.AllowTools == nil {
+		return nil
+	}
+	for _, t := range tools {
+		covered := false
+		for _, a := range *doc.AllowTools {
+			if server, tool, dotted := strings.Cut(a, "."); dotted {
+				covered = t == server+"_"+tool
+			} else {
+				covered = t == a || strings.HasPrefix(t, a+"_")
+			}
+			if covered {
+				break
+			}
+		}
+		if !covered {
+			return fmt.Errorf("jugglerbrief: tools: %q is not covered by the moxyfile's allow-tools %q", t, *doc.AllowTools)
+		}
 	}
 	return nil
 }

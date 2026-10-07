@@ -139,8 +139,11 @@ channel, and it never parses the room):
   given `--stop-grace` (default 30s) to terminalize: exit 3 if it
   aborted in time, else 5 ("cancel requested, still running"), so a
   caller that falls back never races a late agent. Without `--wait`,
-  the launch JSON `{"jid","job","room","moxin_path"}` is printed
-  immediately (`moxin_path`: the `MOXIN_PATH` the unit got, §5).
+  the launch JSON `{"jid","job","room","moxin_path",
+  "parent_moxyfile_digest"}` is printed immediately (`moxin_path`: the
+  `MOXIN_PATH` the unit got; `parent_moxyfile_digest`: the sha256 of the
+  parent reference its moxy enforces, §5). A brief whose moxyfile widens
+  the spawner's is refused before anything is minted (exit 1, §5).
 - `juggler job-ledger <job>`: print a job's ledger (the result spool)
   for a run the caller did not wait on.
 - **Templates.** Brief authors ship a template without `principal`,
@@ -407,12 +410,41 @@ The brief's **inline moxyfile is the agent's toolset**. It MUST be a
 subset of the spawner's own effective moxyfile. That is FDR 0032 D13's
 "ambient rights a subset of the parent's" with a concrete artifact:
 
-- checked **launcher-side** by `juggler spawn` for a fast, legible
-  failure;
-- enforced **moxy-side**, authoritatively, as a narrowing-only step in
-  moxy's existing cascading merge (alongside `moxy validate`). How moxy
-  learns a principal's effective moxyfile is moxy's lane and is handed
-  to a moxy session at the operator's timing.
+- checked **launcher-side**, before anything is minted: `juggler spawn
+  --brief` renders the spawner's effective moxyfile (`moxy
+  show-effective-moxyfile --dir <spawner cwd>`, in the spawner's
+  environment with its pinned `MOXIN_PATH`) into the child's staging
+  directory as `<digest>.parent-moxyfile.toml` (0600) — the **parent
+  reference** — and runs `moxy narrows --parent <it> --child <the brief's
+  moxyfile>`. Exit 1 refuses the spawn with moxy's violation lines
+  verbatim and a run-ledger entry `{tool:"narrows", kind:"refusal",
+  ok:false, violations:[{key,subject,message}]}`; exit 2, a failed
+  render or a missing moxy binary fail the spawn too (a broken check
+  never passes). The child record carries the parent reference's path,
+  `parent_moxyfile_digest` (sha256, also in the launch output) and the
+  `moxy_bin` used;
+- enforced **moxy-side**, authoritatively: the unit gets
+  `MOXY_PARENT_MOXYFILE=<the parent reference>`, so the agent's `moxy
+  serve-http` refuses to start — and re-checks on reload — when its
+  effective configuration (the whole moxyfile hierarchy, not just the
+  brief's file) widens the reference.
+
+Caveats. Parent and child must be served by the **same moxy build**: the
+parent reference names the system moxin directory by store path. A
+**hand-written** parent reference has no `[resolved-moxins]`, and moxins
+are then not compared. By moxy's **shadowing rule**, a brief that omits a
+`[[servers]]` entry the spawner defines must list that name in
+`disable-moxins`, or the check reports it.
+
+**`tools` and `allow-tools`.** The brief's `tools` allowlist stays: it is
+what `juggler run` offers the model. The moxyfile's `allow-tools`
+(moxy's own allowlist: a bare name is a whole server or moxin, a dotted
+`server.tool` one tool; layers intersect; a parent that sets it forces
+the child to) is what the narrowing check covers. When a brief's
+moxyfile sets `allow-tools`, every `tools` entry must be covered by it
+(`<server>_<tool>` ↔ `server.tool` under the `{server}_{tool}` name
+template), checked at brief parse; when it does not, `tools` is
+unchecked against it.
 
 Headless posture: any moxy permission tier other than `always-allow`
 resolves to **deny** for a juggler agent; the agent sees the denial as a
@@ -444,9 +476,10 @@ only way an agent's toolset could widen past its spawner's is its moxy
 discovering different moxins. `juggler spawn` therefore sets the unit's
 `MOXIN_PATH` to the spawner's own value with every entry made absolute
 (against the spawner's working directory), or leaves it unset when the
-spawner's is unset; no `MOXY_*` variable reaches the unit. `MOXIN_PATH`,
-`MOXY_*` (`MOXY_PARENT_MOXYFILE`, which juggler will set itself once moxy
-checks a parent reference, among them) are reserved in a brief's `[env]`.
+spawner's is unset; no `MOXY_*` variable reaches the unit but the
+`MOXY_PARENT_MOXYFILE` juggler sets itself. `MOXIN_PATH`,
+`MOXY_*` (`MOXY_PARENT_MOXYFILE`, which juggler sets itself to the
+parent reference, among them) are reserved in a brief's `[env]`.
 The value the unit got is the child record's and the launch output's
 `moxin_path`. A spawner whose tools are moxins (circus's wrapper tools)
 must therefore carry their directory on its own `MOXIN_PATH`. With
@@ -460,8 +493,7 @@ same user's global moxins, not a brief's choice.
 added to a moxin later. The brief's REQUIRED `tools` allowlist, enforced
 by `juggler run` before the model sees any tool, is what makes "anything
 not explicitly allowed is denied" true for the first bullet; the
-moxy-side narrowing merge (above) remains the second, authoritative
-layer when it lands.
+moxy-side narrowing check (above) is the second, authoritative layer.
 
 ### 6. Lifecycle — ringmaster enforces, troupe authorises
 
@@ -840,6 +872,16 @@ The router, before any subagent exists:
   different run. The pending record drops the failed attempt's run job
   id: if failing that job during the undo itself fails, the job stays open
   and the resumed run opens a second one.
+- **Parent and child need the same moxy build.** The parent reference
+  names moxy's system moxin directory by store path, so the moxy `juggler
+  spawn` renders it with and the moxy the unit serves with must be the
+  same build; juggler resolves both from the same `--moxy` /
+  `JUGGLER_MOXY_BIN` / burned-in path, but a unit started on a host whose
+  moxy differs will refuse to serve (fails closed).
+- **A hand-written parent reference skips the moxin comparison.** Only
+  a rendered reference carries `[resolved-moxins]`; juggler always
+  renders one, but a reference written by hand (or by another launcher)
+  compares servers and keys only.
 - **"Already gone" is inferred from stderr.** troupe 4c52b3b exits 1 for
   a refused login, an unreachable server and a TLS or stream failure
   alike, and wraps every negotiation failure as `xmpp: negotiate: <err>`.
@@ -896,6 +938,7 @@ The router, before any subagent exists:
 | default step cap | 12 (loop-enforced) | circus FDR-0039's first-bullet figure; the agents make 2–4 tool calls, the cap is headroom | real briefs routinely hit it |
 | default wall clock | 2 min (loop primary, `RuntimeMaxSec` backstop) | circus FDR-0039's first-bullet figure; matches `juggler prompt`'s budget | agents time out while a tool is legitimately slow |
 | spend control | one dedicated OpenRouter key per spawner with a hard monthly credit limit (circus: ~$10 to start) | smallest thing that bounds blast radius | per-child budgets are wanted: the spawner mints a child key carrying a subset of its own budget (OpenRouter key minting), which is FDR 0032 D19's spend quota — an ambient, monotone, drop-only right inherited at spawn as a subset of the parent's, with the provider as the enforcement point — made concrete. Not D13's `cap`, which is the right to shorten a child's lifetime (D5). The key goes in the brief as a credential reference, not a secret |
+| brief `allow-tools` | not required; when set, it must cover every `tools` entry | `allow-tools` is moxy's own allowlist and what the narrowing check compares; generating it is a policy decision. Briefs SHOULD set it | a later slice may derive it from `tools` (e.g. once every brief sets it by hand anyway) |
 | early stop on evaluator pass | off by default (`evaluator.stop_on_pass = true` opts in per brief) | an agent that keeps calling tools after the work is done spends steps and may duplicate artifacts, but stopping early is a behaviour change a brief author should choose | most briefs set it (→ make it the default) |
 | evaluator kinds | `jq` only | smallest signed-contract surface | the same count-of-kind jq appears in most briefs (→ `predicate`) or a task needs judgement (→ `agent`) |
 | headless permission posture | non-`always-allow` → deny | no human to ask | a moxin's tier is `ask` only because nobody set it, and agents keep failing on it |

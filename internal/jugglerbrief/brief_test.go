@@ -97,6 +97,30 @@ func TestRoundTripDeterministic(t *testing.T) {
 	}
 }
 
+func TestToolsMustBeCoveredByAllowTools(t *testing.T) {
+	withAllow := func(allow string) string {
+		return strings.Replace(issueFilerBrief, "moxyfile  = '''\n", "moxyfile  = '''\nallow-tools = "+allow+"\n", 1)
+	}
+	for allow, ok := range map[string]bool{
+		`["smith"]`: true, // bare covers smith_*
+		`["smith.list_repos", "smith.create_issue"]`: true,
+		`["smith.list_repos"]`:                       false,
+		`["smit"]`:                                   false, // not a name prefix
+		`[]`:                                         false,
+	} {
+		_, err := Parse([]byte(withAllow(allow)))
+		if (err == nil) != ok {
+			t.Errorf("allow-tools %s: err = %v, want ok=%v", allow, err, ok)
+		}
+		if err != nil && !strings.Contains(err.Error(), "allow-tools") {
+			t.Errorf("allow-tools %s: error must name allow-tools: %v", allow, err)
+		}
+	}
+	if _, err := Parse([]byte(issueFilerBrief)); err != nil {
+		t.Errorf("an unset allow-tools leaves tools unchecked: %v", err)
+	}
+}
+
 func TestStopOnPassRoundTrips(t *testing.T) {
 	b, err := Parse([]byte(issueFilerBrief))
 	if err != nil {

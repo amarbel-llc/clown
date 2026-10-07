@@ -54,6 +54,7 @@
 .Op Fl -stop-grace Ar dur
 .Op Fl -moxy-url Ar url
 .Op Fl -juggler Ar path
+.Op Fl -moxy Ar path
 .Op Fl -user
 .Nm
 .Cm exit-wake Fl -job Ar id Fl -target Ar principal
@@ -607,7 +608,7 @@ A pending run takes no subagents, and
 refuses it before any model call.
 One that is never retried leaves the root and room for the retention
 sweep.
-.It Cm spawn Fl -brief Ar template Op Fl -task Ar file Op Fl -run-key Ar key Op Fl -wait Op Fl -timeout Ar dur Op Fl -stop-grace Ar dur Op Fl -moxy-url Ar url Op Fl -juggler Ar path Op Fl -user
+.It Cm spawn Fl -brief Ar template Op Fl -task Ar file Op Fl -run-key Ar key Op Fl -wait Op Fl -timeout Ar dur Op Fl -stop-grace Ar dur Op Fl -moxy-url Ar url Op Fl -juggler Ar path Op Fl -moxy Ar path Op Fl -user
 Launch one subagent into a run.
 .Ar template
 is a brief
@@ -639,6 +640,44 @@ else the one whose root principal is
 .Ev CLOWN_SESSION_ID
 .Pq the glue runs as the run root .
 A resolved run refuses new subagents.
+.Pp
+Before anything is minted the brief's moxyfile is checked against the
+spawner's.
+.Ql moxy show-effective-moxyfile Fl -dir Ar cwd ,
+run in the spawner's environment with its pinned
+.Ev MOXIN_PATH ,
+renders the spawner's effective moxyfile into the child's staging
+directory as the parent reference
+.Pq Pa <digest>.parent-moxyfile.toml , No mode 0600 ;
+then
+.Ql moxy narrows Fl -parent Ar reference Fl -child Ar brief-moxyfile
+decides.
+A widening brief is refused: exit 1, stderr
+.Ql juggler: spawn: brief moxyfile widens the spawner's:
+followed by moxy's violation lines verbatim, and a
+.Sy {"tool":"narrows","kind":"refusal","ok":false,"violations":[...]}
+entry in the run ledger.
+A check that cannot run
+.Pq moxy exits 2, the render fails, no moxy binary
+fails the spawn with moxy's own message; it never passes silently.
+The moxy binary is
+.Fl -moxy ,
+else
+.Ev JUGGLER_MOXY_BIN ,
+else the one burned in at build time, else
+.Ql moxy
+on
+.Ev PATH
+\(em the same resolution
+.Cm run
+uses, so parent and child are rendered and served by the same build.
+When the brief's moxyfile sets
+.Ql allow-tools ,
+every
+.Ql tools
+entry must be covered by it
+.Pq a bare name covers Ql <name>_* , No a dotted Ql server.tool No covers Ql server_tool ;
+otherwise the brief is rejected at parse.
 .Pp
 The child's principal and JID are minted; in a room the run created,
 the root then admits the JID
@@ -711,9 +750,9 @@ cannot both read stdin.
 Block until the subagent's job terminalizes and print its verdict,
 exiting with its state; see below.
 Without it the launch object
-.Sy {"jid","job","room","moxin_path"}
+.Sy {"jid","job","room","moxin_path","parent_moxyfile_digest"}
 is printed immediately and the exit status is 0
-.Pq Ql moxin_path No is the Ev MOXIN_PATH No the unit got, empty when unset .
+.Pq Ql moxin_path No is the Ev MOXIN_PATH No the unit got, empty when unset; Ql parent_moxyfile_digest No the sha256 of the parent reference the unit's moxy enforces .
 .It Fl -timeout Ar dur
 Bound for
 .Fl -wait
@@ -1131,6 +1170,15 @@ A unit gets its own, the child's.
 .It Ev JUGGLER_OPERATOR_JID
 The default of
 .Cm spawn Fl -new-run Fl -operator-jid .
+.It Ev MOXY_PARENT_MOXYFILE
+Set by
+.Cm spawn Fl -brief
+in the agent unit to the parent reference it rendered: the unit's
+.Ql moxy serve-http
+refuses to start, and to reload, when its effective configuration widens
+it.
+A brief cannot set it, and the spawner's own value never reaches the
+unit or the render.
 .It Ev MOXIN_PATH
 Read by
 .Cm spawn Fl -brief :
@@ -1144,7 +1192,9 @@ variable
 .Pq Ev MOXY_PARENT_MOXYFILE No included ,
 and no
 .Ev MOXY_*
-variable reaches a unit: moxin identity, and with it every tool's
+variable reaches a unit but the
+.Ev MOXY_PARENT_MOXYFILE
+juggler sets itself: moxin identity, and with it every tool's
 permission tier, is the launcher's, never the brief's.
 .It Ev TROUPE_MINT_PASSWORD_FILE , Ev TROUPE_MINT_USER
 The spawner's minter credential, read by troupe from the environment

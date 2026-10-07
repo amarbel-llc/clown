@@ -1,5 +1,6 @@
-// Package jugglerruntest provides stateful fakes of the ringmaster, troupe
-// and systemd-run binaries for tests of internal/jugglerrun and cmd/juggler.
+// Package jugglerruntest provides stateful fakes of the ringmaster, troupe,
+// systemd-run and moxy (its narrowing CLI only, see fakeMoxyCLI) binaries for
+// tests of internal/jugglerrun and cmd/juggler.
 //
 // Each fake is a /bin/sh wrapper that re-execs the running test binary with
 // JUGGLERRUNTEST_FAKE=<tool>; a test package opts in by calling
@@ -52,6 +53,7 @@ type Fakes struct {
 	Ringmaster string
 	Troupe     string
 	SystemdRun string
+	Moxy       string
 }
 
 // Install writes the three wrappers into a fresh temp dir.
@@ -63,7 +65,7 @@ func Install(t testing.TB) *Fakes {
 		t.Fatal(err)
 	}
 	f := &Fakes{Dir: dir}
-	for tool, dst := range map[string]*string{"ringmaster": &f.Ringmaster, "troupe": &f.Troupe, "systemd-run": &f.SystemdRun} {
+	for tool, dst := range map[string]*string{"ringmaster": &f.Ringmaster, "troupe": &f.Troupe, "systemd-run": &f.SystemdRun, "moxy": &f.Moxy} {
 		path := filepath.Join(dir, "bin", tool)
 		script := fmt.Sprintf("#!/bin/sh\n%s=%s %s=%s exec %s \"$@\"\n", toolEnv, shQuote(tool), dirEnv, shQuote(dir), shQuote(self))
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -333,7 +335,11 @@ func parseFlags(args []string, boolean ...string) map[string]string {
 
 func runFake(tool, dir string, args []string) int {
 	env := map[string]string{}
-	for _, k := range []string{"CLOWN_SESSION_ID", "TROUPE_XMPP_USER", "TROUPE_XMPP_PASSWORD_FILE", "TROUPE_XMPP_DOMAIN"} {
+	keys := []string{"CLOWN_SESSION_ID", "TROUPE_XMPP_USER", "TROUPE_XMPP_PASSWORD_FILE", "TROUPE_XMPP_DOMAIN"}
+	if tool == "moxy" {
+		keys = append(keys, "MOXIN_PATH", "MOXY_PARENT_MOXYFILE")
+	}
+	for _, k := range keys {
 		if v, ok := os.LookupEnv(k); ok {
 			env[k] = v
 		}
@@ -354,6 +360,8 @@ func runFake(tool, dir string, args []string) int {
 		return fakeTroupe(dir, args)
 	case "systemd-run":
 		return 0
+	case "moxy":
+		return fakeMoxyCLI(dir, args)
 	}
 	fmt.Fprintf(os.Stderr, "unknown fake %q\n", tool)
 	return 2
@@ -563,6 +571,69 @@ func fakeTroupe(dir string, args []string) int {
 		return 0
 	}
 	fmt.Fprintf(os.Stderr, "fake troupe: unknown verb %q\n", args[0])
+	return 2
+}
+
+// FakeEffectiveMoxyfile is what the moxy fake's show-effective-moxyfile
+// prints, whatever the directory: a fixed, deterministic canonical doc.
+const FakeEffectiveMoxyfile = "# moxy show-effective-moxyfile (fake)\n[[servers]]\nname = \"ring\"\n\n[resolved-moxins]\nring = \"/nix/store/fake-ring/share/moxy/moxins/ring\"\n"
+
+// FakeNarrowsViolations are the two violations the moxy fake's narrows
+// reports under the fail/moxy-narrows-widen knob.
+var FakeNarrowsViolations = []string{
+	"allow-tools: the parent sets allow-tools; the child must set it too",
+	"servers.shell: not in the parent",
+}
+
+// fakeMoxyCLI is moxy's narrowing CLI (moxy 0c17cea): show-effective-moxyfile
+// prints FakeEffectiveMoxyfile; narrows exits 0 unless a knob says
+// otherwise — fail/moxy-narrows-widen exits 1 with FakeNarrowsViolations
+// (lines, or the --json form), fail/moxy-narrows-broken exits 2 with a
+// reason on stderr. Both verbs check their path arguments exist.
+func fakeMoxyCLI(dir string, args []string) int {
+	if len(args) == 0 {
+		return 2
+	}
+	fl := parseFlags(args[1:], "json")
+	switch args[0] {
+	case "show-effective-moxyfile":
+		if fl["dir"] == "" {
+			fmt.Fprintln(os.Stderr, "moxy show-effective-moxyfile: --dir is required")
+			return 2
+		}
+		fmt.Print(FakeEffectiveMoxyfile)
+		return 0
+	case "narrows":
+		for _, p := range []string{fl["parent"], fl["child"]} {
+			if _, err := os.Stat(p); err != nil {
+				fmt.Fprintf(os.Stderr, "moxy narrows: %v\n", err)
+				return 2
+			}
+		}
+		switch {
+		case failKnob(dir, "moxy-narrows-broken"):
+			fmt.Fprintln(os.Stderr, "moxy narrows: child: parsing moxyfile: toml: line 3: expected '='")
+			return 2
+		case failKnob(dir, "moxy-narrows-widen"):
+			if fl["json"] == "true" {
+				var vs []map[string]string
+				for _, l := range FakeNarrowsViolations {
+					k, m, _ := strings.Cut(l, ": ")
+					vs = append(vs, map[string]string{"key": k, "subject": k, "message": m})
+				}
+				b, _ := json.Marshal(map[string]any{"narrows": false, "violations": vs})
+				fmt.Println(string(b))
+			} else {
+				fmt.Println(strings.Join(FakeNarrowsViolations, "\n"))
+			}
+			return 1
+		}
+		if fl["json"] == "true" {
+			fmt.Println(`{"narrows":true,"violations":[]}`)
+		}
+		return 0
+	}
+	fmt.Fprintf(os.Stderr, "fake moxy: unknown verb %q\n", args[0])
 	return 2
 }
 

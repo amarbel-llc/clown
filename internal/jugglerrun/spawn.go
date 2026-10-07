@@ -307,6 +307,9 @@ type SpawnRequest struct {
 	// the unit's moxy discovers exactly these moxin dirs (plus moxy's own
 	// system dir). Empty leaves MOXIN_PATH unset in the unit.
 	MoxinPath string
+	// SpawnerDir is the directory whose effective moxyfile is the parent
+	// reference (the spawner's working directory); empty is os.Getwd().
+	SpawnerDir string
 }
 
 // SpawnerMoxinPath is the MOXIN_PATH a unit inherits from its spawner: the
@@ -334,11 +337,14 @@ type LaunchResult struct {
 	Room string `json:"room"`
 	// MoxinPath is the MOXIN_PATH the unit got ("" = unset).
 	MoxinPath string `json:"moxin_path"`
+	// ParentMoxyfileDigest is the sha256 of the parent reference the unit's
+	// moxy enforces (MOXY_PARENT_MOXYFILE).
+	ParentMoxyfileDigest string `json:"parent_moxyfile_digest"`
 }
 
 // Launch is the launch JSON for rec.
 func (rec *ChildRecord) Launch() LaunchResult {
-	return LaunchResult{JID: rec.JID, Job: rec.Job, Room: rec.Room, MoxinPath: rec.MoxinPath}
+	return LaunchResult{JID: rec.JID, Job: rec.Job, Room: rec.Room, MoxinPath: rec.MoxinPath, ParentMoxyfileDigest: rec.ParentMoxyfileDigest}
 }
 
 // BriefDigest is the subagent idempotency key within a run: the SHA-256 of
@@ -464,6 +470,16 @@ func SpawnChild(ctx context.Context, deps LifecycleDeps, req SpawnRequest) (rec 
 	wallClock, _ := brief.Limits.WallClockDuration()
 
 	var undo undoStack
+	if err := checkBriefNarrows(ctx, deps, req, rec, brief.Moxyfile, &undo); err != nil {
+		var widens *ErrBriefWidens
+		if errors.As(err, &widens) {
+			if lerr := appendRunLedgerLocked(deps.Store, run.RunKey, NarrowsRefusalEntry(widens.result)); lerr != nil {
+				err = fmt.Errorf("%w (recording the refusal also failed: %v)", err, lerr)
+			}
+		}
+		return nil, false, undo.unwind(err)
+	}
+
 	childPW, err := deps.Store.CredentialPath(run.RunKey, rec.Principal)
 	if err != nil {
 		return nil, false, fmt.Errorf("preparing the agent's credential file: %w", err)
@@ -534,6 +550,61 @@ func SpawnChild(ctx context.Context, deps LifecycleDeps, req SpawnRequest) (rec 
 	return rec, false, nil
 }
 
+// checkBriefNarrows is the launcher-side half of the narrowing check (FDR
+// 0019 §5), before anything is minted: it renders the spawner's effective
+// moxyfile (`moxy show-effective-moxyfile --dir <spawner dir>`, in the
+// spawner's environment with its pinned MOXIN_PATH) into the child's staging
+// directory as the parent reference, stages the brief's moxyfile beside it,
+// and runs `moxy narrows` over the two. A widening brief is *ErrBriefWidens;
+// an unrunnable check (no moxy, exit 2, a failed render) is an error too: a
+// broken check never passes. The staged files are undone on any failure.
+func checkBriefNarrows(ctx context.Context, deps LifecycleDeps, req SpawnRequest, rec *ChildRecord, moxyfile string, undo *undoStack) error {
+	rec.MoxyBin = deps.MoxyCLI.Path()
+	dir := req.SpawnerDir
+	if dir == "" {
+		wd, err := os.Getwd()
+		if err != nil {
+			return fmt.Errorf("resolving the spawner's directory: %w", err)
+		}
+		dir = wd
+	}
+	env := moxyEnv(req.MoxinPath)
+	parent, err := deps.MoxyCLI.ShowEffectiveMoxyfile(ctx, env, dir)
+	if err != nil {
+		return err
+	}
+	rec.ParentMoxyfile = deps.Store.stagedParentMoxyfilePath(rec.RunKey, rec.BriefDigest)
+	rec.ParentMoxyfileDigest = sha256Digest(parent)
+	child := deps.Store.stagedChildMoxyfilePath(rec.RunKey, rec.BriefDigest)
+	for path, data := range map[string][]byte{rec.ParentMoxyfile: parent, child: []byte(moxyfile)} {
+		if err := writeFileAtomic(path, data); err != nil {
+			return fmt.Errorf("staging %s: %w", path, err)
+		}
+	}
+	undo.push(func(context.Context, error) error {
+		return errors.Join(removeIfExists(rec.ParentMoxyfile), removeIfExists(child))
+	})
+	res, err := deps.MoxyCLI.Narrows(ctx, env, rec.ParentMoxyfile, child)
+	if err != nil {
+		return err
+	}
+	if res.Widens {
+		return &ErrBriefWidens{Lines: res.Lines, result: res}
+	}
+	return nil
+}
+
+// appendRunLedgerLocked appends e to run runKey's ledger; the caller holds
+// the run lock and has checked the run is open.
+func appendRunLedgerLocked(store Store, runKey string, e RunLedgerEntry) error {
+	l, err := store.loadRunLedger(runKey)
+	if err != nil {
+		return err
+	}
+	l.Calls = append(l.Calls, e)
+	return writeJSONAtomic(store.RunLedgerPath(runKey), l)
+}
+
 // agentUnit is the child's transient unit. Its environment is exactly the
 // child's identity (CLOWN_SESSION_ID and the minted TROUPE_XMPP_USER /
 // PASSWORD_FILE / DOMAIN), the moxy upstream, and the passthrough variables;
@@ -561,6 +632,10 @@ func agentUnit(rec *ChildRecord, cred Credential, req SpawnRequest, briefEnv map
 	}
 	if rec.MoxinPath != "" {
 		env["MOXIN_PATH"] = rec.MoxinPath
+	}
+	// moxy refuses to serve (and to reload) a config that widens this.
+	if rec.ParentMoxyfile != "" {
+		env["MOXY_PARENT_MOXYFILE"] = rec.ParentMoxyfile
 	}
 	env[SessionIDEnv] = rec.Principal
 	env["TROUPE_XMPP_USER"] = cred.Localpart()

@@ -61,6 +61,17 @@ func (s Store) stagedBriefPath(key, digest string) string {
 }
 func (s Store) wakeMarkerPath(job string) string { return filepath.Join(s.Root, "exit-wakes", job) }
 
+// stagedParentMoxyfilePath is a child's parent reference (the spawner's
+// effective moxyfile); stagedChildMoxyfilePath the brief's moxyfile as
+// `moxy narrows` checks it.
+func (s Store) stagedParentMoxyfilePath(key, digest string) string {
+	return filepath.Join(s.childrenDir(key), digestFileName(digest)+".parent-moxyfile.toml")
+}
+
+func (s Store) stagedChildMoxyfilePath(key, digest string) string {
+	return filepath.Join(s.childrenDir(key), digestFileName(digest)+".moxyfile.toml")
+}
+
 // canaryMarkerPath records that `juggler resolve` posted the run's canary
 // line (the stanza id), so a retried resolve never posts it twice.
 func (s Store) canaryMarkerPath(key string) string {
@@ -188,9 +199,16 @@ type ChildRecord struct {
 	Unit          string `json:"unit"`
 	WallClock     string `json:"wall_clock"`
 	// MoxinPath is the MOXIN_PATH the unit got from its spawner ("" = unset).
-	MoxinPath string    `json:"moxin_path"`
-	Holders   []Holder  `json:"holders"`
-	CreatedAt time.Time `json:"created_at"`
+	MoxinPath string `json:"moxin_path"`
+	// ParentMoxyfile is the spawner's rendered effective moxyfile the brief
+	// was checked against and the unit's moxy enforces
+	// (MOXY_PARENT_MOXYFILE); ParentMoxyfileDigest its sha256; MoxyBin the
+	// moxy binary that rendered and checked it.
+	ParentMoxyfile       string    `json:"parent_moxyfile"`
+	ParentMoxyfileDigest string    `json:"parent_moxyfile_digest"`
+	MoxyBin              string    `json:"moxy_bin"`
+	Holders              []Holder  `json:"holders"`
+	CreatedAt            time.Time `json:"created_at"`
 }
 
 func (s Store) LoadRun(key string) (*RunRecord, error) {

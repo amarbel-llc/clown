@@ -63,8 +63,11 @@ type LifecycleDeps struct {
 	// Rooms defaults to ExecRoomProvisioner on the Troupe binary when Troupe
 	// is an ExecTroupe.
 	Rooms RoomProvisioner
-	Store Store
-	Now   func() time.Time
+	// MoxyCLI checks a brief's moxyfile against the spawner's before a spawn
+	// (FDR 0019 §5); unset, every spawn fails rather than skip the check.
+	MoxyCLI MoxyCLI
+	Store   Store
+	Now     func() time.Time
 	// NewPrincipal (children, fresh run keys) defaults to NewPrincipal.
 	NewPrincipal func() string
 	// NewRootPrincipal (a run root, from its run key) defaults to
@@ -81,6 +84,9 @@ func (d LifecycleDeps) withDefaults() LifecycleDeps {
 	}
 	if d.NewRootPrincipal == nil {
 		d.NewRootPrincipal = NewRootPrincipal
+	}
+	if d.MoxyCLI == nil {
+		d.MoxyCLI = missingMoxyCLI{}
 	}
 	if d.Rooms == nil {
 		if t, ok := d.Troupe.(ExecTroupe); ok {

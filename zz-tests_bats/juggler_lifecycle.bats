@@ -34,7 +34,7 @@ setup_file() {
 
   # One tiny wrapper per platform binary name.
   local tool
-  for tool in ringmaster troupe systemd-run; do
+  for tool in ringmaster troupe systemd-run moxy; do
     printf '#!%s\nJUGGLERRUNTEST_FAKE=%s JUGGLERRUNTEST_DIR=%s exec %s "$@"\n' \
       "$BASH" "$tool" "$FAKE_DIR" "$FAKE_PLATFORM_BIN" >"$FAKE_BIN/$tool"
     chmod +x "$FAKE_BIN/$tool"
@@ -42,6 +42,8 @@ setup_file() {
   export JUGGLER_RINGMASTER_BIN="$FAKE_BIN/ringmaster"
   export JUGGLER_TROUPE_BIN="$FAKE_BIN/troupe"
   export JUGGLER_SYSTEMD_RUN_BIN="$FAKE_BIN/systemd-run"
+  # spawn --brief's narrowing check (show-effective-moxyfile + narrows).
+  export JUGGLER_MOXY_BIN="$FAKE_BIN/moxy"
 
   # juggler's lifecycle state and models file live in the scratch dir, never
   # in the real ~/.local/state or ~/.local/share.
@@ -690,7 +692,8 @@ abort_on_cancel() {
   fake_calls '[.[] | select(.tool == "systemd-run")][-1].argv' >"$BATS_TEST_TMPDIR/argv.json"
   jq -e --arg want "--setenv=MOXIN_PATH=$want" '
     ([.[] | select(startswith("--setenv=MOXIN_PATH="))] == [$want])
-    and ([.[] | select(startswith("--setenv=MOXY_"))] | length) == 0
+    and ([.[] | select(startswith("--setenv=MOXY_") and (startswith("--setenv=MOXY_PARENT_MOXYFILE=") | not))] | length) == 0
+    and ([.[] | select(startswith("--setenv=MOXY_PARENT_MOXYFILE="))] | length == 1 and (.[0] | endswith(".parent-moxyfile.toml")))
   ' "$BATS_TEST_TMPDIR/argv.json" >/dev/null
 
   # A spawner without MOXIN_PATH: the unit gets none.
@@ -699,6 +702,37 @@ abort_on_cancel() {
   expect_status 0
   [[ $(jq -r .moxin_path <<<"$output") == "" ]]
   fake_calls '[.[] | select(.tool == "systemd-run")][-1].argv | map(select(startswith("--setenv=MOXIN_PATH="))) | length == 0' | grep -qx true
+}
+
+@test "spawn --brief checks the brief's moxyfile against the spawner's and hands the unit the parent reference" {
+  local root
+  root=$(stored_run rk2 .root_principal)
+  launch_child "$root" "narrowing task"
+  local digest parent
+  digest=$(field .parent_moxyfile_digest)
+  parent=$(fake_calls '[[.[] | select(.tool == "systemd-run")][-1].argv[] | select(startswith("--setenv=MOXY_PARENT_MOXYFILE=")) | ltrimstr("--setenv=MOXY_PARENT_MOXYFILE=")][0]' | jq -r .)
+  [[ -f $parent ]]
+  [[ $digest == "sha256:$(sha256sum "$parent" | cut -d' ' -f1)" ]]
+  fake_calls '[.[] | select(.tool == "moxy")][-2:] | map(.argv[0]) == ["show-effective-moxyfile", "narrows"]' | grep -qx true
+}
+
+@test "spawn --brief refuses a widening brief before minting, with moxy's violation lines" {
+  local root run_job mints_before
+  root=$(stored_run rk2 .root_principal)
+  run_job=$(stored_run rk2 .run_job)
+  mints_before=$(fake_calls '[.[] | select(.tool == "troupe" and .argv[0] == "mint")] | length')
+  mkdir -p "$FAKE_DIR/fail"
+  : >"$FAKE_DIR/fail/moxy-narrows-widen"
+  run_jug_as "$root" spawn --brief "$BATS_FILE_TMPDIR/issue-filer.toml" --task - <<<"widening task"
+  rm -f "$FAKE_DIR/fail/moxy-narrows-widen"
+  expect_status 1
+  [[ $stderr == "juggler: spawn: brief moxyfile widens the spawner's:
+allow-tools: the parent sets allow-tools; the child must set it too
+servers.shell: not in the parent" ]]
+  [[ $(fake_calls '[.[] | select(.tool == "troupe" and .argv[0] == "mint")] | length') -eq $mints_before ]]
+  run_jug job-ledger "$run_job"
+  expect_json '([.calls[] | select(.tool == "narrows" and .kind == "refusal" and .ok == false)] | length == 1)
+    and ([.calls[] | select(.tool == "narrows")][0].violations | map(.key)) == ["allow-tools", "servers.shell"]'
 }
 
 # --- room provisioning and teardown ----------------------------------------

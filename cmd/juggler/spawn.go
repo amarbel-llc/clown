@@ -58,6 +58,7 @@ func parseSpawnFlags(args []string, stderr io.Writer) (spawnOpts, error) {
 	fs.StringVar(&o.moxyURL, "moxy-url", "", "the agent's moxy upstream (default $"+jr.MoxyURLEnv+")")
 	fs.StringVar(&o.juggler, "juggler", "", "juggler binary the unit runs (default: this executable)")
 	fs.DurationVar(&o.stopGrace, "stop-grace", jr.DefaultStopGrace, "added to the wall clock for RuntimeMaxSec")
+	fs.StringVar(&o.bins.moxy, "moxy", "", "--brief: the moxy binary the moxyfile narrowing check runs (default $"+jr.MoxyBinEnv+", then the build's moxy, then moxy on PATH)")
 	fs.BoolVar(&o.bins.userManager, "user", false, "start the unit under the user service manager (systemd-run --user)")
 	o.bins.register(fs, true)
 	if err := fs.Parse(args); err != nil {
@@ -165,6 +166,7 @@ func spawnBrief(ctx context.Context, deps jr.LifecycleDeps, o spawnOpts, stdin i
 		StopGrace:    o.stopGrace,
 		UnitEnv:      jr.PassthroughUnitEnv(os.Environ()),
 		MoxinPath:    jr.SpawnerMoxinPath(os.Getenv("MOXIN_PATH"), cwd),
+		SpawnerDir:   cwd,
 	})
 	if err != nil {
 		return fail(stderr, "spawn", err)

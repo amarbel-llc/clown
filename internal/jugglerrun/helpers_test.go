@@ -73,6 +73,7 @@ func newHarness(t *testing.T) *harness {
 		Ringmaster: ExecRingmaster{Bin: f.Ringmaster},
 		Troupe:     ExecTroupe{Bin: f.Troupe},
 		Units:      ExecSystemdRun{Bin: f.SystemdRun},
+		MoxyCLI:    ExecMoxyCLI{Bin: f.Moxy},
 		Store:      Store{Root: t.TempDir()},
 	}}
 }

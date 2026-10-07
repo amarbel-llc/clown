@@ -62,6 +62,10 @@ type RunLedgerEntry struct {
 	Principal        string `json:"principal,omitempty"`
 	StoppedByResolve bool   `json:"stopped_by_resolve,omitempty"`
 
+	// Narrows-refusal field (`juggler spawn --brief` refused a brief whose
+	// moxyfile widens the spawner's): `moxy narrows --json`'s violations.
+	Violations []NarrowsViolation `json:"violations,omitempty"`
+
 	// Teardown-entry field: the account's JID (Principal above names its
 	// key).
 	JID string `json:"jid,omitempty"`

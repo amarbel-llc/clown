@@ -24,7 +24,9 @@ const runUsage = "usage: juggler run --brief <file|-> [--job <id>] [--brief-stan
 // userManager selects `systemd-run --user` (spawn's --user).
 type platformBins struct {
 	ringmaster, troupe, systemdRun string
-	userManager                    bool
+	// moxy is spawn's --moxy: the binary its narrowing check runs.
+	moxy        string
+	userManager bool
 }
 
 func (p *platformBins) register(fs *flag.FlagSet, withSystemdRun bool) {
@@ -68,6 +70,7 @@ func (p platformBins) lifecycleDeps() (jr.LifecycleDeps, error) {
 		Troupe:     troupe,
 		Rooms:      jr.ExecRoomProvisioner(troupe),
 		Units:      jr.ExecSystemdRun{Bin: resolveBin(p.systemdRun, jr.SystemdRunBinEnv, SystemdRunPath, "systemd-run"), UserManager: p.userManager},
+		MoxyCLI:    jr.ExecMoxyCLI{Bin: resolveBin(p.moxy, jr.MoxyBinEnv, MoxyPath, "moxy")},
 		Store:      store,
 	}, nil
 }

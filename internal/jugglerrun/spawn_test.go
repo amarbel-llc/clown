@@ -805,8 +805,8 @@ func TestSpawnChild_PinsTheSpawnersMoxinPath(t *testing.T) {
 	if got := unitSetenvs(t, h, "MOXIN_PATH"); len(got) != 1 || got[0] != "--setenv=MOXIN_PATH=/spawner/moxins:/nix/store/x-pebble/share/moxy/moxins" {
 		t.Errorf("unit MOXIN_PATH = %q", got)
 	}
-	if got := unitSetenvs(t, h, "MOXY_PARENT_MOXYFILE"); len(got) != 0 {
-		t.Errorf("no MOXY_* may reach the unit: %q", got)
+	if got := unitSetenvs(t, h, "MOXY_PARENT_MOXYFILE"); len(got) != 1 || got[0] != "--setenv=MOXY_PARENT_MOXYFILE="+rec.ParentMoxyfile {
+		t.Errorf("only juggler's own parent reference may reach the unit: %q", got)
 	}
 	if rec.MoxinPath != "/spawner/moxins:/nix/store/x-pebble/share/moxy/moxins" || rec.Launch().MoxinPath != rec.MoxinPath {
 		t.Errorf("record / launch = %+v / %+v", rec, rec.Launch())
