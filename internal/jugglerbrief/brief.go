@@ -61,7 +61,8 @@ type Brief struct {
 	// Env is passed into the agent's transient unit (and so to moxy and its
 	// moxins, which moxyfile(5) cannot configure). Keys spawn owns —
 	// CLOWN_SESSION_ID, TROUPE_XMPP_*, TROUPE_MINT_*, MOXIN_PATH, MOXY_* and
-	// JUGGLER_* — are rejected.
+	// JUGGLER_* — and the LauncherOwnedEnv table are rejected; `juggler
+	// spawn` also refuses a key the launcher already sets in the unit.
 	Env map[string]string `toml:"env,omitempty"`
 
 	Evaluator Evaluator `toml:"evaluator"`
@@ -90,10 +91,64 @@ func IsMoxinIdentityEnvKey(key string) bool {
 	return key == "MOXIN_PATH" || strings.HasPrefix(key, "MOXY_")
 }
 
+// LauncherOwnedEnv is the table of environment keys the launcher owns
+// outright (FDR 0019 §3, §5). moxy's narrowing relation accepts a child
+// server command that is a bare PATH name or a ~/- or $VAR-anchored path
+// because the launcher controls the environment those resolve in; a brief
+// that could set any of these would decide which binary actually runs, or
+// inject code or credentials into it. A Pattern ending in "*" is a prefix.
+var LauncherOwnedEnv = []struct{ Pattern, Why string }{
+	{"PATH", "resolves bare-name server commands"},
+	{"HOME", "anchors ~/ paths and moxy's moxyfile hierarchy"},
+	{"PWD", "anchors relative paths"},
+	{"OLDPWD", "anchors relative paths"},
+	{"SHELL", "selects the interpreter tools shell out to"},
+	{"USER", "names the account tools act as"},
+	{"LOGNAME", "names the account tools act as"},
+	{"TMPDIR", "places temporary files tools create"},
+	{"TMP", "places temporary files tools create"},
+	{"TEMP", "places temporary files tools create"},
+	{"XDG_*", "anchors config, data, state and runtime paths"},
+	{"NIX_*", "reconfigures nix (substituters, paths, profiles)"},
+	{"LD_*", "injects code into every dynamically linked process"},
+	{"DYLD_*", "injects code into every dynamically linked process"},
+	{"SSH_*", "carries SSH credentials (SSH_AUTH_SOCK) and options"},
+	{"GIT_*", "redirects git's repository, config and commands"},
+}
+
+// LauncherOwnedEnvReason returns why key is launcher-owned, and whether it
+// is (see LauncherOwnedEnv).
+func LauncherOwnedEnvReason(key string) (string, bool) {
+	for _, e := range LauncherOwnedEnv {
+		if prefix, isPrefix := strings.CutSuffix(e.Pattern, "*"); isPrefix {
+			if strings.HasPrefix(key, prefix) {
+				return e.Why, true
+			}
+		} else if key == e.Pattern {
+			return e.Why, true
+		}
+	}
+	return "", false
+}
+
+// IsLauncherOwnedEnvKey reports whether key matches LauncherOwnedEnv.
+func IsLauncherOwnedEnvKey(key string) bool {
+	_, owned := LauncherOwnedEnvReason(key)
+	return owned
+}
+
 // ReservedEnvKey reports whether an [env] key is one `juggler spawn` sets
-// itself and a brief therefore may not.
+// itself, or the launcher owns, and a brief therefore may not.
 func ReservedEnvKey(key string) bool {
-	return IsPrincipalEnvKey(key) || IsMoxinIdentityEnvKey(key) || strings.HasPrefix(key, "JUGGLER_")
+	return IsPrincipalEnvKey(key) || IsMoxinIdentityEnvKey(key) || strings.HasPrefix(key, "JUGGLER_") || IsLauncherOwnedEnvKey(key)
+}
+
+// reservedEnvKeyError explains why key may not appear in a brief's [env].
+func reservedEnvKeyError(key string) error {
+	if why, owned := LauncherOwnedEnvReason(key); owned {
+		return fmt.Errorf("jugglerbrief: env: %q is launcher-owned and may not appear in a brief: it %s, so the launcher's value is the one moxy and its tool servers see (FDR 0019 §3)", key, why)
+	}
+	return fmt.Errorf("jugglerbrief: env: %q is set by juggler spawn and may not appear in a brief", key)
 }
 
 // Evaluator names how the run ledger is collapsed into a boolean verdict.
@@ -232,7 +287,7 @@ func (b *Brief) validate(template bool) error {
 			return fmt.Errorf("jugglerbrief: env: invalid key %q", k)
 		}
 		if ReservedEnvKey(k) {
-			return fmt.Errorf("jugglerbrief: env: %q is set by juggler spawn and may not appear in a brief", k)
+			return reservedEnvKeyError(k)
 		}
 	}
 	switch b.Evaluator.Kind {

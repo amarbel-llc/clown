@@ -138,11 +138,40 @@ func StripPrincipalEnv(env []string) []string {
 	return out
 }
 
+// MoxyLaunchEnv is the environment `juggler run` hands its moxy: environ
+// minus the principal (StripPrincipalEnv) and minus every key the brief's
+// [env] names that jugglerbrief reserves (launcher-owned PATH, HOME, XDG_*,
+// NIX_*, ... among them). jugglerbrief already refuses such a brief; this is
+// the backstop that keeps a brief-supplied value out of moxy's ~/ and $VAR
+// expansion and PATH lookup even if that check is ever relaxed. It fails
+// closed: the key is dropped, not restored to a launcher value.
+func MoxyLaunchEnv(environ []string, briefEnv map[string]string) []string {
+	out := make([]string, 0, len(environ))
+	for _, kv := range StripPrincipalEnv(environ) {
+		k, _, _ := strings.Cut(kv, "=")
+		if _, named := briefEnv[k]; named && jugglerbrief.ReservedEnvKey(k) {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
+}
+
 // UnitPassthroughEnvVars are the spawner's environment variables a transient
 // agent unit inherits via --setenv. They locate shared state (the ringmaster
 // journal, the models file) and the XMPP server, never an identity: the
 // unit's identity is the child's, set explicitly by SpawnChild.
+//
+// PATH and HOME are passed explicitly: systemd-run --setenv adds to the
+// service manager's own environment, whose PATH is the manager's (a
+// compile-time default, or whatever environment.d / import-environment put
+// there) and not the spawner's, and whose HOME is only set for user-manager
+// units. moxy resolves bare-name and ~/-anchored server commands against
+// these, and its narrowing check (FDR 0019 §5) assumes the child resolves
+// them exactly as the spawner does.
 var UnitPassthroughEnvVars = []string{
+	"PATH",
+	"HOME",
 	"XDG_STATE_HOME",
 	"XDG_RUNTIME_DIR",
 	"JUGGLER_MODELS_PATH",

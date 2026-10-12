@@ -833,6 +833,68 @@ func TestSpawnChild_PinsTheSpawnersMoxinPath(t *testing.T) {
 	}
 }
 
+func TestSpawnChild_UnitResolvesLikeTheSpawner(t *testing.T) {
+	h := newHarness(t)
+	pinPrincipals(h, testRoot, "child-1")
+	newRun(t, h, "rec-42")
+	if _, _, err := SpawnChild(context.Background(), h.deps, SpawnRequest{
+		Brief: templateBytes(), Task: []byte(testTask), RunKey: "rec-42", JugglerBin: "/bin/juggler",
+		UnitEnv: PassthroughUnitEnv(os.Environ()),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"PATH", "HOME"} {
+		want := os.Getenv(key)
+		if want == "" {
+			t.Fatalf("test environment has no %s", key)
+		}
+		if got := unitSetenvs(t, h, key); len(got) != 1 || got[0] != "--setenv="+key+"="+want {
+			t.Errorf("unit %s = %q, want the spawner's %q", key, got, want)
+		}
+	}
+	if got := unitSetenvs(t, h, "PEBBLE_TARGET_MODE"); len(got) != 1 || got[0] != "--setenv=PEBBLE_TARGET_MODE=shadow" {
+		t.Errorf("a brief may add a novel key: %q", got)
+	}
+}
+
+func TestSpawnChild_BriefMayNotOverrideALauncherSetKey(t *testing.T) {
+	for name, tc := range map[string]struct {
+		key     string
+		unitEnv map[string]string
+	}{
+		"set in the unit env":            {"PEBBLE_TARGET_MODE", map[string]string{"PEBBLE_TARGET_MODE": "live"}},
+		"a passthrough name, even unset": {"TROUPE_TRANSPORT", nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			pinPrincipals(h, testRoot, "child-1")
+			newRun(t, h, "rec-42")
+			tmpl := []byte(strings.Replace(string(templateBytes()), "PEBBLE_TARGET_MODE", tc.key, 1))
+			key, unitEnv := tc.key, tc.unitEnv
+			calls := len(h.fakes.Calls(t, ""))
+			mints := len(h.fakes.Calls(t, "troupe"))
+			_, _, err := SpawnChild(context.Background(), h.deps, SpawnRequest{Brief: tmpl, Task: []byte(testTask), RunKey: "rec-42", JugglerBin: "/bin/juggler", UnitEnv: unitEnv})
+			if err == nil || !strings.Contains(err.Error(), key) || !strings.Contains(err.Error(), "launcher") {
+				t.Fatalf("a brief overriding launcher-set %s: %v", key, err)
+			}
+			if n := len(h.fakes.Calls(t, "troupe")); n != mints {
+				t.Errorf("a refused brief must mint nothing: %d troupe calls became %d", mints, n)
+			}
+			if n := len(h.fakes.Calls(t, "")); n != calls {
+				t.Errorf("a refused brief must create nothing: %d calls became %d", calls, n)
+			}
+		})
+	}
+}
+
+func TestMoxyLaunchEnv(t *testing.T) {
+	environ := []string{"PATH=/launcher/bin", "HOME=/home/l", "CLOWN_SESSION_ID=k", "PEBBLE_TARGET_MODE=shadow", "NIX_CONFIG=evil"}
+	got := MoxyLaunchEnv(environ, map[string]string{"PEBBLE_TARGET_MODE": "shadow", "NIX_CONFIG": "evil"})
+	if strings.Join(got, ",") != "PATH=/launcher/bin,HOME=/home/l,PEBBLE_TARGET_MODE=shadow" {
+		t.Errorf("env = %v", got)
+	}
+}
+
 func TestIdentityEnvironOverridesTheNick(t *testing.T) {
 	t.Setenv("TROUPE_XMPP_NICK", "clown-session-nick")
 	env := IdentityFor("root-1", Credential{JID: "root-1@xmpp.test", PasswordFile: "/pw"}).environ()

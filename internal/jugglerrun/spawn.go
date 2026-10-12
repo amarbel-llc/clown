@@ -11,6 +11,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -301,7 +302,8 @@ type SpawnRequest struct {
 	// DefaultStopGrace when zero.
 	StopGrace time.Duration
 	// UnitEnv is passed to the unit as-is (see PassthroughUnitEnv); identity
-	// and moxin-identity variables in it are ignored.
+	// and moxin-identity variables in it are ignored. A brief [env] key that
+	// collides with one of its keys is refused before anything is minted.
 	UnitEnv map[string]string
 	// MoxinPath is the spawner's effective MOXIN_PATH (SpawnerMoxinPath):
 	// the unit's moxy discovers exactly these moxin dirs (plus moxy's own
@@ -429,6 +431,9 @@ func SpawnChild(ctx context.Context, deps LifecycleDeps, req SpawnRequest) (rec 
 	fill := TemplateFill{Principal: "unminted", Parent: run.RootPrincipal, Room: run.Room, Task: string(req.Task)}
 	probe, _, err := FillTemplate(req.Brief, fill)
 	if err != nil {
+		return nil, false, err
+	}
+	if err := checkBriefEnvOnlyAdds(probe.Env, req.UnitEnv); err != nil {
 		return nil, false, err
 	}
 
@@ -605,12 +610,40 @@ func appendRunLedgerLocked(store Store, runKey string, e RunLedgerEntry) error {
 	return writeJSONAtomic(store.RunLedgerPath(runKey), l)
 }
 
+// checkBriefEnvOnlyAdds refuses a brief [env] key the launcher already sets
+// in the unit: one in unitEnv, or any UnitPassthroughEnvVars name whether or
+// not this spawner has it set (so the verdict does not depend on the
+// spawner's environment). The brief may only add new keys (FDR 0019 §3);
+// jugglerbrief has already refused the reserved ones.
+func checkBriefEnvOnlyAdds(briefEnv, unitEnv map[string]string) error {
+	launcherSet := map[string]bool{}
+	for _, k := range UnitPassthroughEnvVars {
+		launcherSet[k] = true
+	}
+	for k := range unitEnv {
+		launcherSet[k] = true
+	}
+	var collisions []string
+	for k := range briefEnv {
+		if launcherSet[k] {
+			collisions = append(collisions, k)
+		}
+	}
+	if len(collisions) == 0 {
+		return nil
+	}
+	sort.Strings(collisions)
+	return fmt.Errorf("brief env: %s: already set by the launcher in the agent's unit; a brief may only add new variables, never override the launcher's (FDR 0019 §3)", strings.Join(collisions, ", "))
+}
+
 // agentUnit is the child's transient unit. Its environment is exactly the
 // child's identity (CLOWN_SESSION_ID and the minted TROUPE_XMPP_USER /
-// PASSWORD_FILE / DOMAIN), the moxy upstream, and the passthrough variables;
-// the brief travels as a staged file, so the child key is in nothing else.
-// The brief's own [env] (validated by jugglerbrief: no reserved keys) is
-// layered over the passthrough so moxy and its moxins inherit it.
+// PASSWORD_FILE / DOMAIN), the moxy upstream, and the passthrough variables
+// (PATH and HOME among them, so the unit resolves bare-name and ~/-anchored
+// commands exactly as the spawner does); the brief travels as a staged file,
+// so the child key is in nothing else. The brief's own [env] only adds keys
+// (jugglerbrief refuses reserved ones, checkBriefEnvOnlyAdds launcher-set
+// ones), so moxy and its moxins inherit it without it overriding anything.
 func agentUnit(rec *ChildRecord, cred Credential, req SpawnRequest, briefEnv map[string]string, runtimeMax time.Duration) TransientUnit {
 	// The passthrough keeps TROUPE_XMPP_HOST/PORT/INSECURE (connection
 	// settings, not identity); any identity key in it is overwritten below.
@@ -619,7 +652,7 @@ func agentUnit(rec *ChildRecord, cred Credential, req SpawnRequest, briefEnv map
 		env = map[string]string{}
 	}
 	for k, v := range briefEnv {
-		if !jugglerbrief.ReservedEnvKey(k) {
+		if _, launcherSet := env[k]; !launcherSet && !jugglerbrief.ReservedEnvKey(k) {
 			env[k] = v
 		}
 	}

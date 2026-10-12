@@ -171,7 +171,7 @@ func RunAgent(ctx context.Context, deps AgentDeps, req AgentRequest) (AgentOutco
 		if deps.Moxy == nil || deps.AgentStateDir == "" {
 			return a.finishWithoutLoop(jugglerloop.EndToolError, "tool_error: no moxy launcher or agent state dir configured"), nil
 		}
-		url, stop, err := deps.Moxy.Launch(ctx, deps.AgentStateDir, b.Moxyfile)
+		url, stop, err := deps.Moxy.Launch(ctx, deps.AgentStateDir, b.Moxyfile, b.Env)
 		if err != nil {
 			return a.finishWithoutLoop(jugglerloop.EndToolError, "tool_error: launching moxy: "+err.Error()), nil
 		}

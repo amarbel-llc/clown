@@ -307,10 +307,44 @@ into the run's MUC and is the agent's ONLY instruction source. Fields:
 | `system` | the system prompt |
 | `task` | the task text |
 | `moxyfile` | the agent's **inline moxyfile** as a TOML string (§5) |
-| `env` | string→string table passed into the agent's unit environment; how per-agent tool configuration (e.g. a target mode) reaches moxy and its moxins, which moxyfile(5) cannot carry. `CLOWN_SESSION_ID`, `TROUPE_XMPP_*`, `TROUPE_MINT_*` (the spawner's minter credential), `MOXIN_PATH` and `MOXY_*` (moxin identity, pinned by the launcher, §5) and `JUGGLER_*` are reserved and rejected |
+| `env` | string→string table passed into the agent's unit environment; how per-agent tool configuration (e.g. a target mode) reaches moxy and its moxins, which moxyfile(5) cannot carry. `CLOWN_SESSION_ID`, `TROUPE_XMPP_*`, `TROUPE_MINT_*` (the spawner's minter credential), `MOXIN_PATH` and `MOXY_*` (moxin identity, pinned by the launcher, §5), `JUGGLER_*` and every launcher-owned key (table below) are reserved and rejected at parse, naming the key and why. `juggler spawn` also refuses, before minting anything, a key the launcher already sets in the unit (any passthrough variable — `PATH`, `HOME`, `XDG_STATE_HOME`, `XDG_RUNTIME_DIR`, `JUGGLER_MODELS_PATH`, the `JUGGLER_*_BIN` overrides, `TROUPE_TRANSPORT`, `TROUPE_XMPP_HOST`/`PORT`/`INSECURE` — whether or not this spawner has it set): a brief only ever **adds** new variables, never overrides the launcher's |
 | `tools` | REQUIRED allowlist of exact tool names as moxy advertises them (`<server>_<tool>`); `juggler run` offers the model only these. A listed name moxy does not advertise is a startup error; the list may not be empty |
 | `evaluator` | `{kind, program, stop_on_pass}`; first kind is `jq` (§4). `stop_on_pass` (default false) ends the run with `evaluator_pass` as soon as the program first passes after a successful tool result (§4) |
 | `limits` | `{steps, wall_clock, sandbox}`; `sandbox` is RESERVED and unused in this slice (§9) |
+
+**Launcher-owned environment** (`jugglerbrief.LauncherOwnedEnv`; a
+trailing `*` is a prefix). These decide which binary a bare-name, `~/`-
+or `$VAR`-anchored moxy server command resolves to, or inject code or
+credentials into it, so the launcher's value is the only one moxy and its
+tool servers may see:
+
+| Key | Why the launcher owns it |
+|---|---|
+| `PATH` | resolves bare-name server commands |
+| `HOME` | anchors ~/ paths and moxy's moxyfile hierarchy |
+| `PWD` | anchors relative paths |
+| `OLDPWD` | anchors relative paths |
+| `SHELL` | selects the interpreter tools shell out to |
+| `USER` | names the account tools act as |
+| `LOGNAME` | names the account tools act as |
+| `TMPDIR` | places temporary files tools create |
+| `TMP` | places temporary files tools create |
+| `TEMP` | places temporary files tools create |
+| `XDG_*` | anchors config, data, state and runtime paths |
+| `NIX_*` | reconfigures nix (substituters, paths, profiles) |
+| `LD_*` | injects code into every dynamically linked process |
+| `DYLD_*` | injects code into every dynamically linked process |
+| `SSH_*` | carries SSH credentials (SSH_AUTH_SOCK) and options |
+| `GIT_*` | redirects git's repository, config and commands |
+
+The unit's `PATH` and `HOME` are the spawner's, passed explicitly
+(`--setenv`): `systemd-run` only adds to the service manager's own
+environment, whose `PATH` is the manager's (a compile-time default, or
+whatever `environment.d`/`import-environment` put there), not the
+spawner's, and whose `HOME` is set only for user-manager units. `juggler
+run` additionally drops from moxy's environment any reserved key the
+brief names (fail closed), so even a relaxed parse check could not reach
+moxy's `~`/`$VAR` expansion or `PATH` lookup.
 
 At slice-0 strength the stanza is unsigned; the field set is what later
 gets signed under the operator chain (FDR 0032 D10), so nothing is
@@ -440,7 +474,11 @@ parent reference names the system moxin directory by store path. A
 **hand-written** parent reference has no `[resolved-moxins]`, and moxins
 are then not compared. By moxy's **shadowing rule**, a brief that omits a
 `[[servers]]` entry the spawner defines must list that name in
-`disable-moxins`, or the check reports it.
+`disable-moxins`, or the check reports it. moxy's narrowing allows bare
+PATH names and `~/` or `$VAR`-anchored commands because the launcher owns
+the environment; juggler guarantees that by reserving these keys (§3's
+launcher-owned table) and refusing brief overrides of launcher-set
+variables.
 
 **`tools` and `allow-tools`.** The brief's `tools` allowlist stays: it is
 what `juggler run` offers the model. The moxyfile's `allow-tools`

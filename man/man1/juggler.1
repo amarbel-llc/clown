@@ -719,7 +719,10 @@ The unit's environment is exactly: the child's identity
 the brief's own
 .Ql [env]
 table
-.Pq keys CLOWN_SESSION_ID , TROUPE_XMPP_* , TROUPE_MINT_* , MOXIN_PATH , MOXY_* No and JUGGLER_* are reserved and rejected ,
+.Pq keys CLOWN_SESSION_ID , TROUPE_XMPP_* , TROUPE_MINT_* , MOXIN_PATH , MOXY_* , JUGGLER_* No and the launcher-owned keys in Sx ENVIRONMENT No are reserved and rejected ,
+which may only add new variables: a brief key the launcher already sets in
+the unit (any variable in the passthrough list below, whether or not the
+spawner has it set) is refused before anything is minted;
 the spawner's own
 .Ev MOXIN_PATH
 .Pq entries made absolute; absent when the spawner has none ,
@@ -727,6 +730,9 @@ the spawner's own
 when
 .Fl -moxy-url
 or the variable is set, and these variables of the spawner's when set:
+.Ev PATH ,
+.Ev HOME
+.Pq so the unit resolves bare-name and Pa ~/ No commands as the spawner does; Xr systemd-run 1 No would otherwise leave the service manager's own ,
 .Ev XDG_STATE_HOME ,
 .Ev XDG_RUNTIME_DIR ,
 .Ev JUGGLER_MODELS_PATH ,
@@ -1231,6 +1237,29 @@ are inherited by every troupe call.
 .It Ev XDG_STATE_HOME
 Root of juggler's state directory; see
 .Sx FILES .
+.It Ev PATH , HOME , PWD , OLDPWD , SHELL , USER , LOGNAME , TMPDIR , TMP , TEMP , XDG_* , NIX_* , LD_* , DYLD_* , SSH_* , GIT_*
+Launcher-owned: a brief's
+.Ql [env]
+may not set any of them
+.Pq rejected at parse, naming the key and why ,
+and
+.Cm run
+drops any the brief names from moxy's environment.
+moxy's narrowing check accepts bare-name,
+.Pa ~/ Ns -
+and
+.Ev $VAR Ns -anchored
+server commands because the launcher owns the environment they resolve
+in; these keys decide which binary runs, or inject code
+.Pq Ev LD_* , DYLD_*
+or credentials
+.Pq Ev SSH_AUTH_SOCK
+into it.
+The unit's
+.Ev PATH
+and
+.Ev HOME
+are the spawner's.
 .It Ev SERVICE_RESULT , Ev EXIT_CODE , Ev EXIT_STATUS
 Set by systemd for
 .Cm exit-wake ;

@@ -735,6 +735,18 @@ servers.shell: not in the parent" ]]
     and ([.calls[] | select(.tool == "narrows")][0].violations | map(.key)) == ["allow-tools", "servers.shell"]'
 }
 
+@test "spawn --brief refuses a brief that sets the launcher-owned PATH at parse, before any platform call" {
+  local root calls_before
+  root=$(stored_run rk2 .root_principal)
+  calls_before=$(wc -l <"$FAKE_DIR/calls.jsonl")
+  cat "$BATS_FILE_TMPDIR/issue-filer.toml" >"$BATS_TEST_TMPDIR/path-brief.toml"
+  printf '\n[env]\nPATH = "/attacker/bin"\n' >>"$BATS_TEST_TMPDIR/path-brief.toml"
+  run_jug_as "$root" spawn --brief "$BATS_TEST_TMPDIR/path-brief.toml" --task - <<<"path task"
+  expect_status 1
+  [[ $stderr == *'"PATH" is launcher-owned'* ]]
+  [[ $(wc -l <"$FAKE_DIR/calls.jsonl") -eq $calls_before ]]
+}
+
 # --- room provisioning and teardown ----------------------------------------
 
 # calls_since <n> <jq filter>: the filter over the platform calls recorded

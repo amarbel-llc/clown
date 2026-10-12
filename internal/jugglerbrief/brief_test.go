@@ -240,6 +240,21 @@ func TestToolsAndEnv(t *testing.T) {
 	}
 }
 
+func TestLauncherOwnedEnvKeysRejected(t *testing.T) {
+	for _, key := range []string{"PATH", "HOME", "PWD", "XDG_DATA_HOME", "NIX_CONFIG", "SSH_AUTH_SOCK", "GIT_DIR", "LD_PRELOAD", "DYLD_INSERT_LIBRARIES", "TMPDIR"} {
+		src := strings.Replace(issueFilerBrief, "PEBBLE_TARGET_MODE", key, 1)
+		_, err := Parse([]byte(src))
+		if err == nil || !strings.Contains(err.Error(), "env") || !strings.Contains(err.Error(), key) || !strings.Contains(err.Error(), "launcher-owned") {
+			t.Errorf("launcher-owned env key %s: got %v", key, err)
+		}
+	}
+	for _, key := range []string{"PEBBLE_TARGET_MODE", "PATHS", "HOMEPAGE", "GITHUB_TOKEN_REF", "XDGX"} {
+		if IsLauncherOwnedEnvKey(key) {
+			t.Errorf("%s must not be launcher-owned", key)
+		}
+	}
+}
+
 func TestParseTemplate(t *testing.T) {
 	tmpl := issueFilerBrief
 	for _, line := range []string{`principal = "3f1c"`, `parent    = "pebble-webhook@example-host"`, `room      = "pebble-9f3a@rooms.xmpp.example"`, `task      = "<transcription text>"`} {

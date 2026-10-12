@@ -45,9 +45,10 @@ const MoxyNameTemplate = "{server}_{tool}"
 const moxyHandshakeTimeout = 60 * time.Second
 
 // ToolPlaneLauncher starts the agent's one moxy upstream from its inline
-// moxyfile and returns its MCP URL and a stop function.
+// moxyfile and returns its MCP URL and a stop function. briefEnv is the
+// brief's [env], for MoxyLaunchEnv.
 type ToolPlaneLauncher interface {
-	Launch(ctx context.Context, dir, moxyfile string) (url string, stop func(), err error)
+	Launch(ctx context.Context, dir, moxyfile string, briefEnv map[string]string) (url string, stop func(), err error)
 }
 
 // ExecMoxy launches `moxy serve-http --name-template '{server}_{tool}'` with
@@ -57,14 +58,14 @@ type ToolPlaneLauncher interface {
 // user's own moxyfiles are the ceiling. With no --listen moxy binds an
 // ephemeral loopback port and prints the clown-plugin handshake on stdout,
 // parsed with pluginhost.ParseHandshake. moxy (and every tool server it
-// starts, the agent scope) gets the environment minus the principal
-// (StripPrincipalEnv).
+// starts, the agent scope) gets the environment minus the principal and
+// minus any reserved key the brief names (MoxyLaunchEnv).
 type ExecMoxy struct {
 	Bin    string
 	Stderr io.Writer
 }
 
-func (m ExecMoxy) Launch(ctx context.Context, dir, moxyfile string) (string, func(), error) {
+func (m ExecMoxy) Launch(ctx context.Context, dir, moxyfile string, briefEnv map[string]string) (string, func(), error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", nil, err
 	}
@@ -73,7 +74,7 @@ func (m ExecMoxy) Launch(ctx context.Context, dir, moxyfile string) (string, fun
 	}
 	cmd := exec.Command(m.Bin, "serve-http", "--name-template", MoxyNameTemplate)
 	cmd.Dir = dir
-	cmd.Env = StripPrincipalEnv(os.Environ())
+	cmd.Env = MoxyLaunchEnv(os.Environ(), briefEnv)
 	cmd.Stderr = m.Stderr
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
