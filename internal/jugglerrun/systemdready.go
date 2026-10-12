@@ -61,17 +61,31 @@ func (c ExecSystemdChecker) IsSystemRunning(ctx context.Context) (SystemdReadine
 		// from systemd genuinely reporting "unknown".
 		r := SystemdReadiness{State: state}
 		if state == "" {
-			r.Detail = fmt.Sprintf("systemctl exit %d: %s", ce.ExitCode, firstLine(ce.Stderr))
+			if stderr := firstLine(ce.Stderr); stderr != "" {
+				r.Detail = fmt.Sprintf("systemctl exit %d: %s", ce.ExitCode, stderr)
+			} else {
+				r.Detail = fmt.Sprintf("systemctl exit %d (no stderr)", ce.ExitCode)
+			}
 		}
 		return r, nil
 	}
 	return SystemdReadiness{}, fmt.Errorf("the systemd readiness check needs systemctl, and %q could not be run (set --systemctl or $%s): %w", c.Bin, SystemctlBinEnv, err)
 }
 
+// maxDetailStderr bounds the stderr line SystemdReadiness.Detail carries, so
+// a verbose (or hostile) systemctl can't bloat a refusal message or ledger
+// entry.
+const maxDetailStderr = 256
+
+// firstLine returns s's first line, trimmed and capped at maxDetailStderr
+// bytes.
 func firstLine(s string) string {
 	s = strings.TrimSpace(s)
 	if i := strings.IndexByte(s, '\n'); i >= 0 {
 		s = s[:i]
+	}
+	if len(s) > maxDetailStderr {
+		s = s[:maxDetailStderr]
 	}
 	return s
 }

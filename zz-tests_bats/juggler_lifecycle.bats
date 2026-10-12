@@ -792,9 +792,13 @@ servers.shell: not in the parent" ]]
 }
 
 @test "spawn --brief refuses with a detail when systemctl reports no state at all" {
-  local root run_job
+  local root run_job mints_before moxy_calls_before children_before pw_before
   root=$(stored_run rk2 .root_principal)
   run_job=$(stored_run rk2 .run_job)
+  mints_before=$(fake_calls '[.[] | select(.tool == "troupe" and .argv[0] == "mint")] | length')
+  moxy_calls_before=$(fake_calls '[.[] | select(.tool == "moxy")] | length')
+  children_before=$(ls "$XDG_STATE_HOME/juggler/runs/rk2/children/"*.json 2>/dev/null | wc -l)
+  pw_before=$(ls "$XDG_STATE_HOME/juggler/runs/rk2/"*.pw 2>/dev/null | wc -l)
   mkdir -p "$FAKE_DIR/fail"
   : >"$FAKE_DIR/fail/systemctl-is-system-running"
 
@@ -802,6 +806,10 @@ servers.shell: not in the parent" ]]
   rm -f "$FAKE_DIR/fail/systemctl-is-system-running"
   expect_status 1
   [[ $stderr == 'juggler: spawn: systemd is not ready to start units: is-system-running reported no state (systemctl exit 1: systemctl is-system-running: injected failure)' ]]
+  [[ $(fake_calls '[.[] | select(.tool == "troupe" and .argv[0] == "mint")] | length') -eq $mints_before ]]
+  [[ $(fake_calls '[.[] | select(.tool == "moxy")] | length') -eq $moxy_calls_before ]]
+  [[ $(ls "$XDG_STATE_HOME/juggler/runs/rk2/children/"*.json 2>/dev/null | wc -l) -eq $children_before ]]
+  [[ $(ls "$XDG_STATE_HOME/juggler/runs/rk2/"*.pw 2>/dev/null | wc -l) -eq $pw_before ]]
 
   run_jug job-ledger "$run_job"
   expect_json '[.calls[] | select(.tool == "systemd" and .kind == "refusal")] | .[-1].state == "unknown"
