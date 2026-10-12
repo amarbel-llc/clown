@@ -58,8 +58,9 @@ func main() {
 // serveAgent is `juggler run`'s world on one loopback port: a scripted
 // OpenAI-compatible model at /v1/chat/completions answering request N with
 // the Nth element of the JSON array in <dir>/replies.json (the last repeats),
-// and an MCP upstream at /mcp advertising <dir>/tools.json and answering every
-// tools/call with <dir>/call-result.json. Each model request appends a line to
+// and an MCP upstream at /mcp advertising <dir>/tools.json and answering a
+// tools/call of <tool> with <dir>/call-result.<tool>.json when present, else
+// <dir>/call-result.json. Each model request appends a line to
 // <dir>/model-requests; the port is written to <dir>/port last.
 func serveAgent(args []string) int {
 	fs := flag.NewFlagSet("serve-agent", flag.ContinueOnError)
@@ -98,7 +99,13 @@ func serveAgent(args []string) int {
 			_ = f.Close()
 		}
 	}))
-	mux.Handle("/mcp", jugglerruntest.MCPHandler(string(read("tools.json")), string(read("call-result.json")), nil))
+	defaultCallResult := string(read("call-result.json"))
+	mux.Handle("/mcp", jugglerruntest.MCPHandlerPerTool(string(read("tools.json")), func(tool string) string {
+		if b, err := os.ReadFile(filepath.Join(*dir, "call-result."+tool+".json")); err == nil {
+			return string(b)
+		}
+		return defaultCallResult
+	}, nil))
 	srv := &http.Server{Handler: mux}
 	go func() { _ = srv.Serve(ln) }()
 	if err := writePort(*dir, ln); err != nil {

@@ -324,8 +324,10 @@ func (r *run) execute(ctx context.Context, callTurn Turn) (end EndReason, done b
 		entry.Error = toolResultText(result)
 	} else {
 		entry.OK = true
-		if uris := r.cfg.URIExtractor(call.Name, content); uris != nil {
-			entry.URIs = uris
+		if KindProducesArtifacts(r.kinds[call.Name]) {
+			if uris := r.cfg.URIExtractor(call.Name, content); uris != nil {
+				entry.URIs = uris
+			}
 		}
 	}
 	r.ledger.Calls = append(r.ledger.Calls, entry)

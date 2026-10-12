@@ -929,6 +929,56 @@ EOF
     and .calls[0].uris == ["https://forge.test/o/r/issues/7"]' "$(field .ledger)" >/dev/null
 }
 
+@test "run: a blobbed read-only listing before the create leaves exactly one artifact (clown#253)" {
+  local agent_dir="$BATS_TEST_TMPDIR/agent"
+  mkdir -p "$agent_dir"
+  local list='{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"c1","type":"function","function":{"name":"ring_list_issues","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}'
+  local create='{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"c2","type":"function","function":{"name":"ring_create_issue","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}'
+  printf '[%s,%s,{"choices":[{"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}]}]' "$list" "$create" >"$agent_dir/replies.json"
+  printf '%s' '[{"name":"ring_list_issues","inputSchema":{"type":"object"},"_meta":{"kind":"list"}},{"name":"ring_create_issue","inputSchema":{"type":"object"},"_meta":{"kind":"issue"}}]' >"$agent_dir/tools.json"
+  # moxy blobbed the oversized listing: a resource_link to madder://, as on the fleet.
+  printf '%s' '{"content":[{"type":"resource_link","uri":"madder://blobs/blake2b256-listing","name":"output"}],"isError":false}' >"$agent_dir/call-result.ring_list_issues.json"
+  # The create's own result also carries a madder:// link beside its real uri.
+  printf '%s' '{"content":[{"type":"text","text":"Filed issue #8."},{"type":"resource_link","uri":"madder://blobs/blake2b256-echo"}],"structuredContent":{"uri":"https://forge.test/o/r/issues/8"},"isError":false}' >"$agent_dir/call-result.json"
+  "$FAKE_PLATFORM_BIN" serve-agent --dir "$agent_dir" >"$agent_dir/server.log" 2>&1 &
+  local pid=$!
+  wait_for_file "$agent_dir/port" 5
+  local port
+  port=$(<"$agent_dir/port")
+
+  local models="$BATS_TEST_TMPDIR/models.toml"
+  cat "$JUGGLER_MODELS_PATH" >"$models"
+  printf '\n[[model]]\nname = "agent"\nstyle = "openai-compat"\nurl = "http://127.0.0.1:%s/v1"\ntoken = "tok-agent"\n' "$port" >>"$models"
+  cat >"$agent_dir/brief.toml" <<'EOF'
+schema = 1
+principal = "agent-blob"
+parent = "root-blob"
+room = "room-blob@rooms.test"
+model = "agent"
+system = "You file one issue."
+task = "file it"
+tools = ["ring_list_issues", "ring_create_issue"]
+
+[evaluator]
+kind = "jq"
+program = '([.calls[] | select(.kind == "issue" and .ok and (.uris | length) > 0)] | length) >= 1'
+
+[limits]
+steps = 5
+wall_clock = "20s"
+EOF
+
+  run_jug_env "JUGGLER_MODELS_PATH=$models" -- run --brief "$agent_dir/brief.toml" --moxy-url "http://127.0.0.1:$port/mcp"
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  expect_status 0
+  [[ $(field .state) == succeeded ]]
+  # The artifacts are the ok calls with URIs (ArtifactsFromLedger): just the issue.
+  jq -e '(.calls | length) == 2 and .calls[0].kind == "list" and .calls[0].uris == []
+    and [.calls[] | select(.ok and (.uris | length) > 0) | {tool, kind, uris}]
+      == [{"tool":"ring_create_issue","kind":"issue","uris":["https://forge.test/o/r/issues/8"]}]' "$(field .ledger)" >/dev/null
+}
+
 # --- binary resolution -----------------------------------------------------
 
 @test "a --ringmaster flag overrides JUGGLER_RINGMASTER_BIN" {

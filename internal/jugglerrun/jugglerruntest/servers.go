@@ -22,10 +22,19 @@ func FakeMCP(t testing.TB, tools, callResult string) *httptest.Server {
 
 // MCPHandler is FakeMCP's handler; onBadRequest sees an undecodable request.
 func MCPHandler(tools, callResult string, onBadRequest func(error)) http.Handler {
+	return MCPHandlerPerTool(tools, func(string) string { return callResult }, onBadRequest)
+}
+
+// MCPHandlerPerTool is MCPHandler answering each tools/call with
+// callResult(<the called tool's name>).
+func MCPHandlerPerTool(tools string, callResult func(tool string) string, onBadRequest func(error)) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			ID     json.RawMessage `json:"id"`
 			Method string          `json:"method"`
+			Params struct {
+				Name string `json:"name"`
+			} `json:"params"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && onBadRequest != nil {
 			onBadRequest(err)
@@ -38,7 +47,7 @@ func MCPHandler(tools, callResult string, onBadRequest func(error)) http.Handler
 		case "tools/list":
 			result = `{"tools":` + tools + `}`
 		case "tools/call":
-			result = callResult
+			result = callResult(req.Params.Name)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"result":%s}`, req.ID, result)

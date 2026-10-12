@@ -327,7 +327,13 @@ URIs of a successful MCP call are read first from the CallToolResult's
 `structuredContent` (MCP's typed result), then from its content blocks
 (text blocks that parse as JSON, `resource_link` uris, embedded
 resource uris); structuredContent and JSON text blocks both by the
-top-level-field rule (`uri`/`url`, `uris`/`urls`), each URI once. The
+top-level-field rule (`uri`/`url`, `uris`/`urls`), each URI once. Two
+rules keep lookups and transport details out of that list (clown#253):
+a call whose declared kind is read-only — `list`, `search`, `read`,
+`get` or `query` — creates nothing, so its URIs are not extracted at all
+(every other kind extracts, as does a tool that declares none); and a
+URI with the `madder` scheme is never an artifact, since it is moxy's
+blob store standing in for a result too large to inline. The
 ledger carries a `schema` version and, when the loop has any, `notes`
 (facts that decide nothing, e.g. a per-step evaluator check that
 errored). `end.reason` is one of `end_turn`,

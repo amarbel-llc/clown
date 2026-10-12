@@ -452,7 +452,16 @@ an error in that check is a ledger note and the run goes on.
 Every tool call is recorded in the ledger, its artifact URIs read from
 the result's
 .Ql structuredContent
-first and then from its content blocks; at the end the brief's
+first and then from its content blocks
+.Po none for a read-only kind
+.Ql list , search , read , get
+or
+.Ql query ,
+and never a
+.Ql madder://
+blob URI
+.Pc ;
+at the end the brief's
 evaluator
 .Pq a jq program
 collapses the ledger into the verdict, which becomes the ringmaster

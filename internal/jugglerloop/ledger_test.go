@@ -74,6 +74,17 @@ func TestLedger_EmptyCallsSerialiseAsArray(t *testing.T) {
 	}
 }
 
+func TestKindProducesArtifacts(t *testing.T) {
+	for kind, want := range map[string]bool{
+		"list": false, "search": false, "read": false, "get": false, "query": false,
+		"issue": true, "note": true, "": true,
+	} {
+		if got := KindProducesArtifacts(kind); got != want {
+			t.Errorf("KindProducesArtifacts(%q) = %v, want %v", kind, got, want)
+		}
+	}
+}
+
 func TestExtractURIsFromTopLevelFields(t *testing.T) {
 	cases := []struct {
 		name    string

@@ -67,6 +67,26 @@ func newLedger() Ledger {
 	return Ledger{Schema: LedgerSchema, Calls: []LedgerCall{}}
 }
 
+// readOnlyKinds are the declared tool kinds that name a lookup, not an
+// artifact: a call of one of these kinds creates nothing, so whatever URIs
+// its result carries (the listed issues, a moxy blob reference standing in
+// for a large listing) are not the run's artifacts (clown#253).
+var readOnlyKinds = map[string]bool{
+	"list":   true,
+	"search": true,
+	"read":   true,
+	"get":    true,
+	"query":  true,
+}
+
+// KindProducesArtifacts reports whether a successful call of a tool with
+// the declared kind has its result's URIs extracted into the ledger. Every
+// kind outside readOnlyKinds does, including the empty kind of a tool that
+// declares none, so undeclared tools keep extracting as before.
+func KindProducesArtifacts(kind string) bool {
+	return !readOnlyKinds[kind]
+}
+
 // URIExtractor pulls artifact URIs out of a successful tool result. It is
 // the hook for tool-declared extraction; Config.URIExtractor defaults to
 // ExtractURIsFromTopLevelFields.

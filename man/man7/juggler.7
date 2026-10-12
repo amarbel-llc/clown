@@ -271,6 +271,13 @@ plus how the loop ended
 A call's URIs come from the MCP result's
 .Ql structuredContent
 first, then from its content blocks.
+A call whose declared kind is read-only
+.Pq Ql list , search , read , get , query
+records no URIs, and a
+.Ql madder://
+URI
+.Pq moxy's blob store standing in for an oversized result
+is never one.
 Success is measured, never reported: the model never claims it.
 .It The evaluator
 A jq program, run embedded over the ledger JSON, that must produce exactly one

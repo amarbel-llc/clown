@@ -452,11 +452,80 @@ func TestExtractURIsFromMCPContent_StructuredContent(t *testing.T) {
 		"nested structured field is not read": {`{"content":[],"structuredContent":{"issue":{"uri":"https://n"}}}`, []string{}},
 		"no content array":                    {`{"structuredContent":{"url":"https://u"}}`, []string{"https://u"}},
 		"blocks repeat a URI":                 {`[{"type":"text","text":"{\"uri\":\"https://r\"}"},{"type":"resource_link","uri":"https://r"}]`, []string{"https://r"}},
+		"moxy blob link beside the real uri is dropped": {
+			`{"content":[{"type":"resource_link","uri":"madder://blobs/blake2b256-abc"}],"structuredContent":{"uri":"https://f/7"}}`,
+			[]string{"https://f/7"},
+		},
+		"moxy blob link alone yields nothing": {`[{"type":"resource_link","uri":"MADDER://blobs/x"},{"type":"resource","resource":{"uri":"madder://blobs/y"}}]`, []string{}},
 	} {
 		got := ExtractURIsFromMCPContent("t", json.RawMessage(tc.content))
 		if got == nil || strings.Join(got, ",") != strings.Join(tc.want, ",") {
 			t.Errorf("%s: uris = %v, want %v", name, got, tc.want)
 		}
+	}
+}
+
+// perToolExecutor answers each tool name with a canned successful result.
+type perToolExecutor map[string]string
+
+func (e perToolExecutor) Call(_ context.Context, name string, _ json.RawMessage) (json.RawMessage, bool, error) {
+	return json.RawMessage(e[name]), false, nil
+}
+
+func openAIToolCallReply(id, tool string) string {
+	return `{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"` + id + `","type":"function","function":{"name":"` + tool + `","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}`
+}
+
+// runToolsInOrder drives the loop through one call per tool, in order, with
+// the MCP URI extractor, and returns the ledger.
+func runToolsInOrder(t *testing.T, tools []jugglerloop.ToolSpec, results perToolExecutor) jugglerloop.Ledger {
+	t.Helper()
+	replies := []string{}
+	for i, tool := range tools {
+		replies = append(replies, openAIToolCallReply("call_"+string(rune('a'+i)), tool.Name))
+	}
+	model := scriptedOpenAI(t, append(replies, openAIEndTurn)...)
+	res, err := jugglerloop.Run(context.Background(), jugglerloop.Config{
+		Resolved: openAIResolved(model), Model: "test-model", Task: "file one issue",
+		Tools: tools, Exec: results, Principal: "agent-1", URIExtractor: ExtractURIsFromMCPContent,
+	})
+	if err != nil || res.End != jugglerloop.EndTurn || len(res.Ledger.Calls) != len(tools) {
+		t.Fatalf("run: err=%v end=%s calls=%+v", err, res.End, res.Ledger.Calls)
+	}
+	return res.Ledger
+}
+
+func toolSpec(name, kind string) jugglerloop.ToolSpec {
+	return jugglerloop.ToolSpec{Name: name, InputSchema: json.RawMessage(`{"type":"object"}`), Kind: kind}
+}
+
+// clown#253: a listing large enough for moxy to blob comes back as a
+// resource_link to madder://; neither the read-only call nor the blob link
+// is an artifact, so the run's artifacts are exactly the issue it filed.
+func TestRun_BlobbedListingThenCreate_ArtifactsAreOnlyTheIssue(t *testing.T) {
+	ledger := runToolsInOrder(t,
+		[]jugglerloop.ToolSpec{toolSpec("list_issues", "list"), toolSpec("create_issue", "issue")},
+		perToolExecutor{
+			"list_issues":  `{"content":[{"type":"resource_link","uri":"madder://blobs/blake2b256-listing"},{"type":"text","text":"{\"uris\":[\"https://forge.test/o/r/issues/1\"]}"}]}`,
+			"create_issue": `{"content":[{"type":"text","text":"Filed #7."},{"type":"resource_link","uri":"madder://blobs/blake2b256-echo"}],"structuredContent":{"uri":"https://forge.test/o/r/issues/7"}}`,
+		})
+	if got := ledger.Calls[0].URIs; len(got) != 0 {
+		t.Errorf("list_issues uris = %v, want none (read-only kind)", got)
+	}
+	if got := ledger.Calls[1].URIs; strings.Join(got, ",") != "https://forge.test/o/r/issues/7" {
+		t.Errorf("create_issue uris = %v, want only the issue", got)
+	}
+	arts := ArtifactsFromLedger(ledger)
+	if len(arts) != 1 || arts[0].Tool != "create_issue" || strings.Join(arts[0].URIs, ",") != "https://forge.test/o/r/issues/7" {
+		t.Errorf("artifacts = %+v, want exactly the issue", arts)
+	}
+}
+
+func TestRun_UndeclaredKindStillExtracts(t *testing.T) {
+	ledger := runToolsInOrder(t, []jugglerloop.ToolSpec{toolSpec("make_thing", "")},
+		perToolExecutor{"make_thing": `{"content":[],"structuredContent":{"url":"https://made/1"}}`})
+	if got := ledger.Calls[0]; got.Kind != nil || strings.Join(got.URIs, ",") != "https://made/1" {
+		t.Errorf("call = %+v, want kind null and the made uri", got)
 	}
 }
 
