@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"code.linenisgreat.com/clown/internal/jugglerloop"
@@ -159,9 +158,12 @@ func FilterToolsToAllowlist(specs []jugglerloop.ToolSpec, allow []string) (kept 
 //     as JSON, a resource_link block's uri, an embedded resource block's
 //     resource.uri.
 //
-// Each URI appears once, at its first occurrence, and a URI whose scheme is
-// in nonArtifactSchemes is dropped. Other non-array content falls back to
-// the default rule. The result is never nil.
+// Each URI appears once, at its first occurrence; every scheme is kept,
+// madder:// included — moxy blobs any over-threshold result, so a blob link
+// can hold (or be) the call's product. Whether a call's URIs are artifacts at
+// all is the tool's declared kind (jugglerloop.KindProducesArtifacts), not
+// the scheme. Other non-array content falls back to the default rule. The
+// result is never nil.
 func ExtractURIsFromMCPContent(tool string, content json.RawMessage) []string {
 	var envelope struct {
 		Content           json.RawMessage `json:"content"`
@@ -174,26 +176,12 @@ func ExtractURIsFromMCPContent(tool string, content json.RawMessage) []string {
 	return dedupeArtifactURIs(extractURIsFromBlocks(tool, content))
 }
 
-// nonArtifactSchemes are URI schemes that are never something a run made.
-// madder is moxy's content-addressed blob store: moxy replaces a tool
-// output above its inline threshold with a resource_link to
-// madder://blobs/<digest>, so the URI is a transport detail of the result,
-// not an artifact (clown#253).
-var nonArtifactSchemes = map[string]bool{
-	"madder": true,
-}
-
-func isArtifactURI(uri string) bool {
-	scheme, _, found := strings.Cut(uri, ":")
-	return !found || !nonArtifactSchemes[strings.ToLower(scheme)]
-}
-
-// dedupeArtifactURIs keeps each artifact URI once, at its first occurrence.
+// dedupeArtifactURIs keeps each URI once, at its first occurrence.
 func dedupeArtifactURIs(uris []string) []string {
 	out := make([]string, 0, len(uris))
 	seen := map[string]bool{}
 	for _, u := range uris {
-		if !seen[u] && isArtifactURI(u) {
+		if !seen[u] {
 			seen[u] = true
 			out = append(out, u)
 		}

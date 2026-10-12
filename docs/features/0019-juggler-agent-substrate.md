@@ -361,13 +361,17 @@ URIs of a successful MCP call are read first from the CallToolResult's
 `structuredContent` (MCP's typed result), then from its content blocks
 (text blocks that parse as JSON, `resource_link` uris, embedded
 resource uris); structuredContent and JSON text blocks both by the
-top-level-field rule (`uri`/`url`, `uris`/`urls`), each URI once. Two
-rules keep lookups and transport details out of that list (clown#253):
-a call whose declared kind is read-only — `list`, `search`, `read`,
-`get` or `query` — creates nothing, so its URIs are not extracted at all
-(every other kind extracts, as does a tool that declares none); and a
-URI with the `madder` scheme is never an artifact, since it is moxy's
-blob store standing in for a result too large to inline. The
+top-level-field rule (`uri`/`url`, `uris`/`urls`), each URI once. One
+rule keeps lookups out of that list (clown#253): a call whose declared
+kind is read-only — `list`, `search`, `read`, `get` or `query` — creates
+nothing, so its URIs are not extracted at all (every other kind
+extracts, as does a tool that declares none). Read-only tools MUST
+therefore declare a read-only kind; an undeclared lookup's URIs count as
+artifacts. URIs are not filtered by scheme: moxy blobs any result over
+its inline threshold, so a writer's `madder://` link may hold, or be, the
+call's product (a large create result, a capture receipt) and is kept —
+it at least marks the call as having produced something and points at
+where the product is. The
 ledger carries a `schema` version and, when the loop has any, `notes`
 (facts that decide nothing, e.g. a per-step evaluator check that
 errored). `end.reason` is one of `end_turn`,
@@ -453,12 +457,15 @@ subset of the spawner's own effective moxyfile. That is FDR 0032 D13's
 - checked **launcher-side**, before anything is minted: `juggler spawn
   --brief` renders the spawner's effective moxyfile (`moxy
   show-effective-moxyfile --dir <spawner cwd>`, in the spawner's
-  environment with its pinned `MOXIN_PATH`) into the child's staging
+  environment minus its principal (`CLOWN_SESSION_ID`, `TROUPE_XMPP_*`,
+  `TROUPE_MINT_*`) and with its pinned `MOXIN_PATH`) into the child's staging
   directory as `<digest>.parent-moxyfile.toml` (0600) — the **parent
   reference** — and runs `moxy narrows --parent <it> --child <the brief's
   moxyfile>`. Exit 1 refuses the spawn with moxy's violation lines
   verbatim and a run-ledger entry `{tool:"narrows", kind:"refusal",
-  ok:false, violations:[{key,subject,message}]}`; exit 2, a failed
+  ok:false, violations:[{key,subject,message}], moxy_bin,
+  parent_moxyfile_digest}` — `violations_missing:true` instead of
+  `violations` when moxy's `--json` form was unavailable; exit 2, a failed
   render or a missing moxy binary fail the spawn too (a broken check
   never passes). The child record carries the parent reference's path,
   `parent_moxyfile_digest` (sha256, also in the launch output) and the
@@ -919,9 +926,21 @@ The router, before any subagent exists:
 - **Parent and child need the same moxy build.** The parent reference
   names moxy's system moxin directory by store path, so the moxy `juggler
   spawn` renders it with and the moxy the unit serves with must be the
-  same build; juggler resolves both from the same `--moxy` /
-  `JUGGLER_MOXY_BIN` / burned-in path, but a unit started on a host whose
-  moxy differs will refuse to serve (fails closed).
+  same build. juggler pins it: the unit runs `juggler run … --moxy
+  <moxy_bin>`, the absolute path of the binary that ran the check (also in
+  the child record), so the agent never resolves a different moxy of its
+  own — one predating `MOXY_PARENT_MOXYFILE` would otherwise silently
+  ignore it.
+- **A child can rewrite its own parent reference before moxy starts.**
+  The unit runs as the spawner's uid, and the reference file is that
+  user's. moxy pins the reference at startup and judges every reload
+  against the pinned copy, so the exposure is only a reference rewritten
+  before the agent's moxy starts — negligible today (the agent process
+  has run no model turn yet), closed by clown#252 (a DynamicUser or
+  per-run user) or by handing moxy the recorded digest to verify.
+- **Staged files persist per child.** `<digest>.brief.toml`,
+  `<digest>.moxyfile.toml` and `<digest>.parent-moxyfile.toml` stay in
+  the run's `children/` directory after the run, until clown#250's sweep.
 - **A hand-written parent reference skips the moxin comparison.** Only
   a rendered reference carries `[resolved-moxins]`; juggler always
   renders one, but a reference written by hand (or by another launcher)

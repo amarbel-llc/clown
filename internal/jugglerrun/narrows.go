@@ -26,6 +26,12 @@ type NarrowsResult struct {
 	Widens     bool
 	Lines      []string
 	Violations []NarrowsViolation
+	// ViolationsParsed: the --json rerun produced a parseable document; when
+	// false, Violations is not the structured form of Lines.
+	ViolationsParsed bool
+	// MoxyBin and ParentMoxyfileDigest are the check's provenance, set by
+	// the caller for the refusal entry.
+	MoxyBin, ParentMoxyfileDigest string
 }
 
 // MoxyCLI is the moxy surface `juggler spawn` checks a brief's moxyfile with
@@ -91,7 +97,7 @@ func (m ExecMoxyCLI) Narrows(ctx context.Context, env []string, parent, child st
 		Violations []NarrowsViolation `json:"violations"`
 	}
 	if json.Unmarshal(bytes.TrimSpace(jsonOut), &doc) == nil {
-		res.Violations = doc.Violations
+		res.Violations, res.ViolationsParsed = doc.Violations, true
 	}
 	return res, nil
 }
@@ -124,24 +130,28 @@ func (e *ErrBriefWidens) Error() string {
 	return "brief moxyfile widens the spawner's:\n" + strings.Join(e.Lines, "\n")
 }
 
-// NarrowsRefusalEntry is the run ledger's record of a refused spawn.
+// NarrowsRefusalEntry is the run ledger's record of a refused spawn,
+// auditable without a child record: the violations (or violations_missing
+// when moxy's --json form was unavailable, the text lines then being the
+// error's only record), the moxy binary and the parent reference's digest.
 func NarrowsRefusalEntry(res NarrowsResult) RunLedgerEntry {
-	violations := res.Violations
-	if violations == nil {
-		violations = []NarrowsViolation{}
-	}
 	return RunLedgerEntry{
 		Tool: "narrows", Kind: "refusal", OK: false, URIs: []string{},
-		Reason: "brief moxyfile widens the spawner's", Violations: violations,
+		Reason: "brief moxyfile widens the spawner's", Violations: res.Violations,
+		ViolationsMissing: !res.ViolationsParsed,
+		MoxyBin:           res.MoxyBin, ParentMoxyfileDigest: res.ParentMoxyfileDigest,
 	}
 }
 
-// moxyEnv is the spawner's environment for its moxy calls, with MOXIN_PATH
-// replaced by the pinned value (removed when it is "") and no
-// MOXY_PARENT_MOXYFILE of the spawner's own leaking into the render.
+// moxyEnv is the spawner's environment for its moxy calls, minus its
+// principal (StripPrincipalEnv: CLOWN_SESSION_ID, TROUPE_XMPP_*,
+// TROUPE_MINT_*), with MOXIN_PATH replaced by the pinned value (removed when
+// it is "") and no MOXY_PARENT_MOXYFILE of the spawner's own leaking into the
+// render. PATH, HOME and the rest are kept.
 func moxyEnv(moxinPath string) []string {
-	out := make([]string, 0, len(os.Environ())+1)
-	for _, kv := range os.Environ() {
+	base := StripPrincipalEnv(os.Environ())
+	out := make([]string, 0, len(base)+1)
+	for _, kv := range base {
 		k, _, _ := strings.Cut(kv, "=")
 		if k == "MOXIN_PATH" || k == "MOXY_PARENT_MOXYFILE" {
 			continue

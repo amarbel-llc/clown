@@ -457,9 +457,9 @@ first and then from its content blocks
 .Ql list , search , read , get
 or
 .Ql query ,
-and never a
+which read-only tools must declare; a writer's
 .Ql madder://
-blob URI
+blob link is kept
 .Pc ;
 at the end the brief's
 evaluator
@@ -679,7 +679,20 @@ on
 .Ev PATH
 \(em the same resolution
 .Cm run
-uses, so parent and child are rendered and served by the same build.
+uses; its absolute path is recorded as
+.Ql moxy_bin
+and passed to the unit's
+.Cm run
+as
+.Fl -moxy ,
+so parent and child are rendered and served by the same build.
+A refusal's ledger entry also carries
+.Ql moxy_bin
+and
+.Ql parent_moxyfile_digest ,
+and
+.Ql violations_missing : true
+when moxy's structured form was unavailable.
 When the brief's moxyfile sets
 .Ql allow-tools ,
 every

@@ -418,8 +418,8 @@ func TestSpawnChild_LaunchesTheUnit(t *testing.T) {
 			t.Errorf("systemd-run argv lacks %q: %q", want, argv)
 		}
 	}
-	tail := strings.Join(argv[len(argv)-8:], " ")
-	if tail != "/bin/juggler run --brief "+rec.BriefPath+" --job "+rec.Job+" --brief-stanza "+rec.BriefStanza {
+	tail := strings.Join(argv[len(argv)-10:], " ")
+	if tail != "/bin/juggler run --brief "+rec.BriefPath+" --job "+rec.Job+" --brief-stanza "+rec.BriefStanza+" --moxy "+rec.MoxyBin {
 		t.Errorf("unit command = %q", tail)
 	}
 	if hasArg(argv, "--setenv=CLOWN_SESSION_ID=must-not-pass") {

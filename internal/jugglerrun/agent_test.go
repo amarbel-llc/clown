@@ -452,11 +452,11 @@ func TestExtractURIsFromMCPContent_StructuredContent(t *testing.T) {
 		"nested structured field is not read": {`{"content":[],"structuredContent":{"issue":{"uri":"https://n"}}}`, []string{}},
 		"no content array":                    {`{"structuredContent":{"url":"https://u"}}`, []string{"https://u"}},
 		"blocks repeat a URI":                 {`[{"type":"text","text":"{\"uri\":\"https://r\"}"},{"type":"resource_link","uri":"https://r"}]`, []string{"https://r"}},
-		"moxy blob link beside the real uri is dropped": {
+		"moxy blob link is kept after the real uri": {
 			`{"content":[{"type":"resource_link","uri":"madder://blobs/blake2b256-abc"}],"structuredContent":{"uri":"https://f/7"}}`,
-			[]string{"https://f/7"},
+			[]string{"https://f/7", "madder://blobs/blake2b256-abc"},
 		},
-		"moxy blob link alone yields nothing": {`[{"type":"resource_link","uri":"MADDER://blobs/x"},{"type":"resource","resource":{"uri":"madder://blobs/y"}}]`, []string{}},
+		"moxy blob link alone is the call's uri": {`[{"type":"resource_link","uri":"MADDER://blobs/x"},{"type":"resource","resource":{"uri":"madder://blobs/y"}}]`, []string{"MADDER://blobs/x", "madder://blobs/y"}},
 	} {
 		got := ExtractURIsFromMCPContent("t", json.RawMessage(tc.content))
 		if got == nil || strings.Join(got, ",") != strings.Join(tc.want, ",") {
@@ -500,8 +500,9 @@ func toolSpec(name, kind string) jugglerloop.ToolSpec {
 }
 
 // clown#253: a listing large enough for moxy to blob comes back as a
-// resource_link to madder://; neither the read-only call nor the blob link
-// is an artifact, so the run's artifacts are exactly the issue it filed.
+// resource_link to madder://. The read-only call is no artifact (its kind),
+// so the run's artifacts are the issue it filed — plus the create's own blob
+// link, which may hold the product of a large result and is kept.
 func TestRun_BlobbedListingThenCreate_ArtifactsAreOnlyTheIssue(t *testing.T) {
 	ledger := runToolsInOrder(t,
 		[]jugglerloop.ToolSpec{toolSpec("list_issues", "list"), toolSpec("create_issue", "issue")},
@@ -512,12 +513,13 @@ func TestRun_BlobbedListingThenCreate_ArtifactsAreOnlyTheIssue(t *testing.T) {
 	if got := ledger.Calls[0].URIs; len(got) != 0 {
 		t.Errorf("list_issues uris = %v, want none (read-only kind)", got)
 	}
-	if got := ledger.Calls[1].URIs; strings.Join(got, ",") != "https://forge.test/o/r/issues/7" {
-		t.Errorf("create_issue uris = %v, want only the issue", got)
+	want := "https://forge.test/o/r/issues/7,madder://blobs/blake2b256-echo"
+	if got := ledger.Calls[1].URIs; strings.Join(got, ",") != want {
+		t.Errorf("create_issue uris = %v, want the issue then its blob link", got)
 	}
 	arts := ArtifactsFromLedger(ledger)
-	if len(arts) != 1 || arts[0].Tool != "create_issue" || strings.Join(arts[0].URIs, ",") != "https://forge.test/o/r/issues/7" {
-		t.Errorf("artifacts = %+v, want exactly the issue", arts)
+	if len(arts) != 1 || arts[0].Tool != "create_issue" || strings.Join(arts[0].URIs, ",") != want {
+		t.Errorf("artifacts = %+v, want only the create's", arts)
 	}
 }
 

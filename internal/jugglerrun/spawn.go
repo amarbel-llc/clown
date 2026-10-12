@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -487,11 +488,11 @@ func SpawnChild(ctx context.Context, deps LifecycleDeps, req SpawnRequest) (rec 
 
 	childPW, err := deps.Store.CredentialPath(run.RunKey, rec.Principal)
 	if err != nil {
-		return nil, false, fmt.Errorf("preparing the agent's credential file: %w", err)
+		return nil, false, undo.unwind(fmt.Errorf("preparing the agent's credential file: %w", err))
 	}
 	cred, err := deps.Troupe.Mint(ctx, rec.Principal, childPW)
 	if err != nil {
-		return nil, false, fmt.Errorf("minting the agent principal: %w", err)
+		return nil, false, undo.unwind(fmt.Errorf("minting the agent principal: %w", err))
 	}
 	undo.push(func(ctx context.Context, _ error) error { return deps.Troupe.RevokeMint(ctx, rec.Principal, childPW) })
 	rec.JID, rec.CredentialRef = cred.JID, cred.PasswordFile
@@ -565,6 +566,14 @@ func SpawnChild(ctx context.Context, deps LifecycleDeps, req SpawnRequest) (rec 
 // broken check never passes. The staged files are undone on any failure.
 func checkBriefNarrows(ctx context.Context, deps LifecycleDeps, req SpawnRequest, rec *ChildRecord, moxyfile string, undo *undoStack) error {
 	rec.MoxyBin = deps.MoxyCLI.Path()
+	if rec.MoxyBin != "" && !filepath.IsAbs(rec.MoxyBin) {
+		// Pin the unit to this exact binary, not a later PATH lookup.
+		if abs, err := exec.LookPath(rec.MoxyBin); err == nil {
+			if abs, err = filepath.Abs(abs); err == nil {
+				rec.MoxyBin = abs
+			}
+		}
+	}
 	dir := req.SpawnerDir
 	if dir == "" {
 		wd, err := os.Getwd()
@@ -581,19 +590,25 @@ func checkBriefNarrows(ctx context.Context, deps LifecycleDeps, req SpawnRequest
 	rec.ParentMoxyfile = deps.Store.stagedParentMoxyfilePath(rec.RunKey, rec.BriefDigest)
 	rec.ParentMoxyfileDigest = sha256Digest(parent)
 	child := deps.Store.stagedChildMoxyfilePath(rec.RunKey, rec.BriefDigest)
-	for path, data := range map[string][]byte{rec.ParentMoxyfile: parent, child: []byte(moxyfile)} {
-		if err := writeFileAtomic(path, data); err != nil {
-			return fmt.Errorf("staging %s: %w", path, err)
-		}
-	}
+	// The cleanup goes on the stack first, so a failure writing the second
+	// file does not leak the first.
 	undo.push(func(context.Context, error) error {
 		return errors.Join(removeIfExists(rec.ParentMoxyfile), removeIfExists(child))
 	})
+	for _, f := range []struct {
+		path string
+		data []byte
+	}{{rec.ParentMoxyfile, parent}, {child, []byte(moxyfile)}} {
+		if err := writeFileAtomic(f.path, f.data); err != nil {
+			return fmt.Errorf("staging %s: %w", f.path, err)
+		}
+	}
 	res, err := deps.MoxyCLI.Narrows(ctx, env, rec.ParentMoxyfile, child)
 	if err != nil {
 		return err
 	}
 	if res.Widens {
+		res.MoxyBin, res.ParentMoxyfileDigest = rec.MoxyBin, rec.ParentMoxyfileDigest
 		return &ErrBriefWidens{Lines: res.Lines, result: res}
 	}
 	return nil
@@ -677,12 +692,18 @@ func agentUnit(rec *ChildRecord, cred Credential, req SpawnRequest, briefEnv map
 	if req.MoxyURL != "" {
 		env[MoxyURLEnv] = req.MoxyURL
 	}
+	runArgv := []string{req.JugglerBin, "run", "--brief", rec.BriefPath, "--job", rec.Job, "--brief-stanza", rec.BriefStanza}
+	if rec.MoxyBin != "" {
+		// The unit serves with the moxy that ran the narrowing check, so the
+		// MOXY_PARENT_MOXYFILE it is handed is enforced by a build that knows it.
+		runArgv = append(runArgv, "--moxy", rec.MoxyBin)
+	}
 	return TransientUnit{
 		Name:         rec.Unit,
 		RuntimeMax:   runtimeMax,
 		ExecStopPost: []string{req.JugglerBin, "exit-wake", "--job", rec.Job, "--target", rec.Parent},
 		Env:          env,
-		Exec:         []string{req.JugglerBin, "run", "--brief", rec.BriefPath, "--job", rec.Job, "--brief-stanza", rec.BriefStanza},
+		Exec:         runArgv,
 	}
 }
 

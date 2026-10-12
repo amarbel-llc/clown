@@ -273,11 +273,12 @@ A call's URIs come from the MCP result's
 first, then from its content blocks.
 A call whose declared kind is read-only
 .Pq Ql list , search , read , get , query
-records no URIs, and a
+records no URIs, so read-only tools must declare such a kind; every
+other call keeps all its URIs, a
 .Ql madder://
-URI
-.Pq moxy's blob store standing in for an oversized result
-is never one.
+blob link
+.Pq moxy's store for an oversized result, which may hold the product
+included.
 Success is measured, never reported: the model never claims it.
 .It The evaluator
 A jq program, run embedded over the ledger JSON, that must produce exactly one

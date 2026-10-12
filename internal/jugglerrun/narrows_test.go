@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -33,6 +34,8 @@ func TestSpawnChild_NarrowingBriefIsSpawnedUnderItsParentReference(t *testing.T)
 	h := newHarness(t)
 	pinPrincipals(h, testRoot, "child-1")
 	newRun(t, h, "rec-42")
+	t.Setenv(SessionIDEnv, "spawner-principal")
+	t.Setenv("TROUPE_XMPP_USER", "spawner-user")
 	rec, err := spawnForNarrows(h, testTask)
 	if err != nil {
 		t.Fatal(err)
@@ -42,6 +45,19 @@ func TestSpawnChild_NarrowingBriefIsSpawnedUnderItsParentReference(t *testing.T)
 	if len(moxy) != 2 || strings.Join(moxy[0].Argv, " ") != "show-effective-moxyfile --dir /spawner/cwd" ||
 		moxy[0].Env["MOXIN_PATH"] != "/spawner/moxins" || moxy[1].Argv[0] != "narrows" {
 		t.Fatalf("moxy calls = %+v", moxy)
+	}
+	for _, c := range moxy {
+		if _, ok := c.Env[SessionIDEnv]; ok {
+			t.Errorf("the spawner's principal must not reach moxy: %v", c.Env)
+		}
+		if _, ok := c.Env["TROUPE_XMPP_USER"]; ok {
+			t.Errorf("the spawner's XMPP identity must not reach moxy: %v", c.Env)
+		}
+	}
+	units := h.fakes.Calls(t, "systemd-run")
+	argv := units[len(units)-1].Argv
+	if tail := strings.Join(argv[len(argv)-2:], " "); tail != "--moxy "+rec.MoxyBin || !filepath.IsAbs(rec.MoxyBin) {
+		t.Errorf("the unit must serve with the checking moxy %q: argv tail %q", rec.MoxyBin, tail)
 	}
 	if got := strings.Join(moxy[1].Argv, " "); got != "narrows --parent "+rec.ParentMoxyfile+" --child "+h.deps.Store.stagedChildMoxyfilePath("rec-42", rec.BriefDigest) {
 		t.Errorf("narrows argv = %q", got)
@@ -93,8 +109,40 @@ func TestSpawnChild_WideningBriefIsRefusedBeforeTheMint(t *testing.T) {
 	}
 	refusals := callsOf(l, "narrows")
 	if len(refusals) != 1 || refusals[0].Kind != "refusal" || refusals[0].OK || len(refusals[0].Violations) != 2 ||
-		refusals[0].Violations[0].Key != "allow-tools" {
+		refusals[0].Violations[0].Key != "allow-tools" || refusals[0].ViolationsMissing ||
+		refusals[0].MoxyBin != h.fakes.Moxy || !strings.HasPrefix(refusals[0].ParentMoxyfileDigest, "sha256:") {
 		t.Errorf("ledger = %s", data)
+	}
+}
+
+func TestSpawnChild_RefusalWithoutStructuredViolationsSaysSo(t *testing.T) {
+	h := newHarness(t)
+	pinPrincipals(h, testRoot, "child-1")
+	res := newRun(t, h, "rec-42")
+	h.fakes.Fail(t, "moxy", "narrows-widen")
+	h.fakes.Fail(t, "moxy", "narrows-nojson")
+	if _, err := spawnForNarrows(h, testTask); err == nil || !strings.Contains(err.Error(), "servers.shell") {
+		t.Fatalf("err = %v", err)
+	}
+	data, _ := JobLedger(context.Background(), h.deps, res.RunJob, "")
+	if !strings.Contains(string(data), `"violations_missing": true`) || strings.Contains(string(data), `"violations": [`) {
+		t.Errorf("ledger = %s", data)
+	}
+}
+
+func TestSpawnChild_MintFailureRemovesTheStagedMoxyfiles(t *testing.T) {
+	h := newHarness(t)
+	pinPrincipals(h, testRoot, "child-1")
+	newRun(t, h, "rec-42")
+	h.fakes.Fail(t, "troupe", "mint")
+	if _, err := spawnForNarrows(h, testTask); err == nil || !strings.Contains(err.Error(), "minting the agent principal") {
+		t.Fatalf("err = %v", err)
+	}
+	digest := BriefDigest(templateBytes(), []byte(testTask))
+	for _, p := range []string{h.deps.Store.stagedParentMoxyfilePath("rec-42", digest), h.deps.Store.stagedChildMoxyfilePath("rec-42", digest)} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("%s must be removed after a failed mint: %v", p, err)
+		}
 	}
 }
 

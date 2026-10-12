@@ -65,6 +65,11 @@ type RunLedgerEntry struct {
 	// Narrows-refusal field (`juggler spawn --brief` refused a brief whose
 	// moxyfile widens the spawner's): `moxy narrows --json`'s violations.
 	Violations []NarrowsViolation `json:"violations,omitempty"`
+	// ViolationsMissing: moxy's --json form was unavailable, so Violations
+	// is empty although the check found violations.
+	ViolationsMissing    bool   `json:"violations_missing,omitempty"`
+	MoxyBin              string `json:"moxy_bin,omitempty"`
+	ParentMoxyfileDigest string `json:"parent_moxyfile_digest,omitempty"`
 
 	// Teardown-entry field: the account's JID (Principal above names its
 	// key).

@@ -941,7 +941,7 @@ EOF
     and .calls[0].uris == ["https://forge.test/o/r/issues/7"]' "$(field .ledger)" >/dev/null
 }
 
-@test "run: a blobbed read-only listing before the create leaves exactly one artifact (clown#253)" {
+@test "run: a blobbed read-only listing before the create leaves only the create's artifacts (clown#253)" {
   local agent_dir="$BATS_TEST_TMPDIR/agent"
   mkdir -p "$agent_dir"
   local list='{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"c1","type":"function","function":{"name":"ring_list_issues","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}'
@@ -985,10 +985,11 @@ EOF
   wait "$pid" 2>/dev/null || true
   expect_status 0
   [[ $(field .state) == succeeded ]]
-  # The artifacts are the ok calls with URIs (ArtifactsFromLedger): just the issue.
+  # The artifacts are the ok calls with URIs (ArtifactsFromLedger): only the
+  # create's (its kind), which keeps its blob link beside the issue.
   jq -e '(.calls | length) == 2 and .calls[0].kind == "list" and .calls[0].uris == []
     and [.calls[] | select(.ok and (.uris | length) > 0) | {tool, kind, uris}]
-      == [{"tool":"ring_create_issue","kind":"issue","uris":["https://forge.test/o/r/issues/8"]}]' "$(field .ledger)" >/dev/null
+      == [{"tool":"ring_create_issue","kind":"issue","uris":["https://forge.test/o/r/issues/8","madder://blobs/blake2b256-echo"]}]' "$(field .ledger)" >/dev/null
 }
 
 # --- binary resolution -----------------------------------------------------

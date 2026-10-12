@@ -588,7 +588,8 @@ var FakeNarrowsViolations = []string{
 // fakeMoxyCLI is moxy's narrowing CLI (moxy 0c17cea): show-effective-moxyfile
 // prints FakeEffectiveMoxyfile; narrows exits 0 unless a knob says
 // otherwise — fail/moxy-narrows-widen exits 1 with FakeNarrowsViolations
-// (lines, or the --json form), fail/moxy-narrows-broken exits 2 with a
+// (lines, or the --json form; with fail/moxy-narrows-nojson too, the --json
+// form is unparseable), fail/moxy-narrows-broken exits 2 with a
 // reason on stderr. Both verbs check their path arguments exist.
 func fakeMoxyCLI(dir string, args []string) int {
 	if len(args) == 0 {
@@ -615,6 +616,10 @@ func fakeMoxyCLI(dir string, args []string) int {
 			fmt.Fprintln(os.Stderr, "moxy narrows: child: parsing moxyfile: toml: line 3: expected '='")
 			return 2
 		case failKnob(dir, "moxy-narrows-widen"):
+			if fl["json"] == "true" && failKnob(dir, "moxy-narrows-nojson") {
+				fmt.Println("not json")
+				return 1
+			}
 			if fl["json"] == "true" {
 				var vs []map[string]string
 				for _, l := range FakeNarrowsViolations {
