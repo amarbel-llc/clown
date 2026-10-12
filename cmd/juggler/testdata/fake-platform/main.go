@@ -1,16 +1,18 @@
 // Command fake-platform is the bats lane's stand-in for the platform half of
 // the juggler agent substrate (FDR 0019), in two modes:
 //
-//   - JUGGLERRUNTEST_FAKE=<ringmaster|troupe|systemd-run>
+//   - JUGGLERRUNTEST_FAKE=<ringmaster|troupe|systemd-run|moxy|systemctl>
 //     JUGGLERRUNTEST_DIR=<dir> fake-platform <verb args...> behaves as that
 //     binary, exactly as the Go tests' fakes do (internal/jugglerrun/
 //     jugglerruntest): a stateful per-target ringmaster journal, a troupe
 //     that records MUC posts and wakes, a systemd-run that records and
-//     succeeds. Every invocation is appended to <dir>/calls.jsonl, and a
-//     file <dir>/fail/<tool>-<verb> makes that verb exit 1. The bats file
-//     wraps it in one tiny shell script per tool name so juggler can be
-//     pointed at the wrappers through JUGGLER_{RINGMASTER,TROUPE,
-//     SYSTEMD_RUN}_BIN.
+//     succeeds, and a systemctl that answers is-system-running "running"
+//     unless jugglerruntest.Fakes.SetSystemctlState says otherwise. Every
+//     invocation is appended to <dir>/calls.jsonl, and a file
+//     <dir>/fail/<tool>-<verb> makes that verb exit 1. The bats file wraps
+//     it in one tiny shell script per tool name so juggler can be pointed
+//     at the wrappers through JUGGLER_{RINGMASTER,TROUPE,SYSTEMD_RUN,
+//     SYSTEMCTL}_BIN.
 //
 //   - fake-platform serve-decisions --dir <dir> serves an OpenRouter
 //     Decisions endpoint (POST /api/alpha/decisions) on a loopback port,

@@ -34,7 +34,7 @@ setup_file() {
 
   # One tiny wrapper per platform binary name.
   local tool
-  for tool in ringmaster troupe systemd-run moxy; do
+  for tool in ringmaster troupe systemd-run moxy systemctl; do
     printf '#!%s\nJUGGLERRUNTEST_FAKE=%s JUGGLERRUNTEST_DIR=%s exec %s "$@"\n' \
       "$BASH" "$tool" "$FAKE_DIR" "$FAKE_PLATFORM_BIN" >"$FAKE_BIN/$tool"
     chmod +x "$FAKE_BIN/$tool"
@@ -44,6 +44,9 @@ setup_file() {
   export JUGGLER_SYSTEMD_RUN_BIN="$FAKE_BIN/systemd-run"
   # spawn --brief's narrowing check (show-effective-moxyfile + narrows).
   export JUGGLER_MOXY_BIN="$FAKE_BIN/moxy"
+  # spawn's systemd readiness precondition (is-system-running); the fake
+  # reports "running" unless a test writes $FAKE_DIR/systemctl-state.
+  export JUGGLER_SYSTEMCTL_BIN="$FAKE_BIN/systemctl"
 
   # juggler's lifecycle state and models file live in the scratch dir, never
   # in the real ~/.local/state or ~/.local/share.
@@ -174,6 +177,16 @@ set_decision() {
   printf '%s' "$2" >"$DEC_DIR/body"
 }
 
+# set_systemctl_state <state>: the systemctl fake's next `is-system-running`
+# answer ("running" resets to the default).
+set_systemctl_state() {
+  if [[ $1 == running ]]; then
+    rm -f "$FAKE_DIR/systemctl-state"
+  else
+    printf '%s' "$1" >"$FAKE_DIR/systemctl-state"
+  fi
+}
+
 DECIDE_PAYLOAD='{"state":"file an issue on moxy that restart should reconnect","questions":{"route":{"type":"choice","instructions":"Which kind of capture is it?","criteria":{"issue":"File, open or log an issue against a project.","note":"Anything else."}}}}'
 
 # decision_body <confidence>: a usable-shaped answer choosing "issue".
@@ -274,6 +287,20 @@ abort_on_cancel() {
   expect_status 1
   [[ $stderr == *"--operator-jid"* ]]
   [[ $(wc -l <"$FAKE_DIR/calls.jsonl") -eq $calls_before ]]
+}
+
+@test "spawn --new-run refuses before minting when systemd is not ready" {
+  local mints_before
+  mints_before=$(fake_calls '[.[] | select(.tool == "troupe" and .argv[0] == "mint")] | length')
+  set_systemctl_state maintenance
+
+  run_jug spawn --new-run --run-key rk-not-ready --input - --issuer issuer-1 --room room-nr@rooms.test \
+    <<<'{"recording":"should never mint"}'
+  set_systemctl_state running
+  expect_status 1
+  [[ $stderr == 'juggler: spawn: systemd is not ready to start units: is-system-running reported "maintenance"' ]]
+  [[ $(fake_calls '[.[] | select(.tool == "troupe" and .argv[0] == "mint")] | length') -eq $mints_before ]]
+  [[ ! -f $XDG_STATE_HOME/juggler/runs/rk-not-ready.json ]]
 }
 
 # --- decide ----------------------------------------------------------------
@@ -733,6 +760,38 @@ servers.shell: not in the parent" ]]
   run_jug job-ledger "$run_job"
   expect_json '([.calls[] | select(.tool == "narrows" and .kind == "refusal" and .ok == false)] | length == 1)
     and ([.calls[] | select(.tool == "narrows")][0].violations | map(.key)) == ["allow-tools", "servers.shell"]'
+}
+
+@test "spawn --brief refuses before the narrowing check or mint when systemd is not ready, with a ledger entry" {
+  local root run_job mints_before moxy_calls_before
+  root=$(stored_run rk2 .root_principal)
+  run_job=$(stored_run rk2 .run_job)
+  mints_before=$(fake_calls '[.[] | select(.tool == "troupe" and .argv[0] == "mint")] | length')
+  moxy_calls_before=$(fake_calls '[.[] | select(.tool == "moxy")] | length')
+  set_systemctl_state maintenance
+
+  run_jug_as "$root" spawn --brief "$BATS_FILE_TMPDIR/issue-filer.toml" --task - <<<"task systemd not ready"
+  set_systemctl_state running
+  expect_status 1
+  [[ $stderr == 'juggler: spawn: systemd is not ready to start units: is-system-running reported "maintenance"' ]]
+  [[ $(fake_calls '[.[] | select(.tool == "troupe" and .argv[0] == "mint")] | length') -eq $mints_before ]]
+  # The narrowing check is a side effect of THIS spawn too: it must not run
+  # before the systemd precondition.
+  [[ $(fake_calls '[.[] | select(.tool == "moxy")] | length') -eq $moxy_calls_before ]]
+
+  run_jug job-ledger "$run_job"
+  expect_status 0
+  expect_json '[.calls[] | select(.tool == "systemd" and .kind == "refusal" and .ok == false)] | length == 1
+    and .[0].state == "maintenance"'
+}
+
+@test "spawn --brief proceeds when systemd reports degraded" {
+  local root
+  root=$(stored_run rk2 .root_principal)
+  set_systemctl_state degraded
+  launch_child "$root" "task degraded"
+  set_systemctl_state running
+  [[ $(field .jid) == *@xmpp.test ]]
 }
 
 @test "spawn --brief refuses a brief that sets the launcher-owned PATH at parse, before any platform call" {

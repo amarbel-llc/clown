@@ -71,6 +71,10 @@ type RunLedgerEntry struct {
 	MoxyBin              string `json:"moxy_bin,omitempty"`
 	ParentMoxyfileDigest string `json:"parent_moxyfile_digest,omitempty"`
 
+	// Systemd-refusal field (a spawn refused by CheckSystemdReady, FDR 0019
+	// Limitations): the manager's reported is-system-running state.
+	State string `json:"state,omitempty"`
+
 	// Teardown-entry field: the account's JID (Principal above names its
 	// key).
 	JID string `json:"jid,omitempty"`

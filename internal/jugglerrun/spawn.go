@@ -176,6 +176,15 @@ func NewRun(ctx context.Context, deps LifecycleDeps, req NewRunRequest) (NewRunR
 		return newRunResult(prior, true), nil
 	}
 
+	// The systemd readiness precondition (FDR 0019 Limitations) runs before
+	// any side effect, including the mint: a plain error, nothing undone,
+	// nothing saved pending. A first attempt has no run to log a refusal
+	// against; a pending retry's ledger refuses new entries until it
+	// resumes (RunRecord.CheckOpen), so neither case records one.
+	if err := CheckSystemdReady(ctx, deps.Systemd); err != nil {
+		return NewRunResult{}, err
+	}
+
 	var undo undoStack
 	rec := &RunRecord{Schema: RecordSchema, RunKey: req.RunKey, Issuer: req.Issuer, OperatorJID: req.OperatorJID, CreatedAt: deps.Now().UTC()}
 	rec.RootPrincipal = deps.NewRootPrincipal(req.RunKey)
@@ -462,6 +471,20 @@ func SpawnChild(ctx context.Context, deps LifecycleDeps, req SpawnRequest) (rec 
 		return nil, false, err
 	} else if prior != nil {
 		return prior, true, nil
+	}
+
+	// The systemd readiness precondition (FDR 0019 Limitations) runs before
+	// any side effect of THIS spawn: before the narrowing check and before
+	// the mint. A refusal is recorded in the run's ledger the same way a
+	// widening brief is, so it is auditable without a child record.
+	if err := CheckSystemdReady(ctx, deps.Systemd); err != nil {
+		var notReady *ErrSystemdNotReady
+		if errors.As(err, &notReady) {
+			if lerr := appendRunLedgerLocked(deps.Store, run.RunKey, SystemdRefusalEntry(notReady.State)); lerr != nil {
+				err = fmt.Errorf("%w (recording the refusal also failed: %v)", err, lerr)
+			}
+		}
+		return nil, false, err
 	}
 
 	rec = &ChildRecord{Schema: RecordSchema, RunKey: run.RunKey, BriefDigest: digest, Parent: probe.Parent, Room: probe.Room, CreatedAt: deps.Now().UTC()}

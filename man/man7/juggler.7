@@ -304,6 +304,21 @@ up to about 2 seconds late; a holder's cancel is unaffected.
 Each agent is one systemd transient unit started by
 .Cm juggler spawn ,
 its principal minted under a per-run root.
+Before minting anything,
+.Cm juggler spawn
+checks systemd's own readiness to start units
+.Pq Ql systemctl is-system-running ;
+.Fl -user
+checks
+.Ql systemctl Fl -user
+instead:
+only
+.Ql running
+and
+.Ql degraded
+proceed, anything else refuses the spawn synchronously with the
+manager's state, recorded for a subagent spawn in the run ledger as
+.Sy {"tool":"systemd","kind":"refusal","ok":false,"state":"<state>"} .
 .Cm juggler run
 is a ringmaster producer
 .Pq start at boot, progress per turn, done at the end ;

@@ -55,6 +55,7 @@
 .Op Fl -moxy-url Ar url
 .Op Fl -juggler Ar path
 .Op Fl -moxy Ar path
+.Op Fl -systemctl Ar path
 .Op Fl -user
 .Nm
 .Cm exit-wake Fl -job Ar id Fl -target Ar principal
@@ -136,10 +137,13 @@ and
 .Ic wait Fl -on-cancel ) ,
 .Xr troupe 1
 (identity and the run's MUC; a version with
-.Ic mint Fl -password-file )
-and
+.Ic mint Fl -password-file ) ,
 .Xr systemd-run 1
-(one transient unit per agent) as external binaries; see
+(one transient unit per agent) and
+.Xr systemctl 1
+(the spawn readiness precondition,
+.Ic is-system-running )
+as external binaries; see
 .Sx ENVIRONMENT .
 .Sh SUBCOMMANDS
 .Bl -tag -width Ds
@@ -523,6 +527,18 @@ and exits with the state: 0
 .It Cm spawn Fl -new-run Op Fl -run-key Ar key Fl -input Ar file Op Fl -issuer Ar principal Fl -room Ar jid | Fl -room-domain Ar domain Fl -operator-jid Ar jid
 The issuer's entry for a new tree: start a
 .Em run .
+Before anything else, systemd's readiness to start units is checked
+.Pq Ql systemctl is-system-running ;
+.Fl -user
+checks
+.Ql systemctl Fl -user
+instead.
+Only
+.Ql running
+and
+.Ql degraded
+proceed; anything else refuses the spawn before any principal is minted
+.Pq exit 1, Ql juggler: spawn: systemd is not ready to start units: is-system-running reported "<state>" .
 Mints the run's root principal
 .Pq Ql troupe mint Fl -session-key Fl -password-file ;
 the credential is kept by reference, in one password file per identity
@@ -649,6 +665,37 @@ else the one whose root principal is
 .Ev CLOWN_SESSION_ID
 .Pq the glue runs as the run root .
 A resolved run refuses new subagents.
+.Pp
+Before anything else, including the moxyfile narrowing check below,
+systemd's readiness to start units is checked
+.Pq Ql systemctl is-system-running ;
+.Fl -user
+checks
+.Ql systemctl Fl -user
+instead.
+Only
+.Ql running
+and
+.Ql degraded
+.Pq an unrelated unit failed; the manager still starts units
+proceed; anything else
+.Pq Ql starting , Ql initializing , Ql maintenance , Ql stopping , Ql offline , Ql unknown , No or a non-zero exit with no recognized state
+refuses the spawn: exit 1, stderr
+.Ql juggler: spawn: systemd is not ready to start units: is-system-running reported "<state>" ,
+and a
+.Sy {"tool":"systemd","kind":"refusal","ok":false,"reason":"...","state":"<state>"}
+entry in the run ledger
+.Pq auditable without a child record, like a widening brief's entry below .
+The
+.Ql systemctl
+binary is
+.Fl -systemctl ,
+else
+.Ev JUGGLER_SYSTEMCTL_BIN ,
+else the one burned in at build time, else
+.Ql systemctl
+on
+.Ev PATH .
 .Pp
 Before anything is minted the brief's moxyfile is checked against the
 spawner's.
@@ -805,6 +852,12 @@ Start the unit under the user service manager
 .Pq Ql systemd-run Fl -user ;
 for a hardened service user that cannot ask the system manager for a
 transient unit.
+Also selects
+.Ql systemctl Fl -user
+for the systemd readiness precondition.
+.It Fl -systemctl Ar path
+The systemctl binary the systemd readiness precondition runs
+.Pq default Ev JUGGLER_SYSTEMCTL_BIN , No then the build's, then Ql systemctl No on Ev PATH .
 .It Fl -ringmaster Ar path , Fl -troupe Ar path , Fl -systemd-run Ar path
 The consumed binaries; see
 .Sx ENVIRONMENT .
@@ -1163,18 +1216,20 @@ Read by the daemon and, directly, by
 .Cm run , decide
 and
 .Cm spawn .
-.It Ev JUGGLER_RINGMASTER_BIN , Ev JUGGLER_TROUPE_BIN , Ev JUGGLER_SYSTEMD_RUN_BIN , Ev JUGGLER_MOXY_BIN
+.It Ev JUGGLER_RINGMASTER_BIN , Ev JUGGLER_TROUPE_BIN , Ev JUGGLER_SYSTEMD_RUN_BIN , Ev JUGGLER_SYSTEMCTL_BIN , Ev JUGGLER_MOXY_BIN
 The binaries the substrate verbs execute.
 Precedence: the
 .Fl -ringmaster ,
 .Fl -troupe ,
-.Fl -systemd-run
+.Fl -systemd-run ,
+.Fl -systemctl
 or
 .Fl -moxy
 flag, then the variable, then the store path burned in at build time,
 then the bare name on
 .Ev PATH .
-In the nix build ringmaster, troupe and systemd-run are burned in; moxy is
+In the nix build ringmaster, troupe, systemd-run and systemctl are burned
+in; moxy is
 looked up on
 .Ev PATH
 unless the juggler was built by

@@ -74,6 +74,7 @@ func newHarness(t *testing.T) *harness {
 		Troupe:     ExecTroupe{Bin: f.Troupe},
 		Units:      ExecSystemdRun{Bin: f.SystemdRun},
 		MoxyCLI:    ExecMoxyCLI{Bin: f.Moxy},
+		Systemd:    ExecSystemdChecker{Bin: f.Systemctl},
 		Store:      Store{Root: t.TempDir()},
 	}}
 }

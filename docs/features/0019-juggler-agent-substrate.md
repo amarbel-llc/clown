@@ -54,7 +54,10 @@ It is a ringmaster **producer**: `job_start` at boot, `job_progress` per
 turn, `job_done` at the end. It is NOT a ringmaster-spawned process.
 
 **`juggler spawn`** is the launcher-side glue a spawner calls instead of
-assembling the pieces by hand. Given a brief, it:
+assembling the pieces by hand. Before anything else, it checks systemd's
+own readiness to start units (`systemctl is-system-running`, or `--user`
+under `--user`); see Limitations for the accepted states and the refusal
+shape. Given a brief, it then:
 
 1. mints the agent's principal (a fresh UUID) and its JID via
    `troupe mint --session-key <uuid>`, recording the credential by
@@ -876,7 +879,21 @@ The router, before any subagent exists:
   - *systemd degraded* (refuses transient units, D-Bus/polkit down,
     delegation broken): `juggler spawn` fails synchronously before an
     agent exists and the fallback runs. A legible stop. `juggler spawn`
-    SHOULD check `systemctl is-system-running` as a precondition.
+    checks `systemctl is-system-running` (`--user` under `--user`) as a
+    precondition, before the moxyfile narrowing check and before any
+    principal is minted: `running` and `degraded` (an unrelated unit
+    failed; the manager still starts units) proceed, anything else —
+    `starting`, `initializing`, `maintenance`, `stopping`, `offline`,
+    `unknown`, or a non-zero exit with no recognized state — refuses the
+    spawn (exit 1, `juggler: spawn: systemd is not ready to start units:
+    is-system-running reported "<state>"`). A `spawn --brief` refusal is
+    recorded in the run ledger the same way a widening brief is
+    (`{tool:"systemd",kind:"refusal",ok:false,reason,state}`), auditable
+    without a child record; `spawn --new-run` has no run yet to record
+    one against, so its refusal is a plain error. Internally the check
+    runs through the same CommandRunner seam as `moxy narrows` and
+    `systemd-run` (`internal/jugglerrun`'s `SystemdChecker`), so it is
+    faked and tested the same way.
   - *systemd regresses*: a wall clock not enforced loses only the
     backstop (the loop's own budget is primary); a post-stop hook not
     run loses the wake, not the verdict (the reaper still writes

@@ -10,12 +10,15 @@
 // spool-path/wait behave like the real verbs; the troupe fake records MUC
 // posts and wakes and keeps room affiliations (`muc create`/`muc affiliate`,
 // with troupe's owner and last-owner rules); the systemd-run fake records and
-// succeeds. A file <dir>/fail/<tool>-<verb> makes that verb exit 1;
-// <dir>/fail/troupe-muc-<sub> fails one muc subverb, and
-// <dir>/fail/troupe-mint-revoke-login makes mint-revoke fail the way a SASL
-// login refusal does (exit 1, Prosody's refusal text after "xmpp: negotiate:",
-// the file kept), and <dir>/fail/troupe-mint-revoke-tls the way a TLS failure
-// during negotiation does.
+// succeeds; the systemctl fake answers `is-system-running` with "running"
+// unless SetSystemctlState says otherwise. A file <dir>/fail/<tool>-<verb>
+// makes that verb exit 1 (for systemctl, verb is always "is-system-running",
+// so Fail(t, "systemctl", "is-system-running") simulates a check that cannot
+// read any state at all); <dir>/fail/troupe-muc-<sub> fails one muc subverb,
+// and <dir>/fail/troupe-mint-revoke-login makes mint-revoke fail the way a
+// SASL login refusal does (exit 1, Prosody's refusal text after "xmpp:
+// negotiate:", the file kept), and <dir>/fail/troupe-mint-revoke-tls the way
+// a TLS failure during negotiation does.
 package jugglerruntest
 
 import (
@@ -54,9 +57,10 @@ type Fakes struct {
 	Troupe     string
 	SystemdRun string
 	Moxy       string
+	Systemctl  string
 }
 
-// Install writes the three wrappers into a fresh temp dir.
+// Install writes the wrappers into a fresh temp dir.
 func Install(t testing.TB) *Fakes {
 	t.Helper()
 	dir := t.TempDir()
@@ -65,7 +69,7 @@ func Install(t testing.TB) *Fakes {
 		t.Fatal(err)
 	}
 	f := &Fakes{Dir: dir}
-	for tool, dst := range map[string]*string{"ringmaster": &f.Ringmaster, "troupe": &f.Troupe, "systemd-run": &f.SystemdRun, "moxy": &f.Moxy} {
+	for tool, dst := range map[string]*string{"ringmaster": &f.Ringmaster, "troupe": &f.Troupe, "systemd-run": &f.SystemdRun, "moxy": &f.Moxy, "systemctl": &f.Systemctl} {
 		path := filepath.Join(dir, "bin", tool)
 		script := fmt.Sprintf("#!/bin/sh\n%s=%s %s=%s exec %s \"$@\"\n", toolEnv, shQuote(tool), dirEnv, shQuote(dir), shQuote(self))
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -346,7 +350,14 @@ func runFake(tool, dir string, args []string) int {
 	}
 	_ = appendJSONLine(filepath.Join(dir, "calls.jsonl"), Call{Tool: tool, Argv: args, Env: env})
 	verb := "launch"
-	if tool != "systemd-run" && len(args) > 0 {
+	switch {
+	case tool == "systemd-run":
+		verb = "launch"
+	case tool == "systemctl":
+		// The fake implements only is-system-running, whatever flags
+		// (--user) precede it.
+		verb = "is-system-running"
+	case len(args) > 0:
 		verb = args[0]
 	}
 	if _, err := os.Stat(filepath.Join(dir, "fail", tool+"-"+verb)); err == nil {
@@ -362,6 +373,8 @@ func runFake(tool, dir string, args []string) int {
 		return 0
 	case "moxy":
 		return fakeMoxyCLI(dir, args)
+	case "systemctl":
+		return fakeSystemctl(dir)
 	}
 	fmt.Fprintf(os.Stderr, "unknown fake %q\n", tool)
 	return 2
@@ -640,6 +653,34 @@ func fakeMoxyCLI(dir string, args []string) int {
 	}
 	fmt.Fprintf(os.Stderr, "fake moxy: unknown verb %q\n", args[0])
 	return 2
+}
+
+// SetSystemctlState makes the systemctl fake's `is-system-running` report
+// state (default "running"): exit 0 for "running", else systemctl's own
+// exit 1 with state on stdout, e.g. SetSystemctlState(t, "degraded") or
+// SetSystemctlState(t, "maintenance"). Use Fail(t, "systemctl",
+// "is-system-running") instead for a check that cannot read any state at
+// all (systemctl itself unreachable: exit 1, nothing on stdout).
+func (f *Fakes) SetSystemctlState(t testing.TB, state string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(f.Dir, "systemctl-state"), []byte(state), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// fakeSystemctl is `systemctl is-system-running`: prints the knob state set
+// by SetSystemctlState (default "running") and exits 0 only for "running",
+// mirroring systemctl's own exit code (systemctl(1)).
+func fakeSystemctl(dir string) int {
+	state := "running"
+	if b, err := os.ReadFile(filepath.Join(dir, "systemctl-state")); err == nil {
+		state = strings.TrimSpace(string(b))
+	}
+	fmt.Println(state)
+	if state == "running" {
+		return 0
+	}
+	return 1
 }
 
 func failKnob(dir, name string) bool {

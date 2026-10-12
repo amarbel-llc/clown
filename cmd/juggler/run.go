@@ -25,7 +25,10 @@ const runUsage = "usage: juggler run --brief <file|-> [--job <id>] [--brief-stan
 type platformBins struct {
 	ringmaster, troupe, systemdRun string
 	// moxy is spawn's --moxy: the binary its narrowing check runs.
-	moxy        string
+	moxy string
+	// systemctl is spawn's --systemctl: the binary its systemd readiness
+	// precondition (FDR 0019 Limitations) runs.
+	systemctl   string
 	userManager bool
 }
 
@@ -71,6 +74,7 @@ func (p platformBins) lifecycleDeps() (jr.LifecycleDeps, error) {
 		Rooms:      jr.ExecRoomProvisioner(troupe),
 		Units:      jr.ExecSystemdRun{Bin: resolveBin(p.systemdRun, jr.SystemdRunBinEnv, SystemdRunPath, "systemd-run"), UserManager: p.userManager},
 		MoxyCLI:    jr.ExecMoxyCLI{Bin: resolveBin(p.moxy, jr.MoxyBinEnv, MoxyPath, "moxy")},
+		Systemd:    jr.ExecSystemdChecker{Bin: resolveBin(p.systemctl, jr.SystemctlBinEnv, SystemctlPath, "systemctl"), UserManager: p.userManager},
 		Store:      store,
 	}, nil
 }

@@ -32,6 +32,7 @@ func lifecycleEnv(t *testing.T) *jugglerruntest.Fakes {
 	t.Setenv(jr.TroupeBinEnv, f.Troupe)
 	t.Setenv(jr.SystemdRunBinEnv, f.SystemdRun)
 	t.Setenv(jr.MoxyBinEnv, f.Moxy)
+	t.Setenv(jr.SystemctlBinEnv, f.Systemctl)
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv(jr.SessionIDEnv, "")
 	t.Setenv(jr.MoxyURLEnv, "")

@@ -14,7 +14,7 @@ import (
 
 const spawnUsage = `usage: juggler spawn --new-run [--run-key <key>] --input <file|-> [--issuer <principal>] (--room <jid> | --room-domain <domain> --operator-jid <jid>)
        juggler spawn --brief <template|-> [--task <file|->] [--run-key <key>] [--wait [--timeout <dur>]] [--moxy-url <url>] [--juggler <path>] [--stop-grace <dur>] [--user]
-  common: [--ringmaster <path>] [--troupe <path>] [--systemd-run <path>]`
+  common: [--ringmaster <path>] [--troupe <path>] [--systemd-run <path>] [--systemctl <path>]`
 
 // operatorJIDEnv is --operator-jid's default.
 const operatorJIDEnv = "JUGGLER_OPERATOR_JID"
@@ -59,7 +59,8 @@ func parseSpawnFlags(args []string, stderr io.Writer) (spawnOpts, error) {
 	fs.StringVar(&o.juggler, "juggler", "", "juggler binary the unit runs (default: this executable)")
 	fs.DurationVar(&o.stopGrace, "stop-grace", jr.DefaultStopGrace, "added to the wall clock for RuntimeMaxSec")
 	fs.StringVar(&o.bins.moxy, "moxy", "", "--brief: the moxy binary the moxyfile narrowing check runs (default $"+jr.MoxyBinEnv+", then the build's moxy, then moxy on PATH)")
-	fs.BoolVar(&o.bins.userManager, "user", false, "start the unit under the user service manager (systemd-run --user)")
+	fs.StringVar(&o.bins.systemctl, "systemctl", "", "the systemctl binary the systemd readiness precondition runs (default $"+jr.SystemctlBinEnv+", then the build's systemctl, then systemctl on PATH)")
+	fs.BoolVar(&o.bins.userManager, "user", false, "start the unit under the user service manager (systemd-run --user; also selects systemctl --user for the readiness precondition)")
 	o.bins.register(fs, true)
 	if err := fs.Parse(args); err != nil {
 		return o, err

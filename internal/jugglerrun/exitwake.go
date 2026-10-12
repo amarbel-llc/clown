@@ -66,6 +66,9 @@ type LifecycleDeps struct {
 	// MoxyCLI checks a brief's moxyfile against the spawner's before a spawn
 	// (FDR 0019 §5); unset, every spawn fails rather than skip the check.
 	MoxyCLI MoxyCLI
+	// Systemd checks systemd's readiness to start units before a spawn (FDR
+	// 0019 Limitations); unset, every spawn fails rather than skip the check.
+	Systemd SystemdChecker
 	Store   Store
 	Now     func() time.Time
 	// NewPrincipal (children, fresh run keys) defaults to NewPrincipal.
@@ -87,6 +90,9 @@ func (d LifecycleDeps) withDefaults() LifecycleDeps {
 	}
 	if d.MoxyCLI == nil {
 		d.MoxyCLI = missingMoxyCLI{}
+	}
+	if d.Systemd == nil {
+		d.Systemd = missingSystemdChecker{}
 	}
 	if d.Rooms == nil {
 		if t, ok := d.Troupe.(ExecTroupe); ok {

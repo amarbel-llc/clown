@@ -939,9 +939,11 @@
         # into its own repo.
         #
         # mkJugglerGo { moxyPath } builds it. The agent-substrate verbs
-        # (FDR 0019) consume ringmaster, troupe and systemd-run as binaries:
-        # their store paths are burned in as the defaults behind
-        # --ringmaster/--troupe/--systemd-run and JUGGLER_*_BIN. moxy is NOT an
+        # (FDR 0019) consume ringmaster, troupe, systemd-run and systemctl
+        # (the spawn readiness precondition) as binaries: their store paths
+        # are burned in as the defaults behind
+        # --ringmaster/--troupe/--systemd-run/--systemctl and JUGGLER_*_BIN.
+        # moxy is NOT an
         # input of this flake (moxy's flake pins clown, so that would pin the
         # two repos mutually), so MoxyPath is empty by default and `juggler run`
         # resolves moxy from PATH (or --moxy / JUGGLER_MOXY_BIN). mkJuggler
@@ -966,6 +968,8 @@
               # bare name (resolveBin) where there is no systemd (darwin).
               "main.SystemdRunPath" =
                 lib.optionalString pkgs.stdenv.hostPlatform.isLinux "${pkgs.systemd}/bin/systemd-run";
+              "main.SystemctlPath" =
+                lib.optionalString pkgs.stdenv.hostPlatform.isLinux "${pkgs.systemd}/bin/systemctl";
             }
             // lib.optionalAttrs (moxyPath != "") { "main.MoxyPath" = moxyPath; };
           };

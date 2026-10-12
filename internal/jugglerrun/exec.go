@@ -30,6 +30,7 @@ const (
 	RingmasterBinEnv = "JUGGLER_RINGMASTER_BIN"
 	TroupeBinEnv     = "JUGGLER_TROUPE_BIN"
 	SystemdRunBinEnv = "JUGGLER_SYSTEMD_RUN_BIN"
+	SystemctlBinEnv  = "JUGGLER_SYSTEMCTL_BIN"
 	MoxyURLEnv       = "JUGGLER_MOXY_URL"
 
 	SessionIDEnv = "CLOWN_SESSION_ID"
