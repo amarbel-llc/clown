@@ -886,14 +886,29 @@ The router, before any subagent exists:
     `starting`, `initializing`, `maintenance`, `stopping`, `offline`,
     `unknown`, or a non-zero exit with no recognized state — refuses the
     spawn (exit 1, `juggler: spawn: systemd is not ready to start units:
-    is-system-running reported "<state>"`). A `spawn --brief` refusal is
-    recorded in the run ledger the same way a widening brief is
-    (`{tool:"systemd",kind:"refusal",ok:false,reason,state}`), auditable
-    without a child record; `spawn --new-run` has no run yet to record
-    one against, so its refusal is a plain error. Internally the check
-    runs through the same CommandRunner seam as `moxy narrows` and
-    `systemd-run` (`internal/jugglerrun`'s `SystemdChecker`), so it is
-    faked and tested the same way.
+    is-system-running reported "<state>"`). When systemctl's exit carries
+    no state at all — D-Bus or polkit down, no user bus under `--user` —
+    the state is normalized to `"unknown"` but the refusal's `detail`
+    carries systemctl's own exit code and stderr, so that case is never
+    indistinguishable from systemd genuinely answering `unknown`
+    (message: `is-system-running reported no state (systemctl exit
+    <n>: <stderr>)`). A `spawn --brief` refusal is recorded in the run
+    ledger the same way a widening brief is
+    (`{tool:"systemd",kind:"refusal",ok:false,reason,state,detail}`,
+    `detail` only when no state was read), auditable without a child
+    record; `spawn --new-run` has no run yet to record one against, so
+    its refusal is a plain error. Internally the check shells out through
+    the same `runCommand`/`Command` seam (`internal/jugglerrun/exec.go`)
+    `moxy narrows` and `systemd-run` use, behind a small `SystemdChecker`
+    interface, so it is faked and tested the same way. Two caveats of
+    checking systemctl at all: `spawn --new-run` previously needed no
+    systemd and now fails wherever `systemctl` is unavailable (darwin:
+    `SystemctlPath` is empty and the bare name is not found; any other
+    host without systemd); and the check follows `--user` exactly as
+    `systemd-run` does, so a glue that calls `--new-run` without `--user`
+    but spawns children with `--user` checks the *system* manager for the
+    run while checking the *user* manager for each child — `--user`
+    otherwise means nothing to `--new-run`, which starts no unit itself.
   - *systemd regresses*: a wall clock not enforced loses only the
     backstop (the loop's own budget is primary); a post-stop hook not
     run loses the wake, not the verdict (the reaper still writes

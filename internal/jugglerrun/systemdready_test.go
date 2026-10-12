@@ -7,17 +7,19 @@ import (
 	"testing"
 )
 
-// stubSystemdChecker reports state (or err) without shelling out.
+// stubSystemdChecker reports r (or err) without shelling out.
 type stubSystemdChecker struct {
-	state string
-	err   error
+	r   SystemdReadiness
+	err error
 }
 
-func (s stubSystemdChecker) IsSystemRunning(context.Context) (string, error) { return s.state, s.err }
+func (s stubSystemdChecker) IsSystemRunning(context.Context) (SystemdReadiness, error) {
+	return s.r, s.err
+}
 
 func TestCheckSystemdReady_AcceptsRunningAndDegraded(t *testing.T) {
 	for _, state := range []string{"running", "degraded"} {
-		if err := CheckSystemdReady(context.Background(), stubSystemdChecker{state: state}); err != nil {
+		if err := CheckSystemdReady(context.Background(), stubSystemdChecker{r: SystemdReadiness{State: state}}); err != nil {
 			t.Errorf("state %q: err = %v", state, err)
 		}
 	}
@@ -25,7 +27,7 @@ func TestCheckSystemdReady_AcceptsRunningAndDegraded(t *testing.T) {
 
 func TestCheckSystemdReady_RefusesEveryOtherState(t *testing.T) {
 	for _, state := range []string{"starting", "initializing", "maintenance", "stopping", "offline", "unknown", ""} {
-		err := CheckSystemdReady(context.Background(), stubSystemdChecker{state: state})
+		err := CheckSystemdReady(context.Background(), stubSystemdChecker{r: SystemdReadiness{State: state}})
 		var notReady *ErrSystemdNotReady
 		if !errors.As(err, &notReady) {
 			t.Fatalf("state %q: err = %v, want *ErrSystemdNotReady", state, err)
@@ -40,6 +42,27 @@ func TestCheckSystemdReady_RefusesEveryOtherState(t *testing.T) {
 		if err.Error() != `systemd is not ready to start units: is-system-running reported "`+want+`"` {
 			t.Errorf("state %q: message = %q", state, err.Error())
 		}
+	}
+}
+
+// TestCheckSystemdReady_NoStateCarriesDetailInsteadOfBeingLossy covers the
+// case systemctl exits non-zero with nothing on stdout at all (D-Bus/polkit
+// down, no user bus under --user): the checker's own explanation (Detail)
+// must survive into the refusal and its message, not collapse into a bare
+// "unknown" indistinguishable from systemd genuinely reporting that state.
+func TestCheckSystemdReady_NoStateCarriesDetailInsteadOfBeingLossy(t *testing.T) {
+	checker := stubSystemdChecker{r: SystemdReadiness{Detail: "systemctl exit 1: Failed to connect to bus: no such file or directory"}}
+	err := CheckSystemdReady(context.Background(), checker)
+	var notReady *ErrSystemdNotReady
+	if !errors.As(err, &notReady) {
+		t.Fatalf("err = %v, want *ErrSystemdNotReady", err)
+	}
+	if notReady.State != "unknown" || notReady.Detail != checker.r.Detail {
+		t.Errorf("notReady = %+v", notReady)
+	}
+	wantMsg := `systemd is not ready to start units: is-system-running reported no state (systemctl exit 1: Failed to connect to bus: no such file or directory)`
+	if err.Error() != wantMsg {
+		t.Errorf("message = %q, want %q", err.Error(), wantMsg)
 	}
 }
 
@@ -70,7 +93,7 @@ func TestSpawnChild_RefusedWhenSystemdNotReady(t *testing.T) {
 
 	_, err := spawnForNarrows(h, testTask)
 	var notReady *ErrSystemdNotReady
-	if !errors.As(err, &notReady) || notReady.State != "maintenance" {
+	if !errors.As(err, &notReady) || notReady.State != "maintenance" || notReady.Detail != "" {
 		t.Fatalf("err = %v", err)
 	}
 	if err.Error() != `systemd is not ready to start units: is-system-running reported "maintenance"` {
@@ -97,7 +120,7 @@ func TestSpawnChild_RefusedWhenSystemdNotReady(t *testing.T) {
 		t.Fatal(err)
 	}
 	refusals := callsOf(l, "systemd")
-	if len(refusals) != 1 || refusals[0].Kind != "refusal" || refusals[0].OK || refusals[0].State != "maintenance" {
+	if len(refusals) != 1 || refusals[0].Kind != "refusal" || refusals[0].OK || refusals[0].State != "maintenance" || refusals[0].Detail != "" {
 		t.Errorf("ledger = %s", data)
 	}
 }
@@ -108,8 +131,10 @@ func TestSpawnChild_ACheckThatCannotReadAnyStateRefusesAsUnknown(t *testing.T) {
 	res := newRun(t, h, "rec-42")
 	h.fakes.Fail(t, "systemctl", "is-system-running")
 
-	if _, err := spawnForNarrows(h, testTask); err == nil || err.Error() != `systemd is not ready to start units: is-system-running reported "unknown"` {
-		t.Fatalf("err = %v", err)
+	_, err := spawnForNarrows(h, testTask)
+	wantMsg := `systemd is not ready to start units: is-system-running reported no state (systemctl exit 1: systemctl is-system-running: injected failure)`
+	if err == nil || err.Error() != wantMsg {
+		t.Fatalf("err = %v, want %q", err, wantMsg)
 	}
 	data, err := JobLedger(context.Background(), h.deps, res.RunJob, "")
 	if err != nil {
@@ -119,7 +144,9 @@ func TestSpawnChild_ACheckThatCannotReadAnyStateRefusesAsUnknown(t *testing.T) {
 	if err := json.Unmarshal(data, &l); err != nil {
 		t.Fatal(err)
 	}
-	if refusals := callsOf(l, "systemd"); len(refusals) != 1 || refusals[0].State != "unknown" {
+	refusals := callsOf(l, "systemd")
+	wantDetail := "systemctl exit 1: systemctl is-system-running: injected failure"
+	if len(refusals) != 1 || refusals[0].State != "unknown" || refusals[0].Detail != wantDetail {
 		t.Errorf("ledger = %s", data)
 	}
 }
@@ -128,6 +155,7 @@ func TestSpawnChild_ProceedsUnderDegradedSystemd(t *testing.T) {
 	h := newHarness(t)
 	pinPrincipals(h, testRoot, "child-1")
 	newRun(t, h, "rec-42")
+	systemctlBefore := len(h.fakes.Calls(t, "systemctl"))
 	h.fakes.SetSystemctlState(t, "degraded")
 
 	rec, err := spawnForNarrows(h, testTask)
@@ -136,6 +164,9 @@ func TestSpawnChild_ProceedsUnderDegradedSystemd(t *testing.T) {
 	}
 	if len(h.fakes.Calls(t, "systemd-run")) != 1 || rec.Unit == "" {
 		t.Error("the unit must still start under a degraded systemd")
+	}
+	if got := len(h.fakes.Calls(t, "systemctl")) - systemctlBefore; got != 1 {
+		t.Errorf("systemctl calls = %d, want exactly 1 (the readiness check actually ran)", got)
 	}
 }
 
@@ -199,5 +230,8 @@ func TestNewRun_ProceedsUnderDegradedSystemd(t *testing.T) {
 	}
 	if res.RootPrincipal != testRoot {
 		t.Errorf("res = %+v", res)
+	}
+	if got := len(h.fakes.Calls(t, "systemctl")); got != 1 {
+		t.Errorf("systemctl calls = %d, want exactly 1 (the readiness check actually ran)", got)
 	}
 }

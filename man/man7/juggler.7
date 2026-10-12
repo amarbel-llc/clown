@@ -317,8 +317,10 @@ only
 and
 .Ql degraded
 proceed, anything else refuses the spawn synchronously with the
-manager's state, recorded for a subagent spawn in the run ledger as
-.Sy {"tool":"systemd","kind":"refusal","ok":false,"state":"<state>"} .
+manager's state
+.Pq Ql unknown , No with a Ql detail No explanation, when systemctl's own exit carried no state at all ,
+recorded for a subagent spawn in the run ledger as
+.Sy {"tool":"systemd","kind":"refusal","ok":false,"reason":"...","state":"<state>","detail":"..."} .
 .Cm juggler run
 is a ringmaster producer
 .Pq start at boot, progress per turn, done at the end ;

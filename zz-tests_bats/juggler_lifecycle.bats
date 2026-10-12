@@ -301,6 +301,7 @@ abort_on_cancel() {
   [[ $stderr == 'juggler: spawn: systemd is not ready to start units: is-system-running reported "maintenance"' ]]
   [[ $(fake_calls '[.[] | select(.tool == "troupe" and .argv[0] == "mint")] | length') -eq $mints_before ]]
   [[ ! -f $XDG_STATE_HOME/juggler/runs/rk-not-ready.json ]]
+  [[ ! -d $XDG_STATE_HOME/juggler/runs/rk-not-ready ]]
 }
 
 # --- decide ----------------------------------------------------------------
@@ -763,11 +764,13 @@ servers.shell: not in the parent" ]]
 }
 
 @test "spawn --brief refuses before the narrowing check or mint when systemd is not ready, with a ledger entry" {
-  local root run_job mints_before moxy_calls_before
+  local root run_job mints_before moxy_calls_before children_before pw_before
   root=$(stored_run rk2 .root_principal)
   run_job=$(stored_run rk2 .run_job)
   mints_before=$(fake_calls '[.[] | select(.tool == "troupe" and .argv[0] == "mint")] | length')
   moxy_calls_before=$(fake_calls '[.[] | select(.tool == "moxy")] | length')
+  children_before=$(ls "$XDG_STATE_HOME/juggler/runs/rk2/children/"*.json 2>/dev/null | wc -l)
+  pw_before=$(ls "$XDG_STATE_HOME/juggler/runs/rk2/"*.pw 2>/dev/null | wc -l)
   set_systemctl_state maintenance
 
   run_jug_as "$root" spawn --brief "$BATS_FILE_TMPDIR/issue-filer.toml" --task - <<<"task systemd not ready"
@@ -778,20 +781,42 @@ servers.shell: not in the parent" ]]
   # The narrowing check is a side effect of THIS spawn too: it must not run
   # before the systemd precondition.
   [[ $(fake_calls '[.[] | select(.tool == "moxy")] | length') -eq $moxy_calls_before ]]
+  # No child record, and no new child credential file.
+  [[ $(ls "$XDG_STATE_HOME/juggler/runs/rk2/children/"*.json 2>/dev/null | wc -l) -eq $children_before ]]
+  [[ $(ls "$XDG_STATE_HOME/juggler/runs/rk2/"*.pw 2>/dev/null | wc -l) -eq $pw_before ]]
 
   run_jug job-ledger "$run_job"
   expect_status 0
   expect_json '[.calls[] | select(.tool == "systemd" and .kind == "refusal" and .ok == false)] | length == 1
-    and .[0].state == "maintenance"'
+    and .[0].state == "maintenance" and (.[0] | has("detail") | not)'
+}
+
+@test "spawn --brief refuses with a detail when systemctl reports no state at all" {
+  local root run_job
+  root=$(stored_run rk2 .root_principal)
+  run_job=$(stored_run rk2 .run_job)
+  mkdir -p "$FAKE_DIR/fail"
+  : >"$FAKE_DIR/fail/systemctl-is-system-running"
+
+  run_jug_as "$root" spawn --brief "$BATS_FILE_TMPDIR/issue-filer.toml" --task - <<<"task systemd unreadable"
+  rm -f "$FAKE_DIR/fail/systemctl-is-system-running"
+  expect_status 1
+  [[ $stderr == 'juggler: spawn: systemd is not ready to start units: is-system-running reported no state (systemctl exit 1: systemctl is-system-running: injected failure)' ]]
+
+  run_jug job-ledger "$run_job"
+  expect_json '[.calls[] | select(.tool == "systemd" and .kind == "refusal")] | .[-1].state == "unknown"
+    and .[-1].detail == "systemctl exit 1: systemctl is-system-running: injected failure"'
 }
 
 @test "spawn --brief proceeds when systemd reports degraded" {
-  local root
+  local root systemctl_calls_before
   root=$(stored_run rk2 .root_principal)
+  systemctl_calls_before=$(fake_calls '[.[] | select(.tool == "systemctl")] | length')
   set_systemctl_state degraded
   launch_child "$root" "task degraded"
   set_systemctl_state running
   [[ $(field .jid) == *@xmpp.test ]]
+  [[ $(fake_calls '[.[] | select(.tool == "systemctl")] | length') -eq $((systemctl_calls_before + 1)) ]]
 }
 
 @test "spawn --brief refuses a brief that sets the launcher-owned PATH at parse, before any platform call" {

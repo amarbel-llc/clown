@@ -538,7 +538,28 @@ Only
 and
 .Ql degraded
 proceed; anything else refuses the spawn before any principal is minted
-.Pq exit 1, Ql juggler: spawn: systemd is not ready to start units: is-system-running reported "<state>" .
+.Pq exit 1, Ql juggler: spawn: systemd is not ready to start units: is-system-running reported "<state>" ,
+or, when systemctl's own exit carried no state at all
+.Pq D-Bus or polkit down, no user bus under Fl -user ,
+.Ql ...is-system-running reported no state (systemctl exit <n>: <stderr>) ,
+never silently folded into the
+.Ql unknown
+state .
+This also means
+.Fl -new-run
+now needs a working
+.Ql systemctl ,
+unlike before: it fails where none exists
+.Pq darwin, or any other host without systemd ,
+and it follows
+.Fl -user
+exactly as
+.Xr systemd-run 1
+does, checking the system manager unless
+.Fl -user
+is given \(em which otherwise means nothing to
+.Fl -new-run ,
+since it starts no unit itself .
 Mints the run's root principal
 .Pq Ql troupe mint Fl -session-key Fl -password-file ;
 the credential is kept by reference, in one password file per identity
@@ -682,10 +703,15 @@ proceed; anything else
 .Pq Ql starting , Ql initializing , Ql maintenance , Ql stopping , Ql offline , Ql unknown , No or a non-zero exit with no recognized state
 refuses the spawn: exit 1, stderr
 .Ql juggler: spawn: systemd is not ready to start units: is-system-running reported "<state>" ,
-and a
-.Sy {"tool":"systemd","kind":"refusal","ok":false,"reason":"...","state":"<state>"}
+or, when systemctl's own exit carried no state at all
+.Pq D-Bus or polkit down, no user bus under Fl -user ,
+.Ql ...is-system-running reported no state (systemctl exit <n>: <stderr>)
+\(em never silently folded into the
+.Ql unknown
+state \(em and a
+.Sy {"tool":"systemd","kind":"refusal","ok":false,"reason":"...","state":"<state>","detail":"..."}
 entry in the run ledger
-.Pq auditable without a child record, like a widening brief's entry below .
+.Pq Ql detail No present only for the no-state case; auditable without a child record, like a widening brief's entry below .
 The
 .Ql systemctl
 binary is

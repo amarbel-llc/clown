@@ -480,7 +480,7 @@ func SpawnChild(ctx context.Context, deps LifecycleDeps, req SpawnRequest) (rec 
 	if err := CheckSystemdReady(ctx, deps.Systemd); err != nil {
 		var notReady *ErrSystemdNotReady
 		if errors.As(err, &notReady) {
-			if lerr := appendRunLedgerLocked(deps.Store, run.RunKey, SystemdRefusalEntry(notReady.State)); lerr != nil {
+			if lerr := appendRunLedgerLocked(deps.Store, run.RunKey, SystemdRefusalEntry(notReady.State, notReady.Detail)); lerr != nil {
 				err = fmt.Errorf("%w (recording the refusal also failed: %v)", err, lerr)
 			}
 		}
