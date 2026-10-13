@@ -50,13 +50,15 @@ func TestCheckRingmasterProtocol_MissingBinaryRefuses(t *testing.T) {
 // (the same function cmd/juggler's `juggler run` wires). It proves the lock
 // file itself enforces mutual exclusion the way a monitor's liveness probe
 // depends on: a lock a second AcquireJobLock cannot take is "alive", one it
-// can take again is "gone". (Soften: the probe itself — probeJobLock — is a
-// separate, instantaneous flock-then-unlock, not a second AcquireJobLock;
-// this test exercises the lock file's semantics the probe relies on, not the
-// probe's own code path. Identity with what `ringmaster status` reads holds
-// by code reading, not by this test driving the real CLI: a.target =
-// b.Parent = the CLI's --target, and AcquireJobLock resolves
-// ChannelID(resolveSession(target)) the same way Start does.)
+// can take again is "gone". The probe itself — probeJobLock — is a separate,
+// instantaneous flock-then-unlock, not a second AcquireJobLock; this test
+// exercises the lock file's semantics the probe relies on, not the probe's
+// own code path. Identity with what `ringmaster status` reads holds by code
+// reading, not by this test driving the real CLI: a.target = b.Parent = the
+// CLI's --target, and AcquireJobLock resolves ChannelID(resolveSession(target))
+// the same way Start does. The real bats version (real ringmaster binary, a
+// real `juggler run` subprocess, polling `ringmaster status`) goes with the
+// reaper test, tracked as clown#257.
 func TestJobwakeAcquireJobLock_AliveWhileHeldGoneAfterRelease(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	h := newHarness(t)

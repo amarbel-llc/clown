@@ -234,6 +234,11 @@ func TestRunAgent_AdoptedJobProtocolMismatchRefusesBeforeAcquiringLock(t *testin
 	if out.Job != "" || out.State != "" || out.LedgerPath != "" {
 		t.Fatalf("outcome = %+v, want the zero value: nothing should be written on a protocol mismatch", out)
 	}
+	for _, c := range h.fakes.Calls(t, "ringmaster") {
+		if len(c.Argv) > 0 && c.Argv[0] == "done" {
+			t.Fatalf("ringmaster calls include %v; want no done call — the mismatch must refuse before any write is attempted", c.Argv)
+		}
+	}
 }
 
 // TestRunAgent_ReleasesTheLockOnFinishWithoutLoop covers a run that never

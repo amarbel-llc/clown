@@ -190,8 +190,8 @@ type runOutcomeJSON struct {
 // SIGTERM/SIGINT (a holder's `systemctl stop`), which terminalizes the job
 // aborted; a holder's job_cancel is observed on the journal to the same
 // effect. The exit code mirrors the terminal state: 0 succeeded, 2 failed,
-// 3 aborted, 4 interrupted; 1 is a usage or identity error with no job
-// written.
+// 3 aborted, 4 interrupted; 1 is a usage or identity error, or a protocol
+// mismatch on an adopted `--job`, with no job written.
 func cmdRun(ctx context.Context, resolve func(context.Context, string) (rm.ResolveModelResult, error), httpClient *http.Client, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	var (
 		bins                            platformBins

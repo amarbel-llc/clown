@@ -142,13 +142,13 @@ func (o AgentOutcome) ExitCode() int {
 // the unit's ExecStopPost hook does (§6).
 //
 // A returned error means no job could be addressed (bad identity, a failed
-// job_start) and nothing was written. Once the job exists, every failure is
-// a `failed` terminal record and a nil error — except losing the job lock to
-// another live producer (jobwake.ErrAlreadyLocked), which is also a bare
-// error with nothing written: ringmaster settles a job's terminal
-// first-write-wins (RFC-0018 §2.4), so writing one here at all could
-// permanently clobber the real holder's own outcome, not just duplicate it
-// (clown#256 review finding 5).
+// job_start, or a protocol mismatch on an adopted `--job`) and nothing was
+// written. Once the job exists, every failure is a `failed` terminal record
+// and a nil error — except losing the job lock to another live producer
+// (jobwake.ErrAlreadyLocked), which is also a bare error with nothing
+// written: ringmaster settles a job's terminal first-write-wins (RFC-0018
+// §2.4), so writing one here at all could permanently clobber the real
+// holder's own outcome, not just duplicate it (clown#256 review finding 5).
 func RunAgent(ctx context.Context, deps AgentDeps, req AgentRequest) (AgentOutcome, error) {
 	deps = deps.withDefaults()
 	b := req.Brief

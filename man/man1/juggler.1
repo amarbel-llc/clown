@@ -519,7 +519,8 @@ On an adopted job
 which skips the
 .Ic start
 call that would otherwise run it first, the protocol check below runs
-explicitly before the lock is taken.
+explicitly before the lock is taken; a mismatch there exits 1 and writes
+nothing, same as every other identity failure above.
 A losing race against the reaper
 .Pq or any other writer
 on its own
@@ -577,7 +578,9 @@ and exits with the state: 0
 .Ql aborted ,
 4
 .Ql interrupted ;
-1 is a usage or identity error with no job written.
+1 is a usage or identity error, or a protocol mismatch on an adopted
+.Fl -job ,
+with no job written.
 .It Cm spawn Fl -new-run Op Fl -run-key Ar key Fl -input Ar file Op Fl -issuer Ar principal Fl -room Ar jid | Fl -room-domain Ar domain Fl -operator-jid Ar jid
 The issuer's entry for a new tree: start a
 .Em run .

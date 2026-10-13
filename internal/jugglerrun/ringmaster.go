@@ -108,7 +108,7 @@ func (r ExecRingmaster) Progress(ctx context.Context, target, job, message strin
 
 // exitAlreadyTerminal is ringmaster's `done` exit code for a write refused
 // because the job already carries a terminal record (jobwake.ErrAlreadyTerminal,
-// protocol >= 3, clown#256): a losing race against the v3 liveness reaper or
+// protocol 3, clown#256): a losing race against the v3 liveness reaper or
 // another writer, not a failure of the write itself.
 const exitAlreadyTerminal = 3
 

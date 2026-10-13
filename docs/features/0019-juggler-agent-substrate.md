@@ -1032,8 +1032,8 @@ The router, before any subagent exists:
   catches a duplicate that loses the race for the lock: if an operator's
   manual `juggler run --job X` instead *wins* it before the unit's own
   process starts, the unit's process then loses, exits 1, and its own
-  `ExecStopPost` exit-wake writes a `failed`/crash terminal over the
-  manual run's live, in-progress work — the exact clobber the refusal
+  `ExecStopPost` exit-wake writes an `interrupted` (reason crash) terminal
+  over the manual run's live, in-progress work — the exact clobber the refusal
   exists to prevent, just from the other side. Rare (it needs a human
   racing the unit's own startup), not handled in code; avoid it
   operationally. Any other acquire

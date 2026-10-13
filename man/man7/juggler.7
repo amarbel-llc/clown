@@ -367,7 +367,8 @@ against the protocol it was built for, lazily and once per process,
 refusing loudly on any mismatch before the first real job-platform call;
 on an adopted job
 .Pq Fl -job Ar id , which skips Ic start
-the check runs explicitly before the lock is taken.
+the check runs explicitly before the lock is taken; a mismatch there exits
+1 and writes nothing.
 .Cm juggler exit-wake ,
 the terminal writer of last resort, skips the check and only warns on a
 mismatch: it must never refuse to settle a job over a protocol drift
