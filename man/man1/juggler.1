@@ -132,7 +132,7 @@ They consume
 (jobs; protocol version 3 or later, required for the liveness reaper, its
 .Ql done
 exit 3
-.Pq Fn jobwake.ErrAlreadyTerminal
+.Pq Va jobwake.ErrAlreadyTerminal
 and
 .Ic version Fl -protocol ,
 which
@@ -493,14 +493,25 @@ job
 .Ql interrupted
 if the exit-wake hook never runs either
 .Pq clown#256, ringmaster#27 .
-A lock that cannot be acquired is not fatal: the run proceeds without the
-reaper backstop.
+A lock already held by a live producer
+.Pq Va jobwake.ErrAlreadyLocked
+refuses the run outright, rather than racing it; any other failure to
+acquire is not fatal \(em the run proceeds without the reaper backstop \(em
+but is recorded in the run's ledger
+.Ql notes ,
+not only stderr.
+On an adopted job
+.Pq Fl -job ,
+which skips the
+.Ic start
+call that would otherwise run it first, the protocol check below runs
+explicitly before the lock is taken.
 A losing race against the reaper
 .Pq or any other writer
 on its own
 .Ic done
 call is ringmaster's exit 3
-.Pq Fn jobwake.ErrAlreadyTerminal ,
+.Pq Va jobwake.ErrAlreadyTerminal ,
 relayed as success, not logged as a failure.
 Normally started by
 .Cm spawn
@@ -966,6 +977,11 @@ is the agent's job and
 .Fl -target
 the channel that holds it
 .Pq the agent's parent principal .
+As the terminal writer of last resort it never refuses to act over a
+ringmaster protocol mismatch: unlike every other subcommand it skips the
+exact-match check before touching the job, instead running it once,
+non-fatally, and warning on stderr if it disagrees \(em a real mismatch is
+already caught loudly at spawn or run time, when the job was created.
 When the main process left no terminal record the hook writes one:
 .Bl -tag -width "exit-code, core-dump, oom-kill" -offset indent
 .It Ql success
@@ -1003,7 +1019,7 @@ between its read of the journal and its write
 .Pq ringmaster exit 3, jobwake.ErrAlreadyTerminal; clown#256 ,
 that is not a hook failure: it re-reads the journal and relays whichever
 terminal actually landed
-.Pq typically the reaper's own Ql interrupted , message Ql producer died without writing a terminal record , reason Ql crash, not Ql killed .
+.Pq typically the reaper's own Ql interrupted , message Ql producer died without writing a terminal record , reason Ql crash , not Ql killed .
 .Pp
 It then sends ONE wake
 .Pq Ql troupe message

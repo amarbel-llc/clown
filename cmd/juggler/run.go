@@ -63,19 +63,27 @@ func (p platformBins) troupeClient() jr.ExecTroupe {
 }
 
 // lifecycleDeps wires the exec-backed collaborators and the default store.
-func (p platformBins) lifecycleDeps() (jr.LifecycleDeps, error) {
+// protocolChecked wraps Ringmaster in jr.ProtocolCheckedRingmaster, catching
+// a mismatched ringmaster build (a different job-platform protocol than
+// juggler was built for) before the first real job-platform call — a usage
+// or parse-time refusal that never reaches the platform costs nothing
+// (clown#256). `juggler exit-wake` passes false: it is the terminal writer
+// of last resort and must never refuse to settle a job over a protocol
+// mismatch that was already caught loudly at spawn/run time, when the job
+// was created (review finding 3); it still warns (see cmdExitWake).
+func (p platformBins) lifecycleDeps(protocolChecked bool) (jr.LifecycleDeps, error) {
 	store, err := jr.DefaultStore()
 	if err != nil {
 		return jr.LifecycleDeps{}, err
 	}
 	troupe := p.troupeClient()
 	rmc := p.ringmasterClient()
+	var ringmaster jr.Ringmaster = rmc
+	if protocolChecked {
+		ringmaster = &jr.ProtocolCheckedRingmaster{Inner: rmc, Bin: rmc.Bin}
+	}
 	return jr.LifecycleDeps{
-		// clown#256: a mismatched ringmaster build (a different job-platform
-		// protocol than juggler was built for) is caught before the first
-		// real job-platform call, not every invocation — a usage or
-		// parse-time refusal that never reaches the platform costs nothing.
-		Ringmaster: &jr.ProtocolCheckedRingmaster{Inner: rmc, Bin: rmc.Bin},
+		Ringmaster: ringmaster,
 		Troupe:     troupe,
 		Rooms:      jr.ExecRoomProvisioner(troupe),
 		Units:      jr.ExecSystemdRun{Bin: resolveBin(p.systemdRun, jr.SystemdRunBinEnv, SystemdRunPath, "systemd-run"), UserManager: p.userManager},
@@ -94,9 +102,10 @@ func fail(stderr io.Writer, verb string, err error) int {
 
 // withDeps wires bins' lifecycle collaborators and runs fn under a context
 // derived from parent, bounded by timeout when it is positive. A wiring
-// failure is reported as verb's and exits 1.
-func withDeps(parent context.Context, stderr io.Writer, verb string, bins platformBins, timeout time.Duration, fn func(context.Context, jr.LifecycleDeps) int) int {
-	deps, err := bins.lifecycleDeps()
+// failure is reported as verb's and exits 1. protocolChecked is
+// lifecycleDeps' own parameter (see its doc).
+func withDeps(parent context.Context, stderr io.Writer, verb string, bins platformBins, timeout time.Duration, protocolChecked bool, fn func(context.Context, jr.LifecycleDeps) int) int {
+	deps, err := bins.lifecycleDeps(protocolChecked)
 	if err != nil {
 		return fail(stderr, verb, err)
 	}
@@ -215,7 +224,7 @@ func cmdRun(ctx context.Context, resolve func(context.Context, string) (rm.Resol
 	if moxyURL == "" {
 		moxyURL = os.Getenv(jr.MoxyURLEnv)
 	}
-	return withDeps(ctx, stderr, "run", bins, 0, func(ctx context.Context, deps jr.LifecycleDeps) int {
+	return withDeps(ctx, stderr, "run", bins, 0, true, func(ctx context.Context, deps jr.LifecycleDeps) int {
 		out, err := jr.RunAgent(ctx, jr.AgentDeps{
 			Ringmaster:     deps.Ringmaster,
 			Troupe:         deps.Troupe,

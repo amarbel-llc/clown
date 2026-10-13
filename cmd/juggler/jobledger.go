@@ -40,7 +40,7 @@ func cmdJobLedger(args []string, stdout, stderr io.Writer) int {
 	if !ok {
 		return jr.ExitUsage
 	}
-	return withDeps(context.Background(), stderr, "job-ledger", bins, jobLookupTimeout, func(ctx context.Context, deps jr.LifecycleDeps) int {
+	return withDeps(context.Background(), stderr, "job-ledger", bins, jobLookupTimeout, true, func(ctx context.Context, deps jr.LifecycleDeps) int {
 		data, err := jr.JobLedger(ctx, deps, job, target)
 		if err != nil {
 			return fail(stderr, "job-ledger", err)

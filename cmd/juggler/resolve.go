@@ -85,7 +85,7 @@ func cmdResolve(args []string, stdout, stderr io.Writer) int {
 	if stopGrace > 0 {
 		budget += stopGrace
 	}
-	return withDeps(context.Background(), stderr, "resolve", bins, budget, func(ctx context.Context, deps jr.LifecycleDeps) int {
+	return withDeps(context.Background(), stderr, "resolve", bins, budget, true, func(ctx context.Context, deps jr.LifecycleDeps) int {
 		out, err := jr.Resolve(ctx, deps, jr.ResolveRequest{
 			RunJob: job, State: state, Reason: reason, FallbackArtifacts: artifacts, StopGrace: stopGrace,
 			ResultLine: resultLine, CanaryRoom: canary, KeepAccounts: keepAccounts,

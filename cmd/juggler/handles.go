@@ -16,7 +16,7 @@ func cmdHandles(args []string, stdout, stderr io.Writer) int {
 	if !ok {
 		return jr.ExitUsage
 	}
-	return withDeps(context.Background(), stderr, "handles", bins, jobLookupTimeout, func(ctx context.Context, deps jr.LifecycleDeps) int {
+	return withDeps(context.Background(), stderr, "handles", bins, jobLookupTimeout, true, func(ctx context.Context, deps jr.LifecycleDeps) int {
 		holders, err := jr.JobHandles(ctx, deps, job, target)
 		if err != nil {
 			return fail(stderr, "handles", err)

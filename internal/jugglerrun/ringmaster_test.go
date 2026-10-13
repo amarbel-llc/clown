@@ -37,3 +37,22 @@ func TestCheckRingmasterProtocol_MissingBinaryRefuses(t *testing.T) {
 		t.Fatal("want an error when the binary cannot be run at all")
 	}
 }
+
+// TestProtocolCheckedRingmaster_IgnoresACancelledCallerContext: the FIRST
+// call through a ProtocolCheckedRingmaster instance runs the once-only check
+// under its own context.Background()-derived timeout, never the caller's
+// ctx (clown#256 review finding 2). Without that, a caller's ctx that is
+// already cancelled when the first call lands — WaitCancelRequested's own
+// ctx is exactly this, deliberately cancelled by a SIGTERM or a holder's
+// cancel — would latch context.Canceled into checkErr via sync.Once,
+// failing every later call sharing this instance, including finish's Done
+// under a fresh ctx, and losing the agent's own terminal record.
+func TestProtocolCheckedRingmaster_IgnoresACancelledCallerContext(t *testing.T) {
+	h := newHarness(t)
+	pc := &ProtocolCheckedRingmaster{Bin: h.fakes.Ringmaster}
+	cancelledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := pc.check(cancelledCtx); err != nil {
+		t.Fatalf("err = %v, want the protocol check to ignore the caller's own (already cancelled) ctx entirely", err)
+	}
+}

@@ -41,7 +41,17 @@ func cmdExitWake(getenv func(string) string, args []string, stdout, stderr io.Wr
 	if from == "" {
 		from = getenv(jr.SessionIDEnv)
 	}
-	return withDeps(context.Background(), stderr, "exit-wake", bins, exitWakeTimeout, func(ctx context.Context, deps jr.LifecycleDeps) int {
+	// Unchecked (false): the hook is the terminal writer of last resort
+	// (FDR 0019 §6) and must never refuse to settle a job just because its
+	// own build drifted from ringmaster's — that mismatch is already caught
+	// loudly at spawn/run time, when the job was created (clown#256 review
+	// finding 3). It still warns, below, so a mismatch is never silent.
+	return withDeps(context.Background(), stderr, "exit-wake", bins, exitWakeTimeout, false, func(ctx context.Context, deps jr.LifecycleDeps) int {
+		if rmc, ok := deps.Ringmaster.(jr.ExecRingmaster); ok {
+			if perr := jr.CheckRingmasterProtocol(ctx, rmc.Bin); perr != nil {
+				fmt.Fprintf(stderr, "juggler: exit-wake: warning: %v (continuing: the hook never refuses to settle a job)\n", perr)
+			}
+		}
 		out, err := jr.ExitWake(ctx, deps, jr.ExitWakeRequest{
 			Job:       job,
 			Target:    target,

@@ -445,22 +445,6 @@ func fakeRingmaster(dir string, args []string) int {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
-		if len(recs) == 0 || !isTerminal(recs[len(recs)-1].Type) {
-			if raced, err := consumeDoneRaceOnceKnob(dir); err != nil {
-				fmt.Fprintln(os.Stderr, err)
-				return 1
-			} else if raced {
-				// Simulate the v3 liveness reaper winning the race between
-				// this call's read above and its append below: it writes its
-				// own interrupted terminal first (clown#256).
-				if err := appendRecord(dir, target, job, Record{Source: "fake-reaper", Type: "interrupted", Message: "producer died without writing a terminal record"}); err != nil {
-					fmt.Fprintln(os.Stderr, err)
-					return 1
-				}
-				fmt.Fprintln(os.Stderr, "ringmaster done: already terminal")
-				return 3
-			}
-		}
 		for _, r := range recs {
 			if isTerminal(r.Type) {
 				// ringmaster v3 (clown#256): a write refused because the job
@@ -475,6 +459,22 @@ func fakeRingmaster(dir string, args []string) int {
 		if !isTerminal(fl["state"]) || fl["state"] == "cancelled" {
 			fmt.Fprintf(os.Stderr, "ringmaster done: bad state %q\n", fl["state"])
 			return 2
+		}
+		// Validate --state (above) before consuming the race knob (clown#256
+		// review finding 10): an invalid-state call must not eat it.
+		if raced, err := consumeDoneRaceOnceKnob(dir); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		} else if raced {
+			// Simulate the v3 liveness reaper winning the race between this
+			// call's read above and its append below: it writes its own
+			// interrupted terminal first (clown#256).
+			if err := appendRecord(dir, target, job, Record{Source: "fake-reaper", Type: "interrupted", Message: "producer died without writing a terminal record"}); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			}
+			fmt.Fprintln(os.Stderr, "ringmaster done: already terminal")
+			return 3
 		}
 		return exitFor(appendRecord(dir, target, job, Record{Source: "fake", Type: fl["state"], Message: fl["message"], ResultRef: fl["result-ref"]}))
 	case "status":

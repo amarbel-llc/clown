@@ -332,6 +332,12 @@ terminalize it
 .Ql interrupted
 if the post-stop hook never runs either
 .Pq systemd gone, hook crashed; clown#256, ringmaster#27 .
+A lock already held by a live producer
+.Pq Va jobwake.ErrAlreadyLocked
+refuses the run outright rather than racing it; any other acquire failure
+is not fatal but is recorded in the run's ledger
+.Ql notes ,
+not only stderr.
 The unit's
 .Ql ExecStopPost
 hook
@@ -341,7 +347,7 @@ process left none and waking every holder of the job once.
 A losing race against the reaper
 .Pq or any other writer
 on either one's own done call is ringmaster's exit 3
-.Pq Fn jobwake.ErrAlreadyTerminal ;
+.Pq Va jobwake.ErrAlreadyTerminal ;
 both relay whichever terminal actually landed and report success, never a
 failure.
 .Cm juggler
@@ -349,7 +355,14 @@ exact-matches the installed
 .Cm ringmaster Ns 's
 .Ql version Fl -protocol
 against the protocol it was built for, lazily and once per process,
-refusing loudly on any mismatch before the first real job-platform call.
+refusing loudly on any mismatch before the first real job-platform call;
+on an adopted job
+.Pq Fl -job Ar id , which skips Ic start
+the check runs explicitly before the lock is taken.
+.Cm juggler exit-wake ,
+the terminal writer of last resort, skips the check and only warns on a
+mismatch: it must never refuse to settle a job over a protocol drift
+already caught loudly at spawn or run time.
 .El
 .Pp
 Ringmaster's four terminal states map onto FDR 0032 D6's exit reasons:

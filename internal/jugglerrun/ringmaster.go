@@ -255,9 +255,40 @@ type ProtocolCheckedRingmaster struct {
 	checkErr  error
 }
 
-func (p *ProtocolCheckedRingmaster) check(ctx context.Context) error {
-	p.checkOnce.Do(func() { p.checkErr = CheckRingmasterProtocol(ctx, p.Bin) })
+// protocolCheckTimeout bounds the one-time protocol check; it never inherits
+// a caller's ctx (see check).
+const protocolCheckTimeout = 10 * time.Second
+
+// check runs CheckRingmasterProtocol at most once, under a fresh
+// context.Background() bounded by protocolCheckTimeout rather than the
+// caller's ctx (clown#256 review finding 2): the first call through may be
+// WaitCancelRequested or WaitTerminal, whose ctx is deliberately cancelled
+// (SIGTERM, a holder's cancel) — latching that cancellation into checkErr via
+// sync.Once would fail every later call sharing this instance, including
+// finish's Done under a fresh ctx, losing the agent's own terminal record.
+func (p *ProtocolCheckedRingmaster) check(context.Context) error {
+	p.checkOnce.Do(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), protocolCheckTimeout)
+		defer cancel()
+		p.checkErr = CheckRingmasterProtocol(ctx, p.Bin)
+	})
 	return p.checkErr
+}
+
+// checkRingmasterProtocol lets RunAgent run the same check explicitly,
+// before AcquireJobLock, on an adopted job where no Ringmaster method call
+// happens first (clown#256 review finding 3).
+func (p *ProtocolCheckedRingmaster) checkRingmasterProtocol(ctx context.Context) error {
+	return p.check(ctx)
+}
+
+// protocolChecker is implemented by a Ringmaster adapter that runs a lazy,
+// once-per-process protocol check (ProtocolCheckedRingmaster). For a freshly
+// started job, Start already runs the check first, so running it again here
+// is a no-op (sync.Once); for an adopted job (`juggler run --job <id>`),
+// nothing else would run it before AcquireJobLock otherwise.
+type protocolChecker interface {
+	checkRingmasterProtocol(ctx context.Context) error
 }
 
 func (p *ProtocolCheckedRingmaster) Start(ctx context.Context, target, label, source string) (string, error) {

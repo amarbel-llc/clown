@@ -1006,9 +1006,17 @@ The router, before any subagent exists:
   `finish`, or the exit-wake hook's — is ringmaster's exit 3
   (`jobwake.ErrAlreadyTerminal`): both treat it as success, relaying
   whichever terminal actually landed, never logging it as a failure.
-  Acquiring the lock is best-effort, not fatal to the run: if it cannot be
-  acquired (e.g. the lock directory is unwritable), the agent still does
-  its work, it just loses the reaper backstop for that run. Resolve's own
+  A lock already held by a live producer (`jobwake.ErrAlreadyLocked`)
+  refuses the run outright rather than acquiring none: a duplicate
+  `juggler run --job X` would otherwise do full tool-use work concurrently
+  with the real producer and race its `Done` call. Any other acquire
+  failure (e.g. the lock directory is unwritable) is best-effort, not
+  fatal: the agent still does its work, but records the loss of the
+  backstop in the run's ledger `notes` (not only stderr), so an auditor
+  can see a run had none. On an adopted job (`--job <id>`, no `Start`
+  call to run the protocol check first) the check runs explicitly before
+  `AcquireJobLock`, so the lock is never taken ahead of knowing ringmaster
+  is protocol-compatible. Resolve's own
   handling of a child or run job is unchanged — `stopLiveChildren` already
   treats any terminal state (including a reaper-written `interrupted`)
   identically to one the hook or the agent wrote, skipping it as

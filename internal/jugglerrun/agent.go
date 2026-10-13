@@ -140,7 +140,12 @@ func (o AgentOutcome) ExitCode() int {
 //
 // A returned error means no job could be addressed (bad identity, a failed
 // job_start) and nothing was written. Once the job exists, every failure is
-// a `failed` terminal record and a nil error.
+// a `failed` terminal record and a nil error — except losing the job lock to
+// another live producer (jobwake.ErrAlreadyLocked), which is also a bare
+// error with nothing written: ringmaster settles a job's terminal
+// first-write-wins (RFC-0018 §2.4), so writing one here at all could
+// permanently clobber the real holder's own outcome, not just duplicate it
+// (clown#256 review finding 5).
 func RunAgent(ctx context.Context, deps AgentDeps, req AgentRequest) (AgentOutcome, error) {
 	deps = deps.withDefaults()
 	b := req.Brief
@@ -153,9 +158,11 @@ func RunAgent(ctx context.Context, deps AgentDeps, req AgentRequest) (AgentOutco
 	wallClock, _ := b.Limits.WallClockDuration()
 	deadline := deps.Now().Add(wallClock)
 	a := &agentRun{deps: deps, brief: b, target: b.Parent, job: req.Job}
-	// PLATFORM REQUIREMENT: ringmaster protocol >= 2 (RFC-0018): the
-	// `aborted` state, `cancel-requested` records and `wait --on-cancel`.
-	// Brief 6 pins the binary.
+	// PLATFORM REQUIREMENT: ringmaster speaks exactly protocol 3 (RFC-0018):
+	// the `aborted` state, `cancel-requested` records, `wait --on-cancel`,
+	// and (clown#256) the v3 liveness reaper and job lock.
+	// ProtocolCheckedRingmaster (cmd/juggler) enforces the exact match
+	// before the first real job-platform call.
 	if a.job == "" {
 		job, err := deps.Ringmaster.Start(ctx, a.target, AgentJobLabel, RunSource)
 		if err != nil {
@@ -165,18 +172,45 @@ func RunAgent(ctx context.Context, deps AgentDeps, req AgentRequest) (AgentOutco
 		if err := mirrorHolder(ctx, deps.Ringmaster, a.target, a.job, FirstHolder(a.target, deps.Now())); err != nil {
 			a.logf("%v", err)
 		}
+	} else if pc, ok := deps.Ringmaster.(protocolChecker); ok {
+		// Adopted from `juggler spawn`: Start above is skipped, so nothing
+		// has run the protocol check yet. Run it explicitly, before
+		// AcquireJobLock below takes the job's lock ahead of knowing
+		// ringmaster is protocol-compatible (clown#256 review finding 3).
+		// The job already exists (spawn started it), so a failure here
+		// follows RunAgent's documented contract: a failed terminal, not a
+		// bare error.
+		if err := pc.checkRingmasterProtocol(ctx); err != nil {
+			return a.finishWithoutLoop(jugglerloop.EndToolError, fmt.Sprintf("tool_error: %v", err)), nil
+		}
 	}
 	// Hold the job's advisory lock for the run's whole lifetime, whether the
 	// job was just started above or adopted from `juggler spawn` (clown#256,
 	// FDR 0019 §6): this is what lets the v3 liveness reaper terminalize
-	// `interrupted` when the exit-wake hook never runs. Not fatal when it
-	// cannot be acquired (e.g. the real jobwake wiring is unset in a test, or
-	// ringmaster's job-lock directory is unwritable): the agent still does
-	// its work, it just loses the reaper backstop for this run.
-	if release, err := deps.AcquireJobLock(a.target, a.job); err != nil {
-		a.logf("acquiring the job lock (liveness reaper backstop unavailable): %v", err)
-	} else {
+	// `interrupted` when the exit-wake hook never runs.
+	switch release, lockErr := deps.AcquireJobLock(a.target, a.job); {
+	case lockErr == nil:
 		a.releaseLock = release
+	case errors.Is(lockErr, jobwake.ErrAlreadyLocked):
+		// Another live producer already holds this job's advisory lock
+		// (RFC-0018 §2): a duplicate `juggler run --job X` would otherwise do
+		// full tool-use work concurrently with it and race Done. Refuse
+		// outright, writing NOTHING — unlike every other failure below, this
+		// one must not go through finish/Done: the real holder is actively
+		// working the same job, and ringmaster's terminal is first-write-wins
+		// (RFC-0018 §2.4), so a `failed` terminal from the losing duplicate
+		// could durably stamp over the real holder's eventual (and correct)
+		// outcome rather than merely log a redundant attempt (clown#256
+		// review finding 5).
+		return AgentOutcome{}, fmt.Errorf("job %s is already locked by a live producer (duplicate `juggler run`?): %w", a.job, lockErr)
+	default:
+		// Any other acquire failure (the real jobwake wiring unset in a
+		// test, ringmaster's job-lock directory unwritable, ...) is not
+		// fatal: the agent still does its work, it just loses the reaper
+		// backstop for this run — finish records that in the ledger's
+		// Notes, not only stderr (clown#256 review finding 5).
+		a.logf("acquiring the job lock (liveness reaper backstop unavailable): %v", lockErr)
+		a.lockAcquireErr = lockErr
 	}
 
 	if deps.ResolveModel == nil {
@@ -308,6 +342,11 @@ type agentRun struct {
 	// acquiring it failed (or was a no-op), in which case finish releases
 	// nothing.
 	releaseLock func() error
+	// lockAcquireErr is set when AcquireJobLock failed for a reason other
+	// than jobwake.ErrAlreadyLocked (which refuses the run outright, see
+	// RunAgent): the run still proceeds, but finish records the loss of the
+	// reaper backstop in the ledger's Notes (clown#256 review finding 5).
+	lockAcquireErr error
 }
 
 func (a *agentRun) logf(format string, args ...any) {
@@ -419,6 +458,9 @@ func (a *agentRun) finishWithoutLoop(end jugglerloop.EndReason, message string) 
 func (a *agentRun) finish(state, message string, l jugglerloop.Ledger) AgentOutcome {
 	ctx, cancel := context.WithTimeout(context.Background(), finishTimeout)
 	defer cancel()
+	if a.lockAcquireErr != nil {
+		l.Notes = append(l.Notes, fmt.Sprintf("job lock not acquired (liveness reaper backstop unavailable for this run): %v", a.lockAcquireErr))
+	}
 	out := AgentOutcome{Job: a.job, State: state, Message: message, Ledger: l}
 	if doc, err := marshalDocument(l); err != nil {
 		a.logf("marshal ledger: %v", err)
@@ -427,11 +469,21 @@ func (a *agentRun) finish(state, message string, l jugglerloop.Ledger) AgentOutc
 	} else {
 		out.LedgerPath = path
 	}
-	// A losing race against the v3 liveness reaper (or another writer) is
-	// reported as jobwake.ErrAlreadyTerminal (ringmaster exit 3, clown#256):
-	// the job is settled either way, so it is not logged as a failure here.
-	if err := a.deps.Ringmaster.Done(ctx, a.target, a.job, DoneRecord{State: state, Message: message, ResultRef: out.LedgerPath}); err != nil && !errors.Is(err, jobwake.ErrAlreadyTerminal) {
-		a.logf("ringmaster done %s %s: %v", a.job, state, err)
+	if err := a.deps.Ringmaster.Done(ctx, a.target, a.job, DoneRecord{State: state, Message: message, ResultRef: out.LedgerPath}); err != nil {
+		if errors.Is(err, jobwake.ErrAlreadyTerminal) {
+			// A losing race against the v3 liveness reaper (or another
+			// writer) settled the job before this call could: relay
+			// whichever terminal actually landed (FDR 0019 §6, juggler.7),
+			// not this run's own verdict, which was never written
+			// (clown#256 review finding 4).
+			if recs, rerr := a.deps.Ringmaster.Records(ctx, a.target, a.job); rerr != nil {
+				a.logf("reading the terminal that won the race for %s: %v", a.job, rerr)
+			} else if term, ok := TerminalRecord(recs); ok {
+				out.State, out.Message = term.Type, term.Message
+			}
+		} else {
+			a.logf("ringmaster done %s %s: %v", a.job, state, err)
+		}
 	}
 	// Release only after Done has returned (whichever way): releasing
 	// earlier would invite the reaper to write `interrupted` over an

@@ -101,7 +101,7 @@ func cmdSpawn(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		}
 		return jr.ExitUsage
 	}
-	return withDeps(context.Background(), stderr, "spawn", o.bins, spawnTimeout, func(launchCtx context.Context, deps jr.LifecycleDeps) int {
+	return withDeps(context.Background(), stderr, "spawn", o.bins, spawnTimeout, true, func(launchCtx context.Context, deps jr.LifecycleDeps) int {
 		if o.newRun {
 			return spawnNewRun(launchCtx, deps, o, stdin, stdout, stderr)
 		}
