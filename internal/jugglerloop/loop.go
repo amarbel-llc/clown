@@ -72,6 +72,11 @@ type Config struct {
 	// OnTurn, when set, is called synchronously with each turn as it is
 	// appended, terminal turn included.
 	OnTurn func(Turn)
+	// OnTraffic, when set, is called synchronously once per tool call (in
+	// the same places a LedgerCall is appended; clown#255), so a caller can
+	// persist the call's full arguments somewhere the ledger itself does
+	// not carry them.
+	OnTraffic func(TrafficRecord)
 
 	URIExtractor URIExtractor
 	// StopWhen, when set, is called with the in-progress ledger (the final
@@ -292,7 +297,7 @@ func (r *run) execute(ctx context.Context, callTurn Turn) (end EndReason, done b
 		return EndCannotComplete, true
 	}
 
-	entry := LedgerCall{Tool: call.Name, URIs: []string{}}
+	entry := LedgerCall{Tool: call.Name, URIs: []string{}, ArgsDigest: ArgsDigest(call.Args)}
 	if kind, ok := r.kinds[call.Name]; ok {
 		entry.Kind = &kind
 	}
@@ -304,7 +309,8 @@ func (r *run) execute(ctx context.Context, callTurn Turn) (end EndReason, done b
 		result := ToolResult{CallID: call.CallID, OK: false, Content: content}
 		entry.Error = toolResultText(result)
 		r.ledger.Calls = append(r.ledger.Calls, entry)
-		r.append(ToolResultBody(result), callTurn.ID)
+		t := r.append(ToolResultBody(result), callTurn.ID)
+		r.traffic(entry, call.Args, len(content), false, t.At)
 		return "", false
 	}
 
@@ -312,7 +318,8 @@ func (r *run) execute(ctx context.Context, callTurn Turn) (end EndReason, done b
 	if err != nil {
 		entry.Error = err.Error()
 		r.ledger.Calls = append(r.ledger.Calls, entry)
-		r.append(ToolResultBody(ToolResult{CallID: call.CallID, OK: false, Error: err.Error()}), callTurn.ID)
+		t := r.append(ToolResultBody(ToolResult{CallID: call.CallID, OK: false, Error: err.Error()}), callTurn.ID)
+		r.traffic(entry, call.Args, 0, false, t.At)
 		if ctx.Err() != nil {
 			return EndTimeout, true
 		}
@@ -331,11 +338,30 @@ func (r *run) execute(ctx context.Context, callTurn Turn) (end EndReason, done b
 		}
 	}
 	r.ledger.Calls = append(r.ledger.Calls, entry)
-	r.append(ToolResultBody(result), callTurn.ID)
+	t := r.append(ToolResultBody(result), callTurn.ID)
+	r.traffic(entry, call.Args, len(content), entry.OK, t.At)
 	if entry.OK && r.stopNow() {
 		return EndEvaluatorPass, true
 	}
 	return "", false
+}
+
+// traffic calls Config.OnTraffic, when set, with one TrafficRecord for a
+// completed tool call (clown#255): every call gets one, regardless of which
+// of execute's three outcomes it took.
+func (r *run) traffic(entry LedgerCall, args json.RawMessage, resultSize int, ok bool, ts time.Time) {
+	if r.cfg.OnTraffic == nil {
+		return
+	}
+	r.cfg.OnTraffic(TrafficRecord{
+		Step:       r.ledger.Steps,
+		Tool:       entry.Tool,
+		Args:       args,
+		ArgsDigest: entry.ArgsDigest,
+		ResultSize: resultSize,
+		OK:         ok,
+		TS:         ts,
+	})
 }
 
 // stopNow runs Config.StopWhen over the in-progress ledger; an error is a

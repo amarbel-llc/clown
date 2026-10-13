@@ -45,7 +45,8 @@ decoupled from it.
    ends its turn, calls `cannot_complete`, hits the step cap, or hits
    the wall-clock budget;
 3. executes every tool call through **one moxy upstream** (§5),
-   recording each call's outcome in the **ledger** (§4);
+   recording each call's outcome in the **ledger** and its full
+   arguments in **`traffic.jsonl`** (§4, clown#255);
 4. appends every turn to the run's MUC as a stanza;
 5. at the end, runs the brief's **evaluator** (§4) over the ledger and
    writes the ringmaster job's terminal record (§6) with the verdict.
@@ -134,8 +135,11 @@ channel, and it never parses the room):
   `--run-key` a fresh key is minted.
 - `--wait [--timeout <dur>]`: block until the subagent's job
   terminalizes and print `{"jid","job","room","state","reason","message",
-  "ledger":"<path>","artifacts":[{"tool","kind","uris"}],
-  "cannot_complete":null|{"reason"}}` where `state` is the ringmaster
+  "ledger":"<path>","traffic":"<path>","artifacts":[{"tool","kind","uris"}],
+  "cannot_complete":null|{"reason"}}` where `"traffic"` is the run's
+  `traffic.jsonl` (clown#255; §4), derived from `"ledger"`'s path the
+  same way ringmaster's own lock-file convention derives from a job's
+  spool path, and `state` is the ringmaster
   state and `reason` the D6 reason (§6). Exit code mirrors the state:
   0 `succeeded`, 2 `failed`, 3 `aborted`, 4 `interrupted`, 1 usage. At
   `--timeout` the child job is asked to cancel (`ringmaster cancel`) and
@@ -374,7 +378,37 @@ artifacts. URIs are not filtered by scheme: moxy blobs any result over
 its inline threshold, so a writer's `madder://` link may hold, or be, the
 call's product (a large create result, a capture receipt) and is kept —
 it at least marks the call as having produced something and points at
-where the product is. The
+where the product is.
+
+The ledger does not carry a call's **arguments** — circus's next agent
+graphs (circus FDR-0042) need them after the run (attestation agents
+whose findings exist only as a tool call's arguments; a coverage audit
+checking an agent actually opened the files its brief named), but the
+evaluator's input and the future signed contract must not grow with
+file bodies (clown#255). Instead, `juggler run` writes a per-run
+**`traffic.jsonl`** beside the ledger (its own spool file; §6), one JSON
+line per tool call, written at the same point its ledger entry is
+appended — including a read-only kind, a call whose arguments failed
+validation, and one whose executor returned a transport error. Each
+line carries the call's step index, tool name, its **full** arguments
+as sent, `args_digest` (see below), the result's size in bytes and ok
+flag (never the result body itself — moxy already blobs an oversized
+result, and the ledger carries the URI), and a timestamp. It is
+append-only, uncapped, and never read by the evaluator. Each ledger
+call entry in turn gains **`args_digest`**: a sha256, hex-encoded, over
+the arguments' canonical JSON encoding (object keys sorted,
+no insignificant whitespace, numbers kept as their original text —
+`jugglerloop.CanonicalJSON`/`ArgsDigest`), so a ledger entry and its
+traffic.jsonl line are joinable, and a traffic file can be checked
+against its ledger, without the ledger itself carrying the arguments.
+Redaction: a tool's arguments are whatever the model sent and the
+executor received — a model API token or key is never among them,
+since those live in the *model* request (the HTTP call to the
+provider), a wire the traffic file does not touch at all; a tool
+result is recorded only as the loop saw it (size and ok, a `madder://`
+URI if moxy already spilled it), never its body.
+
+The
 ledger carries a `schema` version and, when the loop has any, `notes`
 (facts that decide nothing, e.g. a per-step evaluator check that
 errored). `end.reason` is one of `end_turn`,
@@ -812,20 +846,28 @@ An issue-filer brief (unsigned, slice-0 shape):
     …
     '''
 
-The ledger the evaluator sees:
+The ledger the evaluator sees (`args_digest` joins each call to its line
+in the run's `traffic.jsonl`, below):
 
     {
       "schema": 1,
       "calls": [
-        {"tool": "list_repos",   "kind": null,    "ok": true,  "uris": []},
+        {"tool": "list_repos",   "kind": null,    "ok": true,  "uris": [],
+         "args_digest": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"},
         {"tool": "create_issue", "kind": "issue", "ok": true,
-         "uris": ["https://code.example/clown/issues/301"]}
+         "uris": ["https://code.example/clown/issues/301"],
+         "args_digest": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"}
       ],
       "end": {"reason": "end_turn"},
       "cannot_complete": null,
       "steps": 3,
       "elapsed_ms": 18340
     }
+
+`traffic.jsonl` beside it (never read by the evaluator):
+
+    {"step":1,"tool":"list_repos","args":{},"args_digest":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","result_size":42,"ok":true,"ts":"2026-10-13T14:40:01Z"}
+    {"step":3,"tool":"create_issue","args":{"title":"restart tool should reconnect automatically"},"args_digest":"fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210","result_size":71,"ok":true,"ts":"2026-10-13T14:40:04Z"}
 
 The launcher's side:
 
@@ -1115,6 +1157,7 @@ The router, before any subagent exists:
 | transcript layout | one MUC per run | one link for the fallback note; brief in the same transcript | runs grow long enough that per-agent rooms read better |
 | daemon for remote models | optional | the webhook host's service user has no user session | a host needs local inference for these agents (→ system-service daemon) |
 | agent-scope realisation | open: sub-cgroup vs sibling unit | the bullet needs neither namespaces nor the choice | signing lands, or a non-fixed-surface tool server appears (→ sibling unit + `limits.sandbox`) |
+| `traffic.jsonl` retention | append-only, uncapped, never GC'd (clown#255) | arguments are the whole point of the file; capping or rotating it would defeat the audits it exists for | a long-lived or high-step-count agent's traffic file grows large enough to matter (→ a size/age-based sweep, same as clown#250's staged-file cleanup) |
 | exit-wake emitter | the unit's `ExecStopPost` hook, sole emitter | survives every ending the main process does not | a holder needs a wake on the systemd-dead path (→ holder-side timeout or a cross-host watcher) |
 | router confidence threshold | 0.5 (`--min-confidence`, overridable per brief) | operator's first-bullet figure; below it the subagent is skipped and the fallback note records the choice and confidence. NOTE (two live calls, 2026-10-06): the API's `confidence` is the MARGIN over the runner-up (0.63 vs 0.37 → confidence 0.26), not the winning probability, so with two options 0.5 means roughly "0.75 or better"; semantics for 3+ options unverified. The stanza carries both `confidence` and the chosen option's probability | mirror-phase data shows good choices rejected or bad ones accepted |
 | lifecycle owner | v1: `juggler spawn` | spinclass cannot represent a repo-less session today | the first handle held across the two session kinds (→ v2 spinclass unit session, §11) |

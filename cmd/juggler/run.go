@@ -184,6 +184,9 @@ type runOutcomeJSON struct {
 	State   string `json:"state"`
 	Message string `json:"message"`
 	Ledger  string `json:"ledger"`
+	// Traffic is traffic.jsonl's path (clown#255), empty if it could not be
+	// opened. See jr.AgentOutcome.TrafficPath.
+	Traffic string `json:"traffic,omitempty"`
 }
 
 // cmdRun is `juggler run`, the agent (FDR 0019 §1, §6). ctx is cancelled on
@@ -245,7 +248,7 @@ func cmdRun(ctx context.Context, resolve func(context.Context, string) (rm.Resol
 		if err != nil {
 			return fail(stderr, "run", err)
 		}
-		printJSON(stdout, runOutcomeJSON{Job: out.Job, State: out.State, Message: out.Message, Ledger: out.LedgerPath})
+		printJSON(stdout, runOutcomeJSON{Job: out.Job, State: out.State, Message: out.Message, Ledger: out.LedgerPath, Traffic: out.TrafficPath})
 		return out.ExitCode()
 	})
 }

@@ -280,6 +280,40 @@ blob link
 .Pq moxy's store for an oversized result, which may hold the product
 included.
 Success is measured, never reported: the model never claims it.
+.It Pa traffic.jsonl
+.Pq clown#255
+The ledger carries no call arguments; circus's attestation and coverage
+agent graphs need them after the run, but the evaluator's input and the
+signed contract must not grow with file bodies.
+.Cm juggler run
+instead writes one line per tool call to
+.Pa traffic.jsonl ,
+beside the agent's ringmaster spool file
+.Pq the same directory, named the way ringmaster's own lock-file convention names its sibling: Pa <spool>.traffic.jsonl for Pa <spool>.out ,
+at the same point its ledger entry is appended \(em including a
+read-only kind, an invalid-arguments call and a tool transport error.
+Each line:
+.Sy {"step":N,"tool":"...","args":{...},"args_digest":"...","result_size":N,"ok":bool,"ts":"..."} ,
+arguments in full, the result's size in bytes and ok flag only
+.Pq never the result body: moxy already blobs an oversized one, and the ledger carries its URI .
+Each ledger call entry gains
+.Ql args_digest :
+a sha256, hex-encoded, over the arguments' canonical JSON encoding
+.Pq object keys sorted, no insignificant whitespace, numbers kept as their original text; see Fn jugglerloop.CanonicalJSON No and Fn jugglerloop.ArgsDigest ,
+so a ledger entry and its traffic line are joinable without the ledger
+itself carrying the arguments.
+Append-only, uncapped, never read by the evaluator.
+A model API token or key is never among a tool's recorded arguments: it
+rides the model request, a wire this file never touches.
+Both
+.Cm juggler run Ap s
+and
+.Cm spawn Fl -wait Ap s
+stdout grow a
+.Ql traffic
+path field beside the existing
+.Ql ledger
+one.
 .It The evaluator
 A jq program, run embedded over the ledger JSON, that must produce exactly one
 boolean

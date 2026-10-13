@@ -7,13 +7,23 @@ import (
 	"testing"
 )
 
+// listReposArgsDigestExample and createIssueArgsDigestExample are the
+// args_digest values fdrLedgerExample and FDR 0019's own Examples section
+// use: fixed, illustrative placeholders (64 hex chars, like a real sha256),
+// not computed from any real arguments — keep the two in sync by hand if
+// either changes.
+const (
+	listReposArgsDigestExample   = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	createIssueArgsDigestExample = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+)
+
 // fdrLedgerExample is the ledger from FDR 0019's Examples section.
-const fdrLedgerExample = `{
+var fdrLedgerExample = `{
   "schema": 1,
   "calls": [
-    {"tool": "list_repos",   "kind": null,    "ok": true,  "uris": []},
+    {"tool": "list_repos",   "kind": null,    "ok": true,  "uris": [], "args_digest": "` + listReposArgsDigestExample + `"},
     {"tool": "create_issue", "kind": "issue", "ok": true,
-     "uris": ["https://code.example/clown/issues/301"]}
+     "uris": ["https://code.example/clown/issues/301"], "args_digest": "` + createIssueArgsDigestExample + `"}
   ],
   "end": {"reason": "end_turn"},
   "cannot_complete": null,
@@ -34,8 +44,8 @@ func TestLedger_MatchesFDRExample(t *testing.T) {
 	issue := "issue"
 	l := newLedger()
 	l.Calls = append(l.Calls,
-		LedgerCall{Tool: "list_repos", OK: true, URIs: []string{}},
-		LedgerCall{Tool: "create_issue", Kind: &issue, OK: true, URIs: []string{"https://code.example/clown/issues/301"}},
+		LedgerCall{Tool: "list_repos", OK: true, URIs: []string{}, ArgsDigest: listReposArgsDigestExample},
+		LedgerCall{Tool: "create_issue", Kind: &issue, OK: true, URIs: []string{"https://code.example/clown/issues/301"}, ArgsDigest: createIssueArgsDigestExample},
 	)
 	l.End = LedgerEnd{Reason: EndTurn}
 	l.Steps = 3
@@ -52,7 +62,7 @@ func TestLedger_MatchesFDRExample(t *testing.T) {
 
 func TestLedger_CannotCompleteAndErrorFields(t *testing.T) {
 	l := newLedger()
-	l.Calls = append(l.Calls, LedgerCall{Tool: "create_issue", URIs: []string{}, Error: "denied"})
+	l.Calls = append(l.Calls, LedgerCall{Tool: "create_issue", URIs: []string{}, Error: "denied", ArgsDigest: createIssueArgsDigestExample})
 	l.End = LedgerEnd{Reason: EndCannotComplete}
 	l.CannotComplete = &CannotComplete{Reason: "no repo matches"}
 	l.Steps = 1
@@ -61,7 +71,7 @@ func TestLedger_CannotCompleteAndErrorFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"schema":1,"calls":[{"tool":"create_issue","kind":null,"ok":false,"uris":[],"error":"denied"}],"end":{"reason":"cannot_complete"},"cannot_complete":{"reason":"no repo matches"},"steps":1,"elapsed_ms":0}`
+	want := `{"schema":1,"calls":[{"tool":"create_issue","kind":null,"ok":false,"uris":[],"error":"denied","args_digest":"` + createIssueArgsDigestExample + `"}],"end":{"reason":"cannot_complete"},"cannot_complete":{"reason":"no repo matches"},"steps":1,"elapsed_ms":0}`
 	if string(got) != want {
 		t.Errorf("got  %s\nwant %s", got, want)
 	}

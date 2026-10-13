@@ -120,7 +120,12 @@ type AgentOutcome struct {
 	State      string
 	Message    string
 	LedgerPath string
-	Ledger     jugglerloop.Ledger
+	// TrafficPath is traffic.jsonl's path (clown#255): one record per tool
+	// call, arguments in full, beside the ledger. Empty when the
+	// job-platform facility that derives it is disabled, or the file could
+	// not be opened.
+	TrafficPath string
+	Ledger      jugglerloop.Ledger
 	// ConfigError: the brief does not fit the tool plane (an allowlisted
 	// tool moxy does not advertise). The job is still terminalized failed,
 	// but the process exits 1.
@@ -221,6 +226,17 @@ func RunAgent(ctx context.Context, deps AgentDeps, req AgentRequest) (AgentOutco
 		a.lockAcquireErr = lockErr
 	}
 
+	// traffic.jsonl (clown#255): one record per tool call, beside the
+	// agent's ringmaster spool (the ledger's own eventual home — SpoolPath
+	// is a pure, idempotent lookup, so resolving it now, before the loop,
+	// costs nothing and does not pre-empt writeSpool's own call in finish).
+	// Best-effort: a failure here is logged, not fatal.
+	if spoolPath, err := deps.Ringmaster.SpoolPath(ctx, a.target, a.job); err != nil {
+		a.logf("resolving the traffic file path (spool-path): %v", err)
+	} else {
+		a.traffic, a.trafficPath = openTrafficSink(trafficPathForSpool(spoolPath), a.logf)
+	}
+
 	if deps.ResolveModel == nil {
 		return a.finishWithoutLoop(jugglerloop.EndModelError, "model_error: no model resolver configured"), nil
 	}
@@ -309,6 +325,7 @@ func RunAgent(ctx context.Context, deps AgentDeps, req AgentRequest) (AgentOutco
 		Principal:    b.Principal,
 		BriefTurnID:  req.BriefStanza,
 		OnTurn:       a.postTurn,
+		OnTraffic:    a.traffic.onTraffic,
 		URIExtractor: ExtractURIsFromMCPContent,
 		Now:          deps.Now,
 	})
@@ -355,6 +372,12 @@ type agentRun struct {
 	// RunAgent): the run still proceeds, but finish records the loss of the
 	// reaper backstop in the ledger's Notes (clown#256 review finding 5).
 	lockAcquireErr error
+	// traffic appends one record per tool call to traffic.jsonl (clown#255);
+	// nil when the job-platform facility is disabled or the file could not
+	// be opened, in which case every method is a safe no-op.
+	traffic *trafficSink
+	// trafficPath is traffic.jsonl's path, empty unless traffic is open.
+	trafficPath string
 }
 
 func (a *agentRun) logf(format string, args ...any) {
@@ -469,7 +492,8 @@ func (a *agentRun) finish(state, message string, l jugglerloop.Ledger) AgentOutc
 	if a.lockAcquireErr != nil {
 		l.Notes = append(l.Notes, fmt.Sprintf("job lock not acquired (liveness reaper backstop unavailable for this run): %v", a.lockAcquireErr))
 	}
-	out := AgentOutcome{Job: a.job, State: state, Message: message, Ledger: l}
+	out := AgentOutcome{Job: a.job, State: state, Message: message, Ledger: l, TrafficPath: a.trafficPath}
+	a.traffic.close()
 	if doc, err := marshalDocument(l); err != nil {
 		a.logf("marshal ledger: %v", err)
 	} else if path, err := writeSpool(ctx, a.deps.Ringmaster, a.target, a.job, doc); err != nil {

@@ -1104,6 +1104,73 @@ EOF
       == [{"tool":"ring_create_issue","kind":"issue","uris":["https://forge.test/o/r/issues/8","madder://blobs/blake2b256-echo"]}]' "$(field .ledger)" >/dev/null
 }
 
+@test "run writes traffic.jsonl: one record per tool call, args_digest matches the ledger, a large argument lands in full while the ledger stays small (clown#255)" {
+  local agent_dir="$BATS_TEST_TMPDIR/agent"
+  mkdir -p "$agent_dir"
+  local big
+  big=$(head -c 2000 /dev/zero | tr '\0' 'x')
+  local list='{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"c1","type":"function","function":{"name":"ring_list_issues","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}'
+  local create
+  create=$(jq -nc --arg title "x" --arg body "$big" '
+    ({title: $title, body: $body} | tostring) as $args |
+    {"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"c2","type":"function","function":{"name":"ring_create_issue","arguments":$args}}]},"finish_reason":"tool_calls"}]}')
+  printf '[%s,%s,{"choices":[{"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}]}]' "$list" "$create" >"$agent_dir/replies.json"
+  printf '%s' '[{"name":"ring_list_issues","inputSchema":{"type":"object"},"_meta":{"kind":"list"}},{"name":"ring_create_issue","inputSchema":{"type":"object"},"_meta":{"kind":"issue"}}]' >"$agent_dir/tools.json"
+  printf '%s' '{"content":[{"type":"resource_link","uri":"madder://blobs/blake2b256-listing","name":"output"}],"isError":false}' >"$agent_dir/call-result.ring_list_issues.json"
+  printf '%s' '{"content":[{"type":"text","text":"Filed issue #9."}],"structuredContent":{"uri":"https://forge.test/o/r/issues/9"},"isError":false}' >"$agent_dir/call-result.json"
+  "$FAKE_PLATFORM_BIN" serve-agent --dir "$agent_dir" >"$agent_dir/server.log" 2>&1 &
+  local pid=$!
+  wait_for_file "$agent_dir/port" 5
+  local port
+  port=$(<"$agent_dir/port")
+
+  local models="$BATS_TEST_TMPDIR/models.toml"
+  cat "$JUGGLER_MODELS_PATH" >"$models"
+  printf '\n[[model]]\nname = "agent"\nstyle = "openai-compat"\nurl = "http://127.0.0.1:%s/v1"\ntoken = "tok-agent"\n' "$port" >>"$models"
+  cat >"$agent_dir/brief.toml" <<'EOF'
+schema = 1
+principal = "agent-traffic"
+parent = "root-traffic"
+room = "room-traffic@rooms.test"
+model = "agent"
+system = "You file one issue."
+task = "file it"
+tools = ["ring_list_issues", "ring_create_issue"]
+
+[evaluator]
+kind = "jq"
+program = '([.calls[] | select(.kind == "issue" and .ok and (.uris | length) > 0)] | length) >= 1'
+
+[limits]
+steps = 5
+wall_clock = "20s"
+EOF
+
+  run_jug_env "JUGGLER_MODELS_PATH=$models" -- run --brief "$agent_dir/brief.toml" --moxy-url "http://127.0.0.1:$port/mcp"
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  expect_status 0
+  [[ $(field .state) == succeeded ]]
+  local traffic ledger
+  traffic=$(field .traffic)
+  ledger=$(field .ledger)
+  [[ -n $traffic && -f $traffic ]]
+  [[ $(wc -l <"$traffic") -eq 2 ]]
+
+  # Every ledger call's args_digest matches its traffic line's, position-wise.
+  jq -e --slurpfile traffic "$traffic" '
+    (.calls | length) == 2
+    and .calls[0].args_digest == $traffic[0].args_digest
+    and .calls[1].args_digest == $traffic[1].args_digest
+    and ([.calls[].args_digest] | unique | length) == 2' "$ledger" >/dev/null
+
+  # The large argument lands in traffic in full ...
+  sed -n '2p' "$traffic" | jq -e --arg big "$big" '.tool == "ring_create_issue" and .args.body == $big and .ok == true' >/dev/null
+  # ... and never in the ledger, which stays small (no args field at all).
+  run ! grep -qF "$big" "$ledger"
+  run ! jq -e 'any(.calls[]; has("args"))' "$ledger"
+}
+
 # --- binary resolution -----------------------------------------------------
 
 @test "a --ringmaster flag overrides JUGGLER_RINGMASTER_BIN" {

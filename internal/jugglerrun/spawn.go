@@ -776,13 +776,18 @@ func removeIfExists(path string) error {
 
 // WaitRecord is `juggler spawn --wait`'s stdout object (FDR 0019 §1).
 type WaitRecord struct {
-	JID            string                      `json:"jid"`
-	Job            string                      `json:"job"`
-	Room           string                      `json:"room"`
-	State          string                      `json:"state"`
-	Reason         ExitReason                  `json:"reason"`
-	Message        string                      `json:"message"`
-	Ledger         string                      `json:"ledger"`
+	JID     string     `json:"jid"`
+	Job     string     `json:"job"`
+	Room    string     `json:"room"`
+	State   string     `json:"state"`
+	Reason  ExitReason `json:"reason"`
+	Message string     `json:"message"`
+	Ledger  string     `json:"ledger"`
+	// Traffic is traffic.jsonl's path (clown#255), derived from Ledger the
+	// same way ringmaster's own lock-file convention derives from a job's
+	// spool path — never recorded in the journal itself. Empty whenever
+	// Ledger is (the job never addressed, or the facility disabled).
+	Traffic        string                      `json:"traffic,omitempty"`
 	Artifacts      []Artifact                  `json:"artifacts"`
 	CannotComplete *jugglerloop.CannotComplete `json:"cannot_complete"`
 }
@@ -844,6 +849,7 @@ func WaitChild(ctx context.Context, deps LifecycleDeps, rec *ChildRecord, timeou
 		return out, nil
 	}
 	out.State, out.Message, out.Ledger = term.Type, term.Message, term.ResultRef
+	out.Traffic = trafficPathForSpool(out.Ledger)
 	out.Reason = ExitReasonFor(out.State, out.Message)
 	l, found, err := readAgentLedger(out.Ledger)
 	if err != nil {

@@ -53,6 +53,10 @@ type LedgerCall struct {
 	OK    bool     `json:"ok"`
 	URIs  []string `json:"uris"`
 	Error string   `json:"error,omitempty"`
+	// ArgsDigest is ArgsDigest(the call's arguments) (clown#255): joins this
+	// entry to its traffic.jsonl line without the ledger carrying the
+	// arguments themselves.
+	ArgsDigest string `json:"args_digest"`
 }
 
 type LedgerEnd struct {
