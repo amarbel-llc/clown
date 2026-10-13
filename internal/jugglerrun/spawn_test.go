@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -617,6 +618,73 @@ func TestWaitChild(t *testing.T) {
 		}
 		if got := h.fakes.Cancelled(t); len(got) != 1 || got[0] != rec.Job {
 			t.Errorf("a timed-out wait must request cancellation of the job: %v", got)
+		}
+	})
+	t.Run("traffic", func(t *testing.T) {
+		// clown#255 delta review finding 4: WaitRecord.Traffic is derived
+		// independently of Ledger/ResultRef, from the child's own
+		// principal AND job — pin that derivation directly, since neither
+		// the Go unit suite nor the bats suite otherwise exercises
+		// WaitChild's own traffic path (the bats test reads it from
+		// `run`'s own stdout, not `spawn --wait`'s).
+		h := newHarness(t)
+		pinPrincipals(h, testRoot, "child-1")
+		newRun(t, h, "rec-42")
+		rec := spawnChild(t, h)
+		// A hook-written terminal (ExecStopPost, not `juggler run` itself)
+		// carries no result_ref, yet the agent may have written traffic
+		// before it died.
+		h.fakes.AppendRecord(t, rec.Parent, rec.Job, StateSucceeded, "normal exit", "")
+
+		path := h.deps.Store.TrafficPath(rec.Principal, rec.Job)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(`{"step":1}`+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		w, err := WaitChild(context.Background(), h.deps, rec, time.Second, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if w.Traffic != path {
+			t.Errorf("traffic = %q, want %q", w.Traffic, path)
+		}
+	})
+	t.Run("traffic absent", func(t *testing.T) {
+		h := newHarness(t)
+		pinPrincipals(h, testRoot, "child-1")
+		newRun(t, h, "rec-42")
+		rec := spawnChild(t, h)
+		h.fakes.AppendRecord(t, rec.Parent, rec.Job, StateFailed, "died before opening traffic", "")
+		w, err := WaitChild(context.Background(), h.deps, rec, time.Second, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if w.Traffic != "" {
+			t.Errorf("traffic = %q, want empty: the agent never wrote this file", w.Traffic)
+		}
+	})
+	t.Run("traffic under a different job for the same principal is not reported", func(t *testing.T) {
+		h := newHarness(t)
+		pinPrincipals(h, testRoot, "child-1")
+		newRun(t, h, "rec-42")
+		rec := spawnChild(t, h)
+		h.fakes.AppendRecord(t, rec.Parent, rec.Job, StateSucceeded, "normal exit", "")
+
+		otherJobPath := h.deps.Store.TrafficPath(rec.Principal, "some-other-job")
+		if err := os.MkdirAll(filepath.Dir(otherJobPath), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(otherJobPath, []byte(`{"step":1}`+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		w, err := WaitChild(context.Background(), h.deps, rec, time.Second, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if w.Traffic != "" {
+			t.Errorf("traffic = %q, want empty: a sibling job's file under the same principal must not be reported", w.Traffic)
 		}
 	})
 	t.Run("timeout then the agent aborts within the grace", func(t *testing.T) {

@@ -402,7 +402,13 @@ also deliberately sits outside `agents/<principal>/`, which is moxy's
 own CWD: folio-style tools auto-allow writes inside CWD, so a traffic
 file living there would be reachable — readable, deletable, replaceable
 — by the very model turn whose calls it exists to audit (delta review
-finding 2). (An earlier revision instead put the file beside the
+finding 2). Moving it outside that one CWD is not an absolute
+guarantee on its own: a moxyfile granting a tool writes beyond its CWD,
+or a shell-capable tool, can still reach anywhere under
+`$XDG_STATE_HOME` (which is in moxy's own environment) — the real
+protection is the moxyfile's own policy, this placement only removes
+the CWD-scoped default that would otherwise expose it regardless of
+that policy. (An earlier revision instead put the file beside the
 ringmaster spool, derived from the spool path; a real ringmaster
 discovers journals by `*.jsonl` suffix and read a sibling
 `<job>.traffic.jsonl` as a phantom second job — scanned by its monitor,

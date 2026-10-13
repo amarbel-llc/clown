@@ -14,12 +14,12 @@ import (
 // args_digest. This is NOT full semantic equality, in two ways: a number's
 // original text is kept verbatim (see below), so `1` and `1.0` — the same
 // numeric value, different literal text — canonicalize, and therefore
-// digest, differently; and invalid UTF-8 inside a string value is decoded
-// losslessly as raw bytes, but Go's own encoder replaces it with U+FFFD on
-// the way back out (encoding/json's string encoder does this for any
-// invalid byte sequence it is asked to marshal), so two inputs whose only
-// difference is WHICH invalid bytes appear there canonicalize, and digest,
-// equal. Numbers are decoded with UseNumber so that text survives
+// digest, differently; and invalid UTF-8 inside a string value is replaced
+// with U+FFFD when DECODED (json.Unmarshal's own documented behavior — by
+// the time the encoder sees the value, it is already a valid Go string), so
+// two inputs whose only difference is WHICH invalid bytes appear there
+// canonicalize, and digest, equal. Numbers are decoded with UseNumber so
+// that text survives
 // unchanged (no float64 reformatting or precision loss on a large integer);
 // encoding/json's own Marshal already sorts map keys, which is the whole of
 // the "sorted" rule — this function exists so the rule is stated and

@@ -61,8 +61,9 @@ func TestCanonicalJSON_InvalidJSONErrors(t *testing.T) {
 
 // TestCanonicalJSON_HTMLCharsAreNotEscaped pins SetEscapeHTML(false)
 // (clown#255 delta review finding 5): `<`, `>` and `&` in a string value
-// must come out literal, not as `<` etc, so a generic JSON tool (jq,
-// a verifier not using Go's encoder) reproduces this function's output.
+// must come out literal, not as their JSON numeric escapes (U+003C and
+// friends), so a generic JSON tool (jq, a verifier not using Go's encoder)
+// reproduces this function's output.
 func TestCanonicalJSON_HTMLCharsAreNotEscaped(t *testing.T) {
 	const doc = `{"q":"<a>&b"}`
 	if got := canonicalOf(t, doc); got != doc {
@@ -99,9 +100,9 @@ func TestCanonicalJSON_LineSeparatorsAreStillEscaped(t *testing.T) {
 // TestCanonicalJSON_InvalidUTF8CanonicalizesToTheReplacementCharacter pins
 // the other NOT-full-semantic-equality case the doc comment states
 // (clown#255 delta review finding 5): invalid UTF-8 inside a string value
-// is decoded losslessly but replaced with U+FFFD by Go's encoder, so two
-// inputs differing only in which invalid bytes appear there canonicalize
-// equal.
+// is replaced with U+FFFD at DECODE time (json.Unmarshal's own documented
+// behavior), so two inputs differing only in which invalid bytes appear
+// there canonicalize equal.
 func TestCanonicalJSON_InvalidUTF8CanonicalizesToTheReplacementCharacter(t *testing.T) {
 	a := canonicalOf(t, "{\"q\":\"\xff\"}")
 	b := canonicalOf(t, "{\"q\":\"\xfe\"}")

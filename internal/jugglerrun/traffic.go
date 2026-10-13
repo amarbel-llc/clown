@@ -24,11 +24,19 @@ type trafficSink struct {
 // any stale content from an earlier run of the SAME job (clown#255 review
 // finding 8: O_APPEND alone would otherwise let a retried `juggler run --job
 // X` on an adopted job append a second run's records after the first,
-// restarting step numbering and breaking the positional join — the job's
-// lock is held for the whole run, so no concurrent writer can race this),
-// creating the directory and the file if absent. job is stamped onto every
-// record (delta review finding 1), so the file is self-identifying even
-// moved out of its directory. It returns the sink plus the path to report
+// restarting step numbering and breaking the positional join). This assumes
+// the job's advisory lock is actually held for the run's whole duration, so
+// no concurrent writer can race the truncation; when AcquireJobLock itself
+// failed for a reason OTHER than "already locked" (RunAgent proceeds
+// unlocked in that case, recording the loss in the ledger's Notes — see
+// agent.go), that assumption does not hold, and a genuine concurrent
+// duplicate `run --job X` could O_TRUNC the live run's traffic out from
+// under it (delta review finding 5; accepted — the same degraded, unlocked
+// window already risks worse than this via the job's ledger and terminal
+// record, so this one file is not special-cased). Creates the directory
+// and the file if absent; job is stamped onto every record (delta review
+// finding 1), so the file is self-identifying even moved out of its
+// directory. It returns the sink plus the path to report
 // (empty unless the file now genuinely exists). A failure to open is logged
 // via logf and degrades to a nil sink; traffic is best-effort, never fatal
 // to the run.

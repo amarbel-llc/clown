@@ -84,9 +84,23 @@ func (s Store) AgentStateDir(principal string) string {
 // TrafficPath is traffic.jsonl's path for one agent job (clown#255):
 // <root>/traffic/<principal>/<job>.jsonl, keyed by job (not just principal:
 // a bare `run --brief` with no --job starts a fresh job per invocation
-// under the same principal) and outside AgentStateDir (not moxy's CWD, so
-// the agent's own tool calls cannot reach it; see Store's doc comment).
+// under the same principal) and outside AgentStateDir — not moxy's CWD,
+// so it is not one a CWD-scoped tool auto-allows writes into by default;
+// the actual guarantee still depends on the moxyfile's own policy (a
+// moxyfile granting a tool writes beyond CWD, or a shell-capable tool,
+// can still reach anywhere under $XDG_STATE_HOME; see Store's doc
+// comment). Returns "" for a principal or job that is not a safe single
+// path segment (idPattern; clown#255 delta review finding 7) — neither is
+// validated before reaching here (a hand-run `juggler run --job` is
+// operator, not spawner, input), and a path-traversal sequence in either
+// must not escape the traffic tree. Every caller already treats "" as "no
+// traffic" (openTrafficSink is a no-op on an empty path; trafficPathIfExists
+// never reports one), so this degrades the same way an open failure does,
+// not a new failure mode.
 func (s Store) TrafficPath(principal, job string) string {
+	if !idPattern.MatchString(principal) || !idPattern.MatchString(job) {
+		return ""
+	}
 	return filepath.Join(s.Root, "traffic", principal, job+".jsonl")
 }
 

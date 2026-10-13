@@ -329,8 +329,9 @@ run \(em so a run killed mid-flight can leave traffic lines on disk with
 no ledger at all, the opposite of a half-written ledger with no
 traffic.
 Opening or writing the file can fail
-.Pq a crowded disk, a permissions problem ; either is best-effort, never
-fatal to the run, but leaves a note in the ledger's
+.Pq a crowded disk, a permissions problem .
+Either is best-effort, never fatal to the run, but leaves a note in
+the ledger's
 .Ql notes
 array so an auditor does not mistake silence there for a complete
 record.
@@ -339,8 +340,9 @@ No sweep of
 exists yet, same as
 .Pa agents/<principal>/
 itself; once one does
-.Pq clown#250 , Cm juggler clean , traffic files are reaped by it, not
-by anything specific to this feature.
+.Pq clown#250 , Cm juggler clean .
+Traffic files are reaped by it, not by anything specific to this
+feature.
 A model API token or key is never among a tool's recorded arguments: it
 rides the model request, a wire this file never touches.
 Whatever secret a model's tool call DOES carry \(em a token pasted into
