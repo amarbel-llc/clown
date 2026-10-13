@@ -431,7 +431,7 @@ one grace period after the first reaper observes the released lock,
 including after a reboot.
 A host running neither still has the gap the hook exists to cover;
 deploying one is the host's own responsibility
-.Pq on krone, circus's Pa ringmaster-reap.service .
+.Pq e.g. a Ic ringmaster reap No systemd unit the host deploys .
 A lock already held by a live producer
 .Pq Va jobwake.ErrAlreadyLocked
 refuses the run outright rather than racing it; any other acquire failure

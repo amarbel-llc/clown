@@ -724,9 +724,9 @@ ran: systemd itself gone) is reaped by the host-wide reaper (any
 period after the first reaper observes the released lock, including
 after a reboot — no D6 wake is sent on that path. A host running
 neither a `ringmaster monitor` nor a `ringmaster reap` unit still has
-the gap the hook exists to cover; deploying one is the host's own
-responsibility (on krone, circus's `ringmaster-reap.service`) — see
-Limitations.
+the gap the hook exists to cover; deploying one (e.g. a `ringmaster
+reap` systemd unit the host deploys) is the host's own responsibility —
+see Limitations.
 
 ### 7. Transcript — one MUC per run
 
@@ -984,8 +984,13 @@ The router, before any subagent exists:
   - *systemd dies* (= the host dies): every agent dies, no emitter is
     alive, no D6 wake is sent. Holders on other hosts learn nothing until
     they time out, and no holder-side timeout is designed. Liveness
-    loss, not safety: a dead agent cannot act. Whether the reaper marks
-    the open jobs `interrupted` after a reboot is unverified.
+    loss, not safety: a dead agent cannot act. After a reboot, the first
+    reaper to come back up on the host — a long-running `ringmaster
+    monitor` or `ringmaster reap` — reaps each open job `interrupted` one
+    grace period later (ringmaster#33, landed: the lock lives in the
+    persistent state directory, not anything reboot-cleared, and the
+    reaper finds every lock file under the jobs root, not only channels a
+    monitor happens to be serving); still no D6 wake on that path.
   - *systemd degraded* (refuses transient units, D-Bus/polkit down,
     delegation broken): `juggler spawn` fails synchronously before an
     agent exists and the fallback runs. A legible stop. `juggler spawn`
@@ -1134,9 +1139,9 @@ The router, before any subagent exists:
   `crash`) by the host-wide reaper — one grace period after the first
   reaper observes the released lock, including after a reboot. A host
   running neither a `ringmaster monitor` nor a `ringmaster reap` unit
-  still has the gap the hook exists to cover; deploying one is the
-  host's own responsibility (on krone, circus's
-  `ringmaster-reap.service`). A losing race against a reaper that IS
+  still has the gap the hook exists to cover; deploying one (e.g. a
+  `ringmaster reap` systemd unit the host deploys) is the host's own
+  responsibility. A losing race against a reaper that IS
   running (or any other writer) — on `juggler run`'s own `Done` call in
   `finish`, or the exit-wake hook's — is ringmaster's exit 3
   (`jobwake.ErrAlreadyTerminal`): both treat it as success, relaying

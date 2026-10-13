@@ -101,6 +101,13 @@ status_state() {
   done
   [[ $(status_state "$job") == interrupted ]]
 
+  # The message is the reaper's own, not merely "some terminal landed":
+  # status --json has no field for a terminal's message, so read the
+  # journal directly and check the terminal record itself.
+  run "$RINGMASTER_BIN" read --job "$job" --json
+  assert_success
+  [[ $(jq -s -r '.[-1].message' <<<"$output") == "producer died without writing a terminal record" ]]
+
   # The reap unit itself exits 0 on SIGTERM, same as monitor's own clean
   # shutdown (ringmaster.1 SIGNALS).
   kill -TERM "$REAP_PID"

@@ -479,7 +479,10 @@
             base = mock-stdio-mcp;
             name = "mock-stdio-mcp";
           };
-          # The job platform (RFC-0015): job_wakeup, job_mcp, job_output_spool.
+          # The job platform (RFC-0015): job_wakeup, job_mcp,
+          # job_output_spool, juggler_reaper (clown#257: drives this SAME
+          # real binary directly, not the fake platform, for
+          # `ringmaster reap`).
           RINGMASTER_BIN = {
             base = ringmasterPkg;
             name = "ringmaster";

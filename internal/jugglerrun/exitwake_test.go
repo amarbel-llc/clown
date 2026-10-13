@@ -26,6 +26,25 @@ func (r *countingDoneRingmaster) Done(ctx context.Context, target, job string, d
 	return r.Ringmaster.Done(ctx, target, job, d)
 }
 
+// wroteButErroredRingmaster simulates a `done` call whose write actually
+// landed on the journal before the call itself reported a failure — e.g. a
+// connection reset right after the server-side write succeeded (clown#257
+// review finding 2, scenario B). It delegates the real write to the
+// wrapped Ringmaster first, then overrides a successful result with err.
+type wroteButErroredRingmaster struct {
+	Ringmaster
+	err   error
+	calls int
+}
+
+func (r *wroteButErroredRingmaster) Done(ctx context.Context, target, job string, d DoneRecord) error {
+	r.calls++
+	if err := r.Ringmaster.Done(ctx, target, job, d); err != nil {
+		return err
+	}
+	return r.err
+}
+
 // startAgentJob starts a job on root-1's channel holding root-1 (accepted)
 // and a pending grantee that must never be woken.
 func startAgentJob(t *testing.T, h *harness) string {
@@ -207,6 +226,43 @@ func TestExitWake_GivesUpWhenDoneNeverSucceeds(t *testing.T) {
 	}
 	if n := countTerminals(h.fakes.Records(t, testRoot, job)); n != 0 {
 		t.Errorf("terminal records = %d, want 0: the journal must stay untouched", n)
+	}
+}
+
+// TestExitWake_RelaysATerminalItsOwnDoneWroteBeforeReportingFailure covers
+// clown#257 review finding 2 (scenario B): a `done` call that actually
+// wrote the terminal record before reporting a failure (e.g. a connection
+// reset right after the server-side write landed) must relay that
+// terminal instead of retrying into a duplicate attempt. A short ctx
+// deadline well below DoneRetryBackoff makes this deterministic: if the
+// fix regresses and the code retries anyway, the call fails fast on the
+// deadline instead of hanging, and the call-count/terminal-count
+// assertions below still catch it.
+func TestExitWake_RelaysATerminalItsOwnDoneWroteBeforeReportingFailure(t *testing.T) {
+	h := newHarness(t)
+	job := startAgentJob(t, h)
+	wroteButErrored := &wroteButErroredRingmaster{Ringmaster: h.deps.Ringmaster, err: errors.New("ringmaster: connection reset")}
+	deps := h.deps
+	deps.Ringmaster = wroteButErrored
+	deps.DoneRetryBackoff = 10 * time.Second
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	out, err := ExitWake(ctx, deps, ExitWakeRequest{Job: job, Target: testRoot, Service: ServiceResult{Result: "exit-code"}})
+	if err != nil {
+		t.Fatalf("ExitWake: %v", err)
+	}
+	if out.WroteTerminal {
+		t.Error("WroteTerminal = true, want false: the terminal was found by re-reading the journal, not reported as this call's own success")
+	}
+	if out.State != StateInterrupted {
+		t.Fatalf("outcome = %+v", out)
+	}
+	if wroteButErrored.calls != 1 {
+		t.Errorf("Done was called %d times, want exactly 1 (no retry once the re-read found the terminal it wrote)", wroteButErrored.calls)
+	}
+	if n := countTerminals(h.fakes.Records(t, testRoot, job)); n != 1 {
+		t.Errorf("terminal records = %d, want exactly 1: no duplicate from a retry", n)
 	}
 }
 
