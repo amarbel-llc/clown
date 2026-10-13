@@ -13,7 +13,10 @@ import (
 const exitWakeUsage = "usage: juggler exit-wake --job <id> --target <principal> [--run-ledger <path>] [--from <principal>] [--ringmaster <path>] [--troupe <path>]  ($SERVICE_RESULT, $EXIT_CODE, $EXIT_STATUS from systemd)"
 
 // exitWakeTimeout bounds the whole hook; systemd's own stop timeout is the
-// outer bound.
+// outer bound. Also the budget jugglerrun.ExitWake's `done` retry loop has
+// to work with (clown#257): a transient ringmaster failure is retried,
+// paced by LifecycleDeps.DoneRetryBackoff, until either it succeeds, loses
+// a settled-already race (not a failure), or this deadline arrives.
 const exitWakeTimeout = 60 * time.Second
 
 // exitWakeProtocolWarnTimeout bounds the hook's own non-fatal protocol check,

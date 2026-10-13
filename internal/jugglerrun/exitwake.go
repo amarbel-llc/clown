@@ -7,6 +7,8 @@ import (
 	"io/fs"
 	"os"
 	"time"
+
+	"code.linenisgreat.com/ringmaster/pkgs/jobwake"
 )
 
 // ServiceResult is what systemd hands an ExecStopPost command
@@ -76,11 +78,28 @@ type LifecycleDeps struct {
 	// NewRootPrincipal (a run root, from its run key) defaults to
 	// NewRootPrincipal.
 	NewRootPrincipal func(runKey string) string
+	// DoneRetryBackoff paces ExitWake's retry of a `done` call that failed
+	// for a reason other than jobwake.ErrAlreadyTerminal (clown#257): the
+	// hook is the terminal writer of last resort, so a transient ringmaster
+	// failure must not strand a job after a single bad call. Defaults to
+	// defaultDoneRetryBackoff; tests set it near-zero to keep the retry
+	// loop fast. Bounded by the caller's ctx (the hook's own overall
+	// timeout), not a fixed attempt count.
+	DoneRetryBackoff time.Duration
 }
+
+// defaultDoneRetryBackoff is production's pace for ExitWake's done retry:
+// short enough that a handful of attempts still fit inside the hook's own
+// 60s budget (cmd/juggler's exitWakeTimeout), long enough not to hammer a
+// genuinely down ringmaster.
+const defaultDoneRetryBackoff = 2 * time.Second
 
 func (d LifecycleDeps) withDefaults() LifecycleDeps {
 	if d.Now == nil {
 		d.Now = time.Now
+	}
+	if d.DoneRetryBackoff <= 0 {
+		d.DoneRetryBackoff = defaultDoneRetryBackoff
 	}
 	if d.NewPrincipal == nil {
 		d.NewPrincipal = NewPrincipal
@@ -130,7 +149,8 @@ type ExitWakeOutcome struct {
 
 // ExitWake is the unit's post-stop hook and the sole exit-wake emitter (FDR
 // 0019 §6). It writes the terminal record when the main process did not
-// (HookTerminal), otherwise relays the one already written, then sends ONE
+// (HookTerminal, retried on a transient `done` failure — see
+// doneWithRetry), otherwise relays the one already written, then sends ONE
 // reason-tagged exit wake to every accepted holder recorded on the job's
 // journal. It is idempotent: a terminal record is never written twice, and a
 // sent-wake marker under the store keeps a second run from re-waking.
@@ -147,19 +167,11 @@ func ExitWake(ctx context.Context, deps LifecycleDeps, req ExitWakeRequest) (Exi
 	term, terminal := TerminalRecord(recs)
 	if !terminal {
 		state, message := HookTerminal(req.Service)
-		doneErr := deps.Ringmaster.Done(ctx, req.Target, req.Job, DoneRecord{State: state, Message: message, ResultRef: req.LedgerRef})
-		if doneErr == nil {
-			out.WroteTerminal = true
-			term = JobRecord{Type: state, Message: message, ResultRef: req.LedgerRef}
-		} else {
-			// The main process may have raced us to it; relay theirs.
-			if recs, err = deps.Ringmaster.Records(ctx, req.Target, req.Job); err != nil {
-				return out, fmt.Errorf("ringmaster done %s: %w", req.Job, doneErr)
-			}
-			if term, terminal = TerminalRecord(recs); !terminal {
-				return out, fmt.Errorf("ringmaster done %s: %w", req.Job, doneErr)
-			}
+		wroteTerm, wrote, derr := doneWithRetry(ctx, deps, req, state, message)
+		if derr != nil {
+			return out, derr
 		}
+		term, out.WroteTerminal = wroteTerm, wrote
 	}
 	out.State, out.Message = term.Type, term.Message
 	out.Reason = ExitReasonFor(term.Type, term.Message)
@@ -175,6 +187,38 @@ func ExitWake(ctx context.Context, deps LifecycleDeps, req ExitWakeRequest) (Exi
 		Recipients: WakeRecipients(HoldersFromRecords(recs)),
 	})
 	return out, err
+}
+
+// doneWithRetry calls Done until it succeeds, loses a race against another
+// writer (jobwake.ErrAlreadyTerminal — relayed, not a failure), or the
+// caller's ctx is done (clown#257). The hook is the terminal writer of last
+// resort for this job: any other failure (ringmaster transiently
+// unreachable, disk full, ...) gets retried, paced by
+// deps.DoneRetryBackoff, rather than refused on the first bad call — never
+// a refusal before trying at least once, and never more than one terminal
+// record written (ringmaster's own first-write-wins settles that).
+func doneWithRetry(ctx context.Context, deps LifecycleDeps, req ExitWakeRequest, state, message string) (term JobRecord, wrote bool, err error) {
+	for {
+		doneErr := deps.Ringmaster.Done(ctx, req.Target, req.Job, DoneRecord{State: state, Message: message, ResultRef: req.LedgerRef})
+		if doneErr == nil {
+			return JobRecord{Type: state, Message: message, ResultRef: req.LedgerRef}, true, nil
+		}
+		if errors.Is(doneErr, jobwake.ErrAlreadyTerminal) {
+			recs, rerr := deps.Ringmaster.Records(ctx, req.Target, req.Job)
+			if rerr != nil {
+				return JobRecord{}, false, fmt.Errorf("reading the terminal that won the race for %s: %w", req.Job, rerr)
+			}
+			if t, ok := TerminalRecord(recs); ok {
+				return t, false, nil
+			}
+			return JobRecord{}, false, fmt.Errorf("ringmaster done %s: already terminal, but no terminal record found on the journal: %w", req.Job, doneErr)
+		}
+		select {
+		case <-ctx.Done():
+			return JobRecord{}, false, fmt.Errorf("ringmaster done %s: giving up after repeated failures: %w", req.Job, doneErr)
+		case <-time.After(deps.DoneRetryBackoff):
+		}
+	}
 }
 
 type exitWakeBatch struct {

@@ -2,10 +2,29 @@ package jugglerrun
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 )
+
+// countingDoneRingmaster makes the first failCount calls to Done fail with
+// err, then delegates to the wrapped Ringmaster; it also counts every call
+// (clown#257: pins ExitWake's done-retry behavior).
+type countingDoneRingmaster struct {
+	Ringmaster
+	failCount int
+	err       error
+	calls     int
+}
+
+func (r *countingDoneRingmaster) Done(ctx context.Context, target, job string, d DoneRecord) error {
+	r.calls++
+	if r.calls <= r.failCount {
+		return r.err
+	}
+	return r.Ringmaster.Done(ctx, target, job, d)
+}
 
 // startAgentJob starts a job on root-1's channel holding root-1 (accepted)
 // and a pending grantee that must never be woken.
@@ -125,6 +144,69 @@ func TestExitWake_UnknownJobIsAnError(t *testing.T) {
 	h := newHarness(t)
 	if _, err := ExitWake(context.Background(), h.deps, ExitWakeRequest{Job: "nope-1", Target: testRoot}); err == nil {
 		t.Fatal("want an error for a job with no journal")
+	}
+}
+
+// TestExitWake_RetriesATransientDoneFailure covers clown#257: a `done`
+// failure that is NOT jobwake.ErrAlreadyTerminal (ringmaster transiently
+// unreachable, say) must be retried, not refused on the first bad call —
+// the hook is the terminal writer of last resort. A generous ctx deadline
+// and a tiny backoff keep this deterministic (not racing wall-clock load).
+func TestExitWake_RetriesATransientDoneFailure(t *testing.T) {
+	h := newHarness(t)
+	job := startAgentJob(t, h)
+	transient := &countingDoneRingmaster{Ringmaster: h.deps.Ringmaster, failCount: 3, err: errors.New("ringmaster: transient failure")}
+	deps := h.deps
+	deps.Ringmaster = transient
+	deps.DoneRetryBackoff = time.Millisecond
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := ExitWake(ctx, deps, ExitWakeRequest{Job: job, Target: testRoot, Service: ServiceResult{Result: "exit-code"}})
+	if err != nil {
+		t.Fatalf("ExitWake: %v", err)
+	}
+	if !out.WroteTerminal || out.State != StateInterrupted {
+		t.Fatalf("outcome = %+v", out)
+	}
+	if transient.calls != 4 {
+		t.Errorf("Done was called %d times, want exactly 4 (3 failures + 1 success)", transient.calls)
+	}
+	if n := countTerminals(h.fakes.Records(t, testRoot, job)); n != 1 {
+		t.Errorf("terminal records = %d, want exactly 1", n)
+	}
+}
+
+// TestExitWake_GivesUpWhenDoneNeverSucceeds covers clown#257's other half:
+// a `done` call that fails forever must not strand the hook in an infinite
+// loop — it gives up once ctx is done, returns an error (which cmdExitWake
+// logs and turns into a non-zero exit), and never writes a terminal record
+// of its own (the journal stays exactly as it was: no terminal at all).
+func TestExitWake_GivesUpWhenDoneNeverSucceeds(t *testing.T) {
+	h := newHarness(t)
+	job := startAgentJob(t, h)
+	alwaysFails := &countingDoneRingmaster{Ringmaster: h.deps.Ringmaster, failCount: 1 << 30, err: errors.New("ringmaster: permanently down")}
+	deps := h.deps
+	deps.Ringmaster = alwaysFails
+	deps.DoneRetryBackoff = 5 * time.Millisecond
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	out, err := ExitWake(ctx, deps, ExitWakeRequest{Job: job, Target: testRoot, Service: ServiceResult{Result: "exit-code"}})
+	if err == nil {
+		t.Fatal("want an error when done never succeeds")
+	}
+	if !strings.Contains(err.Error(), "giving up") || !strings.Contains(err.Error(), "permanently down") {
+		t.Errorf("err = %v, want it to name the cause and that it gave up", err)
+	}
+	if out.WroteTerminal {
+		t.Errorf("outcome = %+v, want WroteTerminal false", out)
+	}
+	if alwaysFails.calls < 2 {
+		t.Errorf("Done was called %d times, want at least one retry", alwaysFails.calls)
+	}
+	if n := countTerminals(h.fakes.Records(t, testRoot, job)); n != 0 {
+		t.Errorf("terminal records = %d, want 0: the journal must stay untouched", n)
 	}
 }
 

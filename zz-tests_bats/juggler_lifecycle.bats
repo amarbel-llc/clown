@@ -1181,8 +1181,9 @@ EOF
 }
 
 # --- ringmaster v3: job lock, protocol version, race-handling with whatever
-# else writes a terminal (clown#256; NOT the liveness reaper itself — nothing
-# runs `ringmaster monitor` on an agent's channel today, see ringmaster#33) -
+# else writes a terminal (clown#256; against the FAKE ringmaster binary's
+# race-once knob, not a real reaper — see juggler_reaper.bats for that,
+# against the real pinned binary, clown#257) -
 
 @test "spawn refuses when the ringmaster binary speaks a different job-platform protocol" {
   printf '2' >"$FAKE_DIR/ringmaster-protocol-version"
@@ -1193,12 +1194,12 @@ EOF
 }
 
 @test "spawn --new-run rk5, then a child journal seeded already-interrupted (fixture for the next two tests)" {
-  # This does NOT exercise the v3 liveness reaper: nothing in clown or
-  # ringmaster currently runs `ringmaster monitor` on an agent's channel, so
-  # the reaper never actually reaps one of these jobs today (clown#256 review
-  # finding 1; tracked as ringmaster#33). This just seeds the journal the way
-  # SOME eventual writer — the reaper, once ringmaster#33 lands, or anything
-  # else — would, as a fixture for the race-handling and resolve tests below.
+  # This does NOT run a real reaper: the fake platform's `ringmaster` is a
+  # stateful stand-in, not the real pinned binary (juggler_reaper.bats
+  # drives that one directly). It just seeds the journal the way the
+  # real host-wide reaper (ADR-0001, ringmaster#33, landed) — or the
+  # exit-wake hook, or any other writer — would, as a fixture for the
+  # race-handling and resolve tests below.
   run_jug spawn --new-run --run-key rk5 --input - --issuer issuer-6 --room room-5@rooms.test \
     <<<'{"recording":"fifth"}'
   expect_status 0

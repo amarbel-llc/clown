@@ -67,17 +67,23 @@ type AgentDeps struct {
 	// 2). Nil disables traffic entirely.
 	TrafficPath func(principal, job string) string
 	// AcquireJobLock takes the ringmaster producer's advisory lock on the
-	// job for the run's whole lifetime (RFC-0018 §2; clown#256). Where a
-	// `ringmaster monitor --session <channel>` already watches the parent
-	// channel, this is what lets its v3 liveness reaper terminalize the
-	// job `interrupted` if the exit-wake hook never runs either (systemd
-	// gone, hook crashed) — no monitor watches a run-root or parent-agent
-	// channel today, so holding the lock alone does not guarantee that
-	// (ringmaster#33). Acquired right after the job exists (self-started
-	// or adopted from `juggler spawn`) and released only after Done has
-	// returned, in finish. Defaults to a no-op (no lock, today's
-	// behavior): cmd/juggler's `juggler run` wires jobwake.AcquireJobLock;
-	// tests inject a fake that records acquire/release ordering.
+	// job for the run's whole lifetime (RFC-0018 §2; clown#256). The unit's
+	// exit-wake hook is the first-line backstop for every unit; this lock
+	// is what lets ringmaster's host-wide liveness reaper (ringmaster#33,
+	// landed) act as the backstop FOR the hook instead — any long-running
+	// `ringmaster monitor` or standalone `ringmaster reap` on the host
+	// scans every channel, not just the one it is itself a consumer on,
+	// so a juggler job needs no monitor of its own (`juggler spawn`
+	// launches none): a lock released without a terminal record is reaped
+	// `interrupted` one grace period after the first such reaper observes
+	// it, including after a reboot. A host running neither a monitor nor
+	// `ringmaster reap` still has the gap the hook exists to cover — that
+	// deployment is the host's own responsibility. Acquired right after
+	// the job exists (self-started or adopted from `juggler spawn`) and
+	// released only after Done has returned, in finish. Defaults to a
+	// no-op (no lock, today's behavior): cmd/juggler's `juggler run` wires
+	// jobwake.AcquireJobLock; tests inject a fake that records
+	// acquire/release ordering.
 	AcquireJobLock func(target, jobID string) (release func() error, err error)
 }
 
@@ -204,10 +210,10 @@ func RunAgent(ctx context.Context, deps AgentDeps, req AgentRequest) (AgentOutco
 	}
 	// Hold the job's advisory lock for the run's whole lifetime, whether the
 	// job was just started above or adopted from `juggler spawn` (clown#256,
-	// FDR 0019 §6): where a monitor already watches the parent channel, this
-	// is what lets the v3 liveness reaper terminalize `interrupted` when the
-	// exit-wake hook never runs either — holding the lock alone does not
-	// guarantee a monitor exists to act on it (ringmaster#33).
+	// FDR 0019 §6): this is what lets ringmaster's host-wide liveness
+	// reaper act as the exit-wake hook's own backstop — see
+	// AgentDeps.AcquireJobLock's doc for exactly what that covers and what
+	// it does not (a host running neither a monitor nor `ringmaster reap`).
 	switch release, lockErr := deps.AcquireJobLock(a.target, a.job); {
 	case lockErr == nil:
 		a.releaseLock = release

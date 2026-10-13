@@ -411,18 +411,27 @@ it holds the job's advisory lock
 for the whole run, acquired right after the job exists and released only
 after done has returned
 .Pq clown#256 .
-The post-stop hook, not the lock, is the backstop that actually runs for
-every unit; ringmaster v3's liveness reaper can terminalize the job
-.Ql interrupted
-only where a
-.Ic monitor Fl -session Ar channel
-already watches the parent channel
-.Pq an interactive clown session with its own long-lived monitor, say .
-No monitor watches a run-root or parent-agent channel today, so if the
-hook also cannot run
-.Pq systemd itself gone
-nothing reaps the job: holding the lock is necessary but not sufficient
-.Pq tracked as Em ringmaster#33 .
+The unit's post-stop hook is the first-line backstop that runs for
+every unit.
+Ringmaster's host-wide liveness reaper
+.Pq Em ringmaster#33
+is the backstop FOR the hook: any long-running
+.Cm ringmaster monitor
+or the standalone
+.Cm ringmaster reap
+scans every channel on the host, not only the one it is itself a
+consumer on, so a juggler job needs no monitor of its own on its own
+channel
+.Pq Cm juggler spawn launches none .
+A job whose lock is released without a terminal record
+.Pq the hook also never ran: systemd itself gone
+is reaped by the host-wide reaper
+.Pq any Cm ringmaster monitor No or Cm ringmaster reap No on the host ,
+one grace period after the first reaper observes the released lock,
+including after a reboot.
+A host running neither still has the gap the hook exists to cover;
+deploying one is the host's own responsibility
+.Pq on krone, circus's Pa ringmaster-reap.service .
 A lock already held by a live producer
 .Pq Va jobwake.ErrAlreadyLocked
 refuses the run outright rather than racing it; any other acquire failure
