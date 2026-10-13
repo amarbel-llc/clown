@@ -21,7 +21,7 @@ func main() {
 
 func run(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: juggler <daemon|start|stop|status|list|models|model|prompt|decide|run|spawn|exit-wake|resolve|job-ledger|handles|mcp|download> [args]")
+		fmt.Fprintln(os.Stderr, "usage: juggler <daemon|start|stop|status|list|models|model|prompt|decide|run|spawn|exit-wake|resolve|clean|job-ledger|handles|mcp|download> [args]")
 		return jr.ExitUsage
 	}
 
@@ -39,6 +39,8 @@ func run(args []string) int {
 		return cmdExitWake(os.Getenv, args[1:], os.Stdout, os.Stderr)
 	case "resolve":
 		return cmdResolve(args[1:], os.Stdout, os.Stderr)
+	case "clean":
+		return cmdClean(args[1:], os.Stdout, os.Stderr)
 	case "job-ledger":
 		return cmdJobLedger(args[1:], os.Stdout, os.Stderr)
 	case "handles":

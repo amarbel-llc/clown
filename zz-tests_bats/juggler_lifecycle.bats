@@ -1257,3 +1257,65 @@ EOF
     and ([.calls[] | select(.tool == "teardown" and .kind == "account" and .ok == true)] | length >= 2)'
   [[ $(journal_types "$root" "$reaped_job" | tail -n1) == interrupted ]]
 }
+
+# --- clean (clown#250): the retention sweep for a pending run's leaked root
+# account/password file/pending record -
+
+@test "clean --act refuses without the minter credential" {
+  local saved=$TROUPE_MINT_PASSWORD_FILE
+  unset TROUPE_MINT_PASSWORD_FILE
+  run_jug clean --act
+  export TROUPE_MINT_PASSWORD_FILE=$saved
+  expect_status 1
+  [[ $stderr == *"TROUPE_MINT_PASSWORD_FILE"* ]]
+}
+
+# mint_revokes_for <principal>: how many `troupe mint-revoke --session-key
+# <principal> ...` calls were recorded. calls.jsonl is cumulative for the
+# whole file (BATS_NO_PARALLELIZE_WITHIN_FILE), so scope by principal rather
+# than counting the file-wide total.
+mint_revokes_for() {
+  jq -s --arg p "$1" \
+    '[.[] | select(.tool == "troupe" and .argv[0] == "mint-revoke") | (.argv | index("--session-key")) as $i | .argv[$i + 1]] | map(select(. == $p)) | length' \
+    "$FAKE_DIR/calls.jsonl"
+}
+
+@test "clean dry-run lists a pending run past --older-than without touching it" {
+  mkdir -p "$FAKE_DIR/fail"
+  : >"$FAKE_DIR/fail/troupe-muc-send"
+  run_jug spawn --new-run --run-key rk-clean-1 --input - --issuer issuer-clean --room room-clean-1@rooms.test <<<'{"recording":"x"}'
+  rm -f "$FAKE_DIR/fail/troupe-muc-send"
+  expect_status 1
+
+  jq -r .root_principal "$XDG_STATE_HOME/juggler/runs/rk-clean-1.json" >"$BATS_FILE_TMPDIR/rk-clean-1-root"
+
+  run_jug clean --older-than 0s
+  expect_status 0
+  expect_json '([.runs[] | select(.run_key == "rk-clean-1" and .kind == "pending" and .reaped == false)] | length == 1)'
+  [[ $(field .dry_run) == true ]]
+  [[ -n $(jq -r '.runs[] | select(.run_key=="rk-clean-1") | .detail' <<<"$output") ]]
+  [[ $(mint_revokes_for "$(<"$BATS_FILE_TMPDIR/rk-clean-1-root")") -eq 0 ]]
+  [[ -f $XDG_STATE_HOME/juggler/runs/rk-clean-1.json ]]
+}
+
+@test "clean skips a pending run younger than --older-than" {
+  run_jug clean --older-than 24h
+  expect_status 0
+  expect_json '([.runs[] | select(.run_key == "rk-clean-1")] | length == 0)'
+}
+
+@test "clean --act reaps a pending run past --older-than: revokes the root, removes the pending record, appends a teardown ledger entry" {
+  run_jug clean --older-than 0s --act
+  expect_status 0
+  expect_json '([.runs[] | select(.run_key == "rk-clean-1" and .kind == "pending" and .reaped == true)] | length == 1)'
+  [[ $(mint_revokes_for "$(<"$BATS_FILE_TMPDIR/rk-clean-1-root")") -eq 1 ]]
+  [[ ! -f $XDG_STATE_HOME/juggler/runs/rk-clean-1.json ]]
+  [[ -f $XDG_STATE_HOME/juggler/runs/rk-clean-1/ledger.json ]]
+  [[ $(jq -r '.calls[-1].tool' "$XDG_STATE_HOME/juggler/runs/rk-clean-1/ledger.json") == teardown ]]
+  [[ $(jq -r '.calls[-1].ok' "$XDG_STATE_HOME/juggler/runs/rk-clean-1/ledger.json") == true ]]
+
+  # Idempotent: a second clean finds nothing left to reap.
+  run_jug clean --older-than 0s --act
+  expect_status 0
+  expect_json '([.runs[] | select(.run_key == "rk-clean-1")] | length == 0)'
+}

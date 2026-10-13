@@ -68,6 +68,10 @@
 .Op Fl -result-line Ar text Fl -canary-room Ar jid
 .Op Fl -keep-accounts
 .Nm
+.Cm clean
+.Op Fl -older-than Ar duration
+.Op Fl -act
+.Nm
 .Cm job-ledger Ar job
 .Op Fl -target Ar principal
 .Nm
@@ -105,7 +109,7 @@ prints a one-paragraph hint pointing at the home-manager module before
 returning a non-zero exit code.
 .Pp
 The agent-substrate subcommands
-.Pq Cm run , spawn , exit-wake , resolve , job-ledger , handles , decide
+.Pq Cm run , spawn , exit-wake , resolve , clean , job-ledger , handles , decide
 do not need the daemon for the common case.
 .Cm run , decide
 and
@@ -120,7 +124,7 @@ only a
 .Em local
 GGUF model sends them to the daemon, which owns the llama-server
 process.
-.Cm exit-wake , resolve , job-ledger
+.Cm exit-wake , resolve , clean , job-ledger
 and
 .Cm handles
 never dial the daemon.
@@ -715,8 +719,12 @@ a failure of the mint itself saves nothing and prints nothing on stdout.
 A pending run takes no subagents, and
 .Cm decide Fl -run-key
 refuses it before any model call.
-One that is never retried leaves the root and room for the retention
-sweep.
+One that is never retried leaves the root and room until
+.Cm clean
+.Po
+.Fl -act
+; the room itself is left, only its owner affiliation dropped
+.Pc .
 .It Cm spawn Fl -brief Ar template Op Fl -task Ar file Op Fl -run-key Ar key Op Fl -wait Op Fl -timeout Ar dur Op Fl -stop-grace Ar dur Op Fl -moxy-url Ar url Op Fl -juggler Ar path Op Fl -moxy Ar path Op Fl -user
 Launch one subagent into a run.
 .Ar template
@@ -1199,6 +1207,50 @@ without
 it exits 1 when
 .Ev TROUPE_MINT_PASSWORD_FILE
 is unset, before the canary post and before stopping any child.
+.It Cm clean Op Fl -older-than Ar duration Op Fl -act
+The retention sweep for what
+.Cm spawn Fl -new-run
+and
+.Cm resolve
+deliberately leave behind: a
+.Ql pending
+run
+.Po
+.Fl -new-run
+failed after the root's mint; see above
+.Pc
+whose retry never came, and a resolved run's per-child staged files
+.Pq brief.toml, moxyfile.toml and parent-moxyfile.toml
+and
+.Ql traffic.jsonl
+files, neither of which
+.Cm resolve
+touches.
+A run still open, neither pending nor resolved, is never listed.
+.Fl -older-than
+guards both categories against an in-flight retry or a resolve whose own
+teardown raced this one; default 1h, measured from the pending run's
+creation, or the resolved run's own resolution time.
+Without
+.Fl -act
+it only lists what would be reaped, the default.
+With it, a pending run's root account is revoked the same way
+.Cm resolve Ns 's
+teardown does, a
+.Ql teardown
+ledger entry is appended, then the password file and the pending record
+are removed, in that order; a resolved run's staged and traffic files
+are simply deleted.
+Needs the minter credential exactly when
+.Cm resolve
+does, whenever
+.Fl -act
+is given.
+Prints
+.Sy {"dry_run","older_than","runs":[{"run_key","kind","age","reaped","detail","error"}]} .
+Never destroys a room or revokes a child's account: those stay
+.Cm resolve Ns 's
+job, and, for rooms, the host's own retention sweep's.
 .It Cm job-ledger Ar job Op Fl -target Ar principal
 Print a job's ledger: a run job's run ledger, or an agent job's result
 spool
