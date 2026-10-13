@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -580,6 +581,162 @@ func TestRunAgent_OversizedToolResultIsTruncatedInTheRoom(t *testing.T) {
 		t.Errorf("tool_result post = %.300s", posts[1].Subject)
 	}
 	wantTruncationMarker(t, result.Body.ToolResult.Content, []byte(content))
+}
+
+// containsNote reports whether any ledger note contains substr.
+func containsNote(notes []string, substr string) bool {
+	for _, n := range notes {
+		if strings.Contains(n, substr) {
+			return true
+		}
+	}
+	return false
+}
+
+// TestRunAgent_TrafficFileIsKeyedByPrincipalAndJob_OutsideAgentStateDir
+// covers clown#255 delta review findings 1 and 2: the traffic path must be
+// under <store>/traffic/<principal>/<job>.jsonl, not inside AgentStateDir
+// (moxy's own CWD, and so reachable by the agent's own tool calls).
+func TestRunAgent_TrafficFileIsKeyedByPrincipalAndJob_OutsideAgentStateDir(t *testing.T) {
+	h := newHarness(t)
+	deps := h.agentDeps(openAIResolved(scriptedOpenAI(t, openAICreateIssue, openAIEndTurn)))
+	deps.AgentStateDir = h.deps.Store.AgentStateDir("agent-1")
+	deps.TrafficPath = h.deps.Store.TrafficPath
+
+	out, err := RunAgent(context.Background(), deps, AgentRequest{Brief: parsedBrief(t, "agent-1"), MoxyURL: fakeMoxy(t).URL})
+	if err != nil || out.State != StateSucceeded {
+		t.Fatalf("outcome = %+v, err = %v", out, err)
+	}
+	if out.TrafficPath == "" {
+		t.Fatal("want a non-empty traffic path")
+	}
+	wantPath := filepath.Join(h.deps.Store.Root, "traffic", "agent-1", out.Job+".jsonl")
+	if out.TrafficPath != wantPath {
+		t.Errorf("traffic path = %s, want %s", out.TrafficPath, wantPath)
+	}
+	if strings.HasPrefix(out.TrafficPath, deps.AgentStateDir) {
+		t.Errorf("traffic path %s must not be inside the tool-reachable AgentStateDir %s", out.TrafficPath, deps.AgentStateDir)
+	}
+	lines := readTrafficLines(t, out.TrafficPath)
+	if len(lines) != 1 || lines[0].Job != out.Job || lines[0].ArgsDigest != out.Ledger.Calls[0].ArgsDigest {
+		t.Fatalf("lines = %+v, want 1 matching the ledger call and job %s", lines, out.Job)
+	}
+}
+
+// TestRunAgent_SecondJobUnderSamePrincipalGetsADistinctTrafficFile covers
+// clown#255 delta review finding 1's cardinality bug: a bare `run --brief`
+// with no --job starts a fresh job each invocation under the SAME
+// principal, so keying traffic by principal alone would let the second
+// run's file silently overwrite the first's underneath an already-printed
+// path.
+func TestRunAgent_SecondJobUnderSamePrincipalGetsADistinctTrafficFile(t *testing.T) {
+	h := newHarness(t)
+
+	deps1 := h.agentDeps(openAIResolved(scriptedOpenAI(t, openAICreateIssue, openAIEndTurn)))
+	deps1.TrafficPath = h.deps.Store.TrafficPath
+	out1, err := RunAgent(context.Background(), deps1, AgentRequest{Brief: parsedBrief(t, "agent-1"), MoxyURL: fakeMoxy(t).URL})
+	if err != nil || out1.State != StateSucceeded {
+		t.Fatalf("run 1: outcome = %+v, err = %v", out1, err)
+	}
+
+	deps2 := h.agentDeps(openAIResolved(scriptedOpenAI(t, openAICreateIssue, openAIEndTurn)))
+	deps2.TrafficPath = h.deps.Store.TrafficPath
+	out2, err := RunAgent(context.Background(), deps2, AgentRequest{Brief: parsedBrief(t, "agent-1"), MoxyURL: fakeMoxy(t).URL})
+	if err != nil || out2.State != StateSucceeded {
+		t.Fatalf("run 2: outcome = %+v, err = %v", out2, err)
+	}
+
+	if out1.Job == out2.Job {
+		t.Fatalf("two bare runs under the same principal must get distinct jobs, got %s twice", out1.Job)
+	}
+	if out1.TrafficPath == "" || out2.TrafficPath == "" || out1.TrafficPath == out2.TrafficPath {
+		t.Fatalf("traffic paths = %q, %q, want distinct non-empty paths", out1.TrafficPath, out2.TrafficPath)
+	}
+	if lines := readTrafficLines(t, out1.TrafficPath); len(lines) != 1 || lines[0].Job != out1.Job {
+		t.Errorf("run 1's traffic file changed after run 2 started: %+v", lines)
+	}
+}
+
+// TestRunAgent_RetriedAdoptedJobTruncatesTraffic covers clown#255 review
+// finding 8: re-running the SAME adopted --job must truncate the traffic
+// file (O_TRUNC), never append a second run's lines after the first's.
+func TestRunAgent_RetriedAdoptedJobTruncatesTraffic(t *testing.T) {
+	h := newHarness(t)
+	job, err := h.deps.Ringmaster.Start(context.Background(), testRoot, AgentJobLabel, SpawnSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	deps1 := h.agentDeps(openAIResolved(scriptedOpenAI(t, openAICreateIssue, openAIEndTurn)))
+	deps1.TrafficPath = h.deps.Store.TrafficPath
+	out1, err := RunAgent(context.Background(), deps1, AgentRequest{Brief: parsedBrief(t, "agent-1"), Job: job, MoxyURL: fakeMoxy(t).URL})
+	if err != nil || out1.Job != job {
+		t.Fatalf("run 1: outcome = %+v, err = %v", out1, err)
+	}
+	if lines := readTrafficLines(t, out1.TrafficPath); len(lines) != 1 {
+		t.Fatalf("run 1 lines = %+v, want 1", lines)
+	}
+
+	deps2 := h.agentDeps(openAIResolved(scriptedOpenAI(t, openAICreateIssue, openAICreateIssue, openAIEndTurn)))
+	deps2.TrafficPath = h.deps.Store.TrafficPath
+	out2, err := RunAgent(context.Background(), deps2, AgentRequest{Brief: parsedBrief(t, "agent-1"), Job: job, MoxyURL: fakeMoxy(t).URL})
+	if err != nil || out2.Job != job || out2.TrafficPath != out1.TrafficPath {
+		t.Fatalf("run 2: outcome = %+v, err = %v, want the same path %s", out2, err, out1.TrafficPath)
+	}
+	if lines := readTrafficLines(t, out2.TrafficPath); len(lines) != 2 {
+		t.Fatalf("run 2 lines = %+v, want exactly 2 (this run's calls only, not 1+2)", lines)
+	}
+}
+
+// TestRunAgent_TrafficOpenFailureIsNotedInLedger covers clown#255 review
+// finding 7: a traffic file that cannot be opened at all must leave an
+// auditable trace in the ledger, not just a log line.
+func TestRunAgent_TrafficOpenFailureIsNotedInLedger(t *testing.T) {
+	h := newHarness(t)
+	blocker := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(blocker, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	deps := h.agentDeps(openAIResolved(scriptedOpenAI(t, openAIEndTurn)))
+	deps.TrafficPath = func(principal, job string) string {
+		return filepath.Join(blocker, principal, job+".jsonl")
+	}
+	out, err := RunAgent(context.Background(), deps, AgentRequest{Brief: parsedBrief(t, "agent-1"), MoxyURL: fakeMoxy(t).URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.TrafficPath != "" {
+		t.Errorf("TrafficPath = %q, want empty on an open failure", out.TrafficPath)
+	}
+	if !containsNote(out.Ledger.Notes, "traffic.jsonl could not be opened") {
+		t.Errorf("ledger notes = %v, want a note about the open failure", out.Ledger.Notes)
+	}
+}
+
+// TestAgentRun_FinishNotesTrafficWriteFailure covers clown#255 review
+// finding 7's other half: a write (or close) failure mid-run must also be
+// noted, exercised directly against finish since forcing a real write
+// failure through the full loop is not practical.
+func TestAgentRun_FinishNotesTrafficWriteFailure(t *testing.T) {
+	h := newHarness(t)
+	job, err := h.deps.Ringmaster.Start(context.Background(), testRoot, AgentJobLabel, SpawnSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink, path := openTrafficSink(filepath.Join(t.TempDir(), "job.jsonl"), job, t.Logf)
+	sink.f.Close() // force the close finish() performs to fail
+	a := &agentRun{
+		deps:        AgentDeps{Ringmaster: h.deps.Ringmaster}.withDefaults(),
+		brief:       parsedBrief(t, "agent-1"),
+		target:      testRoot,
+		job:         job,
+		traffic:     sink,
+		trafficPath: path,
+	}
+	out := a.finish(StateSucceeded, "ok", jugglerloop.Ledger{Schema: jugglerloop.LedgerSchema})
+	if !containsNote(out.Ledger.Notes, "traffic.jsonl had a write failure") {
+		t.Errorf("ledger notes = %v, want the write-failure note", out.Ledger.Notes)
+	}
 }
 
 func TestRoomStanza(t *testing.T) {

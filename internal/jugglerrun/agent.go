@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -60,6 +59,13 @@ type AgentDeps struct {
 	Moxy ToolPlaneLauncher
 	// AgentStateDir is the agent's own state directory (the moxy CWD).
 	AgentStateDir string
+	// TrafficPath, when set, returns traffic.jsonl's path for one agent job
+	// given its principal and ringmaster job id (clown#255): Store.TrafficPath
+	// matches this signature directly. Deliberately NOT derived from
+	// AgentStateDir — that directory is moxy's CWD, and a file there is
+	// reachable by the agent's own tool calls (clown#255 delta review finding
+	// 2). Nil disables traffic entirely.
+	TrafficPath func(principal, job string) string
 	// AcquireJobLock takes the ringmaster producer's advisory lock on the
 	// job for the run's whole lifetime (RFC-0018 §2; clown#256). Where a
 	// `ringmaster monitor --session <channel>` already watches the parent
@@ -122,9 +128,9 @@ type AgentOutcome struct {
 	Message    string
 	LedgerPath string
 	// TrafficPath is traffic.jsonl's path (clown#255): one record per tool
-	// call, arguments in full, beside the ledger. Empty when the
-	// job-platform facility that derives it is disabled, or the file could
-	// not be opened.
+	// call, arguments in full, keyed by principal and job, outside the
+	// agent's tool-reachable state directory. Empty when AgentDeps.TrafficPath
+	// is nil, or the file could not be opened.
 	TrafficPath string
 	Ledger      jugglerloop.Ledger
 	// ConfigError: the brief does not fit the tool plane (an allowlisted
@@ -227,14 +233,18 @@ func RunAgent(ctx context.Context, deps AgentDeps, req AgentRequest) (AgentOutco
 		a.lockAcquireErr = lockErr
 	}
 
-	// traffic.jsonl (clown#255): one record per tool call, in the agent's
-	// own state directory (clown#256 review's SpoolPath-based placement put
-	// it in ringmaster's journal directory, where a real ringmaster reads
-	// `*.jsonl` as a second job's journal — delta review finding 1). Keyed
-	// by principal, which RunAgent knows unconditionally from the brief,
-	// unlike a run key. Best-effort: a failure here is logged, not fatal.
-	if deps.AgentStateDir != "" {
-		a.traffic, a.trafficPath = openTrafficSink(filepath.Join(deps.AgentStateDir, "traffic.jsonl"), a.logf)
+	// traffic.jsonl (clown#255): one record per tool call. The first review
+	// round's SpoolPath-based placement put it in ringmaster's journal
+	// directory, where a real ringmaster reads `*.jsonl` as a second job's
+	// journal (delta review finding 1); keying by principal alone then put
+	// it inside AgentStateDir, moxy's CWD and so tool-reachable by the
+	// agent's own calls (delta review finding 2), AND let a second bare
+	// `run --brief` under the same principal silently overwrite the first
+	// run's file (delta review finding 1). TrafficPath(principal, job) — a.job
+	// is already resolved by this point, whether started above or adopted —
+	// avoids all three. Best-effort: a failure here is logged, not fatal.
+	if deps.TrafficPath != nil {
+		a.traffic, a.trafficPath = openTrafficSink(deps.TrafficPath(b.Principal, a.job), a.job, a.logf)
 	}
 
 	if deps.ResolveModel == nil {
@@ -500,7 +510,7 @@ func (a *agentRun) finish(state, message string, l jugglerloop.Ledger) AgentOutc
 		// an auditor should be able to see a run's traffic is incomplete
 		// from the ledger alone.
 		l.Notes = append(l.Notes, "traffic.jsonl had a write failure; some tool-call records may be missing")
-	case a.deps.AgentStateDir != "" && a.trafficPath == "":
+	case a.deps.TrafficPath != nil && a.trafficPath == "":
 		l.Notes = append(l.Notes, "traffic.jsonl could not be opened; no tool-call arguments were recorded for this run")
 	}
 	out := AgentOutcome{Job: a.job, State: state, Message: message, Ledger: l, TrafficPath: a.trafficPath}

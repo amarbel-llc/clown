@@ -38,8 +38,15 @@ func ArgsDigest(args json.RawMessage) string {
 // one whose arguments failed validation or whose executor returned a
 // transport error (ResultSize 0, OK false in the latter case: there is no
 // result content to size). Never read by the evaluator.
+//
+// Job is left empty by the loop itself (this package has no notion of a
+// ringmaster job); the writer that owns the file's job-keyed path
+// (internal/jugglerrun's trafficSink) stamps it before marshaling, so the
+// file is self-identifying even if it is later moved or copied out of its
+// <principal>/<job>.jsonl location (clown#255 delta review finding 1).
 type TrafficRecord struct {
 	Step       int             `json:"step"`
+	Job        string          `json:"job,omitempty"`
 	Tool       string          `json:"tool"`
 	Args       json.RawMessage `json:"args"`
 	ArgsDigest string          `json:"args_digest"`

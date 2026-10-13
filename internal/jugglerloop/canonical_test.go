@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -55,6 +56,71 @@ func TestCanonicalJSON_PreservesLargeIntegerPrecision(t *testing.T) {
 func TestCanonicalJSON_InvalidJSONErrors(t *testing.T) {
 	if _, err := CanonicalJSON(json.RawMessage(`{not json`)); err == nil {
 		t.Fatal("want an error for invalid JSON")
+	}
+}
+
+// TestCanonicalJSON_HTMLCharsAreNotEscaped pins SetEscapeHTML(false)
+// (clown#255 delta review finding 5): `<`, `>` and `&` in a string value
+// must come out literal, not as `<` etc, so a generic JSON tool (jq,
+// a verifier not using Go's encoder) reproduces this function's output.
+func TestCanonicalJSON_HTMLCharsAreNotEscaped(t *testing.T) {
+	const doc = `{"q":"<a>&b"}`
+	if got := canonicalOf(t, doc); got != doc {
+		t.Fatalf("canonical = %s, want %s unescaped", got, doc)
+	}
+}
+
+// TestCanonicalJSON_LineSeparatorsAreStillEscaped documents the one case
+// SetEscapeHTML(false) does NOT cover (clown#255 delta review finding 5):
+// Go's encoder escapes U+2028/U+2029 unconditionally (JS-embedding safety,
+// not gated by the HTML-escaping flag), so a generic tool must special-case
+// them to reproduce this function's output exactly.
+func TestCanonicalJSON_LineSeparatorsAreStillEscaped(t *testing.T) {
+	original := "a" + string(rune(0x2028)) + "b" + string(rune(0x2029)) + "c"
+	doc, err := json.Marshal(map[string]string{"q": original})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := canonicalOf(t, string(doc))
+	if strings.ContainsRune(got, rune(0x2028)) || strings.ContainsRune(got, rune(0x2029)) {
+		t.Fatalf("canonical output still contains a raw line/paragraph separator rune, want it escaped: %q", got)
+	}
+	var roundtrip struct {
+		Q string `json:"q"`
+	}
+	if err := json.Unmarshal([]byte(got), &roundtrip); err != nil {
+		t.Fatalf("canonical output does not parse as JSON: %v (%q)", err, got)
+	}
+	if roundtrip.Q != original {
+		t.Fatalf("round-trip = %q, want %q", roundtrip.Q, original)
+	}
+}
+
+// TestCanonicalJSON_InvalidUTF8CanonicalizesToTheReplacementCharacter pins
+// the other NOT-full-semantic-equality case the doc comment states
+// (clown#255 delta review finding 5): invalid UTF-8 inside a string value
+// is decoded losslessly but replaced with U+FFFD by Go's encoder, so two
+// inputs differing only in which invalid bytes appear there canonicalize
+// equal.
+func TestCanonicalJSON_InvalidUTF8CanonicalizesToTheReplacementCharacter(t *testing.T) {
+	a := canonicalOf(t, "{\"q\":\"\xff\"}")
+	b := canonicalOf(t, "{\"q\":\"\xfe\"}")
+	if a != b {
+		t.Fatalf("two different invalid byte sequences canonicalized differently: %s != %s", a, b)
+	}
+	if !strings.Contains(a, "�") {
+		t.Fatalf("canonical = %s, want the replacement character", a)
+	}
+}
+
+// TestCanonicalJSON_TrailingBytesAfterTheFirstValueAreIgnored pins the NIT
+// noted in CanonicalJSON's own doc comment (clown#255 delta review finding
+// 8, unreached in practice: args is always a single complete value).
+func TestCanonicalJSON_TrailingBytesAfterTheFirstValueAreIgnored(t *testing.T) {
+	a := canonicalOf(t, `{"a":1}`)
+	b := canonicalOf(t, `{"a":1}junk`)
+	if a != b {
+		t.Fatalf("trailing bytes after the first value changed the result: %s != %s", a, b)
 	}
 }
 

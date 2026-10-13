@@ -15,21 +15,24 @@ import (
 // traffic, not that it crashes.
 type trafficSink struct {
 	f      *os.File
+	job    string
 	logf   func(format string, args ...any)
 	failed bool
 }
 
-// openTrafficSink opens path, truncating any stale content from an earlier
-// run under the same principal (clown#255 review finding 8: O_APPEND alone
-// would otherwise let a retried `juggler run --job X` on an adopted job
-// append a second run's records after the first, restarting step numbering
-// and breaking the positional join — the job's lock is held for the whole
-// run, so no concurrent writer can race this), creating the directory and
-// the file if absent. It returns the sink plus the path to report (empty
-// unless the file now genuinely exists). A failure to open is logged via
-// logf and degrades to a nil sink; traffic is best-effort, never fatal to
-// the run.
-func openTrafficSink(path string, logf func(string, ...any)) (*trafficSink, string) {
+// openTrafficSink opens path (job-keyed: see Store.TrafficPath), truncating
+// any stale content from an earlier run of the SAME job (clown#255 review
+// finding 8: O_APPEND alone would otherwise let a retried `juggler run --job
+// X` on an adopted job append a second run's records after the first,
+// restarting step numbering and breaking the positional join — the job's
+// lock is held for the whole run, so no concurrent writer can race this),
+// creating the directory and the file if absent. job is stamped onto every
+// record (delta review finding 1), so the file is self-identifying even
+// moved out of its directory. It returns the sink plus the path to report
+// (empty unless the file now genuinely exists). A failure to open is logged
+// via logf and degrades to a nil sink; traffic is best-effort, never fatal
+// to the run.
+func openTrafficSink(path, job string, logf func(string, ...any)) (*trafficSink, string) {
 	if path == "" {
 		return nil, ""
 	}
@@ -42,7 +45,7 @@ func openTrafficSink(path string, logf func(string, ...any)) (*trafficSink, stri
 		logf("opening traffic file %s: %v", path, err)
 		return nil, ""
 	}
-	return &trafficSink{f: f, logf: logf}, path
+	return &trafficSink{f: f, job: job, logf: logf}, path
 }
 
 // onTraffic is a jugglerloop.Config.OnTraffic value.
@@ -50,6 +53,7 @@ func (s *trafficSink) onTraffic(rec jugglerloop.TrafficRecord) {
 	if s == nil {
 		return
 	}
+	rec.Job = s.job
 	line, err := json.Marshal(rec)
 	if err != nil {
 		s.logf("marshaling traffic record for %s: %v", rec.Tool, err)

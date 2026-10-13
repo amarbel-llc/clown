@@ -962,7 +962,7 @@ the path of the result spool,
 .Ql traffic
 the agent's
 .Pa traffic.jsonl
-.Pq clown#255; present only when the file actually exists, derived independently of Ql ledger since the waiting process is not the one that wrote it ,
+.Pq clown#255; derived from the child's principal AND job, independently of Ql ledger since the waiting process is not the one that wrote it; present only when the file actually exists ,
 and
 .Ql artifacts
 the URIs the successful tool calls returned.
@@ -1475,22 +1475,34 @@ mode 0700 directory; deleted when
 tears the account down.
 .It Pa $XDG_STATE_HOME/juggler/agents/<principal>/moxyfile
 An agent's moxyfile, and the working directory of its moxy.
-.It Pa $XDG_STATE_HOME/juggler/agents/<principal>/traffic.jsonl
+.It Pa $XDG_STATE_HOME/juggler/traffic/<principal>/<job>.jsonl
 .Pq clown#255
 One line per tool call, arguments in full plus
-.Ql args_digest ,
+.Ql args_digest
+and the job id itself
+.Pq so a line is self-identifying even copied elsewhere ,
 written by
 .Cm run
-at the same point its ledger entry is appended; truncated at the start
-of each run, so a retried
+at the same point its ledger entry is appended; truncated only on a
+retry of the SAME job, so a retried
 .Fl -job
-never mixes two runs' lines.
+never mixes two runs' lines \(em a bare
+.Cm run Fl -brief
+with no
+.Fl -job
+starts a fresh job each time and so gets its own file, never
+overwriting a prior one's.
+Deliberately outside
+.Pa agents/<principal>/ ,
+which is moxy's own working directory and so reachable by the agent's
+own tool calls.
 See
 .Xr juggler 7
-for the format and why it lives here rather than beside the ringmaster
-spool.
+for the format and why it lives neither there nor beside the
+ringmaster spool.
 As sensitive as the tool arguments it records \(em not filtered or
 redacted.
+No sweep exists yet; see clown#250.
 .It Pa $XDG_STATE_HOME/juggler/exit-wakes/<job>
 The sent-wake marker that keeps
 .Cm exit-wake

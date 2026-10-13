@@ -28,13 +28,22 @@ const RecordSchema = 1
 //	<root>/runs/<run-key>/children/<digest>.brief.toml   the staged brief
 //	<root>/exit-wakes/<job>                          sent-wake marker
 //	<root>/agents/<principal>/                       an agent's own state (moxy CWD)
-//	<root>/agents/<principal>/traffic.jsonl          clown#255
+//	<root>/traffic/<principal>/<job>.jsonl           clown#255
 //
 // The run key and the brief digest are the idempotency keys of `juggler
 // spawn --new-run` and `juggler spawn --brief` respectively. An agent's own
 // directory is keyed by principal (a fresh UUID per agent, FDR 0032 D1),
 // not by run key or job: `juggler run` knows its own principal unconditionally
 // from the brief, but not its run key, and a run can have many agent jobs.
+// traffic.jsonl is keyed by BOTH principal and job (clown#255): a bare brief
+// with no --job starts a fresh ringmaster job per invocation under the SAME
+// principal (agent.go), so principal alone would let a second run of the
+// same brief silently overwrite the first run's traffic file underneath an
+// already-printed path. It also lives under its own <root>/traffic/ tree,
+// not inside AgentStateDir: AgentStateDir is moxy's working directory, and
+// folio-style tools auto-allow writes inside CWD, so a tool-reachable
+// traffic file could be read, deleted or replaced by the very model turn
+// whose calls it is auditing.
 type Store struct {
 	Root string
 }
@@ -72,10 +81,13 @@ func (s Store) AgentStateDir(principal string) string {
 	return filepath.Join(s.Root, "agents", principal)
 }
 
-// TrafficPath is traffic.jsonl's path for principal (clown#255): beside the
-// rest of the agent's own state, keyed the same way.
-func (s Store) TrafficPath(principal string) string {
-	return filepath.Join(s.AgentStateDir(principal), "traffic.jsonl")
+// TrafficPath is traffic.jsonl's path for one agent job (clown#255):
+// <root>/traffic/<principal>/<job>.jsonl, keyed by job (not just principal:
+// a bare `run --brief` with no --job starts a fresh job per invocation
+// under the same principal) and outside AgentStateDir (not moxy's CWD, so
+// the agent's own tool calls cannot reach it; see Store's doc comment).
+func (s Store) TrafficPath(principal, job string) string {
+	return filepath.Join(s.Root, "traffic", principal, job+".jsonl")
 }
 
 // stagedParentMoxyfilePath is a child's parent reference (the spawner's

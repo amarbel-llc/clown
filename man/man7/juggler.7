@@ -288,22 +288,59 @@ signed contract must not grow with file bodies.
 .Cm juggler run
 instead writes one line per tool call to
 .Pa traffic.jsonl ,
-in the agent's own state directory
-.Pq Pa agents/<principal>/traffic.jsonl under the store root, the same directory already used as moxy's working directory \(em NOT beside the ringmaster spool: a file named for ringmaster's own job-id-prefixed convention there is read by real ringmaster as a second, phantom job ,
+keyed by BOTH the agent's principal and its ringmaster job
+.Pq Pa traffic/<principal>/<job>.jsonl under the store root ,
 at the same point its ledger entry is appended \(em including a
 read-only kind, an invalid-arguments call and a tool transport error.
+Keying by job, not principal alone, matters because a bare
+.Cm run Fl -brief
+with no
+.Fl -job
+starts a FRESH job every invocation under the SAME principal: keying by
+principal alone would let a second run of the same brief silently
+overwrite the first run's file underneath an already-printed path.
+The path is also outside
+.Pa agents/<principal>/ ,
+which is moxy's own working directory: folio-style tools auto-allow
+writes inside CWD, so a traffic file living there would be reachable \(em
+readable, deletable, replaceable \(em by the very model turn whose calls
+it exists to audit.
 Each line:
-.Sy {"step":N,"tool":"...","args":{...},"args_digest":"...","result_size":N,"ok":bool,"ts":"..."} ,
+.Sy {"step":N,"job":"...","tool":"...","args":{...},"args_digest":"...","result_size":N,"ok":bool,"ts":"..."} ,
 arguments in full, the result's size in bytes and ok flag only
 .Pq never the result body: moxy already blobs an oversized one, and the ledger carries its URI .
+.Ql job
+makes a line self-identifying even copied out of its directory; the
+loop itself (jugglerloop) has no notion of a job, so it leaves the
+field empty and the writer that owns the path stamps it before each
+write.
 Each ledger call entry gains
 .Ql args_digest :
 a sha256, hex-encoded, over the arguments' canonical JSON encoding
 .Pq object keys sorted, no insignificant whitespace, numbers kept as their original text; see Fn jugglerloop.CanonicalJSON No and Fn jugglerloop.ArgsDigest ,
 so a ledger entry and its traffic line are joinable without the ledger
 itself carrying the arguments.
-Written within a run, truncated on the next; never read by the
-evaluator.
+Written within a run, truncated on the next run of the SAME job
+.Pq an adopted Fl -job No retry; a fresh job gets its own file, never the prior one's ,
+never read by the evaluator.
+Durability is NOT the ledger's: each line is flushed as its call
+completes, while the ledger is written once, at the very end of the
+run \(em so a run killed mid-flight can leave traffic lines on disk with
+no ledger at all, the opposite of a half-written ledger with no
+traffic.
+Opening or writing the file can fail
+.Pq a crowded disk, a permissions problem ; either is best-effort, never
+fatal to the run, but leaves a note in the ledger's
+.Ql notes
+array so an auditor does not mistake silence there for a complete
+record.
+No sweep of
+.Pa traffic/
+exists yet, same as
+.Pa agents/<principal>/
+itself; once one does
+.Pq clown#250 , Cm juggler clean , traffic files are reaped by it, not
+by anything specific to this feature.
 A model API token or key is never among a tool's recorded arguments: it
 rides the model request, a wire this file never touches.
 Whatever secret a model's tool call DOES carry \(em a token pasted into

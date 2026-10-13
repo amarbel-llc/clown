@@ -783,10 +783,10 @@ type WaitRecord struct {
 	Reason  ExitReason `json:"reason"`
 	Message string     `json:"message"`
 	Ledger  string     `json:"ledger"`
-	// Traffic is traffic.jsonl's path (clown#255), derived from Ledger the
-	// same way ringmaster's own lock-file convention derives from a job's
-	// spool path — never recorded in the journal itself. Empty whenever
-	// Ledger is (the job never addressed, or the facility disabled).
+	// Traffic is traffic.jsonl's path (clown#255), derived independently of
+	// Ledger from the child's own principal and job — never recorded in the
+	// journal itself. Empty when the file was never opened (the facility
+	// disabled, or the agent died before opening it).
 	Traffic        string                      `json:"traffic,omitempty"`
 	Artifacts      []Artifact                  `json:"artifacts"`
 	CannotComplete *jugglerloop.CannotComplete `json:"cannot_complete"`
@@ -863,13 +863,14 @@ func WaitChild(ctx context.Context, deps LifecycleDeps, rec *ChildRecord, timeou
 			}
 		}
 	}
-	// Traffic is derived from the agent's own state directory (rec.Principal),
-	// independently of Ledger/ResultRef (clown#255 review finding 4): a
-	// hook/reaper terminal carries no result_ref even though the agent may
-	// have written plenty of traffic before it died — and conversely finding
-	// a ledger via the spool fallback above doesn't mean the agent ever got
-	// as far as opening its traffic file. Report the path only if it exists.
-	out.Traffic = trafficPathIfExists(deps.Store.TrafficPath(rec.Principal))
+	// Traffic is derived from the child's principal and job (not AgentStateDir,
+	// which is moxy's CWD — see Store's doc comment), independently of
+	// Ledger/ResultRef (clown#255 review finding 4): a hook/reaper terminal
+	// carries no result_ref even though the agent may have written plenty of
+	// traffic before it died — and conversely finding a ledger via the spool
+	// fallback above doesn't mean the agent ever got as far as opening its
+	// traffic file. Report the path only if it exists.
+	out.Traffic = trafficPathIfExists(deps.Store.TrafficPath(rec.Principal, rec.Job))
 	if found {
 		out.Artifacts = ArtifactsFromLedger(l)
 		out.CannotComplete = l.CannotComplete
