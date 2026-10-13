@@ -2,6 +2,7 @@ package jugglerrun
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -47,6 +48,45 @@ func TestCheckRingmasterProtocol_MissingBinaryRefuses(t *testing.T) {
 // cancel — would latch context.Canceled into checkErr via sync.Once,
 // failing every later call sharing this instance, including finish's Done
 // under a fresh ctx, and losing the agent's own terminal record.
+// TestJobwakeAcquireJobLock_AliveWhileHeldGoneAfterRelease is clown#256's
+// finding 6 lock-identity test, at the jobwake level rather than through
+// `ringmaster status`'s liveness field: a bats test driving a real
+// subprocess `juggler run` against the real ringmaster binary while polling
+// `ringmaster status --json` would need three new pieces of harness (a
+// background-run helper, a bash-reachable model/tool-plane HTTP fixture, and
+// the poll loop itself) that do not exist in zz-tests_bats/juggler_lifecycle.bats
+// today — this test instead calls the REAL jobwake.AcquireJobLock directly
+// (the same function cmd/juggler's `juggler run` wires), which is exactly
+// what a monitor's liveness probe does under the hood: a lock a second
+// acquirer cannot take is "alive", one it can take again is "gone".
+func TestJobwakeAcquireJobLock_AliveWhileHeldGoneAfterRelease(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	h := newHarness(t)
+	ctx := context.Background()
+	job, err := h.deps.Ringmaster.Start(ctx, testRoot, "test", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	release, err := jobwake.AcquireJobLock(testRoot, job)
+	if err != nil {
+		t.Fatalf("AcquireJobLock: %v", err)
+	}
+	if _, err := jobwake.AcquireJobLock(testRoot, job); !errors.Is(err, jobwake.ErrAlreadyLocked) {
+		t.Fatalf("second acquire while the first is held: err = %v, want jobwake.ErrAlreadyLocked (alive)", err)
+	}
+	if err := release(); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	release2, err := jobwake.AcquireJobLock(testRoot, job)
+	if err != nil {
+		t.Fatalf("acquire after release: err = %v, want success (gone)", err)
+	}
+	if err := release2(); err != nil {
+		t.Fatalf("release2: %v", err)
+	}
+}
+
 func TestProtocolCheckedRingmaster_IgnoresACancelledCallerContext(t *testing.T) {
 	h := newHarness(t)
 	pc := &ProtocolCheckedRingmaster{Bin: h.fakes.Ringmaster}

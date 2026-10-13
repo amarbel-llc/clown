@@ -488,11 +488,25 @@ it takes the job's advisory lock
 .Pq Fn jobwake.AcquireJobLock
 and releases it only once its own
 .Ic done
-call has returned, so ringmaster v3's liveness reaper can terminalize the
-job
+call has returned
+.Pq clown#256 .
+The
+.Cm exit-wake
+hook, not the lock, is the backstop that actually runs for every unit;
+ringmaster v3's liveness reaper can terminalize the job
 .Ql interrupted
-if the exit-wake hook never runs either
-.Pq clown#256, ringmaster#27 .
+only where a
+.Ic monitor Fl -session Ar channel
+already watches it
+.Pq e.g. an interactive clown session with its own long-lived monitor .
+No monitor watches a run-root or parent-agent channel today, so if the
+hook
+.Em also
+cannot run
+.Pq systemd itself gone
+nothing reaps the job
+.Pq tracked as Em ringmaster#33 ,
+not guaranteed by holding the lock alone .
 A lock already held by a live producer
 .Pq Va jobwake.ErrAlreadyLocked
 refuses the run outright, rather than racing it; any other failure to

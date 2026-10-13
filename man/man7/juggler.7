@@ -327,11 +327,20 @@ is a ringmaster producer
 it holds the job's advisory lock
 .Pq Fn jobwake.AcquireJobLock
 for the whole run, acquired right after the job exists and released only
-after done has returned, so ringmaster v3's liveness reaper can
-terminalize it
+after done has returned
+.Pq clown#256 .
+The post-stop hook, not the lock, is the backstop that actually runs for
+every unit; ringmaster v3's liveness reaper can terminalize the job
 .Ql interrupted
-if the post-stop hook never runs either
-.Pq systemd gone, hook crashed; clown#256, ringmaster#27 .
+only where a
+.Ic monitor Fl -session Ar channel
+already watches the parent channel
+.Pq an interactive clown session with its own long-lived monitor, say .
+No monitor watches a run-root or parent-agent channel today, so if the
+hook also cannot run
+.Pq systemd itself gone
+nothing reaps the job: holding the lock is necessary but not sufficient
+.Pq tracked as Em ringmaster#33 .
 A lock already held by a live producer
 .Pq Va jobwake.ErrAlreadyLocked
 refuses the run outright rather than racing it; any other acquire failure

@@ -1093,7 +1093,9 @@ EOF
   [[ $stderr == *"ringmaster"* ]]
 }
 
-# --- ringmaster v3: job lock, liveness reaper, protocol version (clown#256) -
+# --- ringmaster v3: job lock, protocol version, race-handling with whatever
+# else writes a terminal (clown#256; NOT the liveness reaper itself — nothing
+# runs `ringmaster monitor` on an agent's channel today, see ringmaster#33) -
 
 @test "spawn refuses when the ringmaster binary speaks a different job-platform protocol" {
   printf '2' >"$FAKE_DIR/ringmaster-protocol-version"
@@ -1103,7 +1105,13 @@ EOF
   [[ $stderr == *"protocol 2"* && $stderr == *"protocol 3"* ]]
 }
 
-@test "spawn --new-run rk5, then a child the v3 reaper will have already interrupted" {
+@test "spawn --new-run rk5, then a child journal seeded already-interrupted (fixture for the next two tests)" {
+  # This does NOT exercise the v3 liveness reaper: nothing in clown or
+  # ringmaster currently runs `ringmaster monitor` on an agent's channel, so
+  # the reaper never actually reaps one of these jobs today (clown#256 review
+  # finding 1; tracked as ringmaster#33). This just seeds the journal the way
+  # SOME eventual writer — the reaper, once ringmaster#33 lands, or anything
+  # else — would, as a fixture for the race-handling and resolve tests below.
   run_jug spawn --new-run --run-key rk5 --input - --issuer issuer-6 --room room-5@rooms.test \
     <<<'{"recording":"fifth"}'
   expect_status 0
@@ -1113,10 +1121,6 @@ EOF
   launch_child "$root" "task reaped"
   printf '%s' "$output" >"$BATS_FILE_TMPDIR/rk5-reaped-child.json"
 
-  # Simulate the v3 liveness reaper (ringmaster#27): the agent was SIGKILLed,
-  # the exit-wake hook never ran (systemd gone), so nothing but the reaper
-  # ever writes a terminal for this job — a bare `interrupted` with its own
-  # message, no "killed:"/"crash:" prefix.
   "$FAKE_BIN/ringmaster" "done" "$(field .job)" --target "$root" --state interrupted \
     --message "producer died without writing a terminal record"
 }

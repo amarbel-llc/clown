@@ -624,10 +624,16 @@ The mapping from the unit's result is mechanical:
 ringmaster's four states therefore do not grow a fifth; D6's fifth
 reason is derived at emission from the unit result. A force-reap IS
 possible for a juggler agent (a holder stops or kills the unit) and is
-what `signal` covers. The ringmaster liveness reaper remains the
-backstop that writes `interrupted` when the hook itself cannot run
-(systemd gone, hook crashed); on that path no D6 wake is sent (see
-Limitations).
+what `signal` covers. **systemd's `ExecStopPost` hook is the backstop
+for a juggler unit** — it runs whenever the unit stops, with or without
+anything watching the job's channel, and writes the terminal the main
+process left none. If the hook itself cannot run too (systemd gone, the
+unit forcibly removed before `ExecStopPost` fires), the job is reaped
+`interrupted` by the ringmaster v3 liveness reaper only where a monitor
+already watches that channel (`ringmaster monitor --session <channel>`);
+on that path no D6 wake is sent. No monitor watches a run-root or
+parent-agent channel today, so that combination (hook AND reaper both
+absent) leaves the job open — see Limitations and ringmaster#33.
 
 ### 7. Transcript — one MUC per run
 
@@ -988,21 +994,34 @@ The router, before any subagent exists:
   gone and the file is deleted. Anything else keeps the account and its
   file. If troupe or Prosody change that wording, every teardown keeps its
   accounts (fails safe, not open).
-- **The ringmaster v3 liveness reaper now backstops `juggler run`
-  (clown#256, ringmaster#27).** `juggler run` takes the job's advisory lock
-  (`jobwake.AcquireJobLock`) right after the job exists — self-started or
-  adopted from `juggler spawn` — and releases it only after `Done` has
-  returned, never earlier (RFC-0018 §2.3: releasing before the terminal is
-  durable invites the reaper to write `interrupted` over an outcome about
-  to be recorded). If the post-stop hook also cannot run (systemd gone,
-  hook crashed), the owning session's monitor — not a one-shot `monitor
-  --once`, which never reaps — terminalizes the job `interrupted` once it
-  has observed the lock acquirable (the producer dead) for the reap grace
-  (~3 rescan ticks), message `producer died without writing a terminal
-  record` (no `killed:`/`crash:` prefix, so `ExitReasonFor` reports
-  `crash`, not `killed`); the first v3 monitor a session starts reaps
-  every already-`gone` older job in one burst. A losing race against the
-  reaper (or any other writer) — on `juggler run`'s own `Done` call in
+- **`juggler run` holds ringmaster's advisory lock for the run's whole
+  lifetime (clown#256), but no monitor is wired into the agent substrate's
+  own lifecycle to make the v3 liveness reaper a real backstop — that is
+  a ringmaster gap, tracked as ringmaster#33, not solved here.**
+  `juggler run` takes the job's advisory lock (`jobwake.AcquireJobLock`)
+  right after the job exists — self-started or adopted from `juggler
+  spawn` — and releases it only after `Done` has returned, never earlier
+  (RFC-0018 §2.3: releasing before the terminal is durable invites a
+  reaper to write `interrupted` over an outcome about to be recorded).
+  **systemd's `ExecStopPost` hook (`juggler exit-wake`) is the backstop
+  that actually runs today**, for every juggler unit, with or without
+  anything watching the job's channel (§6's table). The ringmaster v3
+  liveness reaper is a *second* backstop, reaping `interrupted` (message
+  `producer died without writing a terminal record`, no `killed:`/
+  `crash:` prefix, so `ExitReasonFor` reports `crash`) only on a channel
+  some `ringmaster monitor --session <channel>` already watches — e.g.
+  the parent is an interactive clown session with its own long-lived
+  monitor (`cmd/clown/jobmonitor.go`). **No monitor watches a run-root or
+  parent-agent channel today**: `juggler spawn`/`juggler run` start none,
+  so if the hook ALSO cannot run (systemd itself gone, the unit forcibly
+  removed before `ExecStopPost` fires) a job on one of those channels
+  stays open indefinitely — holding its lock is necessary but not
+  sufficient for the reaper to ever see it. ringmaster#33 tracks a
+  bounded-lifetime monitor (`monitor --until-idle`) `juggler spawn` could
+  safely launch per parent channel without leaking a process; until that
+  lands, "the job holds the lock" must not be read as "the job is
+  guaranteed to terminalize". A losing race against a reaper that IS
+  watching (or any other writer) — on `juggler run`'s own `Done` call in
   `finish`, or the exit-wake hook's — is ringmaster's exit 3
   (`jobwake.ErrAlreadyTerminal`): both treat it as success, relaying
   whichever terminal actually landed, never logging it as a failure.
