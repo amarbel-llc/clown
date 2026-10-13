@@ -330,11 +330,15 @@ no ledger at all, the opposite of a half-written ledger with no
 traffic.
 Opening or writing the file can fail
 .Pq a crowded disk, a permissions problem .
-Either is best-effort, never fatal to the run, but leaves a note in
-the ledger's
+An operator-supplied principal or job id that is not a safe single
+path segment
+.Pq e.g. a Fl -job No value containing a slash, or starting with a dot
+disables traffic before ever trying to open it, for the same reason.
+Every case is best-effort, never fatal to the run, but leaves a note
+in the ledger's
 .Ql notes
-array so an auditor does not mistake silence there for a complete
-record.
+array \(em naming the actual cause, not a generic failure \(em so an
+auditor does not mistake silence there for a complete record.
 No sweep of
 .Pa traffic/
 exists yet, same as

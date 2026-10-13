@@ -113,6 +113,40 @@ func TestTrafficSink_WriteOrCloseFailureSetsHadError(t *testing.T) {
 	sink.close() // closing twice is itself an error; must stay a safe no-op
 }
 
+// TestStore_TrafficPath_RejectsUnsafeSegments covers clown#255 delta review
+// round 2, finding 1: a path-traversal or otherwise unsafe principal or job
+// id must never reach filepath.Join, let alone escape <root>/traffic/ — a
+// hand-run `juggler run --job` is operator input, not spawner-minted.
+func TestStore_TrafficPath_RejectsUnsafeSegments(t *testing.T) {
+	s := Store{Root: t.TempDir()}
+	cases := []struct {
+		name           string
+		principal, job string
+	}{
+		{"path separator in job", "agent-1", "a/b"},
+		{"parent-directory job", "agent-1", "../x"},
+		{"job starting with a dot", "agent-1", ".hidden"},
+		{"empty job", "agent-1", ""},
+		{"path separator in principal", "a/b", "job-1"},
+		{"parent-directory principal", "../x", "job-1"},
+		{"principal starting with a dot", ".hidden", "job-1"},
+		{"empty principal", "", "job-1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := s.TrafficPath(tc.principal, tc.job); got != "" {
+				t.Errorf("TrafficPath(%q, %q) = %q, want empty", tc.principal, tc.job, got)
+			}
+		})
+	}
+	// Sanity: a safe pair still returns a real path under Root/traffic, so
+	// the guard above isn't accidentally rejecting everything.
+	want := filepath.Join(s.Root, "traffic", "agent-1", "job-1.jsonl")
+	if got := s.TrafficPath("agent-1", "job-1"); got != want {
+		t.Errorf("TrafficPath(agent-1, job-1) = %q, want %q", got, want)
+	}
+}
+
 // TestTrafficPathIfExists covers clown#255 review finding 4: the launcher
 // side (spawn --wait) must report a path only when the file is genuinely
 // there, never a path the agent never got around to opening.

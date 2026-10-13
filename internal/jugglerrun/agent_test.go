@@ -713,6 +713,41 @@ func TestRunAgent_TrafficOpenFailureIsNotedInLedger(t *testing.T) {
 	}
 }
 
+// TestRunAgent_UnsafeJobIDDisablesTrafficWithAClearNote covers clown#255
+// delta review round 2, finding 2: an adopted --job that fails the
+// path-segment safety check must disable traffic with a note naming THAT
+// as the cause, not the generic "could not be opened" note a disk or
+// permissions failure gets — and nothing may land outside <root>/traffic.
+func TestRunAgent_UnsafeJobIDDisablesTrafficWithAClearNote(t *testing.T) {
+	h := newHarness(t)
+	deps := h.agentDeps(openAIResolved(scriptedOpenAI(t, openAIEndTurn)))
+	deps.TrafficPath = h.deps.Store.TrafficPath
+
+	out, err := RunAgent(context.Background(), deps, AgentRequest{
+		Brief: parsedBrief(t, "agent-1"), Job: "a/b", MoxyURL: fakeMoxy(t).URL,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.TrafficPath != "" {
+		t.Errorf("TrafficPath = %q, want empty", out.TrafficPath)
+	}
+	if !containsNote(out.Ledger.Notes, "not a safe path segment") {
+		t.Errorf("ledger notes = %v, want the unsafe-id note", out.Ledger.Notes)
+	}
+	if containsNote(out.Ledger.Notes, "could not be opened") {
+		t.Errorf("ledger notes = %v, must not claim an open failure for a rejected id", out.Ledger.Notes)
+	}
+
+	// Nothing must land outside <root>/traffic for this job: the only
+	// place a path built from "a/b" could escape to is a nested "a/"
+	// directory under traffic/agent-1/, which must not exist either, since
+	// TrafficPath was never even called.
+	if _, err := os.Stat(filepath.Join(h.deps.Store.Root, "traffic", "agent-1", "a")); !os.IsNotExist(err) {
+		t.Errorf("a nested traffic/agent-1/a/ must not exist: %v", err)
+	}
+}
+
 // TestAgentRun_FinishNotesTrafficWriteFailure covers clown#255 review
 // finding 7's other half: a write (or close) failure mid-run must also be
 // noted, exercised directly against finish since forcing a real write

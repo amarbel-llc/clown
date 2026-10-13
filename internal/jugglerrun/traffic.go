@@ -30,10 +30,14 @@ type trafficSink struct {
 // failed for a reason OTHER than "already locked" (RunAgent proceeds
 // unlocked in that case, recording the loss in the ledger's Notes — see
 // agent.go), that assumption does not hold, and a genuine concurrent
-// duplicate `run --job X` could O_TRUNC the live run's traffic out from
-// under it (delta review finding 5; accepted — the same degraded, unlocked
-// window already risks worse than this via the job's ledger and terminal
-// record, so this one file is not special-cased). Creates the directory
+// duplicate `run --job X` could interleave writes with the live run's
+// through the SAME *os.File — not a clean O_TRUNC takeover, since each
+// process keeps its own file offset: the result is corrupted output
+// (interleaved lines, NUL-holed where one writer's offset outran the
+// other's) rather than a tidy "second run wins" (delta review finding 5;
+// accepted — the same degraded, unlocked window already risks worse than
+// this via the job's ledger and terminal record, so this one file is not
+// special-cased). Creates the directory
 // and the file if absent; job is stamped onto every record (delta review
 // finding 1), so the file is self-identifying even moved out of its
 // directory. It returns the sink plus the path to report

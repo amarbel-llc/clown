@@ -243,8 +243,22 @@ func RunAgent(ctx context.Context, deps AgentDeps, req AgentRequest) (AgentOutco
 	// run's file (delta review finding 1). TrafficPath(principal, job) — a.job
 	// is already resolved by this point, whether started above or adopted —
 	// avoids all three. Best-effort: a failure here is logged, not fatal.
+	//
+	// b.Principal and a.job are checked here (not left to TrafficPath's own
+	// internal idPattern guard alone) so an unsafe id gets a note that says
+	// WHY traffic was never attempted, not the generic "could not be
+	// opened" an auditor would otherwise read as a disk or permissions
+	// problem (clown#255 delta review round 2, finding 2); an adopted
+	// `--job` is operator input, not spawner-minted, and a traversal
+	// sequence in either must never reach TrafficPath at all.
 	if deps.TrafficPath != nil {
-		a.traffic, a.trafficPath = openTrafficSink(deps.TrafficPath(b.Principal, a.job), a.job, a.logf)
+		switch {
+		case !idPattern.MatchString(b.Principal) || !idPattern.MatchString(a.job):
+			a.trafficDisabledNote = fmt.Sprintf("traffic disabled: job id %q or principal %q is not a safe path segment", a.job, b.Principal)
+			a.logf("%s", a.trafficDisabledNote)
+		default:
+			a.traffic, a.trafficPath = openTrafficSink(deps.TrafficPath(b.Principal, a.job), a.job, a.logf)
+		}
 	}
 
 	if deps.ResolveModel == nil {
@@ -388,6 +402,12 @@ type agentRun struct {
 	traffic *trafficSink
 	// trafficPath is traffic.jsonl's path, empty unless traffic is open.
 	trafficPath string
+	// trafficDisabledNote, set only when b.Principal or a.job failed the
+	// path-segment safety check, is finish's ledger note for WHY traffic
+	// was never attempted at all — distinct from the generic "could not be
+	// opened" note, which means a safe id still failed to open the file
+	// (clown#255 delta review round 2, finding 2).
+	trafficDisabledNote string
 }
 
 func (a *agentRun) logf(format string, args ...any) {
@@ -504,6 +524,13 @@ func (a *agentRun) finish(state, message string, l jugglerloop.Ledger) AgentOutc
 	}
 	a.traffic.close()
 	switch {
+	case a.trafficDisabledNote != "":
+		// Checked before ever calling TrafficPath (RunAgent), so this never
+		// reaches the generic "could not be opened" case below: an unsafe
+		// id is a different, more specific cause, and an auditor should not
+		// go looking for a disk or permissions problem that was never the
+		// issue (clown#255 delta review round 2, finding 2).
+		l.Notes = append(l.Notes, a.trafficDisabledNote)
 	case a.traffic.hadError():
 		// clown#255 review finding 7: a mid-run write failure (or a failed
 		// close) is otherwise stderr-only, like a lost lock acquisition —
