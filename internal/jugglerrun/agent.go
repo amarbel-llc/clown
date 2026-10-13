@@ -60,14 +60,17 @@ type AgentDeps struct {
 	// AgentStateDir is the agent's own state directory (the moxy CWD).
 	AgentStateDir string
 	// AcquireJobLock takes the ringmaster producer's advisory lock on the
-	// job for the run's whole lifetime (RFC-0018 §2; clown#256), so the v3
-	// liveness reaper can terminalize it `interrupted` if the exit-wake
-	// hook never runs (systemd gone, hook crashed). Acquired right after
-	// the job exists (self-started or adopted from `juggler spawn`) and
-	// released only after Done has returned, in finish. Defaults to a
-	// no-op (no lock, today's behavior): cmd/juggler's `juggler run` wires
-	// jobwake.AcquireJobLock; tests inject a fake that records acquire/
-	// release ordering.
+	// job for the run's whole lifetime (RFC-0018 §2; clown#256). Where a
+	// `ringmaster monitor --session <channel>` already watches the parent
+	// channel, this is what lets its v3 liveness reaper terminalize the
+	// job `interrupted` if the exit-wake hook never runs either (systemd
+	// gone, hook crashed) — no monitor watches a run-root or parent-agent
+	// channel today, so holding the lock alone does not guarantee that
+	// (ringmaster#33). Acquired right after the job exists (self-started
+	// or adopted from `juggler spawn`) and released only after Done has
+	// returned, in finish. Defaults to a no-op (no lock, today's
+	// behavior): cmd/juggler's `juggler run` wires jobwake.AcquireJobLock;
+	// tests inject a fake that records acquire/release ordering.
 	AcquireJobLock func(target, jobID string) (release func() error, err error)
 }
 
@@ -177,17 +180,22 @@ func RunAgent(ctx context.Context, deps AgentDeps, req AgentRequest) (AgentOutco
 		// has run the protocol check yet. Run it explicitly, before
 		// AcquireJobLock below takes the job's lock ahead of knowing
 		// ringmaster is protocol-compatible (clown#256 review finding 3).
-		// The job already exists (spawn started it), so a failure here
-		// follows RunAgent's documented contract: a failed terminal, not a
-		// bare error.
+		// A mismatch is a bare error, like Start's own failure above, NOT a
+		// failed terminal: finish would try to write one through this SAME
+		// checked Ringmaster, whose cached check error refuses every
+		// method identically (Done, the race-relay Records, writeSpool),
+		// so nothing would actually land on the journal despite the exit
+		// code claiming otherwise (clown#256 delta review finding 1).
 		if err := pc.checkRingmasterProtocol(ctx); err != nil {
-			return a.finishWithoutLoop(jugglerloop.EndToolError, fmt.Sprintf("tool_error: %v", err)), nil
+			return AgentOutcome{}, fmt.Errorf("ringmaster protocol check on %s: %w", a.target, err)
 		}
 	}
 	// Hold the job's advisory lock for the run's whole lifetime, whether the
 	// job was just started above or adopted from `juggler spawn` (clown#256,
-	// FDR 0019 §6): this is what lets the v3 liveness reaper terminalize
-	// `interrupted` when the exit-wake hook never runs.
+	// FDR 0019 §6): where a monitor already watches the parent channel, this
+	// is what lets the v3 liveness reaper terminalize `interrupted` when the
+	// exit-wake hook never runs either — holding the lock alone does not
+	// guarantee a monitor exists to act on it (ringmaster#33).
 	switch release, lockErr := deps.AcquireJobLock(a.target, a.job); {
 	case lockErr == nil:
 		a.releaseLock = release

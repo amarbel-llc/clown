@@ -16,6 +16,12 @@ const exitWakeUsage = "usage: juggler exit-wake --job <id> --target <principal> 
 // outer bound.
 const exitWakeTimeout = 60 * time.Second
 
+// exitWakeProtocolWarnTimeout bounds the hook's own non-fatal protocol check,
+// separately from exitWakeTimeout: a hung `ringmaster version --protocol`
+// must not eat the budget the actual terminal write needs (clown#256 delta
+// review should-fix 3).
+const exitWakeProtocolWarnTimeout = 5 * time.Second
+
 // cmdExitWake is `juggler exit-wake`, the agent unit's ExecStopPost and the
 // sole exit-wake emitter (FDR 0019 §6). getenv supplies $SERVICE_RESULT,
 // $EXIT_CODE and $EXIT_STATUS, so the hook is testable without systemd.
@@ -48,7 +54,10 @@ func cmdExitWake(getenv func(string) string, args []string, stdout, stderr io.Wr
 	// finding 3). It still warns, below, so a mismatch is never silent.
 	return withDeps(context.Background(), stderr, "exit-wake", bins, exitWakeTimeout, false, func(ctx context.Context, deps jr.LifecycleDeps) int {
 		if rmc, ok := deps.Ringmaster.(jr.ExecRingmaster); ok {
-			if perr := jr.CheckRingmasterProtocol(ctx, rmc.Bin); perr != nil {
+			warnCtx, cancel := context.WithTimeout(context.Background(), exitWakeProtocolWarnTimeout)
+			perr := jr.CheckRingmasterProtocol(warnCtx, rmc.Bin)
+			cancel()
+			if perr != nil {
 				fmt.Fprintf(stderr, "juggler: exit-wake: warning: %v (continuing: the hook never refuses to settle a job)\n", perr)
 			}
 		}

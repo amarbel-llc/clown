@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 
@@ -204,6 +205,34 @@ func TestRunAgent_HoldsTheJobLockForAnAdoptedJob(t *testing.T) {
 	// its own (orderRecordingRingmaster only logs Start/Done).
 	if want := []string{"acquire", "done", "release"}; !reflect.DeepEqual(log, want) {
 		t.Errorf("order = %v, want %v", log, want)
+	}
+}
+
+// TestRunAgent_AdoptedJobProtocolMismatchRefusesBeforeAcquiringLock covers
+// the adopted-job (`--job <id>`) protocol-check path (clown#256 review
+// finding 3) together with its delta-review regression (finding 1): a
+// mismatch must be a bare error with AcquireJobLock never called — not a
+// `finishWithoutLoop` that goes on to call Done through the SAME checked
+// Ringmaster, which would silently write nothing (the cached check error
+// refuses every method identically) while still claiming a terminal via the
+// exit code.
+func TestRunAgent_AdoptedJobProtocolMismatchRefusesBeforeAcquiringLock(t *testing.T) {
+	h := newHarness(t)
+	t.Setenv(SessionIDEnv, "agent-1")
+	h.fakes.SetRingmasterProtocolVersion(t, "2")
+	deps := h.agentDeps(openAIResolved(scriptedOpenAI(t, openAICreateIssue, openAIEndTurn)))
+	deps.Ringmaster = &ProtocolCheckedRingmaster{Inner: deps.Ringmaster, Bin: h.fakes.Ringmaster}
+	deps.AcquireJobLock = func(string, string) (func() error, error) {
+		t.Fatal("AcquireJobLock must not be called: the adopted-job protocol check must run first and refuse before the lock is ever taken")
+		return nil, nil
+	}
+
+	out, err := RunAgent(context.Background(), deps, AgentRequest{Brief: parsedBrief(t, "agent-1"), Job: "adopted-job-1", EnvPrincipal: "agent-1"})
+	if err == nil || !strings.Contains(err.Error(), "protocol 2") {
+		t.Fatalf("err = %v, want a protocol-mismatch error naming protocol 2", err)
+	}
+	if out.Job != "" || out.State != "" || out.LedgerPath != "" {
+		t.Fatalf("outcome = %+v, want the zero value: nothing should be written on a protocol mismatch", out)
 	}
 }
 

@@ -1028,7 +1028,15 @@ The router, before any subagent exists:
   A lock already held by a live producer (`jobwake.ErrAlreadyLocked`)
   refuses the run outright rather than acquiring none: a duplicate
   `juggler run --job X` would otherwise do full tool-use work concurrently
-  with the real producer and race its `Done` call. Any other acquire
+  with the real producer and race its `Done` call. The refusal only
+  catches a duplicate that loses the race for the lock: if an operator's
+  manual `juggler run --job X` instead *wins* it before the unit's own
+  process starts, the unit's process then loses, exits 1, and its own
+  `ExecStopPost` exit-wake writes a `failed`/crash terminal over the
+  manual run's live, in-progress work — the exact clobber the refusal
+  exists to prevent, just from the other side. Rare (it needs a human
+  racing the unit's own startup), not handled in code; avoid it
+  operationally. Any other acquire
   failure (e.g. the lock directory is unwritable) is best-effort, not
   fatal: the agent still does its work, but records the loss of the
   backstop in the run's ledger `notes` (not only stderr), so an auditor
@@ -1043,17 +1051,25 @@ The router, before any subagent exists:
   the run-level job `spawn --new-run` starts, and the `Start` calls
   `spawn --brief` makes on a child's behalf before the unit exists, hold
   no lock of their own.
-- **ringmaster protocol ≥ 3 is required** for the liveness reaper, its
-  exit 3 (`jobwake.ErrAlreadyTerminal`), and `ringmaster version
-  --protocol`; `juggler` exact-matches the installed `ringmaster`'s
-  reported protocol integer against the `jobwake.ProtocolVersion` it was
-  built against (clown#256), refusing loudly on any mismatch (both
-  versions named) rather than operating against a journal layout or
-  cancel/wait state machine it no longer agrees with. The check runs
-  lazily — once per process, right before the first real job-platform
-  call through `ExecRingmaster` (a `ProtocolCheckedRingmaster` wrapper),
-  so a usage or parse-time refusal that never reaches the platform costs
-  nothing. Protocol ≥ 2 (superseded by the ≥ 3 requirement above) was for
+- **ringmaster must speak exactly protocol 3** (not "3 or later": a
+  future protocol 4 is refused too) for the liveness reaper, its exit 3
+  (`jobwake.ErrAlreadyTerminal`), and `ringmaster version --protocol`;
+  `juggler` exact-matches the installed `ringmaster`'s reported protocol
+  integer against the `jobwake.ProtocolVersion` it was built against
+  (clown#256), refusing loudly on any mismatch (both versions named)
+  rather than operating against a journal layout or cancel/wait state
+  machine it no longer agrees with. The check runs lazily — once per
+  process, right before the first real job-platform call through
+  `ExecRingmaster` (a `ProtocolCheckedRingmaster` wrapper), so a usage or
+  parse-time refusal that never reaches the platform costs nothing; on an
+  adopted job (`--job <id>`, which skips the `Start` call that would
+  otherwise trigger it) `juggler run` runs the check explicitly first,
+  before `AcquireJobLock`. The one exception is `juggler exit-wake`: as
+  the terminal writer of last resort it never refuses over a mismatch —
+  it runs the same check non-fatally, under its own 5-second timeout, and
+  only warns on stderr if it disagrees, since a real mismatch is already
+  caught loudly at spawn or run time, when the job was created. Protocol
+  ≥ 2 (superseded by the exact-3 requirement above) was for
   `aborted`, `cancel-requested`, `cancel` and `wait --on-cancel`; an older
   installed ringmaster (which spelled the state `cancelled`) will not
   interoperate. **troupe ≥ 4c52b3b is required** for `mint

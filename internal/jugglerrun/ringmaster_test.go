@@ -39,15 +39,6 @@ func TestCheckRingmasterProtocol_MissingBinaryRefuses(t *testing.T) {
 	}
 }
 
-// TestProtocolCheckedRingmaster_IgnoresACancelledCallerContext: the FIRST
-// call through a ProtocolCheckedRingmaster instance runs the once-only check
-// under its own context.Background()-derived timeout, never the caller's
-// ctx (clown#256 review finding 2). Without that, a caller's ctx that is
-// already cancelled when the first call lands — WaitCancelRequested's own
-// ctx is exactly this, deliberately cancelled by a SIGTERM or a holder's
-// cancel — would latch context.Canceled into checkErr via sync.Once,
-// failing every later call sharing this instance, including finish's Done
-// under a fresh ctx, and losing the agent's own terminal record.
 // TestJobwakeAcquireJobLock_AliveWhileHeldGoneAfterRelease is clown#256's
 // finding 6 lock-identity test, at the jobwake level rather than through
 // `ringmaster status`'s liveness field: a bats test driving a real
@@ -56,9 +47,16 @@ func TestCheckRingmasterProtocol_MissingBinaryRefuses(t *testing.T) {
 // background-run helper, a bash-reachable model/tool-plane HTTP fixture, and
 // the poll loop itself) that do not exist in zz-tests_bats/juggler_lifecycle.bats
 // today — this test instead calls the REAL jobwake.AcquireJobLock directly
-// (the same function cmd/juggler's `juggler run` wires), which is exactly
-// what a monitor's liveness probe does under the hood: a lock a second
-// acquirer cannot take is "alive", one it can take again is "gone".
+// (the same function cmd/juggler's `juggler run` wires). It proves the lock
+// file itself enforces mutual exclusion the way a monitor's liveness probe
+// depends on: a lock a second AcquireJobLock cannot take is "alive", one it
+// can take again is "gone". (Soften: the probe itself — probeJobLock — is a
+// separate, instantaneous flock-then-unlock, not a second AcquireJobLock;
+// this test exercises the lock file's semantics the probe relies on, not the
+// probe's own code path. Identity with what `ringmaster status` reads holds
+// by code reading, not by this test driving the real CLI: a.target =
+// b.Parent = the CLI's --target, and AcquireJobLock resolves
+// ChannelID(resolveSession(target)) the same way Start does.)
 func TestJobwakeAcquireJobLock_AliveWhileHeldGoneAfterRelease(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	h := newHarness(t)
@@ -87,6 +85,15 @@ func TestJobwakeAcquireJobLock_AliveWhileHeldGoneAfterRelease(t *testing.T) {
 	}
 }
 
+// TestProtocolCheckedRingmaster_IgnoresACancelledCallerContext: the FIRST
+// call through a ProtocolCheckedRingmaster instance runs the once-only check
+// under its own context.Background()-derived timeout, never the caller's
+// ctx (clown#256 review finding 2). Without that, a caller's ctx that is
+// already cancelled when the first call lands — WaitCancelRequested's own
+// ctx is exactly this, deliberately cancelled by a SIGTERM or a holder's
+// cancel — would latch context.Canceled into checkErr via sync.Once,
+// failing every later call sharing this instance, including finish's Done
+// under a fresh ctx, and losing the agent's own terminal record.
 func TestProtocolCheckedRingmaster_IgnoresACancelledCallerContext(t *testing.T) {
 	h := newHarness(t)
 	pc := &ProtocolCheckedRingmaster{Bin: h.fakes.Ringmaster}

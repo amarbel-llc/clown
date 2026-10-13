@@ -706,6 +706,26 @@ abort_on_cancel() {
   [[ $(journal_types "$root" "$job" | grep -cE '^(succeeded|failed|aborted|interrupted)$') -eq 1 ]]
 }
 
+@test "exit-wake settles the job even when the ringmaster binary speaks a different protocol, with a warning" {
+  local root job
+  root=$(stored_run rk2 .root_principal)
+  launch_child "$root" "wake protocol mismatch"
+  job=$(field .job)
+
+  # Unlike every other subcommand (bats #96), exit-wake is the terminal
+  # writer of last resort: it must still settle the job on a protocol
+  # mismatch, only warning (clown#256 review finding 3; delta review
+  # blocking finding 2).
+  printf '2' >"$FAKE_DIR/ringmaster-protocol-version"
+  run_jug_env SERVICE_RESULT=timeout -- exit-wake --job "$job" --target "$root"
+  rm -f "$FAKE_DIR/ringmaster-protocol-version"
+  expect_status 0
+  [[ $(field .wrote_terminal) == true ]]
+  [[ $(field .state) == failed ]]
+  [[ $stderr == *"protocol 2"* && $stderr == *"protocol 3"* ]]
+  [[ $(journal_types "$root" "$job" | tail -n1) == failed ]]
+}
+
 # --- moxin identity ----------------------------------------------------------
 
 @test "spawn --brief pins the unit's MOXIN_PATH to the spawner's, made absolute, and drops MOXY_*" {
