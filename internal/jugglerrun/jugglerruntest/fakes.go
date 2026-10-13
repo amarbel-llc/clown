@@ -7,15 +7,19 @@
 // RunFakeIfRequested first thing in its TestMain. Every invocation's argv and
 // identity environment is recorded to <dir>/calls.jsonl. The ringmaster fake
 // keeps a per-target journal on disk, so start/progress/done/read/status/
-// spool-path/wait behave like the real verbs; the troupe fake records MUC
-// posts and wakes and keeps room affiliations (`muc create`/`muc affiliate`,
-// with troupe's owner and last-owner rules); the systemd-run fake records and
-// succeeds; the systemctl fake answers `is-system-running` with "running"
-// unless SetSystemctlState says otherwise. A file <dir>/fail/<tool>-<verb>
-// makes that verb exit 1 (for systemctl, verb is always "is-system-running",
-// so Fail(t, "systemctl", "is-system-running") simulates a check that cannot
-// read any state at all); <dir>/fail/troupe-muc-<sub> fails one muc subverb,
-// and <dir>/fail/troupe-mint-revoke-login makes mint-revoke fail the way a
+// spool-path/wait behave like the real v3 protocol (ringmaster#27, clown#256):
+// `done` against an already-terminal job exits 3 (not generic 1), and
+// `version --protocol` prints fakeRingmasterDefaultProtocol ("3") unless
+// SetRingmasterProtocolVersion overrides it, to simulate a mismatched build;
+// the troupe fake records MUC posts and wakes and keeps room affiliations
+// (`muc create`/`muc affiliate`, with troupe's owner and last-owner rules);
+// the systemd-run fake records and succeeds; the systemctl fake answers
+// `is-system-running` with "running" unless SetSystemctlState says
+// otherwise. A file <dir>/fail/<tool>-<verb> makes that verb exit 1 (for
+// systemctl, verb is always "is-system-running", so Fail(t, "systemctl",
+// "is-system-running") simulates a check that cannot read any state at
+// all); <dir>/fail/troupe-muc-<sub> fails one muc subverb, and
+// <dir>/fail/troupe-mint-revoke-login makes mint-revoke fail the way a
 // SASL login refusal does (exit 1, Prosody's refusal text after "xmpp:
 // negotiate:", the file kept), and <dir>/fail/troupe-mint-revoke-tls the way
 // a TLS failure during negotiation does.
@@ -414,6 +418,15 @@ func fakeRingmaster(dir string, args []string) int {
 			fmt.Println(string(b))
 		}
 		return 0
+	case "version":
+		fl := parseFlags(args[1:], "protocol")
+		protocol := ringmasterProtocolVersion(dir)
+		if fl["protocol"] == "true" {
+			fmt.Println(protocol)
+			return 0
+		}
+		fmt.Printf("ringmaster fake\nprotocol v%s\n", protocol)
+		return 0
 	}
 	if len(args) < 2 {
 		return 2
@@ -432,10 +445,31 @@ func fakeRingmaster(dir string, args []string) int {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
+		if len(recs) == 0 || !isTerminal(recs[len(recs)-1].Type) {
+			if raced, err := consumeDoneRaceOnceKnob(dir); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				return 1
+			} else if raced {
+				// Simulate the v3 liveness reaper winning the race between
+				// this call's read above and its append below: it writes its
+				// own interrupted terminal first (clown#256).
+				if err := appendRecord(dir, target, job, Record{Source: "fake-reaper", Type: "interrupted", Message: "producer died without writing a terminal record"}); err != nil {
+					fmt.Fprintln(os.Stderr, err)
+					return 1
+				}
+				fmt.Fprintln(os.Stderr, "ringmaster done: already terminal")
+				return 3
+			}
+		}
 		for _, r := range recs {
 			if isTerminal(r.Type) {
-				fmt.Fprintf(os.Stderr, "ringmaster done: job %s already has a terminal record\n", job)
-				return 1
+				// ringmaster v3 (clown#256): a write refused because the job
+				// is already terminal (the reaper or another writer won the
+				// race) exits 3, distinct from generic failure, so a caller
+				// can tell "already settled" from "the write failed" without
+				// parsing stderr.
+				fmt.Fprintln(os.Stderr, "ringmaster done: already terminal")
+				return 3
 			}
 		}
 		if !isTerminal(fl["state"]) || fl["state"] == "cancelled" {
@@ -653,6 +687,67 @@ func fakeMoxyCLI(dir string, args []string) int {
 	}
 	fmt.Fprintf(os.Stderr, "fake moxy: unknown verb %q\n", args[0])
 	return 2
+}
+
+// fakeRingmasterDefaultProtocol is the fake's default `version --protocol`
+// answer, matching the real jobwake.ProtocolVersion this fake otherwise
+// emulates (ringmaster v3, clown#256).
+const fakeRingmasterDefaultProtocol = "3"
+
+// SetRingmasterProtocolVersion makes the fake ringmaster's `version
+// --protocol` report version instead of fakeRingmasterDefaultProtocol, to
+// simulate a juggler built against a different protocol than the ringmaster
+// binary it execs (clown#256).
+func (f *Fakes) SetRingmasterProtocolVersion(t testing.TB, version string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(f.Dir, "ringmaster-protocol-version"), []byte(version), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// ringmasterProtocolVersion reads the knob SetRingmasterProtocolVersion sets,
+// or fakeRingmasterDefaultProtocol absent one.
+func ringmasterProtocolVersion(dir string) string {
+	if b, err := os.ReadFile(filepath.Join(dir, "ringmaster-protocol-version")); err == nil {
+		return strings.TrimSpace(string(b))
+	}
+	return fakeRingmasterDefaultProtocol
+}
+
+// RaceDoneReaperOnce makes the fake ringmaster's next `done` call against a
+// job with no terminal yet behave as a real producer-vs-reaper race would
+// (clown#256, ringmaster v3's liveness reaper, RFC-0018 §2.3): between that
+// call's read of the journal and its own append, the reaper's write lands
+// first — an `interrupted` terminal with its own message — and the done call
+// itself is refused exit 3 (already terminal), exactly as `ExecRingmaster.Done`
+// and the exit-wake hook's fallback are written to handle. One-shot: consumed
+// by the first `done` call it applies to.
+func (f *Fakes) RaceDoneReaperOnce(t testing.TB) {
+	t.Helper()
+	path := doneRaceOnceKnobPath(f.Dir)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func doneRaceOnceKnobPath(dir string) string {
+	return filepath.Join(dir, "fail", "ringmaster-done-race-once")
+}
+
+// consumeDoneRaceOnceKnob reports whether RaceDoneReaperOnce's knob is set,
+// removing it so the race applies to only the next matching `done` call.
+func consumeDoneRaceOnceKnob(dir string) (bool, error) {
+	path := doneRaceOnceKnobPath(dir)
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, os.Remove(path)
 }
 
 // SetSystemctlState makes the systemctl fake's `is-system-running` report

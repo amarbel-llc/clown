@@ -1092,3 +1092,76 @@ EOF
   expect_status 1
   [[ $stderr == *"ringmaster"* ]]
 }
+
+# --- ringmaster v3: job lock, liveness reaper, protocol version (clown#256) -
+
+@test "spawn refuses when the ringmaster binary speaks a different job-platform protocol" {
+  printf '2' >"$FAKE_DIR/ringmaster-protocol-version"
+  run_jug spawn --new-run --run-key rk-protocol-mismatch --input - --issuer issuer-6 --room room-proto@rooms.test <<<'x'
+  rm -f "$FAKE_DIR/ringmaster-protocol-version"
+  expect_status 1
+  [[ $stderr == *"protocol 2"* && $stderr == *"protocol 3"* ]]
+}
+
+@test "spawn --new-run rk5, then a child the v3 reaper will have already interrupted" {
+  run_jug spawn --new-run --run-key rk5 --input - --issuer issuer-6 --room room-5@rooms.test \
+    <<<'{"recording":"fifth"}'
+  expect_status 0
+  printf '%s' "$output" >"$BATS_FILE_TMPDIR/rk5.json"
+  local root
+  root=$(stored_run rk5 .root_principal)
+  launch_child "$root" "task reaped"
+  printf '%s' "$output" >"$BATS_FILE_TMPDIR/rk5-reaped-child.json"
+
+  # Simulate the v3 liveness reaper (ringmaster#27): the agent was SIGKILLed,
+  # the exit-wake hook never ran (systemd gone), so nothing but the reaper
+  # ever writes a terminal for this job — a bare `interrupted` with its own
+  # message, no "killed:"/"crash:" prefix.
+  "$FAKE_BIN/ringmaster" "done" "$(field .job)" --target "$root" --state interrupted \
+    --message "producer died without writing a terminal record"
+}
+
+@test "exit-wake hook: a done call racing the v3 reaper (exit 3) still reports success, relaying the reaper's terminal" {
+  local root job
+  root=$(stored_run rk5 .root_principal)
+  launch_child "$root" "task race"
+  job=$(field .job)
+
+  # Between this hook's read of the journal and its own done write, the
+  # reaper's write lands first (clown#256): the hook's done call itself gets
+  # ringmaster's exit 3 (already terminal), and must still report the unit's
+  # overall success, relaying whichever terminal actually landed.
+  mkdir -p "$FAKE_DIR/fail"
+  : >"$FAKE_DIR/fail/ringmaster-done-race-once"
+
+  run_jug_env SERVICE_RESULT=signal EXIT_STATUS=KILL -- exit-wake --job "$job" --target "$root"
+  expect_status 0
+  [[ $(field .wrote_terminal) == false ]]
+  [[ $(field .state) == interrupted ]]
+  # The reaper's own message carries no "killed:" prefix, so the relayed
+  # reason is the generic crash, not the hook's own (unwritten) "killed".
+  [[ $(field .reason) == crash ]]
+  [[ $(field .message) == "producer died without writing a terminal record" ]]
+  [[ $(journal_types "$root" "$job" | grep -cx interrupted) -eq 1 ]]
+}
+
+@test "resolve tears down both already-interrupted rk5 children, without a subagent_stop entry for either" {
+  local root run_job reaped_job
+  root=$(stored_run rk5 .root_principal)
+  run_job=$(stored_run rk5 .run_job)
+  reaped_job=$(jq -r .job "$BATS_FILE_TMPDIR/rk5-reaped-child.json")
+
+  run_jug resolve "$run_job" --state failed --reason "reaped before resolve"
+  expect_status 0
+  [[ $(field .state) == failed ]]
+
+  run_jug job-ledger "$run_job"
+  expect_status 0
+  # Both children are already terminal by the time resolve runs: nothing to
+  # stop, so neither gets a subagent_stop entry (FDR 0019 §6; resolve's
+  # stopLiveChildren skips a child whose journal is already terminal) —
+  # unchanged by clown#256. Both accounts still get torn down normally.
+  expect_json '([.calls[] | select(.tool == "subagent_stop")] | length == 0)
+    and ([.calls[] | select(.tool == "teardown" and .kind == "account" and .ok == true)] | length >= 2)'
+  [[ $(journal_types "$root" "$reaped_job" | tail -n1) == interrupted ]]
+}

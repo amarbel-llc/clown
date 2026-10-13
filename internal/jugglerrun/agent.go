@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 	"code.linenisgreat.com/clown/internal/jugglerbrief"
 	"code.linenisgreat.com/clown/internal/jugglereval"
 	"code.linenisgreat.com/clown/internal/jugglerloop"
+	"code.linenisgreat.com/ringmaster/pkgs/jobwake"
 )
 
 // Labels and sources juggler stamps on ringmaster jobs and troupe posts.
@@ -57,6 +59,16 @@ type AgentDeps struct {
 	Moxy ToolPlaneLauncher
 	// AgentStateDir is the agent's own state directory (the moxy CWD).
 	AgentStateDir string
+	// AcquireJobLock takes the ringmaster producer's advisory lock on the
+	// job for the run's whole lifetime (RFC-0018 §2; clown#256), so the v3
+	// liveness reaper can terminalize it `interrupted` if the exit-wake
+	// hook never runs (systemd gone, hook crashed). Acquired right after
+	// the job exists (self-started or adopted from `juggler spawn`) and
+	// released only after Done has returned, in finish. Defaults to a
+	// no-op (no lock, today's behavior): cmd/juggler's `juggler run` wires
+	// jobwake.AcquireJobLock; tests inject a fake that records acquire/
+	// release ordering.
+	AcquireJobLock func(target, jobID string) (release func() error, err error)
 }
 
 func (d AgentDeps) withDefaults() AgentDeps {
@@ -71,6 +83,9 @@ func (d AgentDeps) withDefaults() AgentDeps {
 	}
 	if d.Now == nil {
 		d.Now = time.Now
+	}
+	if d.AcquireJobLock == nil {
+		d.AcquireJobLock = func(string, string) (func() error, error) { return func() error { return nil }, nil }
 	}
 	return d
 }
@@ -138,12 +153,6 @@ func RunAgent(ctx context.Context, deps AgentDeps, req AgentRequest) (AgentOutco
 	wallClock, _ := b.Limits.WallClockDuration()
 	deadline := deps.Now().Add(wallClock)
 	a := &agentRun{deps: deps, brief: b, target: b.Parent, job: req.Job}
-	// PLATFORM GAP (recorded, not fixed): this is where `juggler run` would
-	// take the ringmaster producer's advisory lock (RFC-0016 §2) on a.job, if
-	// a CLI verb for it existed. Without the lock, status liveness reads
-	// `unknown` and the RFC-0018 §2.3 reaper never reaps juggler jobs, so if
-	// the post-stop hook cannot run, nothing writes `interrupted`.
-	//
 	// PLATFORM REQUIREMENT: ringmaster protocol >= 2 (RFC-0018): the
 	// `aborted` state, `cancel-requested` records and `wait --on-cancel`.
 	// Brief 6 pins the binary.
@@ -156,6 +165,18 @@ func RunAgent(ctx context.Context, deps AgentDeps, req AgentRequest) (AgentOutco
 		if err := mirrorHolder(ctx, deps.Ringmaster, a.target, a.job, FirstHolder(a.target, deps.Now())); err != nil {
 			a.logf("%v", err)
 		}
+	}
+	// Hold the job's advisory lock for the run's whole lifetime, whether the
+	// job was just started above or adopted from `juggler spawn` (clown#256,
+	// FDR 0019 §6): this is what lets the v3 liveness reaper terminalize
+	// `interrupted` when the exit-wake hook never runs. Not fatal when it
+	// cannot be acquired (e.g. the real jobwake wiring is unset in a test, or
+	// ringmaster's job-lock directory is unwritable): the agent still does
+	// its work, it just loses the reaper backstop for this run.
+	if release, err := deps.AcquireJobLock(a.target, a.job); err != nil {
+		a.logf("acquiring the job lock (liveness reaper backstop unavailable): %v", err)
+	} else {
+		a.releaseLock = release
 	}
 
 	if deps.ResolveModel == nil {
@@ -283,6 +304,10 @@ type agentRun struct {
 	// runCtx is the loop's context; per-turn posts inherit its values but not
 	// its cancellation.
 	runCtx context.Context
+	// releaseLock releases the job lock AcquireJobLock took; nil when
+	// acquiring it failed (or was a no-op), in which case finish releases
+	// nothing.
+	releaseLock func() error
 }
 
 func (a *agentRun) logf(format string, args ...any) {
@@ -402,8 +427,19 @@ func (a *agentRun) finish(state, message string, l jugglerloop.Ledger) AgentOutc
 	} else {
 		out.LedgerPath = path
 	}
-	if err := a.deps.Ringmaster.Done(ctx, a.target, a.job, DoneRecord{State: state, Message: message, ResultRef: out.LedgerPath}); err != nil {
+	// A losing race against the v3 liveness reaper (or another writer) is
+	// reported as jobwake.ErrAlreadyTerminal (ringmaster exit 3, clown#256):
+	// the job is settled either way, so it is not logged as a failure here.
+	if err := a.deps.Ringmaster.Done(ctx, a.target, a.job, DoneRecord{State: state, Message: message, ResultRef: out.LedgerPath}); err != nil && !errors.Is(err, jobwake.ErrAlreadyTerminal) {
 		a.logf("ringmaster done %s %s: %v", a.job, state, err)
+	}
+	// Release only after Done has returned (whichever way): releasing
+	// earlier would invite the reaper to write `interrupted` over an
+	// outcome about to be recorded (jobwake.AcquireJobLock's own doc).
+	if a.releaseLock != nil {
+		if err := a.releaseLock(); err != nil {
+			a.logf("releasing the job lock %s: %v", a.job, err)
+		}
 	}
 	return out
 }

@@ -988,20 +988,51 @@ The router, before any subagent exists:
   gone and the file is deleted. Anything else keeps the account and its
   file. If troupe or Prosody change that wording, every teardown keeps its
   accounts (fails safe, not open).
-- **The ringmaster reaper does not back-stop juggler jobs today.** RFC-0018
-  reaps a job only when the producer's advisory lock is released, and
-  there is no CLI verb for a producer to take that lock, so `juggler run`
-  cannot. If the post-stop hook cannot run (systemd gone, hook crashed),
-  NOTHING writes `interrupted` and the job stays open. §6's "reaper as
-  backstop" is therefore aspirational until ringmaster grows a lock verb
-  (ringmaster#27). The hook is idempotent and is the only emitter in
-  practice.
-- **ringmaster protocol ≥ 2 is required** for `aborted`, `cancel-requested`,
-  `cancel` and `wait --on-cancel`; an older installed ringmaster (which
-  spelled the state `cancelled`) will not interoperate. **troupe ≥ 4c52b3b
-  is required** for `mint --password-file`, `mint-revoke --password-file`,
-  `muc create` and `muc affiliate`; an older troupe rejects the flag and
-  every mint fails. In v1 both binaries are found on PATH or via
+- **The ringmaster v3 liveness reaper now backstops `juggler run`
+  (clown#256, ringmaster#27).** `juggler run` takes the job's advisory lock
+  (`jobwake.AcquireJobLock`) right after the job exists — self-started or
+  adopted from `juggler spawn` — and releases it only after `Done` has
+  returned, never earlier (RFC-0018 §2.3: releasing before the terminal is
+  durable invites the reaper to write `interrupted` over an outcome about
+  to be recorded). If the post-stop hook also cannot run (systemd gone,
+  hook crashed), the owning session's monitor — not a one-shot `monitor
+  --once`, which never reaps — terminalizes the job `interrupted` once it
+  has observed the lock acquirable (the producer dead) for the reap grace
+  (~3 rescan ticks), message `producer died without writing a terminal
+  record` (no `killed:`/`crash:` prefix, so `ExitReasonFor` reports
+  `crash`, not `killed`); the first v3 monitor a session starts reaps
+  every already-`gone` older job in one burst. A losing race against the
+  reaper (or any other writer) — on `juggler run`'s own `Done` call in
+  `finish`, or the exit-wake hook's — is ringmaster's exit 3
+  (`jobwake.ErrAlreadyTerminal`): both treat it as success, relaying
+  whichever terminal actually landed, never logging it as a failure.
+  Acquiring the lock is best-effort, not fatal to the run: if it cannot be
+  acquired (e.g. the lock directory is unwritable), the agent still does
+  its work, it just loses the reaper backstop for that run. Resolve's own
+  handling of a child or run job is unchanged — `stopLiveChildren` already
+  treats any terminal state (including a reaper-written `interrupted`)
+  identically to one the hook or the agent wrote, skipping it as
+  nothing-to-stop. Only `juggler run`'s own agent job is locked this way;
+  the run-level job `spawn --new-run` starts, and the `Start` calls
+  `spawn --brief` makes on a child's behalf before the unit exists, hold
+  no lock of their own.
+- **ringmaster protocol ≥ 3 is required** for the liveness reaper, its
+  exit 3 (`jobwake.ErrAlreadyTerminal`), and `ringmaster version
+  --protocol`; `juggler` exact-matches the installed `ringmaster`'s
+  reported protocol integer against the `jobwake.ProtocolVersion` it was
+  built against (clown#256), refusing loudly on any mismatch (both
+  versions named) rather than operating against a journal layout or
+  cancel/wait state machine it no longer agrees with. The check runs
+  lazily — once per process, right before the first real job-platform
+  call through `ExecRingmaster` (a `ProtocolCheckedRingmaster` wrapper),
+  so a usage or parse-time refusal that never reaches the platform costs
+  nothing. Protocol ≥ 2 (superseded by the ≥ 3 requirement above) was for
+  `aborted`, `cancel-requested`, `cancel` and `wait --on-cancel`; an older
+  installed ringmaster (which spelled the state `cancelled`) will not
+  interoperate. **troupe ≥ 4c52b3b is required** for `mint
+  --password-file`, `mint-revoke --password-file`, `muc create` and `muc
+  affiliate`; an older troupe rejects the flag and every mint fails. In
+  v1 both binaries are found on PATH or via
   `JUGGLER_{RINGMASTER,TROUPE}_BIN`; the nix-pinned paths (brief 6,
   clown#246) must satisfy both minimums.
 - **The hardened webhook host.** troupe 4c52b3b's privilege-free mint

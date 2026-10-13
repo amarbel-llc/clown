@@ -5,10 +5,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
+
+	"code.linenisgreat.com/ringmaster/pkgs/jobwake"
 )
 
 // JobRecord is one ringmaster journal record, as `ringmaster read --json`
@@ -101,12 +106,25 @@ func (r ExecRingmaster) Progress(ctx context.Context, target, job, message strin
 	return err
 }
 
+// exitAlreadyTerminal is ringmaster's `done` exit code for a write refused
+// because the job already carries a terminal record (jobwake.ErrAlreadyTerminal,
+// protocol >= 3, clown#256): a losing race against the v3 liveness reaper or
+// another writer, not a failure of the write itself.
+const exitAlreadyTerminal = 3
+
 func (r ExecRingmaster) Done(ctx context.Context, target, job string, d DoneRecord) error {
 	args := []string{"done", job, "--target", target, "--state", d.State, "--message", d.Message}
 	if d.ResultRef != "" {
 		args = append(args, "--result-ref", d.ResultRef)
 	}
 	_, err := r.run(ctx, nil, args...)
+	if err == nil {
+		return nil
+	}
+	var ce *CommandError
+	if errors.As(err, &ce) && ce.ExitCode == exitAlreadyTerminal {
+		return fmt.Errorf("%w: %s", jobwake.ErrAlreadyTerminal, ce.Stderr)
+	}
 	return err
 }
 
@@ -192,6 +210,117 @@ func requestStop(ctx context.Context, rmc Ringmaster, target, job, message strin
 	}
 	_, terminal := TerminalRecord(recs)
 	return recs, terminal, nil
+}
+
+// RingmasterProtocolVersion is the job-platform protocol version juggler was
+// built against (jobwake.ProtocolVersion, clown#256).
+const RingmasterProtocolVersion = jobwake.ProtocolVersion
+
+// CheckRingmasterProtocol runs `<bin> version --protocol` and compares its
+// bare-integer stdout against RingmasterProtocolVersion, exact match: clown
+// execs a separately resolved ringmaster binary rather than linking its CLI,
+// so a mismatched build (the on-disk journal layout and the cancel/wait
+// state machine may have changed) must be caught before any job-platform
+// call, not discovered as a confusing mid-flow failure. A mismatch, an
+// unparseable reply, or a failure to run bin at all is an error naming both
+// versions so the fix — rebuild or upgrade one side to match — is obvious.
+func CheckRingmasterProtocol(ctx context.Context, bin string) error {
+	out, err := runCommand(ctx, Command{Argv: []string{bin, "version", "--protocol"}})
+	if err != nil {
+		return fmt.Errorf("checking %s's job-platform protocol version (version --protocol): %w", bin, err)
+	}
+	trimmed := strings.TrimSpace(string(out))
+	got, perr := strconv.Atoi(trimmed)
+	if perr != nil {
+		return fmt.Errorf("checking %s's job-platform protocol version: unparseable output %q", bin, trimmed)
+	}
+	if got != RingmasterProtocolVersion {
+		return fmt.Errorf("%s speaks job-platform protocol %d, juggler was built for protocol %d; rebuild or upgrade one to match", bin, got, RingmasterProtocolVersion)
+	}
+	return nil
+}
+
+// ProtocolCheckedRingmaster wraps a Ringmaster so the FIRST method call
+// through it runs CheckRingmasterProtocol (clown#256) before delegating —
+// not every `juggler` invocation, only the ones that actually reach a
+// job-platform call, so a usage or parse-time refusal that never touches
+// ringmaster costs nothing. The check runs at most once per instance; every
+// method shares its result (success or failure) via checkOnce.
+type ProtocolCheckedRingmaster struct {
+	Inner Ringmaster
+	// Bin is the ringmaster binary CheckRingmasterProtocol runs.
+	Bin string
+
+	checkOnce sync.Once
+	checkErr  error
+}
+
+func (p *ProtocolCheckedRingmaster) check(ctx context.Context) error {
+	p.checkOnce.Do(func() { p.checkErr = CheckRingmasterProtocol(ctx, p.Bin) })
+	return p.checkErr
+}
+
+func (p *ProtocolCheckedRingmaster) Start(ctx context.Context, target, label, source string) (string, error) {
+	if err := p.check(ctx); err != nil {
+		return "", err
+	}
+	return p.Inner.Start(ctx, target, label, source)
+}
+
+func (p *ProtocolCheckedRingmaster) Progress(ctx context.Context, target, job, message string) error {
+	if err := p.check(ctx); err != nil {
+		return err
+	}
+	return p.Inner.Progress(ctx, target, job, message)
+}
+
+func (p *ProtocolCheckedRingmaster) Done(ctx context.Context, target, job string, d DoneRecord) error {
+	if err := p.check(ctx); err != nil {
+		return err
+	}
+	return p.Inner.Done(ctx, target, job, d)
+}
+
+func (p *ProtocolCheckedRingmaster) Records(ctx context.Context, target, job string) ([]JobRecord, error) {
+	if err := p.check(ctx); err != nil {
+		return nil, err
+	}
+	return p.Inner.Records(ctx, target, job)
+}
+
+func (p *ProtocolCheckedRingmaster) Status(ctx context.Context, target, job string) (JobStatus, error) {
+	if err := p.check(ctx); err != nil {
+		return JobStatus{}, err
+	}
+	return p.Inner.Status(ctx, target, job)
+}
+
+func (p *ProtocolCheckedRingmaster) SpoolPath(ctx context.Context, target, job string) (string, error) {
+	if err := p.check(ctx); err != nil {
+		return "", err
+	}
+	return p.Inner.SpoolPath(ctx, target, job)
+}
+
+func (p *ProtocolCheckedRingmaster) WaitTerminal(ctx context.Context, target, job string, timeout time.Duration) error {
+	if err := p.check(ctx); err != nil {
+		return err
+	}
+	return p.Inner.WaitTerminal(ctx, target, job, timeout)
+}
+
+func (p *ProtocolCheckedRingmaster) WaitCancelRequested(ctx context.Context, target, job string) error {
+	if err := p.check(ctx); err != nil {
+		return err
+	}
+	return p.Inner.WaitCancelRequested(ctx, target, job)
+}
+
+func (p *ProtocolCheckedRingmaster) Cancel(ctx context.Context, target, job, message string) error {
+	if err := p.check(ctx); err != nil {
+		return err
+	}
+	return p.Inner.Cancel(ctx, target, job, message)
 }
 
 // IsTerminalState reports whether state is a ringmaster terminal state:

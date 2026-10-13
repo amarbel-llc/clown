@@ -15,6 +15,7 @@ import (
 	rm "code.linenisgreat.com/clown/internal/juggler"
 	"code.linenisgreat.com/clown/internal/jugglerbrief"
 	jr "code.linenisgreat.com/clown/internal/jugglerrun"
+	"code.linenisgreat.com/ringmaster/pkgs/jobwake"
 )
 
 const runUsage = "usage: juggler run --brief <file|-> [--job <id>] [--brief-stanza <id>] [--moxy <path> | --moxy-url <http url>] [--ringmaster <path>] [--troupe <path>]"
@@ -68,8 +69,13 @@ func (p platformBins) lifecycleDeps() (jr.LifecycleDeps, error) {
 		return jr.LifecycleDeps{}, err
 	}
 	troupe := p.troupeClient()
+	rmc := p.ringmasterClient()
 	return jr.LifecycleDeps{
-		Ringmaster: p.ringmasterClient(),
+		// clown#256: a mismatched ringmaster build (a different job-platform
+		// protocol than juggler was built for) is caught before the first
+		// real job-platform call, not every invocation — a usage or
+		// parse-time refusal that never reaches the platform costs nothing.
+		Ringmaster: &jr.ProtocolCheckedRingmaster{Inner: rmc, Bin: rmc.Bin},
 		Troupe:     troupe,
 		Rooms:      jr.ExecRoomProvisioner(troupe),
 		Units:      jr.ExecSystemdRun{Bin: resolveBin(p.systemdRun, jr.SystemdRunBinEnv, SystemdRunPath, "systemd-run"), UserManager: p.userManager},
@@ -211,13 +217,14 @@ func cmdRun(ctx context.Context, resolve func(context.Context, string) (rm.Resol
 	}
 	return withDeps(ctx, stderr, "run", bins, 0, func(ctx context.Context, deps jr.LifecycleDeps) int {
 		out, err := jr.RunAgent(ctx, jr.AgentDeps{
-			Ringmaster:    deps.Ringmaster,
-			Troupe:        deps.Troupe,
-			ResolveModel:  resolve,
-			HTTPClient:    httpClient,
-			Stderr:        stderr,
-			Moxy:          jr.ExecMoxy{Bin: resolveBin(moxyBin, jr.MoxyBinEnv, MoxyPath, "moxy"), Stderr: stderr},
-			AgentStateDir: filepath.Join(deps.Store.Root, "agents", brief.Principal),
+			Ringmaster:     deps.Ringmaster,
+			Troupe:         deps.Troupe,
+			ResolveModel:   resolve,
+			HTTPClient:     httpClient,
+			Stderr:         stderr,
+			Moxy:           jr.ExecMoxy{Bin: resolveBin(moxyBin, jr.MoxyBinEnv, MoxyPath, "moxy"), Stderr: stderr},
+			AgentStateDir:  filepath.Join(deps.Store.Root, "agents", brief.Principal),
+			AcquireJobLock: jobwake.AcquireJobLock,
 		}, jr.AgentRequest{
 			Brief:        brief,
 			Job:          job,

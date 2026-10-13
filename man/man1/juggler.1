@@ -129,7 +129,16 @@ Like
 none of these is a JSON-RPC call.
 They consume
 .Xr ringmaster 1
-(jobs; protocol version 2 or later, for
+(jobs; protocol version 3 or later, required for the liveness reaper, its
+.Ql done
+exit 3
+.Pq Fn jobwake.ErrAlreadyTerminal
+and
+.Ic version Fl -protocol ,
+which
+.Nm
+exact-matches once per process before the first real job-platform call,
+refusing loudly on a mismatch; version 2 alone sufficed only for
 .Ql aborted ,
 .Ql cancel-requested ,
 .Ic cancel
@@ -473,6 +482,26 @@ job's terminal record.
 It is a ringmaster
 .Em producer ,
 not a ringmaster-spawned process.
+Right after the job exists
+.Pq self-started or adopted via Fl -job ,
+it takes the job's advisory lock
+.Pq Fn jobwake.AcquireJobLock
+and releases it only once its own
+.Ic done
+call has returned, so ringmaster v3's liveness reaper can terminalize the
+job
+.Ql interrupted
+if the exit-wake hook never runs either
+.Pq clown#256, ringmaster#27 .
+A lock that cannot be acquired is not fatal: the run proceeds without the
+reaper backstop.
+A losing race against the reaper
+.Pq or any other writer
+on its own
+.Ic done
+call is ringmaster's exit 3
+.Pq Fn jobwake.ErrAlreadyTerminal ,
+relayed as success, not logged as a failure.
 Normally started by
 .Cm spawn
 as a transient unit rather than by hand.
@@ -965,6 +994,16 @@ reason
 reason
 .Ql crash
 .El
+.Pp
+If the hook's own
+.Ic done
+call loses a race against ringmaster v3's liveness reaper
+.Pq or any other writer
+between its read of the journal and its write
+.Pq ringmaster exit 3, jobwake.ErrAlreadyTerminal; clown#256 ,
+that is not a hook failure: it re-reads the journal and relays whichever
+terminal actually landed
+.Pq typically the reaper's own Ql interrupted , message Ql producer died without writing a terminal record , reason Ql crash, not Ql killed .
 .Pp
 It then sends ONE wake
 .Pq Ql troupe message
