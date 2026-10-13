@@ -1,6 +1,8 @@
 package jugglerloop
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"testing"
 )
@@ -57,9 +59,9 @@ func TestCanonicalJSON_InvalidJSONErrors(t *testing.T) {
 }
 
 // TestArgsDigest_TwoOrderingsEqualOneByteChangeDiffers is the exact property
-// clown#255 asks be tested: two logically-equal argument documents, however
-// differently key-ordered, digest equal; a one-byte change in a value
-// digests differently.
+// clown#255 asks be tested: two differently key-ordered encodings of the
+// same argument bytes digest equal; a one-byte change in a value digests
+// differently.
 func TestArgsDigest_TwoOrderingsEqualOneByteChangeDiffers(t *testing.T) {
 	a := ArgsDigest(json.RawMessage(`{"title":"x","body":{"a":1,"b":2}}`))
 	b := ArgsDigest(json.RawMessage(`{"body":{"b":2,"a":1},"title":"x"}`))
@@ -74,16 +76,15 @@ func TestArgsDigest_TwoOrderingsEqualOneByteChangeDiffers(t *testing.T) {
 
 // TestArgsDigest_InvalidJSONFallsBackToRawBytes covers a tool call whose
 // arguments were truncated by a token limit (validateToolArgs's own case):
-// ArgsDigest must not panic or return empty, it falls back to hashing args
-// as sent.
+// unreachable through either of clown's codecs today (both guarantee valid
+// JSON — see ArgsDigest's own doc comment), but if it ever happened,
+// ArgsDigest must not panic or return empty; it falls back to hashing args
+// exactly as sent, asserted directly here (not just that it's deterministic).
 func TestArgsDigest_InvalidJSONFallsBackToRawBytes(t *testing.T) {
 	invalid := json.RawMessage(`{"title":"cut off`)
-	got := ArgsDigest(invalid)
-	if got == "" {
-		t.Fatal("want a non-empty digest even for invalid JSON")
-	}
-	want := ArgsDigest(invalid)
-	if got != want {
-		t.Fatal("ArgsDigest of the same invalid bytes must be deterministic")
+	sum := sha256.Sum256(invalid)
+	want := hex.EncodeToString(sum[:])
+	if got := ArgsDigest(invalid); got != want {
+		t.Fatalf("ArgsDigest(invalid) = %s, want sha256(raw bytes) = %s", got, want)
 	}
 }

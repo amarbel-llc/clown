@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"path/filepath"
 	"time"
 
 	rm "code.linenisgreat.com/clown/internal/juggler"
@@ -235,7 +234,7 @@ func cmdRun(ctx context.Context, resolve func(context.Context, string) (rm.Resol
 			HTTPClient:     httpClient,
 			Stderr:         stderr,
 			Moxy:           jr.ExecMoxy{Bin: resolveBin(moxyBin, jr.MoxyBinEnv, MoxyPath, "moxy"), Stderr: stderr},
-			AgentStateDir:  filepath.Join(deps.Store.Root, "agents", brief.Principal),
+			AgentStateDir:  deps.Store.AgentStateDir(brief.Principal),
 			AcquireJobLock: jobwake.AcquireJobLock,
 		}, jr.AgentRequest{
 			Brief:        brief,

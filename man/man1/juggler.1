@@ -569,7 +569,8 @@ The moxyfile is written under
 .Pa agents/<principal>/
 in the state directory.
 Prints one JSON object
-.Sy {"job","state","message","ledger"}
+.Sy {"job","state","message","ledger","traffic"}
+.Pq Ql traffic No present only when Pa traffic.jsonl No was actually opened; see Sx FILES
 and exits with the state: 0
 .Ql succeeded ,
 2
@@ -949,7 +950,7 @@ The consumed binaries; see
 With
 .Fl -wait ,
 prints
-.Sy {"jid","job","room","state","reason","message","ledger","artifacts":[{"tool","kind","uris"}],"cannot_complete":null|{"reason"}} .
+.Sy {"jid","job","room","state","reason","message","ledger","traffic","artifacts":[{"tool","kind","uris"}],"cannot_complete":null|{"reason"}} .
 .Ql state
 is the ringmaster state
 .Pq or Ql running ,
@@ -957,7 +958,12 @@ is the ringmaster state
 the FDR 0032 D6 exit reason
 .Pq Ql normal , failed , shutdown , crash , killed ,
 .Ql ledger
-the path of the result spool, and
+the path of the result spool,
+.Ql traffic
+the agent's
+.Pa traffic.jsonl
+.Pq clown#255; present only when the file actually exists, derived independently of Ql ledger since the waiting process is not the one that wrote it ,
+and
 .Ql artifacts
 the URIs the successful tool calls returned.
 Exit status:
@@ -1469,6 +1475,22 @@ mode 0700 directory; deleted when
 tears the account down.
 .It Pa $XDG_STATE_HOME/juggler/agents/<principal>/moxyfile
 An agent's moxyfile, and the working directory of its moxy.
+.It Pa $XDG_STATE_HOME/juggler/agents/<principal>/traffic.jsonl
+.Pq clown#255
+One line per tool call, arguments in full plus
+.Ql args_digest ,
+written by
+.Cm run
+at the same point its ledger entry is appended; truncated at the start
+of each run, so a retried
+.Fl -job
+never mixes two runs' lines.
+See
+.Xr juggler 7
+for the format and why it lives here rather than beside the ringmaster
+spool.
+As sensitive as the tool arguments it records \(em not filtered or
+redacted.
 .It Pa $XDG_STATE_HOME/juggler/exit-wakes/<job>
 The sent-wake marker that keeps
 .Cm exit-wake

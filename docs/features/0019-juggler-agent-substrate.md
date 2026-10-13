@@ -136,10 +136,14 @@ channel, and it never parses the room):
 - `--wait [--timeout <dur>]`: block until the subagent's job
   terminalizes and print `{"jid","job","room","state","reason","message",
   "ledger":"<path>","traffic":"<path>","artifacts":[{"tool","kind","uris"}],
-  "cannot_complete":null|{"reason"}}` where `"traffic"` is the run's
-  `traffic.jsonl` (clown#255; §4), derived from `"ledger"`'s path the
-  same way ringmaster's own lock-file convention derives from a job's
-  spool path, and `state` is the ringmaster
+  "cannot_complete":null|{"reason"}}` where `"traffic"` is the child's
+  `traffic.jsonl` (clown#255; §4), derived from the child's own
+  principal (`ChildRecord.Principal`) and the launcher's store —
+  independently of `"ledger"`, since a hook-written terminal carries no
+  `result_ref` even when the agent wrote plenty of traffic before it
+  died — and reported only when the file actually exists (`"traffic"`
+  is `""` otherwise, e.g. the run failed before anything was opened);
+  `state` is the ringmaster
   state and `reason` the D6 reason (§6). Exit code mirrors the state:
   0 `succeeded`, 2 `failed`, 3 `aborted`, 4 `interrupted`, 1 usage. At
   `--timeout` the child job is asked to cancel (`ringmaster cancel`) and
@@ -386,25 +390,54 @@ whose findings exist only as a tool call's arguments; a coverage audit
 checking an agent actually opened the files its brief named), but the
 evaluator's input and the future signed contract must not grow with
 file bodies (clown#255). Instead, `juggler run` writes a per-run
-**`traffic.jsonl`** beside the ledger (its own spool file; §6), one JSON
-line per tool call, written at the same point its ledger entry is
-appended — including a read-only kind, a call whose arguments failed
-validation, and one whose executor returned a transport error. Each
-line carries the call's step index, tool name, its **full** arguments
-as sent, `args_digest` (see below), the result's size in bytes and ok
-flag (never the result body itself — moxy already blobs an oversized
-result, and the ledger carries the URI), and a timestamp. It is
-append-only, uncapped, and never read by the evaluator. Each ledger
+**`traffic.jsonl`** in the agent's own state directory
+(`<store>/agents/<principal>/traffic.jsonl` — the same directory moxy's
+CWD already uses, keyed by principal because `juggler run` knows its
+own principal unconditionally from the brief, unlike its run key; a
+run can have many agent jobs, each with its own traffic file).
+**Not** beside the ringmaster spool: an earlier revision put it there,
+derived from the spool path, but a real ringmaster discovers journals
+by `*.jsonl` suffix and reads a sibling `<job>.traffic.jsonl` as a
+phantom second job — scanned by its monitor, listed by `ringmaster ls`,
+and deleted by its age GC independently of the real job (delta review
+finding 1). One JSON line per tool call, opened (truncating any stale
+content from an earlier run under the same principal) right after the
+job's lock is acquired, and written — each line flushed as its own
+`Write`, durable immediately — at the same point its ledger entry is
+appended in memory: including a read-only kind, a call whose arguments
+failed validation, and one whose executor returned a transport error.
+Because of this, traffic and the ledger are NOT equally durable: a
+`SIGKILL` mid-run leaves every traffic line written so far on disk but
+no ledger at all (the ledger only reaches disk once, at `finish`, via
+the result spool) — traffic can therefore show calls a ledger reader
+never learns happened. Each line carries the call's step index, tool
+name, its **full** arguments as sent, `args_digest` (see below), the
+result's size in bytes and ok flag (never the result body itself —
+moxy already blobs an oversized result, and the ledger carries the
+URI), and a timestamp. It is append-only within one run and never read
+by the evaluator; retention is whatever `agents/<principal>/` already
+has today (nothing sweeps it), not a new concern this adds. Each ledger
 call entry in turn gains **`args_digest`**: a sha256, hex-encoded, over
-the arguments' canonical JSON encoding (object keys sorted,
-no insignificant whitespace, numbers kept as their original text —
-`jugglerloop.CanonicalJSON`/`ArgsDigest`), so a ledger entry and its
-traffic.jsonl line are joinable, and a traffic file can be checked
-against its ledger, without the ledger itself carrying the arguments.
-Redaction: a tool's arguments are whatever the model sent and the
-executor received — a model API token or key is never among them,
-since those live in the *model* request (the HTTP call to the
-provider), a wire the traffic file does not touch at all; a tool
+the arguments' canonical JSON encoding (object keys sorted, no
+insignificant whitespace, numbers kept as their original text, HTML
+escaping disabled — `jugglerloop.CanonicalJSON`/`ArgsDigest`; the
+canonical form is precisely Go's `encoding/json` encoder output under
+that configuration, not a cross-language guarantee), so a ledger entry
+and its traffic.jsonl line are joinable, and a traffic file can be
+checked against its ledger, without the ledger itself carrying the
+arguments. A failure to open the file, or a write failure mid-run, is
+recorded as a ledger note (not only logged), so an auditor can tell a
+run's traffic is incomplete from the ledger alone.
+
+Redaction and sensitivity: a tool's arguments are whatever the model
+sent and the executor received — a model API token or key is never
+among them, since those live in the *model* request (the HTTP call to
+the provider), a wire `traffic.jsonl` does not touch at all; model
+request and response bodies are not captured anywhere by this feature.
+That said, `traffic.jsonl` is exactly as sensitive as the arguments
+themselves: whatever a tool's args legitimately carry — including a
+secret the model echoes into them (a credential it was told to use, a
+pasted token) — lands in the file verbatim, with no filtering. A tool
 result is recorded only as the loop saw it (size and ok, a `madder://`
 URI if moxy already spilled it), never its body.
 
@@ -864,7 +897,9 @@ in the run's `traffic.jsonl`, below):
       "elapsed_ms": 18340
     }
 
-`traffic.jsonl` beside it (never read by the evaluator):
+The same run's `traffic.jsonl`, in the agent's own state directory
+(`agents/<principal>/traffic.jsonl` — not beside the ledger; see §4),
+never read by the evaluator:
 
     {"step":1,"tool":"list_repos","args":{},"args_digest":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","result_size":42,"ok":true,"ts":"2026-10-13T14:40:01Z"}
     {"step":3,"tool":"create_issue","args":{"title":"restart tool should reconnect automatically"},"args_digest":"fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210","result_size":71,"ok":true,"ts":"2026-10-13T14:40:04Z"}
@@ -1021,6 +1056,15 @@ The router, before any subagent exists:
 - **Staged files persist per child.** `<digest>.brief.toml`,
   `<digest>.moxyfile.toml` and `<digest>.parent-moxyfile.toml` stay in
   the run's `children/` directory after the run, until clown#250's sweep.
+- **`traffic.jsonl` is as sensitive as the tool arguments it records, in
+  full, and is not filtered or redacted (clown#255).** Whatever secret a
+  model's tool call carries — a token pasted into a search query, a
+  password typed into a form-filling call — lands verbatim in the
+  run's traffic file. This is a property of the feature (arguments are
+  the whole point), not a bug, but it means `agents/<principal>/` needs
+  the same access controls as the rest of the agent's state. Model
+  request/response bodies themselves are not captured by this feature
+  at all — only the tool calls a loop makes against moxy.
 - **A hand-written parent reference skips the moxin comparison.** Only
   a rendered reference carries `[resolved-moxins]`; juggler always
   renders one, but a reference written by hand (or by another launcher)
@@ -1157,7 +1201,7 @@ The router, before any subagent exists:
 | transcript layout | one MUC per run | one link for the fallback note; brief in the same transcript | runs grow long enough that per-agent rooms read better |
 | daemon for remote models | optional | the webhook host's service user has no user session | a host needs local inference for these agents (→ system-service daemon) |
 | agent-scope realisation | open: sub-cgroup vs sibling unit | the bullet needs neither namespaces nor the choice | signing lands, or a non-fixed-surface tool server appears (→ sibling unit + `limits.sandbox`) |
-| `traffic.jsonl` retention | append-only, uncapped, never GC'd (clown#255) | arguments are the whole point of the file; capping or rotating it would defeat the audits it exists for | a long-lived or high-step-count agent's traffic file grows large enough to matter (→ a size/age-based sweep, same as clown#250's staged-file cleanup) |
+| `traffic.jsonl` retention | append-only within a run, truncated on the next (clown#255) | arguments are the whole point of the file; capping or rotating within a run would defeat the audits it exists for. It lives in the agent's existing `agents/<principal>/` state directory, so it shares whatever sweep (today: none) that directory eventually gets — not a new retention concern of its own | `agents/<principal>/` grows large enough across many runs to need a sweep (→ a size/age-based cleanup covering the whole directory, traffic included) |
 | exit-wake emitter | the unit's `ExecStopPost` hook, sole emitter | survives every ending the main process does not | a holder needs a wake on the systemd-dead path (→ holder-side timeout or a cross-host watcher) |
 | router confidence threshold | 0.5 (`--min-confidence`, overridable per brief) | operator's first-bullet figure; below it the subagent is skipped and the fallback note records the choice and confidence. NOTE (two live calls, 2026-10-06): the API's `confidence` is the MARGIN over the runner-up (0.63 vs 0.37 → confidence 0.26), not the winning probability, so with two options 0.5 means roughly "0.75 or better"; semantics for 3+ options unverified. The stanza carries both `confidence` and the chosen option's probability | mirror-phase data shows good choices rejected or bad ones accepted |
 | lifecycle owner | v1: `juggler spawn` | spinclass cannot represent a repo-less session today | the first handle held across the two session kinds (→ v2 spinclass unit session, §11) |

@@ -849,7 +849,6 @@ func WaitChild(ctx context.Context, deps LifecycleDeps, rec *ChildRecord, timeou
 		return out, nil
 	}
 	out.State, out.Message, out.Ledger = term.Type, term.Message, term.ResultRef
-	out.Traffic = trafficPathForSpool(out.Ledger)
 	out.Reason = ExitReasonFor(out.State, out.Message)
 	l, found, err := readAgentLedger(out.Ledger)
 	if err != nil {
@@ -864,6 +863,13 @@ func WaitChild(ctx context.Context, deps LifecycleDeps, rec *ChildRecord, timeou
 			}
 		}
 	}
+	// Traffic is derived from the agent's own state directory (rec.Principal),
+	// independently of Ledger/ResultRef (clown#255 review finding 4): a
+	// hook/reaper terminal carries no result_ref even though the agent may
+	// have written plenty of traffic before it died — and conversely finding
+	// a ledger via the spool fallback above doesn't mean the agent ever got
+	// as far as opening its traffic file. Report the path only if it exists.
+	out.Traffic = trafficPathIfExists(deps.Store.TrafficPath(rec.Principal))
 	if found {
 		out.Artifacts = ArtifactsFromLedger(l)
 		out.CannotComplete = l.CannotComplete

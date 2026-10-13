@@ -288,8 +288,8 @@ signed contract must not grow with file bodies.
 .Cm juggler run
 instead writes one line per tool call to
 .Pa traffic.jsonl ,
-beside the agent's ringmaster spool file
-.Pq the same directory, named the way ringmaster's own lock-file convention names its sibling: Pa <spool>.traffic.jsonl for Pa <spool>.out ,
+in the agent's own state directory
+.Pq Pa agents/<principal>/traffic.jsonl under the store root, the same directory already used as moxy's working directory \(em NOT beside the ringmaster spool: a file named for ringmaster's own job-id-prefixed convention there is read by real ringmaster as a second, phantom job ,
 at the same point its ledger entry is appended \(em including a
 read-only kind, an invalid-arguments call and a tool transport error.
 Each line:
@@ -302,9 +302,14 @@ a sha256, hex-encoded, over the arguments' canonical JSON encoding
 .Pq object keys sorted, no insignificant whitespace, numbers kept as their original text; see Fn jugglerloop.CanonicalJSON No and Fn jugglerloop.ArgsDigest ,
 so a ledger entry and its traffic line are joinable without the ledger
 itself carrying the arguments.
-Append-only, uncapped, never read by the evaluator.
+Written within a run, truncated on the next; never read by the
+evaluator.
 A model API token or key is never among a tool's recorded arguments: it
 rides the model request, a wire this file never touches.
+Whatever secret a model's tool call DOES carry \(em a token pasted into
+a query, a password typed into a form-filling call \(em lands verbatim
+here, unfiltered: this file is as sensitive as the tool arguments
+themselves.
 Both
 .Cm juggler run Ap s
 and

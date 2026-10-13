@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -226,15 +227,14 @@ func RunAgent(ctx context.Context, deps AgentDeps, req AgentRequest) (AgentOutco
 		a.lockAcquireErr = lockErr
 	}
 
-	// traffic.jsonl (clown#255): one record per tool call, beside the
-	// agent's ringmaster spool (the ledger's own eventual home — SpoolPath
-	// is a pure, idempotent lookup, so resolving it now, before the loop,
-	// costs nothing and does not pre-empt writeSpool's own call in finish).
-	// Best-effort: a failure here is logged, not fatal.
-	if spoolPath, err := deps.Ringmaster.SpoolPath(ctx, a.target, a.job); err != nil {
-		a.logf("resolving the traffic file path (spool-path): %v", err)
-	} else {
-		a.traffic, a.trafficPath = openTrafficSink(trafficPathForSpool(spoolPath), a.logf)
+	// traffic.jsonl (clown#255): one record per tool call, in the agent's
+	// own state directory (clown#256 review's SpoolPath-based placement put
+	// it in ringmaster's journal directory, where a real ringmaster reads
+	// `*.jsonl` as a second job's journal — delta review finding 1). Keyed
+	// by principal, which RunAgent knows unconditionally from the brief,
+	// unlike a run key. Best-effort: a failure here is logged, not fatal.
+	if deps.AgentStateDir != "" {
+		a.traffic, a.trafficPath = openTrafficSink(filepath.Join(deps.AgentStateDir, "traffic.jsonl"), a.logf)
 	}
 
 	if deps.ResolveModel == nil {
@@ -492,8 +492,18 @@ func (a *agentRun) finish(state, message string, l jugglerloop.Ledger) AgentOutc
 	if a.lockAcquireErr != nil {
 		l.Notes = append(l.Notes, fmt.Sprintf("job lock not acquired (liveness reaper backstop unavailable for this run): %v", a.lockAcquireErr))
 	}
-	out := AgentOutcome{Job: a.job, State: state, Message: message, Ledger: l, TrafficPath: a.trafficPath}
 	a.traffic.close()
+	switch {
+	case a.traffic.hadError():
+		// clown#255 review finding 7: a mid-run write failure (or a failed
+		// close) is otherwise stderr-only, like a lost lock acquisition —
+		// an auditor should be able to see a run's traffic is incomplete
+		// from the ledger alone.
+		l.Notes = append(l.Notes, "traffic.jsonl had a write failure; some tool-call records may be missing")
+	case a.deps.AgentStateDir != "" && a.trafficPath == "":
+		l.Notes = append(l.Notes, "traffic.jsonl could not be opened; no tool-call arguments were recorded for this run")
+	}
+	out := AgentOutcome{Job: a.job, State: state, Message: message, Ledger: l, TrafficPath: a.trafficPath}
 	if doc, err := marshalDocument(l); err != nil {
 		a.logf("marshal ledger: %v", err)
 	} else if path, err := writeSpool(ctx, a.deps.Ringmaster, a.target, a.job, doc); err != nil {

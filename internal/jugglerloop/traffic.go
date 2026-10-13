@@ -8,13 +8,20 @@ import (
 )
 
 // ArgsDigest hashes args' canonical JSON encoding (CanonicalJSON; clown#255):
-// a sha256, hex-encoded, so two logically-equal argument documents — however
-// differently ordered or formatted — digest equal, and a one-byte change in
-// either digests differently. If args is not valid JSON at all (e.g.
-// truncated by a token limit; see validateToolArgs), CanonicalJSON cannot
-// run, so the raw bytes are hashed instead: a digest is still produced and
-// still deterministic, just not canonicalized — invalid JSON has no
-// canonical form to begin with.
+// a sha256, hex-encoded, so the same argument bytes — however differently
+// ordered or formatted — digest equal (see CanonicalJSON's own doc for what
+// "the same" does and does not cover), and a one-byte change digests
+// differently. If args is not valid JSON at all (e.g. truncated by a token
+// limit; see validateToolArgs), CanonicalJSON cannot run, so the raw bytes
+// are hashed instead: a digest is still produced and still deterministic,
+// just not canonicalized. Both of clown's codecs guarantee valid JSON today
+// (decodeOpenAIArguments re-quotes unparseable text as a JSON string;
+// argsOrEmptyObject covers a nil/empty Anthropic input), so this path is
+// unreachable in practice — kept so a future codec without that guarantee
+// still gets a digest on the LEDGER's call entry (this function's only
+// caller there), even though the corresponding TrafficRecord, carrying args
+// that would not themselves marshal as JSON, would still fail to encode and
+// get dropped (see trafficSink.onTraffic in internal/jugglerrun).
 func ArgsDigest(args json.RawMessage) string {
 	payload, err := CanonicalJSON(args)
 	if err != nil {

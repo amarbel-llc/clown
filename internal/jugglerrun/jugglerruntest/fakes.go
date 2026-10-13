@@ -146,15 +146,7 @@ func (f *Fakes) Jobs(t testing.TB, target string) []string {
 	paths, _ := filepath.Glob(filepath.Join(f.Dir, "rm", target, "*.jsonl"))
 	var out []string
 	for _, p := range paths {
-		name := filepath.Base(p)
-		if strings.HasSuffix(name, ".traffic.jsonl") {
-			// A job's traffic.jsonl (clown#255) lives beside its journal in
-			// the same directory, derived from the spool path the same way
-			// ringmaster's own lock-file convention derives from it — not a
-			// second job.
-			continue
-		}
-		out = append(out, strings.TrimSuffix(name, ".jsonl"))
+		out = append(out, strings.TrimSuffix(filepath.Base(p), ".jsonl"))
 	}
 	return out
 }

@@ -27,9 +27,14 @@ const RecordSchema = 1
 //	<root>/runs/<run-key>/children/<digest>.json     ChildRecord
 //	<root>/runs/<run-key>/children/<digest>.brief.toml   the staged brief
 //	<root>/exit-wakes/<job>                          sent-wake marker
+//	<root>/agents/<principal>/                       an agent's own state (moxy CWD)
+//	<root>/agents/<principal>/traffic.jsonl          clown#255
 //
 // The run key and the brief digest are the idempotency keys of `juggler
-// spawn --new-run` and `juggler spawn --brief` respectively.
+// spawn --new-run` and `juggler spawn --brief` respectively. An agent's own
+// directory is keyed by principal (a fresh UUID per agent, FDR 0032 D1),
+// not by run key or job: `juggler run` knows its own principal unconditionally
+// from the brief, but not its run key, and a run can have many agent jobs.
 type Store struct {
 	Root string
 }
@@ -60,6 +65,18 @@ func (s Store) stagedBriefPath(key, digest string) string {
 	return filepath.Join(s.childrenDir(key), digestFileName(digest)+".brief.toml")
 }
 func (s Store) wakeMarkerPath(job string) string { return filepath.Join(s.Root, "exit-wakes", job) }
+
+// AgentStateDir is an agent's own per-principal state directory, the moxy
+// CWD: <root>/agents/<principal>.
+func (s Store) AgentStateDir(principal string) string {
+	return filepath.Join(s.Root, "agents", principal)
+}
+
+// TrafficPath is traffic.jsonl's path for principal (clown#255): beside the
+// rest of the agent's own state, keyed the same way.
+func (s Store) TrafficPath(principal string) string {
+	return filepath.Join(s.AgentStateDir(principal), "traffic.jsonl")
+}
 
 // stagedParentMoxyfilePath is a child's parent reference (the spawner's
 // effective moxyfile); stagedChildMoxyfilePath the brief's moxyfile as
