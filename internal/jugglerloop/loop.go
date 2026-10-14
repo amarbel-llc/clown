@@ -101,6 +101,14 @@ type run struct {
 	transcript Transcript
 	ledger     Ledger
 	kinds      map[string]string
+	// offered is the exact set of names sent to the model this run (cfg.Tools
+	// plus the injected cannot_complete), the same set toolsWithCannotComplete
+	// builds for the wire request: a call for any other name is refused
+	// before Exec.Call (clown#261). Neither codec renames a tool between
+	// advertising it and decoding a tool_use/tool_call back (verified by
+	// reading openaicompat.go and anthropic.go: both send and parse t.Name
+	// verbatim), so this is also exactly what the model was shown.
+	offered    map[string]struct{}
 	lastTurnID string
 	start      time.Time
 }
@@ -126,6 +134,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		transcript: Transcript{Schema: TranscriptSchema, Turns: []Turn{}},
 		ledger:     newLedger(),
 		kinds:      map[string]string{},
+		offered:    map[string]struct{}{},
 		lastTurnID: cfg.BriefTurnID,
 		start:      start,
 	}
@@ -134,6 +143,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		if t.Kind != "" {
 			r.kinds[t.Name] = t.Kind
 		}
+		r.offered[t.Name] = struct{}{}
 	}
 
 	end, runErr := r.loop(runCtx, tools)
@@ -300,6 +310,21 @@ func (r *run) execute(ctx context.Context, callTurn Turn) (end EndReason, done b
 	entry := LedgerCall{Tool: call.Name, URIs: []string{}, ArgsDigest: ArgsDigest(call.Args)}
 	if kind, ok := r.kinds[call.Name]; ok {
 		entry.Kind = &kind
+	}
+
+	if _, ok := r.offered[call.Name]; !ok {
+		// A tool the brief's allowlist never offered: a hallucinated or
+		// prompt-injected name. The model can recover (its next reply can
+		// call something it was actually offered), so the executor is never
+		// reached and the run goes on, exactly like an invalid-arguments
+		// call below (clown#261).
+		content, _ := json.Marshal(map[string]string{"error": "tool not offered to the model"})
+		result := ToolResult{CallID: call.CallID, OK: false, Content: content}
+		entry.Error = toolResultText(result)
+		r.ledger.Calls = append(r.ledger.Calls, entry)
+		t := r.append(ToolResultBody(result), callTurn.ID)
+		r.traffic(entry, call.Args, len(content), false, t.At)
+		return "", false
 	}
 
 	if argsErr := validateToolArgs(call.Args); argsErr != nil {

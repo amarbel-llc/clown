@@ -643,6 +643,35 @@ moxyfile sets `allow-tools`, every `tools` entry must be covered by it
 template), checked at brief parse; when it does not, `tools` is
 unchecked against it.
 
+**`tools` is enforced, not just advertised (clown#261).** The loop
+offers the model exactly `tools`, and refuses, at call time, any name
+the model emits that is not in it — a hallucinated or prompt-injected
+call gets a tool_result error and the run continues, never reaching
+the executor. `restart`, `batch` and `async` — moxy's own builtin meta
+tools, bare names under any serving template — may never appear in
+`tools`, nor in the brief's own moxyfile `allow-tools`
+(`Brief.Validate` refuses both): `restart` could reload a rewritten
+moxyfile, and `batch`/`async` let a nested sub-call bypass this same
+filter, bounded only by moxy's own `allow-tools`.
+
+**`allow-tools` is always derived from `tools` (clown#261), not merely
+recommended.** The agent's own moxyfile always carries `allow-tools`
+set to the canonical `server.tool` form of `tools` (resolved via `moxy
+render --resolve`, independent of the `{server}_{tool}` serving
+template — writing the rendered juggler name there directly would be
+read as a bare, nonexistent server, silently allowing nothing),
+**always overriding** whatever the brief's own moxyfile set for
+`allow-tools`: `Brief.Validate` already guarantees a brief-set
+`allow-tools` covers every `tools` entry, so overriding is never wider
+than what the brief itself claimed. Every other key — `pass-tools`
+above all, also `disable-moxins`, `[[servers]]`, `[credentials]`, ... —
+is kept as the brief wrote it; a `pass-tools` entry that would collide
+with the derived `allow-tools` is refused at parse (moxy#459: a tool
+is held at one level, use or pass). moxy therefore enforces the exact
+same toolset as the loop even if the loop's own filter regresses. A
+`tools` entry `moxy render` cannot resolve refuses the spawn before
+anything is minted, naming the tool.
+
 **`pass-tools` (moxy#459).** moxy holds every tool at one of three
 levels, in order: `none`, `pass`, `use`. `allow-tools` names the tools
 held at `use` (servable, callable); `pass-tools` names a tool held at
@@ -661,34 +690,31 @@ allowlist and the child sets none at all, the violation is instead
 pass-tools (a parent with `pass-tools` always has an allowlist, so its
 child always sets one too, if only `[]` beside the tools it passes on).
 
-**Escalation note (moxy#461).** moxy documents an open risk: a session
-able to rewrite its own moxyfile and then call moxy's own `restart`
-tool can widen its own tool access, because moxy's reload check
-validates only against the *parent* reference pinned at spawn. A
-brief's `tools` is **not** the gate here: it only filters what is
-*advertised* to the model (`FilterToolsToAllowlist`,
-`internal/jugglerrun/agent.go`), while the loop forwards whatever tool
-name the model actually emits straight to moxy
-(`internal/jugglerloop/loop.go`) with no re-check against `tools` —
-that gap is tracked separately, clown#261. moxy's own `allow-tools` is
-the real gate. Stock briefs set no `allow-tools` at all, and with no
-allowlist moxy holds every tool — including its own `restart` — at
-`use` already, so pass-to-use is moot there: nothing is held below
-`use` to escalate from. The narrower claim does hold once a spawner's
-own moxyfile sets `pass-tools`: moxy refuses to load `pass-tools`
-without an `allow-tools` beside it, so such a spawner's child always
-sets one too, and `restart` is then reachable only if that child's own
-brief names it. The agent's own moxyfile IS writable by itself today —
-it is written to `<AgentStateDir>/moxyfile`
-(`internal/jugglerrun/toolplane.go`), which is moxy's own CWD, and
-`AgentStateDir`'s own doc comment (`internal/jugglerrun/store.go`) says
-plainly that "folio-style tools auto-allow writes inside CWD" — so an
-agent holding an ordinary file-write tool can rewrite it. And the
-actual reach, once that holds, is wider than one tool's pass-to-use
-step: because the reload check only bounds the agent to the pinned
-spawner reference as a whole, a rewrite-then-`restart` can widen the
-agent up to the *spawner's entire* `allow-tools ∪ pass-tools` set, not
-just the one tool it started at `pass`.
+**Escalation note (moxy#461): closed for juggler by clown#261.** moxy
+documents an open risk: a session able to rewrite its own moxyfile and
+then call moxy's own `restart` tool can widen its own tool access,
+because moxy's reload check validates only against the *parent*
+reference pinned at spawn. The gap this originally relied on — a
+brief's `tools` was *not* a call-time gate, only advertisement
+(`FilterToolsToAllowlist`, `internal/jugglerrun/agent.go`), while the
+loop forwarded whatever name the model emitted straight to moxy
+(`internal/jugglerloop/loop.go`) with no re-check — is now closed: the
+loop refuses any call for a name outside `tools`, and `Brief.Validate`
+refuses `restart` (and `batch`/`async`) from ever appearing in `tools`
+or the brief's own `allow-tools` at all. The agent's own moxyfile IS
+still writable by itself today — it is written to
+`<AgentStateDir>/moxyfile` (`internal/jugglerrun/toolplane.go`), which
+is moxy's own CWD, and `AgentStateDir`'s own doc comment
+(`internal/jugglerrun/store.go`) says plainly that "folio-style tools
+auto-allow writes inside CWD" — so an agent holding an ordinary
+file-write tool can still rewrite it and trigger a moxy reload that
+widens moxy's own permissions up to the spawner's whole set. But that
+no longer matters for this escalation specifically: `restart` can
+never be a name the model is offered, and the loop's call-time filter
+refuses it regardless of what moxy itself would now allow after such a
+reload — the attack needs the model to actually emit the call, and
+that path is closed. moxy's own general risk for a non-juggler client
+remains moxy's own open issue, out of scope here.
 
 Headless posture: any moxy permission tier other than `always-allow`
 resolves to **deny** for a juggler agent; the agent sees the denial as a
@@ -735,9 +761,11 @@ same user's global moxins, not a brief's choice.
 **Allowlist, not deny-list.** moxyfile narrowing is additive deny-lists
 (`disable-moxins`, `disable-servers`), which fail OPEN when a tool is
 added to a moxin later. The brief's REQUIRED `tools` allowlist, enforced
-by `juggler run` before the model sees any tool, is what makes "anything
-not explicitly allowed is denied" true for the first bullet; the
-moxy-side narrowing check (above) is the second, authoritative layer.
+by `juggler run` both in what it offers the model and, at call time, in
+what it will actually execute (clown#261), is what makes "anything not
+explicitly allowed is denied" true for the first bullet; the moxy-side
+narrowing check and the always-derived `allow-tools` (above) are the
+second, authoritative layer.
 
 ### 6. Lifecycle — ringmaster enforces, troupe authorises
 
@@ -1378,7 +1406,7 @@ The router, before any subagent exists:
 | default step cap | 12 (loop-enforced) | circus FDR-0039's first-bullet figure; the agents make 2–4 tool calls, the cap is headroom | real briefs routinely hit it |
 | default wall clock | 2 min (loop primary, `RuntimeMaxSec` backstop) | circus FDR-0039's first-bullet figure; matches `juggler prompt`'s budget | agents time out while a tool is legitimately slow |
 | spend control | one dedicated OpenRouter key per spawner with a hard monthly credit limit (circus: ~$10 to start) | smallest thing that bounds blast radius | per-child budgets are wanted: the spawner mints a child key carrying a subset of its own budget (OpenRouter key minting), which is FDR 0032 D19's spend quota — an ambient, monotone, drop-only right inherited at spawn as a subset of the parent's, with the provider as the enforcement point — made concrete. Not D13's `cap`, which is the right to shorten a child's lifetime (D5). The key goes in the brief as a credential reference, not a secret |
-| brief `allow-tools` | not required; when set, it must cover every `tools` entry. A brief may also set `pass-tools` (moxy#459) to confer a tool it does not call itself; both are checked against the spawner's `allow-tools ∪ pass-tools` union | `allow-tools` is moxy's own allowlist and what the narrowing check compares; generating it is a policy decision. Briefs SHOULD set it | a later slice may derive it from `tools` (e.g. once every brief sets it by hand anyway) |
+| brief `allow-tools` | not required; when set, it must cover every `tools` entry (and is overridden anyway: the agent's own moxyfile always carries `allow-tools` derived from `tools`, clown#261). A brief may also set `pass-tools` (moxy#459) to confer a tool it does not call itself; both are checked against the spawner's `allow-tools ∪ pass-tools` union | `allow-tools` is moxy's own allowlist and what the narrowing check compares; juggler now derives it so every agent's moxy enforces exactly `tools`, with no brief-author footgun | none expected; a brief's own `allow-tools` is vestigial now beyond the parse-time coverage check |
 | early stop on evaluator pass | off by default (`evaluator.stop_on_pass = true` opts in per brief) | an agent that keeps calling tools after the work is done spends steps and may duplicate artifacts, but stopping early is a behaviour change a brief author should choose | most briefs set it (→ make it the default) |
 | evaluator kinds | `jq` only | smallest signed-contract surface | the same count-of-kind jq appears in most briefs (→ `predicate`) or a task needs judgement (→ `agent`) |
 | headless permission posture | non-`always-allow` → deny | no human to ask | a moxin's tier is `ask` only because nobody set it, and agents keep failing on it |

@@ -519,8 +519,25 @@ func SpawnChild(ctx context.Context, deps LifecycleDeps, req SpawnRequest) (rec 
 	rec.MoxinPath = req.MoxinPath
 	wallClock, _ := brief.Limits.WallClockDuration()
 
+	// clown#261 point 3: the agent's own moxyfile always carries allow-tools
+	// derived from the brief's tools, not the brief's own moxyfile verbatim
+	// — computed once here and used both as the narrowing check's staged
+	// child (below) and, independently, by the unit's own `juggler run` once
+	// it starts (agent.go calls the same DeriveAgentMoxyfile from the same,
+	// unmodified staged brief).
+	agentMoxyfile, err := DeriveAgentMoxyfile(ctx, deps.MoxyCLI, moxyEnv(req.MoxinPath), MoxyNameTemplate, brief)
+	if err != nil {
+		var unresolved *ErrToolResolution
+		if errors.As(err, &unresolved) {
+			if lerr := appendRunLedgerLocked(deps.Store, run.RunKey, ToolResolutionRefusalEntry(unresolved)); lerr != nil {
+				err = fmt.Errorf("%w (recording the refusal also failed: %v)", err, lerr)
+			}
+		}
+		return nil, false, err
+	}
+
 	var undo undoStack
-	if err := checkBriefNarrows(ctx, deps, req, rec, brief.Moxyfile, &undo); err != nil {
+	if err := checkBriefNarrows(ctx, deps, req, rec, agentMoxyfile, &undo); err != nil {
 		var widens *ErrBriefWidens
 		if errors.As(err, &widens) {
 			if lerr := appendRunLedgerLocked(deps.Store, run.RunKey, NarrowsRefusalEntry(widens.result)); lerr != nil {

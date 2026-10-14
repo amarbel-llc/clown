@@ -674,7 +674,11 @@ func knobExists(dir, name string) bool {
 // with FakePassToolsViolations (either as lines, or the --json form; with
 // fail/moxy-narrows-nojson too, the --json form is unparseable),
 // fail/moxy-narrows-broken exits 2 with a reason on stderr. Both verbs
-// check their path arguments exist.
+// check their path arguments exist. render (clown#261 point 3,
+// DeriveAgentMoxyfile) implements only --resolve, splitting on the first
+// "_" the way real moxy's structural inverse does for an invertible
+// "{server}_{tool}" template; fail/moxy-render-unresolvable forces the
+// not-invertible failure instead.
 func fakeMoxyCLI(dir string, args []string) int {
 	if len(args) == 0 {
 		return 2
@@ -728,6 +732,29 @@ func fakeMoxyCLI(dir string, args []string) int {
 		if fl["json"] == "true" {
 			fmt.Println(`{"narrows":true,"violations":[]}`)
 		}
+		return 0
+	case "render":
+		// The fake implements only the reverse direction (--resolve), the
+		// one DeriveAgentMoxyfile (clown#261 point 3) uses: real moxy's own
+		// structural inverse for an invertible template splits on the
+		// FIRST occurrence of the literal separator (server non-greedy,
+		// tool greedy, moxy's naming.go buildInverse) — exactly what
+		// strings.Cut on "_" gives for juggler's own "{server}_{tool}".
+		resolve := fl["resolve"]
+		if resolve == "" {
+			fmt.Fprintln(os.Stderr, "moxy render: fake implements --resolve only")
+			return 2
+		}
+		if failKnob(dir, "moxy-render-unresolvable") {
+			fmt.Fprintf(os.Stderr, "moxy render: %q is not invertible\n", resolve)
+			return 2
+		}
+		server, tool, ok := strings.Cut(resolve, "_")
+		if !ok {
+			fmt.Fprintf(os.Stderr, "moxy render: %q is not invertible\n", resolve)
+			return 2
+		}
+		fmt.Printf("%s\t%s\n", server, tool)
 		return 0
 	}
 	fmt.Fprintf(os.Stderr, "fake moxy: unknown verb %q\n", args[0])

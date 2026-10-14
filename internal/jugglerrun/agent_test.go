@@ -257,9 +257,12 @@ func TestRunAgent_LaunchesMoxyFromTheMoxyfile(t *testing.T) {
 	if err != nil || out.State != StateSucceeded {
 		t.Fatalf("outcome = %+v, err = %v", out, err)
 	}
+	// clown#261 point 3: the written moxyfile is no longer the brief's raw
+	// "# narrowed to ring" comment verbatim — it is the derived one, with
+	// allow-tools always set from the brief's tools.
 	written, err := os.ReadFile(deps.AgentStateDir + "/moxyfile")
-	if err != nil || string(written) != "# narrowed to ring" {
-		t.Errorf("agent moxyfile = %q (%v)", written, err)
+	if err != nil || !strings.Contains(string(written), `allow-tools = ["ring.create_issue"]`) {
+		t.Errorf("agent moxyfile = %q (%v), want derived allow-tools", written, err)
 	}
 	logged, _ := os.ReadFile(log)
 	want := []string{"cwd=" + deps.AgentStateDir, "arg=serve-http", "arg=--name-template", "arg={server}_{tool}", "sid=\n", "moxyfile=yes"}

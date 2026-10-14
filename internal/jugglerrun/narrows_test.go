@@ -42,8 +42,9 @@ func TestSpawnChild_NarrowingBriefIsSpawnedUnderItsParentReference(t *testing.T)
 	}
 
 	moxy := h.fakes.Calls(t, "moxy")
-	if len(moxy) != 2 || strings.Join(moxy[0].Argv, " ") != "show-effective-moxyfile --dir /spawner/cwd" ||
-		moxy[0].Env["MOXIN_PATH"] != "/spawner/moxins" || moxy[1].Argv[0] != "narrows" {
+	if len(moxy) != 3 || moxy[0].Argv[0] != "render" ||
+		strings.Join(moxy[1].Argv, " ") != "show-effective-moxyfile --dir /spawner/cwd" ||
+		moxy[1].Env["MOXIN_PATH"] != "/spawner/moxins" || moxy[2].Argv[0] != "narrows" {
 		t.Fatalf("moxy calls = %+v", moxy)
 	}
 	for _, c := range moxy {
@@ -59,7 +60,7 @@ func TestSpawnChild_NarrowingBriefIsSpawnedUnderItsParentReference(t *testing.T)
 	if tail := strings.Join(argv[len(argv)-2:], " "); tail != "--moxy "+rec.MoxyBin || !filepath.IsAbs(rec.MoxyBin) {
 		t.Errorf("the unit must serve with the checking moxy %q: argv tail %q", rec.MoxyBin, tail)
 	}
-	if got := strings.Join(moxy[1].Argv, " "); got != "narrows --parent "+rec.ParentMoxyfile+" --child "+h.deps.Store.stagedChildMoxyfilePath("rec-42", rec.BriefDigest) {
+	if got := strings.Join(moxy[2].Argv, " "); got != "narrows --parent "+rec.ParentMoxyfile+" --child "+h.deps.Store.stagedChildMoxyfilePath("rec-42", rec.BriefDigest) {
 		t.Errorf("narrows argv = %q", got)
 	}
 	parent, err := os.ReadFile(rec.ParentMoxyfile)

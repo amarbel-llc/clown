@@ -234,6 +234,7 @@ func cmdRun(ctx context.Context, resolve func(context.Context, string) (rm.Resol
 			HTTPClient:     httpClient,
 			Stderr:         stderr,
 			Moxy:           jr.ExecMoxy{Bin: resolveBin(moxyBin, jr.MoxyBinEnv, MoxyPath, "moxy"), Stderr: stderr},
+			MoxyCLI:        jr.ExecMoxyCLI{Bin: resolveBin(moxyBin, jr.MoxyBinEnv, MoxyPath, "moxy")},
 			AgentStateDir:  deps.Store.AgentStateDir(brief.Principal),
 			TrafficPath:    deps.Store.TrafficPath,
 			AcquireJobLock: jobwake.AcquireJobLock,

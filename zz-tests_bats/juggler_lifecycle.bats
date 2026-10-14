@@ -1119,6 +1119,52 @@ EOF
     and .calls[0].uris == ["https://forge.test/o/r/issues/7"]' "$(field .ledger)" >/dev/null
 }
 
+@test "run: a tool call the brief never offered is refused and ledgered, never reaching moxy (clown#261)" {
+  local agent_dir="$BATS_TEST_TMPDIR/agent"
+  mkdir -p "$agent_dir"
+  local bogus='{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"c1","type":"function","function":{"name":"ring_delete_repo","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}'
+  printf '[%s,{"choices":[{"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}]}]' "$bogus" >"$agent_dir/replies.json"
+  printf '%s' '[{"name":"ring_create_issue","inputSchema":{"type":"object"},"_meta":{"kind":"issue"}}]' >"$agent_dir/tools.json"
+  printf '%s' '{"content":[{"type":"text","text":"should never be reached"}],"isError":false}' >"$agent_dir/call-result.json"
+  "$FAKE_PLATFORM_BIN" serve-agent --dir "$agent_dir" >"$agent_dir/server.log" 2>&1 &
+  local pid=$!
+  wait_for_file "$agent_dir/port" 5
+  local port
+  port=$(<"$agent_dir/port")
+
+  local models="$BATS_TEST_TMPDIR/models.toml"
+  cat "$JUGGLER_MODELS_PATH" >"$models"
+  printf '\n[[model]]\nname = "agent"\nstyle = "openai-compat"\nurl = "http://127.0.0.1:%s/v1"\ntoken = "tok-agent"\n' "$port" >>"$models"
+  cat >"$agent_dir/brief.toml" <<'EOF'
+schema = 1
+principal = "agent-unoffered"
+parent = "root-unoffered"
+room = "room-unoffered@rooms.test"
+model = "agent"
+system = "You file one issue."
+task = "file it"
+tools = ["ring_create_issue"]
+
+[evaluator]
+kind = "jq"
+program = ".cannot_complete == null"
+
+[limits]
+steps = 4
+wall_clock = "20s"
+EOF
+
+  run_jug_env "JUGGLER_MODELS_PATH=$models" -- run --brief "$agent_dir/brief.toml" --moxy-url "http://127.0.0.1:$port/mcp"
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  expect_status 0
+  [[ $(field .state) == succeeded ]]
+  # The refused call never became a tools/call request at all.
+  [[ ! -f $agent_dir/mcp-tool-calls ]]
+  jq -e '(.calls | length) == 1 and .calls[0].tool == "ring_delete_repo" and .calls[0].ok == false
+    and (.calls[0].error | contains("tool not offered"))' "$(field .ledger)" >/dev/null
+}
+
 @test "run: a blobbed read-only listing before the create leaves only the create's artifacts (clown#253)" {
   local agent_dir="$BATS_TEST_TMPDIR/agent"
   mkdir -p "$agent_dir"

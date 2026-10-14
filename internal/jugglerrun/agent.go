@@ -57,6 +57,12 @@ type AgentDeps struct {
 	// Moxy launches the agent's moxy from the brief's moxyfile when no
 	// upstream URL is handed in.
 	Moxy ToolPlaneLauncher
+	// MoxyCLI resolves a brief's tools entries to their canonical
+	// "server.tool" name for the agent's own derived allow-tools
+	// (clown#261 point 3, DeriveAgentMoxyfile), when Moxy itself is used
+	// (MoxyURL unset). Defaults to a stand-in that refuses every call,
+	// never silently falling back to something unsafe.
+	MoxyCLI MoxyCLI
 	// AgentStateDir is the agent's own state directory (the moxy CWD).
 	AgentStateDir string
 	// TrafficPath, when set, returns traffic.jsonl's path for one agent job
@@ -102,6 +108,9 @@ func (d AgentDeps) withDefaults() AgentDeps {
 	}
 	if d.AcquireJobLock == nil {
 		d.AcquireJobLock = func(string, string) (func() error, error) { return func() error { return nil }, nil }
+	}
+	if d.MoxyCLI == nil {
+		d.MoxyCLI = missingMoxyCLI{}
 	}
 	return d
 }
@@ -280,7 +289,20 @@ func RunAgent(ctx context.Context, deps AgentDeps, req AgentRequest) (AgentOutco
 		if deps.Moxy == nil || deps.AgentStateDir == "" {
 			return a.finishWithoutLoop(jugglerloop.EndToolError, "tool_error: no moxy launcher or agent state dir configured"), nil
 		}
-		url, stop, err := deps.Moxy.Launch(ctx, deps.AgentStateDir, b.Moxyfile, b.Env)
+		// clown#261 point 3: the agent's own moxyfile always carries
+		// allow-tools derived from the brief's tools, computed once here —
+		// spawn.go's checkBriefNarrows computes the same thing,
+		// independently, from the same unmodified staged brief, for the
+		// narrowing check's own staged child, so what was narrowing-checked
+		// and what is actually loaded agree (a bare `juggler run --brief`
+		// with no spawn reaches this same derivation, the only such path).
+		agentMoxyfile, err := DeriveAgentMoxyfile(ctx, deps.MoxyCLI, nil, MoxyNameTemplate, b)
+		if err != nil {
+			out := a.finishWithoutLoop(jugglerloop.EndToolError, "config: "+err.Error())
+			out.ConfigError = true
+			return out, nil
+		}
+		url, stop, err := deps.Moxy.Launch(ctx, deps.AgentStateDir, agentMoxyfile, b.Env)
 		if err != nil {
 			return a.finishWithoutLoop(jugglerloop.EndToolError, "tool_error: launching moxy: "+err.Error()), nil
 		}

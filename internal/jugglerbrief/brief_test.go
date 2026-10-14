@@ -121,6 +121,52 @@ func TestToolsMustBeCoveredByAllowTools(t *testing.T) {
 	}
 }
 
+// clown#261 point 2: restart/batch/async are moxy's own builtin meta tools
+// (no owning server, so they keep their bare literal name under any
+// --name-template); a brief may name none of them, in tools or in its
+// moxyfile's own allow-tools.
+func TestNoReservedMetaTools(t *testing.T) {
+	withTools := func(tools string) string {
+		return strings.Replace(issueFilerBrief, `tools = ["smith_list_repos", "smith_create_issue"]`, "tools = "+tools, 1)
+	}
+	withAllow := func(allow string) string {
+		return strings.Replace(issueFilerBrief, "moxyfile  = '''\n", "moxyfile  = '''\nallow-tools = "+allow+"\n", 1)
+	}
+	for _, tool := range []string{"restart", "batch", "async"} {
+		if _, err := Parse([]byte(withTools(`["smith_list_repos", "` + tool + `"]`))); err == nil {
+			t.Errorf("tools including %q: want an error, got none", tool)
+		} else if !strings.Contains(err.Error(), "tools") || !strings.Contains(err.Error(), tool) {
+			t.Errorf("tools including %q: error must name tools and the tool: %v", tool, err)
+		}
+		if _, err := Parse([]byte(withAllow(`["smith", "` + tool + `"]`))); err == nil {
+			t.Errorf("allow-tools including %q: want an error, got none", tool)
+		} else if !strings.Contains(err.Error(), "allow-tools") || !strings.Contains(err.Error(), tool) {
+			t.Errorf("allow-tools including %q: error must name allow-tools and the tool: %v", tool, err)
+		}
+	}
+	if _, err := Parse([]byte(issueFilerBrief)); err != nil {
+		t.Errorf("a brief naming no reserved meta tool must parse: %v", err)
+	}
+}
+
+// clown#261 point 3: a brief whose moxyfile holds a tools entry at pass
+// (as well as, redundantly, at use) is refused at Validate rather than left
+// to fail at moxy's own load time once juggler derives allow-tools from
+// tools (moxy#459: a tool is held at one level, use or pass).
+func TestPassToolsMustNotCoverTools(t *testing.T) {
+	withMoxyfile := func(lines string) string {
+		return strings.Replace(issueFilerBrief, "moxyfile  = '''\n", "moxyfile  = '''\n"+lines, 1)
+	}
+	if _, err := Parse([]byte(withMoxyfile("allow-tools = [\"smith\"]\npass-tools = [\"smith.list_repos\"]\n"))); err == nil {
+		t.Error("pass-tools covering a tools entry: want an error, got none")
+	} else if !strings.Contains(err.Error(), "pass-tools") || !strings.Contains(err.Error(), "smith_list_repos") {
+		t.Errorf("error must name pass-tools and the covered tools entry: %v", err)
+	}
+	if _, err := Parse([]byte(withMoxyfile("allow-tools = [\"smith\"]\npass-tools = [\"other.tool\"]\n"))); err != nil {
+		t.Errorf("pass-tools covering an unrelated tool must parse: %v", err)
+	}
+}
+
 func TestStopOnPassRoundTrips(t *testing.T) {
 	b, err := Parse([]byte(issueFilerBrief))
 	if err != nil {

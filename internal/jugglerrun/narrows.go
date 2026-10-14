@@ -46,6 +46,14 @@ type MoxyCLI interface {
 	// Narrows runs `moxy narrows --parent parent --child child`. A returned
 	// error is exit 2 (or no exit at all): the check could not be made.
 	Narrows(ctx context.Context, env []string, parent, child string) (NarrowsResult, error)
+	// ResolveToolName runs `moxy render --name-template nameTemplate
+	// --resolve rendered`, moxy's own structural inverse of a tool name
+	// under the given serving template (clown#261 point 3): the canonical
+	// server/tool pair, independent of juggler's own underscore convention.
+	// A returned error means rendered could not be resolved (a non-zero
+	// exit, or output with no tab-separated server/tool half) — never
+	// guessed at by the caller.
+	ResolveToolName(ctx context.Context, env []string, nameTemplate, rendered string) (server, tool string, err error)
 }
 
 // ExecMoxyCLI shells the moxy binary. Argv shapes:
@@ -102,6 +110,23 @@ func (m ExecMoxyCLI) Narrows(ctx context.Context, env []string, parent, child st
 	return res, nil
 }
 
+func (m ExecMoxyCLI) ResolveToolName(ctx context.Context, env []string, nameTemplate, rendered string) (string, string, error) {
+	argv := []string{m.Bin, "render", "--name-template", nameTemplate, "--resolve", rendered}
+	out, err := runCommand(ctx, Command{Argv: argv, Env: env})
+	if err != nil {
+		var ce *CommandError
+		if errors.As(err, &ce) && ce.ExitCode == -1 {
+			return "", "", fmt.Errorf("the moxyfile narrowing check needs moxy, and %q could not be run (set --moxy or $%s): %w", m.Bin, MoxyBinEnv, err)
+		}
+		return "", "", fmt.Errorf("resolving %q: %w", rendered, err)
+	}
+	server, tool, ok := strings.Cut(strings.TrimRight(string(out), "\n"), "\t")
+	if !ok || server == "" || tool == "" {
+		return "", "", fmt.Errorf("resolving %q: %s printed %q, want a tab-separated \"server\\ttool\"", rendered, m.Bin, out)
+	}
+	return server, tool, nil
+}
+
 // missingMoxyCLI stands in when LifecycleDeps names no MoxyCLI: the check
 // never silently passes.
 type missingMoxyCLI struct{}
@@ -116,6 +141,10 @@ func (missingMoxyCLI) ShowEffectiveMoxyfile(context.Context, []string, string) (
 
 func (missingMoxyCLI) Narrows(context.Context, []string, string, string) (NarrowsResult, error) {
 	return NarrowsResult{}, errNoMoxyCLI
+}
+
+func (missingMoxyCLI) ResolveToolName(context.Context, []string, string, string) (string, string, error) {
+	return "", "", errNoMoxyCLI
 }
 
 // ErrBriefWidens is a `spawn --brief` refusal: the brief's moxyfile widens

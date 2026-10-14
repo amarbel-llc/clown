@@ -103,6 +103,13 @@ func serveAgent(args []string) int {
 	}))
 	defaultCallResult := string(read("call-result.json"))
 	mux.Handle("/mcp", jugglerruntest.MCPHandlerPerTool(string(read("tools.json")), func(tool string) string {
+		// clown#261: lets a bats case assert the loop's call-time offered-tool
+		// filter kept an unoffered call from ever reaching here at all, not
+		// just that its ledger entry looks like a refusal.
+		if f, err := os.OpenFile(filepath.Join(*dir, "mcp-tool-calls"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644); err == nil {
+			_, _ = f.WriteString(tool + "\n")
+			_ = f.Close()
+		}
 		if b, err := os.ReadFile(filepath.Join(*dir, "call-result."+tool+".json")); err == nil {
 			return string(b)
 		}

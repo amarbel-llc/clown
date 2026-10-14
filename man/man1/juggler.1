@@ -846,6 +846,33 @@ every
 entry must be covered by it
 .Pq a bare name covers Ql <name>_* , No a dotted Ql server.tool No covers Ql server_tool ;
 otherwise the brief is rejected at parse.
+.Ql restart ,
+.Ql batch
+and
+.Ql async
+\(em moxy's own builtin meta tools \(em may never appear in
+.Ql tools
+or
+.Ql allow-tools
+at all, rejected at parse the same way
+.Pq Em clown#261 .
+The agent's own moxyfile always carries
+.Ql allow-tools
+derived from
+.Ql tools ,
+in moxy's own canonical
+.Ql server.tool
+form, overriding whatever the brief's own moxyfile set for it; a
+.Ql tools
+entry
+.Ql moxy render
+cannot resolve refuses the spawn before anything is minted, naming the
+tool.
+.Cm juggler run
+itself also refuses, at call time, any tool name the model emits
+outside
+.Ql tools ,
+never reaching the executor.
 .Pp
 The child's principal and JID are minted; in a room the run created,
 the root then admits the JID

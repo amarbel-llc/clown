@@ -279,7 +279,13 @@ func (b *Brief) validate(template bool) error {
 		}
 		seen[t] = true
 	}
+	if err := checkNoReservedMetaTools(b.Tools, b.Moxyfile); err != nil {
+		return err
+	}
 	if err := checkToolsCoveredByAllowTools(b.Tools, b.Moxyfile); err != nil {
+		return err
+	}
+	if err := checkPassToolsDoNotCoverTools(b.Tools, b.Moxyfile); err != nil {
 		return err
 	}
 	for k := range b.Env {
@@ -315,12 +321,67 @@ func (b *Brief) validate(template bool) error {
 	return nil
 }
 
+// reservedMetaTools are moxy's own builtin meta tools: no owning server, so
+// they render under their bare literal name regardless of name template
+// (verified against moxy's own naming tests, nametemplate_test.go and
+// toolallow_test.go: "restart"/"batch"/"async" never gain an underscore
+// prefix). A brief may not list any of them, in `tools` or in its moxyfile's
+// `allow-tools` (clown#261 point 2): `restart` lets a tool-reachable agent
+// (its own moxyfile is writable, moxy#461) reload a rewritten moxyfile and
+// widen itself up to the spawner's whole set; `batch` and `async` let a
+// single offered call make further, nested sub-calls the loop's own
+// call-time filter (clown#261 point 1) never sees — bounded only by moxy's
+// own allow-tools, which is why point 3 (deriving it from `tools`) matters.
+var reservedMetaTools = map[string]bool{
+	"restart": true,
+	"batch":   true,
+	"async":   true,
+}
+
+// checkNoReservedMetaTools rejects a reservedMetaTools entry in tools or in
+// the moxyfile's allow-tools, when the moxyfile sets one.
+func checkNoReservedMetaTools(tools []string, moxyfile string) error {
+	for _, t := range tools {
+		if reservedMetaTools[t] {
+			return fmt.Errorf("jugglerbrief: tools: %q is a moxy builtin meta tool and must not be listed (clown#261)", t)
+		}
+	}
+	if strings.TrimSpace(moxyfile) == "" {
+		return nil
+	}
+	var doc struct {
+		AllowTools *[]string `toml:"allow-tools"`
+	}
+	if _, err := toml.Decode(moxyfile, &doc); err != nil {
+		return fmt.Errorf("jugglerbrief: moxyfile: not valid TOML: %w", err)
+	}
+	if doc.AllowTools == nil {
+		return nil
+	}
+	for _, a := range *doc.AllowTools {
+		if reservedMetaTools[a] {
+			return fmt.Errorf("jugglerbrief: moxyfile: allow-tools: %q is a moxy builtin meta tool and must not be listed (clown#261)", a)
+		}
+	}
+	return nil
+}
+
+// toolCoveredByEntry reports whether entry (moxy's own allow-tools/pass-tools
+// vocabulary: a bare server/moxin/builtin name, or a dotted "server.tool")
+// covers t, an exact juggler tool name under the {server}_{tool} name
+// template ("<server>_<tool>" for a dotted entry, "<name>" or "<name>_*" for
+// a bare one).
+func toolCoveredByEntry(t, entry string) bool {
+	if server, tool, dotted := strings.Cut(entry, "."); dotted {
+		return t == server+"_"+tool
+	}
+	return t == entry || strings.HasPrefix(t, entry+"_")
+}
+
 // checkToolsCoveredByAllowTools requires every entry of tools to be offered by
 // the moxyfile's top-level allow-tools, when the moxyfile sets that key (moxy
-// would otherwise never advertise it). An entry is a bare server/moxin name,
-// covering every "<name>_<tool>", or a dotted "<server>.<tool>", covering
-// exactly "<server>_<tool>" (juggler's {server}_{tool} name template). An
-// unset allow-tools leaves tools unchecked.
+// would otherwise never advertise it). An unset allow-tools leaves tools
+// unchecked.
 func checkToolsCoveredByAllowTools(tools []string, moxyfile string) error {
 	if strings.TrimSpace(moxyfile) == "" {
 		return nil
@@ -337,17 +398,42 @@ func checkToolsCoveredByAllowTools(tools []string, moxyfile string) error {
 	for _, t := range tools {
 		covered := false
 		for _, a := range *doc.AllowTools {
-			if server, tool, dotted := strings.Cut(a, "."); dotted {
-				covered = t == server+"_"+tool
-			} else {
-				covered = t == a || strings.HasPrefix(t, a+"_")
-			}
-			if covered {
+			if covered = toolCoveredByEntry(t, a); covered {
 				break
 			}
 		}
 		if !covered {
 			return fmt.Errorf("jugglerbrief: tools: %q is not covered by the moxyfile's allow-tools %q", t, *doc.AllowTools)
+		}
+	}
+	return nil
+}
+
+// checkPassToolsDoNotCoverTools refuses a brief whose moxyfile's pass-tools
+// also covers a tools entry (clown#261 point 3): juggler always derives the
+// agent's own moxyfile's allow-tools from tools, so such an entry would be
+// held at both pass and use, which contradicts moxy's own "a tool is held at
+// one level, use or pass" rule (moxy#459) — better refused here, legibly,
+// than left to fail at moxy's own load time. An unset pass-tools leaves
+// tools unchecked.
+func checkPassToolsDoNotCoverTools(tools []string, moxyfile string) error {
+	if strings.TrimSpace(moxyfile) == "" {
+		return nil
+	}
+	var doc struct {
+		PassTools *[]string `toml:"pass-tools"`
+	}
+	if _, err := toml.Decode(moxyfile, &doc); err != nil {
+		return fmt.Errorf("jugglerbrief: moxyfile: not valid TOML: %w", err)
+	}
+	if doc.PassTools == nil {
+		return nil
+	}
+	for _, t := range tools {
+		for _, p := range *doc.PassTools {
+			if toolCoveredByEntry(t, p) {
+				return fmt.Errorf("jugglerbrief: moxyfile: pass-tools: %q also covers tools entry %q; a tool is held at one level, use or pass", p, t)
+			}
 		}
 	}
 	return nil

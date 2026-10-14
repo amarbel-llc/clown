@@ -126,6 +126,10 @@ const (
 	openAICreateIssueReply    = `{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"create_issue","arguments":"{\"title\":\"x\"}"}}]},"finish_reason":"tool_calls"}]}`
 	openAIEndTurnReply        = `{"choices":[{"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}]}`
 	openAICannotCompleteReply = `{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call_9","type":"function","function":{"name":"cannot_complete","arguments":"{\"reason\":\"no repo matches\"}"}}]},"finish_reason":"tool_calls"}]}`
+	// delete_repo is not in issueTools: these replies exercise the call-time
+	// offered-tool filter (clown#261), not a real tool.
+	anthropicUnofferedToolReply = `{"content":[{"type":"text","text":"deleting"},{"type":"tool_use","id":"tu_9","name":"delete_repo","input":{"name":"x"}}],"stop_reason":"tool_use"}`
+	openAIUnofferedToolReply    = `{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call_9","type":"function","function":{"name":"delete_repo","arguments":"{\"name\":\"x\"}"}}]},"finish_reason":"tool_calls"}]}`
 )
 
 func createIssueExecutor() *fakeExecutor {
@@ -391,6 +395,59 @@ func TestRun_InvalidToolArgsAreAToolErrorTheModelSees(t *testing.T) {
 	}
 	tool := model.request(1)["messages"].([]any)[3].(map[string]any)
 	if tool["role"] != "tool" || !strings.Contains(tool["content"].(string), "invalid tool arguments") {
+		t.Errorf("tool message = %v", tool)
+	}
+}
+
+// clown#261: a tool call for a name the model was never offered (a
+// hallucination, or a prompt-injected name) is refused before the executor
+// sees it, for both codecs — the offered set is built from the exact same
+// cfg.Tools the wire request sent, and neither codec renames a tool between
+// advertising it and decoding a tool_use/tool_call back.
+func TestRun_UnofferedToolCall_Anthropic_IsRefusedWithoutReachingTheExecutor(t *testing.T) {
+	model, srv := newScriptedModel(t, "/v1/messages", anthropicUnofferedToolReply, anthropicEndTurnReply)
+	exec := createIssueExecutor()
+	cfg := baseConfig(rm.ResolveModelResult{Kind: rm.ModelKindLocal, URL: srv.URL}, exec)
+
+	res, err := Run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.End != EndTurn || res.Ledger.Steps != 2 {
+		t.Errorf("end = %q steps = %d, want the run to continue to end_turn", res.End, res.Ledger.Steps)
+	}
+	if len(exec.calls) != 0 {
+		t.Errorf("executor must not see an unoffered tool call: %v", exec.calls)
+	}
+	if len(res.Ledger.Calls) != 1 || res.Ledger.Calls[0].Tool != "delete_repo" || res.Ledger.Calls[0].OK || !strings.Contains(res.Ledger.Calls[0].Error, "tool not offered") {
+		t.Errorf("calls = %+v", res.Ledger.Calls)
+	}
+	block := model.request(1)["messages"].([]any)[2].(map[string]any)["content"].([]any)[0].(map[string]any)
+	if block["is_error"] != true || !strings.Contains(block["content"].(string), "tool not offered") {
+		t.Errorf("tool_result block = %v", block)
+	}
+}
+
+func TestRun_UnofferedToolCall_OpenAICompat_IsRefusedWithoutReachingTheExecutor(t *testing.T) {
+	model, srv := newScriptedModel(t, "/v1/chat/completions", openAIUnofferedToolReply, openAIEndTurnReply)
+	exec := createIssueExecutor()
+	cfg := baseConfig(rm.ResolveModelResult{Kind: rm.ModelKindRemote, URL: srv.URL + "/v1", Style: "openai-compat"}, exec)
+
+	res, err := Run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.End != EndTurn || res.Ledger.Steps != 2 {
+		t.Errorf("end = %q steps = %d, want the run to continue to end_turn", res.End, res.Ledger.Steps)
+	}
+	if len(exec.calls) != 0 {
+		t.Errorf("executor must not see an unoffered tool call: %v", exec.calls)
+	}
+	if len(res.Ledger.Calls) != 1 || res.Ledger.Calls[0].Tool != "delete_repo" || res.Ledger.Calls[0].OK || !strings.Contains(res.Ledger.Calls[0].Error, "tool not offered") {
+		t.Errorf("calls = %+v", res.Ledger.Calls)
+	}
+	tool := model.request(1)["messages"].([]any)[3].(map[string]any)
+	if tool["role"] != "tool" || !strings.Contains(tool["content"].(string), "tool not offered") {
 		t.Errorf("tool message = %v", tool)
 	}
 }

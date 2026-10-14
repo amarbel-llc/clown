@@ -84,6 +84,7 @@ func (h *harness) agentDeps(resolved rm.ResolveModelResult) AgentDeps {
 		Ringmaster:   h.deps.Ringmaster,
 		Troupe:       h.deps.Troupe,
 		ResolveModel: func(context.Context, string) (rm.ResolveModelResult, error) { return resolved, nil },
+		MoxyCLI:      h.deps.MoxyCLI,
 	}
 }
 

@@ -428,6 +428,26 @@ to a tool the spawner holds only at
 .Ql pass ,
 the one upward step the relation permits
 .Pq see FDR 0019 .
+The brief's
+.Ql tools
+is enforced, not just advertised
+.Pq clown#261 :
+the loop refuses, at call time, any name the model emits outside it,
+and the agent's own moxyfile always carries
+.Ql allow-tools
+derived from
+.Ql tools
+in moxy's own canonical form, overriding whatever the brief's own
+moxyfile set.
+.Ql restart ,
+.Ql batch
+and
+.Ql async
+\(em moxy's own builtin meta tools \(em may never appear in a brief's
+.Ql tools
+or
+.Ql allow-tools
+at all.
 .Cm juggler run
 is a ringmaster producer
 .Pq start at boot, progress per turn, done at the end ;
