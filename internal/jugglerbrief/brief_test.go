@@ -172,9 +172,14 @@ func TestPassToolsMustNotCoverTools(t *testing.T) {
 	if _, err := Parse([]byte(withMoxyfile("allow-tools = [\"smith\"]\npass-tools = [\"other.tool\"]\n"))); err != nil {
 		t.Errorf("pass-tools covering an unrelated tool must parse: %v", err)
 	}
-	// A bare pass-tools entry over a dotted allow entry is fine by moxy's
-	// own rule: the holder calls that one tool and may confer the rest of
-	// the server (moxy's own validatePassTools example).
+	// A bare pass-tools entry sitting next to the brief's own bare
+	// allow-tools for the SAME server is fine by moxy's own rule: the
+	// holder calls that one tool and may confer the rest of the server
+	// (moxy's own validatePassTools example). This is a parse-time check
+	// only, over the brief's own moxyfile exactly as written — at runtime
+	// juggler always replaces this brief-set allow-tools with the derived
+	// dotted form (DeriveAgentMoxyfile), so what the brief wrote here is
+	// not what the agent's moxy ultimately loads either way.
 	if _, err := Parse([]byte(withMoxyfile("allow-tools = [\"smith\"]\npass-tools = [\"smith\"]\n"))); err != nil {
 		t.Errorf("a bare pass-tools entry over the same server must parse: %v", err)
 	}

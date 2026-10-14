@@ -22,8 +22,9 @@ import (
 // or drops the entry — a broken resolution never passes, the same
 // discipline checkBriefNarrows already applies to a broken narrowing check.
 // This names a genuine per-tool resolution failure only (ResolveToolName
-// itself ran and reported one, e.g. "not invertible"); a moxy binary that
-// could not be run at all, or a cancelled ctx, is returned bare instead —
+// itself ran and reported one, e.g. moxy's "cannot resolve %q under
+// template %q"); a moxy binary that could not be run at all, or a
+// cancelled ctx, is returned bare instead —
 // it is not about any one tool, and blaming the first one iterated would
 // mislead.
 type ErrToolResolution struct {

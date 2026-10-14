@@ -290,17 +290,27 @@ func RunAgent(ctx context.Context, deps AgentDeps, req AgentRequest) (AgentOutco
 			return a.finishWithoutLoop(jugglerloop.EndToolError, "tool_error: no moxy launcher or agent state dir configured"), nil
 		}
 		// clown#261 point 3: the agent's own moxyfile always carries
-		// allow-tools derived from the brief's tools, computed once here —
-		// spawn.go's checkBriefNarrows computes the same thing,
+		// allow-tools derived from the brief's tools — see
+		// DeriveAgentMoxyfile's own doc comment for what that means and
+		// why it is safe. SpawnChild (spawn.go) computes the same thing
 		// independently, from the same unmodified staged brief, for the
-		// narrowing check's own staged child, so what was narrowing-checked
-		// and what is actually loaded agree (a bare `juggler run --brief`
-		// with no spawn reaches this same derivation, the only such path).
+		// narrowing check's own staged child; a bare `juggler run --brief`
+		// with no spawn reaches this same derivation, the only other path
+		// that writes an agent moxyfile.
 		agentMoxyfile, err := DeriveAgentMoxyfile(ctx, deps.MoxyCLI, nil, MoxyNameTemplate, b)
 		if err != nil {
-			out := a.finishWithoutLoop(jugglerloop.EndToolError, "config: "+err.Error())
-			out.ConfigError = true
-			return out, nil
+			// Only a genuine brief-shaped refusal is a config error; an
+			// infrastructure failure (moxy not runnable, ctx cancelled)
+			// is a tool_error instead — a SIGTERM or a missing binary must
+			// not read as "this brief is misconfigured".
+			var unresolved *ErrToolResolution
+			var mismatch *ErrToolCoverageMismatch
+			if errors.As(err, &unresolved) || errors.As(err, &mismatch) {
+				out := a.finishWithoutLoop(jugglerloop.EndToolError, "config: "+err.Error())
+				out.ConfigError = true
+				return out, nil
+			}
+			return a.finishWithoutLoop(jugglerloop.EndToolError, "tool_error: "+err.Error()), nil
 		}
 		url, stop, err := deps.Moxy.Launch(ctx, deps.AgentStateDir, agentMoxyfile, b.Env)
 		if err != nil {

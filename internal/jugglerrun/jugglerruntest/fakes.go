@@ -678,7 +678,10 @@ func knobExists(dir, name string) bool {
 // DeriveAgentMoxyfile) implements only --resolve, splitting on the first
 // "_" the way real moxy's structural inverse does for an invertible
 // "{server}_{tool}" template; fail/moxy-render-unresolvable forces the
-// not-invertible failure instead.
+// per-name "cannot resolve" failure instead (moxy's own wording for an
+// invertible template whose rendered string still doesn't match its
+// shape — "not invertible" is a different message, moxy's for a
+// non-invertible TEMPLATE, which juggler's constant template never is).
 func fakeMoxyCLI(dir string, args []string) int {
 	if len(args) == 0 {
 		return 2
@@ -745,13 +748,19 @@ func fakeMoxyCLI(dir string, args []string) int {
 			fmt.Fprintln(os.Stderr, "moxy render: fake implements --resolve only")
 			return 2
 		}
+		// "cannot resolve %q under template %q" (moxy's cmd/moxy/main.go)
+		// is the per-name failure for an INVERTIBLE template — juggler's
+		// own "{server}_{tool}" always is one, so this is the only
+		// resolution failure juggler can actually hit; "not invertible" is
+		// a different message, for a non-invertible TEMPLATE, which
+		// juggler's constant template never is.
 		if failKnob(dir, "moxy-render-unresolvable") {
-			fmt.Fprintf(os.Stderr, "moxy render: %q is not invertible\n", resolve)
+			fmt.Fprintf(os.Stderr, "moxy render: cannot resolve %q under template %q\n", resolve, fl["name-template"])
 			return 2
 		}
 		server, tool, ok := strings.Cut(resolve, "_")
 		if !ok {
-			fmt.Fprintf(os.Stderr, "moxy render: %q is not invertible\n", resolve)
+			fmt.Fprintf(os.Stderr, "moxy render: cannot resolve %q under template %q\n", resolve, fl["name-template"])
 			return 2
 		}
 		fmt.Printf("%s\t%s\n", server, tool)

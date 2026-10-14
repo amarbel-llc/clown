@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -268,6 +270,29 @@ func TestRunAgent_LaunchesMoxyFromTheMoxyfile(t *testing.T) {
 	want := []string{"cwd=" + deps.AgentStateDir, "arg=serve-http", "arg=--name-template", "arg={server}_{tool}", "sid=\n", "moxyfile=yes"}
 	if !containsAll(string(logged), want...) {
 		t.Errorf("moxy launch log = %q, want %q (principal stripped)", logged, want)
+	}
+}
+
+// clown#261 review fold-in: an infrastructure failure deriving the agent's
+// moxyfile (moxy itself not runnable, a cancelled ctx) must be a tool_error,
+// not a config error — a SIGTERM or a missing binary is not "this brief is
+// misconfigured", and ConfigError's ExitUsage would misreport it as one.
+func TestRunAgent_MoxyCLIInfrastructureFailureIsToolErrorNotConfigError(t *testing.T) {
+	h := newHarness(t)
+	bin, _ := fakeMoxyBin(t, fakeMoxy(t))
+	t.Setenv(SessionIDEnv, "agent-1")
+	deps := h.agentDeps(openAIResolved(scriptedOpenAI(t, openAIEndTurn)))
+	deps.Moxy = ExecMoxy{Bin: bin}
+	deps.AgentStateDir = t.TempDir() + "/agents/agent-1"
+	underlying := &CommandError{Argv: []string{"moxy", "render"}, ExitCode: -1, Err: errors.New("fork/exec /nonexistent/moxy: no such file or directory")}
+	deps.MoxyCLI = fakeResolveMoxyCLI{infraErr: fmt.Errorf("resolving the agent's tools needs moxy, and %q could not be run: %w", "/nonexistent/moxy", underlying)}
+
+	out, err := RunAgent(context.Background(), deps, AgentRequest{Brief: parsedBrief(t, "agent-1"), EnvPrincipal: "agent-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.ConfigError || out.State != StateFailed || !strings.Contains(out.Message, "tool_error") {
+		t.Fatalf("outcome = %+v, want a tool_error, not a config error", out)
 	}
 }
 

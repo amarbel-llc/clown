@@ -184,8 +184,9 @@ func TestSpawnChild_RenderFailureOrMissingMoxyRefuses(t *testing.T) {
 }
 
 // clown#261 point 2/3: a tools entry render can't resolve (moxy's own
-// "not invertible" case, e.g. a bare builtin name with no separator at
-// all) refuses the spawn pre-mint, with its own ledger refusal kind.
+// "cannot resolve %q under template %q" case, e.g. a bare builtin name
+// with no separator at all) refuses the spawn pre-mint, with its own
+// ledger refusal kind.
 func TestSpawnChild_UnresolvableToolRefusesPreMint(t *testing.T) {
 	h := newHarness(t)
 	pinPrincipals(h, testRoot, "child-1")
@@ -198,14 +199,19 @@ func TestSpawnChild_UnresolvableToolRefusesPreMint(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := spawnForNarrows(h, testTask)
-	if err == nil || !strings.Contains(err.Error(), "ring_create_issue") || !strings.Contains(err.Error(), "not invertible") {
+	if err == nil || !strings.Contains(err.Error(), "ring_create_issue") || !strings.Contains(err.Error(), "cannot resolve") {
 		t.Fatalf("err = %v", err)
 	}
 	if n := mintCalls(t, h); n != mints {
 		t.Errorf("nothing may be minted: %d mints became %d", mints, n)
 	}
 	digest := BriefDigest(templateBytes(), []byte(testTask))
-	for _, p := range []string{h.deps.Store.stagedParentMoxyfilePath("rec-42", digest), h.deps.Store.stagedChildMoxyfilePath("rec-42", digest)} {
+	for _, p := range []string{
+		h.deps.Store.stagedParentMoxyfilePath("rec-42", digest),
+		h.deps.Store.stagedChildMoxyfilePath("rec-42", digest),
+		h.deps.Store.stagedBriefPath("rec-42", digest),
+		h.deps.Store.runDir("rec-42") + "/child-1.pw",
+	} {
 		if _, err := os.Stat(p); !os.IsNotExist(err) {
 			t.Errorf("%s must not be staged: %v", p, err)
 		}
@@ -255,7 +261,7 @@ func TestExecMoxyCLI_ResolveToolName(t *testing.T) {
 		{name: "no tab", stdout: "a\n", wantErrSub: "exactly one line"},
 		{name: "empty server", stdout: "\tb\n", wantErrSub: "non-empty"},
 		{name: "empty tool", stdout: "a\t\n", wantErrSub: "non-empty"},
-		{name: "nonzero exit", stdout: "not invertible\n", exitCode: 2, wantErrSub: "resolving"},
+		{name: "nonzero exit", stdout: "cannot resolve\n", exitCode: 2, wantErrSub: "resolving"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
