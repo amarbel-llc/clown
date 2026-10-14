@@ -121,10 +121,9 @@ func TestToolsMustBeCoveredByAllowTools(t *testing.T) {
 	}
 }
 
-// clown#261 point 2: restart/batch/async are moxy's own builtin meta tools
-// (no owning server, so they keep their bare literal name under any
-// --name-template); a brief may name none of them, in tools or in its
-// moxyfile's own allow-tools.
+// clown#261 point 2: moxy's six builtin meta tools (no owning server, so
+// they keep their bare literal name under any --name-template) may never
+// appear in tools, in the moxyfile's own allow-tools, or in its pass-tools.
 func TestNoReservedMetaTools(t *testing.T) {
 	withTools := func(tools string) string {
 		return strings.Replace(issueFilerBrief, `tools = ["smith_list_repos", "smith_create_issue"]`, "tools = "+tools, 1)
@@ -132,7 +131,10 @@ func TestNoReservedMetaTools(t *testing.T) {
 	withAllow := func(allow string) string {
 		return strings.Replace(issueFilerBrief, "moxyfile  = '''\n", "moxyfile  = '''\nallow-tools = "+allow+"\n", 1)
 	}
-	for _, tool := range []string{"restart", "batch", "async"} {
+	withPass := func(pass string) string {
+		return strings.Replace(issueFilerBrief, "moxyfile  = '''\n", "moxyfile  = '''\nallow-tools = [\"smith\"]\npass-tools = "+pass+"\n", 1)
+	}
+	for _, tool := range []string{"restart", "batch", "async", "async-result", "async-cancel", "status"} {
 		if _, err := Parse([]byte(withTools(`["smith_list_repos", "` + tool + `"]`))); err == nil {
 			t.Errorf("tools including %q: want an error, got none", tool)
 		} else if !strings.Contains(err.Error(), "tools") || !strings.Contains(err.Error(), tool) {
@@ -142,6 +144,11 @@ func TestNoReservedMetaTools(t *testing.T) {
 			t.Errorf("allow-tools including %q: want an error, got none", tool)
 		} else if !strings.Contains(err.Error(), "allow-tools") || !strings.Contains(err.Error(), tool) {
 			t.Errorf("allow-tools including %q: error must name allow-tools and the tool: %v", tool, err)
+		}
+		if _, err := Parse([]byte(withPass(`["` + tool + `"]`))); err == nil {
+			t.Errorf("pass-tools including %q: want an error, got none", tool)
+		} else if !strings.Contains(err.Error(), "pass-tools") || !strings.Contains(err.Error(), tool) {
+			t.Errorf("pass-tools including %q: error must name pass-tools and the tool: %v", tool, err)
 		}
 	}
 	if _, err := Parse([]byte(issueFilerBrief)); err != nil {
@@ -164,6 +171,12 @@ func TestPassToolsMustNotCoverTools(t *testing.T) {
 	}
 	if _, err := Parse([]byte(withMoxyfile("allow-tools = [\"smith\"]\npass-tools = [\"other.tool\"]\n"))); err != nil {
 		t.Errorf("pass-tools covering an unrelated tool must parse: %v", err)
+	}
+	// A bare pass-tools entry over a dotted allow entry is fine by moxy's
+	// own rule: the holder calls that one tool and may confer the rest of
+	// the server (moxy's own validatePassTools example).
+	if _, err := Parse([]byte(withMoxyfile("allow-tools = [\"smith\"]\npass-tools = [\"smith\"]\n"))); err != nil {
+		t.Errorf("a bare pass-tools entry over the same server must parse: %v", err)
 	}
 }
 

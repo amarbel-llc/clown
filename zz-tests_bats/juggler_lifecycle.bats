@@ -1117,6 +1117,10 @@ EOF
   [[ $(wc -l <"$agent_dir/model-requests") -eq 1 ]]
   jq -e '.end.reason == "evaluator_pass" and .steps == 1 and (.calls | length) == 1
     and .calls[0].uris == ["https://forge.test/o/r/issues/7"]' "$(field .ledger)" >/dev/null
+  # Positive control for the clown#261 unoffered-call test below: an
+  # offered call DOES reach moxy and gets logged.
+  [[ -f $agent_dir/mcp-tool-calls ]]
+  grep -qx ring_create_issue "$agent_dir/mcp-tool-calls"
 }
 
 @test "run: a tool call the brief never offered is refused and ledgered, never reaching moxy (clown#261)" {

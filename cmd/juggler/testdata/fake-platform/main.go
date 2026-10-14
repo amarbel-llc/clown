@@ -105,10 +105,19 @@ func serveAgent(args []string) int {
 	mux.Handle("/mcp", jugglerruntest.MCPHandlerPerTool(string(read("tools.json")), func(tool string) string {
 		// clown#261: lets a bats case assert the loop's call-time offered-tool
 		// filter kept an unoffered call from ever reaching here at all, not
-		// just that its ledger entry looks like a refusal.
-		if f, err := os.OpenFile(filepath.Join(*dir, "mcp-tool-calls"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644); err == nil {
-			_, _ = f.WriteString(tool + "\n")
-			_ = f.Close()
+		// just that its ledger entry looks like a refusal. A write failure
+		// here must be loud, not silently swallowed: silence would be
+		// indistinguishable from "never called".
+		f, err := os.OpenFile(filepath.Join(*dir, "mcp-tool-calls"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "fake-platform: recording tools/call %q: %v\n", tool, err)
+			os.Exit(1)
+		}
+		_, werr := f.WriteString(tool + "\n")
+		cerr := f.Close()
+		if werr != nil || cerr != nil {
+			fmt.Fprintf(os.Stderr, "fake-platform: recording tools/call %q: write=%v close=%v\n", tool, werr, cerr)
+			os.Exit(1)
 		}
 		if b, err := os.ReadFile(filepath.Join(*dir, "call-result."+tool+".json")); err == nil {
 			return string(b)

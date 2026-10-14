@@ -3,6 +3,7 @@ package jugglerrun
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -179,5 +180,96 @@ func TestSpawnChild_RenderFailureOrMissingMoxyRefuses(t *testing.T) {
 	}
 	if mintCalls(t, h) != 1 {
 		t.Error("nothing may be minted")
+	}
+}
+
+// clown#261 point 2/3: a tools entry render can't resolve (moxy's own
+// "not invertible" case, e.g. a bare builtin name with no separator at
+// all) refuses the spawn pre-mint, with its own ledger refusal kind.
+func TestSpawnChild_UnresolvableToolRefusesPreMint(t *testing.T) {
+	h := newHarness(t)
+	pinPrincipals(h, testRoot, "child-1")
+	res := newRun(t, h, "rec-42")
+	mints := mintCalls(t, h)
+	if err := os.MkdirAll(filepath.Join(h.fakes.Dir, "fail"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(h.fakes.Dir, "fail", "moxy-render-unresolvable"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := spawnForNarrows(h, testTask)
+	if err == nil || !strings.Contains(err.Error(), "ring_create_issue") || !strings.Contains(err.Error(), "not invertible") {
+		t.Fatalf("err = %v", err)
+	}
+	if n := mintCalls(t, h); n != mints {
+		t.Errorf("nothing may be minted: %d mints became %d", mints, n)
+	}
+	digest := BriefDigest(templateBytes(), []byte(testTask))
+	for _, p := range []string{h.deps.Store.stagedParentMoxyfilePath("rec-42", digest), h.deps.Store.stagedChildMoxyfilePath("rec-42", digest)} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("%s must not be staged: %v", p, err)
+		}
+	}
+	data, err := JobLedger(context.Background(), h.deps, res.RunJob, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var l RunLedger
+	if err := json.Unmarshal(data, &l); err != nil {
+		t.Fatal(err)
+	}
+	refusals := callsOf(l, "tool-resolve")
+	if len(refusals) != 1 || refusals[0].Kind != "refusal" || refusals[0].OK || !strings.Contains(refusals[0].Reason, "ring_create_issue") {
+		t.Errorf("ledger = %s", data)
+	}
+}
+
+func writeFakeMoxyScript(t *testing.T, stdout string, exitCode int) string {
+	t.Helper()
+	dir := t.TempDir()
+	data := filepath.Join(dir, "out")
+	if err := os.WriteFile(data, []byte(stdout), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(dir, "moxy")
+	script := fmt.Sprintf("#!/bin/sh\ncat %q\nexit %d\n", data, exitCode)
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return bin
+}
+
+// clown#261 review LOW 6: ResolveToolName's parsing must be strict — a
+// second tab or a second line is refused, never silently taking the first
+// match.
+func TestExecMoxyCLI_ResolveToolName(t *testing.T) {
+	cases := []struct {
+		name                             string
+		stdout                           string
+		exitCode                         int
+		wantServer, wantTool, wantErrSub string
+	}{
+		{name: "ok", stdout: "ring\tcreate_issue\n", wantServer: "ring", wantTool: "create_issue"},
+		{name: "extra tab", stdout: "a\tb\tc\n", wantErrSub: "exactly one line"},
+		{name: "extra line", stdout: "a\tb\nc\td\n", wantErrSub: "exactly one line"},
+		{name: "no tab", stdout: "a\n", wantErrSub: "exactly one line"},
+		{name: "empty server", stdout: "\tb\n", wantErrSub: "non-empty"},
+		{name: "empty tool", stdout: "a\t\n", wantErrSub: "non-empty"},
+		{name: "nonzero exit", stdout: "not invertible\n", exitCode: 2, wantErrSub: "resolving"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cli := ExecMoxyCLI{Bin: writeFakeMoxyScript(t, c.stdout, c.exitCode)}
+			server, tool, err := cli.ResolveToolName(context.Background(), nil, "{server}_{tool}", "x_y")
+			if c.wantErrSub != "" {
+				if err == nil || !strings.Contains(err.Error(), c.wantErrSub) {
+					t.Fatalf("err = %v, want containing %q", err, c.wantErrSub)
+				}
+				return
+			}
+			if err != nil || server != c.wantServer || tool != c.wantTool {
+				t.Fatalf("server, tool, err = %q, %q, %v", server, tool, err)
+			}
+		})
 	}
 }

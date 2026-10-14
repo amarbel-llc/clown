@@ -521,15 +521,21 @@ func SpawnChild(ctx context.Context, deps LifecycleDeps, req SpawnRequest) (rec 
 
 	// clown#261 point 3: the agent's own moxyfile always carries allow-tools
 	// derived from the brief's tools, not the brief's own moxyfile verbatim
-	// — computed once here and used both as the narrowing check's staged
-	// child (below) and, independently, by the unit's own `juggler run` once
-	// it starts (agent.go calls the same DeriveAgentMoxyfile from the same,
-	// unmodified staged brief).
+	// — computed here and, independently, again by the unit's own `juggler
+	// run` once it starts (agent.go calls the same DeriveAgentMoxyfile from
+	// the same, unmodified staged brief; no digest comparison is needed,
+	// see DeriveAgentMoxyfile's own doc comment).
 	agentMoxyfile, err := DeriveAgentMoxyfile(ctx, deps.MoxyCLI, moxyEnv(req.MoxinPath), MoxyNameTemplate, brief)
 	if err != nil {
 		var unresolved *ErrToolResolution
-		if errors.As(err, &unresolved) {
+		var mismatch *ErrToolCoverageMismatch
+		switch {
+		case errors.As(err, &unresolved):
 			if lerr := appendRunLedgerLocked(deps.Store, run.RunKey, ToolResolutionRefusalEntry(unresolved)); lerr != nil {
+				err = fmt.Errorf("%w (recording the refusal also failed: %v)", err, lerr)
+			}
+		case errors.As(err, &mismatch):
+			if lerr := appendRunLedgerLocked(deps.Store, run.RunKey, ToolCoverageMismatchRefusalEntry(mismatch)); lerr != nil {
 				err = fmt.Errorf("%w (recording the refusal also failed: %v)", err, lerr)
 			}
 		}

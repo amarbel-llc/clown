@@ -439,14 +439,19 @@ derived from
 .Ql tools
 in moxy's own canonical form, overriding whatever the brief's own
 moxyfile set.
+moxy's six own builtin meta tools
 .Ql restart ,
-.Ql batch
+.Ql batch ,
+.Ql async ,
+.Ql async-result ,
+.Ql async-cancel
 and
-.Ql async
-\(em moxy's own builtin meta tools \(em may never appear in a brief's
-.Ql tools
-or
+.Ql status
+may never appear in a brief's
+.Ql tools ,
 .Ql allow-tools
+or
+.Ql pass-tools
 at all.
 .Cm juggler run
 is a ringmaster producer

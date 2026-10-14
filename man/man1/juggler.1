@@ -846,14 +846,13 @@ every
 entry must be covered by it
 .Pq a bare name covers Ql <name>_* , No a dotted Ql server.tool No covers Ql server_tool ;
 otherwise the brief is rejected at parse.
-.Ql restart ,
-.Ql batch
-and
-.Ql async
-\(em moxy's own builtin meta tools \(em may never appear in
-.Ql tools
-or
+moxy's six own builtin meta tools
+.Pq restart, batch, async, async-result, async-cancel and status
+may never appear in
+.Ql tools ,
 .Ql allow-tools
+or
+.Ql pass-tools
 at all, rejected at parse the same way
 .Pq Em clown#261 .
 The agent's own moxyfile always carries

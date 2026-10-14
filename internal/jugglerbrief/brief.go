@@ -323,23 +323,31 @@ func (b *Brief) validate(template bool) error {
 
 // reservedMetaTools are moxy's own builtin meta tools: no owning server, so
 // they render under their bare literal name regardless of name template
-// (verified against moxy's own naming tests, nametemplate_test.go and
-// toolallow_test.go: "restart"/"batch"/"async" never gain an underscore
-// prefix). A brief may not list any of them, in `tools` or in its moxyfile's
-// `allow-tools` (clown#261 point 2): `restart` lets a tool-reachable agent
-// (its own moxyfile is writable, moxy#461) reload a rewritten moxyfile and
-// widen itself up to the spawner's whole set; `batch` and `async` let a
-// single offered call make further, nested sub-calls the loop's own
-// call-time filter (clown#261 point 1) never sees — bounded only by moxy's
-// own allow-tools, which is why point 3 (deriving it from `tools`) matters.
+// (moxy's cmd/moxy/main.go tool registrations; also verified against
+// moxy's own naming tests, nametemplate_test.go and toolallow_test.go, for
+// restart/batch/async). A brief may not list any of them, in `tools`, in
+// its moxyfile's `allow-tools`, OR in its `pass-tools` (clown#261 point 2):
+// `restart` lets a tool-reachable agent (its own moxyfile is writable,
+// moxy#461) reload a rewritten moxyfile and widen itself up to the
+// spawner's whole set; `batch` and `async` let a single offered call make
+// further, nested sub-calls the loop's own call-time filter (clown#261
+// point 1) never sees, bounded only by moxy's own allow-tools; passing any
+// of the six to a non-juggler grandchild (pass-tools) reopens the same
+// risk one level down. `async-result` reads the clown job journal across
+// sessions and `status` discloses the whole moxyfile hierarchy — both are
+// refused outright too, not only when they'd otherwise slip through
+// render's own underscore-less resolution failure by accident.
 var reservedMetaTools = map[string]bool{
-	"restart": true,
-	"batch":   true,
-	"async":   true,
+	"restart":      true,
+	"batch":        true,
+	"async":        true,
+	"async-result": true,
+	"async-cancel": true,
+	"status":       true,
 }
 
 // checkNoReservedMetaTools rejects a reservedMetaTools entry in tools or in
-// the moxyfile's allow-tools, when the moxyfile sets one.
+// the moxyfile's allow-tools or pass-tools, when the moxyfile sets either.
 func checkNoReservedMetaTools(tools []string, moxyfile string) error {
 	for _, t := range tools {
 		if reservedMetaTools[t] {
@@ -351,16 +359,25 @@ func checkNoReservedMetaTools(tools []string, moxyfile string) error {
 	}
 	var doc struct {
 		AllowTools *[]string `toml:"allow-tools"`
+		PassTools  *[]string `toml:"pass-tools"`
 	}
 	if _, err := toml.Decode(moxyfile, &doc); err != nil {
 		return fmt.Errorf("jugglerbrief: moxyfile: not valid TOML: %w", err)
 	}
-	if doc.AllowTools == nil {
-		return nil
-	}
-	for _, a := range *doc.AllowTools {
-		if reservedMetaTools[a] {
-			return fmt.Errorf("jugglerbrief: moxyfile: allow-tools: %q is a moxy builtin meta tool and must not be listed (clown#261)", a)
+	for _, field := range []struct {
+		key     string
+		entries *[]string
+	}{
+		{"allow-tools", doc.AllowTools},
+		{"pass-tools", doc.PassTools},
+	} {
+		if field.entries == nil {
+			continue
+		}
+		for _, a := range *field.entries {
+			if reservedMetaTools[a] {
+				return fmt.Errorf("jugglerbrief: moxyfile: %s: %q is a moxy builtin meta tool and must not be listed (clown#261)", field.key, a)
+			}
 		}
 	}
 	return nil
@@ -410,12 +427,17 @@ func checkToolsCoveredByAllowTools(tools []string, moxyfile string) error {
 }
 
 // checkPassToolsDoNotCoverTools refuses a brief whose moxyfile's pass-tools
-// also covers a tools entry (clown#261 point 3): juggler always derives the
-// agent's own moxyfile's allow-tools from tools, so such an entry would be
-// held at both pass and use, which contradicts moxy's own "a tool is held at
-// one level, use or pass" rule (moxy#459) — better refused here, legibly,
-// than left to fail at moxy's own load time. An unset pass-tools leaves
-// tools unchecked.
+// holds, at the exact dotted "server.tool" granularity juggler always
+// derives the agent's own moxyfile's allow-tools in, a tool also in tools
+// (clown#261 point 3): such an entry would be held at both pass and use,
+// which contradicts moxy's own "a tool is held at one level, use or pass"
+// rule (moxy#459, validatePassTools's CoveredBy(entry, allowed) check) —
+// better refused here, legibly, than left to fail at moxy's own load time.
+// Only a DOTTED pass-tools entry is checked: a bare entry over a dotted
+// allow entry is fine by moxy's own rule (its own example: the holder calls
+// that one tool and may confer the rest of the server), so
+// `pass-tools = ["smith"]` beside `tools = ["smith_list_repos"]` must
+// parse. An unset pass-tools leaves tools unchecked.
 func checkPassToolsDoNotCoverTools(tools []string, moxyfile string) error {
 	if strings.TrimSpace(moxyfile) == "" {
 		return nil
@@ -429,11 +451,17 @@ func checkPassToolsDoNotCoverTools(tools []string, moxyfile string) error {
 	if doc.PassTools == nil {
 		return nil
 	}
+	toolSet := map[string]bool{}
 	for _, t := range tools {
-		for _, p := range *doc.PassTools {
-			if toolCoveredByEntry(t, p) {
-				return fmt.Errorf("jugglerbrief: moxyfile: pass-tools: %q also covers tools entry %q; a tool is held at one level, use or pass", p, t)
-			}
+		toolSet[t] = true
+	}
+	for _, p := range *doc.PassTools {
+		server, tool, dotted := strings.Cut(p, ".")
+		if !dotted {
+			continue
+		}
+		if t := server + "_" + tool; toolSet[t] {
+			return fmt.Errorf("jugglerbrief: moxyfile: pass-tools: %q also covers tools entry %q; a tool is held at one level, use or pass", p, t)
 		}
 	}
 	return nil

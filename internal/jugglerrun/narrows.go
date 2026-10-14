@@ -110,19 +110,27 @@ func (m ExecMoxyCLI) Narrows(ctx context.Context, env []string, parent, child st
 	return res, nil
 }
 
+// ResolveToolName's stdout must be exactly one line of a tab-separated
+// "server\ttool", both halves non-empty: a second tab (ambiguous, e.g. a
+// tool name containing one) or a second line (moxy printing more than one
+// resolution) is refused rather than silently taking the first match.
 func (m ExecMoxyCLI) ResolveToolName(ctx context.Context, env []string, nameTemplate, rendered string) (string, string, error) {
 	argv := []string{m.Bin, "render", "--name-template", nameTemplate, "--resolve", rendered}
 	out, err := runCommand(ctx, Command{Argv: argv, Env: env})
 	if err != nil {
 		var ce *CommandError
 		if errors.As(err, &ce) && ce.ExitCode == -1 {
-			return "", "", fmt.Errorf("the moxyfile narrowing check needs moxy, and %q could not be run (set --moxy or $%s): %w", m.Bin, MoxyBinEnv, err)
+			return "", "", fmt.Errorf("resolving the agent's tools needs moxy, and %q could not be run (set --moxy or $%s): %w", m.Bin, MoxyBinEnv, err)
 		}
 		return "", "", fmt.Errorf("resolving %q: %w", rendered, err)
 	}
-	server, tool, ok := strings.Cut(strings.TrimRight(string(out), "\n"), "\t")
-	if !ok || server == "" || tool == "" {
-		return "", "", fmt.Errorf("resolving %q: %s printed %q, want a tab-separated \"server\\ttool\"", rendered, m.Bin, out)
+	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
+	if len(lines) != 1 || strings.Count(lines[0], "\t") != 1 {
+		return "", "", fmt.Errorf("resolving %q: %s printed %q, want exactly one line of a tab-separated \"server\\ttool\"", rendered, m.Bin, out)
+	}
+	server, tool, _ := strings.Cut(lines[0], "\t")
+	if server == "" || tool == "" {
+		return "", "", fmt.Errorf("resolving %q: %s printed %q, want non-empty server and tool halves", rendered, m.Bin, out)
 	}
 	return server, tool, nil
 }

@@ -647,12 +647,14 @@ unchecked against it.
 offers the model exactly `tools`, and refuses, at call time, any name
 the model emits that is not in it — a hallucinated or prompt-injected
 call gets a tool_result error and the run continues, never reaching
-the executor. `restart`, `batch` and `async` — moxy's own builtin meta
-tools, bare names under any serving template — may never appear in
-`tools`, nor in the brief's own moxyfile `allow-tools`
-(`Brief.Validate` refuses both): `restart` could reload a rewritten
-moxyfile, and `batch`/`async` let a nested sub-call bypass this same
-filter, bounded only by moxy's own `allow-tools`.
+the executor. moxy's six own builtin meta tools (bare names under any
+serving template: `restart`, `batch`, `async`, `async-result`,
+`async-cancel`, `status`) may never appear in `tools`, nor in the
+brief's own moxyfile `allow-tools` or `pass-tools` (`Brief.Validate`
+refuses all three): `restart` could reload a rewritten moxyfile,
+`batch`/`async` let a nested sub-call bypass this same filter (bounded
+only by moxy's own `allow-tools`), and passing any of the six to a
+non-juggler grandchild would reopen the same risk one level down.
 
 **`allow-tools` is always derived from `tools` (clown#261), not merely
 recommended.** The agent's own moxyfile always carries `allow-tools`
@@ -667,10 +669,19 @@ than what the brief itself claimed. Every other key — `pass-tools`
 above all, also `disable-moxins`, `[[servers]]`, `[credentials]`, ... —
 is kept as the brief wrote it; a `pass-tools` entry that would collide
 with the derived `allow-tools` is refused at parse (moxy#459: a tool
-is held at one level, use or pass). moxy therefore enforces the exact
-same toolset as the loop even if the loop's own filter regresses. A
-`tools` entry `moxy render` cannot resolve refuses the spawn before
-anything is minted, naming the tool.
+is held at one level, use or pass). A `tools` entry `moxy render`
+cannot resolve, or whose real resolution the brief's own `allow-tools`
+(when set) does not actually cover, refuses the spawn before anything
+is minted, naming the tool — the latter catches a case
+`checkToolsCoveredByAllowTools`'s own textual heuristic can miss: moxy's
+structural inverse always splits a rendered name on the FIRST
+separator, which does not always agree with that heuristic for a
+`tools` entry with more than one underscore. (The six reserved meta
+tools above are refused outright by `Brief.Validate`, not left to the
+accident of `moxy render` failing on a name with no separator —
+`async-result` reads the clown job journal across sessions and
+`status` discloses the whole moxyfile hierarchy, so both are refused
+for their own sake too, not only as a side effect of the others.)
 
 **`pass-tools` (moxy#459).** moxy holds every tool at one of three
 levels, in order: `none`, `pass`, `use`. `allow-tools` names the tools
@@ -690,31 +701,51 @@ allowlist and the child sets none at all, the violation is instead
 pass-tools (a parent with `pass-tools` always has an allowlist, so its
 child always sets one too, if only `[]` beside the tools it passes on).
 
-**Escalation note (moxy#461): closed for juggler by clown#261.** moxy
+**Escalation note (moxy#461): three paths, stated precisely.** moxy
 documents an open risk: a session able to rewrite its own moxyfile and
 then call moxy's own `restart` tool can widen its own tool access,
 because moxy's reload check validates only against the *parent*
-reference pinned at spawn. The gap this originally relied on — a
-brief's `tools` was *not* a call-time gate, only advertisement
-(`FilterToolsToAllowlist`, `internal/jugglerrun/agent.go`), while the
-loop forwarded whatever name the model emitted straight to moxy
-(`internal/jugglerloop/loop.go`) with no re-check — is now closed: the
-loop refuses any call for a name outside `tools`, and `Brief.Validate`
-refuses `restart` (and `batch`/`async`) from ever appearing in `tools`
-or the brief's own `allow-tools` at all. The agent's own moxyfile IS
-still writable by itself today — it is written to
-`<AgentStateDir>/moxyfile` (`internal/jugglerrun/toolplane.go`), which
-is moxy's own CWD, and `AgentStateDir`'s own doc comment
-(`internal/jugglerrun/store.go`) says plainly that "folio-style tools
-auto-allow writes inside CWD" — so an agent holding an ordinary
-file-write tool can still rewrite it and trigger a moxy reload that
-widens moxy's own permissions up to the spawner's whole set. But that
-no longer matters for this escalation specifically: `restart` can
-never be a name the model is offered, and the loop's call-time filter
-refuses it regardless of what moxy itself would now allow after such a
-reload — the attack needs the model to actually emit the call, and
-that path is closed. moxy's own general risk for a non-juggler client
-remains moxy's own open issue, out of scope here.
+reference pinned at spawn. The agent's own moxyfile IS writable by
+itself today — it is written to `<AgentStateDir>/moxyfile`
+(`internal/jugglerrun/toolplane.go`), which is moxy's own CWD, and
+`AgentStateDir`'s own doc comment (`internal/jugglerrun/store.go`)
+says plainly that "folio-style tools auto-allow writes inside CWD" —
+so an agent holding an ordinary file-write tool can rewrite it and
+trigger a moxy reload that widens moxy's own permissions up to the
+spawner's whole set. Whether that reaches `restart` depends on how the
+call would actually get there:
+
+- **Model-emitted calls** — the gap this moxy#461 escalation originally
+  relied on for juggler specifically: a brief's `tools` was *not* a
+  call-time gate, only advertisement (`FilterToolsToAllowlist`,
+  `internal/jugglerrun/agent.go`), while the loop forwarded whatever
+  name the model emitted straight to moxy
+  (`internal/jugglerloop/loop.go`) with no re-check. Closed by clown#261:
+  the loop refuses any call for a name outside `tools`, and
+  `Brief.Validate` refuses `restart` from ever appearing in `tools` or
+  the brief's own `allow-tools`/`pass-tools` at all — `restart` can
+  never be a name the model is offered, so the loop refuses the call
+  regardless of what moxy itself would allow after a reload.
+- **Out-of-band loopback** — an agent holding any HTTP-fetch or exec
+  tool can rewrite its moxyfile, trigger the reload, and then POST
+  directly to its own moxy's `/mcp` on `127.0.0.1`, skipping the loop
+  (and so `tools`) entirely. This is closed only by the always-derived
+  `allow-tools` (clown#261 point 3): moxy's own tool-call funnel
+  enforces `allow-tools` — including for a builtin, by its bare name —
+  against every caller regardless of transport (moxy's
+  `internal/proxy/proxy.go`, the `callToolV1` allow-tools check), so a
+  moxy whose effective `allow-tools` never includes `restart` refuses
+  the loopback call too. And only when juggler itself launches moxy:
+  the always-derived `allow-tools` is written only in the
+  `deps.Moxy.Launch` path (agent.go).
+- **`--moxy-url`** — when `juggler run` is pointed at an already-running
+  MCP upstream instead of launching moxy itself, no `allow-tools` is
+  derived at all (`DeriveAgentMoxyfile` is never called in this path):
+  the external moxy's own configuration decides, entirely outside
+  clown#261's reach.
+
+moxy's own general risk for a non-juggler client remains moxy's own
+open issue, out of scope here.
 
 Headless posture: any moxy permission tier other than `always-allow`
 resolves to **deny** for a juggler agent; the agent sees the denial as a

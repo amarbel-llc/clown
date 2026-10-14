@@ -452,6 +452,29 @@ func TestRun_UnofferedToolCall_OpenAICompat_IsRefusedWithoutReachingTheExecutor(
 	}
 }
 
+// clown#261 review LOW 6: the offered-tool filter must run BEFORE the
+// args-validity check, so an unoffered call with invalid arguments is
+// refused as unoffered, not as invalid-args.
+func TestRun_UnofferedToolCallWithInvalidArgs_IsRefusedAsUnoffered(t *testing.T) {
+	truncated := `{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"delete_repo","arguments":"{\"name\":\"x"}}]},"finish_reason":"length"}]}`
+	_, srv := newScriptedModel(t, "/v1/chat/completions", truncated, openAIEndTurnReply)
+	exec := createIssueExecutor()
+	cfg := baseConfig(rm.ResolveModelResult{Kind: rm.ModelKindRemote, URL: srv.URL + "/v1", Style: "openai-compat"}, exec)
+
+	res, err := Run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(exec.calls) != 0 {
+		t.Errorf("executor must not see an unoffered tool call: %v", exec.calls)
+	}
+	if len(res.Ledger.Calls) != 1 || res.Ledger.Calls[0].Tool != "delete_repo" ||
+		!strings.Contains(res.Ledger.Calls[0].Error, "tool not offered") ||
+		strings.Contains(res.Ledger.Calls[0].Error, "invalid tool arguments") {
+		t.Errorf("calls = %+v, want refused as unoffered despite the truncated arguments", res.Ledger.Calls)
+	}
+}
+
 func TestValidateToolArgs(t *testing.T) {
 	for _, ok := range []string{`{}`, `{"a":1}`} {
 		if err := validateToolArgs(json.RawMessage(ok)); err != nil {
