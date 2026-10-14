@@ -625,6 +625,13 @@ func fakeTroupe(dir string, args []string) int {
 // prints, whatever the directory: a fixed, deterministic canonical doc.
 const FakeEffectiveMoxyfile = "# moxy show-effective-moxyfile (fake)\n[[servers]]\nname = \"ring\"\n\n[resolved-moxins]\nring = \"/nix/store/fake-ring/share/moxy/moxins/ring\"\n"
 
+// FakeEffectiveMoxyfilePassToolsLine is appended to FakeEffectiveMoxyfile's
+// output under the moxy-parent-pass-tools knob (moxy#459, clown#254): the
+// spawner holds "ring.archive" at pass, not use, so a brief's own
+// allow-tools may legitimately elevate it to use — the one upward step the
+// narrowing relation permits.
+const FakeEffectiveMoxyfilePassToolsLine = "pass-tools = [\"ring.archive\"]\n"
+
 // FakeNarrowsViolations are the two violations the moxy fake's narrows
 // reports under the fail/moxy-narrows-widen knob.
 var FakeNarrowsViolations = []string{
@@ -632,11 +639,29 @@ var FakeNarrowsViolations = []string{
 	"servers.shell: not in the parent",
 }
 
-// fakeMoxyCLI is moxy's narrowing CLI (moxy 0c17cea): show-effective-moxyfile
-// prints FakeEffectiveMoxyfile; narrows exits 0 unless a knob says
-// otherwise — fail/moxy-narrows-widen exits 1 with FakeNarrowsViolations
-// (lines, or the --json form; with fail/moxy-narrows-nojson too, the --json
-// form is unparseable), fail/moxy-narrows-broken exits 2 with a
+// FakePassToolsViolations is the violation the moxy fake's narrows reports
+// under the fail/moxy-narrows-pass-tools-widen knob (moxy#459, clown#254): a
+// tool the child's allow-tools holds at use that the parent holds at
+// neither use nor pass, in moxy 8d69aa4's exact wording.
+var FakePassToolsViolations = []string{
+	"allow-tools: child holds ring.archive at use, parent at none",
+}
+
+// knobExists reports whether dir/name exists: a plain (not "fail/"-prefixed)
+// marker file shaping a success-path fixture rather than a failure, e.g.
+// moxy-parent-pass-tools.
+func knobExists(dir, name string) bool {
+	_, err := os.Stat(filepath.Join(dir, name))
+	return err == nil
+}
+
+// fakeMoxyCLI is moxy's narrowing CLI (moxy 8d69aa4): show-effective-moxyfile
+// prints FakeEffectiveMoxyfile, plus FakeEffectiveMoxyfilePassToolsLine under
+// the moxy-parent-pass-tools knob; narrows exits 0 unless a knob says
+// otherwise — fail/moxy-narrows-widen exits 1 with FakeNarrowsViolations,
+// fail/moxy-narrows-pass-tools-widen exits 1 with FakePassToolsViolations
+// (either as lines, or the --json form; with fail/moxy-narrows-nojson too,
+// the --json form is unparseable), fail/moxy-narrows-broken exits 2 with a
 // reason on stderr. Both verbs check their path arguments exist.
 func fakeMoxyCLI(dir string, args []string) int {
 	if len(args) == 0 {
@@ -649,7 +674,11 @@ func fakeMoxyCLI(dir string, args []string) int {
 			fmt.Fprintln(os.Stderr, "moxy show-effective-moxyfile: --dir is required")
 			return 2
 		}
-		fmt.Print(FakeEffectiveMoxyfile)
+		out := FakeEffectiveMoxyfile
+		if knobExists(dir, "moxy-parent-pass-tools") {
+			out += FakeEffectiveMoxyfilePassToolsLine
+		}
+		fmt.Print(out)
 		return 0
 	case "narrows":
 		for _, p := range []string{fl["parent"], fl["child"]} {
@@ -658,10 +687,14 @@ func fakeMoxyCLI(dir string, args []string) int {
 				return 2
 			}
 		}
+		violations := FakeNarrowsViolations
 		switch {
 		case failKnob(dir, "moxy-narrows-broken"):
 			fmt.Fprintln(os.Stderr, "moxy narrows: child: parsing moxyfile: toml: line 3: expected '='")
 			return 2
+		case failKnob(dir, "moxy-narrows-pass-tools-widen"):
+			violations = FakePassToolsViolations
+			fallthrough
 		case failKnob(dir, "moxy-narrows-widen"):
 			if fl["json"] == "true" && failKnob(dir, "moxy-narrows-nojson") {
 				fmt.Println("not json")
@@ -669,14 +702,14 @@ func fakeMoxyCLI(dir string, args []string) int {
 			}
 			if fl["json"] == "true" {
 				var vs []map[string]string
-				for _, l := range FakeNarrowsViolations {
+				for _, l := range violations {
 					k, m, _ := strings.Cut(l, ": ")
 					vs = append(vs, map[string]string{"key": k, "subject": k, "message": m})
 				}
 				b, _ := json.Marshal(map[string]any{"narrows": false, "violations": vs})
 				fmt.Println(string(b))
 			} else {
-				fmt.Println(strings.Join(FakeNarrowsViolations, "\n"))
+				fmt.Println(strings.Join(violations, "\n"))
 			}
 			return 1
 		}

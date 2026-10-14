@@ -811,6 +811,64 @@ servers.shell: not in the parent" ]]
     and .[0].state == "maintenance" and (.[0] | has("detail") | not)'
 }
 
+# moxy#459 / clown#254: moxy narrows now treats allow-tools and pass-tools as
+# a single union when checking what the parent holds, so a child may
+# legitimately elevate a tool the parent only passes (the one upward step
+# the relation permits).
+@test "spawn --brief mints when the brief's allow-tools elevates a tool the spawner holds only at pass" {
+  local root
+  root=$(stored_run rk2 .root_principal)
+  cat >"$BATS_TEST_TMPDIR/pass-tools-brief.toml" <<'EOF'
+schema = 1
+model = "jev"
+system = "You archive one issue per actionable item."
+tools = ["ring_archive"]
+moxyfile = """
+allow-tools = ["ring.archive"]
+"""
+
+[evaluator]
+kind = "jq"
+program = ".cannot_complete == null"
+
+[limits]
+steps = 3
+wall_clock = "20s"
+EOF
+  : >"$FAKE_DIR/moxy-parent-pass-tools"
+  run_jug_as "$root" spawn --brief "$BATS_TEST_TMPDIR/pass-tools-brief.toml" --task - <<<"pass-tools task"
+  rm -f "$FAKE_DIR/moxy-parent-pass-tools"
+  expect_status 0
+  local digest parent
+  digest=$(field .parent_moxyfile_digest)
+  [[ -n $digest ]]
+  parent=$(fake_calls '[[.[] | select(.tool == "systemd-run")][-1].argv[] | select(startswith("--setenv=MOXY_PARENT_MOXYFILE=")) | ltrimstr("--setenv=MOXY_PARENT_MOXYFILE=")][0]' | jq -r .)
+  [[ -f $parent ]]
+  grep -qxF 'pass-tools = ["ring.archive"]' "$parent"
+  fake_calls '[.[] | select(.tool == "moxy")][-2:] | map(.argv[0]) == ["show-effective-moxyfile", "narrows"]' | grep -qx true
+}
+
+@test "spawn --brief refuses when the brief's allow-tools holds a tool the spawner holds at neither use nor pass" {
+  local root run_job mints_before narrows_refusals_before refusals
+  root=$(stored_run rk2 .root_principal)
+  run_job=$(stored_run rk2 .run_job)
+  mints_before=$(fake_calls '[.[] | select(.tool == "troupe" and .argv[0] == "mint")] | length')
+  run_jug job-ledger "$run_job"
+  narrows_refusals_before=$(jq '[.calls[] | select(.tool == "narrows" and .kind == "refusal" and .ok == false)] | length' <<<"$output")
+  mkdir -p "$FAKE_DIR/fail"
+  : >"$FAKE_DIR/fail/moxy-narrows-pass-tools-widen"
+  run_jug_as "$root" spawn --brief "$BATS_FILE_TMPDIR/issue-filer.toml" --task - <<<"pass-tools miss task"
+  rm -f "$FAKE_DIR/fail/moxy-narrows-pass-tools-widen"
+  expect_status 1
+  [[ $stderr == "juggler: spawn: brief moxyfile widens the spawner's:
+allow-tools: child holds ring.archive at use, parent at none" ]]
+  [[ $(fake_calls '[.[] | select(.tool == "troupe" and .argv[0] == "mint")] | length') -eq $mints_before ]]
+  run_jug job-ledger "$run_job"
+  refusals=$(jq '[.calls[] | select(.tool == "narrows" and .kind == "refusal" and .ok == false)] | length' <<<"$output")
+  [[ $refusals -eq $((narrows_refusals_before + 1)) ]]
+  expect_json '([.calls[] | select(.tool == "narrows" and .kind == "refusal")][-1].violations | map(.key)) == ["allow-tools"]'
+}
+
 @test "spawn --brief refuses with a detail when systemctl reports no state at all" {
   local root run_job mints_before moxy_calls_before children_before pw_before
   root=$(stored_run rk2 .root_principal)

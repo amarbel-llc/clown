@@ -401,6 +401,33 @@ manager's state
 .Pq Ql unknown , No with a Ql detail No explanation, when systemctl's own exit carried no state at all ,
 recorded for a subagent spawn in the run ledger as
 .Sy {"tool":"systemd","kind":"refusal","ok":false,"reason":"...","state":"<state>","detail":"..."} .
+Next, for
+.Fl -brief
+spawns, comes the moxyfile narrowing check: the brief's inline moxyfile
+must not widen the spawner's own effective one, checked with
+.Cm moxy narrows
+and refused with moxy's violation lines verbatim plus a ledger entry
+.Sy {"tool":"narrows","kind":"refusal","ok":false,"violations":[...],"moxy_bin":"...","parent_moxyfile_digest":"..."} .
+moxy's
+.Ql pass-tools
+.Pq moxy#459
+is a third, confer-only tier below
+.Ql allow-tools :
+a holder may confer a pass tool on a child but never call it itself.
+The check covers both tiers' union \(em
+.Ql child.allow-tools
+and
+.Ql child.pass-tools
+must each be covered by
+.Ql parent.allow-tools
+union
+.Ql parent.pass-tools
+\(em so a brief may legitimately set its own
+.Ql allow-tools
+to a tool the spawner holds only at
+.Ql pass ,
+the one upward step the relation permits
+.Pq FDR 0019 No details .
 .Cm juggler run
 is a ringmaster producer
 .Pq start at boot, progress per turn, done at the end ;
