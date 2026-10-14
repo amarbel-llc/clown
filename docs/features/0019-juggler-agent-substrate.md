@@ -655,29 +655,40 @@ its own `allow-tools` to a tool the spawner holds only at `pass` — the
 one upward step (`pass` → `use`) the relation permits, pre-approved when
 the spawner's own moxyfile was written. A violation names the tier:
 `allow-tools: child holds <tool> at use, parent at none` / `pass-tools:
-child holds <tool> at pass, parent at none`; the existing "the parent
-sets allow-tools; the child must set it too" requirement is unchanged
-(a parent with `pass-tools` always has an allowlist, so its child
-always sets one too, if only `[]` beside the tools it passes on).
+child holds <tool> at pass, parent at none`. When the parent has an
+allowlist and the child sets none at all, the violation is instead
+`allow-tools: parent sets an allowlist, child does not` — unchanged by
+pass-tools (a parent with `pass-tools` always has an allowlist, so its
+child always sets one too, if only `[]` beside the tools it passes on).
 
 **Escalation note (moxy#461).** moxy documents an open risk: a session
 able to rewrite its own moxyfile and then call moxy's own `restart`
-tool can lift a tool it holds at `pass` to `use` for itself, since the
-narrowing check runs only at spawn and at moxy startup/reload against
-the *parent* reference, not per-tool-tier across an agent's own later
-edits. For a juggler agent this needs two things to hold at once: its
-own moxyfile must be writable by itself, and `restart` must be among
-its own `allow-tools`. The first is true today — the agent's moxyfile
-is written to `<AgentStateDir>/moxyfile` (`internal/jugglerrun/toolplane.go`),
-which is moxy's own CWD, and `AgentStateDir`'s own doc comment
-(`internal/jugglerrun/store.go`) says plainly that "folio-style tools
-auto-allow writes inside CWD" — so an agent holding an ordinary
-file-write tool can rewrite its own moxyfile. The second is not: no
-brief in this repo sets `restart` in `tools` or `allow-tools`, and
-juggler adds none itself. So a stock juggler agent is not exposed
-today, but that is a property of what a brief's author chooses to
-list, not a guarantee juggler enforces — a brief that adds `restart` to
-its own `allow-tools` reopens the gap.
+tool can widen its own tool access, because moxy's reload check
+validates only against the *parent* reference pinned at spawn. A
+brief's `tools` is **not** the gate here: it only filters what is
+*advertised* to the model (`FilterToolsToAllowlist`,
+`internal/jugglerrun/agent.go`), while the loop forwards whatever tool
+name the model actually emits straight to moxy
+(`internal/jugglerloop/loop.go`) with no re-check against `tools` —
+that gap is tracked separately, clown#261. moxy's own `allow-tools` is
+the real gate. Stock briefs set no `allow-tools` at all, and with no
+allowlist moxy holds every tool — including its own `restart` — at
+`use` already, so pass-to-use is moot there: nothing is held below
+`use` to escalate from. The narrower claim does hold once a spawner's
+own moxyfile sets `pass-tools`: moxy refuses to load `pass-tools`
+without an `allow-tools` beside it, so such a spawner's child always
+sets one too, and `restart` is then reachable only if that child's own
+brief names it. The agent's own moxyfile IS writable by itself today —
+it is written to `<AgentStateDir>/moxyfile`
+(`internal/jugglerrun/toolplane.go`), which is moxy's own CWD, and
+`AgentStateDir`'s own doc comment (`internal/jugglerrun/store.go`) says
+plainly that "folio-style tools auto-allow writes inside CWD" — so an
+agent holding an ordinary file-write tool can rewrite it. And the
+actual reach, once that holds, is wider than one tool's pass-to-use
+step: because the reload check only bounds the agent to the pinned
+spawner reference as a whole, a rewrite-then-`restart` can widen the
+agent up to the *spawner's entire* `allow-tools ∪ pass-tools` set, not
+just the one tool it started at `pass`.
 
 Headless posture: any moxy permission tier other than `always-allow`
 resolves to **deny** for a juggler agent; the agent sees the denial as a

@@ -622,15 +622,21 @@ func fakeTroupe(dir string, args []string) int {
 }
 
 // FakeEffectiveMoxyfile is what the moxy fake's show-effective-moxyfile
-// prints, whatever the directory: a fixed, deterministic canonical doc.
-const FakeEffectiveMoxyfile = "# moxy show-effective-moxyfile (fake)\n[[servers]]\nname = \"ring\"\n\n[resolved-moxins]\nring = \"/nix/store/fake-ring/share/moxy/moxins/ring\"\n"
+// prints, whatever the directory: a fixed, deterministic canonical doc, with
+// [resolved-moxins] before [[servers]] as real moxy renders it
+// (RenderEffective, moxy's internal/config/effective.go).
+const FakeEffectiveMoxyfile = "# moxy show-effective-moxyfile (fake)\n[resolved-moxins]\nring = \"/nix/store/fake-ring/share/moxy/moxins/ring\"\n\n[[servers]]\nname = \"ring\"\n"
 
-// FakeEffectiveMoxyfilePassToolsLine is appended to FakeEffectiveMoxyfile's
-// output under the moxy-parent-pass-tools knob (moxy#459, clown#254): the
-// spawner holds "ring.archive" at pass, not use, so a brief's own
-// allow-tools may legitimately elevate it to use — the one upward step the
-// narrowing relation permits.
-const FakeEffectiveMoxyfilePassToolsLine = "pass-tools = [\"ring.archive\"]\n"
+// FakeEffectiveMoxyfilePassTools is FakeEffectiveMoxyfile's
+// moxy-parent-pass-tools variant (moxy#459, clown#254): allow-tools and
+// pass-tools rendered top-level, before any table, the way RenderEffective
+// writes them. allow-tools is set (empty) alongside pass-tools because real
+// moxy refuses to load pass-tools without an allowlist beside it
+// (moxy's internal/config/config.go, validatePassTools) and its narrowing
+// check never consults pass-tools when the parent holds no allowlist at all
+// (moxy's internal/narrowing/narrowing.go, checkAllowTools) — the spawner
+// holds "ring.archive" at pass, nothing at use.
+const FakeEffectiveMoxyfilePassTools = "# moxy show-effective-moxyfile (fake)\nallow-tools = []\npass-tools = [\"ring.archive\"]\n\n[resolved-moxins]\nring = \"/nix/store/fake-ring/share/moxy/moxins/ring\"\n\n[[servers]]\nname = \"ring\"\n"
 
 // FakeNarrowsViolations are the two violations the moxy fake's narrows
 // reports under the fail/moxy-narrows-widen knob.
@@ -642,7 +648,11 @@ var FakeNarrowsViolations = []string{
 // FakePassToolsViolations is the violation the moxy fake's narrows reports
 // under the fail/moxy-narrows-pass-tools-widen knob (moxy#459, clown#254): a
 // tool the child's allow-tools holds at use that the parent holds at
-// neither use nor pass, in moxy 8d69aa4's exact wording.
+// neither use nor pass. Its message half (after "<key>: ") is moxy
+// 8d69aa4's exact wording (internal/narrowing/narrowing.go:124 in the moxy
+// repo); that verbatim-wording claim covers only this one line, not
+// FakeNarrowsViolations below, which predates it and is its own
+// approximation.
 var FakePassToolsViolations = []string{
 	"allow-tools: child holds ring.archive at use, parent at none",
 }
@@ -655,14 +665,16 @@ func knobExists(dir, name string) bool {
 	return err == nil
 }
 
-// fakeMoxyCLI is moxy's narrowing CLI (moxy 8d69aa4): show-effective-moxyfile
-// prints FakeEffectiveMoxyfile, plus FakeEffectiveMoxyfilePassToolsLine under
-// the moxy-parent-pass-tools knob; narrows exits 0 unless a knob says
-// otherwise — fail/moxy-narrows-widen exits 1 with FakeNarrowsViolations,
-// fail/moxy-narrows-pass-tools-widen exits 1 with FakePassToolsViolations
-// (either as lines, or the --json form; with fail/moxy-narrows-nojson too,
-// the --json form is unparseable), fail/moxy-narrows-broken exits 2 with a
-// reason on stderr. Both verbs check their path arguments exist.
+// fakeMoxyCLI is moxy's narrowing CLI: show-effective-moxyfile prints
+// FakeEffectiveMoxyfile, or FakeEffectiveMoxyfilePassTools under the
+// moxy-parent-pass-tools knob (juggler is pass-tools-agnostic either way —
+// it only renders and stages whatever moxy prints, FDR 0019 §5). narrows
+// exits 0 unless a knob says otherwise — fail/moxy-narrows-widen exits 1
+// with FakeNarrowsViolations, fail/moxy-narrows-pass-tools-widen exits 1
+// with FakePassToolsViolations (either as lines, or the --json form; with
+// fail/moxy-narrows-nojson too, the --json form is unparseable),
+// fail/moxy-narrows-broken exits 2 with a reason on stderr. Both verbs
+// check their path arguments exist.
 func fakeMoxyCLI(dir string, args []string) int {
 	if len(args) == 0 {
 		return 2
@@ -676,7 +688,7 @@ func fakeMoxyCLI(dir string, args []string) int {
 		}
 		out := FakeEffectiveMoxyfile
 		if knobExists(dir, "moxy-parent-pass-tools") {
-			out += FakeEffectiveMoxyfilePassToolsLine
+			out = FakeEffectiveMoxyfilePassTools
 		}
 		fmt.Print(out)
 		return 0

@@ -407,7 +407,7 @@ spawns, comes the moxyfile narrowing check: the brief's inline moxyfile
 must not widen the spawner's own effective one, checked with
 .Cm moxy narrows
 and refused with moxy's violation lines verbatim plus a ledger entry
-.Sy {"tool":"narrows","kind":"refusal","ok":false,"violations":[...],"moxy_bin":"...","parent_moxyfile_digest":"..."} .
+.Sy {"tool":"narrows","kind":"refusal","ok":false,"uris":[],"reason":"brief moxyfile widens the spawner's","violations":[...],"moxy_bin":"...","parent_moxyfile_digest":"..."} .
 moxy's
 .Ql pass-tools
 .Pq moxy#459
@@ -427,7 +427,7 @@ union
 to a tool the spawner holds only at
 .Ql pass ,
 the one upward step the relation permits
-.Pq FDR 0019 No details .
+.Pq see FDR 0019 .
 .Cm juggler run
 is a ringmaster producer
 .Pq start at boot, progress per turn, done at the end ;

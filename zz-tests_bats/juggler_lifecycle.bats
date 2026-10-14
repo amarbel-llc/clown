@@ -812,13 +812,12 @@ servers.shell: not in the parent" ]]
 }
 
 # moxy#459 / clown#254: moxy narrows now treats allow-tools and pass-tools as
-# a single union when checking what the parent holds, so a child may
-# legitimately elevate a tool the parent only passes (the one upward step
-# the relation permits).
-@test "spawn --brief mints when the brief's allow-tools elevates a tool the spawner holds only at pass" {
-  local root
-  root=$(stored_run rk2 .root_principal)
-  cat >"$BATS_TEST_TMPDIR/pass-tools-brief.toml" <<'EOF'
+# a single union when checking what the parent holds. juggler itself is
+# pass-tools-agnostic: it renders and stages whatever moxy prints and relays
+# moxy's verdict verbatim, so these two cases exercise that passthrough
+# against the fake's canned fixtures/violations, not moxy's own real logic.
+_write_pass_tools_brief() {
+  cat >"$1" <<'EOF'
 schema = 1
 model = "jev"
 system = "You archive one issue per actionable item."
@@ -835,16 +834,24 @@ program = ".cannot_complete == null"
 steps = 3
 wall_clock = "20s"
 EOF
+}
+
+@test "spawn --brief mints when the brief's allow-tools elevates a tool the spawner holds only at pass" {
+  local root
+  root=$(stored_run rk2 .root_principal)
+  _write_pass_tools_brief "$BATS_TEST_TMPDIR/pass-tools-brief.toml"
   : >"$FAKE_DIR/moxy-parent-pass-tools"
   run_jug_as "$root" spawn --brief "$BATS_TEST_TMPDIR/pass-tools-brief.toml" --task - <<<"pass-tools task"
   rm -f "$FAKE_DIR/moxy-parent-pass-tools"
   expect_status 0
+  [[ $(jq -r .moxin_path <<<"$output") == "" ]]
   local digest parent
   digest=$(field .parent_moxyfile_digest)
-  [[ -n $digest ]]
   parent=$(fake_calls '[[.[] | select(.tool == "systemd-run")][-1].argv[] | select(startswith("--setenv=MOXY_PARENT_MOXYFILE=")) | ltrimstr("--setenv=MOXY_PARENT_MOXYFILE=")][0]' | jq -r .)
   [[ -f $parent ]]
-  grep -qxF 'pass-tools = ["ring.archive"]' "$parent"
+  [[ $digest == "sha256:$(sha256sum "$parent" | cut -d' ' -f1)" ]]
+  # Top-level, before any table — not nested under [resolved-moxins].
+  awk '/^\[/{exit} /^pass-tools = \["ring\.archive"\]$/{f=1} END{exit f?0:1}' "$parent"
   fake_calls '[.[] | select(.tool == "moxy")][-2:] | map(.argv[0]) == ["show-effective-moxyfile", "narrows"]' | grep -qx true
 }
 
@@ -855,9 +862,10 @@ EOF
   mints_before=$(fake_calls '[.[] | select(.tool == "troupe" and .argv[0] == "mint")] | length')
   run_jug job-ledger "$run_job"
   narrows_refusals_before=$(jq '[.calls[] | select(.tool == "narrows" and .kind == "refusal" and .ok == false)] | length' <<<"$output")
+  _write_pass_tools_brief "$BATS_TEST_TMPDIR/pass-tools-brief.toml"
   mkdir -p "$FAKE_DIR/fail"
   : >"$FAKE_DIR/fail/moxy-narrows-pass-tools-widen"
-  run_jug_as "$root" spawn --brief "$BATS_FILE_TMPDIR/issue-filer.toml" --task - <<<"pass-tools miss task"
+  run_jug_as "$root" spawn --brief "$BATS_TEST_TMPDIR/pass-tools-brief.toml" --task - <<<"pass-tools miss task"
   rm -f "$FAKE_DIR/fail/moxy-narrows-pass-tools-widen"
   expect_status 1
   [[ $stderr == "juggler: spawn: brief moxyfile widens the spawner's:
