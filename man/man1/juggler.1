@@ -1247,7 +1247,7 @@ file, neither of which
 .Cm resolve
 touches; a still-running child, or one whose journal could not even be
 read, is skipped entirely
-.Pq the identical Ringmaster.Records/terminal check Cm resolve Ns 's own teardown uses, including its keep-on-error handling: an unreadable journal is never mistaken for a gone one ,
+.Pq the job's terminal state in ringmaster, the identical check Cm resolve Ns 's own teardown uses, including its keep-on-error handling: an unreadable journal is never mistaken for a gone one ,
 never unlinking a traffic file a live agent might still be appending
 to; such a run stays listed, reporting
 .Ql reaped No false ,
@@ -1279,6 +1279,13 @@ ledger entry is appended \(em in that order, not the reverse, so a
 crash between the two still leaves the run key correctly refused
 either way, never a window where the ledger already claims the root
 gone while the record itself could still resume.
+A tombstone saved right before the ledger write then fails loses that
+one teardown's audit entry for good
+.Pq nothing retries it, since the tombstone already refuses any resume ,
+but stays safe: the account is really revoked and the key really
+retired, just not perfectly audited, and the
+.Fl -act
+run that hit it exits 2 to surface the gap once.
 A tombstone, not a delete: the root principal is a deterministic
 function of the run key, so deleting the record would let a later
 .Fl -new-run
@@ -1299,10 +1306,13 @@ is given
 Exits 2 under
 .Fl -act
 if any listed run could not be fully reaped
-.Pq an error, or Ql reaped No false ;
+.Pq an error, or Ql reaped No false
+and not merely
+.Ql skipped
+.Pq a benign race: a retry resumed or refreshed the run between the sweep's listing and its own lock/reload ;
 a dry-run always exits 0.
 Prints
-.Sy {"dry_run","older_than","resolved","resolved_older_than","runs":[{"run_key","kind","age","reaped","detail","error"}]} .
+.Sy {"dry_run","older_than","resolved","resolved_older_than","runs":[{"run_key","kind","age","reaped","skipped","detail","error"}]} .
 Never destroys a room or revokes a child's account: those stay
 .Cm resolve Ns 's
 job, and, for rooms, the host's own retention sweep's.

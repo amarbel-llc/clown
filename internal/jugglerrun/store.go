@@ -205,11 +205,17 @@ type RunRecord struct {
 	Pending bool `json:"pending,omitempty"`
 	// PendingSince is when the run most recently became (or remained)
 	// pending: `failed()` (spawn.go) stamps it on every failed `--new-run`
-	// attempt, including a retry's own failure — unlike CreatedAt, which a
-	// resume carries forward unchanged (spawn.go's resume path). `juggler
-	// clean`'s age guard reads this, not CreatedAt: a retry policy with
-	// backoff whose total span exceeds the guard must not have its run
-	// reaped between attempts just because the run is, in total, old.
+	// attempt, including a retry's own failure, and `NewRun`'s resume path
+	// stamps it again immediately on EVERY resuming attempt — before the
+	// systemd check or the mint, either of which can fail and return bare,
+	// before failed() ever runs — unlike CreatedAt, which a resume carries
+	// forward unchanged. `juggler clean`'s age guard reads this, not
+	// CreatedAt: a retry policy with backoff whose total span exceeds the
+	// guard must not have its run reaped between attempts just because the
+	// run is, in total, old. A record from before clown#250 has no
+	// PendingSince at all (its zero value); clean's pendingSince() helper
+	// falls back to CreatedAt for one of those, rather than reading a zero
+	// value as "enormously overdue."
 	PendingSince time.Time `json:"pending_since,omitempty"`
 	// TornDown is set by `juggler resolve`'s teardown once every account of
 	// the run (each child's, then the root's) is revoked or already gone and

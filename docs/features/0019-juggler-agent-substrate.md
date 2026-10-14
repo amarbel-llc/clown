@@ -236,7 +236,10 @@ channel, and it never parses the room):
      `RunRecord.pending_since` — stamped fresh on every failed attempt,
      not `created_at`, which a resume carries forward unchanged, so a
      retry policy whose total span exceeds the guard is never reaped
-     between its own attempts): revokes the root the same way `resolve`'s
+     between its own attempts; a pre-clown#250 record with no
+     `pending_since` at all falls back to `created_at` rather than
+     reading its zero value as enormously overdue): revokes the root the
+     same way `resolve`'s
      own teardown does (`teardownRoot`: room affiliation dropped only
      when the room has an operator owner, account and password file
      revoked/deleted) and, once that succeeds, **tombstones** the record
@@ -1135,9 +1138,20 @@ The router, before any subagent exists:
   serialise on the same per-run lock AND clean re-checks the age guard
   against a freshly reloaded record once it holds that lock, not just
   the listing-time snapshot that queued it for reaping), clean revokes
-  the root (`teardownRoot`, the same helper `resolve` uses), appends a
-  `teardown` ledger entry, and **tombstones** the record rather than
-  deleting it: `pending: false, reaped: true, reaped_at`. Because the
+  the root (`teardownRoot`, the same helper `resolve` uses) and, once
+  that succeeds, **tombstones** the record — `pending: false, reaped:
+  true, reaped_at` — first, THEN appends the `teardown` ledger entry
+  (not the reverse): the tombstone is what `spawn --new-run`'s
+  `CheckOpen` actually consults, so a crash between the two always
+  leaves the run key correctly refused either way, never a window
+  where the ledger claims the root gone while the record could still
+  resume. (A tombstone saved right before a ledger write that then
+  fails loses that one teardown's audit entry permanently — nothing
+  retries it, since the tombstone already refuses any resume — but
+  stays safe: the account really is revoked and the key really is
+  retired, just not perfectly audited, and the one `clean --act` that
+  hit it exits non-zero to surface the gap.) A tombstone, not a
+  delete: because the
   root is a function of the run key, deleting the record outright would
   let a later `--new-run` with the same key re-mint a brand-new account
   under that same deterministic principal — one the ledger's existing ok
@@ -1326,7 +1340,7 @@ The router, before any subagent exists:
 | daemon for remote models | optional | the webhook host's service user has no user session | a host needs local inference for these agents (→ system-service daemon) |
 | agent-scope realisation | open: sub-cgroup vs sibling unit | the bullet needs neither namespaces nor the choice | signing lands, or a non-fixed-surface tool server appears (→ sibling unit + `limits.sandbox`) |
 | `traffic.jsonl` retention | append-only within a run, truncated only on a retry of the SAME job (clown#255); swept with `--resolved` once resolved and past `juggler clean`'s resolved-run age guard (clown#250) | arguments are the whole point of the file; capping or rotating within a run would defeat the audits it exists for. Its own `traffic/` tree (not `agents/<principal>/`, which is moxy's CWD and so tool-reachable) is reaped by clean; `agents/<principal>/` itself still has no sweep | clean's sweep needs to run on a schedule rather than by hand (→ a `ringmaster reap`-style systemd timer invoking `juggler clean --act --resolved`) |
-| `juggler clean --older-than` | 1h | an in-flight retry must never be reaped out from under itself; 1h is generous headroom over any realistic backoff while still closing the leak promptly. Measured from `pending_since`, stamped fresh on every failed attempt (not `created_at`, which a resume carries forward unchanged) | a retry policy's total span routinely exceeds 1h (→ raise it, or stamp a policy-aware deadline instead of a flat duration) |
+| `juggler clean --older-than` | 1h | an in-flight retry must never be reaped out from under itself; 1h is generous headroom over any realistic backoff while still closing the leak promptly. Measured from `pending_since`, stamped fresh on every failed attempt (not `created_at`, which a resume carries forward unchanged — though a pre-clown#250 record with no `pending_since` at all falls back to `created_at` rather than reading a zero value as overdue) | a retry policy's total span routinely exceeds 1h (→ raise it, or stamp a policy-aware deadline instead of a flat duration) |
 | `juggler clean --resolved-older-than` | 30d | matches the host's current interim room-retention rule (see "Per-run rooms accumulate" above); staged/traffic files are audit material, not scratch that should vanish quickly, so this is a retention policy, not a retry guard | the host's room-retention rule changes, or staged/traffic files need to outlive 30d for a slower-moving audit need |
 | exit-wake emitter | the unit's `ExecStopPost` hook, sole emitter | survives every ending the main process does not | a holder needs a wake on the systemd-dead path (→ holder-side timeout or a cross-host watcher) |
 | router confidence threshold | 0.5 (`--min-confidence`, overridable per brief) | operator's first-bullet figure; below it the subagent is skipped and the fallback note records the choice and confidence. NOTE (two live calls, 2026-10-06): the API's `confidence` is the MARGIN over the runner-up (0.63 vs 0.37 → confidence 0.26), not the winning probability, so with two options 0.5 means roughly "0.75 or better"; semantics for 3+ options unverified. The stanza carries both `confidence` and the chosen option's probability | mirror-phase data shows good choices rejected or bad ones accepted |

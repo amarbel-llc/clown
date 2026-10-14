@@ -55,9 +55,17 @@ type CleanRunResult struct {
 	// Reaped is whether the reap succeeded. Always false for a dry-run
 	// (Act unset): Clean never computes a speculative "would succeed"
 	// verdict, only what it actually did.
-	Reaped bool   `json:"reaped"`
-	Detail string `json:"detail"`
-	Error  string `json:"error,omitempty"`
+	Reaped bool `json:"reaped"`
+	// Skipped is true when a PENDING run that the listing-time snapshot
+	// queued for reaping turned out, once cleanPendingRun actually held the
+	// lock and reloaded it, to no longer need reaping — a retry resumed it,
+	// or refreshed PendingSince, in the race window between the two (clean
+	// #250 review, should-fix 2). This is not a failure: the CLI's exit
+	// loop must not raise a false alarm every time a periodic sweep merely
+	// loses a race against a legitimate retry.
+	Skipped bool   `json:"skipped,omitempty"`
+	Detail  string `json:"detail"`
+	Error   string `json:"error,omitempty"`
 }
 
 // CleanOutcome is `juggler clean`'s stdout object.
@@ -142,7 +150,17 @@ func pendingSince(run *RunRecord) time.Time {
 // (clown#250 review item 2): a retry that holds the lock, fails again (its
 // own fresh PendingSince), then loses the lock to this call must not be
 // reaped just because the ORIGINAL PendingSince the sweep listed it by was
-// old enough — the retry is still in flight.
+// old enough — the retry is still in flight. Either re-check's failure sets
+// Skipped, not just a false Reaped: a periodic sweep losing this race is
+// routine, not a failure the CLI's exit code should flag.
+//
+// A tombstone saved right before a ledger write that then fails (the run's
+// own lock or disk goes bad between the two) loses that teardown's audit
+// entry permanently: nothing retries it, since the tombstone already makes
+// the key refuse ever resuming. This is still safe — the account really is
+// revoked and the key really is retired, so nothing leaks — just not
+// perfectly audited; Error is set either way so the one `clean --act` run
+// that hit it exits non-zero and surfaces the gap once.
 //
 // The ledger entry is appended directly (loadRunLedger, then
 // writeJSONAtomic), not through the public AppendRunLedgerEntry: that guard
@@ -170,11 +188,13 @@ func cleanPendingRun(ctx context.Context, deps LifecycleDeps, run *RunRecord, ac
 		return res
 	}
 	if fresh == nil || !fresh.Pending {
+		res.Skipped = true
 		res.Detail = "skipped: no longer pending (retried, or already cleaned, since the sweep listed it)"
 		return res
 	}
 	if freshAge := now.Sub(pendingSince(fresh)); freshAge < olderThan {
 		res.Age = freshAge.Round(time.Second).String()
+		res.Skipped = true
 		res.Detail = "skipped: no longer past the age guard (a retry refreshed PendingSince since the sweep listed it)"
 		return res
 	}
@@ -302,7 +322,7 @@ func cleanResolvedRun(ctx context.Context, deps LifecycleDeps, run *RunRecord, a
 		res.Detail = fmt.Sprintf("removed %d of %d staged/traffic file(s)", removed, found)
 	}
 	if liveSkipped > 0 {
-		res.Detail = fmt.Sprintf("%s (%d still-running child skipped)", res.Detail, liveSkipped)
+		res.Detail = fmt.Sprintf("%s (%d still-running or unreadable child skipped)", res.Detail, liveSkipped)
 	}
 	if len(notes) > 0 {
 		res.Error = joinNotes(notes[0], notes[1:])

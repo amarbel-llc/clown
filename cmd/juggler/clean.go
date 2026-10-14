@@ -26,9 +26,10 @@ const cleanTimeout = 5 * time.Minute
 // reason (teardownRoot calls troupe mint-revoke) — checked upfront, like
 // resolve, so a sweep never reaps some runs before discovering the
 // credential is missing for the rest. Exits non-zero under --act if any
-// listed run could not be fully reaped (an error, or reaped:false) — a
-// dry-run always exits 0, since nothing there was ever expected to be
-// "reaped" yet.
+// listed run could not be fully reaped (an error, or reaped:false) and
+// wasn't merely skipped (skipped:true — a benign race against a legitimate
+// retry, not a failure) — a dry-run always exits 0, since nothing there was
+// ever expected to be "reaped" yet.
 func cmdClean(args []string, stdout, stderr io.Writer) int {
 	var (
 		bins                         platformBins
@@ -65,7 +66,7 @@ func cmdClean(args []string, stdout, stderr io.Writer) int {
 		printJSON(stdout, out)
 		if act {
 			for _, r := range out.Runs {
-				if r.Error != "" || !r.Reaped {
+				if r.Error != "" || (!r.Reaped && !r.Skipped) {
 					return jr.ExitFailed
 				}
 			}

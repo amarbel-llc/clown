@@ -191,6 +191,53 @@ func TestClean_ActKeepsRecordWhenRevokeFails(t *testing.T) {
 	}
 }
 
+// TestClean_TombstoneSurvivesALedgerWriteFailure covers the clown#250
+// review's low item 5: the tombstone (SaveRun) must be written BEFORE the
+// teardown ledger entry, not after — so a failure writing the ledger still
+// leaves the run key correctly, permanently refused, never a window where
+// the ledger could claim the root gone while the record itself could still
+// resume. Forced by pre-creating a DIRECTORY at the ledger's own path (not
+// by locking down the run's directory, which would also break
+// teardownRoot/revokeAccount's own password-file deletion — neither of
+// which ever touches ledger.json).
+func TestClean_TombstoneSurvivesALedgerWriteFailure(t *testing.T) {
+	h := newHarness(t)
+	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	pending := pendingRun(t, h, "k", t0)
+	h.deps.Now = func() time.Time { return t0.Add(2 * time.Hour) }
+	if err := os.MkdirAll(h.deps.Store.RunLedgerPath("k"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := Clean(context.Background(), h.deps, CleanRequest{OlderThan: time.Hour, Act: true})
+	if err != nil {
+		t.Fatalf("Clean: %v", err)
+	}
+	if len(out.Runs) != 1 {
+		t.Fatalf("out = %+v", out)
+	}
+	r := out.Runs[0]
+	if r.Error == "" || !strings.Contains(r.Error, "recording the teardown") {
+		t.Errorf("result = %+v, want an error naming the ledger write failure", r)
+	}
+	if !r.Reaped {
+		t.Errorf("result = %+v, the account really was revoked and the key really is tombstoned; only the ledger audit entry failed", r)
+	}
+	rec, err := h.deps.Store.LoadRun("k")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec == nil || rec.Pending || !rec.Reaped || rec.ReapedAt == nil {
+		t.Errorf("the tombstone must have been written despite the ledger write failing: %+v", rec)
+	}
+	if _, err := os.Stat(pending.RootCredentialRef); !os.IsNotExist(err) {
+		t.Errorf("the account must still have been revoked and its password file deleted: %v", err)
+	}
+	if revoked := h.fakes.Revoked(t); len(revoked) != 1 || revoked[0] != testRoot {
+		t.Errorf("revoked = %v, want [%s]", revoked, testRoot)
+	}
+}
+
 // TestPendingSince_FallsBackToCreatedAtWhenZero covers the clown#250 review's
 // low item 4: a pre-clown#250 record has no PendingSince at all (its zero
 // value), which must not read as "enormously overdue" and get reaped on the
@@ -231,6 +278,9 @@ func TestClean_PendingRunRefreshedBetweenListingAndLockIsNotReaped(t *testing.T)
 	res := cleanPendingRun(context.Background(), h.deps, stale, true, time.Hour, now)
 	if res.Reaped {
 		t.Errorf("result = %+v, a freshly-refreshed PendingSince must not be reaped on a stale listing-time snapshot", res)
+	}
+	if !res.Skipped {
+		t.Errorf("result = %+v, losing this race is benign and must be reported as Skipped, not a bare non-reap (clown#250 review item 4)", res)
 	}
 	if !strings.Contains(res.Detail, "no longer past the age guard") {
 		t.Errorf("result.Detail = %q, want the re-check skip message", res.Detail)
@@ -477,7 +527,7 @@ func TestClean_ResolvedSweepSkipsAStillRunningChild(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Clean: %v", err)
 	}
-	if len(out.Runs) != 1 || !strings.Contains(out.Runs[0].Detail, "still-running child skipped") {
+	if len(out.Runs) != 1 || !strings.Contains(out.Runs[0].Detail, "still-running or unreadable child skipped") {
 		t.Fatalf("out.Runs = %+v", out.Runs)
 	}
 	if out.Runs[0].Reaped {
@@ -517,9 +567,9 @@ func TestClean_ResolvedSweepKeepsAChildOnARecordsError(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Ringmaster goes unreachable for THIS child's journal specifically,
-	// only at clean time (resolve above already ran against a healthy
-	// fake and correctly found the child still running).
+	// Ringmaster goes unreachable for THIS child's journal specifically, only
+	// at clean time, after Resolve above has already run against the
+	// healthy fake.
 	h.deps.Ringmaster = flakyRingmaster{ExecRingmaster: h.deps.Ringmaster.(ExecRingmaster), recordsOf: live.Job}
 	h.deps.Now = func() time.Time { return t0.Add(31 * 24 * time.Hour) }
 

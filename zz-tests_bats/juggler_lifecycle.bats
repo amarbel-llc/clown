@@ -1366,6 +1366,17 @@ mint_revokes_for() {
 }
 
 @test "clean --resolved sweeps a resolved run's staged and traffic files, skipping a still-running child, and leaves them alone without --resolved" {
+  # A fresh, test-private store (FAKE_DIR stays the shared one — it only
+  # holds the fake platform binaries, not juggler's own state): without
+  # this, rk1's stuck child from "spawn --brief --wait at --timeout exits 5
+  # when the cancelled job is still running after the stop grace" (which
+  # deliberately leaves that job running forever, saved to
+  # $BATS_FILE_TMPDIR/stuck-job) would be swept up by every later
+  # whole-store --resolved pass too, making the exit-code assertions below
+  # pass regardless of whether THIS run's own --resolved handling is
+  # correct (clown#250 review fold-in item 1).
+  export XDG_STATE_HOME="$BATS_TEST_TMPDIR/state"
+
   local root run_job
   run_jug spawn --new-run --run-key rk-clean-sweep --input - --issuer issuer-clean --room room-clean-sweep@rooms.test <<<'{"recording":"y"}'
   expect_status 0
@@ -1414,17 +1425,14 @@ mint_revokes_for() {
   # --act --resolved reaps the terminal (done) child's files, skips the
   # still-running (live) one. reaped is false (not a bare success): the live
   # child's own files are still out there, just untouched this pass
-  # (clown#250 review item 6). The exit code is non-zero too (ExitFailed=2):
-  # not only because of rk-clean-sweep's own skip, but also because this
-  # sweep is whole-store, not scoped to one run, and rk1's own child (left
-  # deliberately running forever by an earlier test, "resolve stops live
-  # children...") is swept up in every later --resolved pass too — so every
-  # assertion from here on scopes by run_key rather than asserting the bare
-  # overall exit code reflects THIS run alone.
+  # (clown#250 review item 6) — so the exit code is non-zero too
+  # (ExitFailed=2), and with the store isolated to this test (above) that
+  # exit code genuinely reflects rk-clean-sweep's own still-running child,
+  # not an unrelated fixture elsewhere.
   run_jug clean --resolved --resolved-older-than 0s --act
   expect_status 2
   expect_json '([.runs[] | select(.run_key == "rk-clean-sweep" and .kind == "resolved" and .reaped == false)] | length == 1)'
-  [[ $(jq -r '.runs[] | select(.run_key=="rk-clean-sweep") | .detail' <<<"$output") == *"still-running child skipped"* ]]
+  [[ $(jq -r '.runs[] | select(.run_key=="rk-clean-sweep") | .detail' <<<"$output") == *"still-running or unreadable child skipped"* ]]
   [[ ! -f $done_traffic ]]
   [[ ! -d $(dirname "$done_traffic") ]]
   [[ -f $live_traffic ]]
@@ -1433,19 +1441,20 @@ mint_revokes_for() {
 
   # Once the live child also terminalizes, THIS pass reaps its files too
   # (so rk-clean-sweep is still present here, reaped:true, not yet omitted —
-  # omission only applies to a run with nothing LEFT to find).
+  # omission only applies to a run with nothing LEFT to find) and, with
+  # nothing left unreaped anywhere in this isolated store, the exit code
+  # goes back to 0.
   "$FAKE_BIN/ringmaster" "done" "$live_job" --target "$root" --state succeeded --message "live done now"
   run_jug clean --resolved --resolved-older-than 0s --act
-  expect_status 2
+  expect_status 0
   expect_json '([.runs[] | select(.run_key == "rk-clean-sweep" and .kind == "resolved" and .reaped == true)] | length == 1)'
   [[ $(jq -r '.runs[] | select(.run_key=="rk-clean-sweep") | .detail' <<<"$output") == "removed 4 of 4 staged/traffic file(s)" ]]
   [[ ! -f $live_traffic ]]
 
-  # Idempotent, and nothing left to report for THIS run (clown#250 review
-  # point 6) — rk1's permanently-live fixture elsewhere in the shared state
-  # still keeps the overall exit non-zero, which is exactly the point: the
-  # exit code is a whole-store signal, not scoped to rk-clean-sweep alone.
+  # Idempotent, and nothing left to report (clown#250 review point 6): a
+  # second sweep must not keep re-listing a run with nothing left, and
+  # exits 0.
   run_jug clean --resolved --resolved-older-than 0s --act
-  expect_status 2
+  expect_status 0
   expect_json '([.runs[] | select(.run_key == "rk-clean-sweep")] | length == 0)'
 }
