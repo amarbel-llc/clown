@@ -339,9 +339,10 @@ in the ledger's
 .Ql notes
 array \(em naming the actual cause, not a generic failure \(em so an
 auditor does not mistake silence there for a complete record.
-.Cm juggler clean
-.Pq clown#250
-reaps a resolved run's traffic files once past its age guard;
+.Cm juggler clean Fl -resolved
+.Pq clown#250, off by default
+reaps a terminal child's traffic file once its run is resolved and past
+the sweep's own age guard, skipping a still-running child's;
 .Pa agents/<principal>/
 itself still has no sweep.
 A model API token or key is never among a tool's recorded arguments: it

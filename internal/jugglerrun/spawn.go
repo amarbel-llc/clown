@@ -172,6 +172,9 @@ func NewRun(ctx context.Context, deps LifecycleDeps, req NewRunRequest) (NewRunR
 	if err != nil {
 		return NewRunResult{}, err
 	}
+	if prior != nil && prior.Reaped {
+		return NewRunResult{}, prior.CheckOpen()
+	}
 	if prior != nil && !prior.Pending {
 		return newRunResult(prior, true), nil
 	}
@@ -210,6 +213,7 @@ func NewRun(ctx context.Context, deps LifecycleDeps, req NewRunRequest) (NewRunR
 		err := undo.unwind(cause)
 		pending := *rec
 		pending.Pending, pending.RootStanza, pending.RunJob, pending.Holders = true, "", "", nil
+		pending.PendingSince = deps.Now().UTC()
 		if saveErr := deps.Store.SaveRun(&pending); saveErr != nil {
 			return NewRunResult{}, fmt.Errorf("%w (saving the pending run record also failed: %v)", err, saveErr)
 		}

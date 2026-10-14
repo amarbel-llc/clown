@@ -1259,7 +1259,8 @@ EOF
 }
 
 # --- clean (clown#250): the retention sweep for a pending run's leaked root
-# account/password file/pending record -
+# account/password file, and (--resolved) a resolved run's leftover staged
+# and traffic files -
 
 @test "clean --act refuses without the minter credential" {
   local saved=$TROUPE_MINT_PASSWORD_FILE
@@ -1270,6 +1271,15 @@ EOF
   [[ $stderr == *"TROUPE_MINT_PASSWORD_FILE"* ]]
 }
 
+@test "clean refuses a negative --older-than or --resolved-older-than" {
+  run_jug clean --older-than -1s
+  expect_status 1
+  [[ $stderr == *"must not be negative"* ]]
+  run_jug clean --resolved-older-than -1s
+  expect_status 1
+  [[ $stderr == *"must not be negative"* ]]
+}
+
 # mint_revokes_for <principal>: how many `troupe mint-revoke --session-key
 # <principal> ...` calls were recorded. calls.jsonl is cumulative for the
 # whole file (BATS_NO_PARALLELIZE_WITHIN_FILE), so scope by principal rather
@@ -1278,6 +1288,19 @@ mint_revokes_for() {
   jq -s --arg p "$1" \
     '[.[] | select(.tool == "troupe" and .argv[0] == "mint-revoke") | (.argv | index("--session-key")) as $i | .argv[$i + 1]] | map(select(. == $p)) | length' \
     "$FAKE_DIR/calls.jsonl"
+}
+
+@test "clean skips a pending run younger than --older-than" {
+  mkdir -p "$FAKE_DIR/fail"
+  : >"$FAKE_DIR/fail/troupe-muc-send"
+  run_jug spawn --new-run --run-key rk-clean-young --input - --issuer issuer-clean --room room-clean-young@rooms.test <<<'{"recording":"x"}'
+  rm -f "$FAKE_DIR/fail/troupe-muc-send"
+  expect_status 1
+
+  # The run exists, pending, but is too young: it must not appear.
+  run_jug clean --older-than 24h
+  expect_status 0
+  expect_json '([.runs[] | select(.run_key == "rk-clean-young")] | length == 0)'
 }
 
 @test "clean dry-run lists a pending run past --older-than without touching it" {
@@ -1295,21 +1318,29 @@ mint_revokes_for() {
   [[ $(field .dry_run) == true ]]
   [[ -n $(jq -r '.runs[] | select(.run_key=="rk-clean-1") | .detail' <<<"$output") ]]
   [[ $(mint_revokes_for "$(<"$BATS_FILE_TMPDIR/rk-clean-1-root")") -eq 0 ]]
-  [[ -f $XDG_STATE_HOME/juggler/runs/rk-clean-1.json ]]
+  [[ $(jq -r .pending "$XDG_STATE_HOME/juggler/runs/rk-clean-1.json") == true ]]
 }
 
-@test "clean skips a pending run younger than --older-than" {
-  run_jug clean --older-than 24h
-  expect_status 0
-  expect_json '([.runs[] | select(.run_key == "rk-clean-1")] | length == 0)'
-}
+@test "clean --act reaps a pending run past --older-than: revokes the root, deletes the password file, tombstones the record, appends a teardown ledger entry" {
+  local pw
+  pw=$(jq -r .root_credential_ref "$XDG_STATE_HOME/juggler/runs/rk-clean-1.json")
+  [[ -s $pw ]]
 
-@test "clean --act reaps a pending run past --older-than: revokes the root, removes the pending record, appends a teardown ledger entry" {
   run_jug clean --older-than 0s --act
   expect_status 0
   expect_json '([.runs[] | select(.run_key == "rk-clean-1" and .kind == "pending" and .reaped == true)] | length == 1)'
   [[ $(mint_revokes_for "$(<"$BATS_FILE_TMPDIR/rk-clean-1-root")") -eq 1 ]]
-  [[ ! -f $XDG_STATE_HOME/juggler/runs/rk-clean-1.json ]]
+  [[ ! -f $pw ]]
+
+  # Tombstoned, not removed: the run key stays retired forever
+  # (RunRecord.Reaped), never resumable, never re-minted under its
+  # deterministic root principal.
+  [[ -f $XDG_STATE_HOME/juggler/runs/rk-clean-1.json ]]
+  # pending,omitempty: a false value is simply absent from the JSON (jq
+  # reads it back as null), not literally "false".
+  [[ $(jq -r '.pending // false' "$XDG_STATE_HOME/juggler/runs/rk-clean-1.json") == false ]]
+  [[ $(jq -r .reaped "$XDG_STATE_HOME/juggler/runs/rk-clean-1.json") == true ]]
+  [[ $(jq -r .reaped_at "$XDG_STATE_HOME/juggler/runs/rk-clean-1.json") != null ]]
   [[ -f $XDG_STATE_HOME/juggler/runs/rk-clean-1/ledger.json ]]
   [[ $(jq -r '.calls[-1].tool' "$XDG_STATE_HOME/juggler/runs/rk-clean-1/ledger.json") == teardown ]]
   [[ $(jq -r '.calls[-1].ok' "$XDG_STATE_HOME/juggler/runs/rk-clean-1/ledger.json") == true ]]
@@ -1318,4 +1349,79 @@ mint_revokes_for() {
   run_jug clean --older-than 0s --act
   expect_status 0
   expect_json '([.runs[] | select(.run_key == "rk-clean-1")] | length == 0)'
+}
+
+@test "spawn --new-run refuses a reaped run key, minting nothing" {
+  local calls_before
+  calls_before=$(fake_calls '[.[] | select(.tool == "troupe")] | length')
+
+  run_jug spawn --new-run --run-key rk-clean-1 --input - --issuer issuer-clean --room room-clean-1@rooms.test <<<'{"recording":"x"}'
+  expect_status 1
+  [[ $stderr == *"reaped"* ]]
+  [[ $(fake_calls '[.[] | select(.tool == "troupe")] | length') -eq $calls_before ]]
+}
+
+@test "clean --resolved sweeps a resolved run's staged and traffic files, skipping a still-running child, and leaves them alone without --resolved" {
+  local root run_job
+  run_jug spawn --new-run --run-key rk-clean-sweep --input - --issuer issuer-clean --room room-clean-sweep@rooms.test <<<'{"recording":"y"}'
+  expect_status 0
+  root=$(field .root_principal)
+  run_job=$(field .run_job)
+
+  launch_child "$root" "clean sweep done"
+  local done_jid done_job done_principal
+  done_jid=$(field .jid)
+  done_job=$(field .job)
+  done_principal=${done_jid%@*}
+  "$FAKE_BIN/ringmaster" "done" "$done_job" --target "$root" --state succeeded --message "done"
+
+  launch_child "$root" "clean sweep live"
+  local live_jid live_job live_principal
+  live_jid=$(field .jid)
+  live_job=$(field .job)
+  live_principal=${live_jid%@*}
+
+  local done_traffic=$XDG_STATE_HOME/juggler/traffic/$done_principal/$done_job.jsonl
+  local live_traffic=$XDG_STATE_HOME/juggler/traffic/$live_principal/$live_job.jsonl
+  mkdir -p "$(dirname "$done_traffic")" "$(dirname "$live_traffic")"
+  echo '{"tool":"x"}' >"$done_traffic"
+  echo '{"tool":"x"}' >"$live_traffic"
+  local staged_before
+  staged_before=$(ls "$XDG_STATE_HOME/juggler/runs/rk-clean-sweep/children/"*.brief.toml 2>/dev/null | wc -l)
+  [[ $staged_before -eq 2 ]]
+
+  run_jug resolve "$run_job" --state failed --reason "clean sweep test" --stop-grace 200ms
+  expect_status 0
+
+  # Resolved, but --resolved was not given: nothing is swept, however old.
+  run_jug clean --older-than 0s --act
+  expect_status 0
+  expect_json '([.runs[] | select(.run_key == "rk-clean-sweep")] | length == 0)'
+  [[ -f $done_traffic ]]
+  [[ -f $live_traffic ]]
+
+  # Dry-run with --resolved lists it, touches nothing.
+  run_jug clean --resolved --resolved-older-than 0s
+  expect_status 0
+  expect_json '([.runs[] | select(.run_key == "rk-clean-sweep" and .kind == "resolved" and .reaped == false)] | length == 1)'
+  [[ -f $done_traffic ]]
+  [[ -f $live_traffic ]]
+
+  # --act --resolved reaps the terminal (done) child's files, skips the
+  # still-running (live) one.
+  run_jug clean --resolved --resolved-older-than 0s --act
+  expect_status 0
+  expect_json '([.runs[] | select(.run_key == "rk-clean-sweep" and .kind == "resolved" and .reaped == true)] | length == 1)'
+  [[ $(jq -r '.runs[] | select(.run_key=="rk-clean-sweep") | .detail' <<<"$output") == *"still-running child skipped"* ]]
+  [[ ! -f $done_traffic ]]
+  [[ ! -d $(dirname "$done_traffic") ]]
+  [[ -f $live_traffic ]]
+  [[ $(ls "$XDG_STATE_HOME/juggler/runs/rk-clean-sweep/children/"*.brief.toml 2>/dev/null | wc -l) -eq 1 ]]
+  [[ -f $XDG_STATE_HOME/juggler/runs/rk-clean-sweep.json ]]
+
+  # Idempotent, and nothing left to report once the live child also
+  # terminalizes and is swept.
+  run_jug clean --resolved --resolved-older-than 0s --act
+  expect_status 0
+  expect_json '([.runs[] | select(.run_key == "rk-clean-sweep")] | length == 0)'
 }

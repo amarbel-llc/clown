@@ -70,6 +70,8 @@
 .Nm
 .Cm clean
 .Op Fl -older-than Ar duration
+.Op Fl -resolved
+.Op Fl -resolved-older-than Ar duration
 .Op Fl -act
 .Nm
 .Cm job-ledger Ar job
@@ -722,8 +724,8 @@ refuses it before any model call.
 One that is never retried leaves the root and room until
 .Cm clean
 .Po
-.Fl -act
-; the room itself is left, only its owner affiliation dropped
+.Fl -act ;
+the room itself is left, only its owner affiliation dropped
 .Pc .
 .It Cm spawn Fl -brief Ar template Op Fl -task Ar file Op Fl -run-key Ar key Op Fl -wait Op Fl -timeout Ar dur Op Fl -stop-grace Ar dur Op Fl -moxy-url Ar url Op Fl -juggler Ar path Op Fl -moxy Ar path Op Fl -user
 Launch one subagent into a run.
@@ -1207,47 +1209,97 @@ without
 it exits 1 when
 .Ev TROUPE_MINT_PASSWORD_FILE
 is unset, before the canary post and before stopping any child.
-.It Cm clean Op Fl -older-than Ar duration Op Fl -act
+.It Cm clean Op Fl -older-than Ar duration Op Fl -resolved Op Fl -resolved-older-than Ar duration Op Fl -act
 The retention sweep for what
 .Cm spawn Fl -new-run
 and
 .Cm resolve
-deliberately leave behind: a
+deliberately leave behind, in two independent categories, each with
+its own age guard:
+.Bl -enum
+.It
+a
 .Ql pending
 run
 .Po
 .Fl -new-run
 failed after the root's mint; see above
 .Pc
-whose retry never came, and a resolved run's per-child staged files
+whose retry never came, past
+.Fl -older-than
+.Pq default 1h ,
+measured from when the run most recently became pending
+.Pq a retry's own failed attempt resets this, not the run's original creation time ;
+and
+.It
+with
+.Fl -resolved ,
+a resolved run past
+.Fl -resolved-older-than
+.Pq default 30d, measured from the run's own resolution time ,
+sweeping each
+.Em terminal
+child's staged files
 .Pq brief.toml, moxyfile.toml and parent-moxyfile.toml
 and
 .Ql traffic.jsonl
-files, neither of which
+file, neither of which
 .Cm resolve
-touches.
+touches; a still-running child
+.Po
+the same terminal check
+.Cm resolve Ns 's
+own teardown uses
+.Pc
+is skipped entirely, never unlinking a traffic file a live agent is
+still appending to.
+.El
+.Pp
 A run still open, neither pending nor resolved, is never listed.
-.Fl -older-than
-guards both categories against an in-flight retry or a resolve whose own
-teardown raced this one; default 1h, measured from the pending run's
-creation, or the resolved run's own resolution time.
+.Fl -resolved
+is off by default: the resolved-run sweep is a retention policy on
+audit material, not a retry guard, so a bare
+.Fl -act
+only sweeps pending runs.
 Without
 .Fl -act
-it only lists what would be reaped, the default.
-With it, a pending run's root account is revoked the same way
+it only lists what would be reaped, the default; a run with nothing
+left to report
+.Pq every file already gone, or none ever existed
+is omitted, so a periodic sweep's listing does not grow forever.
+With
+.Fl -act ,
+a pending run's root account is revoked the same way
 .Cm resolve Ns 's
-teardown does, a
+teardown does and a
 .Ql teardown
-ledger entry is appended, then the password file and the pending record
-are removed, in that order; a resolved run's staged and traffic files
-are simply deleted.
+ledger entry is appended, then the record is
+.Em tombstoned
+.Pq pending set false, reaped set true, reaped_at set to the time
+rather than deleted: the root principal is a deterministic function of
+the run key, so deleting the record would let a later
+.Fl -new-run
+with the same key re-mint a new account under that same principal \(em
+one the ledger's existing ok teardown entry already marks gone, so a
+later
+.Cm resolve
+would skip revoking it and it would leak forever.
+.Cm spawn Fl -new-run
+therefore refuses a reaped key outright, naming the tombstone.
+A resolved run's staged and traffic files are simply deleted.
 Needs the minter credential exactly when
 .Cm resolve
 does, whenever
 .Fl -act
-is given.
+is given
+.Pq the pending-run category's Ql troupe mint-revoke ; the resolved-run sweep touches no account, but the check does not distinguish .
+Exits 2 under
+.Fl -act
+if any listed run could not be fully reaped
+.Pq an error, or Ql reaped No false ;
+a dry-run always exits 0.
 Prints
-.Sy {"dry_run","older_than","runs":[{"run_key","kind","age","reaped","detail","error"}]} .
+.Sy {"dry_run","older_than","resolved","resolved_older_than","runs":[{"run_key","kind","age","reaped","detail","error"}]} .
 Never destroys a room or revokes a child's account: those stay
 .Cm resolve Ns 's
 job, and, for rooms, the host's own retention sweep's.
@@ -1508,7 +1560,12 @@ and
 The remote-model registry.
 .It Pa $XDG_STATE_HOME/juggler/runs/<run-key>.json
 A run's record: issuer, root principal and JID, credential reference,
-room, root stanza, run job, holders, resolution.
+room, root stanza, run job, holders, resolution, and, once
+.Cm clean
+reaps a pending run past its age guard, a tombstone
+.Pq reaped and reaped_at ;
+clown#250
+.Pq a reaped run key is retired for good; this file is never removed .
 .It Pa $XDG_STATE_HOME/juggler/runs/<run-key>/ledger.json
 The run ledger:
 .Ql route ,
@@ -1524,12 +1581,22 @@ entries.
 .It Pa $XDG_STATE_HOME/juggler/runs/<run-key>/children/<digest>.json
 A subagent's record; the digest is that of the template and task.
 .It Pa $XDG_STATE_HOME/juggler/runs/<run-key>/children/<digest>.brief.toml
-The filled brief staged for the unit.
+The filled brief staged for the unit, alongside its
+.Ql .moxyfile.toml
+and
+.Ql .parent-moxyfile.toml
+siblings.
+Swept, once the run is resolved and the child terminal, by
+.Cm clean Fl -resolved
+(clown#250); off by default.
 .It Pa $XDG_STATE_HOME/juggler/runs/<run-key>/<principal>.pw
 The troupe password of one identity minted for the run, mode 0600 in a
 mode 0700 directory; deleted when
 .Cm resolve
-tears the account down.
+tears the account down, or, for a pending run's root past its age
+guard, by
+.Cm clean Fl -act
+(clown#250).
 .It Pa $XDG_STATE_HOME/juggler/agents/<principal>/moxyfile
 An agent's moxyfile, and the working directory of its moxy.
 .It Pa $XDG_STATE_HOME/juggler/traffic/<principal>/<job>.jsonl
@@ -1559,7 +1626,9 @@ for the format and why it lives neither there nor beside the
 ringmaster spool.
 As sensitive as the tool arguments it records \(em not filtered or
 redacted.
-No sweep exists yet; see clown#250.
+Swept once resolved and past its age guard by
+.Cm clean Fl -resolved
+(clown#250); off by default.
 .It Pa $XDG_STATE_HOME/juggler/exit-wakes/<job>
 The sent-wake marker that keeps
 .Cm exit-wake

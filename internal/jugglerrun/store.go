@@ -203,18 +203,43 @@ type RunRecord struct {
 	// kept, there is no run job or root stanza, and a `--new-run` with the
 	// same key resumes it.
 	Pending bool `json:"pending,omitempty"`
+	// PendingSince is when the run most recently became (or remained)
+	// pending: `failed()` (spawn.go) stamps it on every failed `--new-run`
+	// attempt, including a retry's own failure — unlike CreatedAt, which a
+	// resume carries forward unchanged (spawn.go's resume path). `juggler
+	// clean`'s age guard reads this, not CreatedAt: a retry policy with
+	// backoff whose total span exceeds the guard must not have its run
+	// reaped between attempts just because the run is, in total, old.
+	PendingSince time.Time `json:"pending_since,omitempty"`
 	// TornDown is set by `juggler resolve`'s teardown once every account of
 	// the run (each child's, then the root's) is revoked or already gone and
 	// its password file deleted; false until then.
 	TornDown bool `json:"torn_down"`
+	// Reaped marks a tombstone: `juggler clean` revoked this pending run's
+	// root and retired the run key rather than deleting the record (clown#250
+	// review). The root principal is deterministic (NewRootPrincipal(RunKey)),
+	// so deleting the record would let a later `spawn --new-run` with the
+	// same key re-mint a brand-new account under that same principal — one
+	// the run ledger's existing `teardown` entry already marks gone, so
+	// `resolve`'s teardownAccounts would skip revoking it and the new
+	// account would leak forever. NewRun refuses a reaped key instead.
+	Reaped   bool       `json:"reaped,omitempty"`
+	ReapedAt *time.Time `json:"reaped_at,omitempty"`
 }
 
-// CheckOpen refuses a run that takes no more work: a resolved one, or a
-// pending one (its `spawn --new-run` failed and must be retried first).
+// CheckOpen refuses a run that takes no more work: a resolved one, a reaped
+// one (its run key is retired; clown#250), or a pending one (its `spawn
+// --new-run` failed and must be retried first).
 func (r *RunRecord) CheckOpen() error {
 	switch {
 	case r.Resolved != nil:
 		return fmt.Errorf("run %s is already resolved (%s)", r.RunKey, r.Resolved.State)
+	case r.Reaped:
+		at := ""
+		if r.ReapedAt != nil {
+			at = r.ReapedAt.Format(time.RFC3339)
+		}
+		return fmt.Errorf("run key %q was reaped by juggler clean at %s; choose a new key", r.RunKey, at)
 	case r.Pending:
 		return fmt.Errorf("run %s is pending: its spawn --new-run failed; retry it with the same --run-key", r.RunKey)
 	}

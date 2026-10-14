@@ -179,7 +179,7 @@ func AppendRunLedgerEntry(store Store, runKey string, e RunLedgerEntry) error {
 	if run == nil {
 		return fmt.Errorf("no run with key %q", runKey)
 	}
-	if run.Pending {
+	if run.Pending || run.Reaped {
 		return run.CheckOpen()
 	}
 	l, err := store.loadRunLedger(runKey)

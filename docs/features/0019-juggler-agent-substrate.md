@@ -227,6 +227,49 @@ channel, and it never parses the room):
   `posted` is true also when an earlier attempt posted the line, and
   `stanza` is then that post's id. (Not named `run-…` to avoid confusion with `juggler
   run`.)
+- **`juggler clean [--older-than <dur>] [--resolved [--resolved-older-than
+  <dur>]] [--act]`** (clown#250): the retention sweep for what
+  `spawn --new-run` and `resolve` deliberately leave behind. Two
+  independent categories, each with its own age guard:
+  1. a **pending run** (`spawn --new-run` failed after the root's mint;
+     §1, §2) past `--older-than` (default 1h, measured from
+     `RunRecord.pending_since` — stamped fresh on every failed attempt,
+     not `created_at`, which a resume carries forward unchanged, so a
+     retry policy whose total span exceeds the guard is never reaped
+     between its own attempts): revokes the root the same way `resolve`'s
+     own teardown does (`teardownRoot`: room affiliation dropped only
+     when the room has an operator owner, account and password file
+     revoked/deleted), appends a `teardown` ledger entry, then
+     **tombstones** the record — `pending: false, reaped: true,
+     reaped_at` — rather than deleting it. A tombstone, not a delete: the
+     root principal is deterministic (`NewRootPrincipal(run_key)`), so
+     deleting the record would let a later `spawn --new-run` with the
+     same key re-mint a brand-new account under that same principal —
+     one the ledger's already-ok `teardown` entry marks gone, so
+     `resolve`'s teardown would skip revoking the NEW account and it
+     would leak forever. `spawn --new-run` refuses a reaped key outright,
+     naming the tombstone.
+  2. with `--resolved`, a **resolved run** past `--resolved-older-than`
+     (default 30d — a retention policy on audit material, not a retry
+     guard, so off unless asked for and measured from
+     `Resolution.at`): sweeps each TERMINAL child's staged
+     `<digest>.brief.toml`/`.moxyfile.toml`/`.parent-moxyfile.toml` and
+     `traffic.jsonl` (clown#255) — never an account (`resolve`'s job) or
+     the run/child record itself (the audit trail). A child still
+     running (the same terminal check `resolve`'s own teardown uses) is
+     skipped entirely, so a live agent's `traffic.jsonl` is never
+     unlinked out from under it.
+
+  A run that is neither pending nor resolved — still open — is never
+  touched, however old either guard. Defaults to a dry-run listing;
+  `--act` performs the reap and exits non-zero if any listed run could
+  not be fully reaped. Needs the minter credential exactly when
+  `resolve` does, whenever `--act` is given (`troupe mint-revoke`'s
+  self-removal path for the pending-run category; the resolved-run sweep
+  touches no account but the check does not distinguish). A run with
+  nothing left to report (every file already gone, or none existed) is
+  omitted from the output, so a periodic sweep's listing does not grow
+  forever.
 - Every reason is on stdout and in a ledger: `cannot_complete.reason`
   in the subagent ledger and the `--wait` output; `juggler decide`'s
   reason in its stdout object and the decision stanza.
@@ -433,9 +476,9 @@ sent, `args_digest` (see below), the result's size in bytes and ok
 flag (never the result body itself — moxy already blobs an oversized
 result, and the ledger carries the URI), and a timestamp. It is
 append-only within one run and never read by the evaluator; `juggler
-clean` (clown#250) reaps a resolved run's traffic files once it is past
-the sweep's age guard — `agents/<principal>/` itself still has no
-sweep. Each ledger
+clean --resolved` (clown#250) reaps a resolved run's traffic files once
+it is past the sweep's age guard (opt-in: §1's `juggler clean` entry) —
+`agents/<principal>/` itself still has no sweep. Each ledger
 call entry in turn gains **`args_digest`**: a sha256, hex-encoded, over
 the arguments' canonical JSON encoding (object keys sorted, no
 insignificant whitespace, numbers kept as their original text, HTML
@@ -759,6 +802,12 @@ later, its signature); the evaluator reads a per-agent slice by sender.
 3. At `juggler resolve` (§1) each child is set back to `none`, then the
    root sets ITS OWN affiliation to `none`, leaving the operator the sole
    owner of the archived room.
+4. `juggler clean` (§1, clown#250) does the same step-down for a
+   **pending** run's root — a `spawn --new-run` that failed after the
+   mint and was never retried past the age guard — via the same
+   `teardownRoot` helper `resolve` uses in step 3: the room itself is
+   never destroyed, only the root's owner affiliation dropped, and only
+   when the room has an operator owner to begin with.
 
 A pre-created `--room` is the operator's: juggler neither affiliates
 children into it nor steps the root down from it (its membership is its
@@ -1066,15 +1115,24 @@ The router, before any subagent exists:
   `--new-run` that fails after the mint leaves the root's account, its
   password file, a pending run record and possibly the room (clean
   drops its owner affiliation there, never destroys it — see "Per-run
-  rooms accumulate" above). Past clean's age guard (`--older-than`; an
-  in-flight retry is never reaped), clean revokes the root
-  (`teardownRoot`, the same helper `resolve` uses), deletes its password
-  file and removes the pending record, with a `teardown` ledger entry
-  recording it. Before clean existed, nothing revoked an abandoned
-  pending run; now a host running it periodically (`--act`; the default
-  is a dry-run listing) closes that gap. Because the root is a function
-  of the run key, a run key must never be reused for a different run.
-  The pending record drops the failed attempt's run job
+  rooms accumulate" above). Past clean's age guard (`--older-than`,
+  measured from `pending_since` — stamped fresh on every failed
+  attempt, so a retry policy's own backoff is never mistaken for
+  staleness; an in-flight retry is never reaped, since `spawn --new-run`
+  and `clean` serialise on the same per-run lock), clean revokes the
+  root (`teardownRoot`, the same helper `resolve` uses), appends a
+  `teardown` ledger entry, and **tombstones** the record rather than
+  deleting it: `pending: false, reaped: true, reaped_at`. Because the
+  root is a function of the run key, deleting the record outright would
+  let a later `--new-run` with the same key re-mint a brand-new account
+  under that same deterministic principal — one the ledger's existing ok
+  `teardown` entry already marks gone, so a later `resolve` would skip
+  revoking the NEW account and it would leak forever. `spawn --new-run`
+  therefore refuses a reaped key outright, naming the tombstone: a run
+  key, once reaped, is retired for good, never reused. Before clean
+  existed, nothing revoked an abandoned pending run; now a host running
+  it periodically (`--act`; the default is a dry-run listing) closes
+  that gap. The pending record drops the failed attempt's run job
   id: if failing that job during the undo itself fails, the job stays open
   and the resumed run opens a second one.
 - **Parent and child need the same moxy build.** The parent reference
@@ -1092,12 +1150,16 @@ The router, before any subagent exists:
   before the agent's moxy starts — negligible today (the agent process
   has run no model turn yet), closed by clown#252 (a DynamicUser or
   per-run user) or by handing moxy the recorded digest to verify.
-- **Staged files persist per child until `juggler clean` sweeps them.**
-  `<digest>.brief.toml`, `<digest>.moxyfile.toml` and
+- **Staged files persist per child until `juggler clean --resolved`
+  sweeps them.** `<digest>.brief.toml`, `<digest>.moxyfile.toml` and
   `<digest>.parent-moxyfile.toml` stay in the run's `children/`
-  directory after the run; clean (clown#250) removes them once the run
-  is resolved and past the sweep's age guard, never the child's own
-  record (the audit trail).
+  directory after the run; clean (clown#250), given `--resolved`,
+  removes a TERMINAL child's once the run is resolved and past
+  `--resolved-older-than`'s guard — never a still-running child's (the
+  same terminal check `resolve`'s own teardown uses), and never the
+  child's own record (the audit trail). Off by default: it is a
+  retention policy, not a retry guard, so a bare `clean --act` sweeps
+  only pending runs.
 - **`traffic.jsonl` is as sensitive as the tool arguments it records, in
   full, and is not filtered or redacted (clown#255).** Whatever secret a
   model's tool call carries — a token pasted into a search query, a
@@ -1107,11 +1169,13 @@ The router, before any subagent exists:
   access controls as the rest of the store. Model request/response
   bodies themselves are not captured by this feature at all — only the
   tool calls a loop makes against moxy.
-- **`juggler clean` (clown#250) sweeps `traffic/`; `agents/<principal>/`
-  still has no sweep.** Every agent job's traffic file is reaped once
-  its run is resolved and past clean's age guard — the same sweep that
-  reaps a resolved run's staged files above. `agents/<principal>/`
-  itself is still never swept; that gap (clown#255) remains.
+- **`juggler clean --resolved` (clown#250) sweeps `traffic/`;
+  `agents/<principal>/` still has no sweep.** A terminal child's traffic
+  file is reaped once its run is resolved and past
+  `--resolved-older-than`'s guard — the same opt-in sweep that reaps a
+  resolved run's staged files above, skipping a still-running child's.
+  `agents/<principal>/` itself is still never swept; that gap
+  (clown#255) remains.
 - **A hand-written parent reference skips the moxin comparison.** Only
   a rendered reference carries `[resolved-moxins]`; juggler always
   renders one, but a reference written by hand (or by another launcher)
@@ -1246,7 +1310,9 @@ The router, before any subagent exists:
 | transcript layout | one MUC per run | one link for the fallback note; brief in the same transcript | runs grow long enough that per-agent rooms read better |
 | daemon for remote models | optional | the webhook host's service user has no user session | a host needs local inference for these agents (→ system-service daemon) |
 | agent-scope realisation | open: sub-cgroup vs sibling unit | the bullet needs neither namespaces nor the choice | signing lands, or a non-fixed-surface tool server appears (→ sibling unit + `limits.sandbox`) |
-| `traffic.jsonl` retention | append-only within a run, truncated only on a retry of the SAME job (clown#255); swept once resolved and past `juggler clean`'s age guard (clown#250) | arguments are the whole point of the file; capping or rotating within a run would defeat the audits it exists for. Its own `traffic/` tree (not `agents/<principal>/`, which is moxy's CWD and so tool-reachable) is reaped by clean; `agents/<principal>/` itself still has no sweep | clean's sweep needs to run on a schedule rather than by hand (→ a `ringmaster reap`-style systemd timer invoking `juggler clean --act`) |
+| `traffic.jsonl` retention | append-only within a run, truncated only on a retry of the SAME job (clown#255); swept with `--resolved` once resolved and past `juggler clean`'s resolved-run age guard (clown#250) | arguments are the whole point of the file; capping or rotating within a run would defeat the audits it exists for. Its own `traffic/` tree (not `agents/<principal>/`, which is moxy's CWD and so tool-reachable) is reaped by clean; `agents/<principal>/` itself still has no sweep | clean's sweep needs to run on a schedule rather than by hand (→ a `ringmaster reap`-style systemd timer invoking `juggler clean --act --resolved`) |
+| `juggler clean --older-than` | 1h | an in-flight retry must never be reaped out from under itself; 1h is generous headroom over any realistic backoff while still closing the leak promptly. Measured from `pending_since`, stamped fresh on every failed attempt (not `created_at`, which a resume carries forward unchanged) | a retry policy's total span routinely exceeds 1h (→ raise it, or stamp a policy-aware deadline instead of a flat duration) |
+| `juggler clean --resolved-older-than` | 30d | matches the host's current interim room-retention rule (see "Per-run rooms accumulate" above); staged/traffic files are audit material, not scratch that should vanish quickly, so this is a retention policy, not a retry guard | the host's room-retention rule changes, or staged/traffic files need to outlive 30d for a slower-moving audit need |
 | exit-wake emitter | the unit's `ExecStopPost` hook, sole emitter | survives every ending the main process does not | a holder needs a wake on the systemd-dead path (→ holder-side timeout or a cross-host watcher) |
 | router confidence threshold | 0.5 (`--min-confidence`, overridable per brief) | operator's first-bullet figure; below it the subagent is skipped and the fallback note records the choice and confidence. NOTE (two live calls, 2026-10-06): the API's `confidence` is the MARGIN over the runner-up (0.63 vs 0.37 → confidence 0.26), not the winning probability, so with two options 0.5 means roughly "0.75 or better"; semantics for 3+ options unverified. The stanza carries both `confidence` and the chosen option's probability | mirror-phase data shows good choices rejected or bad ones accepted |
 | lifecycle owner | v1: `juggler spawn` | spinclass cannot represent a repo-less session today | the first handle held across the two session kinds (→ v2 spinclass unit session, §11) |
