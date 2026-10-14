@@ -1245,14 +1245,13 @@ and
 .Ql traffic.jsonl
 file, neither of which
 .Cm resolve
-touches; a still-running child
-.Po
-the same terminal check
-.Cm resolve Ns 's
-own teardown uses
-.Pc
-is skipped entirely, never unlinking a traffic file a live agent is
-still appending to.
+touches; a still-running child, or one whose journal could not even be
+read, is skipped entirely
+.Pq the identical Ringmaster.Records/terminal check Cm resolve Ns 's own teardown uses, including its keep-on-error handling: an unreadable journal is never mistaken for a gone one ,
+never unlinking a traffic file a live agent might still be appending
+to; such a run stays listed, reporting
+.Ql reaped No false ,
+not a bare success with files quietly left behind.
 .El
 .Pp
 A run still open, neither pending nor resolved, is never listed.
@@ -1265,19 +1264,23 @@ Without
 .Fl -act
 it only lists what would be reaped, the default; a run with nothing
 left to report
-.Pq every file already gone, or none ever existed
+.Pq every file already gone or none ever existed, and no child skipped as still-running or unreadable
 is omitted, so a periodic sweep's listing does not grow forever.
 With
 .Fl -act ,
 a pending run's root account is revoked the same way
 .Cm resolve Ns 's
-teardown does and a
-.Ql teardown
-ledger entry is appended, then the record is
+teardown does and, once that succeeds, the record is
 .Em tombstoned
 .Pq pending set false, reaped set true, reaped_at set to the time
-rather than deleted: the root principal is a deterministic function of
-the run key, so deleting the record would let a later
+first, before a
+.Ql teardown
+ledger entry is appended \(em in that order, not the reverse, so a
+crash between the two still leaves the run key correctly refused
+either way, never a window where the ledger already claims the root
+gone while the record itself could still resume.
+A tombstone, not a delete: the root principal is a deterministic
+function of the run key, so deleting the record would let a later
 .Fl -new-run
 with the same key re-mint a new account under that same principal \(em
 one the ledger's existing ok teardown entry already marks gone, so a
@@ -1563,9 +1566,10 @@ A run's record: issuer, root principal and JID, credential reference,
 room, root stanza, run job, holders, resolution, and, once
 .Cm clean
 reaps a pending run past its age guard, a tombstone
-.Pq reaped and reaped_at ;
-clown#250
-.Pq a reaped run key is retired for good; this file is never removed .
+.Pq reaped and reaped_at .
+A reaped run key is retired for good
+.Pq clown#250 ;
+this file is never removed.
 .It Pa $XDG_STATE_HOME/juggler/runs/<run-key>/ledger.json
 The run ledger:
 .Ql route ,

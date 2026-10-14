@@ -191,6 +191,59 @@ func TestClean_ActKeepsRecordWhenRevokeFails(t *testing.T) {
 	}
 }
 
+// TestPendingSince_FallsBackToCreatedAtWhenZero covers the clown#250 review's
+// low item 4: a pre-clown#250 record has no PendingSince at all (its zero
+// value), which must not read as "enormously overdue" and get reaped on the
+// very first clean --act regardless of how recently it actually failed.
+func TestPendingSince_FallsBackToCreatedAtWhenZero(t *testing.T) {
+	createdAt := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	run := &RunRecord{CreatedAt: createdAt}
+	if got := pendingSince(run); !got.Equal(createdAt) {
+		t.Errorf("pendingSince = %v, want the CreatedAt fallback %v", got, createdAt)
+	}
+	stamped := createdAt.Add(time.Hour)
+	run.PendingSince = stamped
+	if got := pendingSince(run); !got.Equal(stamped) {
+		t.Errorf("pendingSince = %v, want the stamped PendingSince %v", got, stamped)
+	}
+}
+
+// TestClean_PendingRunRefreshedBetweenListingAndLockIsNotReaped covers the
+// clown#250 review's should-fix 2: cleanPendingRun must re-check OlderThan
+// against a FRESHLY RELOADED record taken under its own lock, not rely on
+// the listing-time snapshot Clean() filtered by — a retry whose own failure
+// refreshes PendingSince between Clean()'s listing read and
+// cleanPendingRun's lock/reload must not be reaped on the strength of the
+// stale snapshot alone.
+func TestClean_PendingRunRefreshedBetweenListingAndLockIsNotReaped(t *testing.T) {
+	h := newHarness(t)
+	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	stale := pendingRun(t, h, "k", t0)
+	now := t0.Add(2 * time.Hour)
+	// Simulate a retry's own failure landing after Clean() read `stale` for
+	// its listing-time age check, but before cleanPendingRun's own reload.
+	refreshed := *stale
+	refreshed.PendingSince = now.Add(-30 * time.Minute)
+	if err := h.deps.Store.SaveRun(&refreshed); err != nil {
+		t.Fatal(err)
+	}
+
+	res := cleanPendingRun(context.Background(), h.deps, stale, true, time.Hour, now)
+	if res.Reaped {
+		t.Errorf("result = %+v, a freshly-refreshed PendingSince must not be reaped on a stale listing-time snapshot", res)
+	}
+	if !strings.Contains(res.Detail, "no longer past the age guard") {
+		t.Errorf("result.Detail = %q, want the re-check skip message", res.Detail)
+	}
+	rec, _ := h.deps.Store.LoadRun("k")
+	if rec == nil || !rec.Pending || rec.Reaped {
+		t.Errorf("the pending record must remain untouched: %+v", rec)
+	}
+	if len(h.fakes.Revoked(t)) != 0 {
+		t.Error("must not have touched the account")
+	}
+}
+
 // TestClean_PendingSinceResetsOnEachRetryFailure covers the clown#250 review's
 // should-fix 3: the age guard must read PendingSince (stamped fresh by
 // failed() on every failed attempt), not CreatedAt (which a resume carries
@@ -390,7 +443,17 @@ func TestClean_ResolvedSweepSkipsAStillRunningChild(t *testing.T) {
 	res := newProvisionedRun(t, h, "rec-42")
 	live := spawnChild(t, h)
 
-	done := &ChildRecord{Schema: RecordSchema, RunKey: res.RunKey, BriefDigest: "sha256:def", Principal: "child-done", Job: "job-done", Parent: testRoot, CreatedAt: t0}
+	// A genuine terminal job (clown#250 review item 7), not a hand-built
+	// record with no journal at all: that exercised stillRunning's
+	// zero-records branch, not its real terminal-record one.
+	doneJob, err := h.deps.Ringmaster.Start(context.Background(), testRoot, AgentJobLabel, SpawnSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.deps.Ringmaster.Done(context.Background(), testRoot, doneJob, DoneRecord{State: StateSucceeded, Message: "done"}); err != nil {
+		t.Fatal(err)
+	}
+	done := &ChildRecord{Schema: RecordSchema, RunKey: res.RunKey, BriefDigest: "sha256:def", Principal: "child-done", Job: doneJob, Parent: testRoot, CreatedAt: t0}
 	if err := h.deps.Store.SaveChild(done); err != nil {
 		t.Fatal(err)
 	}
@@ -417,10 +480,64 @@ func TestClean_ResolvedSweepSkipsAStillRunningChild(t *testing.T) {
 	if len(out.Runs) != 1 || !strings.Contains(out.Runs[0].Detail, "still-running child skipped") {
 		t.Fatalf("out.Runs = %+v", out.Runs)
 	}
+	if out.Runs[0].Reaped {
+		t.Errorf("result = %+v, must not report reaped:true while the live child's files remain (clown#250 review item 6)", out.Runs[0])
+	}
 	if _, err := os.Stat(livePath); err != nil {
 		t.Errorf("the still-running child's traffic file must be kept: %v", err)
 	}
 	if _, err := os.Stat(donePath); !os.IsNotExist(err) {
 		t.Errorf("the terminal child's traffic file must be swept: %v", err)
+	}
+}
+
+// TestClean_ResolvedSweepKeepsAChildOnARecordsError is the clown#250 review's
+// blocking fix: stillRunning must fail CLOSED (treat an unreadable journal as
+// still running, i.e. keep, never sweep), mirroring teardownChild's own
+// Records-error handling (resolve.go) exactly — a scheduled `clean --act
+// --resolved` running while ringmaster is down must never read "don't know"
+// as "gone" and silently unlink a live agent's traffic.jsonl out from under
+// it. The run must also stay listed (not vanish because nothing was swept),
+// with an error naming the unreadable journal.
+func TestClean_ResolvedSweepKeepsAChildOnARecordsError(t *testing.T) {
+	h := newHarness(t)
+	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	h.deps.Now = func() time.Time { return t0 }
+	pinPrincipals(h, testRoot, "child-1")
+	res := newProvisionedRun(t, h, "rec-42")
+	live := spawnChild(t, h)
+	livePath := h.deps.Store.TrafficPath(live.Principal, live.Job)
+	if err := os.MkdirAll(filepath.Dir(livePath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(livePath, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Resolve(context.Background(), h.deps, ResolveRequest{RunJob: res.RunJob, State: StateFailed, Reason: "x", StopGrace: 100 * time.Millisecond}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Ringmaster goes unreachable for THIS child's journal specifically,
+	// only at clean time (resolve above already ran against a healthy
+	// fake and correctly found the child still running).
+	h.deps.Ringmaster = flakyRingmaster{ExecRingmaster: h.deps.Ringmaster.(ExecRingmaster), recordsOf: live.Job}
+	h.deps.Now = func() time.Time { return t0.Add(31 * 24 * time.Hour) }
+
+	out, err := Clean(context.Background(), h.deps, CleanRequest{Resolved: true, ResolvedOlderThan: 30 * 24 * time.Hour, Act: true})
+	if err != nil {
+		t.Fatalf("Clean: %v", err)
+	}
+	if len(out.Runs) != 1 {
+		t.Fatalf("a run with an unreadable child journal must stay listed, not vanish silently: %+v", out.Runs)
+	}
+	r := out.Runs[0]
+	if r.Error == "" || !strings.Contains(r.Error, "journal unreadable") {
+		t.Errorf("result = %+v, want an error naming the unreadable journal", r)
+	}
+	if r.Reaped {
+		t.Errorf("result = %+v, must not report reaped:true while a child's status is unknown", r)
+	}
+	if _, err := os.Stat(livePath); err != nil {
+		t.Errorf("a Records error must KEEP the child's traffic file (fail closed to \"still running\"), not sweep it: %v", err)
 	}
 }

@@ -1297,6 +1297,10 @@ mint_revokes_for() {
   rm -f "$FAKE_DIR/fail/troupe-muc-send"
   expect_status 1
 
+  # Confirm the setup actually produced a pending run (not vacuously passing
+  # because some earlier, unrelated failure left nothing to clean at all).
+  [[ $(jq -r .pending "$XDG_STATE_HOME/juggler/runs/rk-clean-young.json") == true ]]
+
   # The run exists, pending, but is too young: it must not appear.
   run_jug clean --older-than 24h
   expect_status 0
@@ -1408,10 +1412,18 @@ mint_revokes_for() {
   [[ -f $live_traffic ]]
 
   # --act --resolved reaps the terminal (done) child's files, skips the
-  # still-running (live) one.
+  # still-running (live) one. reaped is false (not a bare success): the live
+  # child's own files are still out there, just untouched this pass
+  # (clown#250 review item 6). The exit code is non-zero too (ExitFailed=2):
+  # not only because of rk-clean-sweep's own skip, but also because this
+  # sweep is whole-store, not scoped to one run, and rk1's own child (left
+  # deliberately running forever by an earlier test, "resolve stops live
+  # children...") is swept up in every later --resolved pass too — so every
+  # assertion from here on scopes by run_key rather than asserting the bare
+  # overall exit code reflects THIS run alone.
   run_jug clean --resolved --resolved-older-than 0s --act
-  expect_status 0
-  expect_json '([.runs[] | select(.run_key == "rk-clean-sweep" and .kind == "resolved" and .reaped == true)] | length == 1)'
+  expect_status 2
+  expect_json '([.runs[] | select(.run_key == "rk-clean-sweep" and .kind == "resolved" and .reaped == false)] | length == 1)'
   [[ $(jq -r '.runs[] | select(.run_key=="rk-clean-sweep") | .detail' <<<"$output") == *"still-running child skipped"* ]]
   [[ ! -f $done_traffic ]]
   [[ ! -d $(dirname "$done_traffic") ]]
@@ -1419,9 +1431,21 @@ mint_revokes_for() {
   [[ $(ls "$XDG_STATE_HOME/juggler/runs/rk-clean-sweep/children/"*.brief.toml 2>/dev/null | wc -l) -eq 1 ]]
   [[ -f $XDG_STATE_HOME/juggler/runs/rk-clean-sweep.json ]]
 
-  # Idempotent, and nothing left to report once the live child also
-  # terminalizes and is swept.
+  # Once the live child also terminalizes, THIS pass reaps its files too
+  # (so rk-clean-sweep is still present here, reaped:true, not yet omitted —
+  # omission only applies to a run with nothing LEFT to find).
+  "$FAKE_BIN/ringmaster" "done" "$live_job" --target "$root" --state succeeded --message "live done now"
   run_jug clean --resolved --resolved-older-than 0s --act
-  expect_status 0
+  expect_status 2
+  expect_json '([.runs[] | select(.run_key == "rk-clean-sweep" and .kind == "resolved" and .reaped == true)] | length == 1)'
+  [[ $(jq -r '.runs[] | select(.run_key=="rk-clean-sweep") | .detail' <<<"$output") == "removed 4 of 4 staged/traffic file(s)" ]]
+  [[ ! -f $live_traffic ]]
+
+  # Idempotent, and nothing left to report for THIS run (clown#250 review
+  # point 6) — rk1's permanently-live fixture elsewhere in the shared state
+  # still keeps the overall exit non-zero, which is exactly the point: the
+  # exit code is a whole-store signal, not scoped to rk-clean-sweep alone.
+  run_jug clean --resolved --resolved-older-than 0s --act
+  expect_status 2
   expect_json '([.runs[] | select(.run_key == "rk-clean-sweep")] | length == 0)'
 }

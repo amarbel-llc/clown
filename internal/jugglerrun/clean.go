@@ -52,7 +52,9 @@ type CleanRunResult struct {
 	// Kind is "pending" or "resolved".
 	Kind string `json:"kind"`
 	Age  string `json:"age"`
-	// Reaped is whether the reap (Act) succeeded, or would have (dry-run).
+	// Reaped is whether the reap succeeded. Always false for a dry-run
+	// (Act unset): Clean never computes a speculative "would succeed"
+	// verdict, only what it actually did.
 	Reaped bool   `json:"reaped"`
 	Detail string `json:"detail"`
 	Error  string `json:"error,omitempty"`
@@ -92,8 +94,8 @@ func Clean(ctx context.Context, deps LifecycleDeps, req CleanRequest) (CleanOutc
 	for _, run := range runs {
 		switch {
 		case run.Pending:
-			if age := now.Sub(run.PendingSince); age >= req.OlderThan {
-				out.Runs = append(out.Runs, cleanPendingRun(ctx, deps, run, req.Act, age))
+			if age := now.Sub(pendingSince(run)); age >= req.OlderThan {
+				out.Runs = append(out.Runs, cleanPendingRun(ctx, deps, run, req.Act, req.OlderThan, now))
 			}
 		case req.Resolved && run.Resolved != nil:
 			if age := now.Sub(run.Resolved.At); age >= req.ResolvedOlderThan {
@@ -106,18 +108,41 @@ func Clean(ctx context.Context, deps LifecycleDeps, req CleanRequest) (CleanOutc
 	return out, nil
 }
 
+// pendingSince is run.PendingSince, falling back to CreatedAt for a
+// pre-clown#250 record that predates the field (a zero PendingSince would
+// otherwise look enormously overdue and get reaped on the very first
+// `clean --act`, regardless of how recently it actually failed; clown#250
+// review, low item 4).
+func pendingSince(run *RunRecord) time.Time {
+	if run.PendingSince.IsZero() {
+		return run.CreatedAt
+	}
+	return run.PendingSince
+}
+
 // cleanPendingRun reaps one pending run past the age guard: the root account
 // (teardownRoot — the same helper `juggler resolve` uses, so the
-// kept-room-affiliation rule and the account-gone semantics are identical),
-// a teardown ledger entry recording it, and, only once the account is
-// confirmed gone, tombstoning the record (RunRecord.Reaped; clown#250
-// review). A tombstone, not a delete: the root principal is deterministic
-// (NewRootPrincipal(RunKey)), so deleting the record would let a later
-// `spawn --new-run` with the same key re-mint a brand-new account under that
-// same principal — one the ledger's existing ok `teardown` entry already
-// marks gone, so resolve's teardownAccounts would skip revoking the NEW
-// account and it would leak forever. NewRun refuses a reaped key instead
+// kept-room-affiliation rule and the account-gone semantics are identical)
+// and, only once the account is confirmed gone, tombstoning the record
+// (RunRecord.Reaped; clown#250 review) — in that order, tombstone before the
+// ledger entry (review item 5): the tombstone is the record NewRun's
+// CheckOpen actually consults, so a crash between the two leaves the run key
+// correctly refused either way, never a window where the ledger already
+// claims the root gone but a retry could still resume and re-mint under the
+// same principal. A tombstone, not a delete: the root principal is
+// deterministic (NewRootPrincipal(RunKey)), so deleting the record would let
+// a later `spawn --new-run` with the same key re-mint a brand-new account
+// under that same principal — one the ledger's existing ok `teardown` entry
+// already marks gone, so resolve's teardownAccounts would skip revoking the
+// NEW account and it would leak forever. NewRun refuses a reaped key instead
 // (RunRecord.CheckOpen), so this can never happen.
+//
+// olderThan and now are re-checked against a freshly reloaded record, under
+// the lock, not just the listing-time snapshot Clean() filtered on
+// (clown#250 review item 2): a retry that holds the lock, fails again (its
+// own fresh PendingSince), then loses the lock to this call must not be
+// reaped just because the ORIGINAL PendingSince the sweep listed it by was
+// old enough — the retry is still in flight.
 //
 // The ledger entry is appended directly (loadRunLedger, then
 // writeJSONAtomic), not through the public AppendRunLedgerEntry: that guard
@@ -127,8 +152,8 @@ func Clean(ctx context.Context, deps LifecycleDeps, req CleanRequest) (CleanOutc
 // the run, not resuming it. A record left in place (the account could not be
 // confirmed gone) is retried by a later clean, the same as resolve's own
 // teardown retries a still-pending account.
-func cleanPendingRun(ctx context.Context, deps LifecycleDeps, run *RunRecord, act bool, age time.Duration) CleanRunResult {
-	res := CleanRunResult{RunKey: run.RunKey, Kind: "pending", Age: age.Round(time.Second).String()}
+func cleanPendingRun(ctx context.Context, deps LifecycleDeps, run *RunRecord, act bool, olderThan time.Duration, now time.Time) CleanRunResult {
+	res := CleanRunResult{RunKey: run.RunKey, Kind: "pending", Age: now.Sub(pendingSince(run)).Round(time.Second).String()}
 	if !act {
 		res.Detail = "would revoke the root account and tombstone the run key"
 		return res
@@ -148,45 +173,54 @@ func cleanPendingRun(ctx context.Context, deps LifecycleDeps, run *RunRecord, ac
 		res.Detail = "skipped: no longer pending (retried, or already cleaned, since the sweep listed it)"
 		return res
 	}
+	if freshAge := now.Sub(pendingSince(fresh)); freshAge < olderThan {
+		res.Age = freshAge.Round(time.Second).String()
+		res.Detail = "skipped: no longer past the age guard (a retry refreshed PendingSince since the sweep listed it)"
+		return res
+	}
+
 	entry := teardownRoot(ctx, deps, fresh, fresh.rootIdentity())
-	ledger, err := deps.Store.loadRunLedger(fresh.RunKey)
-	if err != nil {
-		res.Error = err.Error()
-		return res
-	}
-	ledger.Calls = append(ledger.Calls, entry)
-	if err := writeJSONAtomic(deps.Store.RunLedgerPath(fresh.RunKey), ledger); err != nil {
-		res.Error = err.Error()
-		return res
-	}
 	res.Reaped, res.Detail = entry.OK, entry.Reason
 	if entry.OK {
 		reapedAt := deps.Now().UTC()
 		fresh.Pending, fresh.Reaped, fresh.ReapedAt = false, true, &reapedAt
 		if err := deps.Store.SaveRun(fresh); err != nil {
+			res.Reaped = false
 			res.Error = fmt.Sprintf("account reaped but tombstoning the record failed: %v", err)
 			return res
 		}
 		res.Detail += "; run key tombstoned (retired, never resumable)"
 	}
+	ledger, err := deps.Store.loadRunLedger(fresh.RunKey)
+	if err != nil {
+		res.Error = fmt.Sprintf("recording the teardown in the ledger: %v", err)
+		return res
+	}
+	ledger.Calls = append(ledger.Calls, entry)
+	if err := writeJSONAtomic(deps.Store.RunLedgerPath(fresh.RunKey), ledger); err != nil {
+		res.Error = fmt.Sprintf("recording the teardown in the ledger: %v", err)
+	}
 	return res
 }
 
-// stillRunning reports whether child's job is not yet terminal — the same
-// Records/TerminalRecord check teardownChild uses to keep a live child's
-// account at resolve-time. A resolved run can still hold a live child
-// (resolve's own stop grace timed out, or --keep-accounts), and clean must
-// never unlink a traffic.jsonl a live agent is still appending to. A
-// Records error, or zero records (no journal at all, e.g. a hand-built
-// test fixture), is treated as "don't know, sweep anyway" — the same as
-// teardownChild treats zero records.
-func stillRunning(ctx context.Context, deps LifecycleDeps, child *ChildRecord) bool {
+// stillRunning reports whether child's job is not yet terminal, mirroring
+// teardownChild's own keep-on-error handling (resolve.go) exactly: a
+// Ringmaster.Records error means "don't know" and MUST be treated as still
+// running, not swept (clown#250 review, blocking) — a resolved run can still
+// hold a live child (resolve's own stop grace timed out, or
+// --keep-accounts), and reading "don't know" as "gone" would let a clean
+// running while ringmaster is unreachable unlink a live agent's
+// traffic.jsonl out from under it, silently and for good. Zero records (no
+// journal at all — a hand-built test fixture, or a child spawn that never
+// reached Ringmaster.Start) is not an error and is not running, the same as
+// teardownChild's own treatment of zero records.
+func stillRunning(ctx context.Context, deps LifecycleDeps, child *ChildRecord) (bool, error) {
 	recs, err := deps.Ringmaster.Records(ctx, child.Parent, child.Job)
 	if err != nil {
-		return false
+		return true, fmt.Errorf("journal unreadable: %w", err)
 	}
 	_, terminal := TerminalRecord(recs)
-	return !terminal && len(recs) > 0
+	return !terminal && len(recs) > 0, nil
 }
 
 // cleanResolvedRun sweeps one resolved run's per-TERMINAL-child staged files
@@ -195,14 +229,17 @@ func stillRunning(ctx context.Context, deps LifecycleDeps, child *ChildRecord) b
 // sensitive as the tool arguments they record, in full), located via each
 // child record's own (Principal, Job) pair — TrafficPath is keyed by both,
 // not just the run, since one run can hold many children's traffic files.
-// A still-running child (stillRunning) is skipped entirely: its files are
-// still live. Neither touches an account: resolve already tore those down
-// (or deliberately kept them, --keep-accounts), and clean's job here is
-// retention of leftover files, not teardown. Best-effort per file: one
-// failed removal is recorded in the result, never fatal to the rest of the
-// sweep. Returns nil when there is nothing to report (every file already
-// gone or never existed, and no error) — clown#250 review point 6: a
-// periodic sweep's output must not keep listing a run with nothing left.
+// A still-running child, OR one stillRunning could not read (treated the
+// same: "don't know" must never be swept, clown#250 review blocking item),
+// is skipped entirely: its files may still be live. Neither touches an
+// account: resolve already tore those down (or deliberately kept them,
+// --keep-accounts), and clean's job here is retention of leftover files, not
+// teardown. Best-effort per file: one failed removal is recorded in the
+// result, never fatal to the rest of the sweep. Returns nil only when there
+// is nothing to report AND nothing was skipped for being live or unreadable
+// (clown#250 review point 6): a run whose only leftovers belong to a live
+// (or unreadable) child must stay listed, not disappear just because found
+// is 0 for the files clean actually touched.
 func cleanResolvedRun(ctx context.Context, deps LifecycleDeps, run *RunRecord, act bool, age time.Duration) *CleanRunResult {
 	res := CleanRunResult{RunKey: run.RunKey, Kind: "resolved", Age: age.Round(time.Second).String()}
 	children, err := deps.Store.runChildren(run.RunKey)
@@ -211,7 +248,7 @@ func cleanResolvedRun(ctx context.Context, deps LifecycleDeps, run *RunRecord, a
 		return &res
 	}
 	var found, removed, liveSkipped int
-	var removeErrs []string
+	var notes []string
 	sweep := func(p string) {
 		if p == "" {
 			return
@@ -224,13 +261,19 @@ func cleanResolvedRun(ctx context.Context, deps LifecycleDeps, run *RunRecord, a
 			return
 		}
 		if err := removeIfExists(p); err != nil {
-			removeErrs = append(removeErrs, fmt.Sprintf("%s: %v", p, err))
+			notes = append(notes, fmt.Sprintf("%s: %v", p, err))
 			return
 		}
 		removed++
 	}
 	for _, child := range children {
-		if stillRunning(ctx, deps, child) {
+		running, err := stillRunning(ctx, deps, child)
+		if err != nil {
+			liveSkipped++
+			notes = append(notes, fmt.Sprintf("child %s (job %s): %v", child.Principal, child.Job, err))
+			continue
+		}
+		if running {
 			liveSkipped++
 			continue
 		}
@@ -252,16 +295,19 @@ func cleanResolvedRun(ctx context.Context, deps LifecycleDeps, run *RunRecord, a
 	case !act:
 		res.Detail = fmt.Sprintf("would remove %d staged/traffic file(s)", found)
 	default:
-		res.Reaped = removed == found
+		// Reaped requires every swept file gone AND nothing left behind for
+		// a live or unreadable child: a liveSkipped > 0 run has files still
+		// out there, even though this pass never touched them.
+		res.Reaped = removed == found && liveSkipped == 0
 		res.Detail = fmt.Sprintf("removed %d of %d staged/traffic file(s)", removed, found)
 	}
 	if liveSkipped > 0 {
 		res.Detail = fmt.Sprintf("%s (%d still-running child skipped)", res.Detail, liveSkipped)
 	}
-	if len(removeErrs) > 0 {
-		res.Error = joinNotes(removeErrs[0], removeErrs[1:])
+	if len(notes) > 0 {
+		res.Error = joinNotes(notes[0], notes[1:])
 	}
-	if found == 0 && res.Error == "" {
+	if found == 0 && liveSkipped == 0 && res.Error == "" {
 		return nil
 	}
 	return &res

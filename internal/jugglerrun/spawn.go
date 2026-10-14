@@ -178,12 +178,29 @@ func NewRun(ctx context.Context, deps LifecycleDeps, req NewRunRequest) (NewRunR
 	if prior != nil && !prior.Pending {
 		return newRunResult(prior, true), nil
 	}
+	if prior != nil {
+		// A resuming retry stamps its own fresh PendingSince immediately,
+		// still under the lock from this call's start — before the systemd
+		// check or the mint, either of which can fail and return bare
+		// (clown#250 review, should-fix 3): failed() below only runs for a
+		// failure AFTER this point, so without this, a retry that fails at
+		// CheckSystemdReady or Troupe.Mint (e.g. troupe down) would leave
+		// PendingSince at its stale value from the attempt before, and a
+		// clean sweep could reap the run mid-retry.
+		refreshed := *prior
+		refreshed.PendingSince = deps.Now().UTC()
+		if err := deps.Store.SaveRun(&refreshed); err != nil {
+			return NewRunResult{}, fmt.Errorf("refreshing the pending run's retry stamp: %w", err)
+		}
+		prior = &refreshed
+	}
 
 	// The systemd readiness precondition (FDR 0019 Limitations) runs before
 	// any side effect, including the mint: a plain error, nothing undone,
-	// nothing saved pending. A first attempt has no run to log a refusal
-	// against; a pending retry's ledger refuses new entries until it
-	// resumes (RunRecord.CheckOpen), so neither case records one.
+	// nothing saved pending (beyond the PendingSince refresh above, on a
+	// retry). A first attempt has no run to log a refusal against; a
+	// pending retry's ledger refuses new entries until it resumes
+	// (RunRecord.CheckOpen), so neither case records one.
 	if err := CheckSystemdReady(ctx, deps.Systemd); err != nil {
 		return NewRunResult{}, err
 	}

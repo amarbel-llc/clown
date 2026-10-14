@@ -239,16 +239,21 @@ channel, and it never parses the room):
      between its own attempts): revokes the root the same way `resolve`'s
      own teardown does (`teardownRoot`: room affiliation dropped only
      when the room has an operator owner, account and password file
-     revoked/deleted), appends a `teardown` ledger entry, then
-     **tombstones** the record — `pending: false, reaped: true,
-     reaped_at` — rather than deleting it. A tombstone, not a delete: the
-     root principal is deterministic (`NewRootPrincipal(run_key)`), so
-     deleting the record would let a later `spawn --new-run` with the
-     same key re-mint a brand-new account under that same principal —
-     one the ledger's already-ok `teardown` entry marks gone, so
-     `resolve`'s teardown would skip revoking the NEW account and it
-     would leak forever. `spawn --new-run` refuses a reaped key outright,
-     naming the tombstone.
+     revoked/deleted) and, once that succeeds, **tombstones** the record
+     first — `pending: false, reaped: true, reaped_at` — then appends the
+     `teardown` ledger entry, in that order (not the reverse): the
+     tombstone is the record `spawn --new-run`'s `CheckOpen` actually
+     consults, so a crash between the two leaves the run key correctly
+     refused either way, never a window where the ledger already claims
+     the root gone while the record itself could still resume and
+     re-mint. A tombstone, not a delete: the root principal is
+     deterministic (`NewRootPrincipal(run_key)`), so deleting the record
+     would let a later `spawn --new-run` with the same key re-mint a
+     brand-new account under that same principal — one the ledger's
+     already-ok `teardown` entry marks gone, so `resolve`'s teardown
+     would skip revoking the NEW account and it would leak forever.
+     `spawn --new-run` refuses a reaped key outright, naming the
+     tombstone.
   2. with `--resolved`, a **resolved run** past `--resolved-older-than`
      (default 30d — a retention policy on audit material, not a retry
      guard, so off unless asked for and measured from
@@ -256,9 +261,15 @@ channel, and it never parses the room):
      `<digest>.brief.toml`/`.moxyfile.toml`/`.parent-moxyfile.toml` and
      `traffic.jsonl` (clown#255) — never an account (`resolve`'s job) or
      the run/child record itself (the audit trail). A child still
-     running (the same terminal check `resolve`'s own teardown uses) is
-     skipped entirely, so a live agent's `traffic.jsonl` is never
-     unlinked out from under it.
+     running, OR one whose journal could not even be read, is skipped
+     entirely (the identical `Ringmaster.Records`/terminal check
+     `resolve`'s own teardown uses, including its keep-on-error
+     handling: a Records error means "don't know" and is never read as
+     "gone" — a `clean --act --resolved` running while ringmaster is
+     down must never unlink a live agent's `traffic.jsonl` out from
+     under it), so its files are never swept and `reaped` reports
+     `false` for the run, not a bare success with files quietly left
+     behind.
 
   A run that is neither pending nor resolved — still open — is never
   touched, however old either guard. Defaults to a dry-run listing;
@@ -267,9 +278,9 @@ channel, and it never parses the room):
   `resolve` does, whenever `--act` is given (`troupe mint-revoke`'s
   self-removal path for the pending-run category; the resolved-run sweep
   touches no account but the check does not distinguish). A run with
-  nothing left to report (every file already gone, or none existed) is
-  omitted from the output, so a periodic sweep's listing does not grow
-  forever.
+  nothing left to report (every file already gone or never existed, and
+  no child was skipped as still-running or unreadable) is omitted from
+  the output, so a periodic sweep's listing does not grow forever.
 - Every reason is on stdout and in a ledger: `cannot_complete.reason`
   in the subagent ledger and the `--wait` output; `juggler decide`'s
   reason in its stdout object and the decision stanza.
@@ -1117,10 +1128,14 @@ The router, before any subagent exists:
   drops its owner affiliation there, never destroys it — see "Per-run
   rooms accumulate" above). Past clean's age guard (`--older-than`,
   measured from `pending_since` — stamped fresh on every failed
-  attempt, so a retry policy's own backoff is never mistaken for
-  staleness; an in-flight retry is never reaped, since `spawn --new-run`
-  and `clean` serialise on the same per-run lock), clean revokes the
-  root (`teardownRoot`, the same helper `resolve` uses), appends a
+  attempt, including a resuming retry's own stamp taken before the
+  systemd check or the mint, before either can fail and return bare, so
+  a retry policy's own backoff is never mistaken for staleness; an
+  in-flight retry is never reaped, since `spawn --new-run` and `clean`
+  serialise on the same per-run lock AND clean re-checks the age guard
+  against a freshly reloaded record once it holds that lock, not just
+  the listing-time snapshot that queued it for reaping), clean revokes
+  the root (`teardownRoot`, the same helper `resolve` uses), appends a
   `teardown` ledger entry, and **tombstones** the record rather than
   deleting it: `pending: false, reaped: true, reaped_at`. Because the
   root is a function of the run key, deleting the record outright would

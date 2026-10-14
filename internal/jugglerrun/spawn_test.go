@@ -362,6 +362,32 @@ func TestNewRun_FailureAfterPostCleansUp(t *testing.T) {
 	}
 }
 
+// TestNewRun_ResumeRefreshesPendingSinceEvenWhenTheSystemdCheckFails covers
+// the clown#250 review's should-fix 3: a resuming retry must stamp its own
+// fresh PendingSince BEFORE the systemd readiness check (or the mint),
+// either of which can fail and return bare with failed() never reached —
+// without the early stamp, a retry that keeps failing before the mint would
+// leave PendingSince at the attempt-before's value, and a clean sweep could
+// reap the run out from under a retry policy still in flight.
+func TestNewRun_ResumeRefreshesPendingSinceEvenWhenTheSystemdCheckFails(t *testing.T) {
+	h := newHarness(t)
+	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	pendingRun(t, h, "k", t0)
+
+	h.fakes.SetSystemctlState(t, "starting")
+	retryAt := t0.Add(90 * time.Minute)
+	h.deps.Now = func() time.Time { return retryAt }
+	_, err := NewRun(context.Background(), h.deps, NewRunRequest{RunKey: "k", Issuer: testIssuer, Input: []byte("x"), Room: "run@rooms.test"})
+	var notReady *ErrSystemdNotReady
+	if !errors.As(err, &notReady) {
+		t.Fatalf("err = %v, want *ErrSystemdNotReady", err)
+	}
+	rec, _ := h.deps.Store.LoadRun("k")
+	if rec == nil || !rec.Pending || !rec.PendingSince.Equal(retryAt) {
+		t.Errorf("PendingSince must be refreshed to the retry's own time even though it failed before the mint and failed() never ran: %+v", rec)
+	}
+}
+
 func spawnChild(t *testing.T, h *harness) *ChildRecord {
 	t.Helper()
 	rec, existing, err := SpawnChild(context.Background(), h.deps, SpawnRequest{
