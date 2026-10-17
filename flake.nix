@@ -709,7 +709,7 @@
         # The legacy `tentImageEnabled` (linux-only) stays as the gate
         # for `tentImageTarball` and the conditionally-exposed
         # `packages.X.tent-image`.
-        tentImageEnabled = pkgs.stdenv.isLinux;
+        tentImageEnabled = pkgs.stdenv.hostPlatform.isLinux;
         tentPodmanEnabled = true;
         tentClaudeEnabled = true;
         tentImage =
@@ -1755,7 +1755,7 @@
         # systems so it can be built directly (e.g. as an
         # `aarch64-linux` cross-build from darwin via nix-darwin's
         # linux-builder, then `podman load`-ed into a podman-machine
-        # VM). On darwin systems pkgs.stdenv.isLinux is false and
+        # VM). On darwin systems pkgs.stdenv.hostPlatform.isLinux is false and
         # tentImage evaluates to null, so the package is omitted
         # rather than surfaced as a broken attribute.
         // lib.optionalAttrs tentImageEnabled {

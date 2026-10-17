@@ -62,7 +62,7 @@ in
   config = mkIf cfg.enable {
     # Linux: systemd user service. Restart on failure so a crashed
     # daemon comes back without the user noticing.
-    systemd.user.services.juggler = mkIf pkgs.stdenv.isLinux {
+    systemd.user.services.juggler = mkIf pkgs.stdenv.hostPlatform.isLinux {
       Unit = {
         Description = "Juggler (llama-server control plane)";
         Documentation = "https://code.linenisgreat.com/clown";
@@ -83,7 +83,7 @@ in
     # StandardErrorPath must be an absolute path at eval time —
     # launchd doesn't expand `$HOME` in plist contexts. Resolve
     # through `config.home.homeDirectory` so the type-check passes.
-    launchd.agents.juggler = mkIf pkgs.stdenv.isDarwin {
+    launchd.agents.juggler = mkIf pkgs.stdenv.hostPlatform.isDarwin {
       enable = true;
       config = {
         ProgramArguments = [ "${launcher}" ];

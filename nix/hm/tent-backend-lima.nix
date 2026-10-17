@@ -298,7 +298,7 @@ in
         # rejects linux activation rather than silently no-op'ing.
         assertions = [
           {
-            assertion = pkgs.stdenv.isDarwin;
+            assertion = pkgs.stdenv.hostPlatform.isDarwin;
             message = ''
               services.tent-backend-lima.enable is only meaningful on
               darwin. On linux, run containers directly via rootless
@@ -311,7 +311,7 @@ in
       # Darwin: launchd agent that runs the launcher at login. Like
       # ringmaster, KeepAlive { Crashed = true } restarts on crash
       # but lets clean exits stick.
-      (mkIf pkgs.stdenv.isDarwin {
+      (mkIf pkgs.stdenv.hostPlatform.isDarwin {
         launchd.agents.tent-backend-lima = {
           enable = true;
           config = {
