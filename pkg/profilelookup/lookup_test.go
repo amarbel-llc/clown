@@ -91,6 +91,26 @@ func TestResolveUserShadowsBuiltin(t *testing.T) {
 	}
 }
 
+// A registry repeating a builtin's name resolves as the binary's Merge does:
+// the last entry wins.
+func TestResolveDuplicateBuiltinNameMatchesMerge(t *testing.T) {
+	builtin, err := profile.Builtin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, second := builtin[0], builtin[0]
+	first.Display, second.Display = "first", "second"
+	path := writeRegistry(t, "1.2.3", first, second)
+	got, err := profilelookup.Resolve(builtin[0].Name, profilelookup.Options{RegistryPath: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := profile.Merge(builtin, []profile.Profile{first, second})[0]
+	if got.Display != want.Display || got.Display != "second" {
+		t.Fatalf("display = %q, Merge picks %q", got.Display, want.Display)
+	}
+}
+
 func TestResolveNotFound(t *testing.T) {
 	path := writeRegistry(t, "1.2.3", trimmed())
 	_, err := profilelookup.Resolve("nope", profilelookup.Options{RegistryPath: path})

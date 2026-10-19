@@ -41,7 +41,9 @@
 //   - strings are UTF-8, escaped per encoding/json except that <, > and & are
 //     written literally; no insignificant whitespace, no trailing newline;
 //   - values are verbatim from the registry: ${ENV} references are NOT
-//     expanded.
+//     expanded. Only the token is withheld: a literal credential written into
+//     an env value or a URL IS in Canonical, so treat Canonical as sensitive
+//     (log and store the digest, not the bytes).
 //
 // DigestSHA256 is the lowercase hex sha256 of Canonical. The launcher renders
 // it as a markl-id itself; this package depends on no markl-id library.
@@ -215,14 +217,17 @@ func Resolve(name string, opts Options) (*Resolved, error) {
 		return nil, err
 	}
 
-	source := SourceBuiltin
-	found, ok := findProfile(builtin, name)
-	if p, userOK := findProfile(reg.Profiles, name); userOK {
-		found, ok, source = p, true, SourceUser
-	}
+	// Same merge and same first-match lookup as the clown binary
+	// (cmd/clown/main.go), so a registry that repeats a name resolves to the
+	// entry `clown --profile NAME` would launch.
+	merged := profile.Merge(builtin, reg.Profiles)
+	found, ok := findProfile(merged, name)
 	if !ok {
-		known := names(profile.Merge(builtin, reg.Profiles))
-		return nil, fmt.Errorf("%w: %q (known: %s)", ErrNotFound, name, strings.Join(known, ", "))
+		return nil, fmt.Errorf("%w: %q (known: %s)", ErrNotFound, name, strings.Join(names(merged), ", "))
+	}
+	source := SourceBuiltin
+	if _, inUser := findProfile(reg.Profiles, name); inUser {
+		source = SourceUser
 	}
 	if err := profile.Validate(found); err != nil {
 		return nil, err
