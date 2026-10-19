@@ -59,7 +59,16 @@ type ServerDef struct {
 	// Native httpServers set this directly; bridged stdioServers get it via
 	// Desugar from StdioServerDef.SystemPrompt.
 	SystemPromptPath string `json:"systemPromptPath,omitempty"`
+	// Scope places the server relative to an agent scope (clown#244, FDR
+	// 0020). ScopeFrontend marks a coordination server (job platform,
+	// spinclass) that runs in clown's frontend and is forwarded into the
+	// agent unit. Empty means agent-side: it holds the operator's authority
+	// over files, so it is NOT forwarded into a confined unit.
+	Scope string `json:"scope,omitempty"`
 }
+
+// ScopeFrontend is the Scope value of a server forwarded into agent units.
+const ScopeFrontend = "frontend"
 
 // StdioServerDef declares a stdio MCP server that clown will bridge to
 // HTTP. Schema parallels ServerDef but omits transport (always stdio)
@@ -79,6 +88,8 @@ type StdioServerDef struct {
 	// child). A bridged child opts in by both setting this AND exposing
 	// that prompt; either absent yields no fragment.
 	SystemPrompt bool `json:"systemPrompt,omitempty"`
+	// Scope has the same semantics as ServerDef.Scope; Desugar carries it.
+	Scope string `json:"scope,omitempty"`
 }
 
 // MonitorDef mirrors Anthropic's plugin monitor schema exactly. Fields
@@ -278,6 +289,7 @@ func Desugar(cfg *ClownConfig, bridgePath, pluginDir string) error {
 			Transport:        "streamable-http",
 			Timeout:          stdio.Timeout,
 			SystemPromptPath: systemPromptPath,
+			Scope:            stdio.Scope,
 			Healthcheck: HealthcheckDef{
 				Path:     "/healthz",
 				Interval: JSONDuration{Duration: 1 * time.Second},

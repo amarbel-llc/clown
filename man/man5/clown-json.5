@@ -137,6 +137,17 @@ Unset means static-only.
 See
 .Xr clown-plugin-protocol 7 ,
 section 5.
+.It Fa scope Pq string, optional
+Where the server sits relative to an agent scope
+.Pq Fl -agent-scope .
+.Li frontend
+marks a coordination server (job platform, session manager) that runs
+beside clown and is forwarded into the agent unit.
+Unset means agent-side: the server acts with the operator's authority
+over files, so it is never forwarded into a confined unit.
+Without
+.Fl -agent-scope
+the field has no effect.
 .El
 .Ss Stdio Server Definition
 Each stdio server definition is an object with the following fields:
@@ -198,6 +209,10 @@ Default:
 See
 .Xr clown-plugin-protocol 7 ,
 section 5.
+.It Fa scope Pq string, optional
+As for a server definition; carried onto the synthesized
+.Fa httpServers
+entry.
 .El
 .Pp
 At discovery time, clown desugars each

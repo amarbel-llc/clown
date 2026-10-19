@@ -6,9 +6,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"code.linenisgreat.com/clown/internal/buildcfg"
+	"code.linenisgreat.com/clown/internal/pluginhost"
 	"code.linenisgreat.com/clown/internal/staging"
 	"code.linenisgreat.com/clown/pkg/profilelookup"
 )
@@ -115,11 +117,19 @@ func troupeMonitorCommand(verb, key string) string {
 // guard) and the session degrades to no-XMPP rather than breaking the launch or
 // crash-looping a credential-less connect. A no-op when the troupe binary is
 // absent (dev `go run`), where the receiver is skipped anyway.
+//
+// The credential is ALWAYS this session's own or nothing (clown#267): the
+// inherited TROUPE_XMPP_USER / TROUPE_XMPP_PASSWORD_FILE are scrubbed before
+// this runs (scrubInheritedXMPPCredential), the mint child gets an env without
+// them (troupe mint would otherwise adopt an inherited password file as its
+// output path and reuse the PARENT's password for the child's account), and a
+// result whose file does not name the minted principal is refused.
 func mintSessionXMPPCredential(key string) {
 	if buildcfg.TroupePath == "" {
 		return
 	}
 	cmd := exec.Command(buildcfg.TroupePath, "mint", "--session-key", key)
+	cmd.Env = environWithout(os.Environ(), inheritedXMPPCredentialKeys...)
 	cmd.Stderr = os.Stderr
 	out, err := cmd.Output()
 	if err != nil {
@@ -134,12 +144,44 @@ func mintSessionXMPPCredential(key string) {
 		fmt.Fprintf(os.Stderr, "clown: troupe mint: parsing output: %v\n", err)
 		return
 	}
-	if res.PasswordFile != "" {
-		_ = os.Setenv("TROUPE_XMPP_PASSWORD_FILE", res.PasswordFile)
+	user, _, _ := strings.Cut(res.JID, "@")
+	if !xmppCredentialConsistent(user, res.PasswordFile) {
+		fmt.Fprintf(os.Stderr, "clown: troupe mint returned password file %q for principal %q; refusing a credential that does not name its principal, xmpp-native messaging disabled this session\n", res.PasswordFile, user)
+		return
 	}
-	if user, _, ok := strings.Cut(res.JID, "@"); ok && user != "" {
-		_ = os.Setenv("TROUPE_XMPP_USER", user)
+	_ = os.Setenv("TROUPE_XMPP_PASSWORD_FILE", res.PasswordFile)
+	_ = os.Setenv("TROUPE_XMPP_USER", user)
+}
+
+// inheritedXMPPCredentialKeys name a session's XMPP credential. A value present
+// when clown starts belongs to whoever launched it (a spawning parent session),
+// never to this session.
+var inheritedXMPPCredentialKeys = []string{"TROUPE_XMPP_USER", "TROUPE_XMPP_PASSWORD_FILE"}
+
+// scrubInheritedXMPPCredential drops an inherited XMPP credential from clown's
+// env, so this session either mints its own or runs without one; it never
+// carries its parent's into the claude subtree (clown#267).
+func scrubInheritedXMPPCredential() {
+	for _, k := range inheritedXMPPCredentialKeys {
+		_ = os.Unsetenv(k)
 	}
+}
+
+// xmppCredentialConsistent reports whether the password file names the
+// principal: troupe derives it as .../troupe/accounts/<localpart>.pass.
+func xmppCredentialConsistent(user, passwordFile string) bool {
+	return user != "" && passwordFile != "" && filepath.Base(passwordFile) == user+".pass"
+}
+
+func environWithout(env []string, keys ...string) []string {
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		k, _, _ := strings.Cut(kv, "=")
+		if !slices.Contains(keys, k) {
+			out = append(out, kv)
+		}
+	}
+	return out
 }
 
 // providerUsesPluginDirs reports whether the provider should receive clown's
@@ -281,6 +323,9 @@ func synthJobMonitorPluginDir(root *staging.Root, sessionKey string) (string, er
 					"command":      buildcfg.RingmasterPath,
 					"args":         []string{"mcp"},
 					"systemPrompt": true,
+					// Coordination, not file authority: forwarded into an
+					// agent unit (FDR 0020).
+					"scope": pluginhost.ScopeFrontend,
 				},
 				// troupe: messaging — chat + the standalone waking job_message
 				// (clown#144). Also owns a dynamic system-prompt fragment (its own
@@ -292,6 +337,7 @@ func synthJobMonitorPluginDir(root *staging.Root, sessionKey string) (string, er
 					"command":      buildcfg.TroupePath,
 					"args":         []string{"mcp"},
 					"systemPrompt": true,
+					"scope":        pluginhost.ScopeFrontend,
 				},
 			},
 		}

@@ -674,7 +674,9 @@ func runWithFlags(flags parsedFlags) int {
 	// (TROUPE_XMPP_USER/PASSWORD_FILE). Best-effort: a mint miss logs and leaves
 	// the credential unset, so the receiver is not registered (opt-in transport)
 	// and the launch is never broken. Skipped for --naked and when job-wakeup is
-	// disabled (no receiver to feed).
+	// disabled (no receiver to feed). Whatever credential this process inherited
+	// is a parent's and is dropped first, on every path (clown#267).
+	scrubInheritedXMPPCredential()
 	if !flags.naked && !jobWakeupDisabled() && os.Getenv("TROUPE_TRANSPORT") == "xmpp-native" {
 		mintSessionXMPPCredential(flags.identity.Key)
 	}

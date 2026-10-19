@@ -216,7 +216,14 @@ func stageAgentHome(spec agentscope.Spec, agentHome, cwd string) (plumbingBinds,
 		}
 	}
 	p.rw = append(p.rw, dirs...)
-	if pw := os.Getenv("TROUPE_XMPP_PASSWORD_FILE"); filepath.IsAbs(pw) {
+	// Only this session's own XMPP credential, and only when it names its
+	// principal: a mismatch means a credential inherited from another
+	// session (clown#267), which must never enter a unit.
+	if pw := os.Getenv("TROUPE_XMPP_PASSWORD_FILE"); pw != "" {
+		user := os.Getenv("TROUPE_XMPP_USER")
+		if !filepath.IsAbs(pw) || !xmppCredentialConsistent(user, pw) {
+			return p, fmt.Errorf("TROUPE_XMPP_PASSWORD_FILE %q does not name TROUPE_XMPP_USER %q's principal; refusing to bind another session's credential", pw, user)
+		}
 		p.ro = append(p.ro, pw)
 	}
 	// The user's nix profile links (home-manager's PATH entries) live under
