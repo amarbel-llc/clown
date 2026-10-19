@@ -2034,3 +2034,109 @@ debug-tent-claude-tty CLAUDE_BIN='/nix/store/dii6cpbdqzjcjqcy18x6n56cql0fmdg9-cl
         --volume /home/sasha/.claude.json:/home/sasha/.claude.json \
         clown-tent:0.3.2 \
         sh -c "$inner_cmd"
+
+# clown#244 feasibility probe: start a throwaway transient USER service with
+# the proposed agent-scope sandbox (PrivateUsers, ProtectHome=tmpfs, worktree
+# bind, PrivateTmp, PrivateDevices, no bus/display env) and report, from
+# inside, what it can and cannot reach; then, from outside, its cgroup vs
+# piggy-agent's. Phase 2 passes a script(1)-allocated pty through --pipe and
+# makes it the controlling tty inside (setsid -c), the shape clown would use.
+# Units are --collect'ed and --wait'ed, so nothing outlives the recipe.
+explore-agent-unit-probe DEVPTS='/dev/pts' PIDNS='1':
+    #!/usr/bin/env bash
+    set -uo pipefail
+    wt=$(git rev-parse --show-toplevel)
+    rt=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+    out="$wt/.tmp/agent-unit-probe"
+    rm -rf "$out"; mkdir -p "$out/home"
+    sshsock="$HOME/.local/state/ssh/ssh_client-agent.sock"
+    probe="$out/probe.sh"
+    cat > "$probe" <<'EOF'
+    #!/usr/bin/env bash
+    chk() { if eval "$2" >/dev/null 2>&1; then echo "PASS $1"; else echo "FAIL $1"; fi; }
+    echo "uid=$(id -u) gid=$(id -g) user=$(id -un 2>/dev/null)"
+    echo "cgroup=$(cat /proc/self/cgroup)"
+    echo "tty=$(tty 2>&1)"
+    echo "env DISPLAY=${DISPLAY-<unset>} WAYLAND_DISPLAY=${WAYLAND_DISPLAY-<unset>} DBUS=${DBUS_SESSION_BUS_ADDRESS-<unset>} XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR-<unset>}"
+    chk "real-home-hidden"        "[ ! -e \"$REAL_HOME/.config\" ]"
+    chk "real-home-unwritable"    "! touch \"$REAL_HOME/.agent-probe\""
+    chk "session-bus-absent"      "[ ! -e \"$RT/bus\" ]"
+    chk "posh-dir-absent"         "[ ! -e \"$RT/posh\" ]"
+    chk "wayland-absent"          "! ls $RT/wayland-* "
+    chk "x11-absent"              "[ ! -e /tmp/.X11-unix/X0 ]"
+    chk "busctl-user-fails"       "! timeout 3 busctl --user status"
+    chk "devpts-private"          "[ \"\$(ls /dev/pts | grep -v ptmx | wc -l)\" = 0 ]"
+    chk "worktree-writable"       "touch \"$WT/.tmp/agent-unit-probe/written-from-unit\""
+    chk "nix-store-readable"      "ls /nix/store/ | head -1"
+    timeout 3 ssh-add -l >/dev/null 2>&1; rc=$?
+    if [ "$rc" = 0 ] || [ "$rc" = 1 ]; then echo "PASS ssh-agent-reachable (rc=$rc)"; else echo "FAIL ssh-agent-reachable (rc=$rc)"; fi
+    echo "devpts: $(ls /dev/pts | tr '\n' ' ')"
+    npids=$(ls /proc | grep -c '^[0-9]')
+    echo "visible pids: $npids ($(ls /proc | grep '^[0-9]' | tr '\n' ' '))"
+    chk "pidns-private"           "[ $npids -lt 10 ]"
+    chk "no-proc-root-walkout"    "! ls /proc/*/root$REAL_HOME/.config"
+    EOF
+    chmod +x "$probe"
+    props=(
+        -p PrivateUsers=self -p ProtectHome=tmpfs -p PrivateTmp=yes -p PrivateDevices=yes
+        -p NoNewPrivileges=yes -p ProtectSystem=strict
+        -p "TemporaryFileSystem={{DEVPTS}}"
+        {{ if PIDNS == "1" { "-p PrivatePIDs=yes" } else { "" } }}
+        -p "UnsetEnvironment=$(systemctl --user show-environment | cut -d= -f1 | grep -vx -e PATH -e LANG -e TZDIR -e LOCALE_ARCHIVE | tr '\n' ' ')"
+        -p "BindPaths=$wt" -p "ReadWritePaths=$wt"
+        -p "BindPaths=$sshsock"
+        -E "HOME=$out/home" -E "PATH=$PATH" -E "SSH_AUTH_SOCK=$sshsock" -E "TERM=${TERM:-xterm}"
+        -E "REAL_HOME=$HOME" -E "RT=$rt" -E "WT=$wt"
+    )
+    echo ">> systemd: $(systemctl --version | head -1)"
+    echo ">> phase 1: probe in unit (stdio = pipes)"
+    systemd-run --user --quiet --collect --wait --pipe --slice=clown-agent.slice \
+        --unit="clown-agent-probe-$$-a" "${props[@]}" -- "$probe" < /dev/null
+    echo "   exit=$?"
+    echo ">> phase 1b: cgroup of a live unit vs piggy-agent (from outside)"
+    systemd-run --user --quiet --collect --slice=clown-agent.slice \
+        --unit="clown-agent-probe-$$-b" "${props[@]}" -- sleep 20
+    sleep 1
+    echo "   agent unit:  $(systemctl --user show -p ControlGroup --value "clown-agent-probe-$$-b.service")"
+    echo "   piggy-agent: $(systemctl --user show -p ControlGroup --value piggy-agent.service)"
+    echo "   this recipe: $(cat /proc/self/cgroup)"
+    systemctl --user stop "clown-agent-probe-$$-b.service"
+    echo ">> manager env keys (all unset in the unit except PATH/LANG/TZDIR/LOCALE_ARCHIVE):"
+    echo "   $(systemctl --user show-environment | cut -d= -f1 | tr '\n' ' ')"
+    echo ">> phase 2: fresh O_NOCTTY pty (as clown would allocate) passed via --pipe, made controlling tty inside"
+    python3 -I - "clown-agent-probe-$$-c" "${props[@]}" <<'PY'
+    import fcntl, os, struct, subprocess, sys, termios
+    unit, props = sys.argv[1], sys.argv[2:]
+    m, s = os.openpty()
+    fcntl.ioctl(s, termios.TIOCSWINSZ, struct.pack("HHHH", 33, 111, 0, 0))
+    inner = "echo inner-tty=$(tty 2>&1); stty size 2>&1; echo stat=$(cut -d' ' -f5-8 /proc/$$/stat) '(pgrp session tty_nr tpgid)'; echo pid=$$; trap 'echo got-SIGWINCH; stty size' WINCH; echo ready; read -r line; echo read=$line"
+    argv = ["systemd-run", "--user", "--quiet", "--collect", "--wait", "--pipe", "--expand-environment=no",
+            "--slice=clown-agent.slice", "--unit=" + unit, *props,
+            "--", "python3", "-I", "-c",
+            "import os,fcntl,termios,sys\n"
+            "print('leader-before', os.getsid(0)==os.getpid(), flush=True)\n"
+            "try:\n os.setsid()\nexcept OSError as e: print('setsid', e, flush=True)\n"
+            "try:\n fcntl.ioctl(0, termios.TIOCSCTTY, 0); print('TIOCSCTTY ok', flush=True)\nexcept OSError as e: print('TIOCSCTTY', e, flush=True)\n"
+            "os.execvp('sh', ['sh','-c',sys.argv[1]])", inner]
+    p = subprocess.Popen(argv, stdin=s, stdout=s, stderr=s)
+    os.close(s)
+    buf = b""
+    while b"ready" not in buf:
+        buf += os.read(m, 4096)
+    # resize from the master side (what clown's relay does on its own SIGWINCH)
+    fcntl.ioctl(m, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
+    import time; time.sleep(0.5)
+    os.write(m, b"typed-by-operator\n")
+    while True:
+        try:
+            chunk = os.read(m, 4096)
+        except OSError:
+            break
+        if not chunk:
+            break
+        buf += chunk
+    rc = p.wait()
+    sys.stdout.write(buf.decode(errors="replace"))
+    print("   exit=%d" % rc)
+    PY
+    ls -la "$out"
