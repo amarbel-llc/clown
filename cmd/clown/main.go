@@ -433,6 +433,11 @@ func runWithFlags(flags parsedFlags) int {
 		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
 		return 1
 	}
+	// Whatever XMPP credential this process inherited is a parent's and is
+	// dropped first (clown#267); a credential this clownfile configures is
+	// applied right after and kept, and the xmpp-native mint below overrides
+	// both with this session's own.
+	scrubInheritedXMPPCredential()
 	for k, v := range msgEnv {
 		_ = os.Setenv(k, v)
 	}
@@ -674,9 +679,8 @@ func runWithFlags(flags parsedFlags) int {
 	// (TROUPE_XMPP_USER/PASSWORD_FILE). Best-effort: a mint miss logs and leaves
 	// the credential unset, so the receiver is not registered (opt-in transport)
 	// and the launch is never broken. Skipped for --naked and when job-wakeup is
-	// disabled (no receiver to feed). Whatever credential this process inherited
-	// is a parent's and is dropped first, on every path (clown#267).
-	scrubInheritedXMPPCredential()
+	// disabled (no receiver to feed). The inherited credential was already
+	// dropped where the clownfile's [messaging] env is applied (clown#267).
 	if !flags.naked && !jobWakeupDisabled() && os.Getenv("TROUPE_TRANSPORT") == "xmpp-native" {
 		mintSessionXMPPCredential(flags.identity.Key)
 	}

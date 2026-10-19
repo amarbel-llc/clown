@@ -122,6 +122,10 @@ func startEgressProxy(launch *agentscope.Launch, logger *slog.Logger) (stop func
 	}
 	proxy := &agentscope.EgressProxy{Allow: allow, Unit: launch.Unit, Logger: logger}
 	sock := filepath.Join(dir, "egress.sock")
+	if len(sock) >= 108 {
+		os.RemoveAll(dir)
+		return nil, fmt.Errorf("proxy socket path %q exceeds the unix socket limit; shorten unit_name_hint", sock)
+	}
 	if err := proxy.Listen(sock); err != nil {
 		os.RemoveAll(dir)
 		return nil, err
