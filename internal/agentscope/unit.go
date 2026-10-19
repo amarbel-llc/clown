@@ -51,6 +51,9 @@ type Launch struct {
 	// listen address relays to a frontend PortForward socket, bound in as a
 	// single inode.
 	Forwards []Relay
+	// ServeFile lists the agent-side servers the relay starts inside the
+	// unit (WriteInUnitServers); bound in read-only. Empty: none.
+	ServeFile string
 }
 
 // relays is every in-unit relay the shim starts: the egress proxy's, then the
@@ -114,6 +117,9 @@ func (l Launch) SystemdRunArgs() ([]string, error) {
 	}
 	args = append(args, "--")
 	args = append(args, l.Shim...)
+	if l.ServeFile != "" {
+		args = append(args, "--serve", l.ServeFile)
+	}
 	for _, r := range l.relays() {
 		args = append(args, "--relay", r.String())
 	}
@@ -151,6 +157,9 @@ func (l Launch) properties() []string {
 	}
 	for _, p := range l.Spec.BindsRO {
 		props = append(props, "BindReadOnlyPaths="+p)
+	}
+	if l.ServeFile != "" {
+		props = append(props, "BindReadOnlyPaths="+l.ServeFile)
 	}
 	for _, p := range l.PlumbingRO {
 		props = append(props, "BindReadOnlyPaths=-"+p)
@@ -226,12 +235,14 @@ func (l Launch) environment() (set, unset []string) {
 		env[k] = v
 	}
 	env["HOME"] = l.AgentHome
-	// State and log dirs point at the operator's paths, where clown binds the
-	// job platform's and the hooks' subdirs, so tools inside agree with the
-	// frontend. Config, cache and data stay unset: they default under the
-	// writable agent home rather than the hidden, read-only real one.
+	// State, log and data dirs point at the operator's paths, where clown and
+	// the spec bind specific subdirs (job platform, hooks, moxy's logs, the
+	// madder store), so tools inside agree with the frontend on paths. Config
+	// and cache stay unset: they default under the writable agent home rather
+	// than the hidden, read-only real one.
 	env["XDG_STATE_HOME"] = OperatorXDG(l.FrontendEnv, l.Spec.OperatorHome, "XDG_STATE_HOME")
 	env["XDG_LOG_HOME"] = OperatorXDG(l.FrontendEnv, l.Spec.OperatorHome, "XDG_LOG_HOME")
+	env["XDG_DATA_HOME"] = OperatorXDG(l.FrontendEnv, l.Spec.OperatorHome, "XDG_DATA_HOME")
 	// The unit's only way out (PrivateNetwork) is the in-unit relay.
 	proxy := "http://" + RelayAddr()
 	for _, k := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"} {
@@ -264,6 +275,7 @@ func RelayAddr() string { return fmt.Sprintf("127.0.0.1:%d", RelayPort) }
 var xdgDefaults = map[string]string{
 	"XDG_STATE_HOME": ".local/state",
 	"XDG_LOG_HOME":   ".local/log",
+	"XDG_DATA_HOME":  ".local/share",
 }
 
 // OperatorXDG resolves an XDG base dir as the frontend sees it: its value in

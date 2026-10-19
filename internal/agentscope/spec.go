@@ -155,6 +155,7 @@ var Capabilities = []string{
 	"private-network",      // PrivateNetwork=yes, always
 	"egress-proxy",         // frontend CONNECT proxy with a host:port allowlist
 	"frontend-mcp-sockets", // only frontend-class servers, over per-session peer-checked unix sockets
+	"in-unit-moxy",         // agent-side servers (moxy & co.) run inside the unit, moxy under InUnitMoxyfile
 }
 
 // Result is what clown reports back once the unit is active (FDR 0020

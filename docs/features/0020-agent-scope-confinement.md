@@ -404,8 +404,56 @@ Since then (2026-10-19, all on flic):
 - **XMPP credential.** It is passed into the unit only when its file names
   `TROUPE_XMPP_USER`'s principal (clown#267, fixed in the same series).
 
-Not built yet: in-unit moxy, and frontend monitors (troupe's connection
-owner moved out of the unit). Plugin monitors inside the unit are untested,
+**In-unit servers (same day).** Agent-side clown.json servers (moxy, madder,
+dodder, just-us, the juggler plugin, anything without `scope`) are no longer
+dropped. The frontend reserves each one at `127.0.0.1:2xxxx` inside the
+unit's netns (`Host.Reserve`) and compiles that address into claude's
+manifest. The in-unit `clown agent-relay --serve` starts the real server
+inside the unit with pluginhost's own handshake and healthcheck, then relays
+the reserved port to the address the server announced. The servers' stderr
+goes to `$HOME/.cache/clown/agent-relay.log` in the agent home.
+
+moxy inside the unit reads a global moxyfile that clown binds read-only over
+`$HOME/.config/moxy/moxyfile` (`agentscope.InUnitMoxyfile`). It sets an
+`allow-tools` allowlist, which moxy intersects down the hierarchy, so a
+worktree moxyfile can only narrow it, plus `disable-moxins`.
+
+Evidence on flic, real claude -p plus the operator's moxy plugin, with the
+madder store bound as spinclass binds it:
+- moxy started inside the unit (its pid in the unit's pid namespace) and
+  logged `allow-tools active`.
+- folio write inside the worktree succeeded (the file appeared on the host).
+- folio write to `$HOME` was refused, and the file does not exist on the
+  host. The refusal came from moxy's permission layer; the mount boundary
+  that would also have stopped it is proven separately by
+  `verify-agent-scope`.
+- folio read worked, no smith tool existed, and the claude.ai Krone
+  connector's `issue-filer_file` was listed. That connector reached its
+  origin through the egress proxy; it was not called.
+
+Not built yet: frontend monitors (troupe's connection owner moved out of the
+unit).
+
+## What a confined worker loses
+
+By tool, for a brief to state plainly:
+
+| Tool | Status inside the agent unit | Why |
+|---|---|---|
+| moxy: folio, grit, rg, jq, man, chix, env, batch/async, status, restart | **available** | They act on what the unit sees. git push/fetch go through the egress proxy; nix builds go through the daemon. |
+| moxy: smith | absent | It writes to forges. A confined worker files issues through the issue-filer connector only. |
+| moxy: chrest | absent | It drives the operator's browser, which is the prompt surface. |
+| moxy: calendar, car, gmail, gws, piers, prison | absent | Credentials live under the hidden home. |
+| moxy: freud | absent | It reads operator transcripts. |
+| moxy: stats-me | absent | It needs a host-loopback service the unit cannot reach. |
+| circus read-only cloud moxins (hetzner, cloudflare, nfsn) | absent for now | Not on the allowlist. They could be added as read-only after review. |
+| ringmaster, troupe MCP (jobs, chat) | available | Forwarded from the frontend. |
+| spinclass serve | available once spinclass marks it `"scope":"frontend"` | Until then it runs in-unit with what the unit sees. |
+| claude.ai connectors (e.g. Krone's issue-filer) | available | Through the egress proxy (`mcp-proxy.anthropic.com`, `mcp.starbrandshoes.com` on the default allowlist). |
+| Bash network tools | only allowlisted `host:port` over the proxy | `HTTPS_PROXY`/`HTTP_PROXY` are set. Tools that ignore proxy env get no network. |
+| local juggler model (loopback `ANTHROPIC_BASE_URL`) | unavailable | The unit's loopback is its own. |
+| statsd metrics (clown-hook-toolcost UDP) | dropped | No UDP path out. Metrics still accrue in the hook's state file. |
+| moxy and plugin dynamic system-prompt fragments | not fetched | The frontend cannot reach in-unit servers. Their static fragments still apply. | Plugin monitors inside the unit are untested,
 because `-p` mode does not start them. A loopback `ANTHROPIC_BASE_URL` (a
 local juggler) is not reachable from the unit.
 

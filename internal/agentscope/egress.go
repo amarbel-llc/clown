@@ -27,6 +27,8 @@ const RelayPort = 3128
 // the sweatfile's list instead when it has one.
 var DefaultEgressAllow = []string{
 	"api.anthropic.com:443", "console.anthropic.com:443", "platform.claude.com:443", "claude.ai:443",
+	"mcp-proxy.anthropic.com:443", // claude.ai connectors (e.g. Krone's issue-filer)
+	"mcp.starbrandshoes.com:443",  // the fleet's MCP origin behind those connectors
 	"code.linenisgreat.com:443", "code.linenisgreat.com:22",
 	"forge.starbrandshoes.com:443", "forge.starbrandshoes.com:22",
 	"github.com:443", "github.com:22", "api.github.com:443", "codeload.github.com:443",
@@ -309,10 +311,19 @@ func splice(a, b net.Conn) {
 }
 
 // Relay is one in-unit TCP listener (e.g. 127.0.0.1:3128) whose connections
-// are spliced to a frontend unix socket bound into the unit.
+// are spliced to a frontend unix socket bound into the unit, or, for an
+// in-unit server, to the TCP address it announced (Target).
 type Relay struct {
 	Listen string
 	Socket string
+	Target string
+}
+
+func (r Relay) dial() (net.Conn, error) {
+	if r.Target != "" {
+		return net.Dial("tcp", r.Target)
+	}
+	return net.Dial("unix", r.Socket)
 }
 
 // String renders the relay as the shim's ADDR=SOCK argument.
@@ -349,7 +360,7 @@ func RunRelays(relays []Relay, ready func()) error {
 	}
 	errc := make(chan error, len(relays))
 	for i, ln := range lns {
-		go func(ln net.Listener, sock string) {
+		go func(ln net.Listener, r Relay) {
 			for {
 				c, err := ln.Accept()
 				if err != nil {
@@ -358,7 +369,7 @@ func RunRelays(relays []Relay, ready func()) error {
 				}
 				go func() {
 					defer c.Close()
-					up, err := net.Dial("unix", sock)
+					up, err := r.dial()
 					if err != nil {
 						return
 					}
@@ -366,7 +377,7 @@ func RunRelays(relays []Relay, ready func()) error {
 					splice(c, up)
 				}()
 			}
-		}(ln, relays[i].Socket)
+		}(ln, relays[i])
 	}
 	return <-errc
 }

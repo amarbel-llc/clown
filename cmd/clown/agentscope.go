@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,12 +13,15 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
+	"time"
 
 	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 
 	"code.linenisgreat.com/clown/internal/agentscope"
+	"code.linenisgreat.com/clown/internal/pluginhost"
 )
 
 // runInAgentScope launches argv (the provider binary first) in the agent
@@ -25,20 +29,16 @@ import (
 // in the frontend scope, relays the terminal, and writes the spec's result
 // file once the unit is active. Any failure refuses the launch: there is no
 // unconfined fallback.
-//
-// forwardAddrs are the loopback addresses of this session's frontend-class
-// plugin servers; each is forwarded into the unit (and nothing else on the
-// host's loopback is reachable from it).
-func runInAgentScope(specPath, stagingRoot string, forwardAddrs, argv, extraEnv []string, logger *slog.Logger) int {
-	launch, err := prepareAgentScope(specPath, argv, extraEnv)
+func runInAgentScope(req agentScopeRequest, logger *slog.Logger) int {
+	launch, err := prepareAgentScope(req.specPath, req.argv, req.extraEnv)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown: agent scope: %v\n", err)
 		return 1
 	}
-	if stagingRoot != "" && !strings.HasPrefix(stagingRoot, launch.Spec.Worktree+"/") {
-		launch.PlumbingRO = append(launch.PlumbingRO, stagingRoot)
+	if req.stagingRoot != "" && !strings.HasPrefix(req.stagingRoot, launch.Spec.Worktree+"/") {
+		launch.PlumbingRO = append(launch.PlumbingRO, req.stagingRoot)
 	}
-	stopEndpoints, err := startFrontendEndpoints(&launch, append(forwardAddrs, xmppForward(&launch)...), logger)
+	stopEndpoints, err := startFrontendEndpoints(&launch, append(req.forwardAddrs, xmppForward(&launch)...), req.inUnit, logger)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown: agent scope: frontend endpoints: %v\n", err)
 		return 1
@@ -53,6 +53,20 @@ func runInAgentScope(specPath, stagingRoot string, forwardAddrs, argv, extraEnv 
 	}
 	resetTerminal()
 	return code
+}
+
+// agentScopeRequest is one agent-scope launch.
+type agentScopeRequest struct {
+	specPath    string
+	stagingRoot string
+	// forwardAddrs are the loopback addresses of this session's
+	// frontend-class plugin servers; each is forwarded into the unit, and
+	// nothing else on the host's loopback is reachable from it.
+	forwardAddrs []string
+	// inUnit are the agent-side plugin servers started inside the unit.
+	inUnit   []agentscope.InUnitServer
+	argv     []string
+	extraEnv []string
 }
 
 // agentScopeTools resolves systemd-run and systemctl from PATH (overridable
@@ -112,7 +126,12 @@ func prepareAgentScope(specPath string, argv, extraEnv []string) (agentscope.Lau
 //
 // The proxy's allowlist is the spec's egress_allow, else the default, plus
 // the host of ANTHROPIC_BASE_URL when clown routes the model API elsewhere.
-func startFrontendEndpoints(launch *agentscope.Launch, forwardAddrs []string, logger *slog.Logger) (stop func(), err error) {
+//
+// The same directory holds the read-only files the unit is given: the list of
+// in-unit servers for `clown agent-relay`, and the in-unit moxy's global
+// moxyfile (agentscope.InUnitMoxyfile), bound over $HOME/.config/moxy/moxyfile
+// so the agent cannot widen it.
+func startFrontendEndpoints(launch *agentscope.Launch, forwardAddrs []string, inUnit []agentscope.InUnitServer, logger *slog.Logger) (stop func(), err error) {
 	runtime := os.Getenv("XDG_RUNTIME_DIR")
 	if !filepath.IsAbs(runtime) {
 		return nil, errors.New("XDG_RUNTIME_DIR is unset; nowhere to put the unit's sockets")
@@ -174,6 +193,29 @@ func startFrontendEndpoints(launch *agentscope.Launch, forwardAddrs []string, lo
 		closers = append(closers, fwd.Close)
 		launch.Forwards = append(launch.Forwards, agentscope.Relay{Listen: "127.0.0.1:" + port, Socket: sock})
 	}
+
+	if len(inUnit) > 0 {
+		serve := filepath.Join(dir, "in-unit-servers.json")
+		if err := agentscope.WriteInUnitServers(serve, inUnit); err != nil {
+			stop()
+			return nil, err
+		}
+		launch.ServeFile = serve
+	}
+	moxyfile := filepath.Join(dir, "moxyfile")
+	inUnitMoxyfile := filepath.Join(launch.AgentHome, ".config", "moxy", "moxyfile")
+	if err := os.WriteFile(moxyfile, []byte(agentscope.InUnitMoxyfile), 0o600); err != nil {
+		stop()
+		return nil, err
+	}
+	if err := os.MkdirAll(filepath.Dir(inUnitMoxyfile), 0o700); err == nil {
+		err = touch(inUnitMoxyfile)
+	}
+	if err != nil {
+		stop()
+		return nil, err
+	}
+	launch.PlumbingRO = append(launch.PlumbingRO, moxyfile+":"+inUnitMoxyfile)
 	return stop, nil
 }
 
@@ -275,7 +317,7 @@ func stageAgentHome(spec agentscope.Spec, agentHome, cwd string) (plumbingBinds,
 		filepath.Join(state, "troupe"),
 		filepath.Join(state, "clown", "hook-toolcost"),
 		filepath.Join(state, "clown", "hook-tee"),
-		filepath.Join(logs, "moxy", "hooks"),
+		filepath.Join(logs, "moxy"),
 	}
 	if runtime := os.Getenv("XDG_RUNTIME_DIR"); runtime != "" {
 		dirs = append(dirs, filepath.Join(runtime, "ringmaster"), filepath.Join(runtime, "troupe"))
@@ -356,24 +398,25 @@ func touch(path string) error {
 // takes that terminal as its controlling tty, so SIGWINCH and ^C reach the
 // provider. Finally it execs argv.
 func runAgentExec(args []string) int {
-	var relays []string
+	var relayArgs []string
 	for len(args) > 0 && args[0] != "--" {
-		if args[0] == "--relay" && len(args) > 1 {
-			relays, args = append(relays, args[1]), args[2:]
-			continue
+		switch {
+		case (args[0] == "--relay" || args[0] == "--serve") && len(args) > 1:
+			relayArgs, args = append(relayArgs, args[0], args[1]), args[2:]
+		default:
+			fmt.Fprintf(os.Stderr, "clown agent-exec: unknown argument %q\n", args[0])
+			return 2
 		}
-		fmt.Fprintf(os.Stderr, "clown agent-exec: unknown argument %q\n", args[0])
-		return 2
 	}
 	if len(args) > 0 {
 		args = args[1:]
 	}
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "clown agent-exec: usage: clown agent-exec [--relay ADDR=SOCK]... -- <argv>")
+		fmt.Fprintln(os.Stderr, "clown agent-exec: usage: clown agent-exec [--serve FILE] [--relay ADDR=SOCK]... -- <argv>")
 		return 2
 	}
-	if len(relays) > 0 {
-		if err := startRelays(relays); err != nil {
+	if len(relayArgs) > 0 {
+		if err := startRelays(relayArgs); err != nil {
 			fmt.Fprintf(os.Stderr, "clown agent-exec: relays: %v\n", err)
 			return 126
 		}
@@ -398,21 +441,17 @@ func runAgentExec(args []string) int {
 	return 126
 }
 
-// startRelays starts `clown agent-relay ADDR=SOCK...` as a child that outlives
-// the exec (it stays in the unit's cgroup and dies with it) and waits for it
-// to report, on an inherited pipe, that every listener is up.
-func startRelays(relays []string) error {
-	for _, r := range relays {
-		if _, err := agentscope.ParseRelay(r); err != nil {
-			return err
-		}
-	}
+// startRelays starts `clown agent-relay [--serve FILE] [--relay ADDR=SOCK]...`
+// as a child that outlives the exec (it stays in the unit's cgroup and dies
+// with it) and waits for it to report, on an inherited pipe, that its servers
+// were started and every listener is up.
+func startRelays(relayArgs []string) error {
 	r, w, err := os.Pipe()
 	if err != nil {
 		return err
 	}
 	defer r.Close()
-	cmd := exec.Command(clownExePath(), append([]string{"agent-relay"}, relays...)...)
+	cmd := exec.Command(clownExePath(), append([]string{"agent-relay"}, relayArgs...)...)
 	cmd.ExtraFiles = []*os.File{w}
 	cmd.Stderr = os.Stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
@@ -428,22 +467,39 @@ func startRelays(relays []string) error {
 	return nil
 }
 
-// runAgentRelay is `clown agent-relay ADDR=SOCK...`: the in-unit end of the
-// unit's ways out. fd 3, when present, gets one byte once every listener is
-// up.
+// runAgentRelay is `clown agent-relay [--serve FILE] [--relay ADDR=SOCK]...`,
+// the in-unit end of the unit's ways out. It first starts the agent-side
+// servers listed in FILE inside the unit, then listens on every relay address
+// (the egress proxy, the forwards, and each in-unit server's reserved port).
+// fd 3, when present, gets one byte once all of that is up. A server that
+// fails to start is reported and left out; its tools are then unavailable.
 func runAgentRelay(args []string) int {
-	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "clown agent-relay: usage: clown agent-relay ADDR=SOCK...")
-		return 2
-	}
-	relays := make([]agentscope.Relay, 0, len(args))
-	for _, a := range args {
-		r, err := agentscope.ParseRelay(a)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "clown agent-relay: %v\n", err)
+	var relays []agentscope.Relay
+	for len(args) > 1 {
+		switch args[0] {
+		case "--relay":
+			r, err := agentscope.ParseRelay(args[1])
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "clown agent-relay: %v\n", err)
+				return 2
+			}
+			relays = append(relays, r)
+		case "--serve":
+			servers, err := agentscope.ReadInUnitServers(args[1])
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "clown agent-relay: %v\n", err)
+				return 2
+			}
+			relays = append(relays, startInUnitServers(servers)...)
+		default:
+			fmt.Fprintf(os.Stderr, "clown agent-relay: unknown argument %q\n", args[0])
 			return 2
 		}
-		relays = append(relays, r)
+		args = args[2:]
+	}
+	if len(args) != 0 || len(relays) == 0 {
+		fmt.Fprintln(os.Stderr, "clown agent-relay: usage: clown agent-relay [--serve FILE] [--relay ADDR=SOCK]...")
+		return 2
 	}
 	ready := os.NewFile(3, "ready")
 	err := agentscope.RunRelays(relays, func() {
@@ -452,6 +508,62 @@ func runAgentRelay(args []string) int {
 	})
 	fmt.Fprintf(os.Stderr, "clown agent-relay: %v\n", err)
 	return 1
+}
+
+// startInUnitServers starts each agent-side server inside the unit with
+// pluginhost's own lifecycle (handshake, healthcheck), concurrently, and
+// returns a relay from its reserved port to the address it announced. The
+// servers are this process's children: they live in the unit's cgroup and die
+// with it.
+//
+// Their stderr and lifecycle go to $HOME/.cache/clown/agent-relay.log (the
+// agent home, inside the worktree), not to the relay's stderr, which is the
+// agent's terminal.
+func startInUnitServers(servers []agentscope.InUnitServer) []agentscope.Relay {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logPath := filepath.Join(os.Getenv("HOME"), ".cache", "clown", "agent-relay.log")
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o700); err == nil {
+		if f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
+			logger = slog.New(slog.NewTextHandler(f, nil))
+		}
+	}
+	relays := make([]agentscope.Relay, len(servers))
+	var wg sync.WaitGroup
+	for i, s := range servers {
+		wg.Add(1)
+		go func(i int, s agentscope.InUnitServer) {
+			defer wg.Done()
+			interval, _ := time.ParseDuration(s.HealthInterval)
+			timeout, _ := time.ParseDuration(s.HealthTimeout)
+			srv := &pluginhost.ManagedServer{
+				Name:   s.Name,
+				Logger: logger,
+				Def: pluginhost.ServerDef{
+					Command: s.Command,
+					Args:    s.Args,
+					Env:     s.Env,
+					Healthcheck: pluginhost.HealthcheckDef{
+						Path:     s.HealthPath,
+						Interval: pluginhost.JSONDuration{Duration: interval},
+						Timeout:  pluginhost.JSONDuration{Duration: timeout},
+					},
+				},
+			}
+			if err := srv.Start(context.Background()); err != nil {
+				fmt.Fprintf(os.Stderr, "clown agent-relay: in-unit server %s did not start: %v (see %s)\n", s.Name, err, logPath)
+				return
+			}
+			relays[i] = agentscope.Relay{Listen: s.Listen, Target: srv.Handshake().Address}
+		}(i, s)
+	}
+	wg.Wait()
+	var started []agentscope.Relay
+	for _, r := range relays {
+		if r.Target != "" {
+			started = append(started, r)
+		}
+	}
+	return started
 }
 
 // runEgressConnect is `clown egress-connect SOCK HOST PORT`, an ssh
@@ -517,5 +629,5 @@ func runAgentScopeRun(args []string) int {
 		fmt.Fprintln(os.Stderr, "clown agent-scope-run: usage: clown agent-scope-run --spec <path> -- <argv>")
 		return 2
 	}
-	return runInAgentScope(specPath, "", forwards, args, nil, nil)
+	return runInAgentScope(agentScopeRequest{specPath: specPath, forwardAddrs: forwards, argv: args}, nil)
 }

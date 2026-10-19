@@ -22,6 +22,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"golang.org/x/term"
 
+	"code.linenisgreat.com/clown/internal/agentscope"
 	"code.linenisgreat.com/clown/internal/buildcfg"
 	"code.linenisgreat.com/clown/internal/clownfile"
 	"code.linenisgreat.com/clown/internal/clownname"
@@ -1694,7 +1695,7 @@ func runWithPluginHost(executor Executor, pluginDirs []string, flags parsedFlags
 			fmt.Fprintln(os.Stderr, "clown: --mcp-collapse is not supported with --agent-scope")
 			return 1
 		}
-		discovered = frontendOnly(discovered, logger)
+		flags.agentScopeInUnit = reserveInUnitServers(host, discovered, logger)
 	}
 
 	// v2 (unlike v1): the --cheap-context picker no longer runs here, before
@@ -1776,7 +1777,14 @@ func runProvider(executor Executor, bound Command, logger *slog.Logger, flags pa
 	}
 
 	if flags.agentScopeSpec != "" {
-		return runInAgentScope(flags.agentScopeSpec, flags.stagingRootPath, flags.agentScopeForwards, append([]string{binary}, argv...), extraEnv, logger)
+		return runInAgentScope(agentScopeRequest{
+			specPath:     flags.agentScopeSpec,
+			stagingRoot:  flags.stagingRootPath,
+			forwardAddrs: flags.agentScopeForwards,
+			inUnit:       flags.agentScopeInUnit,
+			argv:         append([]string{binary}, argv...),
+			extraEnv:     extraEnv,
+		}, logger)
 	}
 
 	// ctrl-z escape-to-shell pty proxy (clownfile [attach].pty-suspend): run the
@@ -1965,7 +1973,7 @@ func runManaged(
 	}
 	logger.Info("launching plugin servers", "count", len(discovered))
 
-	report := host.StartAll(ctx, discovered)
+	report := host.StartAll(ctx, startableHere(host, discovered))
 	for _, f := range report.Failed {
 		fmt.Fprintf(os.Stderr, "clown: %s failed: %v\n", f.Server.Name(), f.Err)
 		logger.Error("plugin server failed to start", "server", f.Server.Name(), "err", f.Err)
@@ -2001,7 +2009,7 @@ func runManaged(
 		}
 	}
 
-	if len(report.Started) == 0 {
+	if len(report.Started) == 0 && len(flags.agentScopeInUnit) == 0 {
 		logger.Info("no plugin servers healthy; falling back to original plugin dirs")
 		host.Shutdown()
 		return runUnbound(binding, executor, logger, flags)
@@ -2122,23 +2130,65 @@ func frontendServerAddrs(servers []*pluginhost.ManagedServer) []string {
 	return addrs
 }
 
-// frontendOnly keeps the frontend-class servers. Under --agent-scope the
-// others (moxy and any server with file authority) are not started at all: a
-// confined agent must not reach a frontend process acting with the operator's
-// authority over files (FDR 0020, decision 2026-10-19).
-func frontendOnly(discovered []pluginhost.DiscoveredServer, logger *slog.Logger) []pluginhost.DiscoveredServer {
-	var kept []pluginhost.DiscoveredServer
+// reserveInUnitServers handles the agent-side servers under --agent-scope
+// (moxy and every server without "scope":"frontend"): the frontend never
+// starts them, since a confined agent must not reach a frontend process acting
+// with the operator's authority over files (FDR 0020, decision 2026-10-19).
+// Each is reserved at a fixed in-unit loopback port, which the compiled
+// manifest names, and described for `clown agent-relay` to start INSIDE the
+// unit, where its file tools see only what the unit sees.
+func reserveInUnitServers(host *pluginhost.Host, discovered []pluginhost.DiscoveredServer, logger *slog.Logger) []agentscope.InUnitServer {
+	var inUnit []agentscope.InUnitServer
 	for _, d := range discovered {
 		if d.Def.Scope == pluginhost.ScopeFrontend {
-			kept = append(kept, d)
 			continue
 		}
-		if logger != nil {
-			logger.Warn("agent scope: not starting agent-side server (not forwarded into a confined unit)", "server", d.Name())
+		listen := fmt.Sprintf("127.0.0.1:%d", agentscope.InUnitPortBase+len(inUnit))
+		host.Reserve(d, listen)
+		command := d.Def.Command
+		if !filepath.IsAbs(command) {
+			command = filepath.Join(d.PluginDir, command)
 		}
-		fmt.Fprintf(os.Stderr, "clown: agent scope: %s is agent-side and unavailable in a confined unit\n", d.Name())
+		env := map[string]string{}
+		for k, v := range host.BaseEnv {
+			env[k] = v
+		}
+		for k, v := range d.Def.Env {
+			env[k] = v
+		}
+		inUnit = append(inUnit, agentscope.InUnitServer{
+			Name:           d.Name(),
+			Command:        command,
+			Args:           d.Def.Args,
+			Env:            env,
+			HealthPath:     d.Def.Healthcheck.Path,
+			HealthInterval: d.Def.Healthcheck.Interval.Duration.String(),
+			HealthTimeout:  d.Def.Healthcheck.Timeout.Duration.String(),
+			Listen:         listen,
+		})
+		if logger != nil {
+			logger.Info("agent scope: server runs inside the unit", "server", d.Name(), "listen", listen)
+		}
 	}
-	return kept
+	return inUnit
+}
+
+// startableHere drops the servers reserved for the agent unit, which the
+// frontend must not start.
+func startableHere(host *pluginhost.Host, discovered []pluginhost.DiscoveredServer) []pluginhost.DiscoveredServer {
+	reserved := map[string]bool{}
+	for _, s := range host.Servers {
+		if s.Reserved() {
+			reserved[s.Name] = true
+		}
+	}
+	var out []pluginhost.DiscoveredServer
+	for _, d := range discovered {
+		if !reserved[d.Name()] {
+			out = append(out, d)
+		}
+	}
+	return out
 }
 
 // runUnbound is the shared "launch with no clown-managed MCP servers" path used
@@ -2697,6 +2747,9 @@ type parsedFlags struct {
 	// agentScopeForwards are the loopback addresses of the frontend-class
 	// plugin servers (set in runManaged), forwarded into the agent unit.
 	agentScopeForwards []string
+	// agentScopeInUnit are the agent-side plugin servers reserved for the
+	// agent unit (set in runWithPluginHost), started inside it.
+	agentScopeInUnit []agentscope.InUnitServer
 	// mcpCollapse opts this launch into MCP-collapse mode (all-or-nothing for
 	// the prototype): after the discovered upstream MCP servers are started,
 	// clown launches ONE clown-mcp-collapse aggregator fronting them all and

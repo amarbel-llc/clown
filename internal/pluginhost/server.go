@@ -41,7 +41,13 @@ type ManagedServer struct {
 	done       chan struct{}
 	stderrDone chan struct{}
 	waitState  *os.ProcessState
+	// reserved marks an entry from Host.Reserve: no process here.
+	reserved bool
 }
+
+// Reserved reports whether this entry was reserved for a server running
+// elsewhere (Host.Reserve) rather than started by this host.
+func (s *ManagedServer) Reserved() bool { return s.reserved }
 
 func (s *ManagedServer) logger() *slog.Logger {
 	if s.Logger != nil {

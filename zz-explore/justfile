@@ -2147,7 +2147,10 @@ explore-agent-unit-probe DEVPTS='/dev/pts' PIDNS='1':
 # plumbing left behind: the result file, the unit's journal, the transcript
 # under ~/.claude/projects/<slug>, clown hook state, moxy's hook log. Costs one
 # small model call. Requires `just build` (./result/bin/clown).
-explore-agent-scope-claude PROMPT='Use the Read tool to read hello.txt, then reply with exactly its contents.':
+#
+# EXTRA is passed to clown before --agent-scope (e.g. `--plugin-dir <moxy
+# plugin dir>` to exercise in-unit moxy).
+explore-agent-scope-claude PROMPT='Use the Read tool to read hello.txt, then reply with exactly its contents.' EXTRA='':
     #!/usr/bin/env bash
     set -uo pipefail
     root=$(git rev-parse --show-toplevel)
@@ -2158,15 +2161,18 @@ explore-agent-scope-claude PROMPT='Use the Read tool to read hello.txt, then rep
     echo "agent-scope-e2e-ok" > "$wt/hello.txt"
     sockets='[]'
     [[ -S ${SSH_AUTH_SOCK:-} ]] && sockets=$(jq -n --arg p "$SSH_AUTH_SOCK" '[{path:$p,purpose:"piggy-agent"}]')
-    jq -n --arg wt "$wt" --arg home "$HOME" --argjson s "$sockets" \
+    # The madder store moxy writes large tool outputs to, as spinclass binds it.
+    madder="${XDG_DATA_HOME:-$HOME/.local/share}/madder"
+    binds='[]'; [[ -d $madder ]] && binds=$(jq -n --arg p "$madder" '[$p]')
+    jq -n --arg wt "$wt" --arg home "$HOME" --argjson s "$sockets" --argjson b "$binds" \
         '{version:1, worktree:$wt, operator_home:$home, unit_name_hint:"clown-agent-e2e",
-          result_path:($wt+".result.json"), sockets:$s}' > "$wt/spec.json"
+          result_path:($wt+".result.json"), sockets:$s, binds_rw:$b}' > "$wt/spec.json"
     slug=$(printf '%s' "$wt" | sed 's/[^A-Za-z0-9]/-/g')
     state=${XDG_STATE_HOME:-$HOME/.local/state}
     since=$(date '+%Y-%m-%d %H:%M:%S')
     stamp=$(mktemp); touch "$stamp"
     echo ">> clown --agent-scope (claude -p)"
-    (cd "$wt" && "$clown" --agent-scope "$wt/spec.json" -- -p "{{PROMPT}}" < /dev/null)
+    (cd "$wt" && "$clown" {{EXTRA}} --agent-scope "$wt/spec.json" -- -p "{{PROMPT}}" < /dev/null)
     echo "   exit=$?"
     echo ">> result"; cat "$wt.result.json"
     unit=$(jq -r .unit "$wt.result.json")

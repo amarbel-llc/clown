@@ -323,7 +323,7 @@ func (h *Host) FetchPromptFragments(ctx context.Context) []string {
 	var frags []string
 	for _, srv := range h.Servers {
 		path := srv.Def.SystemPromptPath
-		if path == "" {
+		if path == "" || srv.reserved {
 			continue
 		}
 		frag, ok := h.fetchOnePromptFragment(ctx, srv, path)
@@ -427,6 +427,29 @@ func (h *Host) logToolCatalogSkip(srv *ManagedServer, err error) {
 	if h.Logger != nil {
 		h.Logger.Info("skipping tool catalog fetch", "server", srv.Name, "err", err)
 	}
+}
+
+// Reserve registers a discovered server that clown does not start here: it
+// runs elsewhere (inside an agent unit, FDR 0020) and answers at address,
+// which is what the compiled manifest names. The reserved entry has no
+// process; Stop is a no-op, and the frontend never dials it (no prompt
+// fragment fetch).
+func (h *Host) Reserve(d DiscoveredServer, address string) *ManagedServer {
+	proto := d.Def.Transport
+	if proto != "sse" {
+		proto = "streamable-http"
+	}
+	s := &ManagedServer{
+		Name:      d.Name(),
+		Def:       d.Def,
+		PluginDir: d.PluginDir,
+		Logger:    h.Logger,
+		BaseEnv:   h.BaseEnv,
+		handshake: Handshake{CoreVersion: CoreProtocolVersion, NetworkType: "tcp", Address: address, Protocol: proto},
+		reserved:  true,
+	}
+	h.Servers = append(h.Servers, s)
+	return s
 }
 
 func (h *Host) Shutdown() {
