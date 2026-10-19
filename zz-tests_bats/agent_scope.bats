@@ -18,6 +18,9 @@ setup() {
   if ! systemctl --user show-environment >/dev/null 2>&1; then
     skip "no systemd user manager reachable"
   fi
+  # The launcher binds the session's own XMPP credential; the caller's (often
+  # a clown session) is not this test's business.
+  unset TROUPE_XMPP_USER TROUPE_XMPP_PASSWORD_FILE
   local root
   root="$(git rev-parse --show-toplevel)"
   mkdir -p "$root/.tmp"
@@ -119,7 +122,7 @@ run_probe() {
   run run_probe
   echo "$output"
   [ "$status" -eq 0 ]
-  ! grep -q '^FAIL' <<<"$output"
+  [ "$(grep -c '^FAIL' <<<"$output")" -eq 0 ]
   grep -q '^PASS real-home-hidden' <<<"$output"
   grep -q '^PASS bus-absent' <<<"$output"
   grep -q '^PASS display-absent' <<<"$output"
@@ -175,7 +178,7 @@ run_probe() {
   echo "$output"
   [ "$status" -eq 0 ]
   grep -q 'stdin-tty=yes' <<<"$output"
-  ! grep -q 'tty_nr=0' <<<"$output"
+  [ "$(grep -c 'tty_nr=0' <<<"$output")" -eq 0 ]
   pty="$(jq -r .pty "$RESULT")"
   [[ $pty == /dev/pts/* ]]
 }
@@ -186,6 +189,15 @@ run_probe() {
   echo "$output"
   [ "$status" -ne 0 ]
   grep -q 'exposes the whole operator home' <<<"$output"
+}
+
+@test "agent_scope: an XMPP credential file that does not name its principal is refused (clown#267)" {
+  cd "$WT"
+  run env TROUPE_XMPP_USER=child TROUPE_XMPP_PASSWORD_FILE="$RT/troupe/accounts/parent.pass" \
+    "$CLOWN_BIN" agent-scope-run --spec "$WT/spec.json" -- true
+  echo "$output"
+  [ "$status" -ne 0 ]
+  grep -q "refusing to bind another session's credential" <<<"$output"
 }
 
 @test "agent_scope: host loopback services and abstract sockets are unreachable from inside" {
@@ -199,7 +211,7 @@ run_probe() {
   [ "$status" -eq 0 ]
   grep -q 'PASS host-loopback-unreachable' <<<"$output"
   grep -q 'PASS abstract-unreachable' <<<"$output"
-  ! grep -q '^FAIL' <<<"$output"
+  [ "$(grep -c '^FAIL' <<<"$output")" -eq 0 ]
 }
 
 @test "agent_scope: egress reaches allowlisted hosts through the proxy and nothing else" {
@@ -218,6 +230,6 @@ run_probe() {
     if nix path-info --store https://cache.nixos.org '"$curl_store"' >/dev/null; then echo PASS nix-substituter; else echo FAIL nix-substituter; fi'
   echo "$output"
   [ "$status" -eq 0 ]
-  ! grep -q '^FAIL' <<<"$output"
+  [ "$(grep -c '^FAIL' <<<"$output")" -eq 0 ]
   grep -c '^PASS' <<<"$output" | grep -qx 6
 }
