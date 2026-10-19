@@ -65,7 +65,48 @@ EOF
 }
 
 teardown() {
+  [[ -n ${LISTENER_PID:-} ]] && kill "$LISTENER_PID" 2>/dev/null
   [[ -n ${WT:-} ]] && rm -rf "$WT"
+}
+
+# start_host_listeners opens, in the FRONTEND, a loopback TCP listener and an
+# abstract unix socket, the two things the unit's private netns must hide.
+start_host_listeners() {
+  ABSTRACT="clown-agent-scope-bats-$$"
+  python3 -I -c '
+import os, socket, sys, threading
+tcp = socket.socket(); tcp.bind(("127.0.0.1", 0)); tcp.listen()
+ab = socket.socket(socket.AF_UNIX); ab.bind("\0" + sys.argv[2]); ab.listen()
+with open(sys.argv[1], "w") as f: f.write(str(tcp.getsockname()[1]))
+def serve(s):
+    while True:
+        c, _ = s.accept(); c.sendall(b"host-listener\n"); c.close()
+threading.Thread(target=serve, args=(ab,), daemon=True).start()
+serve(tcp)
+' "$WT/port" "$ABSTRACT" &
+  LISTENER_PID=$!
+  for _ in $(seq 50); do
+    [[ -s $WT/port ]] && break
+    sleep 0.1
+  done
+  PORT="$(cat "$WT/port")"
+  export ABSTRACT PORT
+  # Sanity: both answer from the frontend.
+  [[ "$(probe_tcp)" == *host-listener* ]] || return 1
+  [[ "$(probe_abstract)" == *host-listener* ]] || return 1
+}
+
+# probe_tcp / probe_abstract print what the host listeners send, or nothing.
+probe_tcp() {
+  python3 -I -c 'import socket,sys; s=socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=3); print(s.recv(64))' "$PORT" 2>/dev/null
+}
+probe_abstract() {
+  python3 -I -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.settimeout(3); s.connect("\0" + sys.argv[1]); print(s.recv(64))' "$ABSTRACT" 2>/dev/null
+}
+
+run_in_unit() {
+  cd "$WT" || return 1
+  "$CLOWN_BIN" agent-scope-run --spec "$WT/spec.json" -- bash -c "$1" </dev/null
 }
 
 run_probe() {
@@ -145,4 +186,38 @@ run_probe() {
   echo "$output"
   [ "$status" -ne 0 ]
   grep -q 'exposes the whole operator home' <<<"$output"
+}
+
+@test "agent_scope: host loopback services and abstract sockets are unreachable from inside" {
+  start_host_listeners
+  run run_in_unit "
+    $(declare -f probe_tcp probe_abstract)
+    PORT=$PORT ABSTRACT=$ABSTRACT
+    case \$(probe_tcp) in *host-listener*) echo FAIL host-loopback-reachable ;; *) echo PASS host-loopback-unreachable ;; esac
+    case \$(probe_abstract) in *host-listener*) echo FAIL abstract-reachable ;; *) echo PASS abstract-unreachable ;; esac"
+  echo "$output"
+  [ "$status" -eq 0 ]
+  grep -q 'PASS host-loopback-unreachable' <<<"$output"
+  grep -q 'PASS abstract-unreachable' <<<"$output"
+  ! grep -q '^FAIL' <<<"$output"
+}
+
+@test "agent_scope: egress reaches allowlisted hosts through the proxy and nothing else" {
+  if [[ -n ${CLOWN_AGENT_SCOPE_NO_NETWORK:-} ]]; then
+    skip "CLOWN_AGENT_SCOPE_NO_NETWORK set"
+  fi
+  curl_store="$(readlink -f "$(command -v curl)" | cut -d/ -f1-4)"
+  run run_in_unit '
+    code=$(curl -s -o /dev/null -w "%{http_code}" -m 20 https://api.anthropic.com/)
+    if [ "$code" != 000 ]; then echo "PASS model-api http=$code"; else echo FAIL model-api; fi
+    if curl -s -o /dev/null -m 10 https://example.com/; then echo FAIL off-allowlist-reachable; else echo PASS off-allowlist-refused; fi
+    if git ls-remote https://github.com/NixOS/nixpkgs.git refs/heads/master >/dev/null; then echo PASS git-https; else echo FAIL git-https; fi
+    out=$(eval "$GIT_SSH_COMMAND -o BatchMode=yes -o PreferredAuthentications=none -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -T git@github.com" 2>&1)
+    case $out in *"Permission denied"*) echo PASS git-ssh-reaches-forge ;; *) echo "FAIL git-ssh: $out" ;; esac
+    if nix store info >/dev/null 2>&1; then echo PASS nix-daemon; else echo FAIL nix-daemon; fi
+    if nix path-info --store https://cache.nixos.org '"$curl_store"' >/dev/null; then echo PASS nix-substituter; else echo FAIL nix-substituter; fi'
+  echo "$output"
+  [ "$status" -eq 0 ]
+  ! grep -q '^FAIL' <<<"$output"
+  grep -c '^PASS' <<<"$output" | grep -qx 6
 }

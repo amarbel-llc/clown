@@ -319,6 +319,10 @@ func run(rawArgs []string) int {
 			return runAgentExec(rawArgs[1:])
 		case "agent-scope-run":
 			return runAgentScopeRun(rawArgs[1:])
+		case "egress-relay":
+			return runEgressRelay(rawArgs[1:])
+		case "egress-connect":
+			return runEgressConnect(rawArgs[1:])
 		}
 	}
 

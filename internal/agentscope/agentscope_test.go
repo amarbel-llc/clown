@@ -98,8 +98,17 @@ func testLaunch() Launch {
 			"SSH_AUTH_SOCK=/home/op/.local/state/ssh/agent.sock", "TMPDIR=/tmp",
 		},
 		ManagerEnvKeys: []string{"PATH", "DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR", "GTK_PATH"},
-		Shim:           []string{"/nix/store/c/bin/clown", "agent-exec", "--"},
+		Shim:           []string{"/nix/store/c/bin/clown", "agent-exec"},
 		Argv:           []string{"/nix/store/cl/bin/claude", "--session-id", "$x"},
+		EgressSocket:   "/run/user/1001/clown/agent/u-1/egress.sock",
+	}
+}
+
+func TestSystemdRunArgsRefusesAUnitWithoutItsProxy(t *testing.T) {
+	l := testLaunch()
+	l.EgressSocket = ""
+	if _, err := l.SystemdRunArgs(); err == nil {
+		t.Fatal("want refusal")
 	}
 }
 
@@ -116,13 +125,19 @@ func TestSystemdRunArgsCarryTheRequiredSandbox(t *testing.T) {
 		"--property=BindPaths=/home/op/repos/x/.worktrees/w",
 		"--property=BindPaths=/home/op/.local/state/ssh/agent.sock",
 		"--property=InaccessiblePaths=-/run/user/1001/bus",
+		"--property=PrivateNetwork=yes",
+		"--property=BindPaths=/run/user/1001/clown/agent/u-1/egress.sock",
 	} {
 		if !slices.Contains(args, want) {
 			t.Errorf("missing %q in %v", want, args)
 		}
 	}
 	sep := slices.Index(args, "--")
-	if sep < 0 || !slices.Equal(args[sep+1:], []string{"/nix/store/c/bin/clown", "agent-exec", "--", "/nix/store/cl/bin/claude", "--session-id", "$x"}) {
+	if sep < 0 || !slices.Equal(args[sep+1:], []string{
+		"/nix/store/c/bin/clown", "agent-exec",
+		"--egress-relay", "127.0.0.1:3128=/run/user/1001/clown/agent/u-1/egress.sock", "--",
+		"/nix/store/cl/bin/claude", "--session-id", "$x",
+	}) {
 		t.Fatalf("tail after -- = %v", args[sep+1:])
 	}
 }
@@ -138,6 +153,9 @@ func TestEnvironmentAllowlistsAndUnsetsManagerKeys(t *testing.T) {
 		"PATH": "/bin", "TERM": "xterm", "LC_ALL": "C", "ANTHROPIC_BASE_URL": "u",
 		"SPINCLASS_SESSION": "x/w", "HOME": "/home/op/repos/x/.worktrees/w/.tmp/agent-home",
 		"SSH_AUTH_SOCK": "/home/op/.local/state/ssh/agent.sock",
+		"HTTPS_PROXY":   "http://127.0.0.1:3128", "https_proxy": "http://127.0.0.1:3128",
+		"XDG_STATE_HOME":  "/home/op/.local/state",
+		"GIT_SSH_COMMAND": `ssh -F none -o ProxyCommand="/nix/store/c/bin/clown egress-connect /run/user/1001/clown/agent/u-1/egress.sock %h %p"`,
 	} {
 		if env[k] != want {
 			t.Errorf("%s = %q, want %q", k, env[k], want)

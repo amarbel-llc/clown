@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -31,6 +33,12 @@ func runInAgentScope(specPath, stagingRoot string, argv, extraEnv []string, logg
 	if stagingRoot != "" && !strings.HasPrefix(stagingRoot, launch.Spec.Worktree+"/") {
 		launch.PlumbingRO = append(launch.PlumbingRO, stagingRoot)
 	}
+	stopProxy, err := startEgressProxy(&launch, logger)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clown: agent scope: egress proxy: %v\n", err)
+		return 1
+	}
+	defer stopProxy()
 	code, err := agentscope.Run(launch, agentScopeTools(), logger)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown: agent scope: %v\n", err)
@@ -85,11 +93,59 @@ func prepareAgentScope(specPath string, argv, extraEnv []string) (agentscope.Lau
 		ExtraEnv:       append(extraEnv, "CLAUDE_CONFIG_DIR="+filepath.Join(agentHome, ".claude")),
 		PlumbingRW:     plumbing.rw,
 		PlumbingRO:     plumbing.ro,
-		Shim:           []string{clownExePath(), "agent-exec", "--"},
+		Shim:           []string{clownExePath(), "agent-exec"},
 		Argv:           argv,
-		Network:        agentscope.HostNetwork,
 	}
 	return launch, nil
+}
+
+// startEgressProxy runs the unit's frontend egress proxy on a per-session
+// unix socket under $XDG_RUNTIME_DIR/clown/agent/<unit>/ and records it on
+// the launch. The allowlist is the spec's egress_allow, else the default,
+// plus the host of ANTHROPIC_BASE_URL when clown routes the model API
+// elsewhere.
+func startEgressProxy(launch *agentscope.Launch, logger *slog.Logger) (stop func(), err error) {
+	runtime := os.Getenv("XDG_RUNTIME_DIR")
+	if !filepath.IsAbs(runtime) {
+		return nil, errors.New("XDG_RUNTIME_DIR is unset; nowhere to put the proxy socket")
+	}
+	dir := filepath.Join(runtime, "clown", "agent", strings.TrimSuffix(launch.Unit, ".service"))
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	allow := agentscope.Allowlist(launch.Spec.EgressAllow)
+	if len(allow) == 0 {
+		allow = agentscope.DefaultEgressAllow
+	}
+	if hp := baseURLHostPort(os.Getenv("ANTHROPIC_BASE_URL")); hp != "" {
+		allow = append(append(agentscope.Allowlist{}, allow...), hp)
+	}
+	proxy := &agentscope.EgressProxy{Allow: allow, Unit: launch.Unit, Logger: logger}
+	sock := filepath.Join(dir, "egress.sock")
+	if err := proxy.Listen(sock); err != nil {
+		os.RemoveAll(dir)
+		return nil, err
+	}
+	launch.EgressSocket = sock
+	return func() {
+		_ = proxy.Close()
+		_ = os.RemoveAll(dir)
+	}, nil
+}
+
+// baseURLHostPort returns host:port of an http(s) URL, or "".
+func baseURLHostPort(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	if u.Port() != "" {
+		return u.Host
+	}
+	if u.Scheme == "http" {
+		return u.Host + ":80"
+	}
+	return u.Host + ":443"
 }
 
 type plumbingBinds struct{ rw, ro []string }
@@ -163,6 +219,12 @@ func stageAgentHome(spec agentscope.Spec, agentHome, cwd string) (plumbingBinds,
 	if pw := os.Getenv("TROUPE_XMPP_PASSWORD_FILE"); filepath.IsAbs(pw) {
 		p.ro = append(p.ro, pw)
 	}
+	// The user's nix profile links (home-manager's PATH entries) live under
+	// the hidden home; they only point into /nix/store.
+	p.ro = append(p.ro,
+		filepath.Join(opHome, ".nix-profile"),
+		filepath.Join(state, "nix", "profiles"),
+	)
 	return p, nil
 }
 
@@ -209,17 +271,34 @@ func touch(path string) error {
 	return f.Close()
 }
 
-// runAgentExec is the in-unit exec shim (`clown agent-exec -- argv...`). When
-// fd 0 is a terminal (the pty clown allocated in the frontend), it starts a
-// new session and takes that terminal as its controlling tty, so SIGWINCH and
-// ^C reach the provider; then it execs argv.
+// runAgentExec is the in-unit exec shim
+// (`clown agent-exec [--egress-relay ADDR=SOCK] -- argv...`). It first starts
+// the egress relay (the unit's only way out) and waits until it listens. When
+// fd 0 is a terminal (the pty clown allocated in the frontend), it then starts
+// a new session and takes that terminal as its controlling tty, so SIGWINCH
+// and ^C reach the provider. Finally it execs argv.
 func runAgentExec(args []string) int {
-	if len(args) > 0 && args[0] == "--" {
+	var relay string
+	for len(args) > 0 && args[0] != "--" {
+		if args[0] == "--egress-relay" && len(args) > 1 {
+			relay, args = args[1], args[2:]
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "clown agent-exec: unknown argument %q\n", args[0])
+		return 2
+	}
+	if len(args) > 0 {
 		args = args[1:]
 	}
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "clown agent-exec: usage: clown agent-exec -- <argv>")
+		fmt.Fprintln(os.Stderr, "clown agent-exec: usage: clown agent-exec [--egress-relay ADDR=SOCK] -- <argv>")
 		return 2
+	}
+	if relay != "" {
+		if err := startEgressRelay(relay); err != nil {
+			fmt.Fprintf(os.Stderr, "clown agent-exec: egress relay: %v\n", err)
+			return 126
+		}
 	}
 	if term.IsTerminal(0) {
 		if _, err := unix.Setsid(); err != nil && !errors.Is(err, unix.EPERM) {
@@ -239,6 +318,67 @@ func runAgentExec(args []string) int {
 	err = syscall.Exec(path, args, os.Environ())
 	fmt.Fprintf(os.Stderr, "clown agent-exec: exec %s: %v\n", path, err)
 	return 126
+}
+
+// startEgressRelay starts `clown egress-relay ADDR SOCK` as a child that
+// outlives the exec (it stays in the unit's cgroup and dies with it) and waits
+// for it to report, on an inherited pipe, that it is listening.
+func startEgressRelay(spec string) error {
+	addr, sock, ok := strings.Cut(spec, "=")
+	if !ok {
+		return fmt.Errorf("--egress-relay %q is not ADDR=SOCK", spec)
+	}
+	r, w, err := os.Pipe()
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+	cmd := exec.Command(clownExePath(), "egress-relay", addr, sock)
+	cmd.ExtraFiles = []*os.File{w}
+	cmd.Stderr = os.Stderr
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		w.Close()
+		return err
+	}
+	w.Close()
+	buf := make([]byte, 1)
+	if n, _ := r.Read(buf); n != 1 {
+		return errors.New("relay exited before listening")
+	}
+	return nil
+}
+
+// runEgressRelay is `clown egress-relay ADDR SOCK`: the in-unit end of the
+// egress path. fd 3, when present, gets one byte once the listener is up.
+func runEgressRelay(args []string) int {
+	if len(args) != 2 {
+		fmt.Fprintln(os.Stderr, "clown egress-relay: usage: clown egress-relay ADDR SOCK")
+		return 2
+	}
+	ready := os.NewFile(3, "ready")
+	err := agentscope.RunRelay(args[0], args[1], func() {
+		if ready != nil {
+			_, _ = ready.Write([]byte{1})
+			_ = ready.Close()
+		}
+	})
+	fmt.Fprintf(os.Stderr, "clown egress-relay: %v\n", err)
+	return 1
+}
+
+// runEgressConnect is `clown egress-connect SOCK HOST PORT`, an ssh
+// ProxyCommand that tunnels stdin/stdout through the egress proxy.
+func runEgressConnect(args []string) int {
+	if len(args) != 3 {
+		fmt.Fprintln(os.Stderr, "clown egress-connect: usage: clown egress-connect SOCK HOST PORT")
+		return 2
+	}
+	if err := agentscope.Connect(args[0], net.JoinHostPort(args[1], args[2]), os.Stdin, os.Stdout); err != nil {
+		fmt.Fprintf(os.Stderr, "clown egress-connect: %v\n", err)
+		return 1
+	}
+	return 0
 }
 
 // runAgentScopeRun runs an arbitrary command in the agent scope through the

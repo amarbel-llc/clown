@@ -16,18 +16,6 @@ const Slice = "clown-agent.slice"
 
 const defaultUnitHint = "clown-agent"
 
-// Network selects the unit's network namespace.
-type Network int
-
-const (
-	// HostNetwork shares the host netns. Not a confined unit: every loopback
-	// service on the host is reachable (FDR 0020 "Egress").
-	HostNetwork Network = iota
-	// PrivateNetwork gives the unit a netns holding only lo; egress goes
-	// through the frontend proxy.
-	PrivateNetwork
-)
-
 // Launch is everything needed to start one agent unit.
 type Launch struct {
 	Spec Spec
@@ -51,11 +39,14 @@ type Launch struct {
 	// claude config). Missing paths are skipped rather than failing the start.
 	PlumbingRW []string
 	PlumbingRO []string
-	// Shim is the in-unit exec shim argv prefix, e.g. [clown, agent-exec, --].
+	// Shim is the in-unit exec shim, e.g. [clown, agent-exec]; the launcher
+	// appends its egress-relay flag and "--".
 	Shim []string
 	// Argv is the provider binary and its arguments.
-	Argv    []string
-	Network Network
+	Argv []string
+	// EgressSocket is the frontend egress proxy's unix socket, bound into
+	// the unit as a single inode.
+	EgressSocket string
 }
 
 // UnitName turns spinclass's hint into a valid, unique service name.
@@ -92,6 +83,9 @@ func (l Launch) SystemdRunArgs() ([]string, error) {
 	if len(l.Argv) == 0 {
 		return nil, fmt.Errorf("empty provider argv")
 	}
+	if l.EgressSocket == "" {
+		return nil, fmt.Errorf("no egress proxy socket: a unit without its proxy is not offered")
+	}
 	args := []string{
 		"--user", "--quiet", "--collect", "--wait", "--pipe",
 		"--expand-environment=no",
@@ -110,6 +104,7 @@ func (l Launch) SystemdRunArgs() ([]string, error) {
 	}
 	args = append(args, "--")
 	args = append(args, l.Shim...)
+	args = append(args, "--egress-relay", RelayAddr()+"="+l.EgressSocket, "--")
 	args = append(args, l.Argv...)
 	return args, nil
 }
@@ -125,9 +120,8 @@ func (l Launch) properties() []string {
 		"ProtectSystem=strict",
 		"NoNewPrivileges=yes",
 		"WorkingDirectory=" + l.WorkDir,
-	}
-	if l.Network == PrivateNetwork {
-		props = append(props, "PrivateNetwork=yes")
+		"PrivateNetwork=yes",
+		"BindPaths=" + l.EgressSocket,
 	}
 	props = append(props, "BindPaths="+l.Spec.Worktree, "ReadWritePaths="+l.Spec.Worktree)
 	for _, p := range l.Spec.BindsRW {
@@ -222,6 +216,19 @@ func (l Launch) environment() (set, unset []string) {
 	// writable agent home rather than the hidden, read-only real one.
 	env["XDG_STATE_HOME"] = OperatorXDG(l.FrontendEnv, l.Spec.OperatorHome, "XDG_STATE_HOME")
 	env["XDG_LOG_HOME"] = OperatorXDG(l.FrontendEnv, l.Spec.OperatorHome, "XDG_LOG_HOME")
+	// The unit's only way out (PrivateNetwork) is the in-unit relay.
+	proxy := "http://" + RelayAddr()
+	for _, k := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"} {
+		env[k] = proxy
+	}
+	env["NO_PROXY"] = "localhost,127.0.0.1,::1"
+	env["no_proxy"] = env["NO_PROXY"]
+	// -F none: under PrivateUsers root-owned files read as nobody-owned, and
+	// ssh refuses the system config (systemd's ssh_config.d) as badly owned.
+	// The operator's ~/.ssh is hidden anyway.
+	if len(l.Shim) > 0 {
+		env["GIT_SSH_COMMAND"] = fmt.Sprintf("ssh -F none -o ProxyCommand=%q", l.Shim[0]+" egress-connect "+l.EgressSocket+" %h %p")
+	}
 	for k, v := range env {
 		set = append(set, k+"="+v)
 	}
@@ -234,6 +241,9 @@ func (l Launch) environment() (set, unset []string) {
 	sort.Strings(unset)
 	return set, unset
 }
+
+// RelayAddr is the in-unit relay's listen address.
+func RelayAddr() string { return fmt.Sprintf("127.0.0.1:%d", RelayPort) }
 
 var xdgDefaults = map[string]string{
 	"XDG_STATE_HOME": ".local/state",
