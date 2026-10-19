@@ -89,6 +89,20 @@ test-go-godyn:
     fi
     nix build .#clown-godyn-tests --no-link --print-build-logs
 
+# Dev loop for clown-hook-toolcost (per-tool context-cost metrics into
+# stats-me): builds the hook and runs its -dry-run mode over one transcript
+# JSONL — whole file, no saved state, statsd lines printed to stdout, nothing
+# sent — so metric names and totals can be eyeballed against a real session.
+# Transcripts live under ~/.claude/projects/<project>/<session>.jsonl.
+#
+# print the statsd lines clown-hook-toolcost would emit for a transcript file
+[group("debug")]
+debug-toolcost-transcript transcript:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    out="$(nix build .#clown-hook-toolcost --no-link --print-out-paths)"
+    time "$out/bin/clown-hook-toolcost" -dry-run "{{ transcript }}"
+
 # godyn discards a passing test's output, so a test that t.Skip()s only under
 # godyn (a missing fixture, git, or `go`) still reports ok. This re-runs every
 # per-package godyn test binary verbosely, outside the sandbox but with the

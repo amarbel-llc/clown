@@ -655,6 +655,21 @@
           ];
         };
 
+        # Stop / SubagentStop / SessionEnd hook that turns the session
+        # transcript into per-tool context-cost metrics in stats-me (statsd).
+        # Its path is baked in via buildcfg.HookToolcostPath and shipped THROUGH
+        # THE PLUGIN by synthJobMonitorPluginDir, same live --plugin-dir hook
+        # mechanism as clown-hook-allow / clown-hook-tee.
+        clown-hook-toolcost = buildClownGo {
+          pname = "clown-hook-toolcost";
+          version = clownVersion;
+          subPackages = [ "cmd/clown-hook-toolcost" ];
+          ldflags = [
+            "-s"
+            "-w"
+          ];
+        };
+
         # Added for mcp-collapse permission-mux POC (throwaway; stage 1
         # mechanics). PreToolUse hook that demuxes the collapsed mcp_call tool by
         # tool_id back to a per-upstream-tool allow/ask/deny decision. Its path is
@@ -898,6 +913,8 @@
                 "${clown-hook-allow}/bin/clown-hook-allow";
               "code.linenisgreat.com/clown/internal/buildcfg.HookTeePath" =
                 "${clown-hook-tee}/bin/clown-hook-tee";
+              "code.linenisgreat.com/clown/internal/buildcfg.HookToolcostPath" =
+                "${clown-hook-toolcost}/bin/clown-hook-toolcost";
               # Added for mcp-collapse permission-mux POC
               "code.linenisgreat.com/clown/internal/buildcfg.McpCollapseHookPath" =
                 "${clown-hook-collapse}/bin/clown-hook-collapse";
@@ -1716,6 +1733,9 @@
           # buildGoAuto picked here (`.#clown-plugin-host.passthru.backend`),
           # the same attribute godynTestOutputs gates on.
           clown-plugin-host = clown-plugin-host;
+          # clown-hook-toolcost: exposed for `just debug-toolcost-transcript`
+          # (the dry-run dev loop). The hook itself ships through the plugin.
+          clown-hook-toolcost = clown-hook-toolcost;
           mock-stdio-mcp = mock-stdio-mcp;
           synthetic-plugin = synthetic-plugin;
           # ringmaster + troupe: re-exported from their respective extracted

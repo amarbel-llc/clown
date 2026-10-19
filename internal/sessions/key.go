@@ -41,6 +41,13 @@ func (s Session) Key() string {
 	return repo + "/" + branch
 }
 
+// RepoFromCWD returns the repo name for a cwd, worktree-aware:
+// `<repo>/.worktrees/<wt>` belongs to <repo>. "" when none can be determined.
+func RepoFromCWD(cwd string) string {
+	repo, _ := repoFromCWD(cwd)
+	return repo
+}
+
 // repoFromCWD resolves (repo, worktreeName) for a recorded cwd. worktreeName
 // is non-empty only when the path-shape fallback identified an explicit
 // `.worktrees/<name>` segment (the spinclass layout), in which case it is

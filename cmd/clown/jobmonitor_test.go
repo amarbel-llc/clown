@@ -406,6 +406,60 @@ func TestJobMonitorPluginDirNoHookWhenHookAllowUnset(t *testing.T) {
 	}
 }
 
+// The toolcost collector registers for Stop, SubagentStop and SessionEnd
+// whenever its binary is baked in — no transport/credential gate — and shares
+// the Stop and SessionEnd event lists with the tee rather than replacing it.
+func TestJobMonitorPluginDirRegistersToolcostAlongsideTee(t *testing.T) {
+	t.Setenv("CLOWN_DISABLE_JOB_WAKEUP", "")
+	t.Setenv("TROUPE_TRANSPORT", "xmpp-native")
+	t.Setenv("TROUPE_XMPP_PASSWORD_FILE", "/run/troupe/accounts/sess-1.pass")
+	origTee, origTroupe, origAllow, origCost := buildcfg.HookTeePath, buildcfg.TroupePath, buildcfg.HookAllowPath, buildcfg.HookToolcostPath
+	buildcfg.HookTeePath = "/nix/store/x/bin/clown-hook-tee"
+	buildcfg.TroupePath = "/nix/store/x/bin/troupe"
+	buildcfg.HookAllowPath = ""
+	buildcfg.HookToolcostPath = "/nix/store/x/bin/clown-hook-toolcost"
+	t.Cleanup(func() {
+		buildcfg.HookTeePath, buildcfg.TroupePath, buildcfg.HookAllowPath, buildcfg.HookToolcostPath = origTee, origTroupe, origAllow, origCost
+	})
+
+	dir, err := synthJobMonitorPluginDir(testStagingRoot(t), "sess-key-cost")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "hooks", "hooks.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg struct {
+		Hooks map[string][]struct {
+			Hooks []struct {
+				Command string `json:"command"`
+			} `json:"hooks"`
+		} `json:"hooks"`
+	}
+	if err := json.Unmarshal(b, &cfg); err != nil {
+		t.Fatalf("hooks.json invalid: %v\n%s", err, b)
+	}
+	commands := func(event string) []string {
+		var out []string
+		for _, e := range cfg.Hooks[event] {
+			for _, h := range e.Hooks {
+				out = append(out, h.Command)
+			}
+		}
+		return out
+	}
+	for _, event := range []string{"Stop", "SessionEnd"} {
+		cmds := commands(event)
+		if len(cmds) != 2 || !strings.Contains(cmds[0], "clown-hook-tee") || cmds[1] != buildcfg.HookToolcostPath {
+			t.Fatalf("%s commands = %q, want the tee then the toolcost collector", event, cmds)
+		}
+	}
+	if cmds := commands("SubagentStop"); len(cmds) != 1 || cmds[0] != buildcfg.HookToolcostPath {
+		t.Fatalf("SubagentStop commands = %q, want only the toolcost collector", cmds)
+	}
+}
+
 // The session output tee (troupe#21): on an xmpp-native session with a minted
 // credential and both binaries baked in, the plugin's hooks.json gains Stop
 // AND SessionEnd hooks (clown#226 — the end-of-session flush for the tail the

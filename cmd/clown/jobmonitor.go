@@ -350,8 +350,8 @@ func synthJobMonitorPluginDir(root *staging.Root, sessionKey string) (string, er
 				},
 			},
 		}
-		hookEvents["Stop"] = teeEntry
-		hookEvents["SessionEnd"] = teeEntry
+		addHookEntries(hookEvents, "Stop", teeEntry...)
+		addHookEntries(hookEvents, "SessionEnd", teeEntry...)
 		// SessionEnd hooks share a 1.5s default budget, and per-hook timeouts
 		// on PLUGIN-provided hooks do not raise it (unlike settings-file
 		// hooks) — too tight for the tee's bounded settle-wait (up to 2s).
@@ -363,6 +363,25 @@ func synthJobMonitorPluginDir(root *staging.Root, sessionKey string) (string, er
 			if err := os.Setenv("CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS", "5000"); err != nil {
 				return "", err
 			}
+		}
+	}
+	// Per-tool context-cost metrics into stats-me (clown-hook-toolcost). It
+	// needs only its own baked binary — no transport or credential gate. Stop
+	// and SubagentStop are the per-turn collection points; SessionEnd closes
+	// the trailing response no later Stop will see. The collector is
+	// idempotent per transcript, so the overlapping events never double-count.
+	if buildcfg.HookToolcostPath != "" {
+		entry := map[string]any{
+			"hooks": []any{
+				map[string]any{
+					"type":    "command",
+					"command": buildcfg.HookToolcostPath,
+					"timeout": 10,
+				},
+			},
+		}
+		for _, event := range []string{"Stop", "SubagentStop", "SessionEnd"} {
+			addHookEntries(hookEvents, event, entry)
 		}
 	}
 	if len(hookEvents) > 0 {
@@ -379,6 +398,13 @@ func synthJobMonitorPluginDir(root *staging.Root, sessionKey string) (string, er
 		}
 	}
 	return dir, nil
+}
+
+// addHookEntries appends entries to the hooks.json handler list for event,
+// creating the list on first use, so several hooks can share one event.
+func addHookEntries(events map[string]any, event string, entries ...any) {
+	existing, _ := events[event].([]any)
+	events[event] = append(existing, entries...)
 }
 
 // teeHookCommand returns the hook command for the session output tee

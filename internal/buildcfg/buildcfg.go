@@ -97,6 +97,13 @@ var (
 	// MUC channel via `troupe muc send`. Empty in dev builds (go build,
 	// go run); the hook is then omitted and no tee is registered.
 	HookTeePath string
+	// HookToolcostPath is the absolute path to the clown-hook-toolcost binary
+	// in its own Nix store output, baked at build time. The synthesized
+	// clown-builtin-jobs plugin wires it as a Stop, SubagentStop and
+	// SessionEnd hook: it turns the transcript into per-tool context-cost
+	// metrics in stats-me. Empty in dev builds (go build, go run); the hook
+	// is then omitted.
+	HookToolcostPath string
 	// McpCollapseHookPath is the absolute path to the clown-hook-collapse binary
 	// in its own Nix store output, baked at build time. Added for the mcp-collapse
 	// permission-mux POC (throwaway; stage 1 mechanics): the synthesized aggregator
