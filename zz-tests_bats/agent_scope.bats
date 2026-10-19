@@ -23,7 +23,8 @@ setup() {
   mkdir -p "$root/.tmp"
   WT="$(mktemp -d "$root/.tmp/bats-agent-scope.XXXXXX")"
   RT="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
-  RESULT="$WT/.spinclass/agent-unit.json"
+  # Outside the worktree: the unit could forge a result it can write.
+  RESULT="$BATS_TEST_TMPDIR/agent-unit.json"
   export WT RT RESULT
 
   sockets='[]'
@@ -139,7 +140,7 @@ run_probe() {
 }
 
 @test "agent_scope: a spec exposing the operator home is refused before any unit starts" {
-  jq --arg h "$HOME" '.binds_rw = [$h]' "$WT/spec.json" >"$WT/bad.json"
+  jq --arg h "$HOME" '.binds_rw = [$h] | del(.result_path)' "$WT/spec.json" >"$WT/bad.json"
   run "$CLOWN_BIN" agent-scope-run --spec "$WT/bad.json" -- true
   echo "$output"
   [ "$status" -ne 0 ]

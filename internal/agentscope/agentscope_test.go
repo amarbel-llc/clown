@@ -46,6 +46,7 @@ func TestValidateRefusesUnbindablePathsAndScrubbedEnv(t *testing.T) {
 		"spec sets HOME":     func(s *Spec) { s.Env = map[string]string{"HOME": "/home/op"} },
 		"unknown version":    func(s *Spec) { s.Version = 2 },
 		"relative result":    func(s *Spec) { s.ResultPath = "agent-unit.json" },
+		"result in worktree": func(s *Spec) { s.ResultPath = s.Worktree + "/.spinclass/agent-unit.json" },
 		"relative deny path": func(s *Spec) { s.DenyPaths = []string{"bus"} },
 	}
 	for name, mutate := range cases {
@@ -142,7 +143,10 @@ func TestEnvironmentAllowlistsAndUnsetsManagerKeys(t *testing.T) {
 			t.Errorf("%s = %q, want %q", k, env[k], want)
 		}
 	}
-	for _, k := range []string{"DISPLAY", "WAYLAND_DISPLAY", "DBUS_SESSION_BUS_ADDRESS", "CLOWN_SESSION_ID", "SECRET_TOKEN", "TMPDIR"} {
+	if env["TMPDIR"] != "/home/op/repos/x/.worktrees/w/.tmp" {
+		t.Errorf("TMPDIR outside the worktree not redirected: %q", env["TMPDIR"])
+	}
+	for _, k := range []string{"DISPLAY", "WAYLAND_DISPLAY", "DBUS_SESSION_BUS_ADDRESS", "CLOWN_SESSION_ID", "SECRET_TOKEN"} {
 		if _, ok := env[k]; ok {
 			t.Errorf("%s leaked into the unit", k)
 		}

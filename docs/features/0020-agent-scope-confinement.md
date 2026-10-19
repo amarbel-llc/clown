@@ -355,9 +355,26 @@ Built (`internal/agentscope`, `cmd/clown/agentscope.go`):
   frontend and piggy-agent outside the cgroup; the unit gone after exit; the
   pty path; refusal of a spec that exposes the operator home.
 
+End to end with real claude (`just explore explore-agent-scope-claude`, host
+netns, 2026-10-19): `clown --agent-scope <spec> -- -p ...` from a scratch
+worktree ran claude inside the unit; its Read tool call worked, the answer was
+correct, exit 0; login worked through the bound credentials file; the
+transcript landed in the operator's `~/.claude/projects/<slug>` through the
+bind; the Stop hooks (clown-hook-tee, clown-hook-toolcost) ran inside with
+`hookErrors: []` and wrote their state into the operator's
+`$XDG_STATE_HOME/clown/hook-*` through the binds. Two fixes came out of it:
+temp-dir variables outside the worktree are redirected to `<worktree>/.tmp`
+(claude failed with `EROFS` on an inherited `CLAUDE_CODE_TMPDIR`), and
+`XDG_STATE_HOME`/`XDG_LOG_HOME` are always set to the operator paths the
+binds use (hook state otherwise landed in the agent home).
+
+`result_path` inside the worktree or a `binds_rw` entry is refused: the unit
+could forge a result it can write.
+
 Not built yet: the egress proxy and `PrivateNetwork`, per-session frontend
-MCP sockets and `"scope": "frontend"`, frontend monitors, an end-to-end run
-of real claude with its hooks inside the unit.
+MCP sockets and `"scope": "frontend"`, frontend monitors. Plugin monitors
+(job wakes, chat) inside the unit are untested: `-p` mode does not start
+them.
 
 ## Limitations and follow-ups
 

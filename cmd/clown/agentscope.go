@@ -138,18 +138,28 @@ func stageAgentHome(spec agentscope.Spec, agentHome, cwd string) (plumbingBinds,
 	}
 	p.rw = append(p.rw, transcripts+":"+inUnit)
 
-	state := xdgDir("XDG_STATE_HOME", opHome, ".local/state")
-	runtime := os.Getenv("XDG_RUNTIME_DIR")
-	p.rw = append(p.rw,
+	// The same resolution the unit's env uses (agentscope.OperatorXDG), so a
+	// tool inside writes exactly where these binds land. Created up front: a
+	// missing bind source is skipped, and the hidden home is read-only inside.
+	environ := os.Environ()
+	state := agentscope.OperatorXDG(environ, opHome, "XDG_STATE_HOME")
+	logs := agentscope.OperatorXDG(environ, opHome, "XDG_LOG_HOME")
+	dirs := []string{
 		filepath.Join(state, "ringmaster"),
 		filepath.Join(state, "troupe"),
 		filepath.Join(state, "clown", "hook-toolcost"),
 		filepath.Join(state, "clown", "hook-tee"),
-		filepath.Join(xdgDir("XDG_LOG_HOME", opHome, ".local/log"), "moxy", "hooks"),
-	)
-	if runtime != "" {
-		p.rw = append(p.rw, filepath.Join(runtime, "ringmaster"), filepath.Join(runtime, "troupe"))
+		filepath.Join(logs, "moxy", "hooks"),
 	}
+	if runtime := os.Getenv("XDG_RUNTIME_DIR"); runtime != "" {
+		dirs = append(dirs, filepath.Join(runtime, "ringmaster"), filepath.Join(runtime, "troupe"))
+	}
+	for _, d := range dirs {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			return p, err
+		}
+	}
+	p.rw = append(p.rw, dirs...)
 	if pw := os.Getenv("TROUPE_XMPP_PASSWORD_FILE"); filepath.IsAbs(pw) {
 		p.ro = append(p.ro, pw)
 	}
@@ -166,13 +176,6 @@ func claudeProjectSlug(cwd string) string {
 		}
 	}
 	return string(b)
-}
-
-func xdgDir(env, home, fallback string) string {
-	if v := os.Getenv(env); filepath.IsAbs(v) {
-		return v
-	}
-	return filepath.Join(home, fallback)
 }
 
 func copyIfMissing(src, dst string) error {

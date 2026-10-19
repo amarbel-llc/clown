@@ -162,13 +162,15 @@ var passKeys = map[string]bool{
 	"LANG": true, "TZ": true, "TZDIR": true, "LOCALE_ARCHIVE": true,
 	"USER": true, "LOGNAME": true, "SHELL": true,
 	"SSL_CERT_FILE": true, "SSL_CERT_DIR": true, "CURL_CA_BUNDLE": true, "GIT_SSL_CAINFO": true,
-	"XDG_CONFIG_HOME": true, "XDG_STATE_HOME": true, "XDG_CACHE_HOME": true, "XDG_DATA_HOME": true, "XDG_LOG_HOME": true,
 	"XDG_RUNTIME_DIR": true,
 	"CLOWN_BIN":       true, "CLOWN_NAME": true, "CLOWN_GROUP_ID": true, "CLOWN_GROUP_DESCRIPTION": true, "CLOWN_XMPP_VHOST": true,
 }
 
 // passPrefixes are copied verbatim from the frontend when set there.
 var passPrefixes = []string{"LC_", "NIX_", "ANTHROPIC_", "CLAUDE_CODE_", "TROUPE_"}
+
+// tmpDirKeys name temp directories; they pass only when inside the worktree.
+var tmpDirKeys = map[string]bool{"TMPDIR": true, "CLAUDE_CODE_TMPDIR": true}
 
 // scrubbedKeys never reach the unit from the frontend and the spec may not
 // set them. XDG_RUNTIME_DIR is NOT here: it is passed so job-platform tools
@@ -192,10 +194,13 @@ func (l Launch) environment() (set, unset []string) {
 			if l.bindsSocket(v) {
 				env[k] = v
 			}
-		case k == "TMPDIR":
-			// Passes only when it is inside the worktree.
+		case tmpDirKeys[k]:
+			// Outside the worktree a temp dir is read-only or absent inside
+			// the unit (claude then fails with EROFS), so it is redirected.
 			if within(v, l.Spec.Worktree) {
 				env[k] = v
+			} else {
+				env[k] = filepath.Join(l.Spec.Worktree, ".tmp")
 			}
 		case scrubbedKeys[k]:
 		case passKeys[k] || hasAnyPrefix(k, passPrefixes):
@@ -211,6 +216,12 @@ func (l Launch) environment() (set, unset []string) {
 		env[k] = v
 	}
 	env["HOME"] = l.AgentHome
+	// State and log dirs point at the operator's paths, where clown binds the
+	// job platform's and the hooks' subdirs, so tools inside agree with the
+	// frontend. Config, cache and data stay unset: they default under the
+	// writable agent home rather than the hidden, read-only real one.
+	env["XDG_STATE_HOME"] = OperatorXDG(l.FrontendEnv, l.Spec.OperatorHome, "XDG_STATE_HOME")
+	env["XDG_LOG_HOME"] = OperatorXDG(l.FrontendEnv, l.Spec.OperatorHome, "XDG_LOG_HOME")
 	for k, v := range env {
 		set = append(set, k+"="+v)
 	}
@@ -222,6 +233,22 @@ func (l Launch) environment() (set, unset []string) {
 	}
 	sort.Strings(unset)
 	return set, unset
+}
+
+var xdgDefaults = map[string]string{
+	"XDG_STATE_HOME": ".local/state",
+	"XDG_LOG_HOME":   ".local/log",
+}
+
+// OperatorXDG resolves an XDG base dir as the frontend sees it: its value in
+// env when absolute, else the spec's default under the operator's home.
+func OperatorXDG(env []string, operatorHome, key string) string {
+	for _, kv := range env {
+		if k, v, ok := strings.Cut(kv, "="); ok && k == key && filepath.IsAbs(v) {
+			return v
+		}
+	}
+	return filepath.Join(operatorHome, xdgDefaults[key])
 }
 
 func (l Launch) bindsSocket(path string) bool {

@@ -2140,3 +2140,40 @@ explore-agent-unit-probe DEVPTS='/dev/pts' PIDNS='1':
     print("   exit=%d" % rc)
     PY
     ls -la "$out"
+
+# clown#244 end-to-end: run REAL claude (print mode, one Read tool call, so
+# PreToolUse/Stop/SessionEnd hooks fire) through `clown --agent-scope` from a
+# scratch worktree dir under .tmp, then report from outside what the hooks and
+# plumbing left behind: the result file, the unit's journal, the transcript
+# under ~/.claude/projects/<slug>, clown hook state, moxy's hook log. Costs one
+# small model call. Requires `just build` (./result/bin/clown).
+explore-agent-scope-claude PROMPT='Use the Read tool to read hello.txt, then reply with exactly its contents.':
+    #!/usr/bin/env bash
+    set -uo pipefail
+    root=$(git rev-parse --show-toplevel)
+    clown="$root/result/bin/clown"
+    [[ -x $clown ]] || { echo "FAIL: run 'just build' first" >&2; exit 2; }
+    wt="$root/.tmp/agent-scope-e2e"
+    rm -rf "$wt"; mkdir -p "$wt"
+    echo "agent-scope-e2e-ok" > "$wt/hello.txt"
+    sockets='[]'
+    [[ -S ${SSH_AUTH_SOCK:-} ]] && sockets=$(jq -n --arg p "$SSH_AUTH_SOCK" '[{path:$p,purpose:"piggy-agent"}]')
+    jq -n --arg wt "$wt" --arg home "$HOME" --argjson s "$sockets" \
+        '{version:1, worktree:$wt, operator_home:$home, unit_name_hint:"clown-agent-e2e",
+          result_path:($wt+".result.json"), sockets:$s}' > "$wt/spec.json"
+    slug=$(printf '%s' "$wt" | sed 's/[^A-Za-z0-9]/-/g')
+    state=${XDG_STATE_HOME:-$HOME/.local/state}
+    since=$(date '+%Y-%m-%d %H:%M:%S')
+    stamp=$(mktemp); touch "$stamp"
+    echo ">> clown --agent-scope (claude -p)"
+    (cd "$wt" && "$clown" --agent-scope "$wt/spec.json" -- -p "{{PROMPT}}" < /dev/null)
+    echo "   exit=$?"
+    echo ">> result"; cat "$wt.result.json"
+    unit=$(jq -r .unit "$wt.result.json")
+    echo ">> unit journal (last 40)"; journalctl --user -u "$unit" --since "$since" --no-pager | tail -40
+    echo ">> transcript dir ~/.claude/projects/$slug"; ls -la "$HOME/.claude/projects/$slug" 2>&1 | tail -5
+    echo ">> hook state touched since launch"
+    find "$state/clown/hook-toolcost" "$state/clown/hook-tee" "${XDG_LOG_HOME:-$HOME/.local/log}/moxy/hooks" \
+        -newer "$stamp" -type f 2>/dev/null | head -20
+    echo ">> agent home"; find "$wt/.tmp/agent-home" -maxdepth 3 | head -30
+    rm -f "$stamp"

@@ -76,6 +76,13 @@ func (s Spec) Validate() error {
 		if err := requireAbs("result_path", s.ResultPath); err != nil {
 			return err
 		}
+		// The unit could forge a result it can write (e.g. point pty at the
+		// operator's pts so a check skips it).
+		for _, rw := range append([]string{s.Worktree}, s.BindsRW...) {
+			if s.ResultPath == rw || strings.HasPrefix(s.ResultPath, rw+"/") {
+				return fmt.Errorf("result_path %q is writable from inside the unit (under %q)", s.ResultPath, rw)
+			}
+		}
 	}
 	exposed := map[string][]string{
 		"worktree": {s.Worktree},
