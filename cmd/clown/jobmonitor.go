@@ -10,6 +10,7 @@ import (
 
 	"code.linenisgreat.com/clown/internal/buildcfg"
 	"code.linenisgreat.com/clown/internal/staging"
+	"code.linenisgreat.com/clown/pkg/profilelookup"
 )
 
 // jobMonitorPlugin is the synthesized built-in plugin manifest that registers
@@ -242,7 +243,7 @@ func synthJobMonitorPluginDir(root *staging.Root, sessionKey string) (string, er
 		}
 	}
 	manifest := jobMonitorPlugin{
-		Name:     "clown-builtin-jobs",
+		Name:     profilelookup.JobsPluginName,
 		Version:  "1",
 		Monitors: monitors,
 	}

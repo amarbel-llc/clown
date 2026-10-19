@@ -14,7 +14,7 @@ func TestSaveRoundTrip(t *testing.T) {
 		Name: "or", Display: "Claude (OpenRouter)", Provider: "claude",
 		Backend: "gateway", URL: "https://openrouter.ai/api", Token: "${OPENROUTER_API_KEY}",
 	}}
-	if err := Save(path, in); err != nil {
+	if err := Save(path, in, "0.0.0-test"); err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(path)
@@ -40,7 +40,7 @@ func TestSaveRoundTrip_ContextSelection(t *testing.T) {
 		ContextServers:  []string{"moxy", "caldav"},
 		ContextExcluded: map[string][]string{"moxy": {"folio.read", "grit.status"}},
 	}}
-	if err := Save(path, in); err != nil {
+	if err := Save(path, in, "0.0.0-test"); err != nil {
 		t.Fatal(err)
 	}
 	out, err := Load(path)
@@ -55,7 +55,7 @@ func TestSaveRoundTrip_ContextSelection(t *testing.T) {
 func TestSaveRoundTrip_NoContextSelectionOmitsFields(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "profiles.toml")
 	in := []Profile{{Name: "plain", Provider: "claude", Backend: "anthropic"}}
-	if err := Save(path, in); err != nil {
+	if err := Save(path, in, "0.0.0-test"); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(path)
@@ -91,7 +91,7 @@ func TestSavePreservesComments(t *testing.T) {
 		},
 		{Name: "second", Provider: "claude", Backend: "anthropic"},
 	}
-	if err := Save(path, in); err != nil {
+	if err := Save(path, in, "0.0.0-test"); err != nil {
 		t.Fatal(err)
 	}
 	raw, err := os.ReadFile(path)
@@ -109,6 +109,96 @@ func TestSavePreservesComments(t *testing.T) {
 	}
 	if !reflect.DeepEqual(in, out) {
 		t.Fatalf("round trip: %#v != %#v\nfile:\n%s", in, out, raw)
+	}
+}
+
+func TestSaveStampsRegistry(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "profiles.toml")
+	in := []Profile{{Name: "a", Provider: "claude", Backend: "anthropic"}}
+	if err := Save(path, in, "1.2.3"); err != nil {
+		t.Fatal(err)
+	}
+	reg, err := LoadRegistry(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := RegistryStamp{ClownVersion: "1.2.3", Protocol: ProtocolVersion}
+	if reg.Stamp != want {
+		t.Fatalf("stamp = %#v, want %#v", reg.Stamp, want)
+	}
+	if !reflect.DeepEqual(reg.Profiles, in) || len(reg.Undecoded) != 0 {
+		t.Fatalf("registry = %#v", reg)
+	}
+
+	// A later write by another clown replaces the stamp.
+	if err := Save(path, in, "1.2.4"); err != nil {
+		t.Fatal(err)
+	}
+	reg, err = LoadRegistry(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reg.Stamp.ClownVersion != "1.2.4" {
+		t.Fatalf("stamp after re-save = %#v", reg.Stamp)
+	}
+}
+
+// A pre-stamping file (profiles, comments, no [registry]) must come out of
+// Save still holding every profile under the right table — the stamp may not
+// swallow or be swallowed by the last [[profile]].
+func TestSaveStampsLegacyFileWithoutLosingProfiles(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "profiles.toml")
+	orig := "# mine\n[[profile]]\nname = \"a\"\nprovider = \"claude\"\nbackend = \"anthropic\"\n\n[[profile]]\nname = \"b\"\nprovider = \"claude\"\nbackend = \"anthropic\"\n"
+	if err := os.WriteFile(path, []byte(orig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before, err := LoadRegistry(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.Stamp != (RegistryStamp{}) {
+		t.Fatalf("legacy file has stamp %#v", before.Stamp)
+	}
+	if err := Save(path, before.Profiles, "9.9.9"); err != nil {
+		t.Fatal(err)
+	}
+	after, err := LoadRegistry(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Stamp.ClownVersion != "9.9.9" || !reflect.DeepEqual(after.Profiles, before.Profiles) || len(after.Undecoded) != 0 {
+		raw, _ := os.ReadFile(path)
+		t.Fatalf("after = %#v\nfile:\n%s", after, raw)
+	}
+}
+
+func TestLoadRegistryReportsUnknownKeys(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "profiles.toml")
+	body := "[registry]\nclown_version = \"9\"\nprotocol = \"1\"\n\n[[profile]]\nname = \"a\"\nprovider = \"claude\"\nbackend = \"anthropic\"\nfrom_the_future = true\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	reg, err := LoadRegistry(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reg.Undecoded) != 1 || !strings.Contains(reg.Undecoded[0], "from_the_future") {
+		t.Fatalf("Undecoded = %v", reg.Undecoded)
+	}
+}
+
+func TestBuiltinParses(t *testing.T) {
+	ps, err := Builtin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ps) == 0 {
+		t.Fatal("no builtin profiles")
+	}
+	for _, p := range ps {
+		if err := Validate(p); err != nil {
+			t.Errorf("builtin %q: %v", p.Name, err)
+		}
 	}
 }
 

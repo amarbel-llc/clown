@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"code.linenisgreat.com/clown/internal/buildcfg"
+	"code.linenisgreat.com/clown/pkg/profilelookup"
 )
 
 func TestJobMonitorPluginDirSynthesized(t *testing.T) {
@@ -336,6 +337,18 @@ func TestJobMonitorPluginDirIncludesMCPWhenBridgeSet(t *testing.T) {
 	}
 	if !cfg.StdioServers["troupe"].SystemPrompt {
 		t.Fatalf("troupe server must set systemPrompt:true; got %s", b)
+	}
+	// profilelookup.RequiredServers is what a launcher checks a profile's
+	// keep-set against (clown#264); it must name servers this plugin really
+	// declares, or a drift here lets a mute worker through.
+	for _, required := range profilelookup.RequiredServers() {
+		plugin, server, _ := strings.Cut(required, "/")
+		if plugin != profilelookup.JobsPluginName {
+			t.Fatalf("required server %q is not in the synthesized plugin %q", required, profilelookup.JobsPluginName)
+		}
+		if _, ok := cfg.StdioServers[server]; !ok {
+			t.Fatalf("required server %q is not declared in clown.json; got %s", required, b)
+		}
 	}
 }
 

@@ -1,8 +1,10 @@
 package profile
 
 import (
+	_ "embed"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -37,16 +39,95 @@ type Profile struct {
 	ContextExcluded map[string][]string `toml:"context_excluded,omitempty"`
 }
 
+// ProtocolVersion versions what a registry writer and a registry reader must
+// agree on: the profiles.toml schema and the canonical-JSON digest form
+// (pkg/profilelookup). Bump it on any change to either — a reader built for a
+// different protocol refuses the registry instead of mis-resolving it.
+const ProtocolVersion = 1
+
+// RegistryStamp is the writer stamp Save leaves in the `[registry]` table of
+// profiles.toml: which clown last wrote the file and under which protocol.
+// The zero value means the file predates stamping (or was never written by
+// clown).
+type RegistryStamp struct {
+	ClownVersion string `toml:"clown_version"`
+	Protocol     int    `toml:"protocol"`
+}
+
+// file is the profiles.toml shape. The stamp rides as a string map (the
+// `[registry]` table) rather than a struct because tommy's in-place encoder
+// can create a missing map table but not a missing struct table, and the
+// map path appends the table after the [[profile]] entries.
 type file struct {
-	Profile []Profile `toml:"profile"`
+	Registry map[string]string `toml:"registry,omitempty"`
+	Profile  []Profile         `toml:"profile"`
+}
+
+func (s RegistryStamp) toMap() map[string]string {
+	return map[string]string{
+		"clown_version": s.ClownVersion,
+		"protocol":      strconv.Itoa(s.Protocol),
+	}
+}
+
+// stampFromMap reads a `[registry]` table. A protocol that is not an integer
+// reads as -1, which matches no real protocol, so it surfaces as skew.
+func stampFromMap(m map[string]string) RegistryStamp {
+	if len(m) == 0 {
+		return RegistryStamp{}
+	}
+	s := RegistryStamp{ClownVersion: m["clown_version"]}
+	if raw, ok := m["protocol"]; ok {
+		n, err := strconv.Atoi(raw)
+		if err != nil {
+			n = -1
+		}
+		s.Protocol = n
+	}
+	return s
+}
+
+//go:embed builtin.toml
+var builtinTOML []byte
+
+// Builtin returns the profiles compiled into clown (builtin.toml). The user
+// registry layers on top of these via Merge.
+func Builtin() ([]Profile, error) {
+	var f file
+	if _, err := toml.Decode(string(builtinTOML), &f); err != nil {
+		return nil, fmt.Errorf("builtin profiles: %w", err)
+	}
+	return f.Profile, nil
 }
 
 func Load(path string) ([]Profile, error) {
-	var f file
-	if _, err := toml.DecodeFile(path, &f); err != nil {
-		return nil, fmt.Errorf("load profiles %s: %w", path, err)
+	r, err := LoadRegistry(path)
+	if err != nil {
+		return nil, err
 	}
-	return f.Profile, nil
+	return r.Profiles, nil
+}
+
+// Registry is a parsed profiles.toml: its profiles, its writer stamp, and the
+// keys present in the file that this build's schema does not know (written by
+// a newer clown) — a skew signal independent of the stamp.
+type Registry struct {
+	Profiles  []Profile
+	Stamp     RegistryStamp
+	Undecoded []string
+}
+
+func LoadRegistry(path string) (Registry, error) {
+	var f file
+	md, err := toml.DecodeFile(path, &f)
+	if err != nil {
+		return Registry{}, fmt.Errorf("load profiles %s: %w", path, err)
+	}
+	var unknown []string
+	for _, k := range md.Undecoded() {
+		unknown = append(unknown, k.String())
+	}
+	return Registry{Profiles: f.Profile, Stamp: stampFromMap(f.Registry), Undecoded: unknown}, nil
 }
 
 func Merge(builtin, additional []Profile) []Profile {

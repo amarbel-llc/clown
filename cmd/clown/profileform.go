@@ -8,6 +8,7 @@ import (
 
 	"github.com/charmbracelet/huh"
 
+	"code.linenisgreat.com/clown/internal/buildcfg"
 	"code.linenisgreat.com/clown/internal/clownfile"
 	"code.linenisgreat.com/clown/internal/pluginhost"
 	"code.linenisgreat.com/clown/internal/profile"
@@ -290,7 +291,7 @@ func saveProfileForm(v profileFormValues, user []profile.Profile, editOriginal, 
 	if editOriginal != "" && editOriginal != p.Name {
 		user, _ = profile.Remove(user, editOriginal)
 	}
-	if err := profile.Save(destPath, profile.Upsert(user, p)); err != nil {
+	if err := profile.Save(destPath, profile.Upsert(user, p), buildcfg.Version); err != nil {
 		return nil, err
 	}
 	fmt.Printf("saved profile %q to %s\n", p.Name, destPath)

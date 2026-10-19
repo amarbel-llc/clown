@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"context"
-	_ "embed"
 	"errors"
 	"fmt"
 	"io"
@@ -19,7 +18,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/BurntSushi/toml"
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"golang.org/x/term"
@@ -39,21 +37,15 @@ import (
 	"code.linenisgreat.com/ringmaster/pkgs/jobwake"
 )
 
-//go:embed profiles/builtin.toml
-var builtinProfilesTOML []byte
-
 // loadProfileSets loads the builtin and user profile sets separately —
 // `clown profile list` needs per-source labels that the merged view erases.
 // userPath is where the user set was read from (or would be read from when
 // the file is absent); additionalPath overrides the discovery for tests.
 func loadProfileSets(additionalPath string) (builtin, user []profile.Profile, userPath string, err error) {
-	var f struct {
-		Profile []profile.Profile `toml:"profile"`
+	builtin, err = profile.Builtin()
+	if err != nil {
+		return nil, nil, "", err
 	}
-	if _, err := toml.Decode(string(builtinProfilesTOML), &f); err != nil {
-		return nil, nil, "", fmt.Errorf("builtin profiles: %w", err)
-	}
-	builtin = f.Profile
 
 	var legacy bool
 	if additionalPath == "" {

@@ -40,6 +40,21 @@ touching any of it.
   for their implementation in this repo; `cmd/clown/jobmonitor.go` is just
   the synthesis point that wires those binaries into the
   `clown-builtin-jobs` plugin.
+- **`pkg/profilelookup` is clown's one public Go API, linked by spinclass
+  (clown#264).** It resolves `--profile NAME` (builtin + user
+  `profiles.toml`, via `internal/profile`), returns the saved
+  `--cheap-context` keep-set, a canonical-JSON digest, and fails closed
+  with `*SkewError` on a registry stamped by a different
+  `profile.ProtocolVersion`. Its package doc is the normative spec for the
+  canonical form: changing the JSON (or the `[registry]` stamp, or
+  `profiles.toml`'s schema) means bumping `ProtocolVersion` and announcing it
+  to consumers first. Every `profile.Save` stamps `[registry]`
+  (`clown_version`, `protocol`); a new profile field also needs a field in
+  the library's `canonical` struct. clown publishes `go-pkgs`/`go-pkgs-test`
+  (`mkGoPkgs` in `flake.nix`) so consumers can bridge it; `internal/profile`'s
+  `builtin.toml` is embedded and rides in `extras`. `RequiredServers` must
+  keep naming servers the synthesized `clown-builtin-jobs` plugin declares
+  (a test in `cmd/clown` pins this).
 - **There is no go.mod, go.sum, gomod2nix.toml or vendor/ — dependencies
   live in `go.nix` (igloo FDR 0008), and Go builds/tests run only inside
   nix.** The devShell has no Go toolchain; `go build`/`go test` in the

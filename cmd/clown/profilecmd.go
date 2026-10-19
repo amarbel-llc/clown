@@ -8,6 +8,7 @@ import (
 
 	"github.com/charmbracelet/huh"
 
+	"code.linenisgreat.com/clown/internal/buildcfg"
 	"code.linenisgreat.com/clown/internal/pluginhost"
 	"code.linenisgreat.com/clown/internal/profile"
 )
@@ -162,7 +163,7 @@ func runProfileRemove(name string) int {
 		fmt.Fprintf(os.Stderr, "clown: aborted by user; %s not modified\n", writePath)
 		return 1
 	}
-	if err := profile.Save(writePath, remaining); err != nil {
+	if err := profile.Save(writePath, remaining, buildcfg.Version); err != nil {
 		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
 		return 1
 	}

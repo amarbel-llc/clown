@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"code.linenisgreat.com/clown/internal/userpath"
 )
@@ -16,22 +15,7 @@ import (
 // Writers must always use userConfigWritePath. Legacy fallback removal
 // criterion: one release with the warning, no reports (design doc, 2026-07-06).
 func userConfigPath(name string) (path string, legacy bool, err error) {
-	canonical, err := userConfigWritePath(name)
-	if err != nil {
-		return "", false, err
-	}
-	if _, statErr := os.Stat(canonical); statErr == nil {
-		return canonical, false, nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return canonical, false, nil
-	}
-	legacyPath := filepath.Join(home, ".config", "juggler", name)
-	if _, statErr := os.Stat(legacyPath); statErr == nil {
-		return legacyPath, true, nil
-	}
-	return canonical, false, nil
+	return userpath.ConfigFile(name)
 }
 
 // userConfigWritePath is the canonical (always-write) location for name:

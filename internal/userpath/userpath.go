@@ -20,6 +20,31 @@ func ConfigPath(parts ...string) (string, error) {
 	return resolve("XDG_CONFIG_HOME", []string{".config"}, parts)
 }
 
+// ConfigFile resolves the per-user config file `name` for READING: the
+// canonical ConfigPath(name) when it exists, else the legacy
+// ~/.config/juggler/<name> when that exists (legacy=true so the caller can
+// warn once), else the canonical path. Writers must use ConfigPath. Legacy
+// fallback removal criterion: one release with the warning, no reports
+// (design doc, 2026-07-06).
+func ConfigFile(name string) (path string, legacy bool, err error) {
+	canonical, err := ConfigPath(name)
+	if err != nil {
+		return "", false, err
+	}
+	if _, statErr := os.Stat(canonical); statErr == nil {
+		return canonical, false, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return canonical, false, nil
+	}
+	legacyPath := filepath.Join(home, ".config", "juggler", name)
+	if _, statErr := os.Stat(legacyPath); statErr == nil {
+		return legacyPath, true, nil
+	}
+	return canonical, false, nil
+}
+
 // StatePath resolves a per-user STATE path:
 // $XDG_STATE_HOME/clown/<parts...>, or ~/.local/state/clown/<parts...> when
 // XDG_STATE_HOME is unset or empty. State is machine-managed and never

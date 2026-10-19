@@ -311,8 +311,26 @@
           fileset = lib.fileset.unions [
             ./cmd
             ./internal
+            ./pkg
           ];
         };
+
+        # RFC 0001 (igloo) go-pkgs producer convention, so another fleet
+        # module (spinclass) can link clown's public Go packages — today
+        # pkg/profilelookup (clown#264) — through its go.nix bridge. A go.nix
+        # producer like tommy: mkGoPkgs renders go.mod/gomod2nix.toml from
+        # ./go.nix into both outputs. `extras` keeps the //go:embed'd builtin
+        # profile registry, which isn't in mkGoPkgs's default keep-set.
+        inherit
+          (pkgs.mkGoPkgs {
+            src = self;
+            manifest = ./go.nix;
+            inherit inputs;
+            extras = [ "^internal/profile/builtin\\.toml$" ];
+          })
+          go-pkgs
+          go-pkgs-test
+          ;
 
         # Source fileset for the synthetic-plugin derivation. Explicit
         # allowlist excludes the source-tree bin/ (which historically
@@ -1727,6 +1745,7 @@
             tentBackend = "lima";
           };
           clown-manpages = clown-manpages;
+          inherit go-pkgs go-pkgs-test;
           clown-race = clown-go-race;
           clown-cover = clown-cover;
           # clown-plugin-host: exposed so recipes can read the Go backend that
