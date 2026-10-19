@@ -47,6 +47,16 @@ type Launch struct {
 	// EgressSocket is the frontend egress proxy's unix socket, bound into
 	// the unit as a single inode.
 	EgressSocket string
+	// Forwards are the loopback services the unit may reach: each in-unit
+	// listen address relays to a frontend PortForward socket, bound in as a
+	// single inode.
+	Forwards []Relay
+}
+
+// relays is every in-unit relay the shim starts: the egress proxy's, then the
+// forwards.
+func (l Launch) relays() []Relay {
+	return append([]Relay{{Listen: RelayAddr(), Socket: l.EgressSocket}}, l.Forwards...)
 }
 
 // UnitName turns spinclass's hint into a valid, unique service name.
@@ -104,7 +114,10 @@ func (l Launch) SystemdRunArgs() ([]string, error) {
 	}
 	args = append(args, "--")
 	args = append(args, l.Shim...)
-	args = append(args, "--egress-relay", RelayAddr()+"="+l.EgressSocket, "--")
+	for _, r := range l.relays() {
+		args = append(args, "--relay", r.String())
+	}
+	args = append(args, "--")
 	args = append(args, l.Argv...)
 	return args, nil
 }
@@ -129,6 +142,9 @@ func (l Launch) properties() []string {
 	}
 	for _, s := range l.Spec.Sockets {
 		props = append(props, "BindPaths="+s.Path)
+	}
+	for _, f := range l.Forwards {
+		props = append(props, "BindPaths="+f.Socket)
 	}
 	for _, p := range l.PlumbingRW {
 		props = append(props, "BindPaths=-"+p)

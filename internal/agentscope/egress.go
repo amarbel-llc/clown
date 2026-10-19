@@ -76,13 +76,8 @@ type EgressProxy struct {
 
 // Listen creates the socket at path (0600) and serves it until Close.
 func (p *EgressProxy) Listen(path string) error {
-	_ = os.Remove(path)
-	ln, err := net.Listen("unix", path)
+	ln, err := listenUnix(path)
 	if err != nil {
-		return err
-	}
-	if err := os.Chmod(path, 0o600); err != nil {
-		ln.Close()
 		return err
 	}
 	p.mu.Lock()
@@ -158,6 +153,14 @@ func (p *EgressProxy) handle(c net.Conn) {
 // authorize checks the caller's cgroup via SO_PEERCRED: only processes in the
 // agent unit may use its egress.
 func (p *EgressProxy) authorize(c net.Conn) error {
+	return authorizeUnitPeer(c, p.Unit, p.PeerCgroup)
+}
+
+// authorizeUnitPeer reports whether the peer of a unix connection runs in the
+// agent unit's cgroup. read resolves a pid's cgroup (nil: ProcCgroup). The
+// kernel translates SO_PEERCRED's pid into the reader's pid namespace, so a
+// caller inside the unit's private pid namespace still resolves here.
+func authorizeUnitPeer(c net.Conn, unitName string, read func(pid int) (string, error)) error {
 	uc, ok := c.(*net.UnixConn)
 	if !ok {
 		return errors.New("not a unix connection")
@@ -176,7 +179,6 @@ func (p *EgressProxy) authorize(c net.Conn) error {
 	if credErr != nil {
 		return credErr
 	}
-	read := p.PeerCgroup
 	if read == nil {
 		read = ProcCgroup
 	}
@@ -184,10 +186,85 @@ func (p *EgressProxy) authorize(c net.Conn) error {
 	if err != nil {
 		return err
 	}
-	if !strings.HasSuffix(cg, "/"+Slice+"/"+p.Unit) {
-		return fmt.Errorf("caller pid %d is in %q, not in unit %s", cred.Pid, cg, p.Unit)
+	if !strings.HasSuffix(cg, "/"+Slice+"/"+unitName) {
+		return fmt.Errorf("caller pid %d is in %q, not in unit %s", cred.Pid, cg, unitName)
 	}
 	return nil
+}
+
+// PortForward serves a unix socket bound into the agent unit and splices
+// every authorized connection to one fixed TCP target in the frontend: how a
+// unit with a private network namespace reaches exactly the loopback services
+// clown chose (its own frontend-class MCP servers, the XMPP server), and
+// nothing else on the host's loopback.
+type PortForward struct {
+	Target     string
+	Unit       string
+	Logger     *slog.Logger
+	PeerCgroup func(pid int) (string, error)
+
+	mu sync.Mutex
+	ln net.Listener
+}
+
+// Listen creates the socket at path (0600) and serves it until Close.
+func (f *PortForward) Listen(path string) error {
+	ln, err := listenUnix(path)
+	if err != nil {
+		return err
+	}
+	f.mu.Lock()
+	f.ln = ln
+	f.mu.Unlock()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go f.handle(c)
+		}
+	}()
+	return nil
+}
+
+// Close stops accepting; established connections drain on their own.
+func (f *PortForward) Close() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.ln == nil {
+		return nil
+	}
+	return f.ln.Close()
+}
+
+func (f *PortForward) handle(c net.Conn) {
+	defer c.Close()
+	if err := authorizeUnitPeer(c, f.Unit, f.PeerCgroup); err != nil {
+		if f.Logger != nil {
+			f.Logger.Warn("forward: refused caller", "target", f.Target, "err", err)
+		}
+		return
+	}
+	up, err := net.DialTimeout("tcp", f.Target, 15*time.Second)
+	if err != nil {
+		return
+	}
+	defer up.Close()
+	splice(c, up)
+}
+
+func listenUnix(path string) (net.Listener, error) {
+	_ = os.Remove(path)
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		ln.Close()
+		return nil, err
+	}
+	return ln, nil
 }
 
 // ProcCgroup returns pid's cgroup v2 path from /proc/<pid>/cgroup.
@@ -231,33 +308,67 @@ func splice(a, b net.Conn) {
 	<-done
 }
 
-// RunRelay listens on listen (inside the unit, e.g. 127.0.0.1:3128) and
-// splices every connection to the proxy's unix socket. ready is called once
-// the listener is up.
-func RunRelay(listen, sock string, ready func()) error {
-	ln, err := net.Listen("tcp", listen)
-	if err != nil {
-		return err
+// Relay is one in-unit TCP listener (e.g. 127.0.0.1:3128) whose connections
+// are spliced to a frontend unix socket bound into the unit.
+type Relay struct {
+	Listen string
+	Socket string
+}
+
+// String renders the relay as the shim's ADDR=SOCK argument.
+func (r Relay) String() string { return r.Listen + "=" + r.Socket }
+
+// ParseRelay parses ADDR=SOCK.
+func ParseRelay(s string) (Relay, error) {
+	listen, sock, ok := strings.Cut(s, "=")
+	if !ok || listen == "" || sock == "" {
+		return Relay{}, fmt.Errorf("relay %q is not ADDR=SOCK", s)
 	}
-	defer ln.Close()
-	if ready != nil {
-		ready()
-	}
-	for {
-		c, err := ln.Accept()
+	return Relay{Listen: listen, Socket: sock}, nil
+}
+
+// RunRelays listens on every relay's address (inside the unit) and splices
+// each connection to that relay's unix socket. ready is called once all
+// listeners are up; RunRelays returns when any listener fails.
+func RunRelays(relays []Relay, ready func()) error {
+	lns := make([]net.Listener, 0, len(relays))
+	defer func() {
+		for _, ln := range lns {
+			ln.Close()
+		}
+	}()
+	for _, r := range relays {
+		ln, err := net.Listen("tcp", r.Listen)
 		if err != nil {
 			return err
 		}
-		go func() {
-			defer c.Close()
-			up, err := net.Dial("unix", sock)
-			if err != nil {
-				return
-			}
-			defer up.Close()
-			splice(c, up)
-		}()
+		lns = append(lns, ln)
 	}
+	if ready != nil {
+		ready()
+	}
+	errc := make(chan error, len(relays))
+	for i, ln := range lns {
+		go func(ln net.Listener, sock string) {
+			for {
+				c, err := ln.Accept()
+				if err != nil {
+					errc <- err
+					return
+				}
+				go func() {
+					defer c.Close()
+					up, err := net.Dial("unix", sock)
+					if err != nil {
+						return
+					}
+					defer up.Close()
+					splice(c, up)
+				}()
+			}
+		}(ln, relays[i].Socket)
+	}
+	return <-errc
 }
 
 // Connect opens a tunnel to host:port through the proxy socket and splices

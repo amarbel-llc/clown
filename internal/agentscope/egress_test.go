@@ -87,6 +87,44 @@ func TestEgressRefusesDestinationsOffTheAllowlist(t *testing.T) {
 	}
 }
 
+func forwardRoundTrip(t *testing.T, cgroup string) string {
+	t.Helper()
+	f := &PortForward{Target: echoServer(t), Unit: "u-1.service", PeerCgroup: func(int) (string, error) { return cgroup, nil }}
+	sock := filepath.Join(t.TempDir(), "fwd.sock")
+	if err := f.Listen(sock); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { f.Close() })
+	c, err := net.Dial("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	_, _ = c.Write([]byte("ping\n"))
+	_ = c.(*net.UnixConn).CloseWrite()
+	got, _ := io.ReadAll(c)
+	return string(got)
+}
+
+func TestPortForwardServesOnlyTheUnit(t *testing.T) {
+	if got := forwardRoundTrip(t, unitCgroup); got != "ping\n" {
+		t.Fatalf("unit caller got %q", got)
+	}
+	if got := forwardRoundTrip(t, "/user.slice/user-1001.slice/session-3.scope"); got != "" {
+		t.Fatalf("caller outside the unit got %q", got)
+	}
+}
+
+func TestParseRelay(t *testing.T) {
+	r, err := ParseRelay("127.0.0.1:5222=/run/x/fwd.sock")
+	if err != nil || r.Listen != "127.0.0.1:5222" || r.Socket != "/run/x/fwd.sock" || r.String() != "127.0.0.1:5222=/run/x/fwd.sock" {
+		t.Fatalf("ParseRelay = %+v, %v", r, err)
+	}
+	if _, err := ParseRelay("127.0.0.1:5222"); err == nil {
+		t.Fatal("want error for a relay without a socket")
+	}
+}
+
 func TestEgressRefusesCallersOutsideTheUnit(t *testing.T) {
 	target := echoServer(t)
 	for _, cg := range []string{

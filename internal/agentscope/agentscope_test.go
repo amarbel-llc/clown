@@ -101,6 +101,7 @@ func testLaunch() Launch {
 		Shim:           []string{"/nix/store/c/bin/clown", "agent-exec"},
 		Argv:           []string{"/nix/store/cl/bin/claude", "--session-id", "$x"},
 		EgressSocket:   "/run/user/1001/clown/agent/u-1/egress.sock",
+		Forwards:       []Relay{{Listen: "127.0.0.1:5222", Socket: "/run/user/1001/clown/agent/u-1/fwd-5222.sock"}},
 	}
 }
 
@@ -127,6 +128,7 @@ func TestSystemdRunArgsCarryTheRequiredSandbox(t *testing.T) {
 		"--property=InaccessiblePaths=-/run/user/1001/bus",
 		"--property=PrivateNetwork=yes",
 		"--property=BindPaths=/run/user/1001/clown/agent/u-1/egress.sock",
+		"--property=BindPaths=/run/user/1001/clown/agent/u-1/fwd-5222.sock",
 	} {
 		if !slices.Contains(args, want) {
 			t.Errorf("missing %q in %v", want, args)
@@ -135,7 +137,8 @@ func TestSystemdRunArgsCarryTheRequiredSandbox(t *testing.T) {
 	sep := slices.Index(args, "--")
 	if sep < 0 || !slices.Equal(args[sep+1:], []string{
 		"/nix/store/c/bin/clown", "agent-exec",
-		"--egress-relay", "127.0.0.1:3128=/run/user/1001/clown/agent/u-1/egress.sock", "--",
+		"--relay", "127.0.0.1:3128=/run/user/1001/clown/agent/u-1/egress.sock",
+		"--relay", "127.0.0.1:5222=/run/user/1001/clown/agent/u-1/fwd-5222.sock", "--",
 		"/nix/store/cl/bin/claude", "--session-id", "$x",
 	}) {
 		t.Fatalf("tail after -- = %v", args[sep+1:])

@@ -226,7 +226,7 @@ providers and darwin refuse.
   "worktree": "/abs/worktree",
   "operator_home": "/home/<op>",
   "unit_name_hint": "spinclass-agent-<repo>-<branch>",
-  "result_path": "<worktree>/.spinclass/agent-unit.json",
+  "result_path": "$XDG_STATE_HOME/spinclass/units/<hash>.json",
   "binds_rw": ["..."],
   "binds_ro": ["..."],
   "sockets": [{"path": "/abs/sock", "purpose": "piggy-agent | troupe-ipc | ..."}],
@@ -371,10 +371,43 @@ binds use (hook state otherwise landed in the agent home).
 `result_path` inside the worktree or a `binds_rw` entry is refused: the unit
 could forge a result it can write.
 
-Not built yet: the egress proxy and `PrivateNetwork`, per-session frontend
-MCP sockets and `"scope": "frontend"`, frontend monitors. Plugin monitors
-(job wakes, chat) inside the unit are untested: `-p` mode does not start
-them.
+Since then (2026-10-19, all on flic):
+
+- `PrivateNetwork=yes` is unconditional, and the egress proxy is built as
+  described under Egress.
+- **Forwards replace loopback URLs.** Claude's MCP URLs stay
+  `127.0.0.1:<port>`. The shim's `clown agent-relay` listens on the same
+  port inside the unit's netns and splices each connection to a per-session
+  frontend `PortForward` socket. That socket accepts only callers in the
+  unit's cgroup and dials exactly that one host port.
+- **What is forwarded.** Only frontend-class servers (clown.json
+  `"scope": "frontend"`; clown-builtin-jobs' ringmaster and troupe), plus
+  troupe's XMPP server (`TROUPE_XMPP_HOST:PORT`, default 127.0.0.1:5222)
+  when the session has its own xmpp-native credential. Nothing else on the
+  host's loopback is reachable.
+- **Agent-side servers are not started under `--agent-scope`** (moxy, the
+  juggler plugin, anything without `scope`), so confined mode lacks
+  folio/grit/rg. Running them INSIDE the unit is the next slice, and confined
+  mode is not offered to real workers until it lands (coordinator decision,
+  2026-10-19). `--mcp-collapse` is refused with `--agent-scope`.
+- **`clown agent-scope-capabilities`** prints
+  `{"version":1,"capabilities":[...]}`, and every result echoes the same
+  list. Today's list is `agent-unit`, `private-network`, `egress-proxy` and
+  `frontend-mcp-sockets`; `in-unit-moxy` and `frontend-monitors` are added
+  only with their code.
+- **Evidence.** `just verify-agent-scope` passes 11/11, including a
+  forwarded loopback listener being reachable while unforwarded ones and a
+  host abstract socket stay unreachable. Real claude -p inside the unit
+  called ringmaster `job_read` and troupe `chat_list` over the forwards
+  (`MCP-OK 7`). hook-tee's post arrived in the group channel over the 5222
+  forward; without the forward it was silently lost.
+- **XMPP credential.** It is passed into the unit only when its file names
+  `TROUPE_XMPP_USER`'s principal (clown#267, fixed in the same series).
+
+Not built yet: in-unit moxy, and frontend monitors (troupe's connection
+owner moved out of the unit). Plugin monitors inside the unit are untested,
+because `-p` mode does not start them. A loopback `ANTHROPIC_BASE_URL` (a
+local juggler) is not reachable from the unit.
 
 ## Limitations and follow-ups
 

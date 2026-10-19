@@ -319,8 +319,10 @@ func run(rawArgs []string) int {
 			return runAgentExec(rawArgs[1:])
 		case "agent-scope-run":
 			return runAgentScopeRun(rawArgs[1:])
-		case "egress-relay":
-			return runEgressRelay(rawArgs[1:])
+		case "agent-relay":
+			return runAgentRelay(rawArgs[1:])
+		case "agent-scope-capabilities":
+			return runAgentScopeCapabilities(rawArgs[1:])
 		case "egress-connect":
 			return runEgressConnect(rawArgs[1:])
 		}
@@ -1687,6 +1689,13 @@ func runWithPluginHost(executor Executor, pluginDirs []string, flags parsedFlags
 		logger.Error("discovery failed", "err", err)
 		return 1
 	}
+	if flags.agentScopeSpec != "" {
+		if flags.mcpCollapse {
+			fmt.Fprintln(os.Stderr, "clown: --mcp-collapse is not supported with --agent-scope")
+			return 1
+		}
+		discovered = frontendOnly(discovered, logger)
+	}
 
 	// v2 (unlike v1): the --cheap-context picker no longer runs here, before
 	// any server starts. Fetching a per-tool catalog for grouping requires a
@@ -1767,7 +1776,7 @@ func runProvider(executor Executor, bound Command, logger *slog.Logger, flags pa
 	}
 
 	if flags.agentScopeSpec != "" {
-		return runInAgentScope(flags.agentScopeSpec, flags.stagingRootPath, append([]string{binary}, argv...), extraEnv, logger)
+		return runInAgentScope(flags.agentScopeSpec, flags.stagingRootPath, flags.agentScopeForwards, append([]string{binary}, argv...), extraEnv, logger)
 	}
 
 	// ctrl-z escape-to-shell pty proxy (clownfile [attach].pty-suspend): run the
@@ -2094,7 +2103,42 @@ func runManaged(
 		}
 	}
 
+	if flags.agentScopeSpec != "" {
+		flags.agentScopeForwards = frontendServerAddrs(host.Servers)
+	}
 	return runProvider(executor, bound, logger, flags)
+}
+
+// frontendServerAddrs lists the loopback addresses of the started
+// frontend-class servers: the only clown-managed servers an agent unit may
+// reach, each forwarded into its private netns (FDR 0020).
+func frontendServerAddrs(servers []*pluginhost.ManagedServer) []string {
+	var addrs []string
+	for _, s := range servers {
+		if s.Def.Scope == pluginhost.ScopeFrontend && s.Handshake().Address != "" {
+			addrs = append(addrs, s.Handshake().Address)
+		}
+	}
+	return addrs
+}
+
+// frontendOnly keeps the frontend-class servers. Under --agent-scope the
+// others (moxy and any server with file authority) are not started at all: a
+// confined agent must not reach a frontend process acting with the operator's
+// authority over files (FDR 0020, decision 2026-10-19).
+func frontendOnly(discovered []pluginhost.DiscoveredServer, logger *slog.Logger) []pluginhost.DiscoveredServer {
+	var kept []pluginhost.DiscoveredServer
+	for _, d := range discovered {
+		if d.Def.Scope == pluginhost.ScopeFrontend {
+			kept = append(kept, d)
+			continue
+		}
+		if logger != nil {
+			logger.Warn("agent scope: not starting agent-side server (not forwarded into a confined unit)", "server", d.Name())
+		}
+		fmt.Fprintf(os.Stderr, "clown: agent scope: %s is agent-side and unavailable in a confined unit\n", d.Name())
+	}
+	return kept
 }
 
 // runUnbound is the shared "launch with no clown-managed MCP servers" path used
@@ -2500,6 +2544,9 @@ Clown flags (must appear before --):
                              (huh multi-select, defaults to all); requires a TTY
   --disable-clown-protocol   Disable clown plugin-host protocol
   --tent                     Run the provider inside a podman container (claude only; FDR-0007)
+  --agent-scope SPEC         Run claude in a confined transient systemd user service (the
+                             agent scope) described by the SPEC JSON; clown stays outside
+                             as the frontend. Env: CLOWN_AGENT_SCOPE (FDR-0020)
   --tent-pass-devshell       Force host $PATH passthrough into tent (PATH entries
                              rewritten to their /nix/store canonical form). Default
                              is on when IN_NIX_SHELL is set; use this to force on
@@ -2647,6 +2694,9 @@ type parsedFlags struct {
 	// bound read-only into the agent scope so claude can read clown's
 	// generated plugin dirs and prompt files.
 	stagingRootPath string
+	// agentScopeForwards are the loopback addresses of the frontend-class
+	// plugin servers (set in runManaged), forwarded into the agent unit.
+	agentScopeForwards []string
 	// mcpCollapse opts this launch into MCP-collapse mode (all-or-nothing for
 	// the prototype): after the discovered upstream MCP servers are started,
 	// clown launches ONE clown-mcp-collapse aggregator fronting them all and

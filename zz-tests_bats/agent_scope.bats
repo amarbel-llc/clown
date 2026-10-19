@@ -214,6 +214,30 @@ run_probe() {
   [ "$(grep -c '^FAIL' <<<"$output")" -eq 0 ]
 }
 
+@test "agent_scope: a forwarded loopback service is reachable from inside, on its own port" {
+  start_host_listeners
+  cd "$WT"
+  run "$CLOWN_BIN" agent-scope-run --spec "$WT/spec.json" --forward "127.0.0.1:$PORT" -- bash -c "
+    $(declare -f probe_tcp)
+    PORT=$PORT
+    case \$(probe_tcp) in *host-listener*) echo PASS forwarded-reachable ;; *) echo FAIL forwarded-unreachable ;; esac"
+  echo "$output"
+  [ "$status" -eq 0 ]
+  grep -q 'PASS forwarded-reachable' <<<"$output"
+}
+
+@test "agent_scope: capabilities are reported before launch and echoed in the result" {
+  run "$CLOWN_BIN" agent-scope-capabilities
+  echo "$output"
+  [ "$status" -eq 0 ]
+  [ "$(jq -r .version <<<"$output")" = 1 ]
+  jq -e '.capabilities | index("private-network") and index("frontend-mcp-sockets")' <<<"$output"
+  caps="$output"
+  run run_probe
+  [ "$status" -eq 0 ]
+  [ "$(jq -c .capabilities "$RESULT")" = "$(jq -c .capabilities <<<"$caps")" ]
+}
+
 @test "agent_scope: egress reaches allowlisted hosts through the proxy and nothing else" {
   if [[ -n ${CLOWN_AGENT_SCOPE_NO_NETWORK:-} ]]; then
     skip "CLOWN_AGENT_SCOPE_NO_NETWORK set"

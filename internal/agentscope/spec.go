@@ -146,22 +146,35 @@ func exposesWhole(p, target string) bool {
 	return strings.HasPrefix(target, p+"/")
 }
 
+// Capabilities is what this build's launcher actually does, reported by
+// `clown agent-scope-capabilities` and echoed in every Result. spinclass
+// refuses a confined launch unless the ones it requires are listed, so a
+// capability is added here only with the code that provides it.
+var Capabilities = []string{
+	"agent-unit",           // transient user service, mount/pid/devpts namespaces
+	"private-network",      // PrivateNetwork=yes, always
+	"egress-proxy",         // frontend CONNECT proxy with a host:port allowlist
+	"frontend-mcp-sockets", // only frontend-class servers, over per-session peer-checked unix sockets
+}
+
 // Result is what clown reports back once the unit is active (FDR 0020
 // "Launcher interface"). Unit is authoritative.
 type Result struct {
-	Version      int    `json:"version"`
-	Unit         string `json:"unit,omitempty"`
-	Cgroup       string `json:"cgroup,omitempty"`
-	InvocationID string `json:"invocation_id,omitempty"`
-	UID          int    `json:"uid"`
-	Pty          string `json:"pty,omitempty"`
-	MainPID      int    `json:"main_pid,omitempty"`
-	Error        string `json:"error,omitempty"`
+	Version      int      `json:"version"`
+	Capabilities []string `json:"capabilities"`
+	Unit         string   `json:"unit,omitempty"`
+	Cgroup       string   `json:"cgroup,omitempty"`
+	InvocationID string   `json:"invocation_id,omitempty"`
+	UID          int      `json:"uid"`
+	Pty          string   `json:"pty,omitempty"`
+	MainPID      int      `json:"main_pid,omitempty"`
+	Error        string   `json:"error,omitempty"`
 }
 
 // WriteResult writes r to path atomically (tmp + rename in the same dir).
 func WriteResult(path string, r Result) error {
 	r.Version = SpecVersion
+	r.Capabilities = Capabilities
 	raw, err := json.MarshalIndent(r, "", "  ")
 	if err != nil {
 		return err
