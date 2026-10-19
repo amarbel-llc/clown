@@ -139,8 +139,14 @@ and clown unsets it. clown then sets exactly the following.
 - `SSH_AUTH_SOCK`, only when the spec passes the agent socket.
 - `CLAUDE_CONFIG_DIR` (see the socket table).
 
+**Passed but hollow:** `XDG_RUNTIME_DIR` and `XDG_{CONFIG,STATE,CACHE,DATA,LOG}_HOME`
+keep the frontend's values, so job-platform tools inside resolve the same
+journal and socket paths as the frontend. Under `ProtectHome=tmpfs` those
+directories contain only what was bound in (the bus socket, posh and Wayland
+are absent).
+
 **Scrubbed** (never set, and unset if the manager had them):
-- `DBUS_SESSION_BUS_ADDRESS`, `XDG_RUNTIME_DIR`
+- `DBUS_SESSION_BUS_ADDRESS`
 - `DISPLAY`, `WAYLAND_DISPLAY`, `XAUTHORITY`
 - `SSH_AUTH_SOCK`, unless passed
 - `TROUPE_XMPP_PASSWORD_FILE` and other credential paths
@@ -316,6 +322,42 @@ and it translates the same five resources:
 | files | `BindPaths=` from the spec, instead of tent's static allowlist |
 | network services | passed unix sockets plus the egress proxy, instead of loopback URL rewriting |
 | tty | the ptysuspend relay, with an in-unit `TIOCSCTTY` |
+
+## Implementation status
+
+Built (`internal/agentscope`, `cmd/clown/agentscope.go`):
+
+- `clown --agent-scope <spec>` / `CLOWN_AGENT_SCOPE` for the claude provider,
+  refused with `--tent`, `--naked` and other providers; carried across the
+  `[attach]` re-exec.
+- The unit with every property above except `PrivateNetwork` (host netns,
+  so **not yet a confined unit**: the egress proxy and the frontend MCP
+  sockets come next, and the confinement switch must not be offered before
+  them).
+- `clown agent-exec`, the in-unit shim (`setsid` + `TIOCSCTTY(0)`), and the
+  ptysuspend relay with `DetachSlave`/`NoEscape`.
+- clown's plumbing binds for the base launcher: a per-session
+  `CLAUDE_CONFIG_DIR` under `<worktree>/.tmp/agent-home/.claude` seeded from
+  the operator's `.claude.json` and `settings.json`, the operator's
+  credentials file and this project's transcript dir bound over it, the
+  ringmaster/troupe state and runtime dirs, clown hook state, moxy's hook log
+  dir, the troupe password file read-only, and the staging root read-only
+  when it is outside the worktree. Until the monitors move to the frontend,
+  troupe's connection owner still runs inside, which is why the password
+  file and `TROUPE_*` env are passed.
+- systemd-run and systemctl come from `PATH` (overridable with
+  `CLOWN_SYSTEMD_RUN`/`CLOWN_SYSTEMCTL`): systemd-run serializes properties
+  client-side, so it must match the running manager.
+- `clown agent-scope-run --spec <path> -- argv` runs any command through the
+  same launcher; `just verify-agent-scope` (bats tag `agent_scope`, host-only)
+  uses it to check, against real units: home, bus, display, posh, ptys and
+  other pids unreachable from inside; the result's unit and cgroup; the
+  frontend and piggy-agent outside the cgroup; the unit gone after exit; the
+  pty path; refusal of a spec that exposes the operator home.
+
+Not built yet: the egress proxy and `PrivateNetwork`, per-session frontend
+MCP sockets and `"scope": "frontend"`, frontend monitors, an end-to-end run
+of real claude with its hooks inside the unit.
 
 ## Limitations and follow-ups
 

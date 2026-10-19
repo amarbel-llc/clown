@@ -53,6 +53,18 @@ type Options struct {
 	// generated config through an env var; without this the pty-suspend path
 	// would silently launch them with no config while the plain path worked.
 	Env []string
+	// DetachSlave starts the child in its own session WITHOUT making the inner
+	// pts its controlling tty. For a launcher child (systemd-run --pipe) that
+	// hands the slave to a process in another session: that process can only
+	// acquire it with TIOCSCTTY while no session holds it (clown#244).
+	DetachSlave bool
+	// NoEscape relays every input byte verbatim, the escape key included. Set
+	// when the relay is mandatory (agent scope) rather than opted into via
+	// [attach] pty-suspend, so ^Z keeps reaching the child.
+	NoEscape bool
+	// OnStart, when set, is called once the child has started, with the inner
+	// slave's path and the child's pid.
+	OnStart func(slavePath string, pid int)
 }
 
 func (o Options) escapeKey() byte {
@@ -90,10 +102,13 @@ func Run(argv []string, outer *os.File, opts Options) (int, error) {
 	// Setsid + Setctty: the child leads its own session with the inner pts as its
 	// controlling tty, so its raw-mode/ISIG changes land on the inner pty and its
 	// job-control signals stay off the outer terminal.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: !opts.DetachSlave}
 	if err := cmd.Start(); err != nil {
 		slave.Close()
 		return 1, fmt.Errorf("ptysuspend: start %q: %w", argv[0], err)
+	}
+	if opts.OnStart != nil {
+		opts.OnStart(slave.Name(), cmd.Process.Pid)
 	}
 	slave.Close() // the parent does not need the slave once the child holds it
 
@@ -133,7 +148,11 @@ func Run(argv []string, outer *os.File, opts Options) (int, error) {
 	// Child output -> user terminal (pausable while the escape command holds the
 	// terminal). User input -> child, with the escape key intercepted.
 	go r.copyOutput()
-	go relayInput(r.outer, r.master, opts.escapeKey(), r.shellOut)
+	if opts.NoEscape {
+		go func() { _, _ = io.Copy(r.master, r.outer) }()
+	} else {
+		go relayInput(r.outer, r.master, opts.escapeKey(), r.shellOut)
+	}
 
 	err = cmd.Wait()
 	return exitCode(err), nil

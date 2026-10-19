@@ -99,8 +99,12 @@ let
   # `bats --filter-tags !<tag>`; still exposed as their own lane
   # (`bats-tent_smoke`) for tooling that wants to address them
   # explicitly. The host-side `just test-tent-smoke` recipe runs them
-  # outside any nix lane.
-  hostOnlyTags = [ "tent_smoke" ];
+  # outside any nix lane. `agent_scope` (clown#244) starts real transient
+  # systemd user services; `just verify-agent-scope` runs it on the host.
+  hostOnlyTags = [
+    "tent_smoke"
+    "agent_scope"
+  ];
   defaultExclusionFilter = lib.concatStringsSep "," (map (t: "!${t}") hostOnlyTags);
 in
 lib.listToAttrs (

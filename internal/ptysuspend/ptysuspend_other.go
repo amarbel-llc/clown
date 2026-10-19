@@ -28,6 +28,10 @@ type Options struct {
 	// Env mirrors the linux build's field (see ptysuspend_linux.go); unused
 	// here because Run is a no-op on this platform.
 	Env []string
+	// DetachSlave, NoEscape and OnStart mirror the linux build's fields.
+	DetachSlave bool
+	NoEscape    bool
+	OnStart     func(slavePath string, pid int)
 }
 
 // Supported reports that the pty-suspend proxy is not implemented here, so

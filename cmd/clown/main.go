@@ -315,6 +315,10 @@ func run(rawArgs []string) int {
 			return runProfileCmd(rawArgs[1:])
 		case "pty-suspend":
 			return runPtySuspend(rawArgs[1:])
+		case "agent-exec":
+			return runAgentExec(rawArgs[1:])
+		case "agent-scope-run":
+			return runAgentScopeRun(rawArgs[1:])
 		}
 	}
 
@@ -342,6 +346,10 @@ func run(rawArgs []string) int {
 // directly and rejoin the standard flow (profile load, prompt walk,
 // plugin host, provider exec) without re-running parseFlags.
 func runWithFlags(flags parsedFlags) int {
+	if flags.agentScopeSpec != "" && (flags.tent || flags.naked) {
+		fmt.Fprintln(os.Stderr, "clown: --agent-scope is mutually exclusive with --tent and --naked")
+		return 1
+	}
 	if flags.tent && flags.naked {
 		fmt.Fprintln(os.Stderr, "clown: --tent and --naked are mutually exclusive (naked bypasses clown wrapping, tent is clown wrapping)")
 		return 1
@@ -721,6 +729,7 @@ func runWithFlags(flags parsedFlags) int {
 		return 1
 	}
 	defer root.Close()
+	flags.stagingRootPath = root.Path()
 
 	pluginDirs := readPluginDirs()
 	pluginDirs = append(pluginDirs, flags.extraPluginDirs...)
@@ -778,6 +787,11 @@ func runWithFlags(flags parsedFlags) int {
 	}
 	lead += "\n\n" + fqIdentityFragment(flags.groupID, flags.clownName)
 	prompts.AppendFragments = lead + "\n\n" + prompts.AppendFragments
+
+	if flags.agentScopeSpec != "" && flags.provider != "claude" {
+		fmt.Fprintf(os.Stderr, "clown: --agent-scope supports only the claude provider (got %q); refusing to launch unconfined\n", flags.provider)
+		return 1
+	}
 
 	switch flags.provider {
 	case "claude":
@@ -1742,6 +1756,10 @@ func runProvider(executor Executor, bound Command, logger *slog.Logger, flags pa
 		return 0
 	}
 
+	if flags.agentScopeSpec != "" {
+		return runInAgentScope(flags.agentScopeSpec, flags.stagingRootPath, append([]string{binary}, argv...), extraEnv, logger)
+	}
+
 	// ctrl-z escape-to-shell pty proxy (clownfile [attach].pty-suspend): run the
 	// provider on an inner pty so ^Z suspends clown back to the launching shell,
 	// which a raw-mode TUI (e.g. claude) does not do for itself. Gated to
@@ -2611,6 +2629,14 @@ type parsedFlags struct {
 	// and re-parse profiles.toml a second time in the same launch (clown#178).
 	cheapContextSave cheapContextSaveContext
 	tent             bool
+	// agentScopeSpec is the --agent-scope / CLOWN_AGENT_SCOPE spec path
+	// (clown#244, FDR 0020): when set, claude runs in a transient systemd
+	// user service (the agent scope) and clown stays in the frontend scope.
+	agentScopeSpec string
+	// stagingRootPath is the per-launch staging root (set in runWithFlags),
+	// bound read-only into the agent scope so claude can read clown's
+	// generated plugin dirs and prompt files.
+	stagingRootPath string
 	// mcpCollapse opts this launch into MCP-collapse mode (all-or-nothing for
 	// the prototype): after the discovered upstream MCP servers are started,
 	// clown launches ONE clown-mcp-collapse aggregator fronting them all and
@@ -2701,6 +2727,7 @@ func parseFlags(args []string) (parsedFlags, error) {
 	if os.Getenv("CLOWN_TENT") == "1" {
 		p.tent = true
 	}
+	p.agentScopeSpec = os.Getenv("CLOWN_AGENT_SCOPE")
 	switch os.Getenv("CLOWN_TENT_PASS_DEVSHELL") {
 	case "1":
 		p.passDevshell = true
@@ -2755,6 +2782,14 @@ parse:
 			p.disableClownProtocol = true
 		case args[i] == "--tent":
 			p.tent = true
+		case args[i] == "--agent-scope":
+			if i+1 >= len(args) {
+				return p, fmt.Errorf("--agent-scope requires a spec path")
+			}
+			p.agentScopeSpec = args[i+1]
+			i++
+		case strings.HasPrefix(args[i], "--agent-scope="):
+			p.agentScopeSpec = strings.TrimPrefix(args[i], "--agent-scope=")
 		case args[i] == "--tent-pass-devshell":
 			p.passDevshell = true
 		case args[i] == "--no-tent-pass-devshell":

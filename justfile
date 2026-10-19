@@ -9,7 +9,7 @@ lint: lint-fmt lint-worktree lint-man
 
 test: test-go-godyn test-plugin-host test-stdio-bridge test-plugin-host-moxy test-plugin-host-moxy-disabled
 
-verify: verify-clown-openrouter verify-clown-tailnet verify-cover-bats verify-cover-bats-html verify-crush-tailnet verify-dev-tent verify-juggler verify-juggler-multi verify-opencode-against-openrouter verify-opencode-tailnet verify-plugin-agents verify-tailnet-url verify-tent-smoke
+verify: verify-agent-scope verify-clown-openrouter verify-clown-tailnet verify-cover-bats verify-cover-bats-html verify-crush-tailnet verify-dev-tent verify-juggler verify-juggler-multi verify-opencode-against-openrouter verify-opencode-tailnet verify-plugin-agents verify-tailnet-url verify-tent-smoke
 
 codemod: codemod-fmt
 
@@ -274,6 +274,27 @@ verify-tent-smoke:
 
     echo "tent-smoke: running bats against zz-tests_bats/tent_smoke.bats"
     "$bats_bin" zz-tests_bats/tent_smoke.bats
+
+# Host-side confinement test for the agent-scope launcher (clown#244, FDR
+# 0020): builds clown, then runs zz-tests_bats/agent_scope.bats, which starts
+# throwaway transient systemd USER services through `clown agent-scope-run`
+# and checks from inside (home, bus, display, ptys, pids unreachable) and from
+# outside (result file, cgroup vs piggy-agent and the frontend). Needs a
+# systemd user manager >= 257; units are --collect'ed and never outlive a test.
+#
+# run the host-side agent-scope confinement test against real systemd units
+[group("test")]
+verify-agent-scope:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "$(git rev-parse --show-toplevel)"
+    out="$(nix build --no-link --print-out-paths .#default)"
+    export CLOWN_BIN="$out/bin/clown"
+    bats_libs_store="$(nix build --no-link --print-out-paths .#bats-libs)"
+    export BATS_LIB_PATH="$bats_libs_store/share/bats"
+    bats_bin="$(nix build --no-link --print-out-paths 'nixpkgs#bats')/bin/bats"
+    echo "agent-scope: clown=$CLOWN_BIN"
+    "$bats_bin" zz-tests_bats/agent_scope.bats
 
 # Integration test: launch clown-plugin-host with the synthetic plugin's
 # clown.json and verify URL-based MCP compilation, name preservation,

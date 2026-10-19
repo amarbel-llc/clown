@@ -461,6 +461,9 @@ func (p parsedFlags) reexecArgv() []string {
 	if p.tent {
 		argv = append(argv, "--tent")
 	}
+	if p.agentScopeSpec != "" {
+		argv = append(argv, "--agent-scope", p.agentScopeSpec)
+	}
 	if p.passDevshell {
 		argv = append(argv, "--tent-pass-devshell")
 	}

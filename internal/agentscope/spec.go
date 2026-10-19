@@ -1,0 +1,178 @@
+// Package agentscope launches a provider (claude) in an AGENT SCOPE: a
+// transient systemd user service with a private mount, pid and devpts
+// namespace, the worktree bind-mounted in, and nothing of the operator's home,
+// session bus or display reachable (clown#244, FDR 0020). clown itself stays in
+// the frontend scope and relays the terminal.
+//
+// The spec is spinclass's (FDR 0035): what the unit must see. The result is
+// what spinclass's confinement check needs: the unit name and its cgroup.
+package agentscope
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+// SpecVersion is the only spec version this build understands.
+const SpecVersion = 1
+
+// Socket is one unix socket the unit may reach, bound in as a single inode at
+// the same path.
+type Socket struct {
+	Path    string `json:"path"`
+	Purpose string `json:"purpose"`
+}
+
+// Spec is what the unit must see, written by spinclass (FDR 0035 Interface).
+type Spec struct {
+	Version      int               `json:"version"`
+	Worktree     string            `json:"worktree"`
+	OperatorHome string            `json:"operator_home"`
+	UnitNameHint string            `json:"unit_name_hint"`
+	ResultPath   string            `json:"result_path"`
+	BindsRW      []string          `json:"binds_rw"`
+	BindsRO      []string          `json:"binds_ro"`
+	Sockets      []Socket          `json:"sockets"`
+	DenyPaths    []string          `json:"deny_paths"`
+	EgressAllow  []string          `json:"egress_allow"`
+	Env          map[string]string `json:"env"`
+}
+
+// LoadSpec reads and validates a spec. Unknown fields are refused: a field
+// this build does not understand may be one it was meant to enforce.
+func LoadSpec(path string) (Spec, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return Spec{}, fmt.Errorf("agent scope spec: %w", err)
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	var s Spec
+	if err := dec.Decode(&s); err != nil {
+		return Spec{}, fmt.Errorf("agent scope spec %s: %w", path, err)
+	}
+	if err := s.Validate(); err != nil {
+		return Spec{}, fmt.Errorf("agent scope spec %s: %w", path, err)
+	}
+	return s, nil
+}
+
+// Validate refuses a spec clown cannot honour without weakening the boundary.
+func (s Spec) Validate() error {
+	if s.Version != SpecVersion {
+		return fmt.Errorf("version %d unsupported (this clown understands %d)", s.Version, SpecVersion)
+	}
+	if err := requireAbs("worktree", s.Worktree); err != nil {
+		return err
+	}
+	if err := requireAbs("operator_home", s.OperatorHome); err != nil {
+		return err
+	}
+	if s.ResultPath != "" {
+		if err := requireAbs("result_path", s.ResultPath); err != nil {
+			return err
+		}
+	}
+	exposed := map[string][]string{
+		"worktree": {s.Worktree},
+		"binds_rw": s.BindsRW,
+		"binds_ro": s.BindsRO,
+	}
+	for _, sock := range s.Sockets {
+		exposed["sockets"] = append(exposed["sockets"], sock.Path)
+	}
+	for field, paths := range exposed {
+		for _, p := range paths {
+			if err := requireBindable(field, p); err != nil {
+				return err
+			}
+			if exposesWhole(p, s.OperatorHome) {
+				return fmt.Errorf("%s entry %q exposes the whole operator home %q", field, p, s.OperatorHome)
+			}
+		}
+	}
+	for _, p := range s.DenyPaths {
+		if err := requireBindable("deny_paths", p); err != nil {
+			return err
+		}
+	}
+	for k := range s.Env {
+		if k == "" || strings.ContainsAny(k, "=\x00") {
+			return fmt.Errorf("env key %q is not a valid variable name", k)
+		}
+		if scrubbedKeys[k] {
+			return fmt.Errorf("env key %q is scrubbed from the agent scope and may not be set by the spec", k)
+		}
+	}
+	return nil
+}
+
+func requireAbs(field, p string) error {
+	if p == "" || !filepath.IsAbs(p) || filepath.Clean(p) != p {
+		return fmt.Errorf("%s %q must be an absolute, clean path", field, p)
+	}
+	return nil
+}
+
+// requireBindable additionally refuses ':' and whitespace, which systemd's
+// BindPaths= syntax ("src[:dst[:opts]]", space-separated) would misparse.
+func requireBindable(field, p string) error {
+	if err := requireAbs(field, p); err != nil {
+		return err
+	}
+	if strings.ContainsAny(p, ": \t\n") {
+		return fmt.Errorf("%s %q contains ':' or whitespace, which systemd bind syntax cannot carry", field, p)
+	}
+	return nil
+}
+
+// exposesWhole reports whether binding p would expose all of target: p is
+// target itself or one of its ancestors.
+func exposesWhole(p, target string) bool {
+	if p == target || p == "/" {
+		return true
+	}
+	return strings.HasPrefix(target, p+"/")
+}
+
+// Result is what clown reports back once the unit is active (FDR 0020
+// "Launcher interface"). Unit is authoritative.
+type Result struct {
+	Version      int    `json:"version"`
+	Unit         string `json:"unit,omitempty"`
+	Cgroup       string `json:"cgroup,omitempty"`
+	InvocationID string `json:"invocation_id,omitempty"`
+	UID          int    `json:"uid"`
+	Pty          string `json:"pty,omitempty"`
+	MainPID      int    `json:"main_pid,omitempty"`
+	Error        string `json:"error,omitempty"`
+}
+
+// WriteResult writes r to path atomically (tmp + rename in the same dir).
+func WriteResult(path string, r Result) error {
+	r.Version = SpecVersion
+	raw, err := json.MarshalIndent(r, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".agent-unit-*.json")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(append(raw, '\n')); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
+}

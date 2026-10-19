@@ -1,0 +1,243 @@
+package agentscope
+
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
+	"path/filepath"
+	"sort"
+	"strings"
+)
+
+// Slice is the systemd slice every agent unit runs in. Its cgroup prefix,
+// .../user@<uid>.service/clown.slice/clown-agent.slice/, is what piggy, posh
+// and spinclass match a caller against.
+const Slice = "clown-agent.slice"
+
+const defaultUnitHint = "clown-agent"
+
+// Network selects the unit's network namespace.
+type Network int
+
+const (
+	// HostNetwork shares the host netns. Not a confined unit: every loopback
+	// service on the host is reachable (FDR 0020 "Egress").
+	HostNetwork Network = iota
+	// PrivateNetwork gives the unit a netns holding only lo; egress goes
+	// through the frontend proxy.
+	PrivateNetwork
+)
+
+// Launch is everything needed to start one agent unit.
+type Launch struct {
+	Spec Spec
+	// Unit is the full unit name, ".service" included (see UnitName).
+	Unit string
+	// WorkDir is the provider's working directory; it must be inside the
+	// worktree, the only part of the home the unit can see.
+	WorkDir string
+	// AgentHome becomes HOME inside the unit.
+	AgentHome string
+	// FrontendEnv is clown's own environment ("K=V"), the source of the
+	// allowlisted pass-through keys.
+	FrontendEnv []string
+	// ManagerEnvKeys are the keys the user manager injects into every unit
+	// (systemctl --user show-environment); every one not set by clown is
+	// unset.
+	ManagerEnvKeys []string
+	// ExtraEnv is the provider binding's own "K=V" entries.
+	ExtraEnv []string
+	// PlumbingRW and PlumbingRO are clown's own binds (job-platform state,
+	// claude config). Missing paths are skipped rather than failing the start.
+	PlumbingRW []string
+	PlumbingRO []string
+	// Shim is the in-unit exec shim argv prefix, e.g. [clown, agent-exec, --].
+	Shim []string
+	// Argv is the provider binary and its arguments.
+	Argv    []string
+	Network Network
+}
+
+// UnitName turns spinclass's hint into a valid, unique service name.
+func UnitName(hint string) string {
+	var b strings.Builder
+	for _, r := range hint {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '.', r == '-', r == ':':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	name := strings.Trim(b.String(), "-.")
+	if name == "" {
+		name = defaultUnitHint
+	}
+	if len(name) > 200 {
+		name = name[:200]
+	}
+	var suffix [4]byte
+	_, _ = rand.Read(suffix[:])
+	return name + "-" + hex.EncodeToString(suffix[:]) + ".service"
+}
+
+// SystemdRunArgs renders the systemd-run argv (without argv[0]).
+func (l Launch) SystemdRunArgs() ([]string, error) {
+	if !strings.HasSuffix(l.Unit, ".service") {
+		return nil, fmt.Errorf("unit %q must be a .service", l.Unit)
+	}
+	if !within(l.WorkDir, l.Spec.Worktree) {
+		return nil, fmt.Errorf("working directory %q is outside the worktree %q", l.WorkDir, l.Spec.Worktree)
+	}
+	if len(l.Argv) == 0 {
+		return nil, fmt.Errorf("empty provider argv")
+	}
+	args := []string{
+		"--user", "--quiet", "--collect", "--wait", "--pipe",
+		"--expand-environment=no",
+		"--slice=" + Slice,
+		"--unit=" + l.Unit,
+	}
+	for _, p := range l.properties() {
+		args = append(args, "--property="+p)
+	}
+	set, unset := l.environment()
+	if len(unset) > 0 {
+		args = append(args, "--property=UnsetEnvironment="+strings.Join(unset, " "))
+	}
+	for _, kv := range set {
+		args = append(args, "--setenv="+kv)
+	}
+	args = append(args, "--")
+	args = append(args, l.Shim...)
+	args = append(args, l.Argv...)
+	return args, nil
+}
+
+// properties is the sandbox, in the order FDR 0020 tabulates it.
+func (l Launch) properties() []string {
+	props := []string{
+		"PrivateUsers=self",
+		"PrivatePIDs=yes",
+		"ProtectHome=tmpfs",
+		"TemporaryFileSystem=/dev/pts",
+		"PrivateTmp=yes",
+		"ProtectSystem=strict",
+		"NoNewPrivileges=yes",
+		"WorkingDirectory=" + l.WorkDir,
+	}
+	if l.Network == PrivateNetwork {
+		props = append(props, "PrivateNetwork=yes")
+	}
+	props = append(props, "BindPaths="+l.Spec.Worktree, "ReadWritePaths="+l.Spec.Worktree)
+	for _, p := range l.Spec.BindsRW {
+		props = append(props, "BindPaths="+p)
+	}
+	for _, s := range l.Spec.Sockets {
+		props = append(props, "BindPaths="+s.Path)
+	}
+	for _, p := range l.PlumbingRW {
+		props = append(props, "BindPaths=-"+p)
+	}
+	for _, p := range l.Spec.BindsRO {
+		props = append(props, "BindReadOnlyPaths="+p)
+	}
+	for _, p := range l.PlumbingRO {
+		props = append(props, "BindReadOnlyPaths=-"+p)
+	}
+	for _, p := range l.Spec.DenyPaths {
+		props = append(props, "InaccessiblePaths=-"+p)
+	}
+	return props
+}
+
+func within(p, dir string) bool {
+	p = filepath.Clean(p)
+	return p == dir || strings.HasPrefix(p, dir+"/")
+}
+
+// passKeys are copied verbatim from the frontend when set there.
+var passKeys = map[string]bool{
+	"PATH": true, "TERM": true, "COLORTERM": true, "TERMINFO": true, "TERMINFO_DIRS": true,
+	"LANG": true, "TZ": true, "TZDIR": true, "LOCALE_ARCHIVE": true,
+	"USER": true, "LOGNAME": true, "SHELL": true,
+	"SSL_CERT_FILE": true, "SSL_CERT_DIR": true, "CURL_CA_BUNDLE": true, "GIT_SSL_CAINFO": true,
+	"XDG_CONFIG_HOME": true, "XDG_STATE_HOME": true, "XDG_CACHE_HOME": true, "XDG_DATA_HOME": true, "XDG_LOG_HOME": true,
+	"XDG_RUNTIME_DIR": true,
+	"CLOWN_BIN":       true, "CLOWN_NAME": true, "CLOWN_GROUP_ID": true, "CLOWN_GROUP_DESCRIPTION": true, "CLOWN_XMPP_VHOST": true,
+}
+
+// passPrefixes are copied verbatim from the frontend when set there.
+var passPrefixes = []string{"LC_", "NIX_", "ANTHROPIC_", "CLAUDE_CODE_", "TROUPE_"}
+
+// scrubbedKeys never reach the unit from the frontend and the spec may not
+// set them. XDG_RUNTIME_DIR is NOT here: it is passed so job-platform tools
+// agree with the frontend on paths, and under ProtectHome=tmpfs it holds only
+// what was bound in.
+var scrubbedKeys = map[string]bool{
+	"DBUS_SESSION_BUS_ADDRESS": true, "DISPLAY": true, "WAYLAND_DISPLAY": true, "XAUTHORITY": true,
+	"CLOWN_SESSION_ID": true, "HOME": true, "SSH_AUTH_SOCK": true,
+}
+
+// environment returns the "K=V" entries to set (sorted) and the manager keys
+// to unset.
+func (l Launch) environment() (set, unset []string) {
+	env := map[string]string{}
+	for _, kv := range l.FrontendEnv {
+		k, v, ok := strings.Cut(kv, "=")
+		switch {
+		case !ok:
+		case k == "SSH_AUTH_SOCK":
+			// Passes only when it names a socket the spec binds in.
+			if l.bindsSocket(v) {
+				env[k] = v
+			}
+		case k == "TMPDIR":
+			// Passes only when it is inside the worktree.
+			if within(v, l.Spec.Worktree) {
+				env[k] = v
+			}
+		case scrubbedKeys[k]:
+		case passKeys[k] || hasAnyPrefix(k, passPrefixes):
+			env[k] = v
+		}
+	}
+	for _, kv := range l.ExtraEnv {
+		if k, v, ok := strings.Cut(kv, "="); ok && !scrubbedKeys[k] {
+			env[k] = v
+		}
+	}
+	for k, v := range l.Spec.Env {
+		env[k] = v
+	}
+	env["HOME"] = l.AgentHome
+	for k, v := range env {
+		set = append(set, k+"="+v)
+	}
+	sort.Strings(set)
+	for _, k := range l.ManagerEnvKeys {
+		if _, ok := env[k]; !ok {
+			unset = append(unset, k)
+		}
+	}
+	sort.Strings(unset)
+	return set, unset
+}
+
+func (l Launch) bindsSocket(path string) bool {
+	for _, s := range l.Spec.Sockets {
+		if s.Path == path {
+			return true
+		}
+	}
+	return false
+}
+
+func hasAnyPrefix(k string, prefixes []string) bool {
+	for _, p := range prefixes {
+		if strings.HasPrefix(k, p) {
+			return true
+		}
+	}
+	return false
+}
