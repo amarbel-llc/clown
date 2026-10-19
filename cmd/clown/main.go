@@ -1784,6 +1784,7 @@ func runProvider(executor Executor, bound Command, logger *slog.Logger, flags pa
 			inUnit:       flags.agentScopeInUnit,
 			argv:         append([]string{binary}, argv...),
 			extraEnv:     extraEnv,
+			principal:    flags.identity.Key,
 		}, logger)
 	}
 
@@ -2149,9 +2150,11 @@ func reserveInUnitServers(host *pluginhost.Host, discovered []pluginhost.Discove
 		if !filepath.IsAbs(command) {
 			command = filepath.Join(d.PluginDir, command)
 		}
+		// Not host.BaseEnv: its CLOWN_SESSION_ID must not land in a file or
+		// an environ the agent can read; CLOWN_BIN is all a producer needs.
 		env := map[string]string{}
-		for k, v := range host.BaseEnv {
-			env[k] = v
+		if bin := host.BaseEnv["CLOWN_BIN"]; bin != "" {
+			env["CLOWN_BIN"] = bin
 		}
 		for k, v := range d.Def.Env {
 			env[k] = v

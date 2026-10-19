@@ -54,6 +54,8 @@ type Launch struct {
 	// ServeFile lists the agent-side servers the relay starts inside the
 	// unit (WriteInUnitServers); bound in read-only. Empty: none.
 	ServeFile string
+	// Principal is reported in the result (CLOWN_SESSION_ID).
+	Principal string
 }
 
 // relays is every in-unit relay the shim starts: the egress proxy's, then the

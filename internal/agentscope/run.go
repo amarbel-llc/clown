@@ -139,7 +139,7 @@ func Run(l Launch, tools Tools, logger *slog.Logger) (int, error) {
 				_ = l.fail(err)
 				return
 			}
-			res := Result{Unit: l.Unit, Cgroup: st.ControlGroup, InvocationID: st.InvocationID, UID: os.Getuid(), Pty: pty, MainPID: st.MainPID}
+			res := Result{Unit: l.Unit, Principal: l.Principal, Cgroup: st.ControlGroup, InvocationID: st.InvocationID, UID: os.Getuid(), Pty: pty, MainPID: st.MainPID}
 			if l.Spec.ResultPath != "" {
 				if err := WriteResult(l.Spec.ResultPath, res); err != nil && logger != nil {
 					logger.Error("agent scope: writing result", "err", err)

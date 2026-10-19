@@ -35,6 +35,7 @@ func runInAgentScope(req agentScopeRequest, logger *slog.Logger) int {
 		fmt.Fprintf(os.Stderr, "clown: agent scope: %v\n", err)
 		return 1
 	}
+	launch.Principal = req.principal
 	if req.stagingRoot != "" && !strings.HasPrefix(req.stagingRoot, launch.Spec.Worktree+"/") {
 		launch.PlumbingRO = append(launch.PlumbingRO, req.stagingRoot)
 	}
@@ -67,6 +68,8 @@ type agentScopeRequest struct {
 	inUnit   []agentscope.InUnitServer
 	argv     []string
 	extraEnv []string
+	// principal is this session's identity key, reported in the result.
+	principal string
 }
 
 // agentScopeTools resolves systemd-run and systemctl from PATH (overridable
@@ -208,7 +211,8 @@ func startFrontendEndpoints(launch *agentscope.Launch, forwardAddrs []string, in
 		stop()
 		return nil, err
 	}
-	if err := os.MkdirAll(filepath.Dir(inUnitMoxyfile), 0o700); err == nil {
+	err = os.MkdirAll(filepath.Dir(inUnitMoxyfile), 0o700)
+	if err == nil {
 		err = touch(inUnitMoxyfile)
 	}
 	if err != nil {

@@ -249,7 +249,9 @@ with `error` set.
 ```json
 {
   "version": 1,
+  "capabilities": ["agent-unit", "private-network", "egress-proxy", "frontend-mcp-sockets", "in-unit-moxy"],
   "unit": "spinclass-agent-clown-cool-fir-1a2b.service",
+  "principal": "<CLOWN_SESSION_ID: not in the claude subtree's environment (clown#136), so reported here>",
   "cgroup": "/user.slice/user-1001.slice/user@1001.service/clown.slice/clown-agent.slice/spinclass-agent-clown-cool-fir-1a2b.service",
   "invocation_id": "…",
   "uid": 1001,
@@ -417,6 +419,11 @@ moxy inside the unit reads a global moxyfile that clown binds read-only over
 `$HOME/.config/moxy/moxyfile` (`agentscope.InUnitMoxyfile`). It sets an
 `allow-tools` allowlist, which moxy intersects down the hierarchy, so a
 worktree moxyfile can only narrow it, plus `disable-moxins`.
+
+The madder store is bound **read-write** (coordinator decision,
+2026-10-19). moxy writes large tool outputs there, and a confined worker's
+outputs must reach the frontend's blob store. moxy failed to start in the
+unit when no store was visible at all.
 
 Evidence on flic, real claude -p plus the operator's moxy plugin, with the
 madder store bound as spinclass binds it:

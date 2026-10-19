@@ -164,12 +164,16 @@ type Result struct {
 	Version      int      `json:"version"`
 	Capabilities []string `json:"capabilities"`
 	Unit         string   `json:"unit,omitempty"`
-	Cgroup       string   `json:"cgroup,omitempty"`
-	InvocationID string   `json:"invocation_id,omitempty"`
-	UID          int      `json:"uid"`
-	Pty          string   `json:"pty,omitempty"`
-	MainPID      int      `json:"main_pid,omitempty"`
-	Error        string   `json:"error,omitempty"`
+	// Principal is the session's CLOWN_SESSION_ID, reported by the frontend:
+	// clown keeps it out of the claude subtree's environment (clown#136), so
+	// it is not readable from /proc/<main_pid>/environ.
+	Principal    string `json:"principal,omitempty"`
+	Cgroup       string `json:"cgroup,omitempty"`
+	InvocationID string `json:"invocation_id,omitempty"`
+	UID          int    `json:"uid"`
+	Pty          string `json:"pty,omitempty"`
+	MainPID      int    `json:"main_pid,omitempty"`
+	Error        string `json:"error,omitempty"`
 }
 
 // WriteResult writes r to path atomically (tmp + rename in the same dir).
