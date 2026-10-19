@@ -100,9 +100,10 @@ type State struct {
 	PendingUses map[string]string `json:"pending_uses,omitempty"`
 	// Unconsumed are results written but not yet consumed by a request.
 	Unconsumed []Result `json:"unconsumed,omitempty"`
-	// Live are consumed results still in context (reset on compaction); each
-	// adds its Tokens to carry_tokens for every further request.
-	Live []LiveResult `json:"live,omitempty"`
+	// Live maps tool key -> summed tokens of its consumed results still in
+	// context (reset on compaction); every further request adds the sum to
+	// that key's carry_tokens. Bounded by the number of distinct tool keys.
+	Live map[string]int64 `json:"live,omitempty"`
 }
 
 // Result is one completed tool result awaiting its consuming request.
@@ -112,17 +113,14 @@ type Result struct {
 	Status string `json:"status"`
 }
 
-// LiveResult is a consumed result still occupying context.
-type LiveResult struct {
-	Key    string `json:"key"`
-	Tokens int64  `json:"tokens"`
-}
-
 func (s State) clone() State {
 	c := s
 	c.PrevCalls = append([]string(nil), s.PrevCalls...)
 	c.Unconsumed = append([]Result(nil), s.Unconsumed...)
-	c.Live = append([]LiveResult(nil), s.Live...)
+	c.Live = make(map[string]int64, len(s.Live))
+	for k, v := range s.Live {
+		c.Live[k] = v
+	}
 	c.PendingUses = make(map[string]string, len(s.PendingUses))
 	for k, v := range s.PendingUses {
 		c.PendingUses[k] = v
@@ -226,7 +224,10 @@ func Run(path string, st State, cfg Config) (State, []Metric, error) {
 		line, readErr := br.ReadBytes('\n')
 		if len(line) > 0 {
 			if line[len(line)-1] != '\n' && !json.Valid(line) {
-				break // torn in-flight append: leave it for the next run
+				// Torn in-flight append: leave it for the next run. For a
+				// Final flush it is the effective end of the transcript.
+				reachedEOF = true
+				break
 			}
 			r.handle(line, pos)
 			pos += int64(len(line))
@@ -284,7 +285,7 @@ func (r *runner) handle(line []byte, pos int64) {
 				r.closeOpen()
 				r.commit(pos)
 			}
-			r.w.Live = nil
+			r.w.Live = map[string]int64{}
 			if r.w.LastModel != "" {
 				r.emit("clown.compaction."+r.cfg.Host+"."+r.cfg.Repo+"."+r.w.LastModel, KindCounter, 1)
 			}
@@ -439,8 +440,10 @@ func (r *runner) closeOpen() {
 
 	// Carry first: this request re-read every result consumed by an EARLIER
 	// one. Results consumed by this request start carrying from the next.
-	for _, l := range r.w.Live {
-		r.emit(toolMetric(host, l.Key, "carry_tokens"), KindCounter, l.Tokens)
+	for key, tokens := range r.w.Live {
+		if tokens > 0 {
+			r.emit(toolMetric(host, key, "carry_tokens"), KindCounter, tokens)
+		}
 	}
 
 	weights := make([]int64, len(g.consumes))
@@ -461,7 +464,7 @@ func (r *runner) closeOpen() {
 		if shares[i] > 0 {
 			r.emit(toolMetric(host, c.Key, "cache_write"), KindCounter, shares[i])
 		}
-		r.w.Live = append(r.w.Live, LiveResult{Key: c.Key, Tokens: c.Bytes / 4})
+		r.w.Live[c.Key] += c.Bytes / 4
 	}
 
 	prev := make(map[string]bool, len(r.w.PrevCalls))

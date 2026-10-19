@@ -67,10 +67,17 @@ func main() {
 		}
 		return
 	}
+	// A panic would exit 2, which BLOCKS the agent from stopping: make
+	// "always exit 0" structural rather than dependent on there being no bug.
+	defer func() {
+		if p := recover(); p != nil {
+			debugLog("panic", fmt.Sprint(p))
+		}
+		os.Exit(0)
+	}()
 	if err := run(os.Stdin); err != nil {
 		debugLog("error", err.Error())
 	}
-	os.Exit(0)
 }
 
 // dryRunTranscript is the dev-loop entry (just explore debug-toolcost-transcript):
@@ -116,9 +123,17 @@ func run(stdin io.Reader) error {
 	if err != nil {
 		return err
 	}
+	budget := runBudget
+	if in.HookEventName == "SessionEnd" {
+		budget = sessionEndBudget
+	}
+	deadline := time.Now().Add(budget)
+
 	// One run per transcript at a time: a concurrent Stop + SessionEnd would
-	// otherwise both read the same State and double-emit. Losing the race is
-	// fine — the winner covers the same bytes.
+	// otherwise both read the same State and double-emit. A non-final loser
+	// just yields (the winner covers the same bytes); a final run must not —
+	// the winner may be a non-final Stop that leaves the trailing response
+	// open — so it waits for the lock until its budget runs out.
 	if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
 		return err
 	}
@@ -127,8 +142,15 @@ func run(stdin io.Reader) error {
 		return err
 	}
 	defer lock.Close()
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		return fmt.Errorf("another run holds the lock: %w", err)
+	for {
+		err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			break
+		}
+		if !final || time.Now().After(deadline) {
+			return fmt.Errorf("another run holds the lock: %w", err)
+		}
+		time.Sleep(25 * time.Millisecond)
 	}
 
 	host, _ := os.Hostname()
@@ -136,15 +158,11 @@ func run(stdin io.Reader) error {
 	if cwd == "" {
 		cwd = transcriptCWD(path)
 	}
-	budget := runBudget
-	if in.HookEventName == "SessionEnd" {
-		budget = sessionEndBudget
-	}
 	cfg := toolcost.Config{
 		Host:     toolcost.Segment(host),
 		Repo:     toolcost.Segment(sessions.RepoFromCWD(cwd)),
 		Final:    final,
-		Deadline: time.Now().Add(budget),
+		Deadline: deadline,
 	}
 	st, metrics, err := toolcost.Run(path, toolcost.LoadState(statePath), cfg)
 	if err != nil {

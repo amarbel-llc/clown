@@ -350,6 +350,33 @@ func TestTornTrailingLineIsLeftUnconsumed(t *testing.T) {
 	}
 }
 
+// A Final flush still closes the trailing group when the file ends in a torn
+// line: the torn tail is the effective end of the transcript.
+func TestFinalFlushesBeforeTornTrailingLine(t *testing.T) {
+	var f fixture
+	f.prompt("go")
+	f.assistant("m1", u{in: 1, out: 4}, "end_turn", text("only"))
+	p := writeFixture(t, &f)
+	fh, err := os.OpenFile(p, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Fprint(fh, `{"type":"assistant","mess`)
+	fh.Close()
+
+	c := cfg
+	c.Final = true
+	st, ms := mustRun(t, p, State{}, c)
+	if got, _ := sum(ms, "clown.responses.h.r.opus-5-5.end_turn"); got != 1 {
+		t.Errorf("end_turn = %d, want 1 (final flush despite the torn tail)", got)
+	}
+	// The torn line stays unconsumed for a later run.
+	info, _ := os.Stat(p)
+	if st.Offset >= info.Size() {
+		t.Errorf("offset %d consumed the torn tail (size %d)", st.Offset, info.Size())
+	}
+}
+
 // Final (SessionEnd/SubagentStop) closes the trailing group.
 func TestFinalClosesTrailingGroup(t *testing.T) {
 	var f fixture
