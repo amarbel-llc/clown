@@ -13,6 +13,32 @@ from clown issues #258 #260 #257 #256 #261 #252 #254 #249 #248, from the circus
 and roustabout checkouts on this host (read only), and from purse-first's
 `dagnabit(7)` source. Anything not read is marked **UNVERIFIED**.
 
+## Progress (2026-10-20)
+
+- Operator decisions: extract now; history by **filter-repo** (§3.3); PAPI
+  template **`eng`** (the domain advertises no Go template).
+- Step 1 done by the operator: `linenisgreat/juggler` created on the forge,
+  empty, default branch `master`.
+- Step 2 done. The history was filtered from clown master at
+  `S = 91dd7e3ef12d54041f6e890d800e0e1bee927340` with
+  `just debug-juggler-filter-history S ~/eng/repos/juggler`. Unlike the §3.3
+  path list, the recipe also keeps juggler's pre-rename paths (`cmd/circus`,
+  `internal/ringmaster`, `internal/circusmodels`, the circus/ringmaster man
+  pages, `nix/hm/ringmaster.nix`, `ringmaster.bats`, and the daemon files
+  `b9ffbcf` moved out of `cmd/ringmaster`). The result is 139 commits back
+  to the first daemon commit. The tree at S is unaffected. The `#N` →
+  `clown#N` rewrite skips 280b3ae's numbered list items.
+- Pushed to `ssh://git@code.linenisgreat.com/juggler.git` as master
+  `167e154`, followed by the conform bootstrap `7fa5a1e`
+  (`just debug-juggler-conform`: the `eng` template, flake lock, conform
+  `--repair`, and the version key `JUGGLER_VERSION`).
+- Next: step 3 (import rewrite, go.nix, eng-go preset, Go builds, tests) in
+  the juggler repo. Note that juggler's flake lock reaches clown through the
+  template's `just-us` input (`just-us/clown`). That is not a cycle in
+  evaluation, but once clown takes juggler as an input (step 5) the two
+  repos pin each other one level deep. Consider making `just-us`'s clown
+  input follow, or dropping it.
+
 ## TL;DR
 
 1. **The Go cut is already almost clean.** Juggler is 10 packages: `cmd/juggler`

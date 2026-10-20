@@ -1904,6 +1904,86 @@ debug-run-downstream-tests:
     CLOWN_RUN_DOWNSTREAM_TESTS=1 just test-plugin-host-moxy
     CLOWN_RUN_DOWNSTREAM_TESTS=1 just test-plugin-host-moxy-disabled
 
+# One-off for the juggler extraction (clown#258,
+# docs/plans/2026-10-20-juggler-extraction.md §3.3): clone clown's master at
+# REV into DEST (which must not exist) and git-filter-repo it down to
+# juggler's paths, rewriting bare `#N` issue references in commit messages to
+# `clown#N`. Removed with the rest of juggler at cutover.
+#
+# filter clown's history at REV down to juggler's paths into a new clone at DEST
+[group("debug")]
+debug-juggler-filter-history rev dest:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ -e "{{ dest }}" ]]; then
+        echo "debug-juggler-filter-history: {{ dest }} already exists" >&2
+        exit 1
+    fi
+    src="$(git remote get-url origin)"
+    git clone --no-local --single-branch --branch master "$src" "{{ dest }}"
+    cd "{{ dest }}"
+    git reset --hard "{{ rev }}"
+    rules="$(mktemp)"
+    # The lookbehinds skip the rename commit's (280b3ae) numbered list items
+    # "Rename #1" and "Renames #2/#3", which are not issue references.
+    printf '%s\n' \
+        'regex:(^|[^A-Za-z0-9_/.-])(?<!Rename )(?<!Renames )#([0-9]+)\b==>\1clown#\2' >"$rules"
+    # --force: the reset above means the clone is no longer pristine. The
+    # second block keeps juggler's history from before it was renamed from
+    # circus (280b3ae) and re-homed from cmd/ringmaster (b9ffbcf); none of those
+    # paths exist at REV, so the resulting tree is unaffected.
+    nix run nixpkgs#git-filter-repo -- --force \
+        --path cmd/circus/ \
+        --path internal/ringmaster/ \
+        --path internal/circusmodels/ \
+        --path man/man1/circus.1 \
+        --path man/man7/ringmaster.7 \
+        --path man/man7/ringmaster-testing.7 \
+        --path nix/hm/ringmaster.nix \
+        --path zz-tests_bats/ringmaster.bats \
+        --path cmd/ringmaster/launcher.go \
+        --path cmd/ringmaster/launcher_real_test.go \
+        --path cmd/ringmaster/launcher_reap_test.go \
+        --path cmd/ringmaster/launcher_test.go \
+        --path cmd/ringmaster/launcher_version_test.go \
+        --path cmd/ringmaster/models.go \
+        --path cmd/ringmaster/server.go \
+        --path cmd/ringmaster/server_test.go \
+        --path cmd/ringmaster/testdata/fake-llama-server/ \
+        --path cmd/juggler/ \
+        --path-glob 'internal/juggler*' \
+        --path zz-tests_bats/juggler.bats \
+        --path zz-tests_bats/juggler_lifecycle.bats \
+        --path zz-tests_bats/juggler_reaper.bats \
+        --path man/man1/juggler.1 \
+        --path man/man7/juggler.7 \
+        --path man/man7/juggler-testing.7 \
+        --path docs/features/0019-juggler-agent-substrate.md \
+        --path nix/hm/juggler.nix \
+        --replace-message "$rules"
+    rm -f "$rules"
+    echo "commits: $(git rev-list --count HEAD)  head: $(git rev-parse HEAD)"
+
+# One-off for the juggler extraction (clown#258, plan §3.4): bootstrap the
+# filtered juggler clone at DEST from the PAPI `eng` flake template and run
+# conformist's working-tree repair over it (no commit). Removed at cutover.
+#
+# conform the filtered juggler clone at DEST with the PAPI eng template
+[group("debug")]
+debug-juggler-conform dest:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{ dest }}"
+    # Bootstrap mode only scaffolds; it then asks for: git add, flake lock,
+    # and a local-mode conform --repair to finish the wiring.
+    if [[ ! -e flake.nix ]]; then
+        conformist conform 'api.linenisgreat.com#eng' --overwrite
+    fi
+    git add -A
+    nix flake lock
+    git add flake.lock
+    conformist conform --repair || [[ $? -eq 3 ]] # 3: it wrote/repaired files
+
 # Probe a running llama-server for /v1/models and a test /v1/messages call.
 # Restarts juggler with the specified model (defaults to gemma3).
 # Usage: just debug-juggler-api [model-store-path]
