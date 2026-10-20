@@ -182,6 +182,34 @@ func TestParallelToolUseAndProportionalCacheWriteSplit(t *testing.T) {
 	}
 }
 
+// result_bytes is a statsd TIMER, not a counter: the aggregator stores it as
+// stats.timers.<name>.{count,mean,upper,sum,...}, so a counter-prefix search
+// (stats_counts.*) never finds it (clown#282). Pin the wire form.
+func TestToolResultEmitsResultBytesTimerSample(t *testing.T) {
+	var f fixture
+	f.prompt("go")
+	f.assistant("m1", u{in: 1, out: 10}, "tool_use", toolUse("t1", rgToolName, map[string]any{"pattern": "a"}))
+	f.result("t1", strings.Repeat("a", 300), false)
+	f.assistant("m2", u{in: 1, out: 3, cr: 10}, "end_turn", text("done"))
+	p := writeFixture(t, &f)
+
+	_, ms, err := Run(p, State{}, Config{Host: "h", Repo: "r", Final: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := Encode(ms)
+	const want = "clown.tool_result.h.moxy.rg_search.result_bytes:300|ms"
+	n := 0
+	for _, l := range lines {
+		if l == want {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("got %d %q lines, want exactly one; lines:\n%s", n, want, strings.Join(lines, "\n"))
+	}
+}
+
 // A full cache miss (cache_read == 0) rewrote the whole context; none of that
 // write is attributed to the results the request consumed.
 func TestFullCacheMissIsNotAttributedToResults(t *testing.T) {

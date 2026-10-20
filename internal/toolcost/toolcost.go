@@ -37,6 +37,18 @@
 //	clown.context.<host>.<repo>.<model>:N|g               input+cache_read+cache_write of the latest response
 //	clown.compaction.<host>.<repo>.<model>:1|c
 //
+// Where they land in stats-me: the statsd type decides the stored prefix, so
+// one family spans several prefixes. Counters (|c) appear twice, as
+// stats_counts.<name> (per-flush count) and stats.<name> (per-second rate);
+// timers (|ms) as stats.timers.<name>.{count,mean,upper,lower,sum,...};
+// gauges (|g) as stats.gauges.<name>. result_bytes is a timer — query
+// stats.timers.clown.tool_result.*.result_bytes.*, not stats_counts (clown#282).
+//
+// retry is NOT an error-retry count: it counts every tool_use whose key was
+// also called by the immediately previous response, whatever that call's
+// outcome (repeated Reads/greps across turns count). It is expected to exceed
+// error; compare it against ok+error+spilled, not against error alone.
+//
 // Approximations (documented in the metric docs, not hidden):
 //   - result tokens are estimated as bytes/4 (the transcript offers no
 //     per-result token count);
