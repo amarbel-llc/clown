@@ -156,6 +156,7 @@ var Capabilities = []string{
 	"egress-proxy",         // frontend CONNECT proxy with a host:port allowlist
 	"frontend-mcp-sockets", // only frontend-class servers, over per-session peer-checked unix sockets
 	"in-unit-moxy",         // agent-side servers (moxy & co.) run inside the unit, moxy under InUnitMoxyfile
+	"statsd-relay",         // in-unit UDP 127.0.0.1:8125 relayed over a peer-checked unixgram socket to the frontend's statsd
 }
 
 // Result is what clown reports back once the unit is active (FDR 0020

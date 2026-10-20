@@ -181,15 +181,22 @@ func authorizeUnitPeer(c net.Conn, unitName string, read func(pid int) (string, 
 	if credErr != nil {
 		return credErr
 	}
+	return checkUnitCgroup(int(cred.Pid), unitName, read)
+}
+
+// checkUnitCgroup reports whether pid runs in the agent unit's cgroup:
+// .../clown-agent.slice/<unitName>. read resolves a pid's cgroup (nil:
+// ProcCgroup).
+func checkUnitCgroup(pid int, unitName string, read func(pid int) (string, error)) error {
 	if read == nil {
 		read = ProcCgroup
 	}
-	cg, err := read(int(cred.Pid))
+	cg, err := read(pid)
 	if err != nil {
 		return err
 	}
 	if !strings.HasSuffix(cg, "/"+Slice+"/"+unitName) {
-		return fmt.Errorf("caller pid %d is in %q, not in unit %s", cred.Pid, cg, unitName)
+		return fmt.Errorf("caller pid %d is in %q, not in unit %s", pid, cg, unitName)
 	}
 	return nil
 }
@@ -312,7 +319,9 @@ func splice(a, b net.Conn) {
 
 // Relay is one in-unit TCP listener (e.g. 127.0.0.1:3128) whose connections
 // are spliced to a frontend unix socket bound into the unit, or, for an
-// in-unit server, to the TCP address it announced (Target).
+// in-unit server, to the TCP address it announced (Target). A Listen with a
+// "udp:" prefix (e.g. udp:127.0.0.1:8125, the statsd relay) is a UDP listener
+// whose datagrams go to a frontend unixgram Socket instead.
 type Relay struct {
 	Listen string
 	Socket string
@@ -329,37 +338,58 @@ func (r Relay) dial() (net.Conn, error) {
 // String renders the relay as the shim's ADDR=SOCK argument.
 func (r Relay) String() string { return r.Listen + "=" + r.Socket }
 
-// ParseRelay parses ADDR=SOCK.
+// ParseRelay parses ADDR=SOCK (ADDR may carry a "udp:" prefix).
 func ParseRelay(s string) (Relay, error) {
 	listen, sock, ok := strings.Cut(s, "=")
-	if !ok || listen == "" || sock == "" {
+	if !ok || listen == "" || sock == "" || listen == udpPrefix {
 		return Relay{}, fmt.Errorf("relay %q is not ADDR=SOCK", s)
 	}
 	return Relay{Listen: listen, Socket: sock}, nil
 }
 
 // RunRelays listens on every relay's address (inside the unit) and splices
-// each connection to that relay's unix socket. ready is called once all
-// listeners are up; RunRelays returns when any listener fails.
+// each connection to that relay's unix socket (a UDP relay forwards each
+// datagram instead). ready is called once all listeners are up; RunRelays
+// returns when any listener fails.
 func RunRelays(relays []Relay, ready func()) error {
-	lns := make([]net.Listener, 0, len(relays))
+	var closers []io.Closer
 	defer func() {
-		for _, ln := range lns {
-			ln.Close()
+		for _, c := range closers {
+			c.Close()
 		}
 	}()
+	type bound struct {
+		r  Relay
+		ln net.Listener
+		pc net.PacketConn
+	}
+	var all []bound
 	for _, r := range relays {
+		if r.isUDP() {
+			pc, err := net.ListenPacket("udp", r.listenAddr())
+			if err != nil {
+				return err
+			}
+			closers = append(closers, pc)
+			all = append(all, bound{r: r, pc: pc})
+			continue
+		}
 		ln, err := net.Listen("tcp", r.Listen)
 		if err != nil {
 			return err
 		}
-		lns = append(lns, ln)
+		closers = append(closers, ln)
+		all = append(all, bound{r: r, ln: ln})
 	}
 	if ready != nil {
 		ready()
 	}
-	errc := make(chan error, len(relays))
-	for i, ln := range lns {
+	errc := make(chan error, len(all))
+	for _, b := range all {
+		if b.pc != nil {
+			go func(pc net.PacketConn, r Relay) { errc <- runUDPRelay(pc, r) }(b.pc, b.r)
+			continue
+		}
 		go func(ln net.Listener, r Relay) {
 			for {
 				c, err := ln.Accept()
@@ -377,7 +407,7 @@ func RunRelays(relays []Relay, ready func()) error {
 					splice(c, up)
 				}()
 			}
-		}(ln, relays[i])
+		}(b.ln, b.r)
 	}
 	return <-errc
 }

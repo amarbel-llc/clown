@@ -123,9 +123,10 @@ func prepareAgentScope(specPath string, argv, extraEnv []string) (agentscope.Lau
 
 // startFrontendEndpoints runs, in the frontend, every unix socket the unit
 // reaches the outside through, under $XDG_RUNTIME_DIR/clown/agent/<unit>/:
-// the egress proxy and one PortForward per forwarded loopback address. All
-// accept only callers in the unit's cgroup. They are recorded on the launch
-// (EgressSocket, Forwards) so the unit binds them and the shim relays them.
+// the egress proxy, one PortForward per forwarded loopback address, and the
+// statsd relay. All accept only callers in the unit's cgroup. They are
+// recorded on the launch (EgressSocket, Forwards, StatsdSocket) so the unit
+// binds them and the shim relays them.
 //
 // The proxy's allowlist is the spec's egress_allow, else the default, plus
 // the host of ANTHROPIC_BASE_URL when clown routes the model API elsewhere.
@@ -197,6 +198,26 @@ func startFrontendEndpoints(launch *agentscope.Launch, forwardAddrs []string, in
 		launch.Forwards = append(launch.Forwards, agentscope.Relay{Listen: "127.0.0.1:" + port, Socket: sock})
 	}
 
+	// statsd (clown-hook-toolcost, clown-stdio-bridge) is UDP, which neither
+	// the proxy nor the TCP forwards carry (clown#269). Metrics are not worth
+	// refusing a launch over: a relay that cannot start is reported and the
+	// unit runs without one.
+	if os.Getenv("CLOWN_DISABLE_STATSD") == "1" {
+		launch.ExtraEnv = append(launch.ExtraEnv, "CLOWN_DISABLE_STATSD=1")
+	} else {
+		relay := &agentscope.StatsdRelay{Target: statsdTarget(), Unit: launch.Unit, Logger: logger}
+		sock, err := socket("statsd.sock")
+		if err == nil {
+			err = relay.Listen(sock)
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "clown: agent scope: no statsd relay, metrics from inside the unit are dropped: %v\n", err)
+		} else {
+			closers = append(closers, relay.Close)
+			launch.StatsdSocket = sock
+		}
+	}
+
 	if len(inUnit) > 0 {
 		serve := filepath.Join(dir, "in-unit-servers.json")
 		if err := agentscope.WriteInUnitServers(serve, inUnit); err != nil {
@@ -221,6 +242,15 @@ func startFrontendEndpoints(launch *agentscope.Launch, forwardAddrs []string, in
 	}
 	launch.PlumbingRO = append(launch.PlumbingRO, moxyfile+":"+inUnitMoxyfile)
 	return stop, nil
+}
+
+// statsdTarget is the frontend's statsd destination, as the hooks resolve it
+// outside a unit: STATSD_HOST:STATSD_PORT, default 127.0.0.1:8125.
+func statsdTarget() string {
+	return net.JoinHostPort(
+		firstNonEmpty(os.Getenv("STATSD_HOST"), "127.0.0.1"),
+		firstNonEmpty(os.Getenv("STATSD_PORT"), "8125"),
+	)
 }
 
 // xmppForward returns the XMPP server address to forward when this session
@@ -474,9 +504,10 @@ func startRelays(relayArgs []string) error {
 // runAgentRelay is `clown agent-relay [--serve FILE] [--relay ADDR=SOCK]...`,
 // the in-unit end of the unit's ways out. It first starts the agent-side
 // servers listed in FILE inside the unit, then listens on every relay address
-// (the egress proxy, the forwards, and each in-unit server's reserved port).
-// fd 3, when present, gets one byte once all of that is up. A server that
-// fails to start is reported and left out; its tools are then unavailable.
+// (the egress proxy, the forwards, the statsd relay, and each in-unit server's
+// reserved port). fd 3, when present, gets one byte once all of that is up. A
+// server that fails to start is reported and left out; its tools are then
+// unavailable.
 func runAgentRelay(args []string) int {
 	var relays []agentscope.Relay
 	for len(args) > 1 {

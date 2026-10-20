@@ -110,11 +110,51 @@ Per-tool status, to be measured by the launcher's test:
 | `git fetch`/`push` over ssh | `GIT_SSH_COMMAND` with `-o ProxyCommand=clown egress-connect %h %p` | `clown egress-connect` dials the unix socket and issues `CONNECT`. `known_hosts` is bound read-only from the spec, or the check is not strict. |
 | `nix build` substitution | done by nix-daemon (a system service, outside the unit) over `/nix/var/nix/daemon-socket/socket` | unaffected by the unit's netns |
 | nix client-side fetches (flake inputs, `fetchTree`) | libcurl `https_proxy` | honoured |
-| statsd (clown-hook-toolcost, UDP 127.0.0.1:8125) | not proxyable | dropped under confinement, or sent over a passed unixgram socket |
+| statsd (clown-hook-toolcost, in-unit clown-stdio-bridge; UDP 127.0.0.1:8125) | not proxyable | relayed over a passed unixgram socket (see "statsd relay" below) |
 
 The sweatfile switch that enables confinement must not be able to produce a
 confined unit without the proxy. clown refuses `--agent-scope` when the proxy
 cannot start.
+
+### statsd relay (clown#269)
+
+statsd is fire-and-forget UDP, which neither the `CONNECT` proxy nor the TCP
+forwards carry. Without a path, every confined session's hook-toolcost metrics
+were silently lost.
+
+1. The frontend binds a per-session **unixgram** socket,
+   `$XDG_RUNTIME_DIR/clown/agent/<unit>/statsd.sock` (0600), with
+   `SO_PASSCRED` set, and binds it into the unit as a single inode.
+2. The in-unit `clown agent-relay` listens on UDP `127.0.0.1:8125` in the
+   unit's netns (`--relay udp:127.0.0.1:8125=<sock>`) and sends each datagram,
+   unchanged, to that socket.
+3. The frontend reads each datagram with its `SCM_CREDENTIALS`. The kernel
+   attaches the sender's pid (translated into the frontend's pid namespace),
+   so the sender cannot forge it. A datagram whose sender is not in the unit's
+   cgroup is dropped (the same `.../clown-agent.slice/<unit>` suffix rule as
+   the egress proxy and the forwards). The rest go, unchanged, to the
+   frontend's `STATSD_HOST:STATSD_PORT` (default `127.0.0.1:8125`).
+4. Inside the unit `STATSD_HOST=127.0.0.1` and `STATSD_PORT=8125` are set, so
+   the hooks need no change and the metric names are the same as in
+   unconfined sessions.
+
+Why this shape: a datagram socket keeps statsd's semantics (no connection
+state, a lost frontend drops metrics instead of blocking a hook), and
+`SO_PASSCRED` gives a per-datagram identity check that a connected stream
+socket would only give per connection. The relay is the only UDP path out of
+the unit, and it reaches exactly one destination.
+
+The relay is skipped when the frontend has `CLOWN_DISABLE_STATSD=1`; the unit
+then gets `CLOWN_DISABLE_STATSD=1` too, so senders inside do not try. A relay
+that fails to start is reported on stderr and the unit runs without one:
+metrics are not worth refusing a launch over. Capability: `statsd-relay`.
+
+Coverage: Go unit tests in `internal/agentscope` (forwarding unchanged, drop
+from a foreign cgroup, the cgroup check runs on the kernel-attached pid, both
+ends end to end, the unit's binds/relay argv/env). `just verify-agent-scope`
+cannot run from inside a confined unit (no user manager there), so the
+host-level check that a real hook's metrics arrive in stats-me is left to a
+frontend session.
 
 ## Environment
 
@@ -136,6 +176,8 @@ and clown unsets it. clown then sets exactly the following.
   state then land inside the bound worktree instead of failing on the hidden
   real home.
 - The proxy variables (see Egress).
+- `STATSD_HOST`/`STATSD_PORT` (the in-unit statsd relay), or
+  `CLOWN_DISABLE_STATSD=1` when the frontend has it.
 - `SSH_AUTH_SOCK`, only when the spec passes the agent socket.
 - `CLAUDE_CONFIG_DIR` (see the socket table).
 
@@ -193,7 +235,8 @@ Consequences:
 Every socket below except piggy-agent's is created per session by clown,
 under a frontend-owned directory (`$XDG_RUNTIME_DIR/clown/agent/<unit>/`).
 Each is bound into the unit as a single inode at the same path. The frontend
-end checks `SO_PEERCRED` and `/proc/<pid>/cgroup` against the unit's cgroup.
+end checks `SO_PEERCRED` (or, for the statsd datagram socket,
+`SCM_CREDENTIALS`) and `/proc/<pid>/cgroup` against the unit's cgroup.
 Because of `PrivateNetwork`, loopback TCP is not offered to confined sessions
 at all.
 
@@ -203,7 +246,7 @@ at all.
 | claude → agent-side MCP servers (moxy and other file-tool servers) | | Run **inside** the unit as claude's stdio children, so their file tools are confined too. A frontend moxy would be a ProtectHome bypass through `folio_write`. |
 | plugin monitors (job wakes, chat) | wake lines on stdout | troupe's connection owner (`troupe receive`) and `ringmaster monitor` run in the frontend (FDR 0032 D7). The in-unit monitor is a relay that reads their lines from a passed unix socket. The XMPP password file then never enters the unit. |
 | clown-hook-tee (Stop/SessionEnd) | troupe send | the troupe IPC socket from spec `sockets[]` |
-| clown-hook-toolcost | state dir, statsd | state under the redirected `XDG_STATE_HOME`; statsd as in Egress |
+| clown-hook-toolcost | state dir, statsd | state under the redirected `XDG_STATE_HOME`; statsd through the statsd relay (Egress) |
 | clown-hook-allow (PreToolUse) | nothing | pure |
 | moxy hook logger | `$XDG_LOG_HOME/moxy/hooks` | redirected under the agent home, unless spinclass binds the real dir rw |
 | claude itself | `~/.claude` config, credentials, transcripts | `CLAUDE_CONFIG_DIR` points at a per-session dir. `.credentials.json` is bound in (open question below). The project's transcript dir is bound rw, so `clown resume` and freud keep working. `~/.claude/settings.json` is never writable from inside: a hook written there would run in unconfined sessions. |
@@ -249,7 +292,7 @@ with `error` set.
 ```json
 {
   "version": 1,
-  "capabilities": ["agent-unit", "private-network", "egress-proxy", "frontend-mcp-sockets", "in-unit-moxy"],
+  "capabilities": ["agent-unit", "private-network", "egress-proxy", "frontend-mcp-sockets", "in-unit-moxy", "statsd-relay"],
   "unit": "spinclass-agent-clown-cool-fir-1a2b.service",
   "principal": "<CLOWN_SESSION_ID: not in the claude subtree's environment (clown#136), so reported here>",
   "cgroup": "/user.slice/user-1001.slice/user@1001.service/clown.slice/clown-agent.slice/spinclass-agent-clown-cool-fir-1a2b.service",
@@ -438,6 +481,9 @@ madder store bound as spinclass binds it:
   connector's `issue-filer_file` was listed. That connector reached its
   origin through the egress proxy; it was not called.
 
+**statsd relay (2026-10-20, clown#269).** Built as described under "statsd
+relay"; capability `statsd-relay`. Covered by Go unit tests only so far.
+
 Not built yet: frontend monitors (troupe's connection owner moved out of the
 unit).
 
@@ -459,7 +505,7 @@ By tool, for a brief to state plainly:
 | claude.ai connectors (e.g. Krone's issue-filer) | available | Through the egress proxy (`mcp-proxy.anthropic.com`, `mcp.starbrandshoes.com` on the default allowlist). |
 | Bash network tools | only allowlisted `host:port` over the proxy | `HTTPS_PROXY`/`HTTP_PROXY` are set. Tools that ignore proxy env get no network. |
 | local juggler model (loopback `ANTHROPIC_BASE_URL`) | unavailable | The unit's loopback is its own. |
-| statsd metrics (clown-hook-toolcost UDP) | dropped | No UDP path out. Metrics still accrue in the hook's state file. |
+| statsd metrics (clown-hook-toolcost, in-unit clown-stdio-bridge) | relayed | UDP `127.0.0.1:8125` inside goes over the statsd relay to the frontend's statsd. Dropped only when the frontend sets `CLOWN_DISABLE_STATSD=1` or the relay failed to start. |
 | moxy and plugin dynamic system-prompt fragments | not fetched | The frontend cannot reach in-unit servers. Their static fragments still apply. | Plugin monitors inside the unit are untested,
 because `-p` mode does not start them. A loopback `ANTHROPIC_BASE_URL` (a
 local juggler) is not reachable from the unit.
@@ -474,3 +520,14 @@ local juggler) is not reachable from the unit.
 - `claude` credential refresh under a single-inode bind is unverified. A
   rewrite by rename fails with `EBUSY`.
 - Linux with a systemd user manager only.
+- The statsd relay (clown#269) is covered by Go unit tests, not yet by
+  `just verify-agent-scope`: the worker that built it ran inside a confined
+  unit, where there is no user manager to start a nested one. The host-level
+  check (a real hook-toolcost run in a unit, its metrics in stats-me) is left
+  to a frontend session. The relay forwards datagrams unchanged: it does not
+  validate that they are statsd lines, only who sent them. It is
+  fire-and-forget like statsd itself, so a full frontend socket buffer drops
+  metrics rather than blocking a hook. Any future metrics emitted from inside
+  the unit (e.g. the per-session unused-tool counts in
+  `docs/plans/2026-10-20-unused-tools-per-session.md`) should take this same
+  path rather than a new one.

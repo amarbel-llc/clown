@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -51,6 +52,10 @@ type Launch struct {
 	// listen address relays to a frontend PortForward socket, bound in as a
 	// single inode.
 	Forwards []Relay
+	// StatsdSocket is the frontend StatsdRelay's unixgram socket, bound in as
+	// a single inode; the shim relays UDP StatsdAddr() to it. Empty: no
+	// statsd path (the frontend has CLOWN_DISABLE_STATSD=1).
+	StatsdSocket string
 	// ServeFile lists the agent-side servers the relay starts inside the
 	// unit (WriteInUnitServers); bound in read-only. Empty: none.
 	ServeFile string
@@ -59,9 +64,13 @@ type Launch struct {
 }
 
 // relays is every in-unit relay the shim starts: the egress proxy's, then the
-// forwards.
+// forwards, then the statsd relay.
 func (l Launch) relays() []Relay {
-	return append([]Relay{{Listen: RelayAddr(), Socket: l.EgressSocket}}, l.Forwards...)
+	rs := append([]Relay{{Listen: RelayAddr(), Socket: l.EgressSocket}}, l.Forwards...)
+	if l.StatsdSocket != "" {
+		rs = append(rs, Relay{Listen: udpPrefix + StatsdAddr(), Socket: l.StatsdSocket})
+	}
+	return rs
 }
 
 // UnitName turns spinclass's hint into a valid, unique service name.
@@ -153,6 +162,9 @@ func (l Launch) properties() []string {
 	}
 	for _, f := range l.Forwards {
 		props = append(props, "BindPaths="+f.Socket)
+	}
+	if l.StatsdSocket != "" {
+		props = append(props, "BindPaths="+l.StatsdSocket)
 	}
 	for _, p := range l.PlumbingRW {
 		props = append(props, "BindPaths=-"+p)
@@ -252,6 +264,12 @@ func (l Launch) environment() (set, unset []string) {
 	}
 	env["NO_PROXY"] = "localhost,127.0.0.1,::1"
 	env["no_proxy"] = env["NO_PROXY"]
+	// statsd senders inside (clown-hook-toolcost) reach the in-unit statsd
+	// relay, whatever STATSD_HOST/PORT the frontend relays to.
+	if l.StatsdSocket != "" {
+		env["STATSD_HOST"] = "127.0.0.1"
+		env["STATSD_PORT"] = strconv.Itoa(StatsdPort)
+	}
 	// -F none: under PrivateUsers root-owned files read as nobody-owned, and
 	// ssh refuses the system config (systemd's ssh_config.d) as badly owned.
 	// The operator's ~/.ssh is hidden anyway.
