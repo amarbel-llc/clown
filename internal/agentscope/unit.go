@@ -199,7 +199,9 @@ var passKeys = map[string]bool{
 	"CLOWN_BIN":       true, "CLOWN_NAME": true, "CLOWN_GROUP_ID": true, "CLOWN_GROUP_DESCRIPTION": true, "CLOWN_XMPP_VHOST": true,
 }
 
-// passPrefixes are copied verbatim from the frontend when set there.
+// passPrefixes are copied verbatim from the frontend when set there, minus
+// scrubbedKeys. FDR 0020 "Environment" justifies each one; a new prefix needs
+// an entry there.
 var passPrefixes = []string{"LC_", "NIX_", "ANTHROPIC_", "CLAUDE_CODE_", "TROUPE_"}
 
 // tmpDirKeys name temp directories; they pass only when inside the worktree.
@@ -209,9 +211,16 @@ var tmpDirKeys = map[string]bool{"TMPDIR": true, "CLAUDE_CODE_TMPDIR": true}
 // set them. XDG_RUNTIME_DIR is NOT here: it is passed so job-platform tools
 // agree with the frontend on paths, and under ProtectHome=tmpfs it holds only
 // what was bound in.
+//
+// The nix configuration keys are dropped rather than rewritten (clown#272):
+// NIX_CONFIG carries access-tokens on the dev hosts, and a rewrite would have
+// to know every secret-bearing setting (access-tokens, netrc-file, !include
+// of a secrets file, ...) of every nix version. Builds and substitution go
+// through the host daemon, whose configuration is its own.
 var scrubbedKeys = map[string]bool{
 	"DBUS_SESSION_BUS_ADDRESS": true, "DISPLAY": true, "WAYLAND_DISPLAY": true, "XAUTHORITY": true,
 	"CLOWN_SESSION_ID": true, "HOME": true, "SSH_AUTH_SOCK": true,
+	"NIX_CONFIG": true, "NIX_USER_CONF_FILES": true, "NIX_CONF_DIR": true,
 }
 
 // environment returns the "K=V" entries to set (sorted) and the manager keys

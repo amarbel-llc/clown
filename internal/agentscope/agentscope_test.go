@@ -177,6 +177,53 @@ func TestEnvironmentAllowlistsAndUnsetsManagerKeys(t *testing.T) {
 	}
 }
 
+// clown#272: NIX_CONFIG carries access-tokens on the dev hosts. No nix
+// configuration key may reach the unit, whatever path it comes by.
+func TestNixConfigurationNeverReachesTheUnit(t *testing.T) {
+	l := testLaunch()
+	l.FrontendEnv = append(l.FrontendEnv,
+		"NIX_CONFIG=experimental-features = nix-command flakes\naccess-tokens = github.com=ghp_secret",
+		"NIX_USER_CONF_FILES=/home/op/.config/nix/nix.conf",
+		"NIX_CONF_DIR=/home/op/.config/nix",
+		"NIX_PATH=nixpkgs=/nix/store/p",
+	)
+	l.ExtraEnv = []string{"NIX_CONFIG=access-tokens = github.com=ghp_secret"}
+	set, _ := l.environment()
+	for _, kv := range set {
+		if strings.Contains(kv, "access-tokens") || strings.Contains(kv, "ghp_secret") {
+			t.Errorf("token-bearing entry reached the unit: %q", kv)
+		}
+		for _, k := range []string{"NIX_CONFIG=", "NIX_USER_CONF_FILES=", "NIX_CONF_DIR="} {
+			if strings.HasPrefix(kv, k) {
+				t.Errorf("%s passed into the unit: %q", strings.TrimSuffix(k, "="), kv)
+			}
+		}
+	}
+	if !slices.Contains(set, "NIX_PATH=nixpkgs=/nix/store/p") {
+		t.Errorf("NIX_PATH no longer passed: %v", set)
+	}
+	s := validSpec()
+	s.Env = map[string]string{"NIX_CONFIG": "access-tokens = github.com=x"}
+	if err := s.Validate(); err == nil {
+		t.Error("spec env setting NIX_CONFIG: want refusal")
+	}
+}
+
+func TestValidateRefusesBindingTheOperatorsNixConfig(t *testing.T) {
+	for _, bad := range []string{"/home/op/.config", "/home/op/.config/nix", "/home/op/.config/nix/nix.conf"} {
+		s := validSpec()
+		s.BindsRO = []string{bad}
+		if err := s.Validate(); err == nil {
+			t.Errorf("binds_ro %q: want refusal", bad)
+		}
+	}
+	s := validSpec()
+	s.BindsRO = []string{"/home/op/.config/moxy"}
+	if err := s.Validate(); err != nil {
+		t.Errorf("unrelated ~/.config bind refused: %v", err)
+	}
+}
+
 func TestSSHAuthSockOnlyWhenTheSocketIsBound(t *testing.T) {
 	l := testLaunch()
 	l.Spec.Sockets = nil

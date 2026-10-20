@@ -100,6 +100,10 @@ func (s Spec) Validate() error {
 			if exposesWhole(p, s.OperatorHome) {
 				return fmt.Errorf("%s entry %q exposes the whole operator home %q", field, p, s.OperatorHome)
 			}
+			// The operator's nix.conf can carry access-tokens (clown#272).
+			if nixConf := filepath.Join(s.OperatorHome, ".config", "nix"); exposesWhole(p, nixConf) || within(p, nixConf) {
+				return fmt.Errorf("%s entry %q exposes the operator's nix configuration %q", field, p, nixConf)
+			}
 		}
 	}
 	for _, p := range s.DenyPaths {

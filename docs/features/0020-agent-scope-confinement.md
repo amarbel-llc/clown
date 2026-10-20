@@ -163,10 +163,45 @@ forward the client's environment. The manager's environment is added on top,
 and clown unsets it. clown then sets exactly the following.
 
 **Allowlist (passed through from the frontend):**
-- `PATH`, `TERM`, `COLORTERM`, `LANG`, `LC_*`, `TZ`, `TZDIR`
-- `LOCALE_ARCHIVE`, and the `NIX_*` path variables
-- `ANTHROPIC_*` (provider routing that clown already sets)
-- `CLOWN_NAME`, `CLOWN_GROUP_ID`, `CLOWN_GROUP_DESCRIPTION`, `CLOWN_XMPP_VHOST`
+- `PATH`, `TERM`, `COLORTERM`, `TERMINFO`, `TERMINFO_DIRS`, `LANG`, `TZ`,
+  `TZDIR`, `LOCALE_ARCHIVE`, `USER`, `LOGNAME`, `SHELL`
+- `SSL_CERT_FILE`, `SSL_CERT_DIR`, `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`
+- `CLOWN_BIN`, `CLOWN_NAME`, `CLOWN_GROUP_ID`, `CLOWN_GROUP_DESCRIPTION`,
+  `CLOWN_XMPP_VHOST`
+
+**Pass prefixes** (`passPrefixes` in `internal/agentscope/unit.go`). Every key
+with one of these prefixes passes unless it is scrubbed. A prefix is a blanket
+grant, so each one needs a reason here, and a new one needs a review of what
+secrets could carry it:
+
+| Prefix | Why it passes | Secret-bearing members, and how they are handled |
+|---|---|---|
+| `LC_` | locale; tools misrender without it | none |
+| `NIX_` | the devshell's toolchain wiring (`NIX_CC`, `NIX_CFLAGS_COMPILE`, `NIX_LDFLAGS`, ...), `NIX_PATH`, `NIX_SSL_CERT_FILE`, `NIX_REMOTE`, `NIX_PROFILES` | `NIX_CONFIG`, `NIX_USER_CONF_FILES` and `NIX_CONF_DIR` are **scrubbed** (clown#272): on the dev hosts `NIX_CONFIG` carries `access-tokens`, and the other two redirect nix to a config file that can. |
+| `ANTHROPIC_` | provider routing clown itself sets (`ANTHROPIC_BASE_URL`, model choice) | an `ANTHROPIC_API_KEY` passes. It is the agent's own model credential, which the agent needs. |
+| `CLAUDE_CODE_` | claude's own settings (`CLAUDE_CODE_TMPDIR` is redirected separately) | none known |
+| `TROUPE_` | the session's own XMPP identity (`TROUPE_XMPP_USER`) | `TROUPE_XMPP_PASSWORD_FILE` passes only as a path, bound read-only, and only when it names this session's own principal (clown#267). |
+
+**nix configuration (clown#272).** The nix config keys are dropped, not
+rewritten. A rewrite would have to recognise every secret-bearing nix setting
+(`access-tokens`, `netrc-file`, an `!include` of a secrets file, ...) across
+nix versions; a missed one leaks. Dropping is enough because the unit's builds
+and substitution go through the host's nix-daemon (socket bound in), which
+reads its own configuration. For the same reason the spec may not set these
+keys in `env{}`, and may not bind the operator's `~/.config/nix` (or an
+ancestor of it). The agent home under the worktree has no `nix.conf` unless
+the agent writes one itself. `/etc/nix/nix.conf` stays visible read-only (it
+is outside `/home` and readable by any local user anyway); a token placed
+there is not protected by this boundary.
+
+What a worker loses without the token: **client-side fetches of private flake
+inputs** (`nix flake lock`/`update`, `fetchTree`/`builtins.fetchGit` of a
+private forge or GitHub repo during evaluation) are unauthenticated, so they
+fail or hit the anonymous rate limit. Already-locked inputs present in the
+store, and everything the daemon substitutes or builds, are unaffected. A
+worker that needs a private input fetched asks the operator, or uses the
+per-session forge token spinclass mints into the worktree (spinclass FDR 0028)
+where the fetcher supports it.
 
 **From the spec:** `env{}`, verbatim (spinclass's `SPINCLASS_*` identity).
 
@@ -193,6 +228,7 @@ are absent).
 - `SSH_AUTH_SOCK`, unless passed
 - `TROUPE_XMPP_PASSWORD_FILE` and other credential paths
 - `CLOWN_SESSION_ID` (clown#136: never ambient)
+- `NIX_CONFIG`, `NIX_USER_CONF_FILES`, `NIX_CONF_DIR` (clown#272, above)
 
 Every other key the manager injects is unset as well. On flic that set is:
 `GIO_EXTRA_MODULES GTK_A11Y GTK_PATH HOME INFOPATH LANG LIBEXEC_PATH
