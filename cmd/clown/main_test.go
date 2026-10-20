@@ -289,6 +289,47 @@ func TestApplyNamedProfileModelInjection(t *testing.T) {
 	}
 }
 
+// clown#281: the model precedence is explicit --model > named profile model >
+// clownfile [profile] default model, whichever order the layers are applied.
+func TestModelPrecedenceClownfileThenNamedProfile(t *testing.T) {
+	named := profile.Profile{Provider: "claude", Backend: "anthropic", Model: "profile-model"}
+	cf := clownfile.Profile{Model: "clownfile-model"}
+
+	t.Run("named profile model beats clownfile default", func(t *testing.T) {
+		f := parsedFlags{provider: "claude", forwarded: []string{"-p", "hi"}}
+		applyClownfileProfile(&f, cf)
+		if err := applyNamedProfile(&f, named); err != nil {
+			t.Fatal(err)
+		}
+		want := []string{"--model", "profile-model", "-p", "hi"}
+		if !reflect.DeepEqual(f.forwarded, want) {
+			t.Fatalf("forwarded = %v, want %v", f.forwarded, want)
+		}
+	})
+	t.Run("clownfile default kept when named profile has no model", func(t *testing.T) {
+		f := parsedFlags{provider: "claude"}
+		applyClownfileProfile(&f, cf)
+		if err := applyNamedProfile(&f, profile.Profile{Provider: "claude", Backend: "anthropic"}); err != nil {
+			t.Fatal(err)
+		}
+		want := []string{"--model", "clownfile-model"}
+		if !reflect.DeepEqual(f.forwarded, want) {
+			t.Fatalf("forwarded = %v, want %v", f.forwarded, want)
+		}
+	})
+	t.Run("explicit --model beats both", func(t *testing.T) {
+		f := parsedFlags{provider: "claude", forwarded: []string{"--model", "user-model"}}
+		applyClownfileProfile(&f, cf)
+		if err := applyNamedProfile(&f, named); err != nil {
+			t.Fatal(err)
+		}
+		want := []string{"--model", "user-model"}
+		if !reflect.DeepEqual(f.forwarded, want) {
+			t.Fatalf("forwarded = %v, want %v", f.forwarded, want)
+		}
+	})
+}
+
 func TestApplyNamedProfileEnvMapOnlyIfUnset(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_SUBAGENT_MODEL", "ambient")
 	t.Setenv("ANTHROPIC_DEFAULT_HAIKU_MODEL", "")

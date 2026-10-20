@@ -848,6 +848,7 @@ func applyClownfileProfile(flags *parsedFlags, p clownfile.Profile) {
 	}
 	if p.Model != "" && providerTakesModelFlag(flags.provider) && claudeFlagValue(flags.forwarded, "--model") == "" {
 		flags.forwarded = append([]string{"--model", p.Model}, flags.forwarded...)
+		flags.clownfileModelInjected = true
 	}
 	for k, v := range p.Env {
 		if os.Getenv(k) == "" {
@@ -887,8 +888,16 @@ func resolveProfileName(flagProfile string, providerExplicit bool, pin, buildDef
 // model-registry-design.md's rollback story), then juggler resolution via
 // profile.Model when there's no inline URL/Token.
 func applyNamedProfile(flags *parsedFlags, p profile.Profile) error {
-	if p.Model != "" && providerTakesModelFlag(flags.provider) && claudeFlagValue(flags.forwarded, "--model") == "" {
-		flags.forwarded = append([]string{"--model", p.Model}, flags.forwarded...)
+	if p.Model != "" && providerTakesModelFlag(flags.provider) {
+		switch {
+		case flags.clownfileModelInjected:
+			// The profile is an explicit selection; it outranks the clownfile
+			// default model, which applyClownfileProfile put at the front.
+			flags.forwarded[1] = p.Model
+			flags.clownfileModelInjected = false
+		case claudeFlagValue(flags.forwarded, "--model") == "":
+			flags.forwarded = append([]string{"--model", p.Model}, flags.forwarded...)
+		}
 	}
 	if p.Provider == "claude" {
 		switch {
@@ -2801,6 +2810,11 @@ type parsedFlags struct {
 	version         bool
 	help            bool
 	forwarded       []string
+	// clownfileModelInjected marks that forwarded begins with the
+	// `--model <clownfile default>` pair applyClownfileProfile prepended, so a
+	// named profile's model (an explicit selection) can replace it while a
+	// user's own --model still wins over both (clown#281).
+	clownfileModelInjected bool
 	// extraPluginDirs holds plugin directories supplied at the command
 	// line via --plugin-dir. They are appended to the baked-in set from
 	// CLOWN_PLUGIN_META and let users wire ad-hoc plugins (typically
