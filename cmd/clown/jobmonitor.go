@@ -101,6 +101,27 @@ func troupeMonitorCommand(verb, key string) string {
 	return base
 }
 
+// troupeMintDeferredMarker names, in a --print-launch-plan, the per-session XMPP
+// credential a real launch would mint (clown#284).
+const troupeMintDeferredMarker = "troupe mint --session-key <key>: TROUPE_XMPP_USER and TROUPE_XMPP_PASSWORD_FILE are minted at launch, not in a plan"
+
+// provisionSessionXMPPCredential mints this session's XMPP credential when the
+// session uses the xmpp-native transport. Skipped for --naked and when
+// job-wakeup is disabled (no receiver to feed). Under --print-launch-plan it
+// mints nothing — a plan is a diagnostic and the mint provisions an account,
+// through sudo for a system prosody — and records the deferred mint in the
+// plan instead (clown#284).
+func provisionSessionXMPPCredential(flags *parsedFlags) {
+	if flags.naked || jobWakeupDisabled() || os.Getenv("TROUPE_TRANSPORT") != "xmpp-native" {
+		return
+	}
+	if flags.printLaunchPlan {
+		flags.launchPlanDeferred = append(flags.launchPlanDeferred, troupeMintDeferredMarker)
+		return
+	}
+	mintSessionXMPPCredential(flags.identity.Key)
+}
+
 // mintSessionXMPPCredential mints this session's per-session XMPP account for the
 // xmpp-native transport (troupe#3 Interface 1) and exports the resulting
 // credential-by-reference so the `troupe receive` monitor and the `troupe mcp`

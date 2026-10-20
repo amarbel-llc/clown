@@ -672,7 +672,8 @@ func runWithFlags(flags parsedFlags) int {
 			_ = os.Setenv("CLOWN_XMPP_VHOST", vhost)
 		}
 	}
-	if !flags.naked && !jobWakeupDisabled() {
+	// Not under --print-launch-plan: a plan leaves no presence record (clown#284).
+	if !flags.naked && !flags.printLaunchPlan && !jobWakeupDisabled() {
 		_ = jobwake.RegisterPresenceKey(flags.identity.Key, time.Now())
 	}
 
@@ -682,11 +683,10 @@ func runWithFlags(flags parsedFlags) int {
 	// (TROUPE_XMPP_USER/PASSWORD_FILE). Best-effort: a mint miss logs and leaves
 	// the credential unset, so the receiver is not registered (opt-in transport)
 	// and the launch is never broken. Skipped for --naked and when job-wakeup is
-	// disabled (no receiver to feed). The inherited credential was already
-	// dropped where the clownfile's [messaging] env is applied (clown#267).
-	if !flags.naked && !jobWakeupDisabled() && os.Getenv("TROUPE_TRANSPORT") == "xmpp-native" {
-		mintSessionXMPPCredential(flags.identity.Key)
-	}
+	// disabled (no receiver to feed), and deferred under --print-launch-plan. The
+	// inherited credential was already dropped where the clownfile's [messaging]
+	// env is applied (clown#267).
+	provisionSessionXMPPCredential(&flags)
 
 	// clown#216 + clown#192 step 3: bind this session's clown-name to its
 	// harness session lineage (identity.Key) so a restart/resume of the SAME
@@ -707,7 +707,7 @@ func runWithFlags(flags parsedFlags) int {
 	// keeps the operator key as the channel but mints a separate --session-id),
 	// so `clown resume repo/worktree/<name>` still resolves the dead
 	// conversation by the id claude actually persisted it under.
-	if !flags.naked && flags.clownName != "" {
+	if !flags.naked && !flags.printLaunchPlan && flags.clownName != "" {
 		_ = sessions.RecordSessionName(flags.identity.Key, flags.clownName, flags.groupID)
 		if flags.provider == "claude" && flags.resumeHintID != "" && flags.resumeHintID != flags.identity.Key {
 			_ = sessions.RecordSessionName(flags.resumeHintID, flags.clownName, flags.groupID)
@@ -1783,7 +1783,7 @@ func runProvider(executor Executor, bound Command, logger *slog.Logger, flags pa
 		// one home, so enumerating them is a walk of root.Path() rather than
 		// the fragile guess it would have been across seven independent temp
 		// dirs — populating this is simply deferred, not blocked.
-		plan := launchPlan{Binary: binary, Args: argv, Env: extraEnv}
+		plan := launchPlan{Binary: binary, Args: argv, Env: extraEnv, Deferred: flags.launchPlanDeferred}
 		out, err := plan.JSON()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "clown: rendering launch plan: %v\n", err)
@@ -2833,6 +2833,9 @@ type parsedFlags struct {
 	// were unset in the ambient environment, so a named profile's Env can
 	// override those defaults without overriding the ambient env (clown#285).
 	clownfileEnvSet map[string]bool
+	// launchPlanDeferred lists the side-effecting steps a --print-launch-plan
+	// skipped that a real launch would run, e.g. the troupe mint (clown#284).
+	launchPlanDeferred []string
 	// extraPluginDirs holds plugin directories supplied at the command
 	// line via --plugin-dir. They are appended to the baked-in set from
 	// CLOWN_PLUGIN_META and let users wire ad-hoc plugins (typically

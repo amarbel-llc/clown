@@ -27,6 +27,10 @@ type launchPlan struct {
 	// (docs/plans/2026-07-28-containment-primitive-design.md, part 1b) gives
 	// them one home, at which point filling this in is a directory walk.
 	Files []string `json:"files"`
+	// Deferred names side-effecting steps a real launch runs that computing
+	// the plan skipped, such as minting the session's XMPP credential
+	// (clown#284). Omitted when empty so existing fixtures keep their shape.
+	Deferred []string `json:"deferred,omitempty"`
 }
 
 // secretEnvKeyRe matches env KEYS whose value must never appear in a plan.

@@ -82,6 +82,37 @@ func TestMintFailureLeavesNoCredential(t *testing.T) {
 	}
 }
 
+// clown#284: --print-launch-plan is a diagnostic, so it must not run troupe
+// mint (which provisions an account, through sudo for a system prosody); the
+// plan names the deferred mint instead.
+func TestPrintLaunchPlanRunsNoTroupeMint(t *testing.T) {
+	record := fakeTroupeMint(t, `{"jid":"k@x.example","password_file":"/run/user/1/troupe/accounts/k.pass"}`)
+	t.Setenv("TROUPE_TRANSPORT", "xmpp-native")
+	t.Setenv("CLOWN_DISABLE_JOB_WAKEUP", "")
+	t.Setenv("TROUPE_XMPP_USER", "")
+	t.Setenv("TROUPE_XMPP_PASSWORD_FILE", "")
+
+	f := parsedFlags{printLaunchPlan: true, identity: sessionIdentity{Key: "k"}}
+	provisionSessionXMPPCredential(&f)
+
+	if _, err := os.Stat(record); !os.IsNotExist(err) {
+		t.Fatalf("troupe mint ran under --print-launch-plan (stat err %v)", err)
+	}
+	if os.Getenv("TROUPE_XMPP_USER") != "" || os.Getenv("TROUPE_XMPP_PASSWORD_FILE") != "" {
+		t.Fatal("a plan must not carry a minted credential")
+	}
+	if len(f.launchPlanDeferred) != 1 || !strings.Contains(f.launchPlanDeferred[0], "troupe mint") {
+		t.Fatalf("launchPlanDeferred = %v, want one troupe mint marker", f.launchPlanDeferred)
+	}
+
+	// A real launch still mints.
+	g := parsedFlags{identity: sessionIdentity{Key: "k"}}
+	provisionSessionXMPPCredential(&g)
+	if _, err := os.Stat(record); err != nil {
+		t.Fatalf("a real launch must run troupe mint: %v", err)
+	}
+}
+
 func TestXMPPCredentialConsistent(t *testing.T) {
 	for _, c := range []struct {
 		user, file string
