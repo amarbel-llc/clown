@@ -18,6 +18,19 @@ promotion-criteria: >
 > disagree, the four seams listed under *FDR 0032 touch-points* are the
 > known ones and are being taken to the operator by the spinclass session.
 
+> **Erratum (2026-10-20, clown#283).** §5's *Headless posture* paragraph
+> and the *headless permission posture* row of the Tuning Levers table
+> state that any moxy permission tier other than `always-allow` resolves
+> to deny for a juggler agent. That is an intent, not moxy's behaviour:
+> moxy's `tools/call` funnel never consults its permission resolver on a
+> plain call (moxy#485; moxy's skipped test from bb446c3), so an
+> `each-use`, `delegate-to-client` or `dynamic` tool a juggler agent can
+> reach runs ungated, bounded only by the brief's `tools` list, the
+> derived `allow-tools`, and the unit the agent runs in. The missing
+> server-side enforcement is moxy#486 (an `enforce` mode); FDR 0021 §3
+> (`docs/features/0021-headless-agent-loop-for-confined-workers.md`)
+> records what moxy enforces today and where enforcement is to live.
+
 ## Problem Statement
 
 Every agent the fleet can launch today is a Claude Code harness inside a
@@ -747,9 +760,11 @@ call would actually get there:
 moxy's own general risk for a non-juggler client remains moxy's own
 open issue, out of scope here.
 
-Headless posture: any moxy permission tier other than `always-allow`
-resolves to **deny** for a juggler agent; the agent sees the denial as a
-tool error it can route around or `cannot_complete` on.
+Headless posture (intended; **not enforced today**, see the erratum at
+the top, moxy#485/moxy#486): any moxy permission tier other than
+`always-allow` should resolve to **deny** for a juggler agent; the agent
+would see the denial as a tool error it can route around or
+`cannot_complete` on.
 
 **How `juggler run` reaches moxy.** It writes the brief's moxyfile to the
 agent's state directory and launches `moxy serve-http
@@ -1440,7 +1455,7 @@ The router, before any subagent exists:
 | brief `allow-tools` | not required; when set, it must cover every `tools` entry (and is overridden anyway, when juggler launches moxy itself — not `--moxy-url` — by the derived `allow-tools`, clown#261; the brief's own setting also gets a second check then, that the real resolved `server.tool` is covered by it too, `ErrToolCoverageMismatch`). A brief may also set `pass-tools` (moxy#459) to confer a tool it does not call itself; both are checked against the spawner's `allow-tools ∪ pass-tools` union | `allow-tools` is moxy's own allowlist and what the narrowing check compares; juggler now derives it so every agent's moxy enforces exactly `tools`, when juggler launches moxy itself (not `--moxy-url`), with no brief-author footgun | none expected; a brief's own `allow-tools` is checked but no longer the thing moxy actually loads, beyond that parse-time (and derive-time) coverage check |
 | early stop on evaluator pass | off by default (`evaluator.stop_on_pass = true` opts in per brief) | an agent that keeps calling tools after the work is done spends steps and may duplicate artifacts, but stopping early is a behaviour change a brief author should choose | most briefs set it (→ make it the default) |
 | evaluator kinds | `jq` only | smallest signed-contract surface | the same count-of-kind jq appears in most briefs (→ `predicate`) or a task needs judgement (→ `agent`) |
-| headless permission posture | non-`always-allow` → deny | no human to ask | a moxin's tier is `ask` only because nobody set it, and agents keep failing on it |
+| headless permission posture | non-`always-allow` → deny (intended; not enforced by moxy today, moxy#485, pending moxy#486 — see the erratum) | no human to ask | a moxin's tier is `ask` only because nobody set it, and agents keep failing on it |
 | account teardown | on by default in `juggler resolve`; `--keep-accounts` opts out | a run's accounts have no use after its result line is posted, and each one left is a credential that can still log in | debugging a run needs its identities alive afterwards (→ `--keep-accounts`, then a later `resolve` finishes the teardown) |
 | transcript layout | one MUC per run | one link for the fallback note; brief in the same transcript | runs grow long enough that per-agent rooms read better |
 | daemon for remote models | optional | the webhook host's service user has no user session | a host needs local inference for these agents (→ system-service daemon) |

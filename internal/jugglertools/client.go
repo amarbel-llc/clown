@@ -15,11 +15,15 @@
 //     invalid-params error (-32602) is reported this way too, with the
 //     error message as the content.
 //
-// Permission denial. Moxy's headless posture (any non-always-allow tier
-// resolves to deny for a juggler agent) is moxy's responsibility, not this
-// package's. This client assumes a denial arrives as an isError tool result
-// and treats it exactly like any other tool-level error; it does not
-// inspect or special-case it.
+// Permission denial. Permission enforcement is moxy's responsibility, not
+// this package's, and today moxy does not enforce tiers on a plain
+// tools/call: its call funnel never consults the permission resolver
+// (moxy#485), so a non-always-allow tool the agent can reach runs ungated.
+// The intended headless posture (non-always-allow resolves to deny) awaits
+// moxy#486's server-side enforce mode; see the erratum in FDR 0019 and FDR
+// 0021 §3. Any denial moxy does return is assumed to arrive as an isError tool result and is treated exactly like
+// any other tool-level error; this client does not inspect or special-case
+// it.
 package jugglertools
 
 import (
