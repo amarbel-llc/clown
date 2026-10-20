@@ -272,8 +272,8 @@ or juggler's behaviour.
 2. **Repo name and host.** No issue names it. **Proposed:**
    `linenisgreat/juggler` on forge.starbrandshoes.com, module path
    `code.linenisgreat.com/juggler`, following ringmaster and roustabout.
-   **UNVERIFIED:** whether the `code.linenisgreat.com` vanity path is served per
-   repo automatically, or needs a step.
+   Per circus#310, the vanity-plane visibility of a new repo is today a manual
+   forge-side setting, not automatic. It is part of step 1 below.
 3. **Open juggler work in flight.** #257 (open; touches `juggler spawn` and the
    exit-wake hook) must land before the history cut or be transferred to the new
    repo. #255 and #250 were not read; their state is **UNVERIFIED**.
@@ -289,7 +289,7 @@ or juggler's behaviour.
 | # | Step | Who |
 |---|---|---|
 | 0 | Merge P1/P2 here; land or transfer #257 | clown (worker) |
-| 1 | Create the forge repo `juggler` from the fleet's PAPI template (circus#310 is the open verb for this; **UNVERIFIED** — circus#310 was not readable through smith from this session) | operator / circus |
+| 1 | Create the forge repo `juggler` (§3.4). circus#310's one-verb `circus repo-create` does not exist yet, so this is today's manual sequence, as was done for roustabout | operator / circus |
 | 2 | Produce the history (§3.3) from clown master at a pinned sha `S`, in a scratch clone outside clown's worktrees | clown worker, or the operator |
 | 3 | On top of that history, in the new repo, add one commit with each of these: rewrite imports `code.linenisgreat.com/clown/` → `code.linenisgreat.com/juggler/`; write `go.nix` (module path, ringmaster + tommy as `flakeInputs`, toml, gojq, bubbles/bubbletea, x/term), `flake.nix` (`packages.default`, `lib.mkJugglerGo`, fixtures, `checks` = godyn tests + bats lane + manpages + formatting, `homeManagerModules.juggler`, `go-pkgs` via `mkGoPkgs` for the RPC facade), `justfile` (default: lint build test), `sweatfile`, `AGENTS.md`, `version.env`; add the `pkgs/jugglerrpc` facade; move the bats files and `lib/common.bash` | new juggler session |
 | 4 | Push and tag `v0.1.0` (eng-versioning(7)) | operator (push rights), juggler session prepares |
@@ -345,6 +345,41 @@ repo's issue numbers. The exact regex needs testing on a scratch run. Check
   over archaeology. Clown's history keeps everything either way, because step 6
   only deletes going forward.
 
+### 3.4 Creating the repository (circus#310)
+
+circus#310 lives on GitHub (`amarbel-llc/circus`), not on the forge; that
+is why smith's forge lookup could not find it. Read through cutting-garden at
+`smith://gh-amarbel-llc/amarbel-llc/circus/issues/310`, 2026-10-20, state open.
+
+It describes how a fleet repo is created today, in four manual steps:
+
+1. **Create the empty repo on the forge:** `just infra/hosts/forgejo-create-repo
+   juggler linenisgreat org [private] [desc]` in circus. This auto-initialises
+   the default branch, and the repo is private by default. Labels, units, branch
+   protection, the GitHub push mirror (`forgejo-add-push-mirror`), vanity-plane
+   visibility and the description are then set by hand.
+2. **Clone it** into the operator's repos directory, using the owner-free SSH
+   clone URL (papi#85).
+3. **Bootstrap the tree:** `conformist conform api.linenisgreat.com` with the
+   domain's PAPI flake template, then `--repair`.
+4. **Commit and push**, and apply the forge settings the fleet expects (default
+   branch, labels from the org template, the mirror).
+
+The `circus repo-create NAME [--owner] [--template] [--public] [--dry-run]` verb
+it asks for would do all four in order and refuse at the first unclean step. If
+it lands before the cutover, step 1 becomes one command.
+
+**Interaction with the history choice (§3.3).**
+- **filter-repo:** the forge's auto-init commit and the `conform` bootstrap both
+  create history that is unrelated to the filtered history. Push the filtered
+  history first, to the empty repo (create it without auto-init, or force-push
+  over the init commit before anything else lands). Then run `conformist conform
+  --repair` on top of it as the plan's step 3 commit.
+- **Fresh start:** bootstrap with `conform` first, then add the import commit.
+
+**UNVERIFIED:** whether `forgejo-create-repo` can skip auto-init. Check the
+recipe in `circus/infra/hosts/justfile` before step 1.
+
 ## Open questions for the operator
 
 1. Current shape or post-step-2 shape? (Recommendation: current.)
@@ -354,3 +389,5 @@ repo's issue numbers. The exact regex needs testing on a scratch run. Check
 4. Clown's RPC client: import the facade from juggler, or keep a private copy?
 5. Should `juggler_reaper.bats` go to juggler or to ringmaster?
 6. Drop the dead `pickJugglerModel` at cutover?
+7. Create the repo by hand now (§3.4), or wait for circus#310's
+   `circus repo-create`?
