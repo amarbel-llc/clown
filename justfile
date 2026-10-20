@@ -5,7 +5,7 @@ default: lint build test
 # breaking the parent justfile.
 mod? explore 'zz-explore/justfile'
 
-lint: lint-fmt lint-worktree lint-man
+lint: lint-fmt lint-worktree lint-man lint-juggler-boundary
 
 test: test-go-godyn test-plugin-host test-stdio-bridge test-plugin-host-moxy test-plugin-host-moxy-disabled
 
@@ -34,6 +34,17 @@ lint-worktree:
     set -euo pipefail
     cfg=$(nix build --no-link --print-out-paths '.#conformist-impure-config')
     conformist check --config-file "$cfg" --tree-root .
+
+# Keeps juggler extractable (clown#258): cmd/juggler and internal/juggler*
+# may import no other clown package.
+#
+# check that juggler's Go packages import nothing else from clown
+[group('lint')]
+lint-juggler-boundary:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    system=$(nix eval --raw --impure --expr 'builtins.currentSystem')
+    nix build ".#checks.${system}.juggler-boundary" --no-link --print-build-logs
 
 # run conformist in-place repair (nix fmt) to reformat the tree
 [group('codemod')]

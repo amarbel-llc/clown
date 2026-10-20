@@ -13,7 +13,6 @@ import (
 
 	"code.linenisgreat.com/clown/internal/jugglerloop"
 	"code.linenisgreat.com/clown/internal/jugglertools"
-	"code.linenisgreat.com/clown/internal/pluginhost"
 )
 
 // ConnectMoxy initializes the MCP session with the moxy upstream at url and
@@ -56,7 +55,7 @@ type ToolPlaneLauncher interface {
 // down to CWD, so the agent's file is the innermost layer and the service
 // user's own moxyfiles are the ceiling. With no --listen moxy binds an
 // ephemeral loopback port and prints the clown-plugin handshake on stdout,
-// parsed with pluginhost.ParseHandshake. moxy (and every tool server it
+// parsed with jugglertools.ParseHandshake. moxy (and every tool server it
 // starts, the agent scope) gets the environment minus the principal and
 // minus any reserved key the brief names (MoxyLaunchEnv).
 type ExecMoxy struct {
@@ -109,7 +108,7 @@ func (m ExecMoxy) Launch(ctx context.Context, dir, moxyfile string, briefEnv map
 			stop()
 			return "", nil, fmt.Errorf("%s exited before its handshake", m.Bin)
 		}
-		hs, err := pluginhost.ParseHandshake(line)
+		hs, err := jugglertools.ParseHandshake(line)
 		if err != nil {
 			stop()
 			return "", nil, fmt.Errorf("%s: %w", m.Bin, err)

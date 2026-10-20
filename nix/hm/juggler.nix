@@ -1,5 +1,6 @@
 # home-manager module for `programs.juggler` — see FDR-0010 /
-# docs/plans/2026-05-18-juggler-control-plane.md.
+# docs/plans/2026-05-18-ringmaster-control-plane.md (the daemon later moved
+# from ringmaster into `juggler daemon`).
 #
 # Single-instance only. The daemon binds one Unix domain socket at
 # $HOME/.local/state/juggler/control.sock and tracks the running

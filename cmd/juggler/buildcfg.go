@@ -8,9 +8,10 @@ package main
 // "not configured" / skip.
 //
 // This is deliberately juggler-owned rather than clown's internal/buildcfg:
-// cmd/juggler + internal/juggler + internal/jugglermodels form a
-// self-contained subsystem that imports nothing from clown, so a future
-// extraction into a standalone repo is a clean cut (the perforation line).
+// cmd/juggler + internal/juggler* form a self-contained subsystem that
+// imports nothing else from clown (enforced by checks.juggler-boundary), so
+// the extraction into a standalone repo is a clean cut (clown#258,
+// docs/plans/2026-10-20-juggler-extraction.md).
 var LlamaServerPath string
 
 // RingmasterPath, TroupePath, SystemdRunPath, SystemctlPath and MoxyPath are

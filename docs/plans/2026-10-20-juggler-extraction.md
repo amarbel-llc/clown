@@ -238,8 +238,9 @@ or juggler's behaviour.
     `nix flake check` and in `just` through a new `lint-juggler-boundary`
     recipe.
   - `internal/pluginhost` and `internal/mcphttp` are not changed.
-- **P2. Doc truth-ups.** Fix the dead plan reference in `nix/hm/juggler.nix:2`.
-  Point the "imports nothing from clown" comments at the new check.
+- **P2. Doc truth-ups** (landed in the same merge as P1). Fix the dead plan
+  reference in `nix/hm/juggler.nix:2`. Point the "imports nothing from clown"
+  comments at the new check.
 - **Deliberately not done in clown:**
   - **A dagnabit relayout** (`internal/0/…`, `internal/alfa/…`, a `pkgs/` facade,
     as ringmaster does). It would rewrite every juggler import path in clown, and

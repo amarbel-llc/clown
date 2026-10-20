@@ -27,8 +27,8 @@ var (
 	CodexVersion      string
 	CodexRev          string
 	// LlamaServerPath moved to cmd/juggler (a juggler-owned build var) so the
-	// juggler subsystem imports nothing from clown's buildcfg — the clean
-	// perforation line for a future extraction. See cmd/juggler/buildcfg.go.
+	// juggler subsystem imports nothing from clown (checks.juggler-boundary,
+	// clown#258). See cmd/juggler/buildcfg.go.
 	// RingmasterPath and TroupePath are the absolute paths to the ringmaster
 	// and troupe binaries in their own Nix store outputs, baked at build time
 	// (RFC-0015 §6). clown synthesizes the wake monitor as `ringmaster monitor`

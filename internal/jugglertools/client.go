@@ -1,7 +1,8 @@
 // Package jugglertools is the tool-plane client for `juggler run` (FDR 0019
 // §5): an MCP client for exactly ONE upstream (a moxy instance) over
-// streamable HTTP. It does initialize, tools/list and tools/call, reusing
-// internal/mcphttp for the transport and SSE framing.
+// streamable HTTP. It does initialize, tools/list and tools/call over its own
+// copy of the transport and SSE framing (transport.go), and parses the
+// upstream's startup handshake line (handshake.go).
 //
 // Error taxonomy. Call distinguishes two failure planes:
 //
@@ -35,7 +36,6 @@ import (
 	"time"
 
 	"code.linenisgreat.com/clown/internal/jugglerloop"
-	"code.linenisgreat.com/clown/internal/mcphttp"
 )
 
 // Client satisfies the loop's executor directly; its error taxonomy is the
@@ -258,7 +258,7 @@ func (c *Client) rpc(ctx context.Context, method, params string) (json.RawMessag
 	body := fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":%q,"params":%s}`, id, method, params)
 	// Read one byte past the cap so truncation is detectable: PostJSONRPC
 	// silently truncates at its limit.
-	raw, newSession, err := mcphttp.PostJSONRPC(ctx, c.url, session, body, c.maxBytes+1)
+	raw, newSession, err := postJSONRPC(ctx, c.url, session, body, c.maxBytes+1)
 	if err != nil {
 		return nil, err
 	}

@@ -1810,6 +1810,21 @@
           # warrant reintroducing one.
           bats-default = batsLaneOutputs.bats-default;
           formatting = conformistEval.config.build.check self;
+          # juggler's Go packages import only each other from this module, so
+          # they can leave for their own repository (clown#258,
+          # docs/plans/2026-10-20-juggler-extraction.md). Fails on any
+          # cmd/juggler or internal/juggler* import of another clown package.
+          juggler-boundary = pkgs.runCommand "juggler-boundary" { } ''
+            cd ${goSrc}
+            leaks=$(grep -rnoE --include='*.go' '"code\.linenisgreat\.com/clown/[^"]*"' cmd/juggler internal/juggler* \
+              | grep -vE ':"code\.linenisgreat\.com/clown/(internal/juggler[a-z]*|cmd/juggler)(/[^"]*)?"$' || true)
+            if [ -n "$leaks" ]; then
+              echo "juggler packages import clown packages outside juggler (clown#258):" >&2
+              echo "$leaks" >&2
+              exit 1
+            fi
+            touch $out
+          '';
         }
         // godynTestOutputs;
 
