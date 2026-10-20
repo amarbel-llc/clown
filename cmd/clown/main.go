@@ -853,6 +853,10 @@ func applyClownfileProfile(flags *parsedFlags, p clownfile.Profile) {
 	for k, v := range p.Env {
 		if os.Getenv(k) == "" {
 			_ = os.Setenv(k, v)
+			if flags.clownfileEnvSet == nil {
+				flags.clownfileEnvSet = map[string]bool{}
+			}
+			flags.clownfileEnvSet[k] = true
 		}
 	}
 }
@@ -879,7 +883,9 @@ func resolveProfileName(flagProfile string, providerExplicit bool, pin, buildDef
 // defaults layer (applyClownfileProfile, only-if-unset), a named profile is an
 // explicit user selection, so its gateway env is authoritative: picking
 // claude-openrouter must mean OpenRouter even when the shell exports
-// ANTHROPIC_* for something else. The generic Env map stays only-if-unset.
+// ANTHROPIC_* for something else. The generic Env map yields to the ambient
+// environment but overrides the clownfile [profile].env defaults, as the
+// profile's model overrides the clownfile's model (clown#281, clown#285).
 // Deliberately does not touch flags.backend — that is the tent container
 // backend (podman|lima), a different axis from the profile's API backend.
 //
@@ -888,6 +894,12 @@ func resolveProfileName(flagProfile string, providerExplicit bool, pin, buildDef
 // model-registry-design.md's rollback story), then juggler resolution via
 // profile.Model when there's no inline URL/Token.
 func applyNamedProfile(flags *parsedFlags, p profile.Profile) error {
+	if flags.clownfileModelInjected && !providerTakesModelFlag(flags.provider) {
+		// The clownfile injected --model for a claude-family provider, but the
+		// profile switched to one that takes no passthrough --model.
+		flags.forwarded = flags.forwarded[2:]
+		flags.clownfileModelInjected = false
+	}
 	if p.Model != "" && providerTakesModelFlag(flags.provider) {
 		switch {
 		case flags.clownfileModelInjected:
@@ -947,7 +959,9 @@ func applyNamedProfile(flags *parsedFlags, p profile.Profile) error {
 		mainURL = "https://api.anthropic.com"
 	}
 	for k, v := range p.Env {
-		if os.Getenv(k) != "" {
+		// The profile is an explicit selection, so it overrides a clownfile
+		// default but never the ambient environment.
+		if os.Getenv(k) != "" && !flags.clownfileEnvSet[k] {
 			continue
 		}
 		value := v
@@ -2815,6 +2829,10 @@ type parsedFlags struct {
 	// named profile's model (an explicit selection) can replace it while a
 	// user's own --model still wins over both (clown#281).
 	clownfileModelInjected bool
+	// clownfileEnvSet names the env keys applyClownfileProfile set because they
+	// were unset in the ambient environment, so a named profile's Env can
+	// override those defaults without overriding the ambient env (clown#285).
+	clownfileEnvSet map[string]bool
 	// extraPluginDirs holds plugin directories supplied at the command
 	// line via --plugin-dir. They are appended to the baked-in set from
 	// CLOWN_PLUGIN_META and let users wire ad-hoc plugins (typically

@@ -330,6 +330,46 @@ func TestModelPrecedenceClownfileThenNamedProfile(t *testing.T) {
 	})
 }
 
+// clown#285: the env precedence is ambient environment > named profile env >
+// clownfile [profile] env, whichever order the layers are applied.
+func TestEnvPrecedenceClownfileThenNamedProfile(t *testing.T) {
+	t.Setenv("CLOWN285_BOTH", "")
+	t.Setenv("CLOWN285_CLOWNFILE_ONLY", "")
+	t.Setenv("CLOWN285_AMBIENT", "ambient")
+	f := parsedFlags{provider: "claude"}
+	applyClownfileProfile(&f, clownfile.Profile{Env: map[string]string{
+		"CLOWN285_BOTH": "clownfile", "CLOWN285_CLOWNFILE_ONLY": "clownfile", "CLOWN285_AMBIENT": "clownfile",
+	}})
+	if err := applyNamedProfile(&f, profile.Profile{Provider: "claude", Backend: "anthropic", Env: map[string]string{
+		"CLOWN285_BOTH": "profile", "CLOWN285_AMBIENT": "profile",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := os.Getenv("CLOWN285_BOTH"); got != "profile" {
+		t.Errorf("named profile env must beat clownfile env, got %q", got)
+	}
+	if got := os.Getenv("CLOWN285_CLOWNFILE_ONLY"); got != "clownfile" {
+		t.Errorf("clownfile env must stay when the profile does not set it, got %q", got)
+	}
+	if got := os.Getenv("CLOWN285_AMBIENT"); got != "ambient" {
+		t.Errorf("ambient env must beat both, got %q", got)
+	}
+}
+
+// clown#285 edge: a clownfile --model injected for the claude family is
+// dropped when the named profile switches to a provider that takes none.
+func TestClownfileModelDroppedWhenProfileProviderTakesNoModel(t *testing.T) {
+	f := parsedFlags{provider: "claude", forwarded: []string{"-p", "hi"}}
+	applyClownfileProfile(&f, clownfile.Profile{Model: "clownfile-model"})
+	f.provider = "codex" // runWithFlags sets flags.provider from the profile first
+	if err := applyNamedProfile(&f, profile.Profile{Provider: "codex", Model: "gpt"}); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"-p", "hi"}; !reflect.DeepEqual(f.forwarded, want) {
+		t.Fatalf("forwarded = %v, want %v", f.forwarded, want)
+	}
+}
+
 func TestApplyNamedProfileEnvMapOnlyIfUnset(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_SUBAGENT_MODEL", "ambient")
 	t.Setenv("ANTHROPIC_DEFAULT_HAIKU_MODEL", "")
