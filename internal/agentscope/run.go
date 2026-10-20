@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -24,6 +25,10 @@ import (
 type Tools struct {
 	SystemdRun string
 	Systemctl  string
+
+	// show and procRoot replace systemctl and /proc in tests.
+	show     func(unit string) (Status, error)
+	procRoot string
 }
 
 func (t Tools) systemdRun() string { return orName(t.SystemdRun, "systemd-run") }
@@ -89,12 +94,16 @@ func (t Tools) Show(unit string) (Status, error) {
 	return st, sc.Err()
 }
 
-// waitActive polls until the unit is active with a main pid, the context ends,
-// or the unit fails.
+// waitActive polls until the unit is active with its lasting main process
+// (settledMain), the context ends, or the unit fails.
 func (t Tools) waitActive(ctx context.Context, unit string) (Status, error) {
+	show := t.show
+	if show == nil {
+		show = t.Show
+	}
 	for {
-		st, err := t.Show(unit)
-		if err == nil && st.ActiveState == "active" && st.MainPID > 0 && st.ControlGroup != "" {
+		st, err := show(unit)
+		if err == nil && st.ActiveState == "active" && st.MainPID > 0 && st.ControlGroup != "" && t.settledMain(st.MainPID, unit) {
 			return st, nil
 		}
 		if err == nil && st.ActiveState == "failed" {
@@ -106,6 +115,31 @@ func (t Tools) waitActive(ctx context.Context, unit string) (Status, error) {
 		case <-time.After(50 * time.Millisecond):
 		}
 	}
+}
+
+// settledMain reports whether pid is the process that stays the unit's main
+// process: alive in the unit's cgroup and the init of the unit's own pid
+// namespace (PrivatePIDs=yes). When the unit first turns active, systemd still
+// names the intermediate process that unshared the namespace; it exits once
+// its child, pid 1 inside, runs, and systemd then names that child (observed,
+// clown#273: `just explore explore-agent-scope-mainpid`). pid 1 inside is the
+// exec shim, which execs the provider, so the pid holds for the unit's life.
+func (t Tools) settledMain(pid int, unit string) bool {
+	root := orName(t.procRoot, "/proc")
+	if checkUnitCgroup(pid, unit, func(pid int) (string, error) { return procCgroupAt(root, pid) }) != nil {
+		return false
+	}
+	raw, err := os.ReadFile(filepath.Join(root, strconv.Itoa(pid), "status"))
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		if rest, ok := strings.CutPrefix(line, "NSpid:"); ok {
+			ids := strings.Fields(rest)
+			return len(ids) > 1 && ids[len(ids)-1] == "1"
+		}
+	}
+	return false
 }
 
 // Run starts the unit and waits for it to exit, returning the provider's exit

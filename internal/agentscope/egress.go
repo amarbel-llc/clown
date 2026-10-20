@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -277,8 +278,10 @@ func listenUnix(path string) (net.Listener, error) {
 }
 
 // ProcCgroup returns pid's cgroup v2 path from /proc/<pid>/cgroup.
-func ProcCgroup(pid int) (string, error) {
-	raw, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/cgroup")
+func ProcCgroup(pid int) (string, error) { return procCgroupAt("/proc", pid) }
+
+func procCgroupAt(procRoot string, pid int) (string, error) {
+	raw, err := os.ReadFile(filepath.Join(procRoot, strconv.Itoa(pid), "cgroup"))
 	if err != nil {
 		return "", err
 	}

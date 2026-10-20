@@ -344,7 +344,14 @@ Field notes:
 - `unit` is authoritative. spinclass ignores its own hint once a result
   exists. clown escapes the hint and adds a unique suffix.
 - `pty` is the host path of the slave that clown allocated.
-- `main_pid` is in the frontend's pid namespace.
+- `main_pid` is in the frontend's pid namespace. It is the unit's lasting
+  main process: the init of the unit's pid namespace (the exec shim, which
+  execs the provider), in the unit's cgroup. clown waits for that before
+  writing the result (clown#273): right after the unit turns active, systemd
+  briefly names the intermediate process that unshared the pid namespace,
+  which then exits (observed ~60 ms on flic with
+  `just explore explore-agent-scope-mainpid`). A unit whose main pid never
+  settles within 30 s gets a result carrying the error instead.
 
 ## Keystroke observation (the clown#244 fact to verify)
 

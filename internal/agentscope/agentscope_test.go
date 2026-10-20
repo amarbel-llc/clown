@@ -1,12 +1,15 @@
 package agentscope
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func validSpec() Spec {
@@ -240,6 +243,64 @@ func TestSystemdRunArgsRefusesWorkDirOutsideWorktree(t *testing.T) {
 	l.WorkDir = "/home/op"
 	if _, err := l.SystemdRunArgs(); err == nil {
 		t.Fatal("want refusal")
+	}
+}
+
+// fakeProc writes /proc/<pid>/{cgroup,status} for a process under root.
+func fakeProc(t *testing.T, root string, pid int, cgroup, nspid string) {
+	t.Helper()
+	dir := filepath.Join(root, strconv.Itoa(pid))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "cgroup"), []byte("0::"+cgroup+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "status"), []byte("Name:\tclaude\nNSpid:\t"+nspid+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// clown#273: right after a PrivatePIDs unit turns active, systemd names the
+// intermediate process (gone, or outside the namespace) as MainPID; the
+// record must name the namespace init that stays in the unit's cgroup.
+func TestWaitActiveRecordsTheMainPIDThatStaysInTheUnitCgroup(t *testing.T) {
+	const unit = "u-1.service"
+	cg := "/user.slice/user-1001.slice/user@1001.service/clown.slice/" + Slice + "/" + unit
+	root := t.TempDir()
+	fakeProc(t, root, 98, cg, "98")                    // intermediate, still alive
+	fakeProc(t, root, 99, "/user.slice/other", "99 1") // a pidns init elsewhere
+	fakeProc(t, root, 100, cg, "100 1")                // the lasting main process
+	seq := []int{97, 98, 99, 100}                      // 97: already exited, no /proc entry
+	calls := 0
+	tools := Tools{procRoot: root, show: func(string) (Status, error) {
+		pid := seq[min(calls, len(seq)-1)]
+		calls++
+		return Status{ActiveState: "active", ControlGroup: cg, MainPID: pid}, nil
+	}}
+	st, err := tools.waitActive(context.Background(), unit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.MainPID != 100 {
+		t.Fatalf("recorded MainPID %d, want 100", st.MainPID)
+	}
+	got, err := procCgroupAt(root, st.MainPID)
+	if err != nil || got != cg {
+		t.Fatalf("recorded pid's cgroup = %q (%v), want the unit's %q", got, err, cg)
+	}
+}
+
+func TestWaitActiveGivesUpWhenNoMainPIDSettles(t *testing.T) {
+	const unit = "u-1.service"
+	root := t.TempDir()
+	tools := Tools{procRoot: root, show: func(string) (Status, error) {
+		return Status{ActiveState: "active", ControlGroup: "/x/" + Slice + "/" + unit, MainPID: 97}, nil
+	}}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if _, err := tools.waitActive(ctx, unit); err == nil {
+		t.Fatal("want an error when the main pid never settles")
 	}
 }
 

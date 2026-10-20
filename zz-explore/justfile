@@ -2183,3 +2183,34 @@ explore-agent-scope-claude PROMPT='Use the Read tool to read hello.txt, then rep
         -newer "$stamp" -type f 2>/dev/null | head -20
     echo ">> agent home"; find "$wt/.tmp/agent-home" -maxdepth 3 | head -30
     rm -f "$stamp"
+
+# clown#273 probe: does a PrivatePIDs=yes user unit report an intermediate
+# MainPID (outside the pid namespace) before settling on the namespace's init?
+# Starts a throwaway `sleep` unit with --no-block and polls MainPID tightly,
+# printing each distinct value with its NSpid and cgroup. The unit is stopped
+# (and --collect'ed) at the end.
+explore-agent-scope-mainpid PRIVATE_PIDS='yes' POLLS='400':
+    #!/usr/bin/env bash
+    set -uo pipefail
+    unit="clown-mainpid-probe-$$.service"
+    systemd-run --user --quiet --collect --no-block --slice=clown-agent.slice \
+        --property=PrivateUsers=self --property=PrivatePIDs={{PRIVATE_PIDS}} \
+        --unit="$unit" sleep 20
+    last=""
+    for _ in $(seq {{POLLS}}); do
+        line=$(systemctl --user show -p ActiveState -p MainPID -p ControlGroup "$unit" | tr '\n' ' ')
+        pid=$(sed -n 's/.*MainPID=\([0-9]*\).*/\1/p' <<<"$line")
+        if [[ $line != "$last" ]]; then
+            ns=$(grep NSpid /proc/$pid/status 2>/dev/null | tr '\t' ' ')
+            cg=$(cat /proc/$pid/cgroup 2>/dev/null)
+            echo "$(date +%T.%N) $line | ${ns:-<no proc>} | ${cg:-<no proc>}"
+            last=$line
+        fi
+        sleep 0.005
+    done
+    pid=$(systemctl --user show -p MainPID --value "$unit")
+    echo ">> settled MainPID=$pid: $(grep NSpid /proc/$pid/status 2>/dev/null | tr '\t' ' ') $(cat /proc/$pid/cgroup 2>/dev/null)"
+    echo ">> processes in the unit cgroup"
+    cg=$(systemctl --user show -p ControlGroup --value "$unit")
+    cat "/sys/fs/cgroup$cg/cgroup.procs" 2>/dev/null
+    systemctl --user stop "$unit"
