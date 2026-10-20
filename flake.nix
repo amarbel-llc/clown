@@ -1816,6 +1816,8 @@
           # cmd/juggler or internal/juggler* import of another clown package.
           juggler-boundary = pkgs.runCommand "juggler-boundary" { } ''
             cd ${goSrc}
+            # A missing tree would otherwise pass vacuously.
+            test -d cmd/juggler && test -d internal/jugglerrun
             leaks=$(grep -rnoE --include='*.go' '"code\.linenisgreat\.com/clown/[^"]*"' cmd/juggler internal/juggler* \
               | grep -vE ':"code\.linenisgreat\.com/clown/(internal/juggler[a-z]*|cmd/juggler)(/[^"]*)?"$' || true)
             if [ -n "$leaks" ]; then
