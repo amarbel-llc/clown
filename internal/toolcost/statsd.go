@@ -32,6 +32,21 @@ const (
 // same one clown-stdio-bridge honours).
 func StatsdDisabled() bool { return os.Getenv(statsdDisableEnvVar) == "1" }
 
+// StatsdTarget is the stats-me statsd listener's address:
+// STATSD_HOST:STATSD_PORT, default 127.0.0.1:8125. The agent-scope frontend
+// relays confined units' datagrams to the same address (clown#269).
+func StatsdTarget() string {
+	host := os.Getenv(statsdHostEnvVar)
+	if host == "" {
+		host = statsdDefaultHost
+	}
+	port := os.Getenv(statsdPortEnvVar)
+	if port == "" {
+		port = statsdDefaultPort
+	}
+	return net.JoinHostPort(host, port)
+}
+
 // Encode folds metrics into statsd lines: counters with the same name are
 // summed, a gauge keeps its last value, timers stay individual samples (the
 // timer aggregation is what yields p50/p90/max). Output is sorted by name so
@@ -64,23 +79,14 @@ func Encode(ms []Metric) []string {
 	return lines
 }
 
-// Send writes lines to the stats-me statsd listener (STATSD_HOST/STATSD_PORT,
-// default 127.0.0.1:8125) as fire-and-forget UDP, packed into datagrams of at
-// most datagramMax bytes. Write errors are returned so the caller can log
-// them, never acted on.
+// Send writes lines to the stats-me statsd listener (StatsdTarget) as
+// fire-and-forget UDP, packed into datagrams of at most datagramMax bytes.
+// Write errors are returned so the caller can log them, never acted on.
 func Send(lines []string) error {
 	if len(lines) == 0 {
 		return nil
 	}
-	host := os.Getenv(statsdHostEnvVar)
-	if host == "" {
-		host = statsdDefaultHost
-	}
-	port := os.Getenv(statsdPortEnvVar)
-	if port == "" {
-		port = statsdDefaultPort
-	}
-	conn, err := net.DialTimeout("udp", net.JoinHostPort(host, port), 250*time.Millisecond)
+	conn, err := net.DialTimeout("udp", StatsdTarget(), 250*time.Millisecond)
 	if err != nil {
 		return err
 	}

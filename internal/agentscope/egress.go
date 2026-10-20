@@ -319,14 +319,18 @@ func splice(a, b net.Conn) {
 
 // Relay is one in-unit TCP listener (e.g. 127.0.0.1:3128) whose connections
 // are spliced to a frontend unix socket bound into the unit, or, for an
-// in-unit server, to the TCP address it announced (Target). A Listen with a
-// "udp:" prefix (e.g. udp:127.0.0.1:8125, the statsd relay) is a UDP listener
-// whose datagrams go to a frontend unixgram Socket instead.
+// in-unit server, to the TCP address it announced (Target). A UDP relay (the
+// statsd relay) listens on UDP instead and sends each datagram to a frontend
+// unixgram Socket.
 type Relay struct {
 	Listen string
 	Socket string
 	Target string
+	UDP    bool
 }
+
+// udpPrefix marks a UDP relay's listen address in its ADDR=SOCK form.
+const udpPrefix = "udp:"
 
 func (r Relay) dial() (net.Conn, error) {
 	if r.Target != "" {
@@ -335,16 +339,22 @@ func (r Relay) dial() (net.Conn, error) {
 	return net.Dial("unix", r.Socket)
 }
 
-// String renders the relay as the shim's ADDR=SOCK argument.
-func (r Relay) String() string { return r.Listen + "=" + r.Socket }
-
-// ParseRelay parses ADDR=SOCK (ADDR may carry a "udp:" prefix).
-func ParseRelay(s string) (Relay, error) {
-	listen, sock, ok := strings.Cut(s, "=")
-	if !ok || listen == "" || sock == "" || listen == udpPrefix {
-		return Relay{}, fmt.Errorf("relay %q is not ADDR=SOCK", s)
+// String renders the relay as the shim's [udp:]ADDR=SOCK argument.
+func (r Relay) String() string {
+	if r.UDP {
+		return udpPrefix + r.Listen + "=" + r.Socket
 	}
-	return Relay{Listen: listen, Socket: sock}, nil
+	return r.Listen + "=" + r.Socket
+}
+
+// ParseRelay parses [udp:]ADDR=SOCK.
+func ParseRelay(s string) (Relay, error) {
+	rest, udp := strings.CutPrefix(s, udpPrefix)
+	listen, sock, ok := strings.Cut(rest, "=")
+	if !ok || listen == "" || sock == "" {
+		return Relay{}, fmt.Errorf("relay %q is not [udp:]ADDR=SOCK", s)
+	}
+	return Relay{Listen: listen, Socket: sock, UDP: udp}, nil
 }
 
 // RunRelays listens on every relay's address (inside the unit) and splices
@@ -352,64 +362,58 @@ func ParseRelay(s string) (Relay, error) {
 // datagram instead). ready is called once all listeners are up; RunRelays
 // returns when any listener fails.
 func RunRelays(relays []Relay, ready func()) error {
-	var closers []io.Closer
+	var opened []io.Closer
 	defer func() {
-		for _, c := range closers {
+		for _, c := range opened {
 			c.Close()
 		}
 	}()
-	type bound struct {
-		r  Relay
-		ln net.Listener
-		pc net.PacketConn
-	}
-	var all []bound
+	var serves []func() error
 	for _, r := range relays {
-		if r.isUDP() {
-			pc, err := net.ListenPacket("udp", r.listenAddr())
+		r := r
+		if r.UDP {
+			pc, err := net.ListenPacket("udp", r.Listen)
 			if err != nil {
 				return err
 			}
-			closers = append(closers, pc)
-			all = append(all, bound{r: r, pc: pc})
+			opened = append(opened, pc)
+			serves = append(serves, func() error { return runUDPRelay(pc, r) })
 			continue
 		}
 		ln, err := net.Listen("tcp", r.Listen)
 		if err != nil {
 			return err
 		}
-		closers = append(closers, ln)
-		all = append(all, bound{r: r, ln: ln})
+		opened = append(opened, ln)
+		serves = append(serves, func() error { return serveTCPRelay(ln, r) })
 	}
 	if ready != nil {
 		ready()
 	}
-	errc := make(chan error, len(all))
-	for _, b := range all {
-		if b.pc != nil {
-			go func(pc net.PacketConn, r Relay) { errc <- runUDPRelay(pc, r) }(b.pc, b.r)
-			continue
-		}
-		go func(ln net.Listener, r Relay) {
-			for {
-				c, err := ln.Accept()
-				if err != nil {
-					errc <- err
-					return
-				}
-				go func() {
-					defer c.Close()
-					up, err := r.dial()
-					if err != nil {
-						return
-					}
-					defer up.Close()
-					splice(c, up)
-				}()
-			}
-		}(b.ln, b.r)
+	errc := make(chan error, len(serves))
+	for _, serve := range serves {
+		go func(serve func() error) { errc <- serve() }(serve)
 	}
 	return <-errc
+}
+
+// serveTCPRelay splices every connection accepted on ln to r's destination.
+func serveTCPRelay(ln net.Listener, r Relay) error {
+	for {
+		c, err := ln.Accept()
+		if err != nil {
+			return err
+		}
+		go func() {
+			defer c.Close()
+			up, err := r.dial()
+			if err != nil {
+				return
+			}
+			defer up.Close()
+			splice(c, up)
+		}()
+	}
 }
 
 // Connect opens a tunnel to host:port through the proxy socket and splices

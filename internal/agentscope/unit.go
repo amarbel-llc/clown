@@ -68,7 +68,7 @@ type Launch struct {
 func (l Launch) relays() []Relay {
 	rs := append([]Relay{{Listen: RelayAddr(), Socket: l.EgressSocket}}, l.Forwards...)
 	if l.StatsdSocket != "" {
-		rs = append(rs, Relay{Listen: udpPrefix + StatsdAddr(), Socket: l.StatsdSocket})
+		rs = append(rs, Relay{Listen: StatsdAddr(), Socket: l.StatsdSocket, UDP: true})
 	}
 	return rs
 }

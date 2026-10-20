@@ -22,6 +22,7 @@ import (
 
 	"code.linenisgreat.com/clown/internal/agentscope"
 	"code.linenisgreat.com/clown/internal/pluginhost"
+	"code.linenisgreat.com/clown/internal/toolcost"
 )
 
 // runInAgentScope launches argv (the provider binary first) in the agent
@@ -202,10 +203,10 @@ func startFrontendEndpoints(launch *agentscope.Launch, forwardAddrs []string, in
 	// the proxy nor the TCP forwards carry (clown#269). Metrics are not worth
 	// refusing a launch over: a relay that cannot start is reported and the
 	// unit runs without one.
-	if os.Getenv("CLOWN_DISABLE_STATSD") == "1" {
+	if toolcost.StatsdDisabled() {
 		launch.ExtraEnv = append(launch.ExtraEnv, "CLOWN_DISABLE_STATSD=1")
 	} else {
-		relay := &agentscope.StatsdRelay{Target: statsdTarget(), Unit: launch.Unit, Logger: logger}
+		relay := &agentscope.StatsdRelay{Target: toolcost.StatsdTarget(), Unit: launch.Unit, Logger: logger}
 		sock, err := socket("statsd.sock")
 		if err == nil {
 			err = relay.Listen(sock)
@@ -242,15 +243,6 @@ func startFrontendEndpoints(launch *agentscope.Launch, forwardAddrs []string, in
 	}
 	launch.PlumbingRO = append(launch.PlumbingRO, moxyfile+":"+inUnitMoxyfile)
 	return stop, nil
-}
-
-// statsdTarget is the frontend's statsd destination, as the hooks resolve it
-// outside a unit: STATSD_HOST:STATSD_PORT, default 127.0.0.1:8125.
-func statsdTarget() string {
-	return net.JoinHostPort(
-		firstNonEmpty(os.Getenv("STATSD_HOST"), "127.0.0.1"),
-		firstNonEmpty(os.Getenv("STATSD_PORT"), "8125"),
-	)
 }
 
 // xmppForward returns the XMPP server address to forward when this session
@@ -501,7 +493,7 @@ func startRelays(relayArgs []string) error {
 	return nil
 }
 
-// runAgentRelay is `clown agent-relay [--serve FILE] [--relay ADDR=SOCK]...`,
+// runAgentRelay is `clown agent-relay [--serve FILE] [--relay [udp:]ADDR=SOCK]...`,
 // the in-unit end of the unit's ways out. It first starts the agent-side
 // servers listed in FILE inside the unit, then listens on every relay address
 // (the egress proxy, the forwards, the statsd relay, and each in-unit server's
@@ -533,7 +525,7 @@ func runAgentRelay(args []string) int {
 		args = args[2:]
 	}
 	if len(args) != 0 || len(relays) == 0 {
-		fmt.Fprintln(os.Stderr, "clown agent-relay: usage: clown agent-relay [--serve FILE] [--relay ADDR=SOCK]...")
+		fmt.Fprintln(os.Stderr, "clown agent-relay: usage: clown agent-relay [--serve FILE] [--relay [udp:]ADDR=SOCK]...")
 		return 2
 	}
 	ready := os.NewFile(3, "ready")

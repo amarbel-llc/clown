@@ -111,7 +111,7 @@ func TestUDPRelayCarriesDatagramsEndToEnd(t *testing.T) {
 	probe.Close()
 
 	ready := make(chan struct{})
-	go func() { _ = RunRelays([]Relay{{Listen: udpPrefix + listen, Socket: sock}}, func() { close(ready) }) }()
+	go func() { _ = RunRelays([]Relay{{Listen: listen, Socket: sock, UDP: true}}, func() { close(ready) }) }()
 	select {
 	case <-ready:
 	case <-time.After(2 * time.Second):
@@ -134,7 +134,7 @@ func TestUDPRelayCarriesDatagramsEndToEnd(t *testing.T) {
 
 func TestParseRelayUDP(t *testing.T) {
 	r, err := ParseRelay("udp:127.0.0.1:8125=/run/x/statsd.sock")
-	if err != nil || !r.isUDP() || r.listenAddr() != "127.0.0.1:8125" || r.String() != "udp:127.0.0.1:8125=/run/x/statsd.sock" {
+	if err != nil || !r.UDP || r.Listen != "127.0.0.1:8125" || r.String() != "udp:127.0.0.1:8125=/run/x/statsd.sock" {
 		t.Fatalf("ParseRelay = %+v, %v", r, err)
 	}
 	if _, err := ParseRelay("udp:=/run/x/statsd.sock"); err == nil {

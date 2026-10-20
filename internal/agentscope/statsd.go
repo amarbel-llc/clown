@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"net"
 	"os"
-	"strings"
 	"sync"
 	"time"
 
@@ -20,12 +19,8 @@ const StatsdPort = 8125
 // StatsdAddr is the in-unit statsd relay's listen address.
 func StatsdAddr() string { return fmt.Sprintf("127.0.0.1:%d", StatsdPort) }
 
-// udpPrefix marks a relay's listen address as UDP in its ADDR=SOCK form.
-const udpPrefix = "udp:"
-
-// datagramMax bounds one relayed statsd datagram; statsd senders keep theirs
-// under a 1500-byte MTU, so anything larger is not a statsd packet.
-const datagramMax = 65507
+// maxRelayDatagram bounds one relayed datagram (the largest UDP payload).
+const maxRelayDatagram = 65507
 
 // StatsdRelay is the frontend end of the unit's statsd path. A private network
 // namespace leaves UDP no way out and the egress proxy only does CONNECT, so
@@ -45,25 +40,25 @@ type StatsdRelay struct {
 }
 
 // Listen creates the unixgram socket at path (0600) and serves it until Close.
-func (s *StatsdRelay) Listen(path string) error {
-	up, err := net.Dial("udp", s.Target)
-	if err != nil {
-		return err
-	}
+func (s *StatsdRelay) Listen(path string) (err error) {
 	_ = os.Remove(path)
 	conn, err := net.ListenUnixgram("unixgram", &net.UnixAddr{Name: path, Net: "unixgram"})
 	if err != nil {
-		up.Close()
 		return err
 	}
+	defer func() {
+		if err != nil {
+			conn.Close()
+		}
+	}()
 	if err := os.Chmod(path, 0o600); err != nil {
-		conn.Close()
-		up.Close()
 		return err
 	}
 	if err := setPassCred(conn); err != nil {
-		conn.Close()
-		up.Close()
+		return err
+	}
+	up, err := net.Dial("udp", s.Target)
+	if err != nil {
 		return err
 	}
 	s.mu.Lock()
@@ -85,7 +80,7 @@ func (s *StatsdRelay) Close() error {
 
 func (s *StatsdRelay) serve(conn *net.UnixConn, up net.Conn) {
 	defer up.Close()
-	buf := make([]byte, datagramMax)
+	buf := make([]byte, maxRelayDatagram)
 	oob := make([]byte, unix.CmsgSpace(unix.SizeofUcred))
 	for {
 		n, oobn, _, _, err := conn.ReadMsgUnix(buf, oob)
@@ -135,13 +130,14 @@ func setPassCred(conn *net.UnixConn) error {
 	return serr
 }
 
-// runUDPRelay is the in-unit end: every datagram received on r.Listen is sent,
+// runUDPRelay is the in-unit end: every datagram received on pc is sent,
 // unchanged, to the frontend's unixgram socket r.Socket. A send that fails
 // (the frontend gone, its buffer full) drops the datagram; the dial is retried
-// on the next one.
+// on the next one. The write deadline keeps a full frontend buffer from
+// stalling the relay.
 func runUDPRelay(pc net.PacketConn, r Relay) error {
 	var up net.Conn
-	buf := make([]byte, datagramMax)
+	buf := make([]byte, maxRelayDatagram)
 	for {
 		n, _, err := pc.ReadFrom(buf)
 		if err != nil {
@@ -149,7 +145,6 @@ func runUDPRelay(pc net.PacketConn, r Relay) error {
 		}
 		if up == nil {
 			if up, err = net.Dial("unixgram", r.Socket); err != nil {
-				up = nil
 				continue
 			}
 		}
@@ -160,9 +155,3 @@ func runUDPRelay(pc net.PacketConn, r Relay) error {
 		}
 	}
 }
-
-// isUDP reports whether the relay's listen address is UDP.
-func (r Relay) isUDP() bool { return strings.HasPrefix(r.Listen, udpPrefix) }
-
-// listenAddr is the relay's listen address without its transport prefix.
-func (r Relay) listenAddr() string { return strings.TrimPrefix(r.Listen, udpPrefix) }
