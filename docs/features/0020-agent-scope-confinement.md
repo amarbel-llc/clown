@@ -227,7 +227,9 @@ are absent).
 - `DISPLAY`, `WAYLAND_DISPLAY`, `XAUTHORITY`
 - `SSH_AUTH_SOCK`, unless passed
 - `TROUPE_XMPP_PASSWORD_FILE` and other credential paths
-- `CLOWN_SESSION_ID` (clown#136: never ambient)
+- `CLOWN_SESSION_ID` (clown#136: never in the unit's own environment; claude
+  receives it through its `--settings` env block instead, so hooks see the
+  principal — clown#289)
 - `NIX_CONFIG`, `NIX_USER_CONF_FILES`, `NIX_CONF_DIR` (clown#272, above)
 
 Every other key the manager injects is unset as well. On flic that set is:

@@ -124,6 +124,7 @@ normalize_plan() {
       -e "s#$tmp_root#<tmp>#g" \
       -e 's#/nix/store/[a-z0-9]\{32\}-[^/"]*#<store>#g' \
       -e 's#\("--session-id","\)[0-9a-f-]\{36\}#\1<uuid>#g' \
+      -e 's#\(\\"CLOWN_SESSION_ID\\":\\"\)[^\\"]*#\1<principal>#g' \
       -e 's#\(/clown/crush/\)[0-9a-f]\{1,\}#\1<hash>#g' |
     # Number each mkdtemp'd dir per family by first appearance. sed cannot do
     # this: it has no memory across matches, so every clown-plugin-compile-*
@@ -207,9 +208,9 @@ run_plan() {
   local tmp="${TMPDIR:-/tmp}"
   tmp="${tmp%/}"
 
-  local input='{"binary":"/nix/store/abcdefghijklmnopqrstuvwxyz012345-claude-code-9.9.9/bin/claude","args":["--plugin-dir","'"$tmp"'/clown-plugin-compile-111","--plugin-dir","'"$tmp"'/clown-plugin-compile-222","--plugin-dir","'"$tmp"'/clown-plugin-compile-111","--agents","{\"A\":{\"prompt\":\"secret\"}}","--append-system-prompt-file","'"$tmp"'/clown-prompt-333.txt","--session-id","0e5f8a1c-2b3d-4e5f-8a9b-0c1d2e3f4a5b","--version"],"env":["CRUSH_GLOBAL_CONFIG='"$tmp"'/clown-crush-444"],"files":[]}'
+  local input='{"binary":"/nix/store/abcdefghijklmnopqrstuvwxyz012345-claude-code-9.9.9/bin/claude","args":["--plugin-dir","'"$tmp"'/clown-plugin-compile-111","--plugin-dir","'"$tmp"'/clown-plugin-compile-222","--plugin-dir","'"$tmp"'/clown-plugin-compile-111","--agents","{\"A\":{\"prompt\":\"secret\"}}","--append-system-prompt-file","'"$tmp"'/clown-prompt-333.txt","--settings","{\"env\":{\"CLOWN_SESSION_ID\":\"plan-sess\"}}","--session-id","0e5f8a1c-2b3d-4e5f-8a9b-0c1d2e3f4a5b","--version"],"env":["CRUSH_GLOBAL_CONFIG='"$tmp"'/clown-crush-444"],"files":[]}'
 
-  local want='{"binary":"<store>/bin/claude","args":["--plugin-dir","<tmp>/clown-plugin-compile-<rand#1>","--plugin-dir","<tmp>/clown-plugin-compile-<rand#2>","--plugin-dir","<tmp>/clown-plugin-compile-<rand#1>","--agents","<elided>","--append-system-prompt-file","<tmp>/clown-prompt-<rand#1>.txt","--session-id","<uuid>","--version"],"env":["CRUSH_GLOBAL_CONFIG=<tmp>/clown-crush-<rand#1>"],"files":[]}'
+  local want='{"binary":"<store>/bin/claude","args":["--plugin-dir","<tmp>/clown-plugin-compile-<rand#1>","--plugin-dir","<tmp>/clown-plugin-compile-<rand#2>","--plugin-dir","<tmp>/clown-plugin-compile-<rand#1>","--agents","<elided>","--append-system-prompt-file","<tmp>/clown-prompt-<rand#1>.txt","--settings","{\"env\":{\"CLOWN_SESSION_ID\":\"<principal>\"}}","--session-id","<uuid>","--version"],"env":["CRUSH_GLOBAL_CONFIG=<tmp>/clown-crush-<rand#1>"],"files":[]}'
 
   run normalize_plan <<<"$input"
   assert_success
@@ -224,6 +225,9 @@ run_plan() {
   #   clown-prompt-333 -> #1      numbering is per family, not global
   #   --agents kept, payload gone the flag and its argv position stay pinned
   #   36-char id -> <uuid>        the session id rule fires on a real uuid
+  #   settings principal -> <principal>
+  #                               clown#289: the per-instance key rides claude's
+  #                               settings env; only its value is normalized
   assert_output "$want"
 }
 

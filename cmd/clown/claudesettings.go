@@ -58,10 +58,21 @@ const afkTimeoutDisableMS = "2147483647"
 //     false. --settings outranks the user/project/local files, so this default
 //     lands over a user's own remoteControlAtStartup; a managed source can still
 //     override it.
-func claudeSafetySettingsJSON() string {
+//
+// principal is the session's per-instance key. It is injected as
+// CLOWN_SESSION_ID so hooks get the same identity the MCP servers do (clown#289):
+// hook commands are spawned by claude from its own env, and clown never
+// exports the key on its own env (clown#136), so the settings env block is the
+// one channel that reaches them. Empty principal omits it. This puts the key in
+// claude's whole subtree (Bash calls, subagents) — the accepted cost of hooks
+// seeing it at all; plugin hooks.json commands are not clown's to prefix.
+func claudeSafetySettingsJSON(principal string) string {
 	settings := map[string]any{}
 
 	env := map[string]string{}
+	if principal != "" {
+		env["CLOWN_SESSION_ID"] = principal
+	}
 	if os.Getenv("CLAUDE_AFK_TIMEOUT_MS") == "" {
 		env["CLAUDE_AFK_TIMEOUT_MS"] = afkTimeoutDisableMS
 	}

@@ -30,7 +30,9 @@ Clown wraps the `claude` binary with four additions:
    turns off Claude's autonomous memory writes (`CLAUDE.md`/`AGENTS.md` files
    are unaffected), and a very large `CLAUDE_AFK_TIMEOUT_MS` stops an idle
    confirmation prompt from auto-continuing past the user. Each of those env
-   vars is skipped if you've already set it yourself. The same block also sets
+   vars is skipped if you've already set it yourself. The block also carries
+   `CLOWN_SESSION_ID` (the session's per-instance key, never skipped) so hook
+   commands see the same identity the MCP servers do. The same block also sets
    `remoteControlAtStartup: false`, so a session never auto-connects to
    [Remote Control](https://docs.claude.com/en/docs/claude-code/remote-control);
    unlike the two env vars this settings key has no paired variable to opt out

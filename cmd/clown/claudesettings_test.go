@@ -35,6 +35,25 @@ func parseRemoteControl(t *testing.T, got string) (present bool, value bool) {
 	return true, *v.RemoteControlAtStartup
 }
 
+// clown#289: hook processes are children of claude and inherit only claude's
+// env (clown deliberately never exports CLOWN_SESSION_ID on its own env,
+// clown#136), so the per-instance key rides claude's settings env block. It is
+// the principal verbatim, never gated on a user override, and omitted when the
+// identity is empty rather than injected as an empty override.
+func TestClaudeSafetySettingsJSON_InjectsPrincipalForHooks(t *testing.T) {
+	t.Setenv("CLAUDE_AFK_TIMEOUT_MS", "60000")
+	t.Setenv("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "0")
+
+	env := parseSafetyEnv(t, claudeSafetySettingsJSON("9eff073f-a924-48c2-b076-8b02d38f1938"))
+	if got := env["CLOWN_SESSION_ID"]; got != "9eff073f-a924-48c2-b076-8b02d38f1938" {
+		t.Errorf("CLOWN_SESSION_ID = %q, want the principal", got)
+	}
+
+	if env := parseSafetyEnv(t, claudeSafetySettingsJSON("")); len(env) != 0 {
+		t.Errorf("empty principal must not inject an env block, got %v", env)
+	}
+}
+
 // remoteControlAtStartup is injected unconditionally to disable Remote Control
 // auto-connect for clown sessions, independent of the env-gated defaults.
 func TestClaudeSafetySettingsJSON_RemoteControlAlwaysDisabled(t *testing.T) {
@@ -51,7 +70,7 @@ func TestClaudeSafetySettingsJSON_RemoteControlAlwaysDisabled(t *testing.T) {
 			t.Setenv("CLAUDE_AFK_TIMEOUT_MS", tc.afk)
 			t.Setenv("CLAUDE_CODE_DISABLE_AUTO_MEMORY", tc.autoMem)
 
-			present, val := parseRemoteControl(t, claudeSafetySettingsJSON())
+			present, val := parseRemoteControl(t, claudeSafetySettingsJSON(""))
 			if !present {
 				t.Fatal("remoteControlAtStartup missing; must always be injected")
 			}
@@ -68,7 +87,7 @@ func TestClaudeSafetySettingsJSON_InjectsBothWhenUnset(t *testing.T) {
 	t.Setenv("CLAUDE_AFK_TIMEOUT_MS", "") // empty == unset for os.Getenv
 	t.Setenv("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "")
 
-	env := parseSafetyEnv(t, claudeSafetySettingsJSON())
+	env := parseSafetyEnv(t, claudeSafetySettingsJSON(""))
 	if env["CLAUDE_AFK_TIMEOUT_MS"] != afkTimeoutDisableMS {
 		t.Errorf("AFK = %q, want %q", env["CLAUDE_AFK_TIMEOUT_MS"], afkTimeoutDisableMS)
 	}
@@ -86,7 +105,7 @@ func TestClaudeSafetySettingsJSON_IndependentOverride(t *testing.T) {
 	t.Setenv("CLAUDE_AFK_TIMEOUT_MS", "60000") // user keeps a normal AFK timeout
 	t.Setenv("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "")
 
-	env := parseSafetyEnv(t, claudeSafetySettingsJSON())
+	env := parseSafetyEnv(t, claudeSafetySettingsJSON(""))
 	if _, ok := env["CLAUDE_AFK_TIMEOUT_MS"]; ok {
 		t.Errorf("AFK override present; should not be injected: %v", env)
 	}
@@ -102,7 +121,7 @@ func TestClaudeSafetySettingsJSON_AllEnvOverridden(t *testing.T) {
 	t.Setenv("CLAUDE_AFK_TIMEOUT_MS", "60000")
 	t.Setenv("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "0") // user opts back into auto memory
 
-	got := claudeSafetySettingsJSON()
+	got := claudeSafetySettingsJSON("")
 	if got == "" {
 		t.Fatal("settings must never be empty (remoteControlAtStartup is always injected)")
 	}
