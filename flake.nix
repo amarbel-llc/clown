@@ -104,7 +104,10 @@
     # a burned-in TroupePath. troupe's own inputs (nixpkgs=igloo, utils,
     # treefmt-nix, ringmaster) follow clown's so the closure shares one eval —
     # notably troupe's ringmaster follows clown's, aligning the jobwake pin.
-    troupe.url = "https://code.linenisgreat.com/troupe/archive/master.tar.gz";
+    # S7 PORT BRANCH ONLY: tracks troupe's port branch (a ref, never a rev).
+    # LAST PRE-LANDING COMMIT: restore troupe.url to archive/master.tar.gz and
+    # ringmaster.url to archive/master.tar.gz, then re-lock.
+    troupe.url = "https://code.linenisgreat.com/troupe/archive/snug-oak.tar.gz";
     troupe.inputs.nixpkgs.follows = "igloo";
     troupe.inputs.utils.follows = "utils";
     troupe.inputs.treefmt-nix.follows = "igloo/treefmt-nix";
