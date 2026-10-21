@@ -13,8 +13,11 @@
 // transcript final and close it.
 //
 // Like every clown hook it is best-effort and silent: every failure exits 0
-// (a Stop-hook exit 2 would BLOCK the agent from stopping), nothing is written
-// to stdout, and the run is bounded by runBudget. CLOWN_HOOK_DEBUG_LOG, when
+// (a Stop-hook exit 2 would BLOCK the agent from stopping), and the run is
+// bounded by runBudget. Its one stdout output is a {"systemMessage": ...} line
+// when the session's context floor (the first response's total input) exceeds
+// CLOWN_CONTEXT_FLOOR_PCT (default 60) percent of CLOWN_CONTEXT_WINDOW (default
+// 200000 tokens): past that, auto-compact loops. CLOWN_HOOK_DEBUG_LOG, when
 // set, receives the failures. CLOWN_DISABLE_STATSD=1 turns it off entirely.
 //
 // Wire-up: clown's synthesized clown-builtin-jobs plugin registers this
@@ -31,6 +34,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -163,6 +167,8 @@ func run(stdin io.Reader) error {
 		Repo:     toolcost.Segment(sessions.RepoFromCWD(cwd)),
 		Final:    final,
 		Deadline: deadline,
+		Window:   envInt64("CLOWN_CONTEXT_WINDOW"),
+		FloorPct: int(envInt64("CLOWN_CONTEXT_FLOOR_PCT")),
 	}
 	st, metrics, err := toolcost.Run(path, toolcost.LoadState(statePath), cfg)
 	if err != nil {
@@ -173,7 +179,24 @@ func run(stdin io.Reader) error {
 	if err := toolcost.SaveState(statePath, st); err != nil {
 		return err
 	}
+	// The one thing this hook says aloud: a context floor so large that
+	// auto-compact can never get below it. systemMessage is the hook output
+	// field claude shows the operator; it is emitted at most once per
+	// transcript, when the first response is judged.
+	if msg, over := toolcost.FloorWarning(metrics, cfg); over {
+		_ = json.NewEncoder(os.Stdout).Encode(map[string]string{"systemMessage": msg})
+	}
 	return toolcost.Send(toolcost.Encode(metrics))
+}
+
+// envInt64 reads a positive integer from the environment; unset or malformed
+// is 0 (the toolcost defaults).
+func envInt64(name string) int64 {
+	n, err := strconv.ParseInt(os.Getenv(name), 10, 64)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
 }
 
 // transcriptCWD finds the working directory recorded in the first transcript

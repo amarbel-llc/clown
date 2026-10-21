@@ -116,6 +116,11 @@ type State struct {
 	// context (reset on compaction); every further request adds the sum to
 	// that key's carry_tokens. Bounded by the number of distinct tool keys.
 	Live map[string]int64 `json:"live,omitempty"`
+	// FloorDone records that the transcript's context floor (the first
+	// response's total input) has been judged. A state saved before the guard
+	// existed has Offset > 0 and no FloorDone; Run marks it done rather than
+	// judge a later, larger context as the floor.
+	FloorDone bool `json:"floor_done,omitempty"`
 }
 
 // Result is one completed tool result awaiting its consuming request.
@@ -150,6 +155,51 @@ type Config struct {
 	// Deadline bounds the run; zero means unbounded. Hitting it commits what
 	// was processed so far — the next run resumes from there.
 	Deadline time.Time
+	// Window is the model's context window in tokens and FloorPct the share of
+	// it the first response may already occupy before auto-compact can no
+	// longer get below it (it would loop): the floor guard. Zero values use
+	// DefaultWindow and DefaultFloorPct.
+	Window   int64
+	FloorPct int
+}
+
+// DefaultWindow and DefaultFloorPct are the floor guard's defaults: a 200K
+// window, warn above 60% of it.
+const (
+	DefaultWindow   int64 = 200000
+	DefaultFloorPct       = 60
+)
+
+func (c Config) floorLimit() (window int64, pct int) {
+	window, pct = c.Window, c.FloorPct
+	if window <= 0 {
+		window = DefaultWindow
+	}
+	if pct <= 0 {
+		pct = DefaultFloorPct
+	}
+	return window, pct
+}
+
+// FloorWarning returns the one-line operator warning for a run whose metrics
+// include the floor_over counter (the first response's input exceeded the
+// threshold), or false when the floor is fine.
+func FloorWarning(ms []Metric, cfg Config) (string, bool) {
+	var floor int64
+	over := false
+	for _, m := range ms {
+		switch {
+		case strings.HasPrefix(m.Name, "clown.context_floor_over."):
+			over = true
+		case strings.HasPrefix(m.Name, "clown.context_floor."):
+			floor = m.Value
+		}
+	}
+	if !over {
+		return "", false
+	}
+	window, pct := cfg.floorLimit()
+	return fmt.Sprintf("clown: this session's context floor is %d tokens, over %d%% of its %d-token window; auto-compact cannot get below the floor and will loop. Trim the tool set (a leaner profile) or start a fresh session.", floor, pct, window), true
 }
 
 type usage struct {
@@ -223,6 +273,9 @@ func Run(path string, st State, cfg Config) (State, []Metric, error) {
 	}
 	if st.Version != stateVersion || st.Offset > info.Size() {
 		st = State{Version: stateVersion}
+	}
+	if st.Offset > 0 {
+		st.FloorDone = true // saved before the guard, or past the first response
 	}
 	if _, err := f.Seek(st.Offset, io.SeekStart); err != nil {
 		return st, nil, err
@@ -446,7 +499,17 @@ func (r *runner) closeOpen() {
 			stop = "none" // a subagent transcript records only the stream's opening
 		}
 		r.emit("clown.responses."+base+"."+Segment(stop), KindCounter, 1)
-		r.emit("clown.context."+base, KindGauge, u.InputTokens+u.CacheReadInputTokens+requestCacheWrite)
+		total := u.InputTokens + u.CacheReadInputTokens + requestCacheWrite
+		r.emit("clown.context."+base, KindGauge, total)
+		if !r.w.FloorDone {
+			// The first response of a session carries only the static prefix,
+			// so its total input IS the context floor.
+			r.w.FloorDone = true
+			r.emit("clown.context_floor."+base, KindGauge, total)
+			if window, pct := r.cfg.floorLimit(); total*100 > window*int64(pct) {
+				r.emit("clown.context_floor_over."+base, KindCounter, 1)
+			}
+		}
 		r.w.LastModel = model
 	}
 

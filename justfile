@@ -2161,6 +2161,57 @@ debug-xmpp-native-clown-smoke:
       echo "=== FAIL: see above ==="; exit 1
     fi
 
+# Run one tiny headless claude turn under each connector-off switch and report,
+# from the stream-json init message and the result usage, which switch actually
+# removes the claude.ai connectors: none | setting | env | both. Spends one
+# small API request per variant; uses the operator's existing claude login.
+#
+# measure which connector-off switch bites (setting, env var, or both)
+[group("explore")]
+explore-claude-connector-switches:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    cd "$(mktemp -d)"
+    for variant in none setting env both; do
+        args=(-p "Reply with the single word ok." --output-format stream-json --verbose --disallowed-tools 'Bash(*)')
+        envs=()
+        case "$variant" in
+            setting|both) args+=(--settings '{"disableClaudeAiConnectors":true}') ;;
+        esac
+        case "$variant" in
+            env|both) envs+=(ENABLE_CLAUDEAI_MCP_SERVERS=false) ;;
+        esac
+        out="$(env "${envs[@]}" claude "${args[@]}" 2>/dev/null)" || true
+        jq -rs --arg v "$variant" '
+          (map(select(.type == "system" and .subtype == "init")) | first) as $i
+          | (map(select(.type == "result")) | first) as $r
+          | "\($v): tools=\($i.tools | length) mcp_tools=\([$i.tools[] | select(startswith("mcp__"))] | length)"
+            + " mcp_servers=\([$i.mcp_servers[]?.name] | join(","))"
+            + " floor_tokens=\(($r.usage.input_tokens // 0) + ($r.usage.cache_creation_input_tokens // 0) + ($r.usage.cache_read_input_tokens // 0))"
+        ' <<<"$out" || echo "$variant: no usable output"
+    done
+
+# Print `clown --print-launch-plan` for the built clown under PROFILE and
+# summarize what shapes the context floor: the --disallowed-tools set, the
+# --settings JSON (connector switches, env) and the --plugin-dir count. A saved
+# cheap-context selection (the profile's server/tool keep set) is applied later,
+# once the MCP servers run, so it does not show here.
+#
+# summarize the launch plan a profile produces (context-floor knobs)
+[group("explore")]
+explore-clown-launch-plan PROFILE="porter": build-nix
+    #!/usr/bin/env bash
+    set -euo pipefail
+    clown="$(readlink -f result)/bin/clown"
+    plan="$(env -u CLOWN_SESSION_ID "$clown" --print-launch-plan --profile "{{ PROFILE }}" -- --version)"
+    echo "profile: {{ PROFILE }}"
+    jq -r '
+      .args as $a
+      | "disallowed-tools (\([range(0; $a|length) | select($a[.] == "--disallowed-tools")] | length)): "
+        + ([range(0; $a|length) | select($a[.] == "--disallowed-tools") | $a[. + 1]] | join(","))' <<<"$plan"
+    jq -r '.args as $a | [range(0; $a|length) | select($a[.] == "--settings") | $a[. + 1]][0] // "{}" | fromjson | "settings: \(tojson)"' <<<"$plan"
+    jq -r '"plugin dirs: \([.args[] | select(. == "--plugin-dir")] | length)"' <<<"$plan"
+
 # Print the distinct strings in the claude binary on PATH that match REGEX (up
 # to 40 chars of context each side), so a setting or env var name can be taken
 # from the binary instead of memory (clown context-floor work).
