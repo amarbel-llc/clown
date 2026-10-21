@@ -47,7 +47,7 @@ func TestBuiltinTaskTemplates(t *testing.T) {
 		moxyKeep    []string
 		wantExclude int
 	}{
-		{"reviewer", []string{"clown-builtin-jobs/troupe", "moxy/moxy"}, reviewerMoxyKeep, 138},
+		{"reviewer", []string{"clown-builtin-jobs/ringmaster", "clown-builtin-jobs/troupe", "moxy/moxy"}, reviewerMoxyKeep, 138},
 		{
 			"porter",
 			[]string{"clown-builtin-jobs/ringmaster", "clown-builtin-jobs/troupe", "just-us/just-us", "moxy/moxy", "spinclass/spinclass"},
@@ -106,6 +106,24 @@ func TestBuiltinTaskTemplates(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A launcher refuses a profile whose keep-set drops a server the worker needs to
+// reach its driver (profilelookup.RequiredServers: job control and chat) or
+// strips that server's tools, so every template must keep both whole.
+func TestBuiltinTemplatesKeepTheServersAWorkerNeedsToReportBack(t *testing.T) {
+	required := []string{"clown-builtin-jobs/ringmaster", "clown-builtin-jobs/troupe"}
+	for _, name := range []string{"reviewer", "porter", "canary"} {
+		p := builtinByName(t, name)
+		for _, srv := range required {
+			if !slices.Contains(p.ContextServers, srv) {
+				t.Errorf("%s drops %s, which a worker needs to say hello and report back", name, srv)
+			}
+			if len(p.ContextExcluded[srv]) > 0 {
+				t.Errorf("%s strips tools from %s: %v", name, srv, p.ContextExcluded[srv])
+			}
+		}
 	}
 }
 

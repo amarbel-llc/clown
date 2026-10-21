@@ -55,7 +55,7 @@ display = "Reviewer (read-mostly worker)"
 provider = "claude"
 backend = "anthropic"
 model = "claude-sonnet-5-5"
-context_servers = ["clown-builtin-jobs/troupe", "moxy/moxy"]
+context_servers = ["clown-builtin-jobs/ringmaster", "clown-builtin-jobs/troupe", "moxy/moxy"]
 
 [profile.env]
 CLOWN_DISABLE_CLAUDEAI_CONNECTORS = "1"
