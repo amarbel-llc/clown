@@ -26,6 +26,35 @@ wait_for_file() {
   done
 }
 
+# start_ringmaster_service
+# Run `ringmaster serve` — the job store's host service (ringmaster FDR-0001,
+# RFC-0020), which is the store's only reader and writer — for this test, and
+# block until its socket exists. Needs RINGMASTER_BIN, XDG_STATE_HOME for the
+# store, and a SHORT XDG_RUNTIME_DIR (the socket path is limited to ~108
+# bytes). Pair with stop_ringmaster_service in teardown().
+start_ringmaster_service() {
+  mkdir -p "$XDG_RUNTIME_DIR"
+  "$RINGMASTER_BIN" serve >"$BATS_TEST_TMPDIR/ringmaster-serve.log" 2>&1 &
+  RINGMASTER_SERVICE_PID=$!
+  local sock="$XDG_RUNTIME_DIR/ringmaster/service.sock" tries=0
+  while [[ $tries -lt 100 ]]; do
+    [[ -S $sock ]] && return 0
+    sleep 0.1
+    tries=$((tries + 1))
+  done
+  echo "ringmaster serve did not come up; its log:" >&2
+  cat "$BATS_TEST_TMPDIR/ringmaster-serve.log" >&2
+  return 1
+}
+
+# stop_ringmaster_service — stop what start_ringmaster_service started.
+stop_ringmaster_service() {
+  if [[ -n ${RINGMASTER_SERVICE_PID:-} ]]; then
+    cleanup_pids "$RINGMASTER_SERVICE_PID"
+    RINGMASTER_SERVICE_PID=
+  fi
+}
+
 # cleanup_pids <pid>...
 # SIGTERM each pid and wait for it to reap. Tolerates already-dead pids.
 # Use from teardown() so test failures don't leak background processes.

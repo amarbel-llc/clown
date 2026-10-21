@@ -463,25 +463,20 @@ after done has returned
 .Pq clown#256 .
 The unit's post-stop hook is the first-line backstop that runs for
 every unit.
-Ringmaster's host-wide liveness reaper
-.Pq Em ringmaster#33
-is the backstop FOR the hook: any long-running
-.Cm ringmaster monitor
-or the standalone
-.Cm ringmaster reap
-scans every channel on the host, not only the one it is itself a
-consumer on, so a juggler job needs no monitor of its own on its own
-channel
+Ringmaster's host service
+.Pq Em ringmaster FDR-0001
+is the backstop FOR the hook: it keeps every job's hold, so a juggler job
+needs no monitor of its own on its own channel
 .Pq Cm juggler spawn launches none .
-A job whose lock is released without a terminal record
+A job whose hold ends without a terminal record
 .Pq the hook also never ran: systemd itself gone
-is reaped by the host-wide reaper
-.Pq any Cm ringmaster monitor No or Cm ringmaster reap No on the host ,
-one grace period after the first reaper observes the released lock,
-including after a reboot.
-A host running neither still has the gap the hook exists to cover;
-deploying one is the host's own responsibility
-.Pq e.g. a Ic ringmaster reap No systemd unit the host deploys .
+is written
+.Ql interrupted
+by the service once the hold is not renewed within its grace.
+A host not running
+.Cm ringmaster serve
+has no job store to reach at all: the run fails with the service-unavailable
+error rather than running unprotected.
 A lock already held by a live producer
 .Pq Va jobwake.ErrAlreadyLocked
 refuses the run outright rather than racing it; any other acquire failure

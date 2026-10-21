@@ -329,15 +329,15 @@
         ]
       },
       "locked": {
-        "lastModified": 1792150559,
-        "narHash": "sha256-QqePzARIOIjwjWdXa++rAktehcVya+JBTA/b6DDiZi0=",
-        "rev": "b36b2d5820a8357f76dd234cf67d13c28bc89a6c",
+        "lastModified": 1792590412,
+        "narHash": "sha256-83ESsu9QQD4+Ze9uATW7jiGRUToj/LQeLYA3VvPwoRA=",
+        "rev": "8c467bd12168dba8cba482a2b9641844071a99f0",
         "type": "tarball",
-        "url": "https://code.linenisgreat.com/ringmaster/archive/b36b2d5820a8357f76dd234cf67d13c28bc89a6c.tar.gz"
+        "url": "https://code.linenisgreat.com/ringmaster/archive/8c467bd12168dba8cba482a2b9641844071a99f0.tar.gz"
       },
       "original": {
         "type": "tarball",
-        "url": "https://code.linenisgreat.com/ringmaster/archive/master.tar.gz"
+        "url": "https://code.linenisgreat.com/ringmaster/archive/s7-flag-day.tar.gz"
       }
     },
     "root": {

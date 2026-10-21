@@ -70,7 +70,7 @@
     # the single source of truth for the pinned rev. follows-align the
     # shared amarbel inputs so the closure doesn't carry a second igloo /
     # nixpkgs-master / utils / bats evaluation.
-    ringmaster.url = "https://code.linenisgreat.com/ringmaster/archive/master.tar.gz";
+    ringmaster.url = "https://code.linenisgreat.com/ringmaster/archive/s7-flag-day.tar.gz";
     ringmaster.inputs.igloo.follows = "igloo";
     ringmaster.inputs.nixpkgs-master.follows = "nixpkgs-master";
     ringmaster.inputs.utils.follows = "utils";

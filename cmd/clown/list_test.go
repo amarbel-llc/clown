@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -51,11 +52,27 @@ func TestListJSONEmitsPresenceRecords(t *testing.T) {
 	}
 }
 
-// list works with NO presence records at all (a fresh machine, or
-// CLOWN_DISABLE_JOB_WAKEUP) — an empty table, not an error.
+// list works with NO presence records at all (a fresh store) — an empty table,
+// not an error.
 func TestListEmptyIsNotAnError(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	startJobService(t)
 	if code := runList(nil); code != 0 {
 		t.Fatalf("empty list exit = %d, want 0", code)
+	}
+}
+
+// With no host service to ask (ringmaster FDR-0001: the store is private to it),
+// list fails loudly rather than reporting an empty table that is not true.
+func TestListWithoutTheServiceFailsLoudly(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	rt, err := os.MkdirTemp("", "rm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(rt) })
+	t.Setenv("XDG_RUNTIME_DIR", rt)
+	if code := runList(nil); code != 1 {
+		t.Fatalf("list with no service exit = %d, want 1", code)
 	}
 }

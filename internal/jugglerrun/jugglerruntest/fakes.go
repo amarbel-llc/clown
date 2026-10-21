@@ -9,7 +9,7 @@
 // keeps a per-target journal on disk, so start/progress/done/read/status/
 // spool-path/wait behave like the real v3 protocol (ringmaster#27, clown#256):
 // `done` against an already-terminal job exits 3 (not generic 1), and
-// `version --protocol` prints fakeRingmasterDefaultProtocol ("3") unless
+// `version --protocol` prints fakeRingmasterDefaultProtocol (jobwake.ProtocolVersion) unless
 // SetRingmasterProtocolVersion overrides it, to simulate a mismatched build;
 // the troupe fake records MUC posts and wakes and keeps room affiliations
 // (`muc create`/`muc affiliate`, with troupe's owner and last-owner rules);
@@ -34,9 +34,12 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"code.linenisgreat.com/ringmaster/pkgs/jobwake"
 )
 
 const (
@@ -772,8 +775,8 @@ func fakeMoxyCLI(dir string, args []string) int {
 
 // fakeRingmasterDefaultProtocol is the fake's default `version --protocol`
 // answer, matching the real jobwake.ProtocolVersion this fake otherwise
-// emulates (ringmaster v3, clown#256).
-const fakeRingmasterDefaultProtocol = "3"
+// emulates (clown#256), so it follows the protocol juggler was built against.
+var fakeRingmasterDefaultProtocol = strconv.Itoa(jobwake.ProtocolVersion)
 
 // SetRingmasterProtocolVersion makes the fake ringmaster's `version
 // --protocol` report version instead of fakeRingmasterDefaultProtocol, to

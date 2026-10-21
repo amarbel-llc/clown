@@ -14,20 +14,17 @@
 .Sh DESCRIPTION
 .Nm clown presence
 queries the presence index \(em the clown\(->spinclass liveness seam (RFC-0014).
-Every live clown writes a presence record under
-.Pa $XDG_STATE_HOME/ringmaster/presence/ ,
-its wake monitor (see
-.Xr ringmaster 1 )
-refreshes the record on a ticker, and a clean shutdown removes it; a stale
-record (one not refreshed within the freshness window) is pruned on read.
+The index is kept by ringmaster's host service (see
+.Xr ringmaster 1 ) .
+Every live clown announces itself at launch for a two-minute window, and stays
+present for as long as its wake monitor's subscription lives; a session that
+does neither within the window drops out.
 This command is the stable query surface for that index: a consumer \(em notably
-spinclass's liveness probe \(em uses it instead of reading the on-disk JSON
-directly, so the record schema and the freshness window stay clown's concern.
-It is a pure read, available regardless of
-.Ev CLOWN_DISABLE_JOB_WAKEUP
-.Pq when disabled no records are written, so the listing is simply empty .
+spinclass's liveness probe \(em uses it instead of asking the service directly,
+so the record schema and the freshness window stay clown's concern.
+It is a pure read, and fails when the host service cannot be reached.
 .Pp
-A presence record is written only by a clown whose job-watch monitor is running:
+A clown is present only if it announces itself or its job-watch monitor is running:
 the claude-family providers, not
 .Fl -naked
 or an exec-replacing provider, and not when
@@ -98,9 +95,9 @@ by other means (for example the worker reporting its own
 back at startup).
 .Sh ENVIRONMENT
 .Bl -tag -width Ds
-.It Ev XDG_STATE_HOME
-Root of the presence directory
-.Pq Pa $XDG_STATE_HOME/ringmaster/presence/ .
+.It Ev XDG_RUNTIME_DIR
+Where the host service's socket lives
+.Pq Pa $XDG_RUNTIME_DIR/ringmaster/service.sock .
 .It Ev CLOWN_GROUP_ID
 The group-id a live clown records as its
 .Sy decoration ;

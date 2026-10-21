@@ -34,9 +34,12 @@ setup() {
   # AF_UNIX sun_path limit. The journal/spool stay under XDG_STATE_HOME.
   CJW_RUNTIME_DIR="$(mktemp -d /tmp/cjs.XXXXXX)"
   export XDG_RUNTIME_DIR="$CJW_RUNTIME_DIR"
+  # The store is private to ringmaster's host service (RFC-0020).
+  start_ringmaster_service
 }
 
 teardown() {
+  stop_ringmaster_service
   if [[ -n ${CJW_RUNTIME_DIR:-} ]]; then
     rm -rf "$CJW_RUNTIME_DIR"
   fi

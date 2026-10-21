@@ -722,7 +722,7 @@ abort_on_cancel() {
   expect_status 0
   [[ $(field .wrote_terminal) == true ]]
   [[ $(field .state) == failed ]]
-  [[ $stderr == *"protocol 2"* && $stderr == *"protocol 3"* ]]
+  [[ $stderr == *"protocol 2"* && $stderr == *"protocol 4"* ]]
   [[ $(journal_types "$root" "$job" | tail -n1) == failed ]]
 }
 
@@ -1306,7 +1306,7 @@ EOF
   run_jug spawn --new-run --run-key rk-protocol-mismatch --input - --issuer issuer-6 --room room-proto@rooms.test <<<'x'
   rm -f "$FAKE_DIR/ringmaster-protocol-version"
   expect_status 1
-  [[ $stderr == *"protocol 2"* && $stderr == *"protocol 3"* ]]
+  [[ $stderr == *"protocol 2"* && $stderr == *"protocol 4"* ]]
 }
 
 @test "spawn --new-run rk5, then a child journal seeded already-interrupted (fixture for the next two tests)" {

@@ -9,8 +9,9 @@ import (
 )
 
 // registerPresenceFixture writes one presence record with the given key, group,
-// and description by driving jobwake.RegisterPresence through the env it reads.
-// XDG_STATE_HOME must already point at a temp dir.
+// and description through the in-process ringmaster service (startJobService),
+// which reads the group, description and name from the env. XDG_STATE_HOME must
+// already point at a temp dir.
 func registerPresenceFixture(t *testing.T, key, group, desc string) {
 	t.Helper()
 	registerPresenceFixtureNamed(t, key, group, desc, "")
@@ -21,11 +22,13 @@ func registerPresenceFixture(t *testing.T, key, group, desc string) {
 // care about the name stay unchanged.
 func registerPresenceFixtureNamed(t *testing.T, key, group, desc, clownName string) {
 	t.Helper()
+	sock := startJobService(t)
 	t.Setenv("CLOWN_SESSION_ID", key)
 	t.Setenv("CLOWN_GROUP_ID", group)
 	t.Setenv("CLOWN_GROUP_DESCRIPTION", desc)
 	t.Setenv("CLOWN_NAME", clownName)
-	if err := jobwake.RegisterPresence(time.Now()); err != nil {
+	aliasJobService(t, sock)
+	if err := jobwake.RegisterPresenceKey(key, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 }

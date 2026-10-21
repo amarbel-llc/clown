@@ -25,9 +25,13 @@ setup() {
   # the journal/spool live under XDG_STATE_HOME.
   CJM_RUNTIME_DIR="$(mktemp -d /tmp/cjm.XXXXXX)"
   export XDG_RUNTIME_DIR="$CJM_RUNTIME_DIR"
+  # The store is private to ringmaster's host service (RFC-0020): the MCP
+  # servers reach it over its socket.
+  start_ringmaster_service
 }
 
 teardown() {
+  stop_ringmaster_service
   if [[ -n ${CJM_RUNTIME_DIR:-} ]]; then
     rm -rf "$CJM_RUNTIME_DIR"
   fi

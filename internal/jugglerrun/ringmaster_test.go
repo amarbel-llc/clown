@@ -3,6 +3,8 @@ package jugglerrun
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"strings"
 	"testing"
 
@@ -20,7 +22,7 @@ func TestCheckRingmasterProtocol_MismatchRefuses(t *testing.T) {
 	h := newHarness(t)
 	h.fakes.SetRingmasterProtocolVersion(t, "2")
 	err := CheckRingmasterProtocol(context.Background(), h.fakes.Ringmaster)
-	if err == nil || !strings.Contains(err.Error(), "protocol 2") || !strings.Contains(err.Error(), "protocol 3") {
+	if err == nil || !strings.Contains(err.Error(), "protocol 2") || !strings.Contains(err.Error(), fmt.Sprintf("protocol %d", jobwake.ProtocolVersion)) {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -47,23 +49,27 @@ func TestCheckRingmasterProtocol_MissingBinaryRefuses(t *testing.T) {
 // background-run helper, a bash-reachable model/tool-plane HTTP fixture, and
 // the poll loop itself) that do not exist in zz-tests_bats/juggler_lifecycle.bats
 // today — this test instead calls the REAL jobwake.AcquireJobLock directly
-// (the same function cmd/juggler's `juggler run` wires). It proves the lock
-// file itself enforces mutual exclusion the way a monitor's liveness probe
-// depends on: a lock a second AcquireJobLock cannot take is "alive", one it
-// can take again is "gone". The probe itself — probeJobLock — is a separate,
-// instantaneous flock-then-unlock, not a second AcquireJobLock; this test
-// exercises the lock file's semantics the probe relies on, not the probe's
-// own code path. Identity with what `ringmaster status` reads holds by code
-// reading, not by this test driving the real CLI: a.target = b.Parent = the
-// CLI's --target, and AcquireJobLock resolves ChannelID(resolveSession(target))
-// the same way Start does. The real bats version (real ringmaster binary, a
-// real `juggler run` subprocess, polling `ringmaster status`) goes with the
-// reaper test, tracked as clown#257.
+// (the same function cmd/juggler's `juggler run` wires) against ringmaster's
+// in-process host service (RFC-0020 §7.3, the store is the service's alone).
+// It proves the hold enforces mutual exclusion the way liveness depends on: a
+// hold a second AcquireJobLock cannot take is "alive"; once the terminal is
+// written and the hold released the job cannot be held again. The real bats
+// version (real ringmaster binary, a real `juggler run` subprocess, polling
+// `ringmaster status`) goes with the reaper test, tracked as clown#257.
 func TestJobwakeAcquireJobLock_AliveWhileHeldGoneAfterRelease(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	h := newHarness(t)
-	ctx := context.Background()
-	job, err := h.deps.Ringmaster.Start(ctx, testRoot, "test", "test")
+	rt, err := os.MkdirTemp("", "rm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(rt) })
+	t.Setenv("XDG_RUNTIME_DIR", rt)
+	stopService, err := jobwake.StartService(nil)
+	if err != nil {
+		t.Fatalf("in-process ringmaster service: %v", err)
+	}
+	t.Cleanup(stopService)
+	job, err := jobwake.Start(jobwake.StartOpts{Target: testRoot, Label: "test", Source: "test"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,15 +81,16 @@ func TestJobwakeAcquireJobLock_AliveWhileHeldGoneAfterRelease(t *testing.T) {
 	if _, err := jobwake.AcquireJobLock(testRoot, job); !errors.Is(err, jobwake.ErrAlreadyLocked) {
 		t.Fatalf("second acquire while the first is held: err = %v, want jobwake.ErrAlreadyLocked (alive)", err)
 	}
+	// The holder releases only once its terminal record is durable (RFC-0020
+	// §5.4); a job settled and released can no longer be held (gone).
+	if err := jobwake.Done(testRoot, job, jobwake.TypeSucceeded, "ok", ""); err != nil {
+		t.Fatalf("done: %v", err)
+	}
 	if err := release(); err != nil {
 		t.Fatalf("release: %v", err)
 	}
-	release2, err := jobwake.AcquireJobLock(testRoot, job)
-	if err != nil {
-		t.Fatalf("acquire after release: err = %v, want success (gone)", err)
-	}
-	if err := release2(); err != nil {
-		t.Fatalf("release2: %v", err)
+	if _, err := jobwake.AcquireJobLock(testRoot, job); !errors.Is(err, jobwake.ErrAlreadyTerminal) {
+		t.Fatalf("acquire after the terminal and release: err = %v, want jobwake.ErrAlreadyTerminal", err)
 	}
 }
 

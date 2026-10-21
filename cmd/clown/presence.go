@@ -13,15 +13,13 @@ import (
 
 // runPresence dispatches the `clown presence` subcommands. The presence index
 // (code.linenisgreat.com/ringmaster/pkgs/jobwake presence.go) is the clown→spinclass
-// liveness seam (RFC-0014): each live clown writes a record under
-// $XDG_STATE_HOME/ringmaster/presence/, its job-watch monitor refreshes the
-// lastSeen on a ticker, and a clean shutdown
-// removes the file (ListPresence also prunes records past the freshness window).
-// This CLI is the stable query surface a consumer — notably spinclass's
-// liveness probe (spinclass#201) — uses instead of reading the on-disk JSON
-// directly, so the schema and the freshness window stay clown's concern. It is a
-// pure read, available regardless of CLOWN_DISABLE_JOB_WAKEUP (when disabled no
-// records are written, so the listing is simply empty).
+// liveness seam (RFC-0014): ringmaster's host service keeps it (RFC-0020 §6.4).
+// A clown announces itself at launch for a two-minute window, and stays present
+// for as long as its `ringmaster monitor` subscription lives. This CLI is the
+// stable query surface a consumer — notably spinclass's liveness probe
+// (spinclass#201) — uses instead of asking the service directly, so the schema
+// and the freshness window stay clown's concern. It is a pure read, and fails
+// when the service cannot be reached (the store is private to it).
 func runPresence(args []string) int {
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "clown presence: expected a subcommand (list)")
