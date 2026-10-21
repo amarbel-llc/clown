@@ -56,6 +56,10 @@ type Launch struct {
 	// a single inode; the shim relays UDP StatsdAddr() to it. Empty: no
 	// statsd path (the frontend has CLOWN_DISABLE_STATSD=1).
 	StatsdSocket string
+	// IdleSocket is the frontend's idle-listener unixgram socket (clown#287),
+	// bound in as a single inode so a Stop hook inside can tell the frontend
+	// the agent is idle. Empty: self-close is not armed for this launch.
+	IdleSocket string
 	// ServeFile lists the agent-side servers the relay starts inside the
 	// unit (WriteInUnitServers); bound in read-only. Empty: none.
 	ServeFile string
@@ -165,6 +169,9 @@ func (l Launch) properties() []string {
 	}
 	if l.StatsdSocket != "" {
 		props = append(props, "BindPaths="+l.StatsdSocket)
+	}
+	if l.IdleSocket != "" {
+		props = append(props, "BindPaths="+l.IdleSocket)
 	}
 	for _, p := range l.PlumbingRW {
 		props = append(props, "BindPaths=-"+p)

@@ -326,6 +326,8 @@ func run(rawArgs []string) int {
 			return runAgentScopeCapabilities(rawArgs[1:])
 		case "egress-connect":
 			return runEgressConnect(rawArgs[1:])
+		case "idle-notify":
+			return runIdleNotify(rawArgs[1:])
 		}
 	}
 
@@ -775,6 +777,16 @@ func runWithFlags(flags parsedFlags) int {
 		} else if jugglerDir != "" {
 			pluginDirs = append(pluginDirs, jugglerDir)
 		}
+	}
+
+	// Self-close (clown#287): inside a spinclass session, a Stop hook pokes this
+	// frontend, which runs `spinclass close-self-run` outside the agent unit.
+	// Arms only for a claude launch with spinclass on PATH; see selfCloseArmed.
+	idleDir, idleSock, closeIdle := armSelfClose(flags, root)
+	defer closeIdle()
+	if idleDir != "" {
+		pluginDirs = append(pluginDirs, idleDir)
+		flags.idleSocket = idleSock
 	}
 
 	// Per FDR 0003, plugin-contributed system-prompt-append.d
@@ -1821,6 +1833,7 @@ func runProvider(executor Executor, bound Command, logger *slog.Logger, flags pa
 			argv:         append([]string{binary}, argv...),
 			extraEnv:     extraEnv,
 			principal:    flags.identity.Key,
+			idleSocket:   flags.idleSocket,
 		}, logger)
 	}
 
@@ -2846,6 +2859,9 @@ type parsedFlags struct {
 	// from buildcfg.DefaultProfile, not from --profile or the clownfile pin; it
 	// then yields to the clownfile [profile] model in applyNamedProfile.
 	profileIsBuildDefault bool
+	// idleSocket is the frontend's idle-listener socket when self-close is
+	// armed (clown#287); an agent unit binds it in so the Stop hook can reach it.
+	idleSocket string
 	// clownfileEnvSet names the env keys applyClownfileProfile set because they
 	// were unset in the ambient environment, so a named profile's Env can
 	// override those defaults without overriding the ambient env (clown#285).

@@ -37,6 +37,7 @@ func runInAgentScope(req agentScopeRequest, logger *slog.Logger) int {
 		return 1
 	}
 	launch.Principal = req.principal
+	launch.IdleSocket = req.idleSocket
 	if req.stagingRoot != "" && !strings.HasPrefix(req.stagingRoot, launch.Spec.Worktree+"/") {
 		launch.PlumbingRO = append(launch.PlumbingRO, req.stagingRoot)
 	}
@@ -71,6 +72,9 @@ type agentScopeRequest struct {
 	extraEnv []string
 	// principal is this session's identity key, reported in the result.
 	principal string
+	// idleSocket is the frontend's self-close idle socket (clown#287); empty
+	// when not armed.
+	idleSocket string
 }
 
 // agentScopeTools resolves systemd-run and systemctl from PATH (overridable
