@@ -330,33 +330,82 @@ func TestModelPrecedenceClownfileThenNamedProfile(t *testing.T) {
 	})
 }
 
-// The host clownfile pins `[profile] model = "claude-sonnet-5-5"` and the build
-// default profile is the real builtin claude-anthropic. The named-profile layer
-// outranks the clownfile model (clown#281), so the effective --model is the
-// builtin's — which therefore has to be the current model, or spawned sessions
-// silently run on an older one.
-func TestBuiltinDefaultProfileWithClownfileModelPin(t *testing.T) {
+func builtinProfile(t *testing.T, name string) profile.Profile {
+	t.Helper()
 	builtins, err := profile.Builtin()
 	if err != nil {
 		t.Fatal(err)
 	}
-	var def *profile.Profile
-	for i := range builtins {
-		if builtins[i].Name == "claude-anthropic" {
-			def = &builtins[i]
+	for _, p := range builtins {
+		if p.Name == name {
+			return p
 		}
 	}
-	if def == nil {
-		t.Fatal("builtin claude-anthropic profile missing")
+	t.Fatalf("builtin profile %q missing", name)
+	return profile.Profile{}
+}
+
+// A profile that resolved only from the build default (no --profile, no
+// clownfile pin) was never selected, so it must not outrank the clownfile
+// [profile] model: the host clownfile's claude-sonnet-5-5 pin used to lose to
+// the builtin default's older model. Run against the real builtin default.
+func TestBuildDefaultProfileYieldsToClownfileModel(t *testing.T) {
+	def := builtinProfile(t, "claude-anthropic")
+	f := parsedFlags{provider: "claude", profileIsBuildDefault: true}
+	applyClownfileProfile(&f, clownfile.Profile{Model: "host-pinned-model"})
+	if err := applyNamedProfile(&f, def); err != nil {
+		t.Fatal(err)
 	}
+	want := []string{"--model", "host-pinned-model"}
+	if !reflect.DeepEqual(f.forwarded, want) {
+		t.Fatalf("forwarded = %v, want %v", f.forwarded, want)
+	}
+}
+
+// An explicitly selected profile (--profile, a clownfile pin, the picker) still
+// outranks the clownfile model (clown#281).
+func TestSelectedProfileStillBeatsClownfileModel(t *testing.T) {
+	def := builtinProfile(t, "claude-anthropic")
 	f := parsedFlags{provider: "claude"}
-	applyClownfileProfile(&f, clownfile.Profile{Model: "claude-sonnet-5-5"})
-	if err := applyNamedProfile(&f, *def); err != nil {
+	applyClownfileProfile(&f, clownfile.Profile{Model: "host-pinned-model"})
+	if err := applyNamedProfile(&f, def); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"--model", def.Model}
+	if !reflect.DeepEqual(f.forwarded, want) {
+		t.Fatalf("forwarded = %v, want %v", f.forwarded, want)
+	}
+}
+
+// With no clownfile model the build default's own model applies, and the
+// builtin anthropic default must name the current sonnet.
+func TestBuildDefaultProfileModelAppliesWithoutClownfileModel(t *testing.T) {
+	def := builtinProfile(t, "claude-anthropic")
+	f := parsedFlags{provider: "claude", profileIsBuildDefault: true}
+	if err := applyNamedProfile(&f, def); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"--model", "claude-sonnet-5-5"}
 	if !reflect.DeepEqual(f.forwarded, want) {
 		t.Fatalf("forwarded = %v, want %v", f.forwarded, want)
+	}
+}
+
+func TestProfileIsBuildDefault(t *testing.T) {
+	for _, c := range []struct {
+		name                string
+		resolved, flag, pin string
+		want                bool
+	}{
+		{"nothing resolved", "", "", "", false},
+		{"only the build default", "d", "", "", true},
+		{"explicit --profile", "x", "x", "", false},
+		{"clownfile pin", "p", "", "p", false},
+		{"flag over pin", "x", "x", "p", false},
+	} {
+		if got := profileIsBuildDefault(c.resolved, c.flag, c.pin); got != c.want {
+			t.Errorf("%s: profileIsBuildDefault(%q,%q,%q) = %v, want %v", c.name, c.resolved, c.flag, c.pin, got, c.want)
+		}
 	}
 }
 

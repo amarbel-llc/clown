@@ -403,7 +403,9 @@ func runWithFlags(flags parsedFlags) int {
 	// runWithFlags path — the resume subcommand included — gets the clownfile
 	// pin and the build-time default. A resolved name makes selectedProfile
 	// non-nil below, which is what suppresses the interactive picker.
+	flagProfile := flags.profile
 	flags.profile = resolveProfileName(flags.profile, flags.providerExplicit, cf.Profile.ProfileName, buildcfg.DefaultProfile)
+	flags.profileIsBuildDefault = profileIsBuildDefault(flags.profile, flagProfile, cf.Profile.ProfileName)
 
 	// clownfile [attach] escape-to-shell pty proxy: resolve the enable bit + key +
 	// command here so runProvider (deep in the plugin-host path) can gate on it
@@ -878,6 +880,14 @@ func resolveProfileName(flagProfile string, providerExplicit bool, pin, buildDef
 	return buildDefault
 }
 
+// profileIsBuildDefault reports whether the resolved profile name came only
+// from buildcfg.DefaultProfile: nothing was selected by --profile or the
+// clownfile pin. Such a profile is a fallback, not a choice, so its model must
+// not outrank the clownfile [profile] model.
+func profileIsBuildDefault(resolved, flagProfile, pin string) bool {
+	return resolved != "" && flagProfile == "" && pin == ""
+}
+
 // applyNamedProfile applies a selected named profile (--profile, the clownfile
 // pin, or the interactive picker) to the run. Unlike the clownfile [profile]
 // defaults layer (applyClownfileProfile, only-if-unset), a named profile is an
@@ -902,6 +912,9 @@ func applyNamedProfile(flags *parsedFlags, p profile.Profile) error {
 	}
 	if p.Model != "" && providerTakesModelFlag(flags.provider) {
 		switch {
+		case flags.clownfileModelInjected && flags.profileIsBuildDefault:
+			// A build-default profile was never selected, so the clownfile
+			// model stays: only an explicit selection outranks it.
 		case flags.clownfileModelInjected:
 			// The profile is an explicit selection; it outranks the clownfile
 			// default model, which applyClownfileProfile put at the front.
@@ -2829,6 +2842,10 @@ type parsedFlags struct {
 	// named profile's model (an explicit selection) can replace it while a
 	// user's own --model still wins over both (clown#281).
 	clownfileModelInjected bool
+	// profileIsBuildDefault marks that the resolved named profile came only
+	// from buildcfg.DefaultProfile, not from --profile or the clownfile pin; it
+	// then yields to the clownfile [profile] model in applyNamedProfile.
+	profileIsBuildDefault bool
 	// clownfileEnvSet names the env keys applyClownfileProfile set because they
 	// were unset in the ambient environment, so a named profile's Env can
 	// override those defaults without overriding the ambient env (clown#285).
