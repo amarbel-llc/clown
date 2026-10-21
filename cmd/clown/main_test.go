@@ -330,6 +330,36 @@ func TestModelPrecedenceClownfileThenNamedProfile(t *testing.T) {
 	})
 }
 
+// The host clownfile pins `[profile] model = "claude-sonnet-5-5"` and the build
+// default profile is the real builtin claude-anthropic. The named-profile layer
+// outranks the clownfile model (clown#281), so the effective --model is the
+// builtin's — which therefore has to be the current model, or spawned sessions
+// silently run on an older one.
+func TestBuiltinDefaultProfileWithClownfileModelPin(t *testing.T) {
+	builtins, err := profile.Builtin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var def *profile.Profile
+	for i := range builtins {
+		if builtins[i].Name == "claude-anthropic" {
+			def = &builtins[i]
+		}
+	}
+	if def == nil {
+		t.Fatal("builtin claude-anthropic profile missing")
+	}
+	f := parsedFlags{provider: "claude"}
+	applyClownfileProfile(&f, clownfile.Profile{Model: "claude-sonnet-5-5"})
+	if err := applyNamedProfile(&f, *def); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"--model", "claude-sonnet-5-5"}
+	if !reflect.DeepEqual(f.forwarded, want) {
+		t.Fatalf("forwarded = %v, want %v", f.forwarded, want)
+	}
+}
+
 // clown#285: the env precedence is ambient environment > named profile env >
 // clownfile [profile] env, whichever order the layers are applied.
 func TestEnvPrecedenceClownfileThenNamedProfile(t *testing.T) {

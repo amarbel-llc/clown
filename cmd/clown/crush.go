@@ -247,7 +247,7 @@ func writeCrushConfig(configDir string, backend crushBackend, baseURL, apiKey, m
 	if model == "" {
 		switch backend {
 		case crushBackendAnthropic:
-			model = "claude-sonnet-4-5"
+			model = "claude-sonnet-5-5"
 		default:
 			model = "gpt-4o"
 		}

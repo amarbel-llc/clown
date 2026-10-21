@@ -360,8 +360,8 @@ func TestWriteCrushConfig_DefaultModels(t *testing.T) {
 			t.Fatal(err)
 		}
 		data, _ := os.ReadFile(filepath.Join(dir, "crush.json"))
-		if !strings.Contains(string(data), "claude-sonnet-4-5") {
-			t.Errorf("expected default claude-sonnet-4-5 for anthropic: %s", data)
+		if !strings.Contains(string(data), "claude-sonnet-5-5") {
+			t.Errorf("expected default claude-sonnet-5-5 for anthropic: %s", data)
 		}
 	})
 }

@@ -3,7 +3,7 @@ name = "claude-anthropic"
 display = "Claude (Anthropic)"
 provider = "claude"
 backend = "anthropic"
-model = "claude-sonnet-4-6"
+model = "claude-sonnet-5-5"
 
 [[profile]]
 name = "claude-local"
@@ -17,7 +17,7 @@ name = "opencode-anthropic"
 display = "OpenCode (Anthropic)"
 provider = "opencode"
 backend = "anthropic"
-model = "claude-sonnet-4-6"
+model = "claude-sonnet-5-5"
 
 [[profile]]
 name = "opencode-local"
@@ -31,7 +31,7 @@ name = "crush-anthropic"
 display = "Crush (Anthropic)"
 provider = "crush"
 backend = "anthropic"
-model = "claude-sonnet-4-5"
+model = "claude-sonnet-5-5"
 
 [[profile]]
 name = "crush-local"
