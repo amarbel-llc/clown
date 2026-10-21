@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -33,6 +34,64 @@ func parseRemoteControl(t *testing.T, got string) (present bool, value bool) {
 		return false, false
 	}
 	return true, *v.RemoteControlAtStartup
+}
+
+func TestProfileDisallowedTools(t *testing.T) {
+	t.Setenv("CLOWN_DISALLOWED_TOOLS", "")
+	if got := profileDisallowedTools(); len(got) != 0 {
+		t.Errorf("unset: %v", got)
+	}
+	t.Setenv("CLOWN_DISALLOWED_TOOLS", " Artifact, ArtifactData ,,Workflow,")
+	got := profileDisallowedTools()
+	if want := "Artifact,ArtifactData,Workflow"; strings.Join(got, ",") != want {
+		t.Errorf("got %v, want %s", got, want)
+	}
+}
+
+func parseConnectorSetting(t *testing.T, got string) (present, value bool) {
+	t.Helper()
+	var v struct {
+		Disable *bool `json:"disableClaudeAiConnectors"`
+	}
+	if err := json.Unmarshal([]byte(got), &v); err != nil {
+		t.Fatalf("not valid JSON: %v (%q)", err, got)
+	}
+	if v.Disable == nil {
+		return false, false
+	}
+	return true, *v.Disable
+}
+
+// Context floor: a profile that sets CLOWN_DISABLE_CLAUDEAI_CONNECTORS=1 turns
+// the claude.ai connectors off through both knobs claude honors (the
+// disableClaudeAiConnectors setting and ENABLE_CLAUDEAI_MCP_SERVERS=false),
+// so the connectors' tool definitions never enter the context. Off by default.
+func TestClaudeSafetySettingsJSON_ConnectorsOffOnlyWhenAsked(t *testing.T) {
+	t.Setenv("ENABLE_CLAUDEAI_MCP_SERVERS", "")
+
+	t.Setenv("CLOWN_DISABLE_CLAUDEAI_CONNECTORS", "")
+	got := claudeSafetySettingsJSON("")
+	if present, _ := parseConnectorSetting(t, got); present {
+		t.Errorf("connector setting must be absent by default: %s", got)
+	}
+	if _, ok := parseSafetyEnv(t, got)["ENABLE_CLAUDEAI_MCP_SERVERS"]; ok {
+		t.Errorf("connector env must be absent by default: %s", got)
+	}
+
+	t.Setenv("CLOWN_DISABLE_CLAUDEAI_CONNECTORS", "1")
+	got = claudeSafetySettingsJSON("")
+	if present, value := parseConnectorSetting(t, got); !present || !value {
+		t.Errorf("disableClaudeAiConnectors must be true: %s", got)
+	}
+	if v := parseSafetyEnv(t, got)["ENABLE_CLAUDEAI_MCP_SERVERS"]; v != "false" {
+		t.Errorf("ENABLE_CLAUDEAI_MCP_SERVERS = %q, want false: %s", v, got)
+	}
+
+	// An operator's explicit ENABLE_CLAUDEAI_MCP_SERVERS is not overridden.
+	t.Setenv("ENABLE_CLAUDEAI_MCP_SERVERS", "true")
+	if _, ok := parseSafetyEnv(t, claudeSafetySettingsJSON(""))["ENABLE_CLAUDEAI_MCP_SERVERS"]; ok {
+		t.Error("an explicit ENABLE_CLAUDEAI_MCP_SERVERS must win over the profile default")
+	}
 }
 
 // clown#289: hook processes are children of claude and inherit only claude's

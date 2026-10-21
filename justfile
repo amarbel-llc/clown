@@ -2160,3 +2160,19 @@ debug-xmpp-native-clown-smoke:
     else
       echo "=== FAIL: see above ==="; exit 1
     fi
+
+# Print the distinct strings in the claude binary on PATH that match REGEX (up
+# to 40 chars of context each side), so a setting or env var name can be taken
+# from the binary instead of memory (clown context-floor work).
+#
+# list strings in the claude binary matching a regex
+[group("explore")]
+explore-claude-binary-strings REGEX:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    bin="$(readlink -f "$(command -v claude)")"
+    # nix wraps claude: the real binary is the sibling .claude-wrapped
+    wrapped="$(dirname "$bin")/.claude-wrapped"
+    [[ -e "$wrapped" ]] && bin="$wrapped"
+    echo "claude: $bin" >&2
+    { grep -a -o -E '.{0,40}{{ REGEX }}.{0,40}' "$bin" || true; } | tr -c '[:print:]\n' '?' | sort -u | head -60

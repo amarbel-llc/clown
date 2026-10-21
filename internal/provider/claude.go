@@ -13,8 +13,12 @@ type ClaudeArgs struct {
 	CLIPath             string
 	AgentsFile          string
 	DisallowedToolsFile string
-	SystemPromptFile    string
-	AppendFragments     string
+	// ExtraDisallowed are additional --disallowed-tools entries (a profile's
+	// context-floor trim) layered after the global file's; an entry the file
+	// already carries, or repeated here, is emitted once.
+	ExtraDisallowed  []string
+	SystemPromptFile string
+	AppendFragments  string
 	// Staging is the launch's staging root, under which the
 	// --append-system-prompt-file file is written. Required whenever
 	// AppendFragments is non-empty, which is every real clown launch: clown
@@ -49,14 +53,21 @@ func BuildClaudeArgs(cfg ClaudeArgs, forwarded []string) ([]string, string, erro
 	var args []string
 	var appendFile string
 
+	var patterns []string
 	if cfg.DisallowedToolsFile != "" {
-		patterns, err := readDisallowedTools(cfg.DisallowedToolsFile)
+		var err error
+		patterns, err = readDisallowedTools(cfg.DisallowedToolsFile)
 		if err != nil {
 			return nil, "", err
 		}
-		for _, p := range patterns {
-			args = append(args, "--disallowed-tools", p)
+	}
+	seen := map[string]bool{}
+	for _, p := range append(patterns, cfg.ExtraDisallowed...) {
+		if p == "" || seen[p] {
+			continue
 		}
+		seen[p] = true
+		args = append(args, "--disallowed-tools", p)
 	}
 
 	if cfg.AgentsFile != "" {

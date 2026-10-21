@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"strings"
 )
 
 // afkTimeoutDisableMS is the CLAUDE_AFK_TIMEOUT_MS value clown injects to disable
@@ -19,6 +20,19 @@ import (
 // published docs, so it may change or break without notice; it is a stopgap
 // until a first-class control ships (clown#163).
 const afkTimeoutDisableMS = "2147483647"
+
+// profileDisallowedTools returns the extra --disallowed-tools entries a profile
+// asked for through CLOWN_DISALLOWED_TOOLS (a comma-separated list in the
+// profile's env table), layered over the global set. Blank entries are dropped.
+func profileDisallowedTools() []string {
+	var out []string
+	for _, p := range strings.Split(os.Getenv("CLOWN_DISALLOWED_TOOLS"), ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
 
 // claudeSafetySettingsJSON returns the JSON clown feeds to `claude --settings`
 // for the claude family: clown's safety defaults. claude merges --settings as a
@@ -78,6 +92,16 @@ func claudeSafetySettingsJSON(principal string) string {
 	}
 	if os.Getenv("CLAUDE_CODE_DISABLE_AUTO_MEMORY") == "" {
 		env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
+	}
+	// Context floor: a profile that sets CLOWN_DISABLE_CLAUDEAI_CONNECTORS=1
+	// drops the claude.ai connectors' tool definitions. claude honors both the
+	// setting and the env var (checked in the binary, 2.1.306); both are set so
+	// either path suffices, and an explicit operator env var is left alone.
+	if os.Getenv("CLOWN_DISABLE_CLAUDEAI_CONNECTORS") == "1" {
+		settings["disableClaudeAiConnectors"] = true
+		if os.Getenv("ENABLE_CLAUDEAI_MCP_SERVERS") == "" {
+			env["ENABLE_CLAUDEAI_MCP_SERVERS"] = "false"
+		}
 	}
 	if len(env) > 0 {
 		settings["env"] = env

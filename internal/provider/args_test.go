@@ -20,6 +20,48 @@ func testStagingRoot(t *testing.T) *staging.Root {
 	return r
 }
 
+// A profile's extra disallowed tools layer over the global file: appended after
+// it, in order, never duplicating a global entry, and usable with no global file.
+func TestBuildClaudeArgs_ExtraDisallowedLayersOverTheGlobalSet(t *testing.T) {
+	f, err := os.CreateTemp("", "disallowed-*.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(f.Name())
+	f.WriteString("Bash(*)\nWebFetch\n")
+	f.Close()
+
+	disallowed := func(args []string) []string {
+		var got []string
+		for i, a := range args {
+			if a == "--disallowed-tools" && i+1 < len(args) {
+				got = append(got, args[i+1])
+			}
+		}
+		return got
+	}
+
+	args, _, err := BuildClaudeArgs(ClaudeArgs{
+		DisallowedToolsFile: f.Name(),
+		ExtraDisallowed:     []string{"Artifact", "WebFetch", "Workflow", "Artifact"},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"Bash(*)", "WebFetch", "Artifact", "Workflow"}
+	if got := disallowed(args); strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("--disallowed-tools = %v, want %v", got, want)
+	}
+
+	args, _, err = BuildClaudeArgs(ClaudeArgs{ExtraDisallowed: []string{"Artifact"}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := disallowed(args); strings.Join(got, ",") != "Artifact" {
+		t.Errorf("without a global file: %v", got)
+	}
+}
+
 func TestBuildClaudeArgs_DisallowedToolsFromFile(t *testing.T) {
 	f, err := os.CreateTemp("", "disallowed-*.txt")
 	if err != nil {
