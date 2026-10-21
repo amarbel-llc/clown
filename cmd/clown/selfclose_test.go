@@ -284,6 +284,117 @@ func TestSelfCloseArmedGates(t *testing.T) {
 	})
 }
 
+// A gate that fails must say which one: a silent unarmed launch is what made
+// the first live check undiagnosable.
+func TestSelfCloseDecisionNamesTheFailingGate(t *testing.T) {
+	bin, _ := fakeSpinclass(t, t.TempDir(), "0")
+	f := parsedFlags{provider: "claude"}
+	f.identity.Key = "k-1"
+	for _, c := range []struct {
+		name, spin, runtime, path, want string
+	}{
+		{"no spinclass session", "", "/run/user/1", filepath.Dir(bin), "SPINCLASS_SESSION_ID"},
+		{"no runtime dir", "repo/b", "", filepath.Dir(bin), "XDG_RUNTIME_DIR"},
+		{"no spinclass on PATH", "repo/b", "/run/user/1", t.TempDir(), "spinclass"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Setenv("SPINCLASS_SESSION_ID", c.spin)
+			t.Setenv("XDG_RUNTIME_DIR", c.runtime)
+			t.Setenv("PATH", c.path)
+			got, reason := selfCloseDecision(f)
+			if got != "" || !strings.Contains(reason, c.want) {
+				t.Fatalf("decision = %q, %q; want no binary and a reason naming %q", got, reason, c.want)
+			}
+		})
+	}
+	t.Setenv("SPINCLASS_SESSION_ID", "repo/b")
+	t.Setenv("XDG_RUNTIME_DIR", "/run/user/1")
+	t.Setenv("PATH", filepath.Dir(bin))
+	if got, reason := selfCloseDecision(f); got != bin || reason != "" {
+		t.Fatalf("armed decision = %q, %q; want %q and no reason", got, reason, bin)
+	}
+}
+
+// armSelfClose records its decision in close-self-run.log: armed (with the
+// socket and spinclass path) or not armed (with the reason) on a claude launch.
+func TestArmSelfCloseLogsItsDecision(t *testing.T) {
+	state := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", state)
+	t.Setenv("SPINCLASS_SESSION_ID", "")
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	f := parsedFlags{provider: "claude"}
+	f.identity.Key = "k-1"
+	dir, sock, closeFn := armSelfClose(f, testStagingRoot(t))
+	closeFn()
+	if dir != "" || sock != "" {
+		t.Fatalf("must not arm outside a spinclass session: %q %q", dir, sock)
+	}
+	b, err := os.ReadFile(filepath.Join(state, "clown", "close-self-run.log"))
+	if err != nil {
+		t.Fatalf("an unarmed claude launch must leave a log line: %v", err)
+	}
+	if !strings.Contains(string(b), "self-close not armed") || !strings.Contains(string(b), "SPINCLASS_SESSION_ID") {
+		t.Fatalf("log = %q", b)
+	}
+
+	// Another provider is not a self-close candidate and logs nothing new.
+	before := len(b)
+	f.provider = "codex"
+	_, _, closeFn = armSelfClose(f, testStagingRoot(t))
+	closeFn()
+	after, _ := os.ReadFile(filepath.Join(state, "clown", "close-self-run.log"))
+	if len(after) != before {
+		t.Fatalf("a non-claude launch must not log, got %q", after[before:])
+	}
+
+	// Armed: the socket, hook dir and spinclass path are recorded.
+	bin, _ := fakeSpinclass(t, t.TempDir(), "0")
+	t.Setenv("SPINCLASS_SESSION_ID", "repo/b")
+	t.Setenv("PATH", filepath.Dir(bin))
+	f.provider = "claude"
+	dir, sock, closeFn = armSelfClose(f, testStagingRoot(t))
+	defer closeFn()
+	if dir == "" || sock == "" {
+		t.Fatalf("expected to arm: %q %q", dir, sock)
+	}
+	armed, _ := os.ReadFile(filepath.Join(state, "clown", "close-self-run.log"))
+	for _, want := range []string{"self-close armed", sock, bin} {
+		if !strings.Contains(string(armed), want) {
+			t.Errorf("log missing %q:\n%s", want, armed)
+		}
+	}
+}
+
+// idle-notify leaves its outcome where the operator can find it (the unit's
+// writable temp dir), since a hook has no other voice: both a delivered poke
+// and a failed one are recorded, and neither changes the exit status.
+func TestIdleNotifyRecordsItsOutcome(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	logFile := filepath.Join(tmp, "clown-idle-notify.log")
+
+	sock := filepath.Join(shortSocketDir(t), "k.sock")
+	var runs atomic.Int32
+	l, err := startIdleListener(sock, func() { runs.Add(1) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	if code := runIdleNotify([]string{sock}); code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	if code := runIdleNotify([]string{filepath.Join(shortSocketDir(t), "absent.sock")}); code != 0 {
+		t.Fatalf("exit = %d", code)
+	}
+	b, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Fatalf("no idle-notify log: %v", err)
+	}
+	if !strings.Contains(string(b), "sent") || !strings.Contains(string(b), "dial failed") {
+		t.Fatalf("log should record one delivery and one failure:\n%s", b)
+	}
+}
+
 func TestSynthIdlePluginDirRegistersAStopHook(t *testing.T) {
 	dir, err := synthIdlePluginDir(testStagingRoot(t), "/nix/store/c/bin/clown", "/run/user/1001/clown/idle/k.sock")
 	if err != nil {

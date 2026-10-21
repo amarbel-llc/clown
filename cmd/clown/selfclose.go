@@ -33,17 +33,47 @@ func idleSocketPath(runtimeDir, key string) string {
 // plugin hook) inside a spinclass session, a runtime dir for the socket and
 // spinclass on PATH. --print-launch-plan never arms: it writes no state.
 func selfCloseArmed(flags parsedFlags) (spinclassPath string, ok bool) {
-	if flags.provider != "claude" || flags.naked || flags.printLaunchPlan || flags.identity.Key == "" {
-		return "", false
-	}
-	if os.Getenv("SPINCLASS_SESSION_ID") == "" || os.Getenv("XDG_RUNTIME_DIR") == "" {
-		return "", false
+	path, reason := selfCloseDecision(flags)
+	return path, reason == ""
+}
+
+// selfCloseDecision is selfCloseArmed with the reason it declined: an empty
+// reason means armed. It names the failing gate so a silent launch is
+// diagnosable.
+func selfCloseDecision(flags parsedFlags) (spinclassPath, reason string) {
+	switch {
+	case flags.provider != "claude":
+		return "", "provider is not claude"
+	case flags.naked:
+		return "", "--naked"
+	case flags.printLaunchPlan:
+		return "", "--print-launch-plan"
+	case flags.identity.Key == "":
+		return "", "no session identity key"
+	case os.Getenv("SPINCLASS_SESSION_ID") == "":
+		return "", "SPINCLASS_SESSION_ID is not set in clown's environment"
+	case os.Getenv("XDG_RUNTIME_DIR") == "":
+		return "", "XDG_RUNTIME_DIR is not set in clown's environment"
 	}
 	path, err := exec.LookPath("spinclass")
 	if err != nil {
-		return "", false
+		return "", "spinclass is not on clown's PATH"
 	}
-	return path, true
+	return path, ""
+}
+
+// logSelfClose appends one timestamped line to the close-self-run log, best
+// effort: the log is the only record of why a launch did or did not arm.
+func logSelfClose(logPath, format string, args ...any) {
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o700); err != nil {
+		return
+	}
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	fmt.Fprintf(f, "%s %s\n", time.Now().UTC().Format(time.RFC3339), fmt.Sprintf(format, args...))
 }
 
 // selfCloseRunner runs `spinclass close-self-run` for one session.
@@ -145,17 +175,28 @@ func (l *idleListener) Close() {
 // runIdleNotify is `clown idle-notify SOCKET`, the Stop hook's command: it
 // sends one datagram to the frontend and always exits 0, so it can never fail
 // or stall the agent's turn.
+//
+// A hook has no other voice, so its outcome is appended to
+// clown-idle-notify.log in the temp dir (inside an agent unit that is the
+// worktree's .tmp, which the operator can read).
 func runIdleNotify(args []string) int {
+	record := filepath.Join(os.TempDir(), "clown-idle-notify.log")
 	if len(args) != 1 {
+		logSelfClose(record, "idle-notify: want one socket argument, got %d", len(args))
 		return 0
 	}
 	conn, err := net.DialTimeout("unixgram", args[0], 250*time.Millisecond)
 	if err != nil {
+		logSelfClose(record, "idle-notify: dial failed: %v", err)
 		return 0
 	}
 	defer conn.Close()
 	_ = conn.SetWriteDeadline(time.Now().Add(250 * time.Millisecond))
-	_, _ = conn.Write([]byte{1})
+	if _, err := conn.Write([]byte{1}); err != nil {
+		logSelfClose(record, "idle-notify: write failed: %v", err)
+		return 0
+	}
+	logSelfClose(record, "idle-notify: sent to %s", args[0])
 	return 0
 }
 
@@ -202,27 +243,37 @@ func synthIdlePluginDir(root *staging.Root, clownBin, sock string) (string, erro
 // socket to bind into an agent unit ("" when not armed or on any failure: a
 // session that cannot self-close is still a working session).
 func armSelfClose(flags parsedFlags, root *staging.Root) (pluginDir, sock string, closeFn func()) {
-	bin, ok := selfCloseArmed(flags)
-	if !ok {
+	bin, reason := selfCloseDecision(flags)
+	logPath, logErr := userStateWritePath("close-self-run.log")
+	notArmed := func(why string) (string, string, func()) {
+		fmt.Fprintf(os.Stderr, "clown: self-close not armed: %s\n", why)
+		if logErr == nil {
+			logSelfClose(logPath, "self-close not armed (%s): %s", flags.identity.Key, why)
+		}
 		return "", "", func() {}
+	}
+	if reason != "" {
+		// Only a claude launch is a candidate; --naked, --print-launch-plan and
+		// other providers are silent (a plan must write no state).
+		if flags.provider == "claude" && !flags.naked && !flags.printLaunchPlan && logErr == nil {
+			logSelfClose(logPath, "self-close not armed (%s): %s", flags.identity.Key, reason)
+		}
+		return "", "", func() {}
+	}
+	if logErr != nil {
+		return notArmed(logErr.Error())
 	}
 	sock = idleSocketPath(os.Getenv("XDG_RUNTIME_DIR"), flags.identity.Key)
-	logPath, err := userStateWritePath("close-self-run.log")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "clown: self-close not armed: %v\n", err)
-		return "", "", func() {}
-	}
 	runner := &selfCloseRunner{bin: bin, principal: flags.identity.Key, logPath: logPath}
 	l, err := startIdleListener(sock, func() { _ = runner.run() })
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "clown: self-close not armed: %v\n", err)
-		return "", "", func() {}
+		return notArmed(err.Error())
 	}
 	dir, err := synthIdlePluginDir(root, flags.identity.Bin, sock)
 	if err != nil {
 		l.Close()
-		fmt.Fprintf(os.Stderr, "clown: self-close not armed: %v\n", err)
-		return "", "", func() {}
+		return notArmed(err.Error())
 	}
+	logSelfClose(logPath, "self-close armed (%s): socket %s, spinclass %s, hook plugin %s, clown %s", flags.identity.Key, sock, bin, dir, flags.identity.Bin)
 	return dir, sock, l.Close
 }
