@@ -365,6 +365,58 @@ func TestArmSelfCloseLogsItsDecision(t *testing.T) {
 	}
 }
 
+// The Stop hook must run the very binary that armed it. identity.Bin honors
+// $CLOWN_BIN, which a devshell may point at an older clown that does not know
+// `idle-notify` (live failure: "unknown flag idle-notify" after every turn), so
+// the hook uses the arming process's own executable, never identity.Bin.
+func TestArmSelfCloseHookRunsTheArmingExecutableNotCLOWN_BIN(t *testing.T) {
+	bin, _ := fakeSpinclass(t, t.TempDir(), "0")
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("SPINCLASS_SESSION_ID", "repo/b")
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	t.Setenv("PATH", filepath.Dir(bin))
+	t.Setenv("CLOWN_DISABLE_SELF_CLOSE", "")
+	f := parsedFlags{provider: "claude"}
+	f.identity.Key = "k-1"
+	f.identity.Bin = "/old/stub/clown" // what $CLOWN_BIN resolved to
+
+	dir, sock, closeFn := armSelfClose(f, testStagingRoot(t))
+	defer closeFn()
+	if dir == "" {
+		t.Fatal("expected to arm")
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hb, err := os.ReadFile(filepath.Join(dir, "hooks", "hooks.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(hb), "/old/stub/clown") {
+		t.Fatalf("hook uses $CLOWN_BIN's binary: %s", hb)
+	}
+	if !strings.Contains(string(hb), exe+" idle-notify "+sock) {
+		t.Fatalf("hook should run %q idle-notify %q:\n%s", exe, sock, hb)
+	}
+}
+
+// CLOWN_DISABLE_SELF_CLOSE=1 is the off-switch: nothing is armed and no hook
+// is registered.
+func TestSelfCloseDisableSwitch(t *testing.T) {
+	bin, _ := fakeSpinclass(t, t.TempDir(), "0")
+	t.Setenv("SPINCLASS_SESSION_ID", "repo/b")
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	t.Setenv("PATH", filepath.Dir(bin))
+	t.Setenv("CLOWN_DISABLE_SELF_CLOSE", "1")
+	f := parsedFlags{provider: "claude"}
+	f.identity.Key = "k-1"
+	got, reason := selfCloseDecision(f)
+	if got != "" || !strings.Contains(reason, "CLOWN_DISABLE_SELF_CLOSE") {
+		t.Fatalf("decision = %q, %q", got, reason)
+	}
+}
+
 // idle-notify leaves its outcome where the operator can find it (the unit's
 // writable temp dir), since a hook has no other voice: both a delivered poke
 // and a failed one are recorded, and neither changes the exit status.

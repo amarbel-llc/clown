@@ -50,6 +50,8 @@ func selfCloseDecision(flags parsedFlags) (spinclassPath, reason string) {
 		return "", "--print-launch-plan"
 	case flags.identity.Key == "":
 		return "", "no session identity key"
+	case os.Getenv("CLOWN_DISABLE_SELF_CLOSE") == "1":
+		return "", "CLOWN_DISABLE_SELF_CLOSE=1"
 	case os.Getenv("SPINCLASS_SESSION_ID") == "":
 		return "", "SPINCLASS_SESSION_ID is not set in clown's environment"
 	case os.Getenv("XDG_RUNTIME_DIR") == "":
@@ -269,11 +271,19 @@ func armSelfClose(flags parsedFlags, root *staging.Root) (pluginDir, sock string
 	if err != nil {
 		return notArmed(err.Error())
 	}
-	dir, err := synthIdlePluginDir(root, flags.identity.Bin, sock)
+	// The hook runs THIS executable, never flags.identity.Bin: that honors
+	// $CLOWN_BIN, which a devshell can point at an older clown that rejects
+	// `idle-notify` and errors after every turn.
+	exe := clownExePath()
+	if exe == "" {
+		l.Close()
+		return notArmed("cannot resolve clown's own executable")
+	}
+	dir, err := synthIdlePluginDir(root, exe, sock)
 	if err != nil {
 		l.Close()
 		return notArmed(err.Error())
 	}
-	logSelfClose(logPath, "self-close armed (%s): socket %s, spinclass %s, hook plugin %s, clown %s", flags.identity.Key, sock, bin, dir, flags.identity.Bin)
+	logSelfClose(logPath, "self-close armed (%s): socket %s, spinclass %s, hook plugin %s, clown %s", flags.identity.Key, sock, bin, dir, exe)
 	return dir, sock, l.Close
 }
