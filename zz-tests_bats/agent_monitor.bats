@@ -32,8 +32,8 @@ teardown() {
 
 # wait_for_line waits up to 20s for $OUT to contain $1.
 wait_for_line() {
-  local i
-  for i in $(seq 200); do
+  local _
+  for _ in $(seq 200); do
     grep -qF -- "$1" "$OUT" && return 0
     sleep 0.1
   done
@@ -67,6 +67,7 @@ start_relay() {
 finish_job() {
   local id
   id="$("$RINGMASTER_BIN" start --source relay-test --label "$1")"
+  # shellcheck disable=SC1010
   "$RINGMASTER_BIN" done "$id" --state succeeded --message "$1"
   echo "$id"
 }
