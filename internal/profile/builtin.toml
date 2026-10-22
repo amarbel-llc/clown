@@ -197,6 +197,29 @@ CLOWN_DISALLOWED_TOOLS = "Artifact,ArtifactData,ArtifactComments,DesignSync,Work
   "status",
 ]
 
+# canary-spinclass is canary-grit (below) with moxy dropped whole, for
+# confined runs that test spinclass's grit with no moxy server in the unit at
+# all. Its spinclass and just-us selections are canary-grit's (a test pins it).
+[[profile]]
+name = "canary-spinclass"
+display = "Canary (minimal worker, spinclass grit, no moxy)"
+provider = "claude"
+backend = "anthropic"
+model = "claude-sonnet-5-5"
+context_servers = ["clown-builtin-jobs/ringmaster", "clown-builtin-jobs/troupe", "spinclass/spinclass", "just-us/just-us"]
+
+[profile.env]
+CLOWN_DISABLE_CLAUDEAI_CONNECTORS = "1"
+CLOWN_DISALLOWED_TOOLS = "Artifact,ArtifactData,ArtifactComments,DesignSync,Workflow,SendFeedback,EnterPlanMode,ExitPlanMode,ScheduleWakeup,CronCreate,CronDelete,CronList,RemoteTrigger,EndConversation,ReportFindings,PushNotification,ListMcpResourcesTool,ReadMcpResourceTool,ReadMcpResourceDirTool,WaitForMcpServers"
+
+[profile.context_excluded]
+"spinclass/spinclass" = [
+  "close-child-session", "grant-session-handle", "list", "merge-this-session", "merge-this-session-async",
+  "nothing-but-the-truth", "perms-list", "release-session-handle", "resurrect", "session-job-cancel",
+  "spawn-session", "update-this-session-description", "validate",
+]
+"just-us/just-us" = ["dump_justfile", "list_variables"]
+
 # canary-grit is canary for runs that test spinclass's own grit tools under
 # confinement: moxy keeps only read-only folio read/ls, rg and jq (none of its
 # grit, chix or smith tools), just-us keeps run_recipe because canaries run

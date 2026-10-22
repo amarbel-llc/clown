@@ -123,7 +123,7 @@ func TestBuiltinTaskTemplates(t *testing.T) {
 // strips that server's tools, so every template must keep both whole.
 func TestBuiltinTemplatesKeepTheServersAWorkerNeedsToReportBack(t *testing.T) {
 	required := []string{"clown-builtin-jobs/ringmaster", "clown-builtin-jobs/troupe"}
-	for _, name := range []string{"reviewer", "porter", "canary", "canary-grit"} {
+	for _, name := range []string{"reviewer", "porter", "canary", "canary-grit", "canary-spinclass"} {
 		p := builtinByName(t, name)
 		for _, srv := range required {
 			if !slices.Contains(p.ContextServers, srv) {
@@ -160,6 +160,40 @@ func TestBuiltinCanaryGritKeepsGritAndRunRecipe(t *testing.T) {
 	for _, tool := range canaryGritMoxyKeep {
 		if strings.HasPrefix(tool, "grit_") || strings.HasPrefix(tool, "chix_") || strings.HasPrefix(tool, "smith_") || tool == "folio_write" {
 			t.Errorf("moxy %s must not be kept by canary-grit", tool)
+		}
+	}
+}
+
+// canary-spinclass is canary-grit without moxy: the worker's only tools beyond
+// Claude Code's own are spinclass's (the same surface as canary-grit), just-us
+// run_recipe, and job control and chat. Spinclass refuses canary-grit for this
+// run because it keeps moxy.
+func TestBuiltinCanarySpinclassDropsMoxyWhole(t *testing.T) {
+	p := builtinByName(t, "canary-spinclass")
+	if err := Validate(p); err != nil {
+		t.Fatal(err)
+	}
+	got := slices.Clone(p.ContextServers)
+	slices.Sort(got)
+	want := []string{"clown-builtin-jobs/ringmaster", "clown-builtin-jobs/troupe", "just-us/just-us", "spinclass/spinclass"}
+	if !slices.Equal(got, want) {
+		t.Errorf("context_servers = %v, want %v", got, want)
+	}
+	if _, ok := p.ContextExcluded["moxy/moxy"]; ok {
+		t.Error("canary-spinclass carries moxy exclusions for a server it does not keep")
+	}
+	grit := builtinByName(t, "canary-grit")
+	for _, srv := range []string{"spinclass/spinclass", "just-us/just-us"} {
+		if !slices.Equal(p.ContextExcluded[srv], grit.ContextExcluded[srv]) {
+			t.Errorf("%s exclusions differ from canary-grit's: %v vs %v", srv, p.ContextExcluded[srv], grit.ContextExcluded[srv])
+		}
+	}
+	if p.Provider != grit.Provider || p.Backend != grit.Backend || p.Model != grit.Model {
+		t.Errorf("shape = %s/%s/%s, want canary-grit's", p.Provider, p.Backend, p.Model)
+	}
+	for k, v := range grit.Env {
+		if p.Env[k] != v {
+			t.Errorf("env %s = %q, want canary-grit's %q", k, p.Env[k], v)
 		}
 	}
 }

@@ -16,7 +16,7 @@ protocol change.
 
 ## Templates
 
-`reviewer`, `porter`, `canary` (and `canary-grit`, canary plus spinclass's grit tools and just-us for runs that test grit under confinement) in `internal/profile/builtin.toml`: claude /
+`reviewer`, `porter`, `canary` (and `canary-grit`, canary plus spinclass's grit tools and just-us for runs that test grit under confinement; `canary-spinclass` is canary-grit with moxy dropped whole) in `internal/profile/builtin.toml`: claude /
 anthropic / claude-sonnet-5-5, a saved cheap-context selection (servers + moxy
 tool exclusions + spinclass exclusions for porter), both knobs on. Lists are
 from worker transcripts against moxy's 156-tool catalog; a test checks each
