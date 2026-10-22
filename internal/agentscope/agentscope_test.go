@@ -3,6 +3,7 @@ package agentscope
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -341,6 +342,36 @@ func TestWaitActiveWaitsForTheProviderExec(t *testing.T) {
 		return Status{ActiveState: "active", ControlGroup: cg, MainPID: 100}, nil
 	}}).waitActive(ctx, unit); err == nil {
 		t.Fatal("a unit whose pid 1 never left the shim was reported started")
+	}
+}
+
+// TestProviderStartedWhenTheInitRenamedItself: as pid 1 the shim keeps its
+// argv and runs the provider as a child; its InitComm name is the signal.
+func TestProviderStartedWhenTheInitRenamedItself(t *testing.T) {
+	root := t.TempDir()
+	fakeProc(t, root, 100, "/x", "100 1")
+	setCmdline(t, root, 100, "/nix/store/x-clown/bin/clown", ShimVerb, "--", "claude")
+	tools := Tools{procRoot: root}
+	if tools.providerStarted(100) {
+		t.Fatal("the shim was reported started before it renamed itself")
+	}
+	if err := os.WriteFile(filepath.Join(root, "100", "comm"), []byte(InitComm+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !tools.providerStarted(100) {
+		t.Fatal("the shim renamed itself but was not reported started")
+	}
+}
+
+// TestWaitActiveReportsAFailedUnitAsEnded: a provider that exits nonzero
+// between two polls leaves the unit failed; Run classifies it by exit code,
+// so waitActive must not call it a start failure.
+func TestWaitActiveReportsAFailedUnitAsEnded(t *testing.T) {
+	tools := Tools{procRoot: t.TempDir(), show: func(string) (Status, error) {
+		return Status{ActiveState: "failed", SubState: "failed"}, nil
+	}}
+	if _, err := tools.waitActive(context.Background(), "u-1.service"); !errors.Is(err, errUnitEnded) {
+		t.Fatalf("err = %v, want errUnitEnded", err)
 	}
 }
 

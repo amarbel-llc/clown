@@ -112,7 +112,10 @@ func (t Tools) waitActive(ctx context.Context, unit string) (Status, error) {
 			return st, nil
 		}
 		if err == nil && st.ActiveState == "failed" {
-			return st, fmt.Errorf("unit %s failed to start (%s)", unit, st.SubState)
+			// A provider that ran and exited nonzero between two polls
+			// leaves the unit failed too; Run tells the two apart by the
+			// exit code.
+			return st, fmt.Errorf("unit %s ended (%s): %w", unit, st.SubState, errUnitEnded)
 		}
 		select {
 		case <-ctx.Done():
@@ -147,17 +150,27 @@ func (t Tools) settledMain(pid int, unit string) bool {
 	return false
 }
 
-// providerStarted reports whether pid, the unit's main process, has exec'd
-// the provider: its argv is no longer the shim's (`<clown> agent-exec ...`).
-// The shim execs in place, so the pid is the same before and after.
+// providerStarted reports whether pid, the unit's main process, has started
+// the provider. As the pid namespace's init (the usual case) the shim stays
+// pid 1, starts the provider as its child, and then renames itself InitComm.
+// A shim that is not pid 1 execs the provider in place instead, after which
+// its argv is no longer the shim's (`<clown> agent-exec ...`).
 func (t Tools) providerStarted(pid int) bool {
-	raw, err := os.ReadFile(filepath.Join(orName(t.procRoot, "/proc"), strconv.Itoa(pid), "cmdline"))
+	dir := filepath.Join(orName(t.procRoot, "/proc"), strconv.Itoa(pid))
+	if comm, err := os.ReadFile(filepath.Join(dir, "comm")); err == nil && strings.TrimSpace(string(comm)) == InitComm {
+		return true
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "cmdline"))
 	if err != nil || len(raw) == 0 {
 		return false
 	}
 	args := strings.Split(strings.TrimSuffix(string(raw), "\x00"), "\x00")
 	return len(args) < 2 || args[1] != ShimVerb
 }
+
+// InitComm is the process name the shim, as init, takes once the provider
+// runs (at most 15 bytes, the kernel's comm limit).
+const InitComm = "clown-init"
 
 // ShimVerb is the clown subcommand the unit's main process runs until it
 // execs the provider.
@@ -220,7 +233,7 @@ func Run(l Launch, tools Tools, logger *slog.Logger) (int, error) {
 		go func() {
 			st, err := tools.waitActive(ctx, l.Unit)
 			res := Result{Unit: l.Unit, Principal: l.Principal, Cgroup: st.ControlGroup, InvocationID: st.InvocationID, UID: os.Getuid(), Pty: pty, MainPID: st.MainPID}
-			if err != nil && !errors.Is(err, context.Canceled) {
+			if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, errUnitEnded) {
 				// The unit failed, or the provider did not start in time:
 				// say so now, not only when the unit exits.
 				_ = l.fail(err)
@@ -256,7 +269,7 @@ func Run(l Launch, tools Tools, logger *slog.Logger) (int, error) {
 	o := <-outcome
 	switch {
 	case o.err == nil:
-	case !errors.Is(o.err, context.Canceled):
+	case !errors.Is(o.err, context.Canceled) && !errors.Is(o.err, errUnitEnded):
 		// Already recorded by the report goroutine; the exit does not undo it.
 		if err == nil {
 			err = o.err
@@ -281,6 +294,9 @@ func Run(l Launch, tools Tools, logger *slog.Logger) (int, error) {
 	l.writeResult(o.res, logger)
 	return code, err
 }
+
+// errUnitEnded is a unit that stopped before clown saw its provider start.
+var errUnitEnded = errors.New("the unit ended before clown saw its provider start")
 
 type startOutcome struct {
 	res Result

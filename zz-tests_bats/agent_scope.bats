@@ -346,6 +346,31 @@ run_probe() {
   [ "$(jq -r '.exit_code // "absent"' "$RESULT")" = absent ]
 }
 
+@test "agent_scope: the unit's init reaps orphans, so none stays a zombie" {
+  # The subshell's sleep is orphaned and reparented to the unit's pid 1.
+  # When pid 1 was the provider (here, sleep after the exec) it never reaped.
+  run_in_unit '(sleep 0.2 &); exec sleep 4' >/dev/null 2>&1 &
+  local launcher=$!
+  local cg=""
+  for _ in $(seq 100); do
+    cg="$(jq -r '.cgroup // empty' "$RESULT" 2>/dev/null || true)"
+    [[ -n $cg ]] && break
+    sleep 0.1
+  done
+  [[ -n $cg ]]
+  sleep 1.5
+  local pid zombies=0 procs=0
+  for pid in $(cat "/sys/fs/cgroup$cg/cgroup.procs"); do
+    procs=$((procs + 1))
+    grep -q '^State:[[:space:]]*Z' "/proc/$pid/status" 2>/dev/null && zombies=$((zombies + 1))
+  done
+  [ "$(cat "/proc/$(jq -r .main_pid "$RESULT")/comm")" = clown-init ]
+  wait "$launcher"
+  echo "procs=$procs zombies=$zombies"
+  [ "$procs" -ge 2 ]
+  [ "$zombies" -eq 0 ]
+}
+
 @test "agent_scope: a provider that exits records its exit code, with no error" {
   run run_in_unit 'sleep 1; exit 3'
   [ "$status" -eq 3 ]
@@ -353,6 +378,11 @@ run_probe() {
   [ "$(jq -r .exit_code "$RESULT")" = 3 ]
   [ "$(jq -r '.error // ""' "$RESULT")" = "" ]
   [ -n "$(jq -r .cgroup "$RESULT")" ]
+  # Too quick to be seen starting, and nonzero: an exit, not a failed start.
+  run run_in_unit 'exit 5'
+  [ "$status" -eq 5 ]
+  [ "$(jq -r .exit_code "$RESULT")" = 5 ]
+  [ "$(jq -r '.error // ""' "$RESULT")" = "" ]
   run run_in_unit 'exit 0'
   [ "$status" -eq 0 ]
   [ "$(jq -r .exit_code "$RESULT")" = 0 ]

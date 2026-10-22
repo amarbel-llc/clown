@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -533,9 +534,63 @@ func runAgentExec(args []string) int {
 		fmt.Fprintf(os.Stderr, "clown agent-exec: %v\n", err)
 		return agentscope.ShimExitNotFound
 	}
+	if os.Getpid() == 1 {
+		return runAsInit(path, args)
+	}
 	err = syscall.Exec(path, args, os.Environ())
 	fmt.Fprintf(os.Stderr, "clown agent-exec: exec %s: %v\n", path, err)
 	return agentscope.ShimExitRefused
+}
+
+// runAsInit runs the provider as the child of the shim, which stays the
+// init of the unit's pid namespace: it reaps every process reparented to it
+// (claude as pid 1 did not, so zombies accumulated, nikulin round P), passes
+// systemd's stop and hangup signals on, and exits with the provider's
+// status. Once the provider runs it renames itself agentscope.InitComm,
+// which is how the frontend tells "provider started" (FDR 0020 "Result").
+//
+// The provider stays in the shim's session and process group, so the
+// terminal's own signals (^C, ^\, SIGWINCH) reach it directly; the shim
+// ignores those rather than passing them on twice.
+func runAsInit(path string, args []string) int {
+	sigs := make(chan os.Signal, 16)
+	signal.Notify(sigs, syscall.SIGCHLD, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGINT, syscall.SIGQUIT, syscall.SIGUSR1, syscall.SIGUSR2)
+	proc, err := os.StartProcess(path, args, &os.ProcAttr{
+		Env:   os.Environ(),
+		Files: []*os.File{os.Stdin, os.Stdout, os.Stderr},
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clown agent-exec: starting %s: %v\n", path, err)
+		return agentscope.ShimExitRefused
+	}
+	_ = os.WriteFile("/proc/self/comm", []byte(agentscope.InitComm), 0)
+	for {
+		// Reap everything that has exited; only the provider's status counts.
+		for {
+			var ws syscall.WaitStatus
+			pid, err := syscall.Wait4(-1, &ws, syscall.WNOHANG, nil)
+			if err != nil || pid <= 0 {
+				break
+			}
+			if pid == proc.Pid {
+				return exitCodeOf(ws)
+			}
+		}
+		switch s := <-sigs; s {
+		case syscall.SIGCHLD, syscall.SIGINT, syscall.SIGQUIT:
+		default:
+			_ = proc.Signal(s)
+		}
+	}
+}
+
+// exitCodeOf is a wait status as a shell reports it: the exit code, or 128
+// plus the signal that killed the process.
+func exitCodeOf(ws syscall.WaitStatus) int {
+	if ws.Signaled() {
+		return 128 + int(ws.Signal())
+	}
+	return ws.ExitStatus()
 }
 
 // startRelays starts `clown agent-relay [--serve FILE] [--relay ADDR=SOCK]...`

@@ -95,7 +95,8 @@ Next by severity:
   with `exit_code` at exit and with `error` on any refusal after the spec
   loads (FDR 0020 "Result").
 - **PID 1 does not reap.** claude is PID 1 (`cmd/clown/agentscope.go:500`),
-  and zombies went from 2 to 6 in round P. (A, B)
+  and zombies went from 2 to 6 in round P. (A, B) **Fixed after the audit**:
+  agent-exec stays PID 1 as a reaping init (FDR 0020 limitations).
 - **The profile registry stamp is unchecked by the binary.** `profile.Load`
   drops the stamp and unknown keys (`cmd/clown/main.go:45-71`), so an older
   clown silently ignores future restriction keys while the library fails

@@ -352,8 +352,10 @@ clown refuses to start when:
 `result_path` at these points (since 2026-10-22; audit "result file
 unreliable on failure"):
 - **Provider started.** The unit is `active`, its main pid has settled, and
-  that pid has exec'd the provider: its `/proc/<pid>/cmdline` is no longer
-  `<clown> agent-exec ...`. Until the exec, pid 1 is the shim, which can
+  that pid has started the provider. clown reads that from
+  `/proc/<pid>/comm`, which the shim, staying pid 1, sets to `clown-init`
+  once the provider runs. A shim that is not pid 1 execs instead, and then
+  its `cmdline` is no longer `<clown> agent-exec ...`. Until the exec, pid 1 is the shim, which can
   still refuse (its relays, its in-unit servers, a profile's unconfirmed
   exclusions), so "active" alone is not success. clown waits up to 2 minutes
   for this (`startupTimeout`). Raise it if a cold-store launch is reported
@@ -392,8 +394,12 @@ Field notes:
   exists. clown escapes the hint and adds a unique suffix.
 - `pty` is the host path of the slave that clown allocated.
 - `main_pid` is in the frontend's pid namespace. It is the unit's lasting
-  main process: the init of the unit's pid namespace (the exec shim, which
-  execs the provider), in the unit's cgroup. clown waits for that before
+  main process: the init of the unit's pid namespace, in the unit's cgroup.
+  Since 2026-10-22 that is the shim itself, renamed `clown-init` once it has
+  started the provider as its child (it no longer execs the provider), so
+  `main_pid` is not claude's pid. spinclass uses it only as the root of the
+  mount namespace and walks every pid in the cgroup for environ reads
+  (spinclass/firm-mulberry, 2026-10-22). clown waits for that before
   writing the result (clown#273): right after the unit turns active, systemd
   briefly names the intermediate process that unshared the pid namespace,
   which then exits (observed ~60 ms on flic with
@@ -793,9 +799,20 @@ and a live round. Not built; a separate design.
 
 - The agent runs as the operator's uid, not a dynamic uid. The system-manager
   launcher is deferred.
-- The unit's PID 1 is claude itself (agent-exec execs it), which does not
-  reap orphans: zombies accumulate during a session (nikulin round P: 2 to 6
-  in one session). A reaping init in agent-exec is a follow-up.
+- Until 2026-10-22 the unit's PID 1 was claude itself (agent-exec exec'd it),
+  which did not reap orphans: zombies accumulated during a session (nikulin
+  round P: 2 to 6 in one session). agent-exec now stays PID 1 as a minimal
+  init (`runAsInit`):
+  - it runs the provider as its child and reaps every process reparented
+    to it;
+  - it passes SIGTERM, SIGHUP, SIGUSR1 and SIGUSR2 on to the provider;
+  - it ignores the terminal's SIGINT and SIGQUIT, which reach the provider
+    directly because it stays in the shim's process group;
+  - it exits with the provider's status, or 128 plus the signal that killed
+    it.
+
+  Host test: an orphan in a unit whose provider never reaps does not stay a
+  zombie. Not yet seen in a live round.
 - `claude` credential refresh under a single-inode bind is unverified. A
   rewrite by rename fails with `EBUSY`, and since the bind became read-only
   a write in place fails with `EROFS` (see "The operator's claude
