@@ -745,6 +745,66 @@ By tool, for a brief to state plainly:
 because `-p` mode does not start them. A loopback `ANTHROPIC_BASE_URL` (a
 local juggler) is not reachable from the unit.
 
+## Proposed: a per-session serve socket (F12)
+
+**Status: PROPOSED, plan of record (coordinator, 2026-10-22). Not built.**
+Trigger to build: round Q's proxy-side F12 probe is quoted, and the operator
+gives the go on timing.
+
+**Problem.** spinclass serve speaks MCP over stdio only (spinclass
+`cmd/spinclass/commands_mcp.go`, `transport.NewStdio`, per
+spinclass/firm-mulberry). The TCP listener on the host loopback is
+clown-stdio-bridge wrapping it. Any same-uid host process can connect to
+that port and act as the session, and the bridge cannot tell the session's
+own worker from anyone else (spinclass F12). The proxy-side reach is closed:
+the egress proxy refuses the loopback.
+
+**Design (option (y)).** The check runs in the frontend, in the bridge
+(principle 7); nothing in the unit is trusted.
+1. Under `--agent-scope`, the frontend runs the serve's clown-stdio-bridge
+   with `--listen-unix $XDG_RUNTIME_DIR/clown/serve/<principal>/spinclass.sock`
+   (0600; directory 0700) and `--peer-unit <unit>`, instead of a TCP
+   listener.
+2. For every accepted connection, the bridge runs agentscope's cgroup peer
+   check, the same one PortForward and the egress proxy use, and only then
+   splices the connection into the child's stdio. A caller outside
+   `.../clown-agent.slice/<unit>` is refused, with its cgroup logged.
+3. clown binds that one socket inode into the unit, like the monitor
+   sockets. The in-unit agent-relay listens on the `127.0.0.1:<port>` that
+   claude's URL already names and splices to the socket. Nothing changes for
+   claude, and a confined session's serve has no TCP listener.
+4. clown computes the unit name before pluginhost starts the frontend
+   servers (a small reorder). The check needs only the unit's cgroup, not
+   spinclass's record, so claude's first MCP connection at startup is
+   accepted: no race.
+5. The result gains `serve_socket`, which spinclass's F12 probe already
+   checks. clown advertises the capability `frontend-serve-socket`, and
+   spinclass adds it to its RequiredCapabilities.
+
+**Changes when built.**
+- clown-stdio-bridge: `--listen-unix` and `--peer-unit`.
+- pluginhost: start a frontend-scoped stdio server that way under
+  `--agent-scope`; add a unix handshake form (RFC 0002).
+- agentscope: the reorder, the bind, the relay entry, `serve_socket`, and
+  the capability.
+- Unconfined sessions are unchanged: TCP loopback, same uid, not a
+  boundary.
+- **ADR 0006 ("clown-stdio-bridge trusts loopback clients") is superseded
+  for this mode.** A confined session's serve bridge trusts only its unit's
+  cgroup.
+
+**Retracted: option (b).** An earlier draft had spinclass serve listen on
+the socket itself and read the unit name lazily from spinclass's unit
+record. That draft assumed the serve had its own TCP listener. It has none,
+so option (b) would need a new socket transport in spinclass or go-mcp, and
+it would race claude's first connection against the record write. Do not
+build (b).
+
+**Tests when built.**
+- Unit test: the bridge refuses a foreign cgroup.
+- Host bats: MCP from inside the unit works over the socket; a host process
+  on the socket is refused; nothing listens on TCP for the confined serve.
+
 ## The operator's claude credential
 
 **A confined worker can READ the operator's Claude credential.** The
