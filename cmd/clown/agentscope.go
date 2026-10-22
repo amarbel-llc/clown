@@ -618,8 +618,15 @@ func applyInUnitExclusions(srv *pluginhost.ManagedServer, saved []string, logger
 		live[i] = t.Name
 	}
 	excluded := resolveExcludedTools(saved, live)
+	unmatched := unmatchedExclusions(saved, live)
 	logger.Info("tool exclusions resolved", "server", srv.Name, "saved", len(saved), "matched", len(excluded),
-		"rendered", excluded, "unmatched", unmatchedExclusions(saved, live))
+		"rendered", excluded, "unmatched", unmatched)
+	if len(unmatched) > 0 && len(excluded) > 0 {
+		// A tool that is not in the catalog yet (a child still starting) stays
+		// visible if it appears later; say so where the operator looks first.
+		fmt.Fprintf(os.Stderr, "clown agent-relay: in-unit server %s: %d of the profile's %d excluded tool names match nothing in its %d-tool catalog (see %s)\n",
+			srv.Name, len(unmatched), len(saved), len(live), "agent-relay.log")
+	}
 	if len(excluded) == 0 {
 		fmt.Fprintf(os.Stderr, "clown agent-relay: in-unit server %s: none of the profile's %d excluded tool names matches its catalog\n", srv.Name, len(saved))
 		logger.Warn("tool exclusions matched nothing", "server", srv.Name, "saved", len(saved), "catalog", len(live))
