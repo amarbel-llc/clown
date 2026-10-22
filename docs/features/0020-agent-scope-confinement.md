@@ -510,6 +510,18 @@ inside the unit with pluginhost's own handshake and healthcheck, then relays
 the reserved port to the address the server announced. The servers' stderr
 goes to `$HOME/.cache/clown/agent-relay.log` in the agent home.
 
+A profile's saved cheap-context selection covers in-unit servers too
+(clown#290). The frontend has no catalog for a server it never started, so an
+in-unit server is kept or dropped by name against `context_servers`. A dropped
+one is never started by the relay. A kept one carries the profile's saved
+`context_excluded` names verbatim in the `--serve` file, and the relay POSTs
+them to the server's `/clown/exclude-tools` once it is healthy. The push is
+best-effort, as on the frontend: a failure is logged to the relay's stderr and
+`agent-relay.log`, and the server keeps its full catalog. Before this, the
+replay saw only frontend-started servers and silently dropped every in-unit
+server, so a confined worker under any builtin profile had no moxy and no
+just-us.
+
 moxy inside the unit reads a global moxyfile that clown binds read-only over
 `$HOME/.config/moxy/moxyfile` (`agentscope.InUnitMoxyfile`). It sets an
 `allow-tools` allowlist, which moxy intersects down the hierarchy, so a

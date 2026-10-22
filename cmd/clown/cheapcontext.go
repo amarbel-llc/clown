@@ -12,6 +12,7 @@ import (
 
 	"github.com/charmbracelet/huh"
 
+	"code.linenisgreat.com/clown/internal/agentscope"
 	"code.linenisgreat.com/clown/internal/pluginhost"
 	"code.linenisgreat.com/clown/internal/profile"
 )
@@ -109,6 +110,11 @@ func isMultiGroup(groups []toolGroup) bool {
 type serverCatalog struct {
 	server pluginhost.DiscoveredServer
 	groups []toolGroup // nil/empty when the catalog fetch failed
+	// inUnit marks a server reserved to start inside an agent unit
+	// (--agent-scope, FDR 0020): the frontend never starts it, so it has no
+	// catalog to fetch, and its saved exclusions are applied inside the unit
+	// once `clown agent-relay` has started it (clown#290).
+	inUnit bool
 }
 
 // selectionResult is selectServers' v2 return value: which servers survive
@@ -184,6 +190,12 @@ func selectionFromSavedProfile(saved *profile.Profile, catalogs []serverCatalog)
 
 		savedExcluded, hasExclusions := saved.ContextExcluded[name]
 		if !hasExclusions {
+			continue
+		}
+		if c.inUnit {
+			// No live catalog on the frontend: hand the saved names to the
+			// unit verbatim; the server itself ignores names it does not have.
+			result.excludedTools[name] = append([]string(nil), savedExcluded...)
 			continue
 		}
 		liveTools := make(map[string]bool, len(savedExcluded))
@@ -368,15 +380,21 @@ const excludeToolsPushBudget = 3 * time.Second
 // neither 404s the push, which is logged and treated as "exclusions not
 // applied" rather than a launch failure — v1's whole-server deselection
 // still works regardless.
+//
+// inUnit are the servers reserved to start inside an agent unit
+// (--agent-scope): they take part in the selection by name only, and their
+// exclusions are returned in inUnitExcluded for the unit to push, since
+// nothing here can reach them (clown#290).
 func applyCheapContextSelection(
 	ctx context.Context,
 	host *pluginhost.Host,
 	discovered []pluginhost.DiscoveredServer,
 	started []*pluginhost.ManagedServer,
+	inUnit []pluginhost.DiscoveredServer,
 	logger *slog.Logger,
 	savedProfile *profile.Profile,
 	saveCtx cheapContextSaveContext,
-) ([]pluginhost.DiscoveredServer, error) {
+) (kept []pluginhost.DiscoveredServer, inUnitExcluded map[string][]string, err error) {
 	byName := make(map[string]pluginhost.DiscoveredServer, len(discovered))
 	for _, d := range discovered {
 		byName[d.Name()] = d
@@ -397,10 +415,13 @@ func applyCheapContextSelection(
 		}
 		catalogs = append(catalogs, serverCatalog{server: d, groups: groups})
 	}
+	for _, d := range inUnit {
+		catalogs = append(catalogs, serverCatalog{server: d, inUnit: true})
+	}
 
 	result, err := selectServers(catalogs, logger, savedProfile, saveCtx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	keptNames := make(map[string]bool, len(result.kept))
@@ -415,8 +436,17 @@ func applyCheapContextSelection(
 		}
 	}
 
+	inUnitNames := make(map[string]bool, len(inUnit))
+	for _, d := range inUnit {
+		inUnitNames[d.Name()] = true
+	}
+	inUnitExcluded = map[string][]string{}
 	pushedExclusions, pushFailures := 0, 0
 	for name, excludedTools := range result.excludedTools {
+		if inUnitNames[name] {
+			inUnitExcluded[name] = excludedTools
+			continue
+		}
 		srv, ok := serversByName[name]
 		if !ok {
 			continue
@@ -434,8 +464,28 @@ func applyCheapContextSelection(
 
 	logger.Info("cheap-context: selection applied",
 		"catalogs_fetched", len(catalogs), "servers_stopped", stopped,
-		"servers_with_exclusions", pushedExclusions, "exclusion_push_failures", pushFailures)
-	return result.kept, nil
+		"servers_with_exclusions", pushedExclusions, "exclusion_push_failures", pushFailures,
+		"in_unit_servers", len(inUnit), "in_unit_with_exclusions", len(inUnitExcluded))
+	return result.kept, inUnitExcluded, nil
+}
+
+// narrowInUnitServers drops the in-unit servers a selection did not keep, so
+// the relay never starts them, and gives each kept one the exclusions it
+// pushes once started.
+func narrowInUnitServers(servers []agentscope.InUnitServer, kept []pluginhost.DiscoveredServer, excluded map[string][]string) []agentscope.InUnitServer {
+	keptNames := make(map[string]bool, len(kept))
+	for _, d := range kept {
+		keptNames[d.Name()] = true
+	}
+	var out []agentscope.InUnitServer
+	for _, s := range servers {
+		if !keptNames[s.Name] {
+			continue
+		}
+		s.Exclude = excluded[s.Name]
+		out = append(out, s)
+	}
+	return out
 }
 
 // pushExcludeTools POSTs the exclusion list to a running server's

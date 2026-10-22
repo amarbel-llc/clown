@@ -584,6 +584,16 @@ func startInUnitServers(servers []agentscope.InUnitServer) []agentscope.Relay {
 				fmt.Fprintf(os.Stderr, "clown agent-relay: in-unit server %s did not start: %v (see %s)\n", s.Name, err, logPath)
 				return
 			}
+			if len(s.Exclude) > 0 {
+				// Best-effort, as on the frontend (applyCheapContextSelection):
+				// a failed push leaves the server's full catalog visible.
+				if err := pushExcludeTools(context.Background(), srv, s.Exclude); err != nil {
+					fmt.Fprintf(os.Stderr, "clown agent-relay: in-unit server %s: tool exclusions not applied: %v\n", s.Name, err)
+					logger.Warn("tool exclusions not applied", "server", s.Name, "err", err)
+				} else {
+					logger.Info("tool exclusions applied", "server", s.Name, "count", len(s.Exclude))
+				}
+			}
 			relays[i] = agentscope.Relay{Listen: s.Listen, Target: srv.Handshake().Address}
 		}(i, s)
 	}

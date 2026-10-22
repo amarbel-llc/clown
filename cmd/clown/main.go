@@ -2076,18 +2076,21 @@ func runManaged(
 	// dir-exclusion logic below); a partially-deselected server's excluded
 	// tool names are pushed into its ALREADY-RUNNING bridge via POST
 	// /clown/exclude-tools (cmd/clown-stdio-bridge/http.go) before claude's
-	// own discovery-time tools/list call. Note: this filtering only reaches
-	// bridged (stdioServers-declared) plugins — a native httpServers plugin
-	// like moxy has no clown-owned proxy in its request path at all, so its
-	// per-tool selection currently has no effect (clown#175).
+	// own discovery-time tools/list call. A native httpServers plugin like
+	// moxy answers the same route itself. Under --agent-scope the servers
+	// reserved for the unit were never started here: they are selected by
+	// name, and the relay pushes their exclusions once it starts them inside
+	// the unit (clown#290).
 	if cheapContextActive {
-		filtered, err := applyCheapContextSelection(ctx, host, discovered, report.Started, logger, flags.cheapContextProfile, flags.cheapContextSave)
+		inUnit := reservedServers(host, discovered)
+		filtered, inUnitExcluded, err := applyCheapContextSelection(ctx, host, discovered, report.Started, inUnit, logger, flags.cheapContextProfile, flags.cheapContextSave)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "clown: %v\n", err)
 			logger.Error("cheap-context selection failed", "err", err)
 			return 1
 		}
 		discovered = filtered
+		flags.agentScopeInUnit = narrowInUnitServers(flags.agentScopeInUnit, filtered, inUnitExcluded)
 		if len(discovered) == 0 {
 			logger.Info("cheap-context: every server deselected; falling back to original plugin dirs")
 			return runUnbound(binding, executor, logger, flags)
@@ -2229,6 +2232,15 @@ func reserveInUnitServers(host *pluginhost.Host, discovered []pluginhost.Discove
 // startableHere drops the servers reserved for the agent unit, which the
 // frontend must not start.
 func startableHere(host *pluginhost.Host, discovered []pluginhost.DiscoveredServer) []pluginhost.DiscoveredServer {
+	return partitionReserved(host, discovered, false)
+}
+
+// reservedServers are the discovered servers reserved for the agent unit.
+func reservedServers(host *pluginhost.Host, discovered []pluginhost.DiscoveredServer) []pluginhost.DiscoveredServer {
+	return partitionReserved(host, discovered, true)
+}
+
+func partitionReserved(host *pluginhost.Host, discovered []pluginhost.DiscoveredServer, wantReserved bool) []pluginhost.DiscoveredServer {
 	reserved := map[string]bool{}
 	for _, s := range host.Servers {
 		if s.Reserved() {
@@ -2237,7 +2249,7 @@ func startableHere(host *pluginhost.Host, discovered []pluginhost.DiscoveredServ
 	}
 	var out []pluginhost.DiscoveredServer
 	for _, d := range discovered {
-		if !reserved[d.Name()] {
+		if reserved[d.Name()] == wantReserved {
 			out = append(out, d)
 		}
 	}

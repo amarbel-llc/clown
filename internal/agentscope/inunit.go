@@ -26,6 +26,10 @@ type InUnitServer struct {
 	HealthInterval string            `json:"health_interval"`
 	HealthTimeout  string            `json:"health_timeout"`
 	Listen         string            `json:"listen"`
+	// Exclude are tool names the relay pushes to the server's
+	// /clown/exclude-tools once it has started: a profile's saved exclusions,
+	// which the frontend cannot push to a server it never started (clown#290).
+	Exclude []string `json:"exclude,omitempty"`
 }
 
 // WriteInUnitServers writes the list the relay reads (0600).
