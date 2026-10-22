@@ -40,13 +40,63 @@ type Profile struct {
 	// dirs, which would run every server un-narrowed (cmd/clown runUnbound).
 	ContextServers  []string            `toml:"context_servers,omitempty"`
 	ContextExcluded map[string][]string `toml:"context_excluded,omitempty"`
+
+	// Base names the builtin this (user) profile claims to narrow, as
+	// "<builtin>" or "<builtin>@sha256:<hex>" pinning the builtin's
+	// canonical digest (pkg/profilelookup). It is a declaration, not
+	// inheritance: nothing is copied from the base. A launcher (spinclass)
+	// decides whether the profile really narrows it; clown resolves the base
+	// among the builtins and refuses a pin that no longer matches. Protocol 2.
+	Base string `toml:"base,omitempty"`
 }
 
 // ProtocolVersion versions what a registry writer and a registry reader must
 // agree on: the profiles.toml schema and the canonical-JSON digest form
-// (pkg/profilelookup). Bump it on any change to either — a reader built for a
-// different protocol refuses the registry instead of mis-resolving it.
-const ProtocolVersion = 1
+// (pkg/profilelookup). Bump it on any change to either — a reader refuses a
+// registry stamped by a newer protocol instead of mis-resolving it.
+//
+// Protocol 2 added `base` and renders env values as digests in the canonical
+// form. A protocol-2 reader still reads protocol-1 registries (a strict
+// subset), and Save stamps 2 only when a profile uses `base`, so an untouched
+// registry stays readable by protocol-1 clowns.
+const ProtocolVersion = 2
+
+// OldestReadableProtocol is the oldest registry protocol this build reads.
+const OldestReadableProtocol = 1
+
+// ReadableProtocol reports whether a registry stamped with protocol p can be
+// read in full by this build.
+func ReadableProtocol(p int) bool {
+	return p >= OldestReadableProtocol && p <= ProtocolVersion
+}
+
+// protocolFor is the lowest protocol that holds profiles: 2 when any uses
+// `base`, else 1.
+func protocolFor(profiles []Profile) int {
+	for _, p := range profiles {
+		if p.Base != "" {
+			return 2
+		}
+	}
+	return 1
+}
+
+// ParseBase splits a `base` value into the builtin's name and the pinned
+// lowercase-hex sha256 ("" when unpinned).
+func ParseBase(base string) (name, pin string, err error) {
+	name, rest, pinned := strings.Cut(base, "@")
+	if name == "" || strings.TrimSpace(name) != name {
+		return "", "", fmt.Errorf("base %q: no builtin name", base)
+	}
+	if !pinned {
+		return name, "", nil
+	}
+	pin, ok := strings.CutPrefix(rest, "sha256:")
+	if !ok || len(pin) != 64 || strings.Trim(pin, "0123456789abcdef") != "" {
+		return "", "", fmt.Errorf("base %q: a pin is sha256: followed by 64 lowercase hex digits", base)
+	}
+	return name, pin, nil
+}
 
 // RegistryStamp is the writer stamp Save leaves in the `[registry]` table of
 // profiles.toml: which clown last wrote the file and under which protocol.
@@ -95,10 +145,19 @@ var builtinTOML []byte
 
 // Builtin returns the profiles compiled into clown (builtin.toml). The user
 // registry layers on top of these via Merge.
-func Builtin() ([]Profile, error) {
+func Builtin() ([]Profile, error) { return parseBuiltins(builtinTOML) }
+
+// parseBuiltins parses a builtin profile set. Builtins are the roots a `base`
+// names, so one carrying a base is refused.
+func parseBuiltins(data []byte) ([]Profile, error) {
 	var f file
-	if _, err := toml.Decode(string(builtinTOML), &f); err != nil {
+	if _, err := toml.Decode(string(data), &f); err != nil {
 		return nil, fmt.Errorf("builtin profiles: %w", err)
+	}
+	for _, p := range f.Profile {
+		if p.Base != "" {
+			return nil, fmt.Errorf("builtin profile %q has base %q; builtins are roots", p.Name, p.Base)
+		}
 	}
 	return f.Profile, nil
 }
@@ -131,6 +190,22 @@ func LoadRegistry(path string) (Registry, error) {
 		unknown = append(unknown, k.String())
 	}
 	return Registry{Profiles: f.Profile, Stamp: stampFromMap(f.Registry), Undecoded: unknown}, nil
+}
+
+// MisstampedBase returns the names of profiles carrying `base` in a registry
+// stamped older than protocol 2 (or unstamped): a writer that did not know
+// what base means, so readers refuse the registry rather than guess.
+func (r Registry) MisstampedBase() []string {
+	if r.Stamp.Protocol >= 2 {
+		return nil
+	}
+	var out []string
+	for _, p := range r.Profiles {
+		if p.Base != "" {
+			out = append(out, p.Name)
+		}
+	}
+	return out
 }
 
 func Merge(builtin, additional []Profile) []Profile {
@@ -211,6 +286,11 @@ func Validate(p Profile) error {
 	// each call site to remember this hazard individually.
 	if p.ContextServers != nil && len(p.ContextServers) == 0 {
 		return fmt.Errorf("profile %q: context_servers must be nil or non-empty, not an empty list (an empty saved selection can never be told apart from no saved selection)", p.Name)
+	}
+	if p.Base != "" {
+		if _, _, err := ParseBase(p.Base); err != nil {
+			return fmt.Errorf("profile %q: %w", p.Name, err)
+		}
 	}
 	return nil
 }

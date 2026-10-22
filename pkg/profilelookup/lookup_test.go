@@ -51,7 +51,8 @@ func TestResolveUserProfile(t *testing.T) {
 	if !reflect.DeepEqual(got.Selection, wantSel) {
 		t.Fatalf("selection = %#v, want %#v", got.Selection, wantSel)
 	}
-	if got.Registry != (profilelookup.RegistryStamp{Present: true, ClownVersion: "1.2.3", ProtocolVersion: profilelookup.ProtocolVersion}) {
+	// Save stamps protocol 1 when no profile uses base.
+	if got.Registry != (profilelookup.RegistryStamp{Present: true, ClownVersion: "1.2.3", ProtocolVersion: 1}) {
 		t.Fatalf("registry stamp = %#v", got.Registry)
 	}
 }
@@ -202,7 +203,7 @@ func TestSkewOtherProtocolNamesBothSides(t *testing.T) {
 	if !errors.As(err, &skew) {
 		t.Fatalf("err = %v, want *SkewError", err)
 	}
-	for _, want := range []string{"7.7.7", "protocol 99", "protocol 1"} {
+	for _, want := range []string{"7.7.7", "protocol 99", "speaks profile protocol 2", "reads protocols 1 to 2"} {
 		if !strings.Contains(skew.Error(), want) {
 			t.Errorf("message %q lacks %q", skew.Error(), want)
 		}
@@ -233,7 +234,7 @@ func TestCanonicalGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"protocol":1,"name":"trimmed","display":"Trimmed","provider":"claude","backend":"anthropic","model":"opus","url":"https://x.example/a?b=1&c=<2>","token_set":true,"env":{"ALPHA":"${HOME}","ZED":"z"},"context_servers":["clown-builtin-jobs/ringmaster","clown-builtin-jobs/troupe","moxy/moxy"],"context_excluded":{"moxy/moxy":["folio.read","folio.write"]}}`
+	want := `{"protocol":2,"name":"trimmed","display":"Trimmed","provider":"claude","backend":"anthropic","model":"opus","url":"https://x.example/a?b=1&c=<2>","token_set":true,"env":{"ALPHA":"` + sha256Hex("${HOME}") + `","ZED":"` + sha256Hex("z") + `"},"context_servers":["clown-builtin-jobs/ringmaster","clown-builtin-jobs/troupe","moxy/moxy"],"context_excluded":{"moxy/moxy":["folio.read","folio.write"]},"base":""}`
 	if string(got) != want {
 		t.Fatalf("canonical =\n%s\nwant\n%s", got, want)
 	}
@@ -244,7 +245,7 @@ func TestCanonicalNilSelectionAndDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"protocol":1,"name":"p","display":"","provider":"claude","backend":"anthropic","model":"","url":"","token_set":false,"env":{},"context_servers":null,"context_excluded":{}}`
+	want := `{"protocol":2,"name":"p","display":"","provider":"claude","backend":"anthropic","model":"","url":"","token_set":false,"env":{},"context_servers":null,"context_excluded":{},"base":""}`
 	if string(got) != want {
 		t.Fatalf("canonical =\n%s\nwant\n%s", got, want)
 	}

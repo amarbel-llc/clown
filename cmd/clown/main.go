@@ -35,6 +35,7 @@ import (
 	"code.linenisgreat.com/clown/internal/sessions"
 	"code.linenisgreat.com/clown/internal/staging"
 	"code.linenisgreat.com/clown/internal/tent"
+	"code.linenisgreat.com/clown/pkg/profilelookup"
 	"code.linenisgreat.com/ringmaster/pkgs/jobwake"
 )
 
@@ -96,11 +97,32 @@ func registrySkewRefusal(path string, reg profile.Registry) error {
 		held = append(held, "keys this clown does not know: "+strings.Join(reg.Undecoded, ", "))
 		remedy = append(remedy, "if they are typos or stale, remove them by hand; if a newer clown wrote them, use it")
 	}
+	if names := reg.MisstampedBase(); len(names) > 0 && reg.Stamp.Protocol >= 0 {
+		stamp := "no protocol stamp"
+		if reg.Stamp.Protocol > 0 {
+			stamp = fmt.Sprintf("a protocol %d stamp", reg.Stamp.Protocol)
+		}
+		held = append(held, fmt.Sprintf("base on profiles %s under %s (base needs protocol 2)", strings.Join(names, ", "), stamp))
+		remedy = append(remedy, `if you wrote base on purpose, set the [registry] protocol to "2" by hand; otherwise remove base`)
+	}
 	if len(held) == 0 {
 		return nil
 	}
 	return &registrySkewError{msg: fmt.Sprintf("profile registry %s holds %s; this clown %s speaks profile protocol %d and refuses the registry rather than drop what it cannot read (%s)",
 		path, strings.Join(held, " and "), buildcfg.Version, profile.ProtocolVersion, strings.Join(remedy, "; "))}
+}
+
+// verifyProfileBase refuses a profile whose `base` a launcher could not vouch
+// for (unknown builtin, stale pin), by resolving it through pkg/profilelookup
+// exactly as spinclass does. A profile without base is not looked up: the
+// library's stricter registry rules (an unstamped file is refused) apply only
+// where a base is claimed, and a base forces a protocol-2 stamp anyway.
+func verifyProfileBase(p profile.Profile, registryPath string) error {
+	if p.Base == "" {
+		return nil
+	}
+	_, err := profilelookup.Resolve(p.Name, profilelookup.Options{RegistryPath: registryPath})
+	return err
 }
 
 // registrySkewError is registrySkewRefusal's refusal, typed so a read-only
@@ -524,6 +546,10 @@ func runWithFlags(flags parsedFlags) int {
 			fmt.Fprintf(os.Stderr, "clown: invalid profile: %v\n", err)
 			return 1
 		}
+		if err := verifyProfileBase(*selectedProfile, profilesPath); err != nil {
+			fmt.Fprintf(os.Stderr, "clown: %v\n", err)
+			return 1
+		}
 		flags.provider = selectedProfile.Provider
 	}
 
@@ -546,6 +572,10 @@ func runWithFlags(flags parsedFlags) int {
 		}
 		if err := profile.Validate(*chosen); err != nil {
 			fmt.Fprintf(os.Stderr, "clown: invalid profile: %v\n", err)
+			return 1
+		}
+		if err := verifyProfileBase(*chosen, profilesPath); err != nil {
+			fmt.Fprintf(os.Stderr, "clown: %v\n", err)
 			return 1
 		}
 		selectedProfile = chosen

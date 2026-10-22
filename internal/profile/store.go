@@ -17,9 +17,11 @@ import (
 // existing [[profile]] tables by position: removing a middle profile shifts
 // later values up, and a comment stays with its table position.
 //
-// Every save stamps writerVersion (the saving clown's version) and
-// ProtocolVersion into the `[registry]` table, so a library reader can detect
-// a registry written by a clown it does not understand.
+// Every save stamps writerVersion (the saving clown's version) and the lowest
+// protocol that holds the profiles (2 only when one uses `base`) into the
+// `[registry]` table, so a library reader can detect a registry written by a
+// clown it does not understand, and an untouched registry stays readable by
+// older clowns.
 func Save(path string, profiles []Profile, writerVersion string) error {
 	existing, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -31,7 +33,7 @@ func Save(path string, profiles []Profile, writerVersion string) error {
 		return fmt.Errorf("parse %s: %w", path, err)
 	}
 	f.Profile = profiles
-	f.Registry = RegistryStamp{ClownVersion: writerVersion, Protocol: ProtocolVersion}.toMap()
+	f.Registry = RegistryStamp{ClownVersion: writerVersion, Protocol: protocolFor(profiles)}.toMap()
 	body, err := marshal.MarshalDocument(handle, &f)
 	if err != nil {
 		return fmt.Errorf("encode profiles: %w", err)

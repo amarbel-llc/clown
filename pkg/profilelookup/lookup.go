@@ -8,8 +8,10 @@
 // # Surface
 //
 //   - Resolve returns a Resolved: the profile's identity (never its token), its
-//     Selection (the saved --cheap-context keep-set), the canonical JSON of the
-//     definition, and the sha256 of those bytes.
+//     Selection (the saved --cheap-context keep-set), its Env as per-value
+//     digests, its Base (the builtin it declares it narrows, resolved the same
+//     way), the canonical JSON of the definition, and the sha256 of those
+//     bytes. A base that cannot be vouched for fails with *BaseError.
 //   - RequiredServers is the set of MCP servers a worker needs to reach its
 //     driver (job-wake and chat); Selection.Missing checks it against the
 //     keep-set so a launcher can refuse before spawning a mute worker.
@@ -20,6 +22,9 @@
 // ProtocolVersion versions the profiles.toml schema, the registry stamp and
 // the canonical form below together. A launcher pins the constant it was built
 // against; bumping it is a breaking change announced to consumers first.
+// Protocol 2 added `base` and env-value digests. This build reads registries
+// stamped 1 or 2; the digest depends only on the profile and this build's
+// protocol, never on the registry's stamp.
 //
 // # Canonical form and digest
 //
@@ -27,23 +32,28 @@
 // of clown produce the same bytes for the same definition:
 //
 //   - one object, keys in this fixed order: protocol, name, display, provider,
-//     backend, model, url, token_set, env, context_servers, context_excluded;
+//     backend, model, url, token_set, env, context_servers, context_excluded,
+//     base;
 //   - every key is always present: an unset string is "", never omitted;
 //   - protocol is the integer ProtocolVersion; no floats occur anywhere;
 //   - token is NEVER included: token_set is whether one is configured, so
 //     rotating a token does not change the digest but adding or removing one
 //     does;
 //   - env and context_excluded are objects with keys sorted bytewise (unset
-//     renders {}); context_excluded's tool lists are sorted and deduplicated;
+//     renders {}); env's values are the lowercase-hex sha256 of each value as
+//     written, never the value; context_excluded's tool lists are sorted and
+//     deduplicated;
+//   - base is the profile's base exactly as written, "" when unset;
 //   - context_servers is a sorted, deduplicated array, or null when the profile
 //     has no saved selection (every server is kept) — never [] (a saved empty
 //     selection is rejected by profile.Validate);
 //   - strings are UTF-8, escaped per encoding/json except that <, > and & are
 //     written literally; no insignificant whitespace, no trailing newline;
 //   - values are verbatim from the registry: ${ENV} references are NOT
-//     expanded. Only the token is withheld: a literal credential written into
-//     an env value or a URL IS in Canonical, so treat Canonical as sensitive
-//     (log and store the digest, not the bytes).
+//     expanded. The token is withheld and env values are digests, but a
+//     literal credential written into the URL IS in Canonical (clown#292), so
+//     treat Canonical as sensitive (log and store the digest, not the bytes).
+//     A low-entropy env value is guessable from its digest.
 //
 // DigestSHA256 is the lowercase hex sha256 of Canonical. The launcher renders
 // it as a markl-id itself; this package depends on no markl-id library.
@@ -99,17 +109,41 @@ type SkewError struct {
 	RegistryProtocol int      // 0 if unstamped
 	LibraryProtocol  int      // this build's ProtocolVersion
 	UnknownFields    []string // keys present in the registry but unknown to this build
+	// MisstampedBase names profiles carrying `base` under a stamp older than
+	// protocol 2: a writer that did not know what base means.
+	MisstampedBase []string
 }
 
 func (e *SkewError) Error() string {
+	reads := fmt.Sprintf("this library speaks profile protocol %d and reads protocols %d to %d", e.LibraryProtocol, profile.OldestReadableProtocol, e.LibraryProtocol)
 	switch {
 	case e.RegistryProtocol == 0:
-		return fmt.Sprintf("profile registry %s was written by a clown that predates version stamping (this library speaks profile protocol %d); save any profile with `clown profile` to restamp it", e.RegistryPath, e.LibraryProtocol)
-	case e.RegistryProtocol != e.LibraryProtocol:
-		return fmt.Sprintf("profile registry %s was last written by clown %s (profile protocol %d); this library speaks profile protocol %d", e.RegistryPath, e.RegistryVersion, e.RegistryProtocol, e.LibraryProtocol)
+		return fmt.Sprintf("profile registry %s was written by a clown that predates version stamping (%s); save any profile with `clown profile` to restamp it", e.RegistryPath, reads)
+	case !profile.ReadableProtocol(e.RegistryProtocol):
+		return fmt.Sprintf("profile registry %s was last written by clown %s (profile protocol %d); %s", e.RegistryPath, e.RegistryVersion, e.RegistryProtocol, reads)
+	case len(e.MisstampedBase) > 0:
+		return fmt.Sprintf("profile registry %s is stamped profile protocol %d (by clown %s) but profiles %s carry base, which needs protocol 2; save it with a clown that speaks protocol 2, or remove base", e.RegistryPath, e.RegistryProtocol, e.RegistryVersion, strings.Join(e.MisstampedBase, ", "))
 	default:
-		return fmt.Sprintf("profile registry %s (last written by clown %s) holds fields unknown to this library (profile protocol %d): %s", e.RegistryPath, e.RegistryVersion, e.LibraryProtocol, strings.Join(e.UnknownFields, ", "))
+		return fmt.Sprintf("profile registry %s (last written by clown %s) holds fields unknown to this library (%s): %s", e.RegistryPath, e.RegistryVersion, reads, strings.Join(e.UnknownFields, ", "))
 	}
+}
+
+// BaseError reports a profile whose `base` cannot be vouched for: it names no
+// builtin, is malformed, or pins a digest the builtin no longer has. Resolve
+// returns it so a launcher can refuse with the message.
+type BaseError struct {
+	Profile string
+	Base    string // the base value as written
+	Pinned  string // the pinned digest, "" when unpinned
+	Current string // the builtin's current digest, "" when it was not resolved
+	Reason  string
+}
+
+func (e *BaseError) Error() string {
+	if e.Pinned != "" && e.Current != "" {
+		return fmt.Sprintf("profile %q: base %q pins sha256 %s, but the builtin now has %s; re-pin it after checking the builtin's change", e.Profile, e.Base, e.Pinned, e.Current)
+	}
+	return fmt.Sprintf("profile %q: base %q: %s", e.Profile, e.Base, e.Reason)
 }
 
 // Source says which layer a profile came from.
@@ -194,6 +228,18 @@ type Resolved struct {
 
 	Selection Selection
 
+	// Env maps each env key to the lowercase-hex sha256 of its value as
+	// written (${VAR} references unexpanded), never the value itself. Equal
+	// digests mean equal values; a low-entropy value is guessable from its
+	// digest, so this is for comparison, not secrecy.
+	Env map[string]string
+
+	// Base is the builtin this profile declares it narrows, resolved exactly
+	// as a top-level Resolve of that builtin would be (Source is always
+	// SourceBuiltin, even when a user profile shadows the name); nil when
+	// the profile has no base.
+	Base *Resolved
+
 	// Canonical is the canonical JSON of the definition (see package doc) and
 	// DigestSHA256 the lowercase hex sha256 of it.
 	Canonical    []byte
@@ -229,27 +275,73 @@ func Resolve(name string, opts Options) (*Resolved, error) {
 	if _, inUser := findProfile(reg.Profiles, name); inUser {
 		source = SourceUser
 	}
-	if err := profile.Validate(found); err != nil {
+	r, err := resolved(found, source, stamp)
+	if err != nil {
 		return nil, err
 	}
+	if found.Base != "" {
+		if r.Base, err = resolveBase(found, builtin); err != nil {
+			return nil, err
+		}
+	}
+	return r, nil
+}
 
-	canonical, err := Canonicalize(found)
+// resolved validates p and renders everything Resolve reports about it except
+// its base.
+func resolved(p profile.Profile, source Source, stamp RegistryStamp) (*Resolved, error) {
+	if err := profile.Validate(p); err != nil {
+		return nil, err
+	}
+	canonical, err := Canonicalize(p)
 	if err != nil {
 		return nil, err
 	}
 	sum := sha256.Sum256(canonical)
 	return &Resolved{
-		Name:         found.Name,
-		Display:      found.Display,
-		Provider:     found.Provider,
-		Backend:      found.Backend,
-		Model:        found.Model,
+		Name:         p.Name,
+		Display:      p.Display,
+		Provider:     p.Provider,
+		Backend:      p.Backend,
+		Model:        p.Model,
 		Source:       source,
-		Selection:    selectionOf(found),
+		Selection:    selectionOf(p),
+		Env:          envDigests(p.Env),
 		Canonical:    canonical,
 		DigestSHA256: hex.EncodeToString(sum[:]),
 		Registry:     stamp,
 	}, nil
+}
+
+// resolveBase resolves p's base among the builtins only (a user profile
+// shadowing the name is not a base) and checks its pin.
+func resolveBase(p profile.Profile, builtin []profile.Profile) (*Resolved, error) {
+	name, pin, err := profile.ParseBase(p.Base)
+	if err != nil {
+		return nil, &BaseError{Profile: p.Name, Base: p.Base, Reason: err.Error()}
+	}
+	b, ok := findProfile(builtin, name)
+	if !ok {
+		return nil, &BaseError{Profile: p.Name, Base: p.Base, Reason: fmt.Sprintf("no builtin profile is named %q (builtins: %s)", name, strings.Join(names(builtin), ", "))}
+	}
+	r, err := resolved(b, SourceBuiltin, RegistryStamp{})
+	if err != nil {
+		return nil, err
+	}
+	if pin != "" && pin != r.DigestSHA256 {
+		return nil, &BaseError{Profile: p.Name, Base: p.Base, Pinned: pin, Current: r.DigestSHA256}
+	}
+	return r, nil
+}
+
+// envDigests maps each env key to the lowercase-hex sha256 of its value.
+func envDigests(env map[string]string) map[string]string {
+	out := make(map[string]string, len(env))
+	for k, v := range env {
+		sum := sha256.Sum256([]byte(v))
+		out[k] = hex.EncodeToString(sum[:])
+	}
+	return out
 }
 
 // loadUserRegistry reads and vets the user registry. An absent file is an
@@ -273,13 +365,15 @@ func loadUserRegistry(opts Options) (profile.Registry, RegistryStamp, error) {
 		return profile.Registry{}, RegistryStamp{}, err
 	}
 	stamp := RegistryStamp{Present: true, ClownVersion: reg.Stamp.ClownVersion, ProtocolVersion: reg.Stamp.Protocol}
-	if reg.Stamp.Protocol != ProtocolVersion || len(reg.Undecoded) > 0 {
+	misstamped := reg.MisstampedBase()
+	if !profile.ReadableProtocol(reg.Stamp.Protocol) || len(reg.Undecoded) > 0 || len(misstamped) > 0 {
 		return profile.Registry{}, stamp, &SkewError{
 			RegistryPath:     path,
 			RegistryVersion:  reg.Stamp.ClownVersion,
 			RegistryProtocol: reg.Stamp.Protocol,
 			LibraryProtocol:  ProtocolVersion,
 			UnknownFields:    reg.Undecoded,
+			MisstampedBase:   misstamped,
 		}
 	}
 	return reg, stamp, nil
@@ -345,6 +439,7 @@ type canonical struct {
 	Env             map[string]string   `json:"env"`
 	ContextServers  []string            `json:"context_servers"`
 	ContextExcluded map[string][]string `json:"context_excluded"`
+	Base            string              `json:"base"`
 }
 
 // Canonicalize renders p in the canonical form documented on the package.
@@ -358,11 +453,9 @@ func Canonicalize(p profile.Profile) ([]byte, error) {
 		Model:           p.Model,
 		URL:             p.URL,
 		TokenSet:        p.Token != "",
-		Env:             map[string]string{},
+		Env:             envDigests(p.Env),
 		ContextExcluded: excludedOf(p.ContextExcluded),
-	}
-	for k, v := range p.Env {
-		c.Env[k] = v
+		Base:            p.Base,
 	}
 	if p.ContextServers != nil {
 		c.ContextServers = sortedUnique(p.ContextServers)

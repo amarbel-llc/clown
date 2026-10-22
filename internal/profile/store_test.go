@@ -122,7 +122,8 @@ func TestSaveStampsRegistry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := RegistryStamp{ClownVersion: "1.2.3", Protocol: ProtocolVersion}
+	// No profile uses a protocol-2 key, so the file stays readable by older clowns.
+	want := RegistryStamp{ClownVersion: "1.2.3", Protocol: 1}
 	if reg.Stamp != want {
 		t.Fatalf("stamp = %#v, want %#v", reg.Stamp, want)
 	}

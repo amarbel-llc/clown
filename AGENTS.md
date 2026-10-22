@@ -43,14 +43,17 @@ touching any of it.
 - **`pkg/profilelookup` is clown's one public Go API, linked by spinclass
   (clown#264).** It resolves `--profile NAME` (builtin + user
   `profiles.toml`, via `internal/profile`), returns the saved
-  `--cheap-context` keep-set, a canonical-JSON digest, and fails closed
-  with `*SkewError` on a registry stamped by a different
-  `profile.ProtocolVersion`. Its package doc is the normative spec for the
+  `--cheap-context` keep-set, env as per-value digests, the resolved `base`
+  builtin, a canonical-JSON digest, and fails closed with `*SkewError` on a
+  registry it cannot read (stamped outside protocols 1..`ProtocolVersion`,
+  unknown keys, or `base` under a pre-2 stamp) and `*BaseError` on a base it
+  cannot vouch for. Its package doc is the normative spec for the
   canonical form: changing the JSON (or the `[registry]` stamp, or
   `profiles.toml`'s schema) means bumping `ProtocolVersion` and announcing it
   to consumers first. Every `profile.Save` stamps `[registry]`
-  (`clown_version`, `protocol`); a new profile field also needs a field in
-  the library's `canonical` struct. clown publishes `go-pkgs`/`go-pkgs-test`
+  (`clown_version`, and the lowest `protocol` that holds the file, so an
+  untouched registry stays readable by older clowns); a new profile field
+  also needs a field in the library's `canonical` struct (a test checks). clown publishes `go-pkgs`/`go-pkgs-test`
   (`mkGoPkgs` in `flake.nix`) so consumers can bridge it; `internal/profile`'s
   `builtin.toml` is embedded and rides in `extras`. `RequiredServers` must
   keep naming servers the synthesized `clown-builtin-jobs` plugin declares
