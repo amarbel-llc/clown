@@ -196,3 +196,62 @@ CLOWN_DISALLOWED_TOOLS = "Artifact,ArtifactData,ArtifactComments,DesignSync,Work
   "stats-me_export", "stats-me_labels", "stats-me_query", "stats-me_range", "stats-me_series",
   "status",
 ]
+
+# canary-grit is canary for runs that test spinclass's own grit tools under
+# confinement: moxy keeps only read-only folio read/ls, rg and jq (none of its
+# grit, chix or smith tools), just-us keeps run_recipe because canaries run
+# their probes through it, and spinclass keeps whoami, version, list-handles,
+# its grit tools and close-this-session.
+[[profile]]
+name = "canary-grit"
+display = "Canary (minimal worker, spinclass grit)"
+provider = "claude"
+backend = "anthropic"
+model = "claude-sonnet-5-5"
+context_servers = ["clown-builtin-jobs/ringmaster", "clown-builtin-jobs/troupe", "spinclass/spinclass", "moxy/moxy", "just-us/just-us"]
+
+[profile.env]
+CLOWN_DISABLE_CLAUDEAI_CONNECTORS = "1"
+CLOWN_DISALLOWED_TOOLS = "Artifact,ArtifactData,ArtifactComments,DesignSync,Workflow,SendFeedback,EnterPlanMode,ExitPlanMode,ScheduleWakeup,CronCreate,CronDelete,CronList,RemoteTrigger,EndConversation,ReportFindings,PushNotification,ListMcpResourcesTool,ReadMcpResourceTool,ReadMcpResourceDirTool,WaitForMcpServers"
+
+[profile.context_excluded]
+"spinclass/spinclass" = [
+  "close-child-session", "grant-session-handle", "list", "merge-this-session", "merge-this-session-async",
+  "nothing-but-the-truth", "perms-list", "release-session-handle", "resurrect", "session-job-cancel",
+  "spawn-session", "update-this-session-description", "validate",
+]
+"just-us/just-us" = ["dump_justfile", "list_variables"]
+"moxy/moxy" = [
+  "async", "async-cancel", "async-result", "batch", "calendar_agenda",
+  "car_doc-graph", "car_export", "car_get", "car_list", "car_search",
+  "chix_build", "chix_derivation-show", "chix_develop-run", "chix_doc", "chix_doc-options",
+  "chix_doc-tree", "chix_flake-check", "chix_flake-init", "chix_flake-lock", "chix_flake-show",
+  "chix_flake-update", "chix_log", "chix_nix-hash", "chix_run", "chix_search",
+  "chix_store-cat", "chix_store-gc", "chix_store-ls", "chix_store-path-info", "chix_store-realize",
+  "chix_which", "chix_why-depends",
+  "chrest_browser-info", "chrest_capture", "chrest_close-tab", "chrest_close-window", "chrest_create-tab",
+  "chrest_create-window", "chrest_get-tab", "chrest_get-window", "chrest_init", "chrest_items-get",
+  "chrest_items-put", "chrest_list-extensions", "chrest_list-tabs", "chrest_list-windows", "chrest_read-resource",
+  "chrest_resource-read", "chrest_resource-templates", "chrest_state-get", "chrest_state-restore", "chrest_update-tab",
+  "chrest_update-window",
+  "env_clock", "env_cpu", "env_date", "env_get", "env_loadavg", "env_meminfo", "env_resolve", "env_uptime", "env_which",
+  "folio_chmod", "folio_cp", "folio_df", "folio_du", "folio_file-type", "folio_glob", "folio_link", "folio_mkdir", "folio_mktemp",
+  "folio_mv", "folio_rm", "folio_tar", "folio_tree", "folio_write",
+  "freud_interruptions", "freud_interruptions-timeseries", "freud_messages", "freud_sessions", "freud_subagents",
+  "freud_summary", "freud_tool-frequency", "freud_tool-results-summary", "freud_tool-results-timeseries",
+  "freud_tool-usage", "freud_transcript", "freud_unique-tools",
+  "gmail_read", "gmail_triage",
+  "grit_branch", "grit_clone", "grit_commit", "grit_merge", "grit_remote", "grit_stage", "grit_stash", "grit_tag", "grit_worktree",
+  "gws_api", "man_list", "man_section", "man_toc",
+  "piers_batch-update", "piers_comment", "piers_create", "piers_get", "piers_outline", "piers_tab", "piers_update",
+  "prison_get", "restart",
+  "smith_content-get", "smith_issue-close", "smith_issue-comment", "smith_issue-create", "smith_issue-edit", "smith_issue-edit-labels",
+  "smith_issue-edit-milestone", "smith_issue-get", "smith_issue-list", "smith_issue-watch", "smith_milestone-create", "smith_milestone-delete",
+  "smith_milestone-edit", "smith_milestone-list", "smith_pr-comment", "smith_pr-create", "smith_pr-get", "smith_pr-list",
+  "smith_pr-merge", "smith_pr-status",
+  "smith_pr-watch", "smith_release-create", "smith_release-delete", "smith_release-list", "smith_release-view",
+  "smith_repo-get", "smith_repo-label-create", "smith_repo-label-delete", "smith_repo-label-list", "smith_tag-create",
+  "smith_tag-delete", "smith_tag-list", "smith_tag-view", "smith_whoami",
+  "stats-me_export", "stats-me_labels", "stats-me_query", "stats-me_range", "stats-me_series",
+  "status",
+]

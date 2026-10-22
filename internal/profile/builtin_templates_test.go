@@ -25,6 +25,10 @@ var porterMoxyExtra = strings.Fields(`folio_write folio_cp folio_mkdir grit_comm
 
 var canaryMoxyKeep = strings.Fields(`folio_read folio_ls rg_search grit_stage`)
 
+// canary-grit tests spinclass's own grit under confinement, so moxy keeps none
+// of its grit (nor chix or smith) and no write tool.
+var canaryGritMoxyKeep = strings.Fields(`folio_read folio_ls rg_search jq_jq`)
+
 func builtinByName(t *testing.T, name string) Profile {
 	t.Helper()
 	ps, err := Builtin()
@@ -54,6 +58,11 @@ func TestBuiltinTaskTemplates(t *testing.T) {
 			append(slices.Clone(reviewerMoxyKeep), porterMoxyExtra...), 124,
 		},
 		{"canary", []string{"clown-builtin-jobs/ringmaster", "clown-builtin-jobs/troupe", "moxy/moxy"}, canaryMoxyKeep, 152},
+		{
+			"canary-grit",
+			[]string{"clown-builtin-jobs/ringmaster", "clown-builtin-jobs/troupe", "just-us/just-us", "moxy/moxy", "spinclass/spinclass"},
+			canaryGritMoxyKeep, 152,
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -114,7 +123,7 @@ func TestBuiltinTaskTemplates(t *testing.T) {
 // strips that server's tools, so every template must keep both whole.
 func TestBuiltinTemplatesKeepTheServersAWorkerNeedsToReportBack(t *testing.T) {
 	required := []string{"clown-builtin-jobs/ringmaster", "clown-builtin-jobs/troupe"}
-	for _, name := range []string{"reviewer", "porter", "canary"} {
+	for _, name := range []string{"reviewer", "porter", "canary", "canary-grit"} {
 		p := builtinByName(t, name)
 		for _, srv := range required {
 			if !slices.Contains(p.ContextServers, srv) {
@@ -123,6 +132,34 @@ func TestBuiltinTemplatesKeepTheServersAWorkerNeedsToReportBack(t *testing.T) {
 			if len(p.ContextExcluded[srv]) > 0 {
 				t.Errorf("%s strips tools from %s: %v", name, srv, p.ContextExcluded[srv])
 			}
+		}
+	}
+}
+
+// canary-grit keeps spinclass's grit tools and close-this-session but none of
+// the session-spawning or merging surface, and just-us keeps run_recipe.
+func TestBuiltinCanaryGritKeepsGritAndRunRecipe(t *testing.T) {
+	p := builtinByName(t, "canary-grit")
+	excluded := p.ContextExcluded["spinclass/spinclass"]
+	for _, kept := range []string{
+		"whoami", "version", "list-handles", "close-this-session",
+		"grit_branch", "grit_clone", "grit_commit", "grit_merge", "grit_remote", "grit_stage", "grit_stash", "grit_tag", "grit_worktree",
+	} {
+		if slices.Contains(excluded, kept) {
+			t.Errorf("spinclass %s must stay available to canary-grit", kept)
+		}
+	}
+	for _, dropped := range []string{"spawn-session", "close-child-session", "grant-session-handle", "merge-this-session", "merge-this-session-async"} {
+		if !slices.Contains(excluded, dropped) {
+			t.Errorf("spinclass %s must be excluded for canary-grit", dropped)
+		}
+	}
+	if slices.Contains(p.ContextExcluded["just-us/just-us"], "run_recipe") {
+		t.Error("just-us run_recipe must stay available: canaries run their probes through it")
+	}
+	for _, tool := range canaryGritMoxyKeep {
+		if strings.HasPrefix(tool, "grit_") || strings.HasPrefix(tool, "chix_") || strings.HasPrefix(tool, "smith_") || tool == "folio_write" {
+			t.Errorf("moxy %s must not be kept by canary-grit", tool)
 		}
 	}
 }
