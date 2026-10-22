@@ -28,14 +28,20 @@ type exclusionReadback struct {
 }
 
 // exclusionReadbackRecord is the file a launch writes: one entry per server
-// whose profile carried exclusions.
+// whose profile carried exclusions. Checks says what the readback proves:
+// "listing", i.e. that the excluded tools are no longer advertised, not that
+// a call naming one is refused (clown-stdio-bridge filters listing only).
 type exclusionReadbackRecord struct {
 	Version int                 `json:"version"`
+	Checks  string              `json:"checks"`
 	Profile string              `json:"profile,omitempty"`
 	Servers []exclusionReadback `json:"servers"`
 }
 
-const exclusionReadbackVersion = 1
+const (
+	exclusionReadbackVersion = 1
+	exclusionReadbackChecks  = "listing"
+)
 
 // applyAndReadBackExclusions resolves saved against live (the catalog
 // fetched before the push), pushes the matched names, fetches the catalog
@@ -120,6 +126,7 @@ func recordFrontendExclusionReadback(flags parsedFlags, rbs []exclusionReadback,
 	if err == nil {
 		err = writeExclusionReadback(path, exclusionReadbackRecord{
 			Version: exclusionReadbackVersion,
+			Checks:  exclusionReadbackChecks,
 			Profile: flags.cheapContextProfile.Name,
 			Servers: rbs,
 		})

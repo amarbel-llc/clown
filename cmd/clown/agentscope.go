@@ -649,7 +649,7 @@ func recordInUnitExclusionReadback(rbs []exclusionReadback) error {
 		return nil
 	}
 	path := filepath.Join(os.Getenv("HOME"), ".cache", "clown", "exclusion-readback.json")
-	if err := writeExclusionReadback(path, exclusionReadbackRecord{Version: exclusionReadbackVersion, Servers: rbs}); err != nil {
+	if err := writeExclusionReadback(path, exclusionReadbackRecord{Version: exclusionReadbackVersion, Checks: exclusionReadbackChecks, Servers: rbs}); err != nil {
 		fmt.Fprintf(os.Stderr, "clown agent-relay: writing %s: %v\n", path, err)
 	}
 	return exclusionRefusal("in the agent unit", rbs)
