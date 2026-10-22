@@ -378,8 +378,8 @@ run_probe() {
   [ "$(jq -r .exit_code "$RESULT")" = 3 ]
   [ "$(jq -r '.error // ""' "$RESULT")" = "" ]
   [ -n "$(jq -r .cgroup "$RESULT")" ]
-  # Too quick to be seen starting, and nonzero: an exit, not a failed start.
-  run run_in_unit 'exit 5'
+  # Short-lived and nonzero: an exit, not a failed start.
+  run run_in_unit 'sleep 0.5; exit 5'
   [ "$status" -eq 5 ]
   [ "$(jq -r .exit_code "$RESULT")" = 5 ]
   [ "$(jq -r '.error // ""' "$RESULT")" = "" ]

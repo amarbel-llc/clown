@@ -367,11 +367,23 @@ func TestProviderStartedWhenTheInitRenamedItself(t *testing.T) {
 // between two polls leaves the unit failed; Run classifies it by exit code,
 // so waitActive must not call it a start failure.
 func TestWaitActiveReportsAFailedUnitAsEnded(t *testing.T) {
-	tools := Tools{procRoot: t.TempDir(), show: func(string) (Status, error) {
-		return Status{ActiveState: "failed", SubState: "failed"}, nil
-	}}
-	if _, err := tools.waitActive(context.Background(), "u-1.service"); !errors.Is(err, errUnitEnded) {
-		t.Fatalf("err = %v, want errUnitEnded", err)
+	failed := func(result string) Tools {
+		return Tools{procRoot: t.TempDir(), show: func(string) (Status, error) {
+			return Status{ActiveState: "failed", SubState: "failed", Result: result}, nil
+		}}
+	}
+	for _, r := range []string{"exit-code", "signal"} {
+		if _, err := failed(r).waitActive(context.Background(), "u-1.service"); !errors.Is(err, errUnitEnded) {
+			t.Errorf("result %s: err = %v, want errUnitEnded", r, err)
+		}
+	}
+	// A unit that never ran its process (a bad exec, sandbox setup) is a
+	// start failure, not an exit.
+	for _, r := range []string{"exec", "resources", "protocol"} {
+		_, err := failed(r).waitActive(context.Background(), "u-1.service")
+		if err == nil || errors.Is(err, errUnitEnded) || !strings.Contains(err.Error(), "failed to start (result "+r+")") {
+			t.Errorf("result %s: err = %v, want a start failure naming it", r, err)
+		}
 	}
 }
 

@@ -363,6 +363,12 @@ unreliable on failure"):
 - **Exit.** When the unit exits after its provider started, the file is
   rewritten with `exit_code`. If the provider exited too fast for clown to
   see it start, the file has `exit_code` but no `cgroup` or `main_pid`.
+  That holds only with evidence that something ran:
+  - systemd's `Result` for the failed unit was `exit-code` or `signal`, or
+  - clown saw the shim running, or
+  - the exit code is 0.
+  Otherwise, or when systemd's `Result` names a start failure (`exec`,
+  `resources`, ...), the file gets `error`.
 - **Failure.** On any refusal after the spec loads, the file is rewritten
   with `error` set. This covers staging, the frontend endpoints, a unit that
   failed, a provider that did not start in time, and a shim that refused
@@ -806,8 +812,9 @@ and a live round. Not built; a separate design.
   - it runs the provider as its child and reaps every process reparented
     to it;
   - it passes SIGTERM, SIGHUP, SIGUSR1 and SIGUSR2 on to the provider;
-  - it ignores the terminal's SIGINT and SIGQUIT, which reach the provider
-    directly because it stays in the shim's process group;
+  - with a terminal, it does not pass on SIGINT and SIGQUIT, which already
+    reach the provider through the shim's process group; without one it
+    passes them on;
   - it exits with the provider's status, or 128 plus the signal that killed
     it.
 

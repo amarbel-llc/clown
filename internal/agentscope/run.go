@@ -65,12 +65,25 @@ type Status struct {
 	ControlGroup string
 	InvocationID string
 	MainPID      int
+	// Result is systemd's verdict on a stopped unit: "exit-code" or
+	// "signal" when a process in it ran and ended; anything else (e.g.
+	// "exec", "resources", "protocol") when it never got that far.
+	Result string
+	// ShimSeen is set by waitActive once it saw the unit's settled main
+	// process (the shim) running.
+	ShimSeen bool
+}
+
+// ranAndEnded reports whether a failed unit's Result says a process in it
+// ran, as opposed to the unit failing to start.
+func (s Status) ranAndEnded() bool {
+	return s.Result == "exit-code" || s.Result == "signal" || s.Result == "core-dump"
 }
 
 // Show reads a unit's status.
 func (t Tools) Show(unit string) (Status, error) {
 	out, err := exec.Command(t.systemctl(), "--user", "show",
-		"-p", "ActiveState", "-p", "SubState", "-p", "ControlGroup", "-p", "InvocationID", "-p", "MainPID",
+		"-p", "ActiveState", "-p", "SubState", "-p", "ControlGroup", "-p", "InvocationID", "-p", "MainPID", "-p", "Result",
 		unit).Output()
 	if err != nil {
 		return Status{}, fmt.Errorf("systemctl --user show %s: %w", unit, err)
@@ -90,6 +103,8 @@ func (t Tools) Show(unit string) (Status, error) {
 			st.InvocationID = v
 		case "MainPID":
 			st.MainPID, _ = strconv.Atoi(v)
+		case "Result":
+			st.Result = v
 		}
 	}
 	return st, sc.Err()
@@ -105,16 +120,24 @@ func (t Tools) waitActive(ctx context.Context, unit string) (Status, error) {
 	if show == nil {
 		show = t.Show
 	}
+	seen := false
 	for {
 		st, err := show(unit)
-		if err == nil && st.ActiveState == "active" && st.MainPID > 0 && st.ControlGroup != "" &&
-			t.settledMain(st.MainPID, unit) && t.providerStarted(st.MainPID) {
-			return st, nil
+		if err == nil && st.ActiveState == "active" && st.MainPID > 0 && st.ControlGroup != "" && t.settledMain(st.MainPID, unit) {
+			seen = true
+			if t.providerStarted(st.MainPID) {
+				st.ShimSeen = true
+				return st, nil
+			}
 		}
+		st.ShimSeen = seen
 		if err == nil && st.ActiveState == "failed" {
+			if !st.ranAndEnded() {
+				return st, fmt.Errorf("unit %s failed to start (result %s)", unit, st.Result)
+			}
 			// A provider that ran and exited nonzero between two polls
-			// leaves the unit failed too; Run tells the two apart by the
-			// exit code.
+			// leaves the unit failed too; Run tells it apart from a shim
+			// refusal by the exit code.
 			return st, fmt.Errorf("unit %s ended (%s): %w", unit, st.SubState, errUnitEnded)
 		}
 		select {
@@ -244,7 +267,7 @@ func Run(l Launch, tools Tools, logger *slog.Logger) (int, error) {
 					logger.Info("agent scope: provider started", "unit", l.Unit, "cgroup", st.ControlGroup, "main_pid", st.MainPID, "pty", pty)
 				}
 			}
-			outcome <- startOutcome{res: res, err: err}
+			outcome <- startOutcome{res: res, err: err, shimSeen: st.ShimSeen}
 		}()
 	}
 	defer tools.stopIfActive(l.Unit)
@@ -281,6 +304,15 @@ func Run(l Launch, tools Tools, logger *slog.Logger) (int, error) {
 			err = why
 		}
 		return code, l.fail(why)
+	case code != 0 && !o.shimSeen && !errors.Is(o.err, errUnitEnded):
+		// No evidence anything ran: systemd neither reported a process
+		// exit nor did clown see the shim. A unit that failed to start, or
+		// systemd-run refusing, ends here too.
+		why := fmt.Errorf("the unit ended (exit %d) before clown saw it running: either it failed to start or its provider exited at once", code)
+		if err == nil {
+			err = why
+		}
+		return code, l.fail(why)
 	default:
 		// The unit exited before clown saw the provider start: a provider
 		// that ran briefly, observed by its exit alone.
@@ -299,8 +331,9 @@ func Run(l Launch, tools Tools, logger *slog.Logger) (int, error) {
 var errUnitEnded = errors.New("the unit ended before clown saw its provider start")
 
 type startOutcome struct {
-	res Result
-	err error
+	res      Result
+	err      error
+	shimSeen bool
 }
 
 func (l Launch) writeResult(r Result, logger *slog.Logger) {

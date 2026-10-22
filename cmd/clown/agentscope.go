@@ -550,8 +550,9 @@ func runAgentExec(args []string) int {
 // which is how the frontend tells "provider started" (FDR 0020 "Result").
 //
 // The provider stays in the shim's session and process group, so the
-// terminal's own signals (^C, ^\, SIGWINCH) reach it directly; the shim
-// ignores those rather than passing them on twice.
+// terminal's own signals (^C, ^\, SIGWINCH) reach it directly; with a
+// terminal the shim does not pass SIGINT/SIGQUIT on a second time, without
+// one it does.
 func runAsInit(path string, args []string) int {
 	sigs := make(chan os.Signal, 16)
 	signal.Notify(sigs, syscall.SIGCHLD, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGINT, syscall.SIGQUIT, syscall.SIGUSR1, syscall.SIGUSR2)
@@ -564,6 +565,7 @@ func runAsInit(path string, args []string) int {
 		return agentscope.ShimExitRefused
 	}
 	_ = os.WriteFile("/proc/self/comm", []byte(agentscope.InitComm), 0)
+	onTerminal := term.IsTerminal(0)
 	for {
 		// Reap everything that has exited; only the provider's status counts.
 		for {
@@ -577,7 +579,13 @@ func runAsInit(path string, args []string) int {
 			}
 		}
 		switch s := <-sigs; s {
-		case syscall.SIGCHLD, syscall.SIGINT, syscall.SIGQUIT:
+		case syscall.SIGCHLD:
+		case syscall.SIGINT, syscall.SIGQUIT:
+			// From a terminal these already reached the provider through
+			// the process group; without one they came from outside.
+			if !onTerminal {
+				_ = proc.Signal(s)
+			}
 		default:
 			_ = proc.Signal(s)
 		}
