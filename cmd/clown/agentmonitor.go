@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -35,17 +36,35 @@ func runAgentMonitor(args []string) int {
 			backoff = min(backoff*2, 2*time.Second)
 			continue
 		}
-		backoff = 100 * time.Millisecond
-		if uc, ok := c.(*net.UnixConn); ok {
-			_ = uc.CloseWrite()
-		}
-		_, err = io.Copy(os.Stdout, c)
+		got, err := copyLines(os.Stdout, c)
 		_ = c.Close()
-		var werr *os.PathError
-		if errors.As(err, &werr) && werr.Op == "write" {
-			return 0
+		if err != nil {
+			return 0 // our stdout is gone: claude stopped the monitor
+		}
+		if got {
+			backoff = 100 * time.Millisecond
 		}
 		time.Sleep(backoff)
+		backoff = min(backoff*2, 2*time.Second)
+	}
+}
+
+// copyLines copies complete lines from r to w until r ends, dropping a
+// trailing partial line (a relay write cut short is replayed whole on the
+// next connection). It reports whether any line arrived, and an error only
+// when writing to w failed.
+func copyLines(w io.Writer, r io.Reader) (bool, error) {
+	br := bufio.NewReader(r)
+	got := false
+	for {
+		line, err := br.ReadString('\n')
+		if err != nil {
+			return got, nil
+		}
+		got = true
+		if _, err := io.WriteString(w, line); err != nil {
+			return got, err
+		}
 	}
 }
 
@@ -90,6 +109,21 @@ func runAgentMonitorServe(args []string) int {
 	return 0
 }
 
+// socketNameSafe accepts a non-empty path component of [A-Za-z0-9_-] only:
+// nothing that walks out of the directory or that systemd's BindPaths= would
+// parse as a separator.
+func socketNameSafe(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-') {
+			return false
+		}
+	}
+	return true
+}
+
 // moveMonitorsToFrontend rewrites the synthesized job-platform plugin's
 // monitors for an agent-scope launch: each command is recorded to run in the
 // frontend, and claude is given `clown agent-monitor <socket>` instead, so
@@ -101,7 +135,7 @@ func moveMonitorsToFrontend(pluginDir, principal string) ([]agentscope.MonitorSp
 	if !filepath.IsAbs(runtime) {
 		return nil, errors.New("XDG_RUNTIME_DIR is unset; nowhere to put the monitor sockets")
 	}
-	if principal == "" || strings.ContainsAny(principal, "/") {
+	if !socketNameSafe(principal) {
 		return nil, fmt.Errorf("principal %q cannot name a monitor socket directory", principal)
 	}
 	manifestPath := filepath.Join(pluginDir, ".claude-plugin", "plugin.json")
@@ -119,6 +153,9 @@ func moveMonitorsToFrontend(pluginDir, principal string) ([]agentscope.MonitorSp
 	}
 	var specs []agentscope.MonitorSpec
 	for i, mon := range manifest.Monitors {
+		if !socketNameSafe(mon.Name) {
+			return nil, fmt.Errorf("monitor name %q cannot name a socket", mon.Name)
+		}
 		sock := filepath.Join(dir, mon.Name+".sock")
 		if len(sock) >= 108 {
 			return nil, fmt.Errorf("monitor socket path %q exceeds the unix socket limit", sock)

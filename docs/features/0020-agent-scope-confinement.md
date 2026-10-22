@@ -279,7 +279,9 @@ Consequences:
 ## How the agent still reaches its sockets
 
 Every socket below except piggy-agent's is created per session by clown,
-under a frontend-owned directory (`$XDG_RUNTIME_DIR/clown/agent/<unit>/`).
+under a frontend-owned directory: `$XDG_RUNTIME_DIR/clown/agent/<unit>/`,
+except the monitor sockets (`$XDG_RUNTIME_DIR/clown/monitors/<principal>/`,
+named before the unit is) and the idle socket (`clown/idle/`).
 Each is bound into the unit as a single inode at the same path. The frontend
 end checks `SO_PEERCRED` (or, for the statsd datagram socket,
 `SCM_CREDENTIALS`) and `/proc/<pid>/cgroup` against the unit's cgroup.
@@ -290,7 +292,7 @@ at all.
 |---|---|---|
 | claude → frontend MCP servers (ringmaster mcp, troupe mcp, `spinclass serve`) | an MCP stream | A per-server unix socket. For each accepted connection, the frontend starts a fresh stdio server and splices the two. The in-unit side is `clown mcp-socket-relay <sock>`, which claude starts as a stdio MCP server. A plugin marks a server frontend in `clown.json` (`"scope": "frontend"`); clown-builtin-jobs' servers are frontend. |
 | claude → agent-side MCP servers (moxy and other file-tool servers) | | Run **inside** the unit as claude's stdio children, so their file tools are confined too. A frontend moxy would be a ProtectHome bypass through `folio_write`. |
-| plugin monitors (job wakes, chat) | wake lines on stdout | troupe's connection owner (`troupe receive`) and `ringmaster monitor` run in the frontend (FDR 0032 D7). The in-unit monitor is a relay that reads their lines from a passed unix socket. The XMPP password file then never enters the unit. |
+| plugin monitors (job wakes, chat) | wake lines on stdout | troupe's connection owner (`troupe receive`) and `ringmaster monitor` run in the frontend (FDR 0032 D7). The in-unit monitor (`clown agent-monitor`) reads their lines from a per-principal socket under `$XDG_RUNTIME_DIR/clown/monitors/<principal>/`, bound in as a single inode. The XMPP password file still enters the unit, read-only, for clown-hook-tee (next row). |
 | clown-hook-tee (Stop/SessionEnd) | troupe send | `troupe muc send` inside the unit, with the session's own password file (bound read-only) over the forwarded XMPP port; no troupe socket or directory |
 | clown-hook-toolcost | state dir, statsd | state under the redirected `XDG_STATE_HOME`; statsd through the statsd relay (Egress) |
 | self-close idle poke (Stop) | one datagram to the frontend | The per-session unixgram `$XDG_RUNTIME_DIR/clown/idle/<principal>.sock`, bound in as a single inode (`Launch.IdleSocket`, clown#287). The in-unit `clown idle-notify <sock>` Stop hook sends one byte and always exits 0. The frontend listener runs `spinclass close-self-run` for its own principal, serialized (pokes during a run coalesce into one more), outside the unit; it never reads the datagram, so a unit can only trigger its own session's runner, which is a no-op unless the session queued a close and spinclass allows it. Armed only for a claude launch inside a spinclass session with `spinclass` on PATH. |
@@ -339,7 +341,7 @@ with `error` set.
 ```json
 {
   "version": 1,
-  "capabilities": ["agent-unit", "private-network", "egress-proxy", "frontend-mcp-sockets", "in-unit-moxy", "statsd-relay"],
+  "capabilities": ["agent-unit", "private-network", "egress-proxy", "frontend-mcp-sockets", "in-unit-moxy", "statsd-relay", "frontend-monitors"],
   "unit": "spinclass-agent-clown-cool-fir-1a2b.service",
   "principal": "<CLOWN_SESSION_ID: not in the claude subtree's environment (clown#136), so reported here>",
   "cgroup": "/user.slice/user-1001.slice/user@1001.service/clown.slice/clown-agent.slice/spinclass-agent-clown-cool-fir-1a2b.service",
@@ -464,19 +466,32 @@ Built (`internal/agentscope`, `cmd/clown/agentscope.go`):
   - Each relay serves its monitor's stdout lines on
     `$XDG_RUNTIME_DIR/clown/monitors/<principal>/<name>.sock`, bound into the
     unit as a single inode. Callers must be in the unit's cgroup.
-  - The stream is one-way: the relay never reads from a connection, so
-    nothing in the unit can write into it. Every line, including the relay's
-    own `[clown] monitor <name> unavailable` notice, is frontend-written.
+  - The stream is one-way: what a reader sends is read only to notice it has
+    gone and is discarded. Every line the relay serves, including its own
+    `[clown] monitor <name> unavailable` notice, is frontend-written. This
+    covers the socket, not claude's pipe: inside the unit a process of the
+    same uid can write to `clown agent-monitor`'s stdout, as it could to an
+    in-unit monitor's before, or connect first and take the queued lines.
+  - A monitor starts with its first reader, not with the relay: ringmaster's
+    monitor acks what it prints, so lines printed before claude's
+    `agent-monitor` connects would be acked and then exist only in the relay.
   - Lines produced while no reader is connected are queued (1024 lines,
-    oldest dropped) and replayed to the next reader. The bound and a running
-    drop count are in the launch log.
+    oldest dropped) and replayed to the next reader. The bound, the drop
+    count and, on close, the undelivered count are in the launch log.
+  - The reader forwards complete lines only, so a relay write cut short and
+    replayed whole is never glued to a fragment.
   - A monitor that exits is restarted with capped backoff (1s to 30s). After
     5 consecutive runs shorter than 10s, the relay emits the unavailable notice
     once and keeps retrying. `ringmaster monitor` replays unacked records when
     it starts, so a wake produced while it was down arrives after the restart
-    (`zz-tests_bats/agent_monitor.bats`, against the real ringmaster). The
-    window that remains is a line acked by ringmaster and queued here when
-    the frontend itself dies; the unit dies with it.
+    (`zz-tests_bats/agent_monitor.bats`, against the real ringmaster). Lines
+    acked by ringmaster and still queued here are lost when the relay closes:
+    when the frontend dies, when the unit fails to start after a reader
+    connected, or in the short gap between claude exiting and the frontend
+    stopping the relay. Unconfined, a wake that arrives while claude is down
+    stays unacked and replays on resume; here it can be lost in those gaps.
+  - Monitors are killed with the relay and, through `Pdeathsig`, with the
+    frontend process even when it dies without unwinding (SIGKILL, a hangup).
   - **Authority:** a frontend monitor is the same monitor every unconfined
     session runs today, with the same reach. ringmaster's reaper is
     host-wide. The change is that a worker no longer gets that reach.
@@ -646,6 +661,7 @@ By tool, for a brief to state plainly:
 | moxy: stats-me | absent | It needs a host-loopback service the unit cannot reach. |
 | circus read-only cloud moxins (hetzner, cloudflare, nfsn) | absent for now | Not on the allowlist. They could be added as read-only after review. |
 | ringmaster, troupe MCP (jobs, chat) | available | Forwarded from the frontend. |
+| `ringmaster`/`troupe` CLI from Bash, and in-unit job producers (e.g. moxy's async jobs) | no job state | No ringmaster or troupe directory is bound, so producing or reading a job journal from inside the unit is expected to fail (inferred from the binds; not observed). Use the MCP tools. Before, an in-unit moxy, which gets no CLOWN_SESSION_ID, journaled to a channel no monitor watched. |
 | spinclass serve | available once spinclass marks it `"scope":"frontend"` | Until then it runs in-unit with what the unit sees. |
 | claude.ai connectors (e.g. Krone's issue-filer) | available | Through the egress proxy (`mcp-proxy.anthropic.com`, `mcp.starbrandshoes.com` on the default allowlist). |
 | Bash network tools | only allowlisted `host:port` over the proxy | `HTTPS_PROXY`/`HTTP_PROXY` are set. Tools that ignore proxy env get no network. |

@@ -161,6 +161,7 @@ var Capabilities = []string{
 	"frontend-mcp-sockets", // only frontend-class servers, over per-session peer-checked unix sockets
 	"in-unit-moxy",         // agent-side servers (moxy & co.) run inside the unit, moxy under InUnitMoxyfile
 	"statsd-relay",         // in-unit UDP 127.0.0.1:8125 relayed over a peer-checked unixgram socket to the frontend's statsd
+	"frontend-monitors",    // job-platform monitors run in the frontend; no ringmaster or troupe state is bound into the unit
 }
 
 // Result is what clown reports back once the unit is active (FDR 0020

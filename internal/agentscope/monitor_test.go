@@ -58,9 +58,28 @@ func waitFor(t *testing.T, cond func() bool) {
 	}
 }
 
-func TestMonitorRelayReplaysLinesQueuedBeforeAClient(t *testing.T) {
-	m := &MonitorRelay{Command: "echo a; echo b; sleep 30"}
+// connectAndLeave starts the monitor with a reader that goes away at once.
+func connectAndLeave(t *testing.T, sock string) {
+	t.Helper()
+	c, err := net.Dial("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = c.Close()
+}
+
+// TestMonitorRelayStartsWithItsFirstReaderAndReplaysWhatItQueued: the monitor
+// does not run before anything can read it (it would ack lines into the
+// void), and lines it prints while no reader is connected reach the next one.
+func TestMonitorRelayStartsWithItsFirstReaderAndReplaysWhatItQueued(t *testing.T) {
+	mark := filepath.Join(t.TempDir(), "started")
+	m := &MonitorRelay{Command: "touch " + mark + "; sleep 0.3; echo a; echo b; sleep 30"}
 	sock := startRelay(t, m)
+	time.Sleep(200 * time.Millisecond)
+	if _, err := os.Stat(mark); err == nil {
+		t.Fatal("the monitor started before any reader connected")
+	}
+	connectAndLeave(t, sock)
 	waitFor(t, func() bool { m.mu.Lock(); defer m.mu.Unlock(); return len(m.queue) == 2 })
 	if got := readLines(t, sock, 2); strings.Join(got, ",") != "a,b" {
 		t.Errorf("lines = %v, want [a b]", got)
@@ -133,8 +152,9 @@ func TestMonitorRelayRestartsAKilledMonitorThatReplaysWhatItMissed(t *testing.T)
 }
 
 func TestMonitorRelayBoundsItsQueueAndCountsDrops(t *testing.T) {
-	m := &MonitorRelay{Command: "for i in 1 2 3 4 5; do echo $i; done; sleep 30", BufferLines: 3}
+	m := &MonitorRelay{Command: "sleep 0.3; for i in 1 2 3 4 5; do echo $i; done; sleep 30", BufferLines: 3}
 	sock := startRelay(t, m)
+	connectAndLeave(t, sock)
 	waitFor(t, func() bool { m.mu.Lock(); defer m.mu.Unlock(); return m.dropped == 2 })
 	if got := readLines(t, sock, 3); strings.Join(got, ",") != "3,4,5" {
 		t.Errorf("lines = %v, want the newest three", got)
@@ -156,4 +176,18 @@ func TestMonitorRelayRefusesCallersOutsideTheUnit(t *testing.T) {
 	if line, _ := bufio.NewReader(c).ReadString('\n'); line != "" {
 		t.Errorf("a caller outside the unit read %q", line)
 	}
+}
+
+// TestMonitorRelayMonitorDiesWithTheRelay: Close stops the monitor's process.
+func TestMonitorRelayMonitorDiesWithTheRelay(t *testing.T) {
+	m := &MonitorRelay{Command: "echo up; exec sleep 30"}
+	sock := startRelay(t, m)
+	if got := readLines(t, sock, 1); len(got) != 1 {
+		t.Fatalf("no line from the monitor: %v", got)
+	}
+	m.mu.Lock()
+	pid := m.proc.Process.Pid
+	m.mu.Unlock()
+	_ = m.Close()
+	waitFor(t, func() bool { return syscall.Kill(pid, 0) != nil })
 }

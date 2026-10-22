@@ -254,6 +254,12 @@ func startFrontendEndpoints(launch *agentscope.Launch, forwardAddrs []string, in
 		closers = append(closers, relay.Close)
 		launch.MonitorSockets = append(launch.MonitorSockets, spec.Socket)
 	}
+	if len(monitors) > 0 {
+		// Runs after the relays closed and unlinked their sockets; Remove
+		// leaves the directory when anything else is in it.
+		monitorDir := filepath.Dir(monitors[0].Socket)
+		closers = append(closers, func() error { return os.Remove(monitorDir) })
+	}
 
 	moxyfile := filepath.Join(dir, "moxyfile")
 	inUnitMoxyfile := filepath.Join(launch.AgentHome, ".config", "moxy", "moxyfile")

@@ -83,6 +83,7 @@ finish_job() {
   wait_for_line "$first"
 
   pid="$(monitor_pid)"
+  [[ -n $pid ]]
   kill -KILL "$pid"
   second="$(finish_job second)"
   wait_for_line "$second"

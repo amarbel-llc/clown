@@ -49,7 +49,19 @@ func TestMoveMonitorsToFrontendRewritesTheManifest(t *testing.T) {
 
 func TestMoveMonitorsToFrontendRefusesAPrincipalThatIsAPath(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
-	if _, err := moveMonitorsToFrontend(t.TempDir(), "../other"); err == nil {
-		t.Error("a principal with a slash was accepted as a socket directory")
+	for _, p := range []string{"../other", "..", ".", "a b", "a:b", ""} {
+		if _, err := moveMonitorsToFrontend(t.TempDir(), p); err == nil {
+			t.Errorf("principal %q was accepted as a socket directory", p)
+		}
+	}
+}
+
+// TestCopyLinesDropsATrailingFragment: a relay write cut short is replayed
+// whole, so the reader must never pass the fragment on.
+func TestCopyLinesDropsATrailingFragment(t *testing.T) {
+	var out strings.Builder
+	got, err := copyLines(&out, strings.NewReader("one\ntwo\nthr"))
+	if err != nil || !got || out.String() != "one\ntwo\n" {
+		t.Errorf("copyLines = %v, %v, %q; want the two complete lines", got, err, out.String())
 	}
 }

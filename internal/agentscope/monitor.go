@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"os/exec"
+	"runtime"
 	"sync"
 	"syscall"
 	"time"
@@ -24,15 +25,18 @@ type MonitorSpec struct {
 
 // MonitorRelay runs one monitor command in the frontend and serves its stdout
 // lines on a unix socket bound into the agent unit. The stream is one-way:
-// the relay never reads from a connection, so nothing in the unit can write
-// into it, and every line in it, including the relay's own
-// "[clown] monitor ... unavailable" notice, was written by the frontend.
+// what a reader sends is read only to notice it has gone and is discarded, so
+// every line the relay serves, including its own "[clown] monitor ...
+// unavailable" notice, was written by the frontend. (Inside the unit, a
+// process of the same uid can still write to the reader's stdout; the relay
+// cannot speak for that.)
 //
-// Lines produced while no client is connected are queued (at most
-// BufferLines, oldest dropped and counted) and replayed to the next client. A
-// command that exits is restarted with capped backoff; after GiveUpAfter
-// consecutive runs shorter than ShortRun it emits one unavailable notice and
-// keeps retrying at the cap.
+// The command starts with the first reader. Lines produced while no reader is
+// connected are queued (at most BufferLines, oldest dropped and counted) and
+// replayed to the next reader. A command that exits is restarted with capped
+// backoff; after GiveUpAfter consecutive runs shorter than ShortRun it emits
+// one unavailable notice and keeps retrying at the cap. It is killed with the
+// relay (Close) and with the frontend process (Pdeathsig).
 type MonitorRelay struct {
 	Name    string
 	Command string
@@ -56,6 +60,7 @@ type MonitorRelay struct {
 	queue   []string
 	dropped int
 	proc    *exec.Cmd
+	started bool
 	stopped bool
 	wake    chan struct{}
 }
@@ -78,7 +83,10 @@ func (m *MonitorRelay) defaults() {
 	}
 }
 
-// Start listens on path (0600) and starts the monitor command.
+// Start listens on path (0600). The monitor command starts with the first
+// authorized reader, not before: a monitor such as ringmaster's acks what it
+// prints, so lines it printed with nobody to read them would be acked and
+// then exist only in this relay's memory.
 func (m *MonitorRelay) Start(path string) error {
 	m.defaults()
 	ln, err := listenUnix(path)
@@ -91,7 +99,6 @@ func (m *MonitorRelay) Start(path string) error {
 	m.mu.Unlock()
 	m.log("monitor relay started", "monitor", m.Name, "socket", path, "buffer_lines", m.BufferLines)
 	go m.accept(ln)
-	go m.run()
 	return nil
 }
 
@@ -109,13 +116,13 @@ func (m *MonitorRelay) Close() error {
 		_ = c.Close()
 	}
 	m.clients = nil
-	dropped := m.dropped
+	dropped, undelivered := m.dropped, len(m.queue)
 	ln := m.ln
 	m.mu.Unlock()
 	if proc != nil && proc.Process != nil {
 		_ = syscall.Kill(-proc.Process.Pid, syscall.SIGTERM)
 	}
-	m.log("monitor relay stopped", "monitor", m.Name, "dropped_lines", dropped)
+	m.log("monitor relay stopped", "monitor", m.Name, "dropped_lines", dropped, "undelivered_lines", undelivered)
 	if ln != nil {
 		return ln.Close()
 	}
@@ -134,9 +141,6 @@ func (m *MonitorRelay) accept(ln net.Listener) {
 				_ = c.Close()
 				continue
 			}
-		}
-		if uc, ok := c.(*net.UnixConn); ok {
-			_ = uc.CloseRead()
 		}
 		m.mu.Lock()
 		if m.stopped {
@@ -157,8 +161,35 @@ func (m *MonitorRelay) accept(ln net.Listener) {
 		} else {
 			_ = c.Close()
 		}
+		first := ok && !m.started
+		if first {
+			m.started = true
+		}
 		m.mu.Unlock()
+		if ok {
+			go m.untilGone(c)
+		}
+		if first {
+			go m.run()
+		}
 	}
+}
+
+// untilGone drops c as soon as its reader goes away, so the next line is
+// queued for a later reader instead of written into a dead socket. What the
+// reader sends is read only to see EOF and is thrown away: nothing from the
+// unit ever enters the stream.
+func (m *MonitorRelay) untilGone(c net.Conn) {
+	_, _ = io.Copy(io.Discard, c)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i, have := range m.clients {
+		if have == c {
+			m.clients = append(m.clients[:i], m.clients[i+1:]...)
+			break
+		}
+	}
+	_ = c.Close()
 }
 
 // emit delivers line to every connected client, or queues it when none is.
@@ -192,6 +223,11 @@ func writeLine(c net.Conn, line string) bool {
 }
 
 func (m *MonitorRelay) run() {
+	// Pdeathsig is tied to the thread that forked the child: pinning this
+	// goroutine keeps that thread alive for as long as the relay runs, so a
+	// frontend killed without unwinding (SIGKILL, a hangup) still takes its
+	// monitors with it, as claude's death takes an unconfined session's.
+	runtime.LockOSThread()
 	backoff := m.MinBackoff
 	short := 0
 	announced := false
@@ -226,7 +262,7 @@ func (m *MonitorRelay) run() {
 func (m *MonitorRelay) runOnce() error {
 	cmd := exec.Command("sh", "-c", m.Command)
 	cmd.Env = m.Env
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pdeathsig: syscall.SIGTERM}
 	out, err := cmd.StdoutPipe()
 	if err != nil {
 		return err
@@ -248,7 +284,17 @@ func (m *MonitorRelay) runOnce() error {
 	for sc.Scan() {
 		m.emit(sc.Text())
 	}
-	return cmd.Wait()
+	if err := sc.Err(); err != nil {
+		// An over-long line stops the scanner while the monitor may still be
+		// writing: stop it rather than wait on a pipe nobody drains.
+		m.log("monitor relay: reading the monitor failed; stopping it", "monitor", m.Name, "err", err)
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+	}
+	err = cmd.Wait()
+	m.mu.Lock()
+	m.proc = nil
+	m.mu.Unlock()
+	return err
 }
 
 func (m *MonitorRelay) log(msg string, args ...any) {
