@@ -184,7 +184,9 @@ type Result struct {
 	UID          int    `json:"uid"`
 	Pty          string `json:"pty,omitempty"`
 	MainPID      int    `json:"main_pid,omitempty"`
-	Error        string `json:"error,omitempty"`
+	// ExitCode is set once the unit has exited after its provider started.
+	ExitCode *int   `json:"exit_code,omitempty"`
+	Error    string `json:"error,omitempty"`
 }
 
 // WriteResult writes r to path atomically (tmp + rename in the same dir).

@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -95,7 +96,10 @@ func (t Tools) Show(unit string) (Status, error) {
 }
 
 // waitActive polls until the unit is active with its lasting main process
-// (settledMain), the context ends, or the unit fails.
+// (settledMain) and that process has exec'd the provider (providerStarted),
+// the context ends, or the unit fails. Until the exec, the main process is
+// the shim, which may still refuse (its relays or in-unit servers failing),
+// so "active" alone does not mean the launch succeeded.
 func (t Tools) waitActive(ctx context.Context, unit string) (Status, error) {
 	show := t.show
 	if show == nil {
@@ -103,7 +107,8 @@ func (t Tools) waitActive(ctx context.Context, unit string) (Status, error) {
 	}
 	for {
 		st, err := show(unit)
-		if err == nil && st.ActiveState == "active" && st.MainPID > 0 && st.ControlGroup != "" && t.settledMain(st.MainPID, unit) {
+		if err == nil && st.ActiveState == "active" && st.MainPID > 0 && st.ControlGroup != "" &&
+			t.settledMain(st.MainPID, unit) && t.providerStarted(st.MainPID) {
 			return st, nil
 		}
 		if err == nil && st.ActiveState == "failed" {
@@ -142,11 +147,52 @@ func (t Tools) settledMain(pid int, unit string) bool {
 	return false
 }
 
+// providerStarted reports whether pid, the unit's main process, has exec'd
+// the provider: its argv is no longer the shim's (`<clown> agent-exec ...`).
+// The shim execs in place, so the pid is the same before and after.
+func (t Tools) providerStarted(pid int) bool {
+	raw, err := os.ReadFile(filepath.Join(orName(t.procRoot, "/proc"), strconv.Itoa(pid), "cmdline"))
+	if err != nil || len(raw) == 0 {
+		return false
+	}
+	args := strings.Split(strings.TrimSuffix(string(raw), "\x00"), "\x00")
+	return len(args) < 2 || args[1] != ShimVerb
+}
+
+// ShimVerb is the clown subcommand the unit's main process runs until it
+// execs the provider.
+const ShimVerb = "agent-exec"
+
+// The shim's own exit codes, for a refusal before the provider starts: bad
+// usage, its relays or in-unit servers failing (including a profile's
+// unconfirmed exclusions), the terminal, or the exec itself; and a provider
+// not found. A provider that itself exits with one of these before clown
+// sees it start is reported as a shim refusal.
+const (
+	ShimExitUsage    = 2
+	ShimExitRefused  = 126
+	ShimExitNotFound = 127
+)
+
+// ShimRefused reports whether code is one of the shim's own refusal codes.
+func ShimRefused(code int) bool {
+	return code == ShimExitUsage || code == ShimExitRefused || code == ShimExitNotFound
+}
+
+// startupTimeout bounds how long Run waits, after starting the unit, for the
+// provider to be exec'd: unit activation plus the shim's relays and in-unit
+// servers (moxy, just-us). Start value 2m; raise it if a launch on a cold
+// nix store is reported as "provider did not start" while the unit was still
+// starting its servers.
+const startupTimeout = 2 * time.Minute
+
 // Run starts the unit and waits for it to exit, returning the provider's exit
 // code. The terminal is never handed to the unit: when stdin is a terminal,
 // clown relays through a fresh pty whose slave the in-unit shim makes its
-// controlling tty. Once the unit is active, the result is written to the
-// spec's result_path; on failure the result carries the error.
+// controlling tty. Once the provider has started in the unit, the result is
+// written to the spec's result_path; it is rewritten with the exit code when
+// the unit exits, and with the error when the launch fails, including a unit
+// that exits before its provider started.
 func Run(l Launch, tools Tools, logger *slog.Logger) (int, error) {
 	args, err := l.SystemdRunArgs()
 	if err != nil {
@@ -162,26 +208,30 @@ func Run(l Launch, tools Tools, logger *slog.Logger) (int, error) {
 		return 1, l.fail(errors.New("stdout or stderr is a terminal but stdin is not; refusing to hand the operator's terminal to the agent scope"))
 	}
 
-	reported := make(chan struct{})
+	// The report goroutine waits for the provider to start and writes the
+	// success result; the exit cancels it, and the outcome decides what the
+	// result says last.
+	ctx, cancel := context.WithTimeout(context.Background(), startupTimeout)
+	defer cancel()
+	outcome := make(chan startOutcome, 1)
+	var reporting atomic.Bool
 	report := func(pty string) {
+		reporting.Store(true)
 		go func() {
-			defer close(reported)
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
 			st, err := tools.waitActive(ctx, l.Unit)
-			if err != nil {
-				_ = l.fail(err)
-				return
-			}
 			res := Result{Unit: l.Unit, Principal: l.Principal, Cgroup: st.ControlGroup, InvocationID: st.InvocationID, UID: os.Getuid(), Pty: pty, MainPID: st.MainPID}
-			if l.Spec.ResultPath != "" {
-				if err := WriteResult(l.Spec.ResultPath, res); err != nil && logger != nil {
-					logger.Error("agent scope: writing result", "err", err)
+			if err != nil && !errors.Is(err, context.Canceled) {
+				// The unit failed, or the provider did not start in time:
+				// say so now, not only when the unit exits.
+				_ = l.fail(err)
+			}
+			if err == nil {
+				l.writeResult(res, logger)
+				if logger != nil {
+					logger.Info("agent scope: provider started", "unit", l.Unit, "cgroup", st.ControlGroup, "main_pid", st.MainPID, "pty", pty)
 				}
 			}
-			if logger != nil {
-				logger.Info("agent scope: unit active", "unit", l.Unit, "cgroup", st.ControlGroup, "main_pid", st.MainPID, "pty", pty)
-			}
+			outcome <- startOutcome{res: res, err: err}
 		}()
 	}
 	defer tools.stopIfActive(l.Unit)
@@ -196,11 +246,54 @@ func Run(l Launch, tools Tools, logger *slog.Logger) (int, error) {
 	} else {
 		code, err = runPiped(argv, report)
 	}
-	select {
-	case <-reported:
-	case <-time.After(time.Second):
+	cancel()
+	if !reporting.Load() {
+		if err == nil {
+			err = fmt.Errorf("systemd-run exited (code %d) before the unit started", code)
+		}
+		return code, l.fail(err)
 	}
+	o := <-outcome
+	switch {
+	case o.err == nil:
+	case !errors.Is(o.err, context.Canceled):
+		// Already recorded by the report goroutine; the exit does not undo it.
+		if err == nil {
+			err = o.err
+		}
+		return code, l.fail(o.err)
+	case ShimRefused(code):
+		why := fmt.Errorf("the unit's exec shim refused before the provider started (exit %d; its stderr says why)", code)
+		if err == nil {
+			err = why
+		}
+		return code, l.fail(why)
+	default:
+		// The unit exited before clown saw the provider start: a provider
+		// that ran briefly, observed by its exit alone.
+		o.res = Result{Unit: l.Unit, Principal: l.Principal, UID: os.Getuid()}
+	}
+	exit := code
+	o.res.ExitCode = &exit
+	if err != nil {
+		o.res.Error = err.Error()
+	}
+	l.writeResult(o.res, logger)
 	return code, err
+}
+
+type startOutcome struct {
+	res Result
+	err error
+}
+
+func (l Launch) writeResult(r Result, logger *slog.Logger) {
+	if l.Spec.ResultPath == "" {
+		return
+	}
+	if err := WriteResult(l.Spec.ResultPath, r); err != nil && logger != nil {
+		logger.Error("agent scope: writing result", "err", err)
+	}
 }
 
 func runPiped(argv []string, report func(pty string)) (int, error) {
@@ -237,7 +330,10 @@ func (t Tools) stopIfActive(unit string) {
 	}
 }
 
-// fail records err in the result file (when the spec names one) and returns it.
+// Fail records err in the result file (when the spec names one) and returns
+// it: for a launch refused after its spec loaded, before or during Run.
+func (l Launch) Fail(err error) error { return l.fail(err) }
+
 func (l Launch) fail(err error) error {
 	if l.Spec.ResultPath != "" {
 		_ = WriteResult(l.Spec.ResultPath, Result{Unit: l.Unit, UID: os.Getuid(), Error: err.Error()})

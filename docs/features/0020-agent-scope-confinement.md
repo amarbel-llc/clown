@@ -348,9 +348,28 @@ clown refuses to start when:
 - `worktree` is not absolute;
 - a bind path equals `operator_home` or contains it.
 
-**Result.** Once the unit is `active`, clown writes the result atomically
-(tmp + rename) to `result_path`. If the launch fails, clown rewrites the file
-with `error` set.
+**Result.** clown writes the result atomically (tmp + rename) to
+`result_path` at these points (since 2026-10-22; audit "result file
+unreliable on failure"):
+- **Provider started.** The unit is `active`, its main pid has settled, and
+  that pid has exec'd the provider: its `/proc/<pid>/cmdline` is no longer
+  `<clown> agent-exec ...`. Until the exec, pid 1 is the shim, which can
+  still refuse (its relays, its in-unit servers, a profile's unconfirmed
+  exclusions), so "active" alone is not success. clown waits up to 2 minutes
+  for this (`startupTimeout`). Raise it if a cold-store launch is reported
+  as not started while its servers were still starting.
+- **Exit.** When the unit exits after its provider started, the file is
+  rewritten with `exit_code`. If the provider exited too fast for clown to
+  see it start, the file has `exit_code` but no `cgroup` or `main_pid`.
+- **Failure.** On any refusal after the spec loads, the file is rewritten
+  with `error` set. This covers staging, the frontend endpoints, a unit that
+  failed, a provider that did not start in time, and a shim that refused
+  before the exec. The shim's own exit codes are 2 (usage), 126 (refused)
+  and 127 (provider not found); a unit exiting with one of them before its
+  provider was seen is reported as a shim refusal. A provider that itself
+  exits 2, 126 or 127 that fast is misreported the same way. A spec that
+  fails to load or validate writes nothing: its `result_path` is not
+  trusted.
 
 ```json
 {
@@ -362,7 +381,8 @@ with `error` set.
   "invocation_id": "…",
   "uid": 1001,
   "pty": "/dev/pts/N",
-  "main_pid": 12345
+  "main_pid": 12345,
+  "exit_code": 0
 }
 ```
 

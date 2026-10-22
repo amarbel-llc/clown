@@ -91,6 +91,9 @@ Next by severity:
   fails (agent-relay's exclusion refusal, exit 126) leaves a success result;
   and the report goroutine gets only 1s (`internal/agentscope/run.go:165-203`,
   `cmd/clown/agentscope.go:35-49`). spinclass relies on this file. (B)
+  **Fixed after the audit**: written once the provider is exec'd, rewritten
+  with `exit_code` at exit and with `error` on any refusal after the spec
+  loads (FDR 0020 "Result").
 - **PID 1 does not reap.** claude is PID 1 (`cmd/clown/agentscope.go:500`),
   and zombies went from 2 to 6 in round P. (A, B)
 - **The profile registry stamp is unchecked by the binary.** `profile.Load`

@@ -333,4 +333,28 @@ run_probe() {
   [ "$status" -ne 0 ]
   [[ $output != *UNIT-RAN* ]]
   [[ $output == *'"127.0.0.1:8080"'*loopback* ]]
+  # The refusal came after the spec loaded, so it is in the result file.
+  [[ "$(jq -r .error "$RESULT")" == *'"127.0.0.1:8080"'* ]]
+}
+
+@test "agent_scope: a unit whose shim refuses before the provider starts leaves an error result" {
+  cd "$WT" || return 1
+  run -127 "$CLOWN_BIN" agent-scope-run --spec "$WT/spec.json" -- /nonexistent/provider </dev/null
+  echo "$output"
+  jq . "$RESULT"
+  [[ "$(jq -r .error "$RESULT")" == *"refused before the provider started (exit 127"* ]]
+  [ "$(jq -r '.exit_code // "absent"' "$RESULT")" = absent ]
+}
+
+@test "agent_scope: a provider that exits records its exit code, with no error" {
+  run run_in_unit 'sleep 1; exit 3'
+  [ "$status" -eq 3 ]
+  jq . "$RESULT"
+  [ "$(jq -r .exit_code "$RESULT")" = 3 ]
+  [ "$(jq -r '.error // ""' "$RESULT")" = "" ]
+  [ -n "$(jq -r .cgroup "$RESULT")" ]
+  run run_in_unit 'exit 0'
+  [ "$status" -eq 0 ]
+  [ "$(jq -r .exit_code "$RESULT")" = 0 ]
+  [ "$(jq -r '.error // ""' "$RESULT")" = "" ]
 }

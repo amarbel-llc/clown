@@ -298,6 +298,58 @@ func fakeProc(t *testing.T, root string, pid int, cgroup, nspid string) {
 	if err := os.WriteFile(filepath.Join(dir, "status"), []byte("Name:\tclaude\nNSpid:\t"+nspid+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	setCmdline(t, root, pid, "claude", "-p", "hi")
+}
+
+// setCmdline writes /proc/<pid>/cmdline under root.
+func setCmdline(t *testing.T, root string, pid int, argv ...string) {
+	t.Helper()
+	raw := strings.Join(argv, "\x00") + "\x00"
+	if err := os.WriteFile(filepath.Join(root, strconv.Itoa(pid), "cmdline"), []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestWaitActiveWaitsForTheProviderExec: while pid 1 is still the exec shim
+// (its relays and in-unit servers starting, any of which may refuse), the
+// launch has not succeeded; it has once the shim exec'd the provider.
+func TestWaitActiveWaitsForTheProviderExec(t *testing.T) {
+	const unit = "u-1.service"
+	cg := "/user.slice/user-1001.slice/user@1001.service/clown.slice/" + Slice + "/" + unit
+	root := t.TempDir()
+	fakeProc(t, root, 100, cg, "100 1")
+	setCmdline(t, root, 100, "/nix/store/x-clown/bin/clown", ShimVerb, "--relay", "a=b", "--", "claude")
+	polls := 0
+	tools := Tools{procRoot: root, show: func(string) (Status, error) {
+		polls++
+		if polls == 3 {
+			setCmdline(t, root, 100, "claude", "-p", "hi")
+		}
+		return Status{ActiveState: "active", ControlGroup: cg, MainPID: 100}, nil
+	}}
+	if _, err := tools.waitActive(context.Background(), unit); err != nil {
+		t.Fatal(err)
+	}
+	if polls < 3 {
+		t.Fatalf("reported started after %d polls, while pid 1 was still the shim", polls)
+	}
+
+	setCmdline(t, root, 100, "/nix/store/x-clown/bin/clown", ShimVerb, "--", "claude")
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if _, err := (Tools{procRoot: root, show: func(string) (Status, error) {
+		return Status{ActiveState: "active", ControlGroup: cg, MainPID: 100}, nil
+	}}).waitActive(ctx, unit); err == nil {
+		t.Fatal("a unit whose pid 1 never left the shim was reported started")
+	}
+}
+
+func TestShimRefusedCodes(t *testing.T) {
+	for code, want := range map[int]bool{0: false, 1: false, 2: true, 126: true, 127: true, 130: false} {
+		if ShimRefused(code) != want {
+			t.Errorf("ShimRefused(%d) = %v, want %v", code, !want, want)
+		}
+	}
 }
 
 // clown#273: right after a PrivatePIDs unit turns active, systemd names the

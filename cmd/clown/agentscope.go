@@ -34,6 +34,9 @@ import (
 func runInAgentScope(req agentScopeRequest, logger *slog.Logger) int {
 	launch, err := prepareAgentScope(req.specPath, req.argv, req.extraEnv)
 	if err != nil {
+		// A spec that loaded names a trusted result_path; record the refusal
+		// there (launch.Spec is empty when the spec itself was refused).
+		_ = launch.Fail(err)
 		fmt.Fprintf(os.Stderr, "clown: agent scope: %v\n", err)
 		return 1
 	}
@@ -44,7 +47,8 @@ func runInAgentScope(req agentScopeRequest, logger *slog.Logger) int {
 	}
 	stopEndpoints, err := startFrontendEndpoints(&launch, append(req.forwardAddrs, xmppForward(&launch)...), req.inUnit, req.monitors, logger)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "clown: agent scope: frontend endpoints: %v\n", err)
+		err = launch.Fail(fmt.Errorf("frontend endpoints: %w", err))
+		fmt.Fprintf(os.Stderr, "clown: agent scope: %v\n", err)
 		return 1
 	}
 	defer stopEndpoints()
@@ -100,23 +104,26 @@ func prepareAgentScope(specPath string, argv, extraEnv []string) (agentscope.Lau
 	if err != nil {
 		return agentscope.Launch{}, err
 	}
+	// From here on a refusal carries the spec and unit, so the caller can
+	// record it in the result file.
+	refused := agentscope.Launch{Spec: spec, Unit: agentscope.UnitName(spec.UnitNameHint)}
 	cwd, err := os.Getwd()
 	if err != nil {
-		return agentscope.Launch{}, err
+		return refused, err
 	}
 	tools := agentScopeTools()
 	managerKeys, err := tools.ManagerEnvKeys()
 	if err != nil {
-		return agentscope.Launch{}, err
+		return refused, err
 	}
 	agentHome := filepath.Join(spec.Worktree, ".tmp", "agent-home")
 	plumbing, err := stageAgentHome(spec, agentHome, cwd)
 	if err != nil {
-		return agentscope.Launch{}, fmt.Errorf("staging the agent home: %w", err)
+		return refused, fmt.Errorf("staging the agent home: %w", err)
 	}
 	launch := agentscope.Launch{
 		Spec:           spec,
-		Unit:           agentscope.UnitName(spec.UnitNameHint),
+		Unit:           refused.Unit,
 		WorkDir:        cwd,
 		AgentHome:      agentHome,
 		FrontendEnv:    os.Environ(),
@@ -495,7 +502,7 @@ func runAgentExec(args []string) int {
 			relayArgs, args = append(relayArgs, args[0], args[1]), args[2:]
 		default:
 			fmt.Fprintf(os.Stderr, "clown agent-exec: unknown argument %q\n", args[0])
-			return 2
+			return agentscope.ShimExitUsage
 		}
 	}
 	if len(args) > 0 {
@@ -503,32 +510,32 @@ func runAgentExec(args []string) int {
 	}
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "clown agent-exec: usage: clown agent-exec [--serve FILE] [--relay ADDR=SOCK]... -- <argv>")
-		return 2
+		return agentscope.ShimExitUsage
 	}
 	if len(relayArgs) > 0 {
 		if err := startRelays(relayArgs); err != nil {
 			fmt.Fprintf(os.Stderr, "clown agent-exec: relays: %v\n", err)
-			return 126
+			return agentscope.ShimExitRefused
 		}
 	}
 	if term.IsTerminal(0) {
 		if _, err := unix.Setsid(); err != nil && !errors.Is(err, unix.EPERM) {
 			fmt.Fprintf(os.Stderr, "clown agent-exec: setsid: %v\n", err)
-			return 126
+			return agentscope.ShimExitRefused
 		}
 		if err := unix.IoctlSetInt(0, unix.TIOCSCTTY, 0); err != nil {
 			fmt.Fprintf(os.Stderr, "clown agent-exec: acquiring the controlling tty: %v\n", err)
-			return 126
+			return agentscope.ShimExitRefused
 		}
 	}
 	path, err := exec.LookPath(args[0])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown agent-exec: %v\n", err)
-		return 127
+		return agentscope.ShimExitNotFound
 	}
 	err = syscall.Exec(path, args, os.Environ())
 	fmt.Fprintf(os.Stderr, "clown agent-exec: exec %s: %v\n", path, err)
-	return 126
+	return agentscope.ShimExitRefused
 }
 
 // startRelays starts `clown agent-relay [--serve FILE] [--relay ADDR=SOCK]...`
