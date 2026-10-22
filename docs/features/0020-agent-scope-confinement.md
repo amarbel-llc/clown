@@ -312,7 +312,7 @@ at all.
 | self-close idle poke (Stop) | one datagram to the frontend | The per-session unixgram `$XDG_RUNTIME_DIR/clown/idle/<principal>.sock`, bound in as a single inode (`Launch.IdleSocket`, clown#287). The in-unit `clown idle-notify <sock>` Stop hook sends one byte and always exits 0. The frontend listener runs `spinclass close-self-run` for its own principal, serialized (pokes during a run coalesce into one more), outside the unit; it never reads the datagram, so a unit can only trigger its own session's runner, which is a no-op unless the session queued a close and spinclass allows it. Armed only for a claude launch inside a spinclass session with `spinclass` on PATH. |
 | clown-hook-allow (PreToolUse) | nothing | pure |
 | moxy hook logger | `$XDG_LOG_HOME/moxy/hooks` | redirected under the agent home, unless spinclass binds the real dir rw |
-| claude itself | `~/.claude` config, credentials, transcripts | `CLAUDE_CONFIG_DIR` points at a per-session dir. `.credentials.json` is bound in (open question below). The project's transcript dir is bound rw, so `clown resume` and freud keep working. `~/.claude/settings.json` is never writable from inside: a hook written there would run in unconfined sessions. |
+| claude itself | `~/.claude` config, credentials, transcripts | `CLAUDE_CONFIG_DIR` points at a per-session dir. The operator's `.credentials.json` is bound in **read-only** (see "The operator's claude credential" below). The project's transcript dir is bound rw, so `clown resume` and freud keep working. `~/.claude/settings.json` is never writable from inside: a hook written there would run in unconfined sessions. |
 | ssh / git signing | piggy-agent socket | spec `sockets[]`. Every act prompts the operator (piggy-agent(1) SCOPES: the boundary is the prompt surface and the home directory, not the socket). |
 | nix | nix-daemon socket | `/nix/var/nix/daemon-socket/socket` (visible: outside `/home`, read-only under ProtectSystem, which does not stop `connect`) |
 
@@ -684,6 +684,59 @@ By tool, for a brief to state plainly:
 | moxy and plugin dynamic system-prompt fragments | not fetched | The frontend cannot reach in-unit servers. Their static fragments still apply. | Plugin monitors inside the unit are untested,
 because `-p` mode does not start them. A loopback `ANTHROPIC_BASE_URL` (a
 local juggler) is not reachable from the unit.
+
+## The operator's claude credential
+
+**A confined worker can READ the operator's Claude credential.** The
+operator's `~/.claude/.credentials.json` (the claude.ai OAuth access and
+refresh tokens) is bound into every unit. Treat it as exposed to anything
+run in a unit: the worker's Bash, its tools, and anything they fetch. The
+model API and claude.ai hosts are on the default egress allowlist, so a
+worker that reads it can also use it.
+
+Since 2026-10-22 the bind is read-only (`stageAgentHome`; before, it was
+read-write, so a worker could overwrite or delete the operator's
+credentials; audit 2026-10-22, top 2).
+
+- Untested consequence, to be watched in the next live round: claude
+  writes refreshed tokens back to this file. Inside a unit that write now
+  fails. How claude reacts is not observed: it may keep the refreshed token
+  in memory, or fail auth once the access token expires. If the provider
+  rotates refresh tokens on use, a refresh from inside a unit could also
+  leave the operator's stored refresh token stale. That is a theory, not
+  verified. A round that runs past an access-token expiry would show it.
+
+**Does claude in the unit need the file?** It needs *a* credential. Two
+alternatives are known from Claude Code's documented environment variables,
+not tested in a unit here:
+- a long-lived `CLAUDE_CODE_OAUTH_TOKEN` minted with `claude setup-token`;
+- an `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN`.
+
+Either one is still a secret held in the unit, only narrower and revocable
+on its own.
+
+**Can the frontend inject it, so that the unit never holds it (principle
+7)?** Not through the egress proxy as built. The proxy is a CONNECT tunnel:
+TLS ends inside the unit, so the proxy cannot add a header without
+intercepting TLS, which would need a CA the unit trusts. A feasible route
+is a frontend HTTP reverse proxy for the model API:
+- `ANTHROPIC_BASE_URL` points at a plain-HTTP listener reached through a
+  forward socket in the unit;
+- the frontend replaces a placeholder bearer with the real token and
+  forwards over TLS to `api.anthropic.com`;
+- the frontend also owns the refresh.
+
+Open points to size before building it:
+- claude.ai connectors (`mcp-proxy.anthropic.com`) authenticate with the
+  same OAuth token and would need the same injection, or be lost;
+- whether claude accepts a placeholder credential and a non-default base
+  URL for a subscription login is not verified;
+- streaming and the `anthropic-beta` OAuth headers have to pass through
+  unchanged.
+
+Rough size: one new frontend component (an HTTP-aware sibling of
+`PortForward`), a token source and refresh in the frontend, unit tests,
+and a live round. Not built; a separate design.
 
 ## Limitations and follow-ups
 

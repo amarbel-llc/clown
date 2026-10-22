@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -14,6 +15,34 @@ import (
 // nothing else of troupe's or ringmaster's (every session's passwords,
 // sockets, cursors, job journals and presence). The monitors that used those
 // run in the frontend (moveMonitorsToFrontend).
+// TestStageAgentHomeBindsTheOperatorCredentialReadOnly: a worker can read the
+// operator's claude credential but must not overwrite or delete it.
+func TestStageAgentHomeBindsTheOperatorCredentialReadOnly(t *testing.T) {
+	opHome, agentHome := t.TempDir(), t.TempDir()
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	creds := filepath.Join(opHome, ".claude", ".credentials.json")
+	if err := os.MkdirAll(filepath.Dir(creds), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(creds, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p, err := stageAgentHome(agentscope.Spec{OperatorHome: opHome}, agentHome, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := creds + ":" + filepath.Join(agentHome, ".claude", ".credentials.json")
+	if !slices.Contains(p.ro, want) {
+		t.Errorf("read-only binds %v, want %q", p.ro, want)
+	}
+	for _, b := range p.rw {
+		if strings.HasPrefix(b, creds) {
+			t.Errorf("credential bound read-write: %q", b)
+		}
+	}
+}
+
 func TestStageAgentHomeBindsNoJobPlatformState(t *testing.T) {
 	opHome, runtime, state := t.TempDir(), t.TempDir(), t.TempDir()
 	t.Setenv("XDG_RUNTIME_DIR", runtime)

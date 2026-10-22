@@ -42,7 +42,9 @@ statuses and are not counted.
    unit** (`cmd/clown/agentscope.go:350-357`). A confined worker can read it
    or overwrite it, and the claude.ai and Anthropic API hosts are on its egress
    allowlist. The FDR calls this an open question. Fix: bind it read-only, or
-   mint a per-session credential, and record the decision. (A)
+   mint a per-session credential, and record the decision. (A) **Bound
+   read-only after the audit**; still readable by the worker (FDR 0020,
+   "The operator's claude credential").
 3. **Security: the egress proxy reaches a host loopback port** when
    `ANTHROPIC_BASE_URL` is on loopback (a local juggler). That host:port is
    appended to the allowlist (`cmd/clown/agentscope.go:175-177`), and the
@@ -51,7 +53,7 @@ statuses and are not counted.
    `NO_PROXY`; any other process in the unit can CONNECT to it. This
    contradicts FDR 0020's "nothing else on the host's loopback". Fix: refuse
    loopback targets in the proxy, or never append a loopback base URL. Add a
-   bats case. (B)
+   bats case. (B) **Fixed after the audit** (both), with bats cases (5dc5fee).
 4. **Security (policy, not boundary): the bridge's call refusal can be
    bypassed, and the route that sets it is open to the worker.**
    - The bridge writes the request body to the child verbatim

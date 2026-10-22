@@ -354,8 +354,9 @@ type plumbingBinds struct{ rw, ro []string }
 // claude gets its own CLAUDE_CONFIG_DIR, seeded from the operator's config
 // once, so an edit to settings or .claude.json from inside (a hook written
 // there would run in unconfined sessions) never reaches the operator's copy.
-// The operator's credentials file and this project's transcript dir are bound
-// over the seeded copies so login and `clown resume` keep working.
+// The operator's credentials file (read-only) and this project's transcript
+// dir are bound over the seeded copies so login and `clown resume` keep
+// working.
 func stageAgentHome(spec agentscope.Spec, agentHome, cwd string) (plumbingBinds, error) {
 	var p plumbingBinds
 	opHome := spec.OperatorHome
@@ -379,7 +380,9 @@ func stageAgentHome(spec agentscope.Spec, agentHome, cwd string) (plumbingBinds,
 		if err := touch(dst); err != nil {
 			return p, err
 		}
-		p.rw = append(p.rw, creds+":"+dst)
+		// Read-only: the worker can still READ the operator's credential
+		// (FDR 0020), but can no longer overwrite or delete it.
+		p.ro = append(p.ro, creds+":"+dst)
 	}
 	slug := claudeProjectSlug(cwd)
 	transcripts := filepath.Join(opHome, ".claude", "projects", slug)

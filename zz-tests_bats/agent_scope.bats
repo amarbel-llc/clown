@@ -292,6 +292,22 @@ run_probe() {
   grep -c '^PASS' <<<"$output" | grep -qx 6
 }
 
+@test "agent_scope: the operator's claude credential is readable but not writable inside" {
+  if [[ ! -f $HOME/.claude/.credentials.json ]]; then
+    skip "no operator credentials file to bind"
+  fi
+  # Nothing is printed from the file; only whether it opens.
+  run run_in_unit '
+    c="$CLAUDE_CONFIG_DIR/.credentials.json"
+    if [ -r "$c" ] && head -c1 "$c" >/dev/null; then echo PASS readable; else echo FAIL unreadable; fi
+    if (: >>"$c") 2>/dev/null; then echo FAIL writable; else echo PASS not-writable; fi
+    if rm -f "$c" 2>/dev/null && [ ! -e "$c" ]; then echo FAIL deletable; else echo PASS not-deletable; fi'
+  echo "$output"
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '^FAIL' <<<"$output")" -eq 0 ]
+  grep -c '^PASS' <<<"$output" | grep -qx 3
+}
+
 @test "agent_scope: the egress proxy never tunnels to the host's loopback" {
   start_host_listeners
   # A loopback model API (a local juggler) used to be appended to the
