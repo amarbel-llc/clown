@@ -226,7 +226,7 @@ var tmpDirKeys = map[string]bool{"TMPDIR": true, "CLAUDE_CODE_TMPDIR": true}
 // through the host daemon, whose configuration is its own.
 var scrubbedKeys = map[string]bool{
 	"DBUS_SESSION_BUS_ADDRESS": true, "DISPLAY": true, "WAYLAND_DISPLAY": true, "XAUTHORITY": true,
-	"CLOWN_SESSION_ID": true, "HOME": true, "SSH_AUTH_SOCK": true,
+	"CLOWN_SESSION_ID": true, "CLOWN_UNIT": true, "HOME": true, "SSH_AUTH_SOCK": true,
 	"NIX_CONFIG": true, "NIX_USER_CONF_FILES": true, "NIX_CONF_DIR": true,
 }
 
@@ -265,6 +265,11 @@ func (l Launch) environment() (set, unset []string) {
 		env[k] = v
 	}
 	env["HOME"] = l.AgentHome
+	// The marker spinclass's hook reads to tell it runs confined (FDR 0035): set
+	// last and scrubbed from every other source, so it is the unit's own name or
+	// absent. A hint for choosing defer-vs-ask, not a boundary: an agent inside
+	// can still set any variable in its own processes.
+	env["CLOWN_UNIT"] = l.Unit
 	// State, log and data dirs point at the operator's paths, where clown and
 	// the spec bind specific subdirs (job platform, hooks, moxy's logs, the
 	// madder store), so tools inside agree with the frontend on paths. Config

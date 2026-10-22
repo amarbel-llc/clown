@@ -231,6 +231,12 @@ are absent).
   receives it through its `--settings` env block instead, so hooks see the
   principal — clown#289)
 - `NIX_CONFIG`, `NIX_USER_CONF_FILES`, `NIX_CONF_DIR` (clown#272, above)
+- `CLOWN_UNIT` is scrubbed from every other source and then set last to the
+  unit's own name (`--unit=`, `.service` included), so it is present iff the
+  process runs inside an agent-scope unit. It is the marker spinclass's
+  PreToolUse hook reads to tell it is confined; a hint for choosing
+  defer-vs-ask, not a boundary, since an agent can set variables in its own
+  processes
 
 Every other key the manager injects is unset as well. On flic that set is:
 `GIO_EXTRA_MODULES GTK_A11Y GTK_PATH HOME INFOPATH LANG LIBEXEC_PATH

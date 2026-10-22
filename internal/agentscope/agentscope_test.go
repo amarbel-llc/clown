@@ -180,6 +180,30 @@ func TestEnvironmentAllowlistsAndUnsetsManagerKeys(t *testing.T) {
 	}
 }
 
+// CLOWN_UNIT is the in-unit marker spinclass's hook reads to tell it is
+// confined (FDR 0035): the unit's own name, present only inside a unit, and not
+// settable by an operator export, the extra env or the spec.
+func TestClownUnitNamesTheUnitAndCannotBeSetFromOutside(t *testing.T) {
+	l := testLaunch()
+	l.FrontendEnv = append(l.FrontendEnv, "CLOWN_UNIT=operator-export.service")
+	l.ExtraEnv = []string{"CLOWN_UNIT=extra.service"}
+	set, _ := l.environment()
+	var got []string
+	for _, kv := range set {
+		if strings.HasPrefix(kv, "CLOWN_UNIT=") {
+			got = append(got, kv)
+		}
+	}
+	if !slices.Equal(got, []string{"CLOWN_UNIT=u-1.service"}) {
+		t.Errorf("CLOWN_UNIT entries = %v, want exactly the launch's unit name", got)
+	}
+	s := validSpec()
+	s.Env = map[string]string{"CLOWN_UNIT": "spec.service"}
+	if err := s.Validate(); err == nil {
+		t.Error("spec env setting CLOWN_UNIT: want refusal")
+	}
+}
+
 // clown#272: NIX_CONFIG carries access-tokens on the dev hosts. No nix
 // configuration key may reach the unit, whatever path it comes by.
 func TestNixConfigurationNeverReachesTheUnit(t *testing.T) {
