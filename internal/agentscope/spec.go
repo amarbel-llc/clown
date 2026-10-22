@@ -104,6 +104,11 @@ func (s Spec) Validate() error {
 			if nixConf := filepath.Join(s.OperatorHome, ".config", "nix"); exposesWhole(p, nixConf) || within(p, nixConf) {
 				return fmt.Errorf("%s entry %q exposes the operator's nix configuration %q", field, p, nixConf)
 			}
+			// clown binds the operator's claude credential read-only; a
+			// writable bind over it would undo that.
+			if creds := filepath.Join(s.OperatorHome, ".claude", ".credentials.json"); field != "binds_ro" && field != "sockets" && exposesWhole(p, creds) {
+				return fmt.Errorf("%s entry %q makes the operator's claude credential %q writable", field, p, creds)
+			}
 		}
 	}
 	for _, p := range s.DenyPaths {

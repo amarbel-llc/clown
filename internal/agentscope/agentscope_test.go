@@ -236,6 +236,21 @@ func TestNixConfigurationNeverReachesTheUnit(t *testing.T) {
 	}
 }
 
+func TestValidateRefusesAWritableBindOverTheOperatorsClaudeCredential(t *testing.T) {
+	for _, bad := range []string{"/home/op/.claude", "/home/op/.claude/.credentials.json"} {
+		s := validSpec()
+		s.BindsRW = []string{bad}
+		if err := s.Validate(); err == nil || !strings.Contains(err.Error(), "credential") {
+			t.Errorf("binds_rw %q: want a refusal naming the credential, got %v", bad, err)
+		}
+	}
+	s := validSpec()
+	s.BindsRW = []string{"/home/op/.claude/projects/x"}
+	if err := s.Validate(); err != nil {
+		t.Errorf("a transcript dir bind was refused: %v", err)
+	}
+}
+
 func TestValidateRefusesBindingTheOperatorsNixConfig(t *testing.T) {
 	for _, bad := range []string{"/home/op/.config", "/home/op/.config/nix", "/home/op/.config/nix/nix.conf"} {
 		s := validSpec()

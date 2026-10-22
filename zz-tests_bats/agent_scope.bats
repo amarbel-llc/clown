@@ -300,12 +300,14 @@ run_probe() {
   run run_in_unit '
     c="$CLAUDE_CONFIG_DIR/.credentials.json"
     if [ -r "$c" ] && head -c1 "$c" >/dev/null; then echo PASS readable; else echo FAIL unreadable; fi
-    if (: >>"$c") 2>/dev/null; then echo FAIL writable; else echo PASS not-writable; fi
-    if rm -f "$c" 2>/dev/null && [ ! -e "$c" ]; then echo FAIL deletable; else echo PASS not-deletable; fi'
+    # Appending writes nothing on success either; it fails only on a
+    # read-only bind (a read-write one accepted it before 2026-10-22).
+    if err=$( (: >>"$c") 2>&1); then echo FAIL writable; else echo "write-refused: $err"; fi'
   echo "$output"
   [ "$status" -eq 0 ]
   [ "$(grep -c '^FAIL' <<<"$output")" -eq 0 ]
-  grep -c '^PASS' <<<"$output" | grep -qx 3
+  grep -q '^PASS readable' <<<"$output"
+  grep -q '^write-refused: .*Read-only file system' <<<"$output"
 }
 
 @test "agent_scope: the egress proxy never tunnels to the host's loopback" {

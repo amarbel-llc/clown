@@ -193,7 +193,7 @@ secrets could carry it:
 | `LC_` | locale; tools misrender without it | none |
 | `NIX_` | the devshell's toolchain wiring (`NIX_CC`, `NIX_CFLAGS_COMPILE`, `NIX_LDFLAGS`, ...), `NIX_PATH`, `NIX_SSL_CERT_FILE`, `NIX_REMOTE`, `NIX_PROFILES` | `NIX_CONFIG`, `NIX_USER_CONF_FILES` and `NIX_CONF_DIR` are **scrubbed** (clown#272): on the dev hosts `NIX_CONFIG` carries `access-tokens`, and the other two redirect nix to a config file that can. |
 | `ANTHROPIC_` | provider routing clown itself sets (`ANTHROPIC_BASE_URL`, model choice) | an `ANTHROPIC_API_KEY` passes. It is the agent's own model credential, which the agent needs. |
-| `CLAUDE_CODE_` | claude's own settings (`CLAUDE_CODE_TMPDIR` is redirected separately) | none known |
+| `CLAUDE_CODE_` | claude's own settings (`CLAUDE_CODE_TMPDIR` is redirected separately) | a `CLAUDE_CODE_OAUTH_TOKEN` passes. Like `ANTHROPIC_API_KEY`, it is a model credential the agent then holds. |
 | `TROUPE_` | the session's own XMPP identity (`TROUPE_XMPP_USER`) | `TROUPE_XMPP_PASSWORD_FILE` passes only as a path, bound read-only, and only when it names this session's own principal (clown#267). |
 
 **nix configuration (clown#272).** The nix config keys are dropped, not
@@ -520,12 +520,15 @@ Built (`internal/agentscope`, `cmd/clown/agentscope.go`):
   uses it to check, against real units: home, bus, display, posh, ptys and
   other pids unreachable from inside; the result's unit and cgroup; the
   frontend and piggy-agent outside the cgroup; the unit gone after exit; the
-  pty path; refusal of a spec that exposes the operator home.
+  pty path; refusal of a spec that exposes the operator home; the operator's
+  claude credential readable but not writable; the egress proxy refusing the
+  host loopback, and a loopback `egress_allow` entry refusing the launch.
 
 End to end with real claude (`just explore explore-agent-scope-claude`, host
 netns, 2026-10-19): `clown --agent-scope <spec> -- -p ...` from a scratch
 worktree ran claude inside the unit; its Read tool call worked, the answer was
-correct, exit 0; login worked through the bound credentials file; the
+correct, exit 0; login worked through the bound credentials file (then
+read-write; read-only since 2026-10-22, not yet re-run); the
 transcript landed in the operator's `~/.claude/projects/<slug>` through the
 bind; the Stop hooks (clown-hook-tee, clown-hook-toolcost) ran inside with
 `hookErrors: []` and wrote their state into the operator's
@@ -691,16 +694,19 @@ local juggler) is not reachable from the unit.
 operator's `~/.claude/.credentials.json` (the claude.ai OAuth access and
 refresh tokens) is bound into every unit. Treat it as exposed to anything
 run in a unit: the worker's Bash, its tools, and anything they fetch. The
-model API and claude.ai hosts are on the default egress allowlist, so a
-worker that reads it can also use it.
+model API and claude.ai hosts are on the default egress allowlist, so by
+default a worker that reads it can also use it.
 
 Since 2026-10-22 the bind is read-only (`stageAgentHome`; before, it was
-read-write, so a worker could overwrite or delete the operator's
-credentials; audit 2026-10-22, top 2).
+read-write, so a worker could overwrite or truncate the operator's
+credentials; audit 2026-10-22, top 2). A spec `binds_rw` (or worktree)
+that would expose the file writable is refused (`Spec.Validate`). The host
+test checks that a write fails with "Read-only file system".
 
-- Untested consequence, to be watched in the next live round: claude
-  writes refreshed tokens back to this file. Inside a unit that write now
-  fails. How claude reacts is not observed: it may keep the refreshed token
+- Untested consequence, to be watched in the next live round: claude is
+  expected to write refreshed tokens back to this file (inferred from the
+  file holding a refresh token; not observed here). Inside a unit any such
+  write now fails. How claude reacts is not observed: it may keep the refreshed token
   in memory, or fail auth once the access token expires. If the provider
   rotates refresh tokens on use, a refresh from inside a unit could also
   leave the operator's stored refresh token stale. That is a theory, not
@@ -712,8 +718,8 @@ not tested in a unit here:
 - a long-lived `CLAUDE_CODE_OAUTH_TOKEN` minted with `claude setup-token`;
 - an `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN`.
 
-Either one is still a secret held in the unit, only narrower and revocable
-on its own.
+Either one is still a secret held in the unit. Whether either is narrower
+or separately revocable than the operator's login is not verified here.
 
 **Can the frontend inject it, so that the unit never holds it (principle
 7)?** Not through the egress proxy as built. The proxy is a CONNECT tunnel:
@@ -746,7 +752,9 @@ and a live round. Not built; a separate design.
   reap orphans: zombies accumulate during a session (nikulin round P: 2 to 6
   in one session). A reaping init in agent-exec is a follow-up.
 - `claude` credential refresh under a single-inode bind is unverified. A
-  rewrite by rename fails with `EBUSY`.
+  rewrite by rename fails with `EBUSY`, and since the bind became read-only
+  a write in place fails with `EROFS` (see "The operator's claude
+  credential").
 - Linux with a systemd user manager only.
 - The statsd relay (clown#269) is covered by Go unit tests, not yet by
   `just verify-agent-scope`: the worker that built it ran inside a confined

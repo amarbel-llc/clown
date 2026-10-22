@@ -381,7 +381,7 @@ func stageAgentHome(spec agentscope.Spec, agentHome, cwd string) (plumbingBinds,
 			return p, err
 		}
 		// Read-only: the worker can still READ the operator's credential
-		// (FDR 0020), but can no longer overwrite or delete it.
+		// (FDR 0020), but can no longer overwrite or truncate it.
 		p.ro = append(p.ro, creds+":"+dst)
 	}
 	slug := claudeProjectSlug(cwd)

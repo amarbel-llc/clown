@@ -10,13 +10,8 @@ import (
 	"code.linenisgreat.com/clown/internal/agentscope"
 )
 
-// TestStageAgentHomeBindsNoJobPlatformState pins the confined unit's job
-// platform surface: the session's own troupe password file, read-only, and
-// nothing else of troupe's or ringmaster's (every session's passwords,
-// sockets, cursors, job journals and presence). The monitors that used those
-// run in the frontend (moveMonitorsToFrontend).
 // TestStageAgentHomeBindsTheOperatorCredentialReadOnly: a worker can read the
-// operator's claude credential but must not overwrite or delete it.
+// operator's claude credential but must not overwrite or truncate it.
 func TestStageAgentHomeBindsTheOperatorCredentialReadOnly(t *testing.T) {
 	opHome, agentHome := t.TempDir(), t.TempDir()
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
@@ -43,6 +38,11 @@ func TestStageAgentHomeBindsTheOperatorCredentialReadOnly(t *testing.T) {
 	}
 }
 
+// TestStageAgentHomeBindsNoJobPlatformState pins the confined unit's job
+// platform surface: the session's own troupe password file, read-only, and
+// nothing else of troupe's or ringmaster's (every session's passwords,
+// sockets, cursors, job journals and presence). The monitors that used those
+// run in the frontend (moveMonitorsToFrontend).
 func TestStageAgentHomeBindsNoJobPlatformState(t *testing.T) {
 	opHome, runtime, state := t.TempDir(), t.TempDir(), t.TempDir()
 	t.Setenv("XDG_RUNTIME_DIR", runtime)
