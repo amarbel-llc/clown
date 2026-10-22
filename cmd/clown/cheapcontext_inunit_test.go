@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"code.linenisgreat.com/clown/internal/agentscope"
@@ -38,12 +39,13 @@ func TestApplyCheapContextSelection_ConfinedBuiltinsKeepInUnitServers(t *testing
 			continue
 		}
 		t.Run(p.Name, func(t *testing.T) {
-			kept, excluded, err := applyCheapContextSelection(
+			out, err := applyCheapContextSelection(
 				context.Background(), &pluginhost.Host{}, inUnitTestServers, nil, inUnitTestServers,
 				slog.Default(), &p, cheapContextSaveContext{})
 			if err != nil {
 				t.Fatal(err)
 			}
+			excluded := out.inUnitExcluded
 
 			var want, got []string
 			for _, d := range inUnitTestServers {
@@ -51,7 +53,7 @@ func TestApplyCheapContextSelection_ConfinedBuiltinsKeepInUnitServers(t *testing
 					want = append(want, d.Name())
 				}
 			}
-			for _, d := range kept {
+			for _, d := range out.kept {
 				got = append(got, d.Name())
 			}
 			if !reflect.DeepEqual(got, want) {
@@ -77,14 +79,15 @@ func TestApplyCheapContextSelection_CanaryGritKeepsJustUs(t *testing.T) {
 	if i < 0 {
 		t.Fatal("no builtin canary-grit")
 	}
-	kept, excluded, err := applyCheapContextSelection(
+	out, err := applyCheapContextSelection(
 		context.Background(), &pluginhost.Host{}, inUnitTestServers, nil, inUnitTestServers,
 		slog.Default(), &builtins[i], cheapContextSaveContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(kept) != 2 {
-		t.Fatalf("kept = %v, want moxy/moxy and just-us/just-us", kept)
+	excluded := out.inUnitExcluded
+	if len(out.kept) != 2 {
+		t.Fatalf("kept = %v, want moxy/moxy and just-us/just-us", out.kept)
 	}
 	if !slices.Contains(excluded["moxy/moxy"], "grit_branch") {
 		t.Errorf("moxy exclusions = %v, want them to carry grit_branch", excluded["moxy/moxy"])
@@ -145,10 +148,19 @@ func TestBuiltinMoxyExclusionsResolveAgainstMoxyRendering(t *testing.T) {
 	}
 }
 
-// TestApplyInUnitExclusionsPushesRenderedNames drives the relay's push against
-// a fake server speaking MCP initialize/tools/list and /clown/exclude-tools.
-func TestApplyInUnitExclusionsPushesRenderedNames(t *testing.T) {
-	var pushed []string
+// fakeExcludeServer speaks MCP initialize/tools/list and /clown/exclude-tools
+// the way moxy does: a pushed name stops being listed, unless ignorePush
+// (a server whose filter does not take) or failPush (the route errors).
+type fakeExcludeServer struct {
+	mu         sync.Mutex
+	tools      []string
+	pushed     []string
+	ignorePush bool
+	failPush   bool
+}
+
+func (f *fakeExcludeServer) start(t *testing.T) *httptest.Server {
+	t.Helper()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
@@ -161,25 +173,123 @@ func TestApplyInUnitExclusionsPushesRenderedNames(t *testing.T) {
 		case "initialize":
 			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%q,"result":{}}`, req.ID)
 		case "tools/list":
-			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%q,"result":{"tools":[{"name":"folio.read"},{"name":"grit.branch"},{"name":"chix.build"}]}}`, req.ID)
+			f.mu.Lock()
+			var tools []map[string]string
+			for _, name := range f.tools {
+				if f.ignorePush || !slices.Contains(f.pushed, name) {
+					tools = append(tools, map[string]string{"name": name})
+				}
+			}
+			f.mu.Unlock()
+			raw, _ := json.Marshal(tools)
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%q,"result":{"tools":%s}}`, req.ID, raw)
 		}
 	})
 	mux.HandleFunc("/clown/exclude-tools", func(w http.ResponseWriter, r *http.Request) {
+		if f.failPush {
+			http.Error(w, "no", http.StatusInternalServerError)
+			return
+		}
 		var body struct {
 			Exclude []string `json:"exclude"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
-		pushed = body.Exclude
+		f.mu.Lock()
+		f.pushed = body.Exclude
+		f.mu.Unlock()
 		_ = json.NewEncoder(w).Encode(body)
 	})
-	fake := httptest.NewServer(mux)
-	defer fake.Close()
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
 
-	srv := (&pluginhost.Host{}).Reserve(pluginhost.DiscoveredServer{PluginName: "moxy", ServerName: "moxy"}, strings.TrimPrefix(fake.URL, "http://"))
-	applyInUnitExclusions(srv, []string{"grit_branch", "chix_build", "smith_pr-create"}, slog.Default())
+func reserveFake(name string, fake *httptest.Server) *pluginhost.ManagedServer {
+	plugin, server, _ := strings.Cut(name, "/")
+	return (&pluginhost.Host{}).Reserve(pluginhost.DiscoveredServer{PluginName: plugin, ServerName: server}, strings.TrimPrefix(fake.URL, "http://"))
+}
 
-	if want := []string{"grit.branch", "chix.build"}; !reflect.DeepEqual(pushed, want) {
-		t.Errorf("pushed %v, want %v", pushed, want)
+var fakeMoxyTools = []string{"folio.read", "grit.branch", "chix.build"}
+
+// TestApplyInUnitExclusionsPushesRenderedNames drives the relay's push and
+// readback against a fake moxy.
+func TestApplyInUnitExclusionsPushesRenderedNames(t *testing.T) {
+	f := &fakeExcludeServer{tools: fakeMoxyTools}
+	rb := applyInUnitExclusions(reserveFake("moxy/moxy", f.start(t)), []string{"grit_branch", "chix_build", "smith_pr-create"}, slog.Default())
+
+	if want := []string{"grit.branch", "chix.build"}; !reflect.DeepEqual(f.pushed, want) {
+		t.Errorf("pushed %v, want %v", f.pushed, want)
+	}
+	if rb.Problem != "" || rb.CatalogAfter != 1 || !reflect.DeepEqual(rb.Unmatched, []string{"smith_pr-create"}) {
+		t.Errorf("readback = %+v, want confirmed with 1 tool left and smith_pr-create unmatched", rb)
+	}
+	if err := exclusionRefusal("p", []exclusionReadback{rb}); err != nil {
+		t.Errorf("a confirmed readback refused: %v", err)
+	}
+}
+
+// TestApplyAndReadBackExclusionsRefuses covers each way a profile's exclusions
+// go unconfirmed; every one must refuse the launch.
+func TestApplyAndReadBackExclusionsRefuses(t *testing.T) {
+	cases := []struct {
+		name  string
+		fake  *fakeExcludeServer
+		saved []string
+		want  string
+	}{
+		{"no saved name matches", &fakeExcludeServer{tools: fakeMoxyTools}, []string{"smith_pr-create"}, "matches"},
+		{"push fails", &fakeExcludeServer{tools: fakeMoxyTools, failPush: true}, []string{"grit_branch"}, "pushing the exclusions failed"},
+		{"readback still lists it", &fakeExcludeServer{tools: fakeMoxyTools, ignorePush: true}, []string{"grit_branch"}, "still listed"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			srv := reserveFake("moxy/moxy", c.fake.start(t))
+			rb := applyAndReadBackExclusions(context.Background(), &pluginhost.Host{}, srv, c.saved, fakeMoxyTools)
+			if !strings.Contains(rb.Problem, c.want) {
+				t.Errorf("problem = %q, want it to mention %q", rb.Problem, c.want)
+			}
+			if exclusionRefusal("p", []exclusionReadback{rb}) == nil {
+				t.Error("an unconfirmed readback did not refuse")
+			}
+		})
+	}
+	t.Run("catalog not fetched", func(t *testing.T) {
+		rb := applyAndReadBackExclusions(context.Background(), &pluginhost.Host{}, &pluginhost.ManagedServer{Name: "moxy/moxy"}, []string{"grit_branch"}, nil)
+		if rb.Problem == "" {
+			t.Error("a server with no fetched catalog was confirmed")
+		}
+	})
+}
+
+// TestApplyCheapContextSelection_ProfileRefusesUnconfirmedExclusions drives
+// the frontend path: a started server under a saved selection whose
+// exclusions do not take refuses the launch, and the readback is returned for
+// the record either way.
+func TestApplyCheapContextSelection_ProfileRefusesUnconfirmedExclusions(t *testing.T) {
+	saved := &profile.Profile{
+		Name:            "p",
+		ContextServers:  []string{"moxy/moxy"},
+		ContextExcluded: map[string][]string{"moxy/moxy": {"grit_branch"}},
+	}
+	moxy := pluginhost.DiscoveredServer{PluginName: "moxy", ServerName: "moxy"}
+	for _, c := range []struct {
+		name       string
+		ignorePush bool
+		refuse     bool
+	}{{"confirmed", false, false}, {"readback differs", true, true}} {
+		t.Run(c.name, func(t *testing.T) {
+			f := &fakeExcludeServer{tools: fakeMoxyTools, ignorePush: c.ignorePush}
+			host := &pluginhost.Host{}
+			srv := host.Reserve(moxy, strings.TrimPrefix(f.start(t).URL, "http://"))
+			out, err := applyCheapContextSelection(context.Background(), host, []pluginhost.DiscoveredServer{moxy},
+				[]*pluginhost.ManagedServer{srv}, nil, slog.Default(), saved, cheapContextSaveContext{})
+			if (err != nil) != c.refuse {
+				t.Fatalf("err = %v, want refusal %v", err, c.refuse)
+			}
+			if len(out.readbacks) != 1 || !reflect.DeepEqual(out.readbacks[0].Matched, []string{"grit.branch"}) {
+				t.Errorf("readbacks = %+v, want one for moxy matching grit.branch", out.readbacks)
+			}
+		})
 	}
 }
 

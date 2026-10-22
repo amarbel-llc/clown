@@ -521,7 +521,14 @@ func runAgentRelay(args []string) int {
 				fmt.Fprintf(os.Stderr, "clown agent-relay: %v\n", err)
 				return 2
 			}
-			relays = append(relays, startInUnitServers(servers)...)
+			started, readbacks := startInUnitServers(servers)
+			if err := recordInUnitExclusionReadback(readbacks); err != nil {
+				// Exiting before the ready byte fails the confined launch: an
+				// in-unit server's profile exclusions are not confirmed.
+				fmt.Fprintf(os.Stderr, "clown agent-relay: %v\n", err)
+				return 1
+			}
+			relays = append(relays, started...)
 		default:
 			fmt.Fprintf(os.Stderr, "clown agent-relay: unknown argument %q\n", args[0])
 			return 2
@@ -550,7 +557,11 @@ func runAgentRelay(args []string) int {
 // Their stderr and lifecycle go to $HOME/.cache/clown/agent-relay.log (the
 // agent home, inside the worktree), not to the relay's stderr, which is the
 // agent's terminal.
-func startInUnitServers(servers []agentscope.InUnitServer) []agentscope.Relay {
+//
+// A server carrying exclusions (a profile's saved selection) has them
+// resolved, pushed and read back; the readbacks are returned in no particular
+// order, one per such server that started.
+func startInUnitServers(servers []agentscope.InUnitServer) ([]agentscope.Relay, []exclusionReadback) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	logPath := filepath.Join(os.Getenv("HOME"), ".cache", "clown", "agent-relay.log")
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o700); err == nil {
@@ -559,6 +570,7 @@ func startInUnitServers(servers []agentscope.InUnitServer) []agentscope.Relay {
 		}
 	}
 	relays := make([]agentscope.Relay, len(servers))
+	readbacks := make([]*exclusionReadback, len(servers))
 	var wg sync.WaitGroup
 	for i, s := range servers {
 		wg.Add(1)
@@ -585,7 +597,8 @@ func startInUnitServers(servers []agentscope.InUnitServer) []agentscope.Relay {
 				return
 			}
 			if len(s.Exclude) > 0 {
-				applyInUnitExclusions(srv, s.Exclude, logger)
+				rb := applyInUnitExclusions(srv, s.Exclude, logger)
+				readbacks[i] = &rb
 			}
 			relays[i] = agentscope.Relay{Listen: s.Listen, Target: srv.Handshake().Address}
 		}(i, s)
@@ -597,47 +610,49 @@ func startInUnitServers(servers []agentscope.InUnitServer) []agentscope.Relay {
 			started = append(started, r)
 		}
 	}
-	return started
+	var rbs []exclusionReadback
+	for _, rb := range readbacks {
+		if rb != nil {
+			rbs = append(rbs, *rb)
+		}
+	}
+	return started, rbs
 }
 
 // applyInUnitExclusions resolves a profile's saved exclusions against the
-// catalog the started server renders and pushes the result, as the frontend
-// does for the servers it starts (applyCheapContextSelection). Best-effort: a
-// failure leaves the server's full catalog visible and is reported on stderr
-// and in agent-relay.log.
-func applyInUnitExclusions(srv *pluginhost.ManagedServer, saved []string, logger *slog.Logger) {
+// catalog the started server renders, pushes the result and reads it back, as
+// the frontend does for the servers it starts (applyCheapContextSelection).
+// The outcome goes to agent-relay.log, and a partial match also to stderr.
+func applyInUnitExclusions(srv *pluginhost.ManagedServer, saved []string, logger *slog.Logger) exclusionReadback {
 	ctx := context.Background()
-	tools, ok := (&pluginhost.Host{Logger: logger}).FetchToolCatalog(ctx, srv)
-	if !ok {
-		fmt.Fprintf(os.Stderr, "clown agent-relay: in-unit server %s: tool exclusions not applied: its tool catalog could not be fetched\n", srv.Name)
-		logger.Warn("tool exclusions not applied: no tool catalog", "server", srv.Name)
-		return
-	}
-	live := make([]string, len(tools))
-	for i, t := range tools {
-		live[i] = t.Name
-	}
-	excluded := resolveExcludedTools(saved, live)
-	unmatched := unmatchedExclusions(saved, live)
-	logger.Info("tool exclusions resolved", "server", srv.Name, "saved", len(saved), "matched", len(excluded),
-		"rendered", excluded, "unmatched", unmatched)
-	if len(unmatched) > 0 && len(excluded) > 0 {
+	host := &pluginhost.Host{Logger: logger}
+	tools, ok := host.FetchToolCatalog(ctx, srv)
+	rb := applyAndReadBackExclusions(ctx, host, srv, saved, toolNames(tools, ok))
+	logger.Info("tool exclusions read back", "server", srv.Name, "saved", rb.Saved, "matched", len(rb.Matched),
+		"rendered", rb.Matched, "unmatched", rb.Unmatched, "catalog_after", rb.CatalogAfter,
+		"still_listed", rb.StillListed, "problem", rb.Problem)
+	if rb.Problem == "" && len(rb.Unmatched) > 0 {
 		// A tool that is not in the catalog yet (a child still starting) stays
 		// visible if it appears later; say so where the operator looks first.
-		fmt.Fprintf(os.Stderr, "clown agent-relay: in-unit server %s: %d of the profile's %d excluded tool names match nothing in its %d-tool catalog (see %s)\n",
-			srv.Name, len(unmatched), len(saved), len(live), "agent-relay.log")
+		fmt.Fprintf(os.Stderr, "clown agent-relay: in-unit server %s: %d of the profile's %d excluded tool names match nothing in its catalog (see agent-relay.log)\n",
+			srv.Name, len(rb.Unmatched), rb.Saved)
 	}
-	if len(excluded) == 0 {
-		fmt.Fprintf(os.Stderr, "clown agent-relay: in-unit server %s: none of the profile's %d excluded tool names matches its catalog\n", srv.Name, len(saved))
-		logger.Warn("tool exclusions matched nothing", "server", srv.Name, "saved", len(saved), "catalog", len(live))
-		return
+	return rb
+}
+
+// recordInUnitExclusionReadback writes the in-unit readbacks to
+// $HOME/.cache/clown/exclusion-readback.json (the agent home, inside the
+// worktree: written by the worker's own unit, so a hint for the frontend, not
+// proof) and returns the refusal when any is not confirmed.
+func recordInUnitExclusionReadback(rbs []exclusionReadback) error {
+	if len(rbs) == 0 {
+		return nil
 	}
-	if err := pushExcludeTools(ctx, srv, excluded); err != nil {
-		fmt.Fprintf(os.Stderr, "clown agent-relay: in-unit server %s: tool exclusions not applied: %v\n", srv.Name, err)
-		logger.Warn("tool exclusions not applied", "server", srv.Name, "err", err)
-		return
+	path := filepath.Join(os.Getenv("HOME"), ".cache", "clown", "exclusion-readback.json")
+	if err := writeExclusionReadback(path, exclusionReadbackRecord{Version: exclusionReadbackVersion, Servers: rbs}); err != nil {
+		fmt.Fprintf(os.Stderr, "clown agent-relay: writing %s: %v\n", path, err)
 	}
-	logger.Info("tool exclusions applied", "server", srv.Name, "saved", len(saved), "pushed", len(excluded), "catalog", len(live))
+	return exclusionRefusal("in the agent unit", rbs)
 }
 
 // runEgressConnect is `clown egress-connect SOCK HOST PORT`, an ssh

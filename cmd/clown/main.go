@@ -2083,14 +2083,15 @@ func runManaged(
 	// the unit (clown#290).
 	if cheapContextActive {
 		inUnit := reservedServers(host, discovered)
-		filtered, inUnitExcluded, err := applyCheapContextSelection(ctx, host, discovered, report.Started, inUnit, logger, flags.cheapContextProfile, flags.cheapContextSave)
+		outcome, err := applyCheapContextSelection(ctx, host, discovered, report.Started, inUnit, logger, flags.cheapContextProfile, flags.cheapContextSave)
+		recordFrontendExclusionReadback(flags, outcome.readbacks, logger)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "clown: %v\n", err)
 			logger.Error("cheap-context selection failed", "err", err)
 			return 1
 		}
-		discovered = filtered
-		flags.agentScopeInUnit = narrowInUnitServers(flags.agentScopeInUnit, filtered, inUnitExcluded)
+		discovered = outcome.kept
+		flags.agentScopeInUnit = narrowInUnitServers(flags.agentScopeInUnit, outcome.kept, outcome.inUnitExcluded)
 		if len(discovered) == 0 {
 			logger.Info("cheap-context: every server deselected; falling back to original plugin dirs")
 			return runUnbound(binding, executor, logger, flags)

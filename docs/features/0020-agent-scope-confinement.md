@@ -518,9 +518,32 @@ one is never started by the relay. A kept one carries the profile's saved
 healthy, the relay fetches its tool catalog, resolves the saved names against
 it (exactly, or by claude's form of the rendered name: moxy renders
 `grit.branch`, claude shows `grit_branch`; clown#291), and POSTs the rendered
-names to `/clown/exclude-tools`. The push is best-effort, as on the frontend:
-a failed fetch or push, or saved names that match nothing, are logged to the
-relay's stderr and `agent-relay.log`, and the server keeps its full catalog.
+names to `/clown/exclude-tools`. It then fetches the catalog again and checks
+that none of the pushed names is still listed (the readback). Under a profile
+nothing about this is best-effort, here or on the frontend: a catalog that
+cannot be fetched, saved names that match nothing, a failed push, or a
+readback that still lists an excluded tool refuses the launch. The relay
+exits before its ready byte, so the confined launch fails, and the frontend
+returns before starting the provider. Launches without a saved selection keep
+the old best-effort push. The readbacks are recorded as JSON: the frontend's
+servers in `$XDG_STATE_HOME/clown/readback/<principal>.json`, the in-unit
+servers in `$HOME/.cache/clown/exclusion-readback.json` in the agent home.
+
+What the readback proves, and what it does not:
+- It checks LISTING. moxy refuses an excluded tool at call time too, but
+  `clown-stdio-bridge` only filters `tools/list`. For a bridged server, a
+  call naming a hidden tool still goes through.
+- In-unit servers, and their `/clown/exclude-tools` route, run inside the
+  worker's unit on its loopback. A worker able to reach that route could
+  change its own exclusions. The in-unit record is written by that same unit.
+  So in-unit exclusions are policy, not a boundary: only a whole-server drop,
+  or a frontend enforcer, is.
+- **Recipe scoping is unenforced.** No component in clown's path inspects
+  `run_recipe`'s arguments (just-us was not read). A confined worker with
+  just-us can run any recipe in its justfile. The design places recipe
+  enforcement in a clown-run frontend moxy proxy (moxy#487), which does not
+  exist yet.
+
 Before this, the
 replay saw only frontend-started servers and silently dropped every in-unit
 server, so a confined worker under any builtin profile had no moxy and no

@@ -426,6 +426,11 @@ const excludeToolsPushBudget = 3 * time.Second
 // (--agent-scope): they take part in the selection by name only, and their
 // exclusions are returned in inUnitExcluded for the unit to push, since
 // nothing here can reach them (clown#290).
+//
+// Under a profile's saved selection the exclusions are not best-effort: each
+// started server's saved names are resolved, pushed and read back, and any
+// server whose exclusions are not confirmed refuses the launch. The readbacks
+// are returned either way, for the launch's readback record.
 func applyCheapContextSelection(
 	ctx context.Context,
 	host *pluginhost.Host,
@@ -435,7 +440,7 @@ func applyCheapContextSelection(
 	logger *slog.Logger,
 	savedProfile *profile.Profile,
 	saveCtx cheapContextSaveContext,
-) (kept []pluginhost.DiscoveredServer, inUnitExcluded map[string][]string, err error) {
+) (cheapContextOutcome, error) {
 	byName := make(map[string]pluginhost.DiscoveredServer, len(discovered))
 	for _, d := range discovered {
 		byName[d.Name()] = d
@@ -443,6 +448,7 @@ func applyCheapContextSelection(
 
 	catalogs := make([]serverCatalog, 0, len(started))
 	serversByName := make(map[string]*pluginhost.ManagedServer, len(started))
+	liveNames := make(map[string][]string, len(started))
 	for _, srv := range started {
 		d, ok := byName[srv.Name]
 		if !ok {
@@ -454,6 +460,7 @@ func applyCheapContextSelection(
 		if ok {
 			groups = groupToolsByPrefix(d, tools)
 		}
+		liveNames[srv.Name] = toolNames(tools, ok)
 		catalogs = append(catalogs, serverCatalog{server: d, groups: groups})
 	}
 	for _, d := range inUnit {
@@ -462,7 +469,7 @@ func applyCheapContextSelection(
 
 	result, err := selectServers(catalogs, logger, savedProfile, saveCtx)
 	if err != nil {
-		return nil, nil, err
+		return cheapContextOutcome{}, err
 	}
 
 	keptNames := make(map[string]bool, len(result.kept))
@@ -481,33 +488,73 @@ func applyCheapContextSelection(
 	for _, d := range inUnit {
 		inUnitNames[d.Name()] = true
 	}
-	inUnitExcluded = map[string][]string{}
+	out := cheapContextOutcome{kept: result.kept, inUnitExcluded: map[string][]string{}}
+	replayed := savedProfile != nil && savedProfile.ContextServers != nil
 	pushedExclusions, pushFailures := 0, 0
-	for name, excludedTools := range result.excludedTools {
-		if inUnitNames[name] {
-			inUnitExcluded[name] = excludedTools
-			continue
+	if replayed {
+		// The raw saved lists, not result.excludedTools: a server whose saved
+		// names all fail to match must still be judged, and refused.
+		for _, d := range result.kept {
+			name := d.Name()
+			saved := savedProfile.ContextExcluded[name]
+			if len(saved) == 0 {
+				continue
+			}
+			if inUnitNames[name] {
+				out.inUnitExcluded[name] = append([]string(nil), saved...)
+				continue
+			}
+			srv, ok := serversByName[name]
+			if !ok {
+				continue
+			}
+			rb := applyAndReadBackExclusions(ctx, host, srv, saved, liveNames[name])
+			logger.Info("cheap-context: tool exclusions read back", "server", name, "saved", rb.Saved,
+				"matched", len(rb.Matched), "unmatched", rb.Unmatched, "still_listed", rb.StillListed, "problem", rb.Problem)
+			out.readbacks = append(out.readbacks, rb)
 		}
-		srv, ok := serversByName[name]
-		if !ok {
-			continue
-		}
-		if err := pushExcludeTools(ctx, srv, excludedTools); err != nil {
-			// Best-effort: a push failure means this server's deselected
-			// tools stay visible, not that the launch fails.
-			logger.Warn("cheap-context: failed to push tool exclusions; server keeps its full catalog",
-				"server", name, "err", err)
-			pushFailures++
-		} else {
-			pushedExclusions++
+	} else {
+		for name, excludedTools := range result.excludedTools {
+			if inUnitNames[name] {
+				out.inUnitExcluded[name] = excludedTools
+				continue
+			}
+			srv, ok := serversByName[name]
+			if !ok {
+				continue
+			}
+			if err := pushExcludeTools(ctx, srv, excludedTools); err != nil {
+				// Best-effort without a profile: a push failure means this
+				// server's deselected tools stay visible, not that the launch fails.
+				logger.Warn("cheap-context: failed to push tool exclusions; server keeps its full catalog",
+					"server", name, "err", err)
+				pushFailures++
+			} else {
+				pushedExclusions++
+			}
 		}
 	}
 
 	logger.Info("cheap-context: selection applied",
 		"catalogs_fetched", len(catalogs), "servers_stopped", stopped,
 		"servers_with_exclusions", pushedExclusions, "exclusion_push_failures", pushFailures,
-		"in_unit_servers", len(inUnit), "in_unit_with_exclusions", len(inUnitExcluded))
-	return result.kept, inUnitExcluded, nil
+		"readbacks", len(out.readbacks),
+		"in_unit_servers", len(inUnit), "in_unit_with_exclusions", len(out.inUnitExcluded))
+	if replayed {
+		if err := exclusionRefusal(savedProfile.Name, out.readbacks); err != nil {
+			return out, err
+		}
+	}
+	return out, nil
+}
+
+// cheapContextOutcome is what applyCheapContextSelection decided: the kept
+// servers, the exclusions the agent unit pushes for its servers, and the
+// readbacks of the exclusions pushed here under a profile.
+type cheapContextOutcome struct {
+	kept           []pluginhost.DiscoveredServer
+	inUnitExcluded map[string][]string
+	readbacks      []exclusionReadback
 }
 
 // narrowInUnitServers drops the in-unit servers a selection did not keep, so
