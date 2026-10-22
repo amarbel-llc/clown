@@ -2116,9 +2116,9 @@ func runManaged(
 		discovered = outcome.kept
 		flags.agentScopeInUnit = narrowInUnitServers(flags.agentScopeInUnit, outcome.kept, outcome.inUnitExcluded)
 		if len(discovered) == 0 {
-			logger.Info("cheap-context: every server deselected; falling back to original plugin dirs")
+			logger.Info("cheap-context: every server deselected; no servers to bind")
 			return runUnbound(binding, executor, logger, flags, fmt.Sprintf(
-				"none of them was started or kept (discovered: %s)", discoveredServerNames(offered)))
+				"the selection kept none of them (discovered: %s; started here: %d)", discoveredServerNames(offered), len(report.Started)))
 		}
 	}
 

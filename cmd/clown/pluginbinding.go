@@ -31,10 +31,11 @@ import (
 // both keeps that claude-specific bookkeeping inside claudeBinding instead of
 // leaking back into the shared pipeline.
 //
-// Bind is ALSO called on the three fallback paths (nothing discovered, nothing
-// healthy, everything deselected) with a nil host and empty sets. An
-// implementation MUST treat that as "launch with no clown-managed MCP servers",
-// not as an error.
+// Bind is ALSO called by runUnbound, on the fallback paths (clown protocol
+// disabled, nothing discovered, nothing healthy, everything deselected), with
+// a nil host and empty sets. An implementation MUST treat that as "launch
+// with no clown-managed MCP servers", not as an error. runUnbound never gets
+// that far under a profile's saved selection: it refuses instead.
 type pluginBinding interface {
 	Bind(host *pluginhost.Host, allDiscovered, selected []pluginhost.DiscoveredServer) (Command, error)
 }

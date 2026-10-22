@@ -2,6 +2,8 @@ package main
 
 import (
 	"errors"
+	"io"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -30,6 +32,23 @@ func TestRunUnboundIsUnreachableUnderASavedSelection(t *testing.T) {
 	}
 	if b.calls != 0 || exec.gotArgs != nil {
 		t.Errorf("the fallback bound %d time(s) and ran %v under a saved selection", b.calls, exec.gotArgs)
+	}
+}
+
+// TestRunWithPluginHostRefusesItsFallbacksUnderASavedSelection drives the two
+// fallbacks in runWithPluginHost that need no running server: the clown
+// protocol disabled, and nothing discovered.
+func TestRunWithPluginHostRefusesItsFallbacksUnderASavedSelection(t *testing.T) {
+	saved := &profile.Profile{Name: "narrow", ContextServers: []string{"moxy/moxy"}}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	for name, flags := range map[string]parsedFlags{
+		"protocol disabled":  {cheapContextProfile: saved, disableClownProtocol: true},
+		"nothing discovered": {cheapContextProfile: saved},
+	} {
+		b := &bindCountingBinding{}
+		if code := runWithPluginHost(&recordingExecutor{}, nil, flags, logger, "", nil, b); code != 1 || b.calls != 0 {
+			t.Errorf("%s: exit %d, %d bind(s); want a refusal before any bind", name, code, b.calls)
+		}
 	}
 }
 
