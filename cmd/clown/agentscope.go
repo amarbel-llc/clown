@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -505,6 +506,10 @@ func startRelays(relayArgs []string) error {
 // server that fails to start is reported and left out; its tools are then
 // unavailable.
 func runAgentRelay(args []string) int {
+	// The in-unit servers this starts must not inherit the ready pipe: one
+	// holding it open would keep agent-exec waiting for a byte that never
+	// comes after a refusal, instead of failing the launch.
+	unix.CloseOnExec(3)
 	var relays []agentscope.Relay
 	for len(args) > 1 {
 		switch args[0] {
@@ -521,11 +526,14 @@ func runAgentRelay(args []string) int {
 				fmt.Fprintf(os.Stderr, "clown agent-relay: %v\n", err)
 				return 2
 			}
-			started, readbacks := startInUnitServers(servers)
+			started, running, readbacks := startInUnitServers(servers)
 			if err := recordInUnitExclusionReadback(readbacks); err != nil {
 				// Exiting before the ready byte fails the confined launch: an
 				// in-unit server's profile exclusions are not confirmed.
 				fmt.Fprintf(os.Stderr, "clown agent-relay: %v\n", err)
+				for _, srv := range running {
+					srv.Stop()
+				}
 				return 1
 			}
 			relays = append(relays, started...)
@@ -560,8 +568,9 @@ func runAgentRelay(args []string) int {
 //
 // A server carrying exclusions (a profile's saved selection) has them
 // resolved, pushed and read back; the readbacks are returned in no particular
-// order, one per such server that started.
-func startInUnitServers(servers []agentscope.InUnitServer) ([]agentscope.Relay, []exclusionReadback) {
+// order, one per such server that started, with the started servers so a
+// refusing caller can stop them.
+func startInUnitServers(servers []agentscope.InUnitServer) ([]agentscope.Relay, []*pluginhost.ManagedServer, []exclusionReadback) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	logPath := filepath.Join(os.Getenv("HOME"), ".cache", "clown", "agent-relay.log")
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o700); err == nil {
@@ -571,6 +580,7 @@ func startInUnitServers(servers []agentscope.InUnitServer) ([]agentscope.Relay, 
 	}
 	relays := make([]agentscope.Relay, len(servers))
 	readbacks := make([]*exclusionReadback, len(servers))
+	running := make([]*pluginhost.ManagedServer, len(servers))
 	var wg sync.WaitGroup
 	for i, s := range servers {
 		wg.Add(1)
@@ -596,6 +606,7 @@ func startInUnitServers(servers []agentscope.InUnitServer) ([]agentscope.Relay, 
 				fmt.Fprintf(os.Stderr, "clown agent-relay: in-unit server %s did not start: %v (see %s)\n", s.Name, err, logPath)
 				return
 			}
+			running[i] = srv
 			if len(s.Exclude) > 0 {
 				rb := applyInUnitExclusions(srv, s.Exclude, logger)
 				readbacks[i] = &rb
@@ -616,7 +627,7 @@ func startInUnitServers(servers []agentscope.InUnitServer) ([]agentscope.Relay, 
 			rbs = append(rbs, *rb)
 		}
 	}
-	return started, rbs
+	return started, slices.DeleteFunc(running, func(s *pluginhost.ManagedServer) bool { return s == nil }), rbs
 }
 
 // applyInUnitExclusions resolves a profile's saved exclusions against the
