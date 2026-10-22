@@ -100,7 +100,11 @@ Next by severity:
 - **The profile registry stamp is unchecked by the binary.** `profile.Load`
   drops the stamp and unknown keys (`cmd/clown/main.go:45-71`), so an older
   clown silently ignores future restriction keys while the library fails
-  closed. Close this before the protocol-2 bump. (C)
+  closed. Close this before the protocol-2 bump. (C) **Fixed after the
+  audit**: the binary refuses a user registry stamped with a newer protocol
+  or holding unknown keys, naming both sides; an unstamped registry of known
+  keys is still read (`registrySkewRefusal`). A profile picked interactively
+  is now validated too.
 - **Fail-closed checks only the pid namespace after start**
   (`internal/agentscope/run.go:137-140`). (A)
 - **ssh git from a unit has no known_hosts.** The only test disables strict

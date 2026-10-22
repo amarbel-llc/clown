@@ -57,17 +57,47 @@ func loadProfileSets(additionalPath string) (builtin, user []profile.Profile, us
 		additionalPath, legacy = path, isLegacy
 	}
 
-	user, err = profile.Load(additionalPath)
+	reg, err := profile.LoadRegistry(additionalPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return builtin, nil, additionalPath, nil
 		}
 		return nil, nil, "", fmt.Errorf("additional profiles: %w", err)
 	}
+	if err := registrySkewRefusal(additionalPath, reg); err != nil {
+		return nil, nil, "", err
+	}
 	if legacy {
 		warnLegacyConfig(additionalPath)
 	}
-	return builtin, user, additionalPath, nil
+	return builtin, reg.Profiles, additionalPath, nil
+}
+
+// registrySkewRefusal refuses a user registry this clown cannot read in full:
+// one written under a newer profile protocol, or holding keys this build does
+// not know. Read anyway, a newer restriction (say, a tool allowlist) would be
+// silently dropped and the profile would run wider than it was written. An
+// unstamped registry with only known keys predates stamping and is read.
+// pkg/profilelookup applies the stricter rule (unstamped is refused too) for
+// launchers that vouch for a profile's digest.
+func registrySkewRefusal(path string, reg profile.Registry) error {
+	newer := reg.Stamp.Protocol > profile.ProtocolVersion || reg.Stamp.Protocol < 0
+	if !newer && len(reg.Undecoded) == 0 {
+		return nil
+	}
+	writer := "an unstamped clown"
+	if reg.Stamp.ClownVersion != "" || reg.Stamp.Protocol != 0 {
+		writer = fmt.Sprintf("clown %s (profile protocol %d)", reg.Stamp.ClownVersion, reg.Stamp.Protocol)
+	}
+	var held []string
+	if newer {
+		held = append(held, "a newer profile protocol")
+	}
+	if len(reg.Undecoded) > 0 {
+		held = append(held, "fields this clown does not know: "+strings.Join(reg.Undecoded, ", "))
+	}
+	return fmt.Errorf("profile registry %s was last written by %s and holds %s; this clown %s speaks profile protocol %d and refuses it rather than drop what it cannot read (use the clown that wrote it, or a newer one)",
+		path, writer, strings.Join(held, " and "), buildcfg.Version, profile.ProtocolVersion)
 }
 
 func loadProfiles(additionalPath string) ([]profile.Profile, error) {
@@ -504,6 +534,10 @@ func runWithFlags(flags parsedFlags) int {
 		}
 		if chosen == nil {
 			return 0
+		}
+		if err := profile.Validate(*chosen); err != nil {
+			fmt.Fprintf(os.Stderr, "clown: invalid profile: %v\n", err)
+			return 1
 		}
 		selectedProfile = chosen
 		flags.provider = selectedProfile.Provider
