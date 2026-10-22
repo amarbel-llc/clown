@@ -200,6 +200,31 @@ run_probe() {
   grep -q "refusing to bind another session's credential" <<<"$output"
 }
 
+@test "agent_scope: only the session's own troupe password and cursors enter the unit, read-only" {
+  local state="${XDG_STATE_HOME:-$HOME/.local/state}"
+  local self="bats-self-$$" other="bats-other-$$"
+  local acct="$RT/troupe/accounts"
+  local cur="$state/troupe/cursors"
+  mkdir -p "$acct" "$cur/$other@xmpp.test"
+  echo self >"$acct/$self.pass"
+  echo other >"$acct/$other.pass"
+  touch "$cur/$other@xmpp.test/x.cursor"
+  TROUPE_XMPP_USER="$self" TROUPE_XMPP_DOMAIN=xmpp.test TROUPE_XMPP_PASSWORD_FILE="$acct/$self.pass" \
+    run run_in_unit "
+      chk() { if eval \"\$2\" >/dev/null 2>&1; then echo \"PASS \$1\"; else echo \"FAIL \$1\"; fi; }
+      chk own-pass-readable     '[ \"\$(cat $acct/$self.pass)\" = self ]'
+      chk own-pass-readonly     '! sh -c \"echo x >$acct/$self.pass\"'
+      chk other-pass-absent     '[ ! -e $acct/$other.pass ]'
+      chk accounts-not-listable '[ \"\$(ls $acct)\" = $self.pass ]'
+      chk own-cursors-readonly  '[ -d $cur/$self@xmpp.test ] && ! touch $cur/$self@xmpp.test/w'
+      chk other-cursors-absent  '[ ! -e $cur/$other@xmpp.test ]'"
+  rm -rf "$acct/$self.pass" "$acct/$other.pass" "$cur/$self@xmpp.test" "$cur/$other@xmpp.test"
+  echo "$output"
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '^PASS' <<<"$output")" -eq 6 ]
+  [ "$(grep -c '^FAIL' <<<"$output")" -eq 0 ]
+}
+
 @test "agent_scope: host loopback services and abstract sockets are unreachable from inside" {
   start_host_listeners
   run run_in_unit "

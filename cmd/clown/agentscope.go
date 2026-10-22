@@ -343,15 +343,21 @@ func stageAgentHome(spec agentscope.Spec, agentHome, cwd string) (plumbingBinds,
 	environ := os.Environ()
 	state := agentscope.OperatorXDG(environ, opHome, "XDG_STATE_HOME")
 	logs := agentscope.OperatorXDG(environ, opHome, "XDG_LOG_HOME")
+	// ringmaster's dirs stay whole: the in-unit `ringmaster monitor` binds its
+	// nudge socket in the shared runtime jobs/ dir and reaps every channel's
+	// journals, so nothing narrower lets it work. They go once the monitors
+	// run on the frontend. No troupe directory is bound: troupe's in-unit
+	// verbs (receive, muc send) need only the password file (below) and the
+	// session's own read cursors (troupeCursorDir), never accounts/, other
+	// sessions' sockets or other accounts' cursors.
 	dirs := []string{
 		filepath.Join(state, "ringmaster"),
-		filepath.Join(state, "troupe"),
 		filepath.Join(state, "clown", "hook-toolcost"),
 		filepath.Join(state, "clown", "hook-tee"),
 		filepath.Join(logs, "moxy"),
 	}
 	if runtime := os.Getenv("XDG_RUNTIME_DIR"); runtime != "" {
-		dirs = append(dirs, filepath.Join(runtime, "ringmaster"), filepath.Join(runtime, "troupe"))
+		dirs = append(dirs, filepath.Join(runtime, "ringmaster"))
 	}
 	for _, d := range dirs {
 		if err := os.MkdirAll(d, 0o700); err != nil {
@@ -368,6 +374,12 @@ func stageAgentHome(spec agentscope.Spec, agentHome, cwd string) (plumbingBinds,
 			return p, fmt.Errorf("TROUPE_XMPP_PASSWORD_FILE %q does not name TROUPE_XMPP_USER %q's principal; refusing to bind another session's credential", pw, user)
 		}
 		p.ro = append(p.ro, pw)
+		if cursors := troupeCursorDir(state, user, os.Getenv("TROUPE_XMPP_DOMAIN")); cursors != "" {
+			if err := os.MkdirAll(cursors, 0o700); err != nil {
+				return p, err
+			}
+			p.ro = append(p.ro, cursors)
+		}
 	}
 	// The user's nix profile links (home-manager's PATH entries) live under
 	// the hidden home; they only point into /nix/store.
@@ -376,6 +388,17 @@ func stageAgentHome(spec agentscope.Spec, agentHome, cwd string) (plumbingBinds,
 		filepath.Join(state, "nix", "profiles"),
 	)
 	return p, nil
+}
+
+// troupeCursorDir is the session's own troupe read-cursor directory,
+// <state>/troupe/cursors/<user>@<domain> (troupe keys it by the account's
+// JID), or "" when the account is not fully named. `troupe receive` only reads
+// it in the unit; chat_read, which advances it, runs on the frontend.
+func troupeCursorDir(state, user, domain string) string {
+	if user == "" || domain == "" || strings.ContainsAny(user+domain, "/") {
+		return ""
+	}
+	return filepath.Join(state, "troupe", "cursors", user+"@"+domain)
 }
 
 // claudeProjectSlug is claude's per-project directory name under

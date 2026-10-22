@@ -437,11 +437,23 @@ Built (`internal/agentscope`, `cmd/clown/agentscope.go`):
   `CLAUDE_CONFIG_DIR` under `<worktree>/.tmp/agent-home/.claude` seeded from
   the operator's `.claude.json` and `settings.json`, the operator's
   credentials file and this project's transcript dir bound over it, the
-  ringmaster/troupe state and runtime dirs, clown hook state, moxy's hook log
-  dir, the troupe password file read-only, and the staging root read-only
-  when it is outside the worktree. Until the monitors move to the frontend,
-  troupe's connection owner still runs inside, which is why the password
-  file and `TROUPE_*` env are passed.
+  ringmaster state and runtime dirs, clown hook state, moxy's hook log dir,
+  the session's own troupe password file and its own troupe read cursors
+  (`troupe/cursors/<user>@<domain>`) read-only, and the staging root
+  read-only when it is outside the worktree. Until the monitors move to the
+  frontend, troupe's connection owner still runs inside, which is why the
+  password file and `TROUPE_*` env are passed.
+- No troupe directory is bound (clown#291 follow-up, 2026-10-22). The
+  runtime `troupe/` dir, with every session's `accounts/<uuid>.pass` and
+  socket, and the state `troupe/` dir, with every account's cursors, used to
+  be bound read-write whole. That made the single-file password bind
+  meaningless: a worker could read, replace or delete any session's XMPP
+  password. troupe's in-unit verbs need only the named password file and
+  their own cursors (troupe/rich-elder's survey). ringmaster's dirs are still
+  bound whole, because the in-unit `ringmaster monitor` binds its socket in
+  the shared runtime `jobs/` dir and its reaper appends to every channel's
+  journal. So other sessions' job journals and presence stay reachable from
+  the unit until the monitors run on the frontend.
 - systemd-run and systemctl come from `PATH` (overridable with
   `CLOWN_SYSTEMD_RUN`/`CLOWN_SYSTEMCTL`): systemd-run serializes properties
   client-side, so it must match the running manager.
@@ -535,9 +547,12 @@ What the readback proves, and what it does not:
   filter `tools/list`, so for a bridged server (spinclass, just-us) a tool
   absent from the listing was still callable by name. The bridge now answers
   a `tools/call` naming an excluded tool itself, with moxy's
-  "excluded for this session" tool error, and never forwards it. That is
-  enforced only as far as the bridge process is: in the unit, the bridge is
-  the worker's own.
+  "excluded for this session" tool error, and never forwards it. Until then,
+  spinclass tools a profile excluded (spawn-session, merge-this-session,
+  close-child-session, the handle grants, resurrect, in canary-grit) were
+  hidden but callable by name. This is policy, not a boundary: in a unit,
+  the bridge belongs to the worker, and its `/clown/exclude-tools` is
+  unauthenticated loopback.
 - In-unit servers, and their `/clown/exclude-tools` route, run inside the
   worker's unit on its loopback. A worker able to reach that route could
   change its own exclusions. The in-unit record is written by that same unit.
