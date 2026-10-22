@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -242,6 +243,65 @@ func TestHTTP_ExcludedToolCallIsRefused(t *testing.T) {
 	}
 }
 
+// TestHTTP_MultiLineBodyReachesTheChildAsOneMessage: a child that reads one
+// message per line must not see a tools/call smuggled as an inner line of a
+// harmless request (audit 2026-10-22, top 4).
+func TestHTTP_MultiLineBodyReachesTheChildAsOneMessage(t *testing.T) {
+	t.Setenv("CLOWN_BRIDGE_HEARTBEAT_INTERVAL", "0")
+
+	stdinR, stdinW := io.Pipe()
+	stdoutR, stdoutW := io.Pipe()
+	tr := newTranslator(stdinW, stdoutR, nullLogger{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = tr.Run(ctx) }()
+	defer func() {
+		_ = stdinR.Close()
+		_ = stdinW.Close()
+		_ = stdoutR.Close()
+		_ = stdoutW.Close()
+	}()
+
+	var mu sync.Mutex
+	var lines []string
+	go func() {
+		sc := bufio.NewScanner(stdinR)
+		for sc.Scan() {
+			mu.Lock()
+			lines = append(lines, sc.Text())
+			mu.Unlock()
+			var msg struct {
+				ID any `json:"id"`
+			}
+			if json.Unmarshal(sc.Bytes(), &msg) != nil || msg.ID == nil {
+				continue
+			}
+			out, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": msg.ID, "result": map[string]any{}})
+			_, _ = stdoutW.Write(append(out, '\n'))
+		}
+	}()
+
+	h := newHTTPHandler(tr, nullLogger{}, nil)
+	srv := httptest.NewServer(http.HandlerFunc(h.handleMCP))
+	defer srv.Close()
+	h.setExcludeTools([]string{"folio_read"})
+
+	body := "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\",\"x\":\n" +
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"folio_read"}}` + "\n}"
+	resp, err := http.Post(srv.URL, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	_, _ = io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(lines) != 1 || !strings.HasPrefix(lines[0], `{"jsonrpc":"2.0","id":1,"method":"ping"`) {
+		t.Errorf("child read lines %q, want the ping as one line", lines)
+	}
+}
+
 func TestRefuseExcludedCall(t *testing.T) {
 	h := &httpHandler{}
 	h.setExcludeTools([]string{"folio_read"})
@@ -252,6 +312,13 @@ func TestRefuseExcludedCall(t *testing.T) {
 		{"excluded call", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"folio_read"}}`, true, true},
 		{"kept call", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"grit_status"}}`, false, false},
 		{"case-variant key cannot hide the name", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"folio_read","NAME":"grit_status"}}`, true, true},
+		{"a Go child reads Name over name", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"grit_status","Name":"folio_read"}}`, true, true},
+		{"case-variant key names an excluded tool", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"NAME":"folio_read"}}`, true, true},
+		{"case-variant method", `{"jsonrpc":"2.0","id":1,"Method":"tools/call","params":{"name":"folio_read"}}`, true, true},
+		{"method smuggled behind a duplicate", `{"jsonrpc":"2.0","id":1,"method":"ping","METHOD":"tools/call","params":{"name":"folio_read"}}`, true, true},
+		{"exact duplicate name", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"grit_status","name":"folio_read"}}`, true, true},
+		{"long-s fold of params", "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"paramſ\":{\"name\":\"folio_read\"}}", true, true},
+		{"escaped name", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"folio_read"}}`, true, true},
 		{"id-less call is dropped, not forwarded", `{"jsonrpc":"2.0","method":"tools/call","params":{"name":"folio_read"}}`, true, false},
 		{"other method", `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`, false, false},
 	}

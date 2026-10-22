@@ -611,9 +611,15 @@ What the readback proves, and what it does not:
   "excluded for this session" tool error, and never forwards it. Until then,
   spinclass tools a profile excluded (spawn-session, merge-this-session,
   close-child-session, the handle grants, resurrect, in canary-grit) were
-  hidden but callable by name. This is policy, not a boundary: in a unit,
-  the bridge belongs to the worker, and its `/clown/exclude-tools` is
-  unauthenticated loopback.
+  hidden but callable by name. Since 2026-10-22 (audit top 4) the bridge
+  compacts each body to one line before forwarding, so a tools/call cannot
+  ride as an inner line of a harmless request to a line-reading child. It
+  also matches keys case-insensitively, as a Go child's decoder does, and
+  refuses as ambiguous (JSON-RPC -32600) a request that repeats a key in any
+  case, e.g. `{"name":"kept","Name":"excluded"}`. This is still policy, not
+  a boundary: in a unit, the bridge belongs to the worker, and its
+  `/clown/exclude-tools` is unauthenticated loopback (ADR 0006's premise does
+  not hold there; not reopened yet).
 - In-unit servers, and their `/clown/exclude-tools` route, run inside the
   worker's unit on its loopback. A worker able to reach that route could
   change its own exclusions. The in-unit record is written by that same unit.

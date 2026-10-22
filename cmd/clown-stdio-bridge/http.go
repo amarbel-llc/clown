@@ -3,9 +3,11 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -255,8 +257,16 @@ func (h *httpHandler) handleMCP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
 			return
 		}
+		// The child reads one message per line, so a body whose lines are
+		// themselves messages would reach it as several. Compacting leaves
+		// exactly one line: the message checked here is the one the child gets.
+		// A body that does not compact is not JSON, and the spine refuses it.
+		var compact bytes.Buffer
+		if json.Compact(&compact, body) == nil {
+			body = compact.Bytes()
+		}
 		if resp, refused := h.refuseExcludedCall(body); refused {
-			h.logger.Printf("clown-stdio-bridge: refused tools/call of an excluded tool")
+			h.logger.Printf("clown-stdio-bridge: refused a tools/call of an excluded tool, or an ambiguous request")
 			if resp == nil {
 				// An id-less call is a notification: nothing to answer, and
 				// still never forwarded.
@@ -274,16 +284,27 @@ func (h *httpHandler) handleMCP(w http.ResponseWriter, r *http.Request) {
 
 // refuseExcludedCall reports whether body is a tools/call whose tool is in the
 // exclude set, with the JSON-RPC response refusing it (nil for an id-less
-// call). Keys are matched exactly, as the child's own decoder does, not with
-// encoding/json's case-insensitive struct matching, which a crafted
-// {"name":"excluded","NAME":"other"} could otherwise slip past.
+// call). Keys match case-insensitively, as a Go child's struct decoder does,
+// and a request that repeats a key it reads (method, params, name, id, ...)
+// in any case is refused as ambiguous: decoders differ on which copy wins
+// ({"name":"kept","Name":"excluded"} is "excluded" to a Go child). This is
+// policy, not a boundary: whatever runs in the unit can reach the child some
+// other way.
 func (h *httpHandler) refuseExcludedCall(body []byte) ([]byte, bool) {
-	var req, params map[string]json.RawMessage
+	req, err := foldedObject(body)
+	if errors.Is(err, errAmbiguousKey) {
+		return invalidRequest(nil, err), true
+	}
 	var method, name string
-	if json.Unmarshal(body, &req) != nil ||
-		json.Unmarshal(req["method"], &method) != nil || method != "tools/call" ||
-		json.Unmarshal(req["params"], &params) != nil ||
-		json.Unmarshal(params["name"], &name) != nil {
+	if err != nil || json.Unmarshal(req["method"], &method) != nil || method != "tools/call" {
+		return nil, false
+	}
+	id := req["id"]
+	params, err := foldedObject(req["params"])
+	if errors.Is(err, errAmbiguousKey) {
+		return invalidRequest(id, err), true
+	}
+	if err != nil || json.Unmarshal(params["name"], &name) != nil {
 		return nil, false
 	}
 	h.excludeMu.RLock()
@@ -292,7 +313,6 @@ func (h *httpHandler) refuseExcludedCall(body []byte) ([]byte, bool) {
 	if !excluded {
 		return nil, false
 	}
-	id := req["id"]
 	if len(id) == 0 {
 		return nil, true
 	}
@@ -308,4 +328,48 @@ func (h *httpHandler) refuseExcludedCall(body []byte) ([]byte, bool) {
 		return nil, false
 	}
 	return resp, true
+}
+
+var errAmbiguousKey = errors.New("ambiguous request")
+
+// foldedObject decodes a JSON object into its members keyed by folded name,
+// failing with errAmbiguousKey when two keys fold to the same name. The fold
+// upper-cases then lower-cases, so the non-ASCII letters encoding/json also
+// matches (U+017F for s, U+212A for k) land on their ASCII letter.
+func foldedObject(raw []byte) (map[string]json.RawMessage, error) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		return nil, errors.New("not a JSON object")
+	}
+	out := map[string]json.RawMessage{}
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return nil, err
+		}
+		key, _ := tok.(string)
+		var val json.RawMessage
+		if err := dec.Decode(&val); err != nil {
+			return nil, err
+		}
+		folded := strings.ToLower(strings.ToUpper(key))
+		if _, dup := out[folded]; dup {
+			return nil, fmt.Errorf("%w: key %q appears more than once (ignoring case)", errAmbiguousKey, key)
+		}
+		out[folded] = val
+	}
+	return out, nil
+}
+
+// invalidRequest is the JSON-RPC Invalid Request error for an ambiguous body.
+func invalidRequest(id json.RawMessage, err error) []byte {
+	if len(id) == 0 {
+		id = json.RawMessage("null")
+	}
+	resp, _ := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      id,
+		"error":   map[string]any{"code": -32600, "message": "clown-stdio-bridge: refused: " + err.Error()},
+	})
+	return resp
 }

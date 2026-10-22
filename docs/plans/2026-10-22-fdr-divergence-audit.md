@@ -71,7 +71,8 @@ statuses and are not counted.
      reopened when `--agent-scope` broke its premise. (D)
 
    Fix: compact or reject multi-line bodies; refuse any case variant of the
-   keys; reopen ADR 0006. Real enforcement belongs on the frontend
+   keys; reopen ADR 0006. **The first two fixed after the audit** (bodies
+   compacted; keys folded, repeats refused). ADR 0006 is not reopened yet. Real enforcement belongs on the frontend
    (principle 7, moxy#487).
 5. **Security/correctness: partial exclusion matches launch anyway.** Only a
    zero match refuses (`cmd/clown/exclusionreadback.go:60-63`). Unmatched
