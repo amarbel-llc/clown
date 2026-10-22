@@ -226,6 +226,10 @@ func TestApplyInUnitExclusionsPushesRenderedNames(t *testing.T) {
 	if err := exclusionRefusal("p", []exclusionReadback{rb}); err != nil {
 		t.Errorf("a confirmed readback refused: %v", err)
 	}
+	// smith_pr-create is the harmless kind: no live tool under any rendering.
+	if len(rb.Ambiguous) != 0 {
+		t.Errorf("ambiguous = %v, want none", rb.Ambiguous)
+	}
 }
 
 // TestApplyAndReadBackExclusionsRefuses covers each way a profile's exclusions
@@ -240,11 +244,17 @@ func TestApplyAndReadBackExclusionsRefuses(t *testing.T) {
 		{"no saved name matches", &fakeExcludeServer{tools: fakeMoxyTools}, []string{"smith_pr-create"}, "matches"},
 		{"push fails", &fakeExcludeServer{tools: fakeMoxyTools, failPush: true}, []string{"grit_branch"}, "pushing the exclusions failed"},
 		{"readback still lists it", &fakeExcludeServer{tools: fakeMoxyTools, ignorePush: true}, []string{"grit_branch"}, "still listed"},
+		// Fix 5 (audit 2026-10-22): an unmatched name that could mean a live
+		// tool, and a name that matches more than one.
+		{"unmatched by case", &fakeExcludeServer{tools: fakeMoxyTools}, []string{"chix_build", "GRIT_BRANCH"}, `"GRIT_BRANCH" matches no tool exactly but could mean grit.branch`},
+		{"unmatched by claude's prefix", &fakeExcludeServer{tools: fakeMoxyTools}, []string{"mcp__plugin_moxy_moxy__chix_build"}, "could mean chix.build"},
+		{"unmatched by separator", &fakeExcludeServer{tools: []string{"chix.flake-check"}}, []string{"chix_flake_check"}, "could mean chix.flake-check"},
+		{"matches two tools", &fakeExcludeServer{tools: []string{"a.b_c", "a_b.c"}}, []string{"a_b_c"}, `"a_b_c" matches 2 tools: a.b_c, a_b.c`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			srv := reserveFake("moxy/moxy", c.fake.start(t))
-			rb := applyAndReadBackExclusions(context.Background(), &pluginhost.Host{}, srv, c.saved, fakeMoxyTools)
+			rb := applyAndReadBackExclusions(context.Background(), &pluginhost.Host{}, srv, c.saved, c.fake.tools)
 			if !strings.Contains(rb.Problem, c.want) {
 				t.Errorf("problem = %q, want it to mention %q", rb.Problem, c.want)
 			}

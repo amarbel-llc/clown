@@ -80,7 +80,10 @@ statuses and are not counted.
    moxy names were unmatched. A tool that registers after the fetch stays
    visible (`cmd/clown/agentscope.go:675-680`). Under principle 1 the
    denylist itself is the deeper problem: `context_excluded` silently admits a
-   tool its server adds later (clown#266, allowlist mode). (C)
+   tool its server adds later (clown#266, allowlist mode). (C) **Rule
+   decided and built after the audit**: unmatched names with no loose
+   counterpart are harmless; a loose match or a multi-tool match refuses
+   (FDR 0020). Allowlist mode goes to the dynamic-profiles design.
 
 Next by severity:
 - **The confined launch's result file is unreliable on failure.** A refusal

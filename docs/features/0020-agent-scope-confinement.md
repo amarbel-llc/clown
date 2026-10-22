@@ -602,6 +602,25 @@ the old best-effort push. The readbacks are recorded as JSON: the frontend's
 servers in `$XDG_STATE_HOME/clown/readback/<principal>.json`, the in-unit
 servers in `$HOME/.cache/clown/exclusion-readback.json` in the agent home.
 
+Unmatched saved names (rule of 2026-10-22, audit top 5). A saved exclusion
+that matches no live tool under any rendering is harmless: the tool is not
+there. It is recorded as `unmatched` and the launch continues. Under a
+profile the launch is refused, and the record lists the entry under
+`ambiguous` with the candidate tools and the server, when:
+- an unmatched saved name's loose form (case folded, claude's `mcp__<plugin>__`
+  prefix stripped, `.`/`-`/`_` as one separator) equals a live tool's; the
+  profile meant that tool, which would otherwise stay visible;
+- a saved name matches more than one live tool (the claude-safe fold can
+  collide).
+
+In nikulin round P, 89 of canary-grit's 152 moxy names were unmatched. These
+are taken to be exactly the tools of the moxins the in-unit moxyfile
+disables: smith 34, chrest 21, freud 12, piers 7, car 5, stats-me 5, gmail 2,
+calendar 1, gws 1, prison 1. That count is an inference from the code; it
+stays one until a confined round's readback record is quoted. The denylist
+itself still admits a tool a server adds later (principle 1). Allowlist
+mode belongs to the dynamic-profiles design (clown#266).
+
 What the readback proves, and what it does not:
 - It checks LISTING only; the record says so (`"checks": "listing"`). moxy
   refuses an excluded tool at call time too. `clown-stdio-bridge` used to only

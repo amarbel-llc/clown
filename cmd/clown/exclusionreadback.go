@@ -22,6 +22,7 @@ type exclusionReadback struct {
 	Saved        int      `json:"saved"`
 	Matched      []string `json:"matched"`
 	Unmatched    []string `json:"unmatched,omitempty"`
+	Ambiguous    []string `json:"ambiguous,omitempty"`
 	CatalogAfter int      `json:"catalog_after"`
 	StillListed  []string `json:"still_listed,omitempty"`
 	Problem      string   `json:"problem,omitempty"`
@@ -57,6 +58,10 @@ func applyAndReadBackExclusions(ctx context.Context, host *pluginhost.Host, srv 
 		rb.Problem = "its tool catalog could not be fetched"
 		return rb
 	}
+	if rb.Ambiguous = ambiguousExclusions(saved, live); len(rb.Ambiguous) > 0 {
+		rb.Problem = "saved exclusions that could mean a live tool they do not match exactly: " + strings.Join(rb.Ambiguous, "; ")
+		return rb
+	}
 	if len(rb.Matched) == 0 {
 		rb.Problem = fmt.Sprintf("none of the profile's %d excluded tool names matches its %d-tool catalog", len(saved), len(live))
 		return rb
@@ -84,6 +89,53 @@ func applyAndReadBackExclusions(ctx context.Context, host *pluginhost.Host, srv 
 		rb.Problem = fmt.Sprintf("%d excluded tools are still listed after the push", len(rb.StillListed))
 	}
 	return rb
+}
+
+// ambiguousExclusions describes each saved exclusion name that could mean a
+// live tool without naming exactly one: an unmatched name whose loose form
+// equals a live tool's (the profile meant that tool, so it would stay
+// visible), and a name that matches more than one live tool. An unmatched
+// name with no loose counterpart is harmless: the tool is not there.
+func ambiguousExclusions(saved, live []string) []string {
+	loose := map[string][]string{}
+	for _, name := range live {
+		k := looseToolName(name)
+		loose[k] = append(loose[k], name)
+	}
+	unmatched := map[string]bool{}
+	for _, name := range unmatchedExclusions(saved, live) {
+		unmatched[name] = true
+	}
+	var out []string
+	for _, name := range saved {
+		if unmatched[name] {
+			if cands := loose[looseToolName(name)]; len(cands) > 0 {
+				out = append(out, fmt.Sprintf("%q matches no tool exactly but could mean %s", name, strings.Join(cands, ", ")))
+			}
+			continue
+		}
+		if hits := resolveExcludedTools([]string{name}, live); len(hits) > 1 {
+			out = append(out, fmt.Sprintf("%q matches %d tools: %s", name, len(hits), strings.Join(hits, ", ")))
+		}
+	}
+	return out
+}
+
+// looseToolName folds the ways one tool's name gets written: case, claude's
+// "mcp__<plugin>__" prefix, and '.', '-' and '_' as one separator.
+func looseToolName(name string) string {
+	name = strings.ToLower(name)
+	if rest, ok := strings.CutPrefix(name, "mcp__"); ok {
+		if _, tool, ok := strings.Cut(rest, "__"); ok {
+			name = tool
+		}
+	}
+	return strings.Map(func(r rune) rune {
+		if r == '.' || r == '-' {
+			return '_'
+		}
+		return r
+	}, name)
 }
 
 // toolNames returns the names of tools, or nil when ok is false, so a failed
