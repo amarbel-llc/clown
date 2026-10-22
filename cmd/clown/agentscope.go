@@ -346,7 +346,7 @@ func stageAgentHome(spec agentscope.Spec, agentHome, cwd string) (plumbingBinds,
 	// ringmaster's dirs stay whole: the in-unit `ringmaster monitor` binds its
 	// nudge socket in the shared runtime jobs/ dir and reaps every channel's
 	// journals, so nothing narrower lets it work. They go once the monitors
-	// run on the frontend. No troupe directory is bound: troupe's in-unit
+	// run on the frontend. No shared troupe directory is bound: troupe's in-unit
 	// verbs (receive, muc send) need only the password file (below) and the
 	// session's own read cursors (troupeCursorDir), never accounts/, other
 	// sessions' sockets or other accounts' cursors.

@@ -226,7 +226,9 @@ are absent).
 - `DBUS_SESSION_BUS_ADDRESS`
 - `DISPLAY`, `WAYLAND_DISPLAY`, `XAUTHORITY`
 - `SSH_AUTH_SOCK`, unless passed
-- `TROUPE_XMPP_PASSWORD_FILE` and other credential paths
+- credential paths other than `TROUPE_XMPP_PASSWORD_FILE`, which passes as
+  a path to the session's own password file, bound read-only (see the
+  `TROUPE_` row above)
 - `CLOWN_SESSION_ID` (clown#136: never in the unit's own environment; claude
   receives it through its `--settings` env block instead, so hooks see the
   principal — clown#289)
@@ -289,7 +291,7 @@ at all.
 | claude → frontend MCP servers (ringmaster mcp, troupe mcp, `spinclass serve`) | an MCP stream | A per-server unix socket. For each accepted connection, the frontend starts a fresh stdio server and splices the two. The in-unit side is `clown mcp-socket-relay <sock>`, which claude starts as a stdio MCP server. A plugin marks a server frontend in `clown.json` (`"scope": "frontend"`); clown-builtin-jobs' servers are frontend. |
 | claude → agent-side MCP servers (moxy and other file-tool servers) | | Run **inside** the unit as claude's stdio children, so their file tools are confined too. A frontend moxy would be a ProtectHome bypass through `folio_write`. |
 | plugin monitors (job wakes, chat) | wake lines on stdout | troupe's connection owner (`troupe receive`) and `ringmaster monitor` run in the frontend (FDR 0032 D7). The in-unit monitor is a relay that reads their lines from a passed unix socket. The XMPP password file then never enters the unit. |
-| clown-hook-tee (Stop/SessionEnd) | troupe send | the troupe IPC socket from spec `sockets[]` |
+| clown-hook-tee (Stop/SessionEnd) | troupe send | `troupe muc send` inside the unit, with the session's own password file (bound read-only) over the forwarded XMPP port; no troupe socket or directory |
 | clown-hook-toolcost | state dir, statsd | state under the redirected `XDG_STATE_HOME`; statsd through the statsd relay (Egress) |
 | self-close idle poke (Stop) | one datagram to the frontend | The per-session unixgram `$XDG_RUNTIME_DIR/clown/idle/<principal>.sock`, bound in as a single inode (`Launch.IdleSocket`, clown#287). The in-unit `clown idle-notify <sock>` Stop hook sends one byte and always exits 0. The frontend listener runs `spinclass close-self-run` for its own principal, serialized (pokes during a run coalesce into one more), outside the unit; it never reads the datagram, so a unit can only trigger its own session's runner, which is a no-op unless the session queued a close and spinclass allows it. Armed only for a claude launch inside a spinclass session with `spinclass` on PATH. |
 | clown-hook-allow (PreToolUse) | nothing | pure |
@@ -443,7 +445,8 @@ Built (`internal/agentscope`, `cmd/clown/agentscope.go`):
   read-only when it is outside the worktree. Until the monitors move to the
   frontend, troupe's connection owner still runs inside, which is why the
   password file and `TROUPE_*` env are passed.
-- No troupe directory is bound (clown#291 follow-up, 2026-10-22). The
+- No shared troupe directory is bound, only the session's own cursor
+  directory, read-only (clown#291 follow-up, 2026-10-22). The
   runtime `troupe/` dir, with every session's `accounts/<uuid>.pass` and
   socket, and the state `troupe/` dir, with every account's cursors, used to
   be bound read-write whole. That made the single-file password bind

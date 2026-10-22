@@ -9,11 +9,11 @@ import (
 	"code.linenisgreat.com/clown/internal/agentscope"
 )
 
-// TestStageAgentHomeBindsNoTroupeDirectory pins the confined unit's troupe
+// TestStageAgentHomeBindsOnlyOwnTroupeState pins the confined unit's troupe
 // surface: the session's own password file and read cursors, never the
 // accounts/ directory (every session's password), the runtime socket dir or
 // other accounts' cursors.
-func TestStageAgentHomeBindsNoTroupeDirectory(t *testing.T) {
+func TestStageAgentHomeBindsOnlyOwnTroupeState(t *testing.T) {
 	opHome, runtime, state := t.TempDir(), t.TempDir(), t.TempDir()
 	t.Setenv("XDG_RUNTIME_DIR", runtime)
 	t.Setenv("XDG_STATE_HOME", state)

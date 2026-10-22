@@ -70,6 +70,11 @@ EOF
 teardown() {
   [[ -n ${LISTENER_PID:-} ]] && kill "$LISTENER_PID" 2>/dev/null
   [[ -n ${WT:-} ]] && rm -rf "$WT"
+  # Fake troupe accounts a test made in the real runtime/state dirs.
+  if [[ ${#TROUPE_FIXTURES[@]} -gt 0 ]]; then
+    rm -rf "${TROUPE_FIXTURES[@]}"
+  fi
+  return 0
 }
 
 # start_host_listeners opens, in the FRONTEND, a loopback TCP listener and an
@@ -205,6 +210,7 @@ run_probe() {
   local self="bats-self-$$" other="bats-other-$$"
   local acct="$RT/troupe/accounts"
   local cur="$state/troupe/cursors"
+  TROUPE_FIXTURES=("$acct/$self.pass" "$acct/$other.pass" "$cur/$self@xmpp.test" "$cur/$other@xmpp.test")
   mkdir -p "$acct" "$cur/$other@xmpp.test"
   echo self >"$acct/$self.pass"
   echo other >"$acct/$other.pass"
@@ -218,7 +224,6 @@ run_probe() {
       chk accounts-not-listable '[ \"\$(ls $acct)\" = $self.pass ]'
       chk own-cursors-readonly  '[ -d $cur/$self@xmpp.test ] && ! touch $cur/$self@xmpp.test/w'
       chk other-cursors-absent  '[ ! -e $cur/$other@xmpp.test ]'"
-  rm -rf "$acct/$self.pass" "$acct/$other.pass" "$cur/$self@xmpp.test" "$cur/$other@xmpp.test"
   echo "$output"
   [ "$status" -eq 0 ]
   [ "$(grep -c '^PASS' <<<"$output")" -eq 6 ]
