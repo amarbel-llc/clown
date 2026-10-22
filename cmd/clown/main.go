@@ -65,7 +65,9 @@ func loadProfileSets(additionalPath string) (builtin, user []profile.Profile, us
 		return nil, nil, "", fmt.Errorf("additional profiles: %w", err)
 	}
 	if err := registrySkewRefusal(additionalPath, reg); err != nil {
-		return nil, nil, "", err
+		// The builtins stay vouched for; read-only callers (profile list)
+		// may show them next to the refusal. Every other caller refuses.
+		return builtin, nil, additionalPath, err
 	}
 	if legacy {
 		warnLegacyConfig(additionalPath)
@@ -97,9 +99,15 @@ func registrySkewRefusal(path string, reg profile.Registry) error {
 	if len(held) == 0 {
 		return nil
 	}
-	return fmt.Errorf("profile registry %s holds %s; this clown %s speaks profile protocol %d and refuses the registry rather than drop what it cannot read (%s)",
-		path, strings.Join(held, " and "), buildcfg.Version, profile.ProtocolVersion, strings.Join(remedy, "; "))
+	return &registrySkewError{msg: fmt.Sprintf("profile registry %s holds %s; this clown %s speaks profile protocol %d and refuses the registry rather than drop what it cannot read (%s)",
+		path, strings.Join(held, " and "), buildcfg.Version, profile.ProtocolVersion, strings.Join(remedy, "; "))}
 }
+
+// registrySkewError is registrySkewRefusal's refusal, typed so a read-only
+// caller can still show the builtin profiles beside it.
+type registrySkewError struct{ msg string }
+
+func (e *registrySkewError) Error() string { return e.msg }
 
 func loadProfiles(additionalPath string) ([]profile.Profile, error) {
 	builtin, user, _, err := loadProfileSets(additionalPath)

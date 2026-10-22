@@ -1,7 +1,9 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"text/tabwriter"
@@ -94,14 +96,25 @@ func openrouterOpencodeUpgradeHint(builtin, user []profile.Profile) string {
 	return buf.String()
 }
 
-func runProfileList() int {
-	builtin, user, _, err := loadProfileSets("")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
+func runProfileList() int { return listProfiles("", os.Stdout, os.Stderr) }
+
+// listProfiles is `clown profile list`. It is read-only, so a user registry
+// this clown cannot read in full (registrySkewError) does not hide the
+// builtins: they are listed, the refusal is printed, and the exit is nonzero.
+// Nothing from the refused registry is listed.
+func listProfiles(additionalPath string, stdout, stderr io.Writer) int {
+	builtin, user, _, err := loadProfileSets(additionalPath)
+	var skew *registrySkewError
+	if err != nil && !errors.As(err, &skew) {
+		fmt.Fprintf(stderr, "clown: %v\n", err)
 		return 1
 	}
-	fmt.Print(formatProfileList(builtin, user))
-	fmt.Print(openrouterOpencodeUpgradeHint(builtin, user))
+	fmt.Fprint(stdout, formatProfileList(builtin, user))
+	fmt.Fprint(stdout, openrouterOpencodeUpgradeHint(builtin, user))
+	if skew != nil {
+		fmt.Fprintf(stderr, "clown: %v\n", skew)
+		return 1
+	}
 	return 0
 }
 

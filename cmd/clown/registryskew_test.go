@@ -50,6 +50,51 @@ func TestLoadProfileSetsRefusesARegistryItCannotReadInFull(t *testing.T) {
 	}
 }
 
+const skewedRegistry = knownProfile + "context_kept = [\"moxy/moxy\"]\n\n[registry]\nclown_version = \"9.9.9\"\nprotocol = \"2\"\n"
+
+// TestProfileListShowsBuiltinsBesideARefusedRegistry: list is read-only, so
+// it shows what it can vouch for (the builtins), prints the refusal, exits
+// nonzero, and lists nothing from the refused file.
+func TestProfileListShowsBuiltinsBesideARefusedRegistry(t *testing.T) {
+	var out, errOut strings.Builder
+	code := listProfiles(writeRegistry(t, skewedRegistry), &out, &errOut)
+	if code == 0 {
+		t.Error("list exited 0 on a refused registry")
+	}
+	if !strings.Contains(out.String(), "canary") || strings.Contains(out.String(), "mine") {
+		t.Errorf("list printed %q; want the builtins and nothing from the refused registry", out.String())
+	}
+	for _, want := range []string{"profile protocol 2, written by clown 9.9.9", "context_kept", "refuses the registry"} {
+		if !strings.Contains(errOut.String(), want) {
+			t.Errorf("stderr %q does not say %q", errOut.String(), want)
+		}
+	}
+}
+
+// TestProfileVerbsThatChangeOrLaunchRefuseARefusedRegistry: remove and edit
+// refuse before touching the file, as the launch path does (main.go returns
+// on any loadProfileSets error).
+func TestProfileVerbsThatChangeOrLaunchRefuseARefusedRegistry(t *testing.T) {
+	cfg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", cfg)
+	path := filepath.Join(cfg, "clown", "profiles.toml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(skewedRegistry), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code := runProfileRemove("mine"); code == 0 {
+		t.Error("profile remove ran on a refused registry")
+	}
+	if _, err := profileEditInteractive("mine"); err == nil || !strings.Contains(err.Error(), "refuses the registry") {
+		t.Errorf("profile edit: err = %v, want the refusal", err)
+	}
+	if raw, _ := os.ReadFile(path); string(raw) != skewedRegistry {
+		t.Errorf("the refused registry was rewritten:\n%s", raw)
+	}
+}
+
 func TestLoadProfileSetsReadsCurrentAndUnstampedRegistries(t *testing.T) {
 	for name, body := range map[string]string{
 		"current":   knownProfile + "\n[registry]\nclown_version = \"0.4.4\"\nprotocol = \"1\"\n",
