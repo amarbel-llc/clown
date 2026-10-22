@@ -42,7 +42,7 @@ func runInAgentScope(req agentScopeRequest, logger *slog.Logger) int {
 	if req.stagingRoot != "" && !strings.HasPrefix(req.stagingRoot, launch.Spec.Worktree+"/") {
 		launch.PlumbingRO = append(launch.PlumbingRO, req.stagingRoot)
 	}
-	stopEndpoints, err := startFrontendEndpoints(&launch, append(req.forwardAddrs, xmppForward(&launch)...), req.inUnit, logger)
+	stopEndpoints, err := startFrontendEndpoints(&launch, append(req.forwardAddrs, xmppForward(&launch)...), req.inUnit, req.monitors, logger)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown: agent scope: frontend endpoints: %v\n", err)
 		return 1
@@ -68,7 +68,10 @@ type agentScopeRequest struct {
 	// nothing else on the host's loopback is reachable from it.
 	forwardAddrs []string
 	// inUnit are the agent-side plugin servers started inside the unit.
-	inUnit   []agentscope.InUnitServer
+	inUnit []agentscope.InUnitServer
+	// monitors run in the frontend; the unit reads their lines over the
+	// sockets they name.
+	monitors []agentscope.MonitorSpec
 	argv     []string
 	extraEnv []string
 	// principal is this session's identity key, reported in the result.
@@ -141,7 +144,7 @@ func prepareAgentScope(specPath string, argv, extraEnv []string) (agentscope.Lau
 // in-unit servers for `clown agent-relay`, and the in-unit moxy's global
 // moxyfile (agentscope.InUnitMoxyfile), bound over $HOME/.config/moxy/moxyfile
 // so the agent cannot widen it.
-func startFrontendEndpoints(launch *agentscope.Launch, forwardAddrs []string, inUnit []agentscope.InUnitServer, logger *slog.Logger) (stop func(), err error) {
+func startFrontendEndpoints(launch *agentscope.Launch, forwardAddrs []string, inUnit []agentscope.InUnitServer, monitors []agentscope.MonitorSpec, logger *slog.Logger) (stop func(), err error) {
 	runtime := os.Getenv("XDG_RUNTIME_DIR")
 	if !filepath.IsAbs(runtime) {
 		return nil, errors.New("XDG_RUNTIME_DIR is unset; nowhere to put the unit's sockets")
@@ -232,6 +235,26 @@ func startFrontendEndpoints(launch *agentscope.Launch, forwardAddrs []string, in
 		}
 		launch.ServeFile = serve
 	}
+	// The job-platform monitors run here, with the frontend's own env and
+	// arguments; the unit can only read their lines (FDR 0020 "frontend
+	// monitors"). Each is the same monitor an unconfined session runs, with
+	// that monitor's authority (ringmaster's reaper is host-wide).
+	for _, spec := range monitors {
+		relay := &agentscope.MonitorRelay{
+			Name:    spec.Name,
+			Command: spec.Command,
+			Env:     os.Environ(),
+			Unit:    launch.Unit,
+			Logger:  logger,
+		}
+		if err := relay.Start(spec.Socket); err != nil {
+			stop()
+			return nil, fmt.Errorf("monitor %s: %w", spec.Name, err)
+		}
+		closers = append(closers, relay.Close)
+		launch.MonitorSockets = append(launch.MonitorSockets, spec.Socket)
+	}
+
 	moxyfile := filepath.Join(dir, "moxyfile")
 	inUnitMoxyfile := filepath.Join(launch.AgentHome, ".config", "moxy", "moxyfile")
 	if err := os.WriteFile(moxyfile, []byte(agentscope.InUnitMoxyfile), 0o600); err != nil {
@@ -343,21 +366,16 @@ func stageAgentHome(spec agentscope.Spec, agentHome, cwd string) (plumbingBinds,
 	environ := os.Environ()
 	state := agentscope.OperatorXDG(environ, opHome, "XDG_STATE_HOME")
 	logs := agentscope.OperatorXDG(environ, opHome, "XDG_LOG_HOME")
-	// ringmaster's dirs stay whole: the in-unit `ringmaster monitor` binds its
-	// nudge socket in the shared runtime jobs/ dir and reaps every channel's
-	// journals, so nothing narrower lets it work. They go once the monitors
-	// run on the frontend. No shared troupe directory is bound: troupe's in-unit
-	// verbs (receive, muc send) need only the password file (below) and the
-	// session's own read cursors (troupeCursorDir), never accounts/, other
-	// sessions' sockets or other accounts' cursors.
+	// No ringmaster or troupe directory is bound. The job-platform monitors
+	// (`ringmaster monitor`, `troupe receive`) run in the frontend and the unit
+	// reads their lines over relay sockets (moveMonitorsToFrontend); the MCP
+	// servers are frontend-scoped. What stays inside is clown-hook-tee's
+	// `troupe muc send`, which needs only the session's own password file
+	// (below) and the forwarded XMPP port.
 	dirs := []string{
-		filepath.Join(state, "ringmaster"),
 		filepath.Join(state, "clown", "hook-toolcost"),
 		filepath.Join(state, "clown", "hook-tee"),
 		filepath.Join(logs, "moxy"),
-	}
-	if runtime := os.Getenv("XDG_RUNTIME_DIR"); runtime != "" {
-		dirs = append(dirs, filepath.Join(runtime, "ringmaster"))
 	}
 	for _, d := range dirs {
 		if err := os.MkdirAll(d, 0o700); err != nil {
@@ -374,12 +392,6 @@ func stageAgentHome(spec agentscope.Spec, agentHome, cwd string) (plumbingBinds,
 			return p, fmt.Errorf("TROUPE_XMPP_PASSWORD_FILE %q does not name TROUPE_XMPP_USER %q's principal; refusing to bind another session's credential", pw, user)
 		}
 		p.ro = append(p.ro, pw)
-		if cursors := troupeCursorDir(state, user, os.Getenv("TROUPE_XMPP_DOMAIN")); cursors != "" {
-			if err := os.MkdirAll(cursors, 0o700); err != nil {
-				return p, err
-			}
-			p.ro = append(p.ro, cursors)
-		}
 	}
 	// The user's nix profile links (home-manager's PATH entries) live under
 	// the hidden home; they only point into /nix/store.
@@ -388,17 +400,6 @@ func stageAgentHome(spec agentscope.Spec, agentHome, cwd string) (plumbingBinds,
 		filepath.Join(state, "nix", "profiles"),
 	)
 	return p, nil
-}
-
-// troupeCursorDir is the session's own troupe read-cursor directory,
-// <state>/troupe/cursors/<user>@<domain> (troupe keys it by the account's
-// JID), or "" when the account is not fully named. `troupe receive` only reads
-// it in the unit; chat_read, which advances it, runs on the frontend.
-func troupeCursorDir(state, user, domain string) string {
-	if user == "" || domain == "" || strings.ContainsAny(user+domain, "/") {
-		return ""
-	}
-	return filepath.Join(state, "troupe", "cursors", user+"@"+domain)
 }
 
 // claudeProjectSlug is claude's per-project directory name under

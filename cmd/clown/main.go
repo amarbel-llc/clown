@@ -328,6 +328,10 @@ func run(rawArgs []string) int {
 			return runEgressConnect(rawArgs[1:])
 		case "idle-notify":
 			return runIdleNotify(rawArgs[1:])
+		case "agent-monitor":
+			return runAgentMonitor(rawArgs[1:])
+		case "agent-monitor-serve":
+			return runAgentMonitorServe(rawArgs[1:])
 		}
 	}
 
@@ -762,6 +766,17 @@ func runWithFlags(flags parsedFlags) int {
 		if monitorDir, err := synthJobMonitorPluginDir(root, flags.identity.Key); err != nil {
 			fmt.Fprintf(os.Stderr, "clown: registering job-watch monitor: %v\n", err)
 		} else if monitorDir != "" {
+			if flags.agentScopeSpec != "" {
+				// Confined: the job-platform monitors run in the frontend and
+				// the unit only reads their lines (FDR 0020). A monitor left
+				// inside would need the ringmaster dirs the unit no longer has.
+				monitors, err := moveMonitorsToFrontend(monitorDir, flags.identity.Key)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "clown: agent scope: moving the job monitors to the frontend: %v\n", err)
+					return 1
+				}
+				flags.agentScopeMonitors = monitors
+			}
 			pluginDirs = append(pluginDirs, monitorDir)
 		}
 	}
@@ -1831,6 +1846,7 @@ func runProvider(executor Executor, bound Command, logger *slog.Logger, flags pa
 			stagingRoot:  flags.stagingRootPath,
 			forwardAddrs: flags.agentScopeForwards,
 			inUnit:       flags.agentScopeInUnit,
+			monitors:     flags.agentScopeMonitors,
 			argv:         append([]string{binary}, argv...),
 			extraEnv:     extraEnv,
 			principal:    flags.identity.Key,
@@ -2817,6 +2833,10 @@ type parsedFlags struct {
 	// agentScopeInUnit are the agent-side plugin servers reserved for the
 	// agent unit (set in runWithPluginHost), started inside it.
 	agentScopeInUnit []agentscope.InUnitServer
+	// agentScopeMonitors are the job-platform monitors that run in the
+	// frontend for the agent unit (set in runWithFlags), each relayed to the
+	// unit over its own socket.
+	agentScopeMonitors []agentscope.MonitorSpec
 	// mcpCollapse opts this launch into MCP-collapse mode (all-or-nothing for
 	// the prototype): after the discovered upstream MCP servers are started,
 	// clown launches ONE clown-mcp-collapse aggregator fronting them all and

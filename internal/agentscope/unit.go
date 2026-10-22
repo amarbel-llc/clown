@@ -63,6 +63,10 @@ type Launch struct {
 	// ServeFile lists the agent-side servers the relay starts inside the
 	// unit (WriteInUnitServers); bound in read-only. Empty: none.
 	ServeFile string
+	// MonitorSockets are the frontend monitor relays' sockets (MonitorRelay),
+	// each bound in as a single inode at the same path, where the unit's
+	// `clown agent-monitor` reads its lines.
+	MonitorSockets []string
 	// Principal is reported in the result (CLOWN_SESSION_ID).
 	Principal string
 }
@@ -172,6 +176,9 @@ func (l Launch) properties() []string {
 	}
 	if l.IdleSocket != "" {
 		props = append(props, "BindPaths="+l.IdleSocket)
+	}
+	for _, s := range l.MonitorSockets {
+		props = append(props, "BindPaths="+s)
 	}
 	for _, p := range l.PlumbingRW {
 		props = append(props, "BindPaths=-"+p)

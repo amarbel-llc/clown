@@ -205,28 +205,32 @@ run_probe() {
   grep -q "refusing to bind another session's credential" <<<"$output"
 }
 
-@test "agent_scope: only the session's own troupe password and cursors enter the unit, read-only" {
+@test "agent_scope: of the job platform's state only the session's own troupe password enters the unit, read-only" {
   local state="${XDG_STATE_HOME:-$HOME/.local/state}"
   local self="bats-self-$$" other="bats-other-$$"
   local acct="$RT/troupe/accounts"
   local cur="$state/troupe/cursors"
-  TROUPE_FIXTURES=("$acct/$self.pass" "$acct/$other.pass" "$cur/$self@xmpp.test" "$cur/$other@xmpp.test")
-  mkdir -p "$acct" "$cur/$other@xmpp.test"
+  local jobs="$state/ringmaster/jobs" presence="$state/ringmaster/presence" rjobs="$RT/ringmaster/jobs"
+  TROUPE_FIXTURES=("$acct/$self.pass" "$acct/$other.pass" "$cur/$other@xmpp.test"
+    "$jobs/$other" "$presence/$other.json" "$rjobs/$other.sock")
+  mkdir -p "$acct" "$cur/$other@xmpp.test" "$jobs/$other" "$presence" "$rjobs"
   echo self >"$acct/$self.pass"
   echo other >"$acct/$other.pass"
-  touch "$cur/$other@xmpp.test/x.cursor"
+  touch "$cur/$other@xmpp.test/x.cursor" "$jobs/$other/j.jsonl" "$presence/$other.json" "$rjobs/$other.sock"
   TROUPE_XMPP_USER="$self" TROUPE_XMPP_DOMAIN=xmpp.test TROUPE_XMPP_PASSWORD_FILE="$acct/$self.pass" \
     run run_in_unit "
       chk() { if eval \"\$2\" >/dev/null 2>&1; then echo \"PASS \$1\"; else echo \"FAIL \$1\"; fi; }
-      chk own-pass-readable     '[ \"\$(cat $acct/$self.pass)\" = self ]'
-      chk own-pass-readonly     '! sh -c \"echo x >$acct/$self.pass\"'
-      chk other-pass-absent     '[ ! -e $acct/$other.pass ]'
-      chk accounts-not-listable '[ \"\$(ls $acct)\" = $self.pass ]'
-      chk own-cursors-readonly  '[ -d $cur/$self@xmpp.test ] && ! touch $cur/$self@xmpp.test/w'
-      chk other-cursors-absent  '[ ! -e $cur/$other@xmpp.test ]'"
+      chk own-pass-readable      '[ \"\$(cat $acct/$self.pass)\" = self ]'
+      chk own-pass-readonly      '! sh -c \"echo x >$acct/$self.pass\"'
+      chk other-pass-absent      '[ ! -e $acct/$other.pass ]'
+      chk accounts-not-listable  '[ \"\$(ls $acct)\" = $self.pass ]'
+      chk cursors-absent         '[ ! -e $cur ]'
+      chk other-journal-absent   '[ ! -e $jobs/$other ]'
+      chk presence-absent        '[ ! -e $presence/$other.json ]'
+      chk nudge-sockets-absent   '[ ! -e $rjobs/$other.sock ]'"
   echo "$output"
   [ "$status" -eq 0 ]
-  [ "$(grep -c '^PASS' <<<"$output")" -eq 6 ]
+  [ "$(grep -c '^PASS' <<<"$output")" -eq 8 ]
   [ "$(grep -c '^FAIL' <<<"$output")" -eq 0 ]
 }
 

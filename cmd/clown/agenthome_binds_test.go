@@ -9,11 +9,12 @@ import (
 	"code.linenisgreat.com/clown/internal/agentscope"
 )
 
-// TestStageAgentHomeBindsOnlyOwnTroupeState pins the confined unit's troupe
-// surface: the session's own password file and read cursors, never the
-// accounts/ directory (every session's password), the runtime socket dir or
-// other accounts' cursors.
-func TestStageAgentHomeBindsOnlyOwnTroupeState(t *testing.T) {
+// TestStageAgentHomeBindsNoJobPlatformState pins the confined unit's job
+// platform surface: the session's own troupe password file, read-only, and
+// nothing else of troupe's or ringmaster's (every session's passwords,
+// sockets, cursors, job journals and presence). The monitors that used those
+// run in the frontend (moveMonitorsToFrontend).
+func TestStageAgentHomeBindsNoJobPlatformState(t *testing.T) {
 	opHome, runtime, state := t.TempDir(), t.TempDir(), t.TempDir()
 	t.Setenv("XDG_RUNTIME_DIR", runtime)
 	t.Setenv("XDG_STATE_HOME", state)
@@ -26,38 +27,42 @@ func TestStageAgentHomeBindsOnlyOwnTroupeState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cursors := filepath.Join(state, "troupe", "cursors", "sess-1@xmpp.test")
-	if !slices.Contains(p.ro, pw) || !slices.Contains(p.ro, cursors) {
-		t.Errorf("ro binds %v, want the own password file and %s", p.ro, cursors)
+	if !slices.Contains(p.ro, pw) || slices.Contains(p.rw, pw) {
+		t.Errorf("binds ro=%v rw=%v, want the own password file read-only", p.ro, p.rw)
+	}
+	platform := []string{
+		filepath.Join(runtime, "troupe"), filepath.Join(state, "troupe"),
+		filepath.Join(runtime, "ringmaster"), filepath.Join(state, "ringmaster"),
 	}
 	for _, b := range append(slices.Clone(p.rw), p.ro...) {
 		src, _, _ := strings.Cut(b, ":")
-		for _, dir := range []string{filepath.Join(runtime, "troupe"), filepath.Join(state, "troupe")} {
-			if (src == dir || strings.HasPrefix(src, dir+"/")) && src != pw && src != cursors {
-				t.Errorf("bind %q exposes troupe state beyond the session's own", b)
+		for _, dir := range platform {
+			if (src == dir || strings.HasPrefix(src, dir+"/")) && src != pw {
+				t.Errorf("bind %q exposes job-platform state", b)
 			}
 		}
-	}
-	if slices.Contains(p.rw, pw) || slices.Contains(p.rw, cursors) {
-		t.Errorf("the own troupe files must be read-only: rw = %v", p.rw)
 	}
 
 	// The launch artifact: the systemd-run argv the unit is started with.
 	wt := t.TempDir()
+	mon := filepath.Join(runtime, "clown", "monitors", "sess-key", "ringmaster-monitor.sock")
 	args, err := agentscope.Launch{
 		Unit: "u-1.service", WorkDir: wt, Spec: agentscope.Spec{Worktree: wt},
 		Argv: []string{"claude"}, EgressSocket: filepath.Join(runtime, "egress.sock"),
-		PlumbingRW: p.rw, PlumbingRO: p.ro,
+		PlumbingRW: p.rw, PlumbingRO: p.ro, MonitorSockets: []string{mon},
 	}.SystemdRunArgs()
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !slices.Contains(args, "--property=BindPaths="+mon) {
+		t.Errorf("unit args %v, want the monitor socket bound", args)
+	}
 	for _, a := range args {
-		if !strings.Contains(a, "/troupe") {
+		if a == "--property=BindReadOnlyPaths=-"+pw || a == "--property=BindPaths="+mon {
 			continue
 		}
-		if want := "--property=BindReadOnlyPaths=-"; a != want+pw && a != want+cursors {
-			t.Errorf("unit argument %q binds troupe state beyond the session's own", a)
+		if strings.Contains(a, "/troupe") || strings.Contains(a, "/ringmaster") {
+			t.Errorf("unit argument %q binds job-platform state", a)
 		}
 	}
 }

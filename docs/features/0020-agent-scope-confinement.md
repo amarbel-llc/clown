@@ -438,25 +438,51 @@ Built (`internal/agentscope`, `cmd/clown/agentscope.go`):
 - clown's plumbing binds for the base launcher: a per-session
   `CLAUDE_CONFIG_DIR` under `<worktree>/.tmp/agent-home/.claude` seeded from
   the operator's `.claude.json` and `settings.json`, the operator's
-  credentials file and this project's transcript dir bound over it, the
-  ringmaster state and runtime dirs, clown hook state, moxy's hook log dir,
-  the session's own troupe password file and its own troupe read cursors
-  (`troupe/cursors/<user>@<domain>`) read-only, and the staging root
-  read-only when it is outside the worktree. Until the monitors move to the
-  frontend, troupe's connection owner still runs inside, which is why the
-  password file and `TROUPE_*` env are passed.
-- No shared troupe directory is bound, only the session's own cursor
-  directory, read-only (clown#291 follow-up, 2026-10-22). The
-  runtime `troupe/` dir, with every session's `accounts/<uuid>.pass` and
-  socket, and the state `troupe/` dir, with every account's cursors, used to
-  be bound read-write whole. That made the single-file password bind
-  meaningless: a worker could read, replace or delete any session's XMPP
-  password. troupe's in-unit verbs need only the named password file and
-  their own cursors (troupe/rich-elder's survey). ringmaster's dirs are still
-  bound whole, because the in-unit `ringmaster monitor` binds its socket in
-  the shared runtime `jobs/` dir and its reaper appends to every channel's
-  journal. So other sessions' job journals and presence stay reachable from
-  the unit until the monitors run on the frontend.
+  credentials file and this project's transcript dir bound over it, clown
+  hook state, moxy's hook log dir, the session's own troupe password file
+  read-only (for clown-hook-tee's `troupe muc send`, with the forwarded XMPP
+  port), the frontend monitor sockets, and the staging root read-only when it
+  is outside the worktree.
+- No ringmaster or troupe directory is bound (2026-10-22). The runtime
+  `troupe/` dir (every session's `accounts/<uuid>.pass` and socket), the
+  state `troupe/` dir (every account's cursors), and the ringmaster runtime
+  and state dirs (every channel's journals, nudge sockets and presence) used
+  to be bound read-write whole. A worker could read, replace or delete any
+  session's XMPP password, and read or append to any session's job journal.
+  The troupe dirs went first (ce3cc4a; troupe/rich-elder's survey showed the
+  in-unit verbs need only the named password file). The ringmaster dirs went
+  with the frontend monitors below, because the in-unit `ringmaster monitor`
+  bound its socket in the shared runtime `jobs/` dir and its reaper appended
+  to every channel's journal (ringmaster/bright-holly's survey); nothing
+  narrower let it run inside.
+- **Frontend monitors (built 2026-10-22).** Under `--agent-scope` clown
+  rewrites the job-platform plugin's monitors (`moveMonitorsToFrontend`):
+  claude runs `clown agent-monitor <socket>` inside the unit, and the
+  frontend runs the original commands (`ringmaster monitor --session <key>`,
+  and `troupe receive` under xmpp-native, or the legacy `troupe agent`) with
+  its own env and arguments, as `agentscope.MonitorRelay`s.
+  - Each relay serves its monitor's stdout lines on
+    `$XDG_RUNTIME_DIR/clown/monitors/<principal>/<name>.sock`, bound into the
+    unit as a single inode. Callers must be in the unit's cgroup.
+  - The stream is one-way: the relay never reads from a connection, so
+    nothing in the unit can write into it. Every line, including the relay's
+    own `[clown] monitor <name> unavailable` notice, is frontend-written.
+  - Lines produced while no reader is connected are queued (1024 lines,
+    oldest dropped) and replayed to the next reader. The bound and a running
+    drop count are in the launch log.
+  - A monitor that exits is restarted with capped backoff (1s to 30s). After
+    5 consecutive runs shorter than 10s, the relay emits the unavailable notice
+    once and keeps retrying. `ringmaster monitor` replays unacked records when
+    it starts, so a wake produced while it was down arrives after the restart
+    (`zz-tests_bats/agent_monitor.bats`, against the real ringmaster). The
+    window that remains is a line acked by ringmaster and queued here when
+    the frontend itself dies; the unit dies with it.
+  - **Authority:** a frontend monitor is the same monitor every unconfined
+    session runs today, with the same reach. ringmaster's reaper is
+    host-wide. The change is that a worker no longer gets that reach.
+    Turning the reaper off for these monitors (`RINGMASTER_DISABLE_LIVENESS`)
+    is ringmaster's call.
+  - Other plugins' monitors still run inside the unit.
 - systemd-run and systemctl come from `PATH` (overridable with
   `CLOWN_SYSTEMD_RUN`/`CLOWN_SYSTEMCTL`): systemd-run serializes properties
   client-side, so it must match the running manager.
@@ -598,8 +624,13 @@ madder store bound as spinclass binds it:
 **statsd relay (2026-10-20, clown#269).** Built as described under "statsd
 relay"; capability `statsd-relay`. Covered by Go unit tests only so far.
 
-Not built yet: frontend monitors (troupe's connection owner moved out of the
-unit).
+**Frontend monitors (2026-10-22).** Built as described in the launcher
+bullets above. Covered by Go unit tests (relay delivery, queue replay, input
+ignored, restart and unavailable notice, queue bound, caller check, kill and
+replay), a nix-lane bats test against the real `ringmaster monitor`
+(including killing it while a wake is produced), and `verify-agent-scope`
+(no ringmaster or troupe state inside a unit). Not yet verified in a live
+confined session.
 
 ## What a confined worker loses
 
@@ -628,9 +659,9 @@ local juggler) is not reachable from the unit.
 
 - The agent runs as the operator's uid, not a dynamic uid. The system-manager
   launcher is deferred.
-- Moving troupe's connection owner to the frontend changes the
-  `clown-builtin-jobs` monitor shape: a relay in the unit, the owner in the
-  frontend.
+- The unit's PID 1 is claude itself (agent-exec execs it), which does not
+  reap orphans: zombies accumulate during a session (nikulin round P: 2 to 6
+  in one session). A reaping init in agent-exec is a follow-up.
 - `claude` credential refresh under a single-inode bind is unverified. A
   rewrite by rename fails with `EBUSY`.
 - Linux with a systemd user manager only.
