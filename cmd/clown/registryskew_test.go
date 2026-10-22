@@ -29,7 +29,7 @@ func TestLoadProfileSetsRefusesARegistryItCannotReadInFull(t *testing.T) {
 	for name, c := range map[string]struct{ body, want string }{
 		"newer protocol": {
 			knownProfile + "\n[registry]\nclown_version = \"9.9.9\"\nprotocol = \"2\"\n",
-			"clown 9.9.9 (profile protocol 2)",
+			"profile protocol 2, written by clown 9.9.9",
 		},
 		"unknown profile field": {
 			knownProfile + "context_kept = [\"moxy/moxy\"]\n\n[registry]\nclown_version = \"0.4.4\"\nprotocol = \"1\"\n",
@@ -37,12 +37,13 @@ func TestLoadProfileSetsRefusesARegistryItCannotReadInFull(t *testing.T) {
 		},
 		"malformed protocol": {
 			knownProfile + "\n[registry]\nprotocol = \"two\"\n",
-			"newer profile protocol",
+			"unreadable protocol stamp",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, _, _, err := loadProfileSets(writeRegistry(t, c.body))
-			if err == nil || !strings.Contains(err.Error(), c.want) || !strings.Contains(err.Error(), "refuses it") {
+			if err == nil || !strings.Contains(err.Error(), c.want) || !strings.Contains(err.Error(), "refuses the registry") ||
+				strings.Contains(err.Error(), "-1") {
 				t.Errorf("err = %v, want a refusal naming %q", err, c.want)
 			}
 		})

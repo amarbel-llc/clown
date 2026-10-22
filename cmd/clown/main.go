@@ -81,23 +81,24 @@ func loadProfileSets(additionalPath string) (builtin, user []profile.Profile, us
 // pkg/profilelookup applies the stricter rule (unstamped is refused too) for
 // launchers that vouch for a profile's digest.
 func registrySkewRefusal(path string, reg profile.Registry) error {
-	newer := reg.Stamp.Protocol > profile.ProtocolVersion || reg.Stamp.Protocol < 0
-	if !newer && len(reg.Undecoded) == 0 {
-		return nil
-	}
-	writer := "an unstamped clown"
-	if reg.Stamp.ClownVersion != "" || reg.Stamp.Protocol != 0 {
-		writer = fmt.Sprintf("clown %s (profile protocol %d)", reg.Stamp.ClownVersion, reg.Stamp.Protocol)
-	}
-	var held []string
-	if newer {
-		held = append(held, "a newer profile protocol")
+	var held, remedy []string
+	switch {
+	case reg.Stamp.Protocol < 0:
+		held = append(held, "an unreadable protocol stamp in its [registry] table")
+		remedy = append(remedy, "fix or remove the [registry] protocol value")
+	case reg.Stamp.Protocol > profile.ProtocolVersion:
+		held = append(held, fmt.Sprintf("profile protocol %d, written by clown %s", reg.Stamp.Protocol, reg.Stamp.ClownVersion))
+		remedy = append(remedy, "use that clown or a newer one")
 	}
 	if len(reg.Undecoded) > 0 {
-		held = append(held, "fields this clown does not know: "+strings.Join(reg.Undecoded, ", "))
+		held = append(held, "keys this clown does not know: "+strings.Join(reg.Undecoded, ", "))
+		remedy = append(remedy, "if they are typos or stale, remove them by hand; if a newer clown wrote them, use it")
 	}
-	return fmt.Errorf("profile registry %s was last written by %s and holds %s; this clown %s speaks profile protocol %d and refuses it rather than drop what it cannot read (use the clown that wrote it, or a newer one)",
-		path, writer, strings.Join(held, " and "), buildcfg.Version, profile.ProtocolVersion)
+	if len(held) == 0 {
+		return nil
+	}
+	return fmt.Errorf("profile registry %s holds %s; this clown %s speaks profile protocol %d and refuses the registry rather than drop what it cannot read (%s)",
+		path, strings.Join(held, " and "), buildcfg.Version, profile.ProtocolVersion, strings.Join(remedy, "; "))
 }
 
 func loadProfiles(additionalPath string) ([]profile.Profile, error) {
