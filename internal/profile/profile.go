@@ -35,6 +35,9 @@ type Profile struct {
 	// is best-effort intent, not a hard requirement (matches
 	// applyCheapContextSelection's existing best-effort posture elsewhere,
 	// e.g. a failed exclude-tools push is logged and skipped, not fatal).
+	// The one exception: when none of ContextServers is started or kept,
+	// the launch is refused rather than falling back to the original plugin
+	// dirs, which would run every server un-narrowed (cmd/clown runUnbound).
 	ContextServers  []string            `toml:"context_servers,omitempty"`
 	ContextExcluded map[string][]string `toml:"context_excluded,omitempty"`
 }

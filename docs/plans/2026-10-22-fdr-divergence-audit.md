@@ -34,7 +34,10 @@ statuses and are not counted.
    hands claude the original plugin dirs, which still declare every MCP server
    (`cmd/clown/pluginbinding.go:87-90`). A narrowed profile then runs
    un-narrowed. There is no test. Fix: under a saved selection, refuse instead
-   of falling back. (C)
+   of falling back. (C) **Fixed after the audit:** `runUnbound` itself
+   refuses under a saved selection, naming the keep-set and what the launch
+   found, so all four fallbacks (including `--disable-clown-protocol` and
+   nothing discovered) are unreachable; `cmd/clown/unboundfallback_test.go`.
 2. **Security: the operator's OAuth credential is bound read-write into the
    unit** (`cmd/clown/agentscope.go:350-357`). A confined worker can read it
    or overwrite it, and the claude.ai and Anthropic API hosts are on its egress

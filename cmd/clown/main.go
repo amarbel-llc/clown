@@ -1704,7 +1704,7 @@ func runWithPluginHost(executor Executor, pluginDirs []string, flags parsedFlags
 	verbose := flags.verbose
 
 	if disableClown {
-		return runUnbound(binding, executor, nil, flags)
+		return runUnbound(binding, executor, nil, flags, "--disable-clown-protocol is set, so clown cannot narrow them")
 	}
 
 	logger := preLogger
@@ -1773,7 +1773,7 @@ func runWithPluginHost(executor Executor, pluginDirs []string, flags parsedFlags
 
 	if len(discovered) == 0 {
 		logger.Info("no plugin servers discovered; passing plugin dirs through")
-		return runUnbound(binding, executor, logger, flags)
+		return runUnbound(binding, executor, logger, flags, "no plugin server was discovered")
 	}
 
 	return runManaged(host, discovered, executor, binding, logger, appendFile, flags)
@@ -2079,7 +2079,13 @@ func runManaged(
 	if len(report.Started) == 0 && len(flags.agentScopeInUnit) == 0 {
 		logger.Info("no plugin servers healthy; falling back to original plugin dirs")
 		host.Shutdown()
-		return runUnbound(binding, executor, logger, flags)
+		failed := make([]pluginhost.DiscoveredServer, len(report.Failed))
+		for i, f := range report.Failed {
+			failed[i] = f.Server
+		}
+		return runUnbound(binding, executor, logger, flags, fmt.Sprintf(
+			"no plugin server started (discovered: %s; failed: %s)",
+			discoveredServerNames(discovered), discoveredServerNames(failed)))
 	}
 	defer host.Shutdown()
 
@@ -2106,11 +2112,13 @@ func runManaged(
 			logger.Error("cheap-context selection failed", "err", err)
 			return 1
 		}
+		offered := discovered
 		discovered = outcome.kept
 		flags.agentScopeInUnit = narrowInUnitServers(flags.agentScopeInUnit, outcome.kept, outcome.inUnitExcluded)
 		if len(discovered) == 0 {
 			logger.Info("cheap-context: every server deselected; falling back to original plugin dirs")
-			return runUnbound(binding, executor, logger, flags)
+			return runUnbound(binding, executor, logger, flags, fmt.Sprintf(
+				"none of them was started or kept (discovered: %s)", discoveredServerNames(offered)))
 		}
 	}
 
@@ -2274,10 +2282,20 @@ func partitionReserved(host *pluginhost.Host, discovered []pluginhost.Discovered
 }
 
 // runUnbound is the shared "launch with no clown-managed MCP servers" path used
-// by every fallback in runWithPluginHost/runManaged. Routing all three through
-// one helper is what keeps them from drifting apart from each other, and from
-// the bound path, as bindings are added.
-func runUnbound(binding pluginBinding, executor Executor, logger *slog.Logger, flags parsedFlags) int {
+// by every fallback in runWithPluginHost/runManaged. Routing all of them
+// through one helper is what keeps them from drifting apart from each other,
+// and from the bound path, as bindings are added. why says what the fallback
+// found, for the refusal: under a profile's saved selection this path is
+// refused, because the original plugin dirs still declare every server and
+// the profile would run un-narrowed.
+func runUnbound(binding pluginBinding, executor Executor, logger *slog.Logger, flags parsedFlags, why string) int {
+	if err := savedSelectionFallbackRefusal(flags.cheapContextProfile, why); err != nil {
+		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
+		if logger != nil {
+			logger.Error("refused the unbound fallback under a saved selection", "err", err)
+		}
+		return 1
+	}
 	bound, err := binding.Bind(nil, nil, nil)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
@@ -2287,6 +2305,30 @@ func runUnbound(binding pluginBinding, executor Executor, logger *slog.Logger, f
 		return 1
 	}
 	return runProvider(executor, bound, logger, flags)
+}
+
+// savedSelectionFallbackRefusal is the error runUnbound refuses with when p
+// carries a saved selection (ContextServers), naming what the profile keeps
+// and what the launch found; nil when there is no saved selection.
+func savedSelectionFallbackRefusal(p *profile.Profile, found string) error {
+	if p == nil || p.ContextServers == nil {
+		return nil
+	}
+	return fmt.Errorf("profile %q keeps only the MCP servers %s, but %s; refusing to launch, since falling back to the original plugin dirs would start every plugin's servers un-narrowed",
+		p.Name, strings.Join(p.ContextServers, ", "), found)
+}
+
+// discoveredServerNames lists servers by their "<plugin>/<server>" names, or
+// "none".
+func discoveredServerNames(servers []pluginhost.DiscoveredServer) string {
+	if len(servers) == 0 {
+		return "none"
+	}
+	names := make([]string, len(servers))
+	for i, s := range servers {
+		names[i] = s.Name()
+	}
+	return strings.Join(names, ", ")
 }
 
 func runCodex(cliPath string, flags parsedFlags, prompts promptwalk.PromptResult, root *staging.Root) int {
