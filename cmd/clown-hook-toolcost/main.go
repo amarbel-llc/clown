@@ -16,9 +16,13 @@
 // (a Stop-hook exit 2 would BLOCK the agent from stopping), and the run is
 // bounded by runBudget. Its one stdout output is a {"systemMessage": ...} line
 // when the session's context floor (the first response's total input) exceeds
-// CLOWN_CONTEXT_FLOOR_PCT (default 60) percent of CLOWN_CONTEXT_WINDOW (default
-// 200000 tokens): past that, auto-compact loops. CLOWN_HOOK_DEBUG_LOG, when
-// set, receives the failures. CLOWN_DISABLE_STATSD=1 turns it off entirely.
+// CLOWN_CONTEXT_FLOOR_PCT (default 60) percent of CLOWN_CONTEXT_WINDOW: past
+// that, auto-compact loops. There is no default window: it is unknown unless
+// CLOWN_CONTEXT_WINDOW is set (clown sets it for a `[1m]` model; a profile or
+// clownfile env can set it for any other), and an unknown window means no
+// warning and no over counter. CLOWN_DISABLE_CONTEXT_FLOOR_WARNING=1 silences
+// the warning and the counter (the floor gauge stays). CLOWN_HOOK_DEBUG_LOG,
+// when set, receives the failures. CLOWN_DISABLE_STATSD=1 turns it off entirely.
 //
 // Wire-up: clown's synthesized clown-builtin-jobs plugin registers this
 // binary for Stop, SubagentStop and SessionEnd (hooks/hooks.json) — see
@@ -169,6 +173,7 @@ func run(stdin io.Reader) error {
 		Deadline: deadline,
 		Window:   envInt64("CLOWN_CONTEXT_WINDOW"),
 		FloorPct: int(envInt64("CLOWN_CONTEXT_FLOOR_PCT")),
+		FloorOff: os.Getenv("CLOWN_DISABLE_CONTEXT_FLOOR_WARNING") == "1",
 	}
 	st, metrics, err := toolcost.Run(path, toolcost.LoadState(statePath), cfg)
 	if err != nil {

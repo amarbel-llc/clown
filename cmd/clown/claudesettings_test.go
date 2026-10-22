@@ -70,7 +70,7 @@ func TestClaudeSafetySettingsJSON_ConnectorsOffOnlyWhenAsked(t *testing.T) {
 	t.Setenv("ENABLE_CLAUDEAI_MCP_SERVERS", "")
 
 	t.Setenv("CLOWN_DISABLE_CLAUDEAI_CONNECTORS", "")
-	got := claudeSafetySettingsJSON("")
+	got := claudeSafetySettingsJSON("", "")
 	if present, _ := parseConnectorSetting(t, got); present {
 		t.Errorf("connector setting must be absent by default: %s", got)
 	}
@@ -79,7 +79,7 @@ func TestClaudeSafetySettingsJSON_ConnectorsOffOnlyWhenAsked(t *testing.T) {
 	}
 
 	t.Setenv("CLOWN_DISABLE_CLAUDEAI_CONNECTORS", "1")
-	got = claudeSafetySettingsJSON("")
+	got = claudeSafetySettingsJSON("", "")
 	if present, value := parseConnectorSetting(t, got); !present || !value {
 		t.Errorf("disableClaudeAiConnectors must be true: %s", got)
 	}
@@ -89,7 +89,7 @@ func TestClaudeSafetySettingsJSON_ConnectorsOffOnlyWhenAsked(t *testing.T) {
 
 	// An operator's explicit ENABLE_CLAUDEAI_MCP_SERVERS is not overridden.
 	t.Setenv("ENABLE_CLAUDEAI_MCP_SERVERS", "true")
-	if _, ok := parseSafetyEnv(t, claudeSafetySettingsJSON(""))["ENABLE_CLAUDEAI_MCP_SERVERS"]; ok {
+	if _, ok := parseSafetyEnv(t, claudeSafetySettingsJSON("", ""))["ENABLE_CLAUDEAI_MCP_SERVERS"]; ok {
 		t.Error("an explicit ENABLE_CLAUDEAI_MCP_SERVERS must win over the profile default")
 	}
 }
@@ -103,13 +103,41 @@ func TestClaudeSafetySettingsJSON_InjectsPrincipalForHooks(t *testing.T) {
 	t.Setenv("CLAUDE_AFK_TIMEOUT_MS", "60000")
 	t.Setenv("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "0")
 
-	env := parseSafetyEnv(t, claudeSafetySettingsJSON("9eff073f-a924-48c2-b076-8b02d38f1938"))
+	env := parseSafetyEnv(t, claudeSafetySettingsJSON("9eff073f-a924-48c2-b076-8b02d38f1938", ""))
 	if got := env["CLOWN_SESSION_ID"]; got != "9eff073f-a924-48c2-b076-8b02d38f1938" {
 		t.Errorf("CLOWN_SESSION_ID = %q, want the principal", got)
 	}
 
-	if env := parseSafetyEnv(t, claudeSafetySettingsJSON("")); len(env) != 0 {
+	if env := parseSafetyEnv(t, claudeSafetySettingsJSON("", "")); len(env) != 0 {
 		t.Errorf("empty principal must not inject an env block, got %v", env)
+	}
+}
+
+// The context-floor guard's window: a `[1m]` model selects claude's 1M window,
+// so hooks get CLOWN_CONTEXT_WINDOW=1000000; a bare model id implies no window
+// (it could be 200K or 1M), so nothing is injected and the guard stays quiet;
+// an operator's own CLOWN_CONTEXT_WINDOW (env, profile env, clownfile env) wins.
+func TestClaudeSafetySettingsJSON_ContextWindowFromTheModelSuffix(t *testing.T) {
+	t.Setenv("CLOWN_CONTEXT_WINDOW", "")
+
+	for model, want := range map[string]string{
+		"fable[1m]":              "1000000",
+		"claude-sonnet-5-5[1M]":  "1000000",
+		" opus[1m] ":             "1000000",
+		"claude-sonnet-5-5":      "",
+		"fable":                  "",
+		"":                       "",
+		"claude-sonnet-4-6[1mx]": "",
+	} {
+		got := parseSafetyEnv(t, claudeSafetySettingsJSON("", model))["CLOWN_CONTEXT_WINDOW"]
+		if got != want {
+			t.Errorf("model %q: CLOWN_CONTEXT_WINDOW = %q, want %q", model, got, want)
+		}
+	}
+
+	t.Setenv("CLOWN_CONTEXT_WINDOW", "400000")
+	if v, ok := parseSafetyEnv(t, claudeSafetySettingsJSON("", "fable[1m]"))["CLOWN_CONTEXT_WINDOW"]; ok {
+		t.Errorf("an explicit CLOWN_CONTEXT_WINDOW must win, but settings injected %q", v)
 	}
 }
 
@@ -129,7 +157,7 @@ func TestClaudeSafetySettingsJSON_RemoteControlAlwaysDisabled(t *testing.T) {
 			t.Setenv("CLAUDE_AFK_TIMEOUT_MS", tc.afk)
 			t.Setenv("CLAUDE_CODE_DISABLE_AUTO_MEMORY", tc.autoMem)
 
-			present, val := parseRemoteControl(t, claudeSafetySettingsJSON(""))
+			present, val := parseRemoteControl(t, claudeSafetySettingsJSON("", ""))
 			if !present {
 				t.Fatal("remoteControlAtStartup missing; must always be injected")
 			}
@@ -146,7 +174,7 @@ func TestClaudeSafetySettingsJSON_InjectsBothWhenUnset(t *testing.T) {
 	t.Setenv("CLAUDE_AFK_TIMEOUT_MS", "") // empty == unset for os.Getenv
 	t.Setenv("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "")
 
-	env := parseSafetyEnv(t, claudeSafetySettingsJSON(""))
+	env := parseSafetyEnv(t, claudeSafetySettingsJSON("", ""))
 	if env["CLAUDE_AFK_TIMEOUT_MS"] != afkTimeoutDisableMS {
 		t.Errorf("AFK = %q, want %q", env["CLAUDE_AFK_TIMEOUT_MS"], afkTimeoutDisableMS)
 	}
@@ -164,7 +192,7 @@ func TestClaudeSafetySettingsJSON_IndependentOverride(t *testing.T) {
 	t.Setenv("CLAUDE_AFK_TIMEOUT_MS", "60000") // user keeps a normal AFK timeout
 	t.Setenv("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "")
 
-	env := parseSafetyEnv(t, claudeSafetySettingsJSON(""))
+	env := parseSafetyEnv(t, claudeSafetySettingsJSON("", ""))
 	if _, ok := env["CLAUDE_AFK_TIMEOUT_MS"]; ok {
 		t.Errorf("AFK override present; should not be injected: %v", env)
 	}
@@ -180,7 +208,7 @@ func TestClaudeSafetySettingsJSON_AllEnvOverridden(t *testing.T) {
 	t.Setenv("CLAUDE_AFK_TIMEOUT_MS", "60000")
 	t.Setenv("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "0") // user opts back into auto memory
 
-	got := claudeSafetySettingsJSON("")
+	got := claudeSafetySettingsJSON("", "")
 	if got == "" {
 		t.Fatal("settings must never be empty (remoteControlAtStartup is always injected)")
 	}

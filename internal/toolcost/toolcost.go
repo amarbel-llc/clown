@@ -157,28 +157,28 @@ type Config struct {
 	Deadline time.Time
 	// Window is the model's context window in tokens and FloorPct the share of
 	// it the first response may already occupy before auto-compact can no
-	// longer get below it (it would loop): the floor guard. Zero values use
-	// DefaultWindow and DefaultFloorPct.
+	// longer get below it (it would loop): the floor guard. A zero Window means
+	// the window is unknown, and the guard then judges nothing: the floor gauge
+	// is still emitted, but no over counter and no warning, because any assumed
+	// window would be wrong for some model (a transcript carries the API model
+	// id, not the `[1m]` suffix that selects a 1M window). A zero FloorPct uses
+	// DefaultFloorPct. FloorOff silences the judgement the same way.
 	Window   int64
 	FloorPct int
+	FloorOff bool
 }
 
-// DefaultWindow and DefaultFloorPct are the floor guard's defaults: a 200K
-// window, warn above 60% of it.
-const (
-	DefaultWindow   int64 = 200000
-	DefaultFloorPct       = 60
-)
+// DefaultFloorPct is the floor guard's default: warn above 60% of the window.
+const DefaultFloorPct = 60
 
-func (c Config) floorLimit() (window int64, pct int) {
+// floorLimit returns the guard's window and percentage, and false when it must
+// not judge: the operator turned it off, or the window is unknown.
+func (c Config) floorLimit() (window int64, pct int, ok bool) {
 	window, pct = c.Window, c.FloorPct
-	if window <= 0 {
-		window = DefaultWindow
-	}
 	if pct <= 0 {
 		pct = DefaultFloorPct
 	}
-	return window, pct
+	return window, pct, window > 0 && !c.FloorOff
 }
 
 // FloorWarning returns the one-line operator warning for a run whose metrics
@@ -195,10 +195,10 @@ func FloorWarning(ms []Metric, cfg Config) (string, bool) {
 			floor = m.Value
 		}
 	}
-	if !over {
+	window, pct, judged := cfg.floorLimit()
+	if !over || !judged {
 		return "", false
 	}
-	window, pct := cfg.floorLimit()
 	return fmt.Sprintf("clown: this session's context floor is %d tokens, over %d%% of its %d-token window; auto-compact cannot get below the floor and will loop. Trim the tool set (a leaner profile) or start a fresh session.", floor, pct, window), true
 }
 
@@ -506,7 +506,7 @@ func (r *runner) closeOpen() {
 			// so its total input IS the context floor.
 			r.w.FloorDone = true
 			r.emit("clown.context_floor."+base, KindGauge, total)
-			if window, pct := r.cfg.floorLimit(); total*100 > window*int64(pct) {
+			if window, pct, judged := r.cfg.floorLimit(); judged && total*100 > window*int64(pct) {
 				r.emit("clown.context_floor_over."+base, KindCounter, 1)
 			}
 		}

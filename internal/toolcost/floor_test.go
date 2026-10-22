@@ -69,6 +69,46 @@ func TestFloorUnderTheThresholdIsOnlyAGauge(t *testing.T) {
 	}
 }
 
+// The same 175,868-token floor that is over 60% of a 200K window is fine in a 1M
+// window; an unknown window judges nothing (no assumed 200K); and the operator's
+// off switch silences the judgement while the gauge stays.
+func TestFloorIsJudgedAgainstTheModelsWindow(t *testing.T) {
+	var f fixture
+	f.prompt("hi")
+	f.assistant("m1", u{in: 8, cc5m: 175860}, "end_turn", text("ok")) // 175868
+	p := writeFixture(t, &f)
+
+	cases := []struct {
+		name     string
+		window   int64
+		off      bool
+		wantOver bool
+	}{
+		{"200K window", 200000, false, true},
+		{"1M window", 1000000, false, false},
+		{"unknown window", 0, false, false},
+		{"200K window, switched off", 200000, true, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cfg := floorCfg()
+			cfg.Final, cfg.Window, cfg.FloorOff = true, c.window, c.off
+			_, ms := mustRun(t, p, State{}, cfg)
+			if got, n := sum(ms, "clown.context_floor.h.r.opus-5-5"); n != 1 || got != 175868 {
+				t.Errorf("floor gauge = %d (x%d), want 175868 once whatever the window", got, n)
+			}
+			got, _ := sum(ms, "clown.context_floor_over.h.r.opus-5-5")
+			if (got == 1) != c.wantOver {
+				t.Errorf("floor_over = %d, want over=%v", got, c.wantOver)
+			}
+			msg, over := FloorWarning(ms, cfg)
+			if over != c.wantOver {
+				t.Errorf("FloorWarning over = %v (%q), want %v", over, msg, c.wantOver)
+			}
+		})
+	}
+}
+
 // The floor is judged once per transcript: a later run over appended records
 // emits no floor metric, and neither does a state saved before this feature.
 func TestFloorIsCheckedOncePerTranscript(t *testing.T) {

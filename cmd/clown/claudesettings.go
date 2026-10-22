@@ -3,8 +3,26 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"strconv"
 	"strings"
 )
+
+// oneMillionWindow is the context window of a model selected with claude's
+// `[1m]` suffix (or an `opus[1m]`/`sonnet[1m]`/`fable[1m]` alias).
+const oneMillionWindow int64 = 1_000_000
+
+// contextWindowForModel is the window a launch's --model value implies, or 0
+// when it implies none. Only the `[1m]` suffix is knowable from the string
+// (claude 2.1.306 selects the 1M window by it, and whether an account may use
+// it is claude's call); a bare model id could be 200K or 1M, and a guess would
+// wrongly warn on one of them, so it stays unknown and the guard stays quiet
+// unless CLOWN_CONTEXT_WINDOW says otherwise.
+func contextWindowForModel(model string) int64 {
+	if strings.HasSuffix(strings.ToLower(strings.TrimSpace(model)), "[1m]") {
+		return oneMillionWindow
+	}
+	return 0
+}
 
 // afkTimeoutDisableMS is the CLAUDE_AFK_TIMEOUT_MS value clown injects to disable
 // Claude Code's AskUserQuestion idle auto-continue (clown#163). Around Claude
@@ -80,12 +98,19 @@ func profileDisallowedTools() []string {
 // one channel that reaches them. Empty principal omits it. This puts the key in
 // claude's whole subtree (Bash calls, subagents) — the accepted cost of hooks
 // seeing it at all; plugin hooks.json commands are not clown's to prefix.
-func claudeSafetySettingsJSON(principal string) string {
+func claudeSafetySettingsJSON(principal, model string) string {
 	settings := map[string]any{}
 
 	env := map[string]string{}
 	if principal != "" {
 		env["CLOWN_SESSION_ID"] = principal
+	}
+	// The context-floor guard needs the launch's window; an operator's own
+	// CLOWN_CONTEXT_WINDOW (env, profile env or clownfile env) is left alone.
+	if os.Getenv("CLOWN_CONTEXT_WINDOW") == "" {
+		if w := contextWindowForModel(model); w > 0 {
+			env["CLOWN_CONTEXT_WINDOW"] = strconv.FormatInt(w, 10)
+		}
 	}
 	if os.Getenv("CLAUDE_AFK_TIMEOUT_MS") == "" {
 		env["CLAUDE_AFK_TIMEOUT_MS"] = afkTimeoutDisableMS

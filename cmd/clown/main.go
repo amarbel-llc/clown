@@ -1286,7 +1286,7 @@ func runClaude(cliPath string, flags parsedFlags, prompts promptwalk.PromptResul
 			ExtraDisallowed:     profileDisallowedTools(),
 			SystemPromptFile:    prompts.SystemPromptFile,
 			AppendFragments:     prompts.AppendFragments,
-			SettingsJSON:        claudeSafetySettingsJSON(flags.identity.Key),
+			SettingsJSON:        claudeSafetySettingsJSON(flags.identity.Key, claudeFlagValue(forwarded, "--model")),
 			Staging:             root,
 		}, forwarded)
 		if err != nil {
@@ -2408,7 +2408,7 @@ func runClownbox(cliPath string, flags parsedFlags, prompts promptwalk.PromptRes
 		ExtraDisallowed:     profileDisallowedTools(),
 		SystemPromptFile:    prompts.SystemPromptFile,
 		AppendFragments:     prompts.AppendFragments,
-		SettingsJSON:        claudeSafetySettingsJSON(flags.identity.Key),
+		SettingsJSON:        claudeSafetySettingsJSON(flags.identity.Key, claudeFlagValue(flags.forwarded, "--model")),
 		Staging:             root,
 	}, flags.forwarded)
 	if err != nil {
