@@ -110,7 +110,10 @@ traffic goes through a frontend-scope proxy:
    launches are unchanged. Loopback services a unit needs are given to it as
    forwards (below), one chosen address each. Before this, a loopback
    `ANTHROPIC_BASE_URL` was appended to the allowlist, and any process in the
-   unit could CONNECT to it (audit 2026-10-22, top 3).
+   unit could CONNECT to it (audit 2026-10-22, top 3). Not covered: the
+   host's own non-loopback addresses (LAN, tailnet). An allowlisted name
+   that resolves to one reaches services bound to `0.0.0.0`; the allowlist
+   is the only guard there.
 
 Per-tool status, to be measured by the launcher's test:
 

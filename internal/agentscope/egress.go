@@ -186,8 +186,11 @@ func (p *EgressProxy) resolveNonLoopback(target string) (addrs []string, why str
 		lookup = net.LookupIP
 	}
 	ips, err := lookup(host)
-	if err != nil || len(ips) == 0 {
+	if err != nil {
 		return nil, fmt.Sprintf("it does not resolve (%v)", err)
+	}
+	if len(ips) == 0 {
+		return nil, "it resolves to no address"
 	}
 	for _, ip := range ips {
 		if ip.IsLoopback() || ip.IsUnspecified() {
