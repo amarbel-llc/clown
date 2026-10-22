@@ -514,10 +514,14 @@ A profile's saved cheap-context selection covers in-unit servers too
 (clown#290). The frontend has no catalog for a server it never started, so an
 in-unit server is kept or dropped by name against `context_servers`. A dropped
 one is never started by the relay. A kept one carries the profile's saved
-`context_excluded` names verbatim in the `--serve` file, and the relay POSTs
-them to the server's `/clown/exclude-tools` once it is healthy. The push is
-best-effort, as on the frontend: a failure is logged to the relay's stderr and
-`agent-relay.log`, and the server keeps its full catalog. Before this, the
+`context_excluded` names verbatim in the `--serve` file. Once the server is
+healthy, the relay fetches its tool catalog, resolves the saved names against
+it (exactly, or by claude's form of the rendered name: moxy renders
+`grit.branch`, claude shows `grit_branch`; clown#291), and POSTs the rendered
+names to `/clown/exclude-tools`. The push is best-effort, as on the frontend:
+a failed fetch or push, or saved names that match nothing, are logged to the
+relay's stderr and `agent-relay.log`, and the server keeps its full catalog.
+Before this, the
 replay saw only frontend-started servers and silently dropped every in-unit
 server, so a confined worker under any builtin profile had no moxy and no
 just-us.

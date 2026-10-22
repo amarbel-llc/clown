@@ -2,9 +2,14 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"code.linenisgreat.com/clown/internal/agentscope"
@@ -86,6 +91,95 @@ func TestApplyCheapContextSelection_CanaryGritKeepsJustUs(t *testing.T) {
 	}
 	if slices.Contains(excluded["just-us/just-us"], "run_recipe") {
 		t.Errorf("just-us exclusions = %v, must not drop run_recipe", excluded["just-us/just-us"])
+	}
+}
+
+func TestResolveExcludedTools(t *testing.T) {
+	live := []string{"folio.read", "grit.branch", "smith.content-get", "status", "jq.jq"}
+	saved := []string{"grit_branch", "smith_content-get", "status", "gone_tool", "jq.jq"}
+	got := resolveExcludedTools(saved, live)
+	want := []string{"grit.branch", "smith.content-get", "status", "jq.jq"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("resolveExcludedTools = %v, want %v", got, want)
+	}
+	if got := unmatchedExclusions(saved, live); !reflect.DeepEqual(got, []string{"gone_tool"}) {
+		t.Errorf("unmatchedExclusions = %v, want [gone_tool]", got)
+	}
+}
+
+// moxyRendered renders a claude-side moxy tool name the way moxy's default
+// "{server}.{tool}" template does: the server is the part before the first
+// "_" (no moxy server name contains one); a meta tool has no server.
+func moxyRendered(claudeName string) string {
+	server, tool, ok := strings.Cut(claudeName, "_")
+	if !ok {
+		return claudeName
+	}
+	return server + "." + tool
+}
+
+// TestBuiltinMoxyExclusionsResolveAgainstMoxyRendering is the clown#291
+// regression: the builtins list moxy tools as claude shows them ("grit_branch"),
+// moxy renders "grit.branch", and exact matching excluded nothing.
+func TestBuiltinMoxyExclusionsResolveAgainstMoxyRendering(t *testing.T) {
+	builtins, err := profile.Builtin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range builtins {
+		saved := p.ContextExcluded["moxy/moxy"]
+		if len(saved) == 0 {
+			continue
+		}
+		t.Run(p.Name, func(t *testing.T) {
+			var live, want []string
+			for _, name := range saved {
+				live = append(live, moxyRendered(name))
+				want = append(want, moxyRendered(name))
+			}
+			live = append(live, "folio.read", "rg.search") // kept by every template
+			if got := resolveExcludedTools(saved, live); !reflect.DeepEqual(got, want) {
+				t.Errorf("resolved %d of %d saved names; missing %v", len(got), len(saved), slices.DeleteFunc(slices.Clone(want), func(n string) bool { return slices.Contains(got, n) }))
+			}
+		})
+	}
+}
+
+// TestApplyInUnitExclusionsPushesRenderedNames drives the relay's push against
+// a fake server speaking MCP initialize/tools/list and /clown/exclude-tools.
+func TestApplyInUnitExclusionsPushesRenderedNames(t *testing.T) {
+	var pushed []string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID     string `json:"id"`
+			Method string `json:"method"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		w.Header().Set("Content-Type", "application/json")
+		switch req.Method {
+		case "initialize":
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%q,"result":{}}`, req.ID)
+		case "tools/list":
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%q,"result":{"tools":[{"name":"folio.read"},{"name":"grit.branch"},{"name":"chix.build"}]}}`, req.ID)
+		}
+	})
+	mux.HandleFunc("/clown/exclude-tools", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Exclude []string `json:"exclude"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		pushed = body.Exclude
+		_ = json.NewEncoder(w).Encode(body)
+	})
+	fake := httptest.NewServer(mux)
+	defer fake.Close()
+
+	srv := (&pluginhost.Host{}).Reserve(pluginhost.DiscoveredServer{PluginName: "moxy", ServerName: "moxy"}, strings.TrimPrefix(fake.URL, "http://"))
+	applyInUnitExclusions(srv, []string{"grit_branch", "chix_build", "smith_pr-create"}, slog.Default())
+
+	if want := []string{"grit.branch", "chix.build"}; !reflect.DeepEqual(pushed, want) {
+		t.Errorf("pushed %v, want %v", pushed, want)
 	}
 }
 

@@ -585,14 +585,7 @@ func startInUnitServers(servers []agentscope.InUnitServer) []agentscope.Relay {
 				return
 			}
 			if len(s.Exclude) > 0 {
-				// Best-effort, as on the frontend (applyCheapContextSelection):
-				// a failed push leaves the server's full catalog visible.
-				if err := pushExcludeTools(context.Background(), srv, s.Exclude); err != nil {
-					fmt.Fprintf(os.Stderr, "clown agent-relay: in-unit server %s: tool exclusions not applied: %v\n", s.Name, err)
-					logger.Warn("tool exclusions not applied", "server", s.Name, "err", err)
-				} else {
-					logger.Info("tool exclusions applied", "server", s.Name, "count", len(s.Exclude))
-				}
+				applyInUnitExclusions(srv, s.Exclude, logger)
 			}
 			relays[i] = agentscope.Relay{Listen: s.Listen, Target: srv.Handshake().Address}
 		}(i, s)
@@ -605,6 +598,39 @@ func startInUnitServers(servers []agentscope.InUnitServer) []agentscope.Relay {
 		}
 	}
 	return started
+}
+
+// applyInUnitExclusions resolves a profile's saved exclusions against the
+// catalog the started server renders and pushes the result, as the frontend
+// does for the servers it starts (applyCheapContextSelection). Best-effort: a
+// failure leaves the server's full catalog visible and is reported on stderr
+// and in agent-relay.log.
+func applyInUnitExclusions(srv *pluginhost.ManagedServer, saved []string, logger *slog.Logger) {
+	ctx := context.Background()
+	tools, ok := (&pluginhost.Host{Logger: logger}).FetchToolCatalog(ctx, srv)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "clown agent-relay: in-unit server %s: tool exclusions not applied: its tool catalog could not be fetched\n", srv.Name)
+		logger.Warn("tool exclusions not applied: no tool catalog", "server", srv.Name)
+		return
+	}
+	live := make([]string, len(tools))
+	for i, t := range tools {
+		live[i] = t.Name
+	}
+	excluded := resolveExcludedTools(saved, live)
+	logger.Info("tool exclusions resolved", "server", srv.Name, "saved", len(saved), "matched", len(excluded),
+		"rendered", excluded, "unmatched", unmatchedExclusions(saved, live))
+	if len(excluded) == 0 {
+		fmt.Fprintf(os.Stderr, "clown agent-relay: in-unit server %s: none of the profile's %d excluded tool names matches its catalog\n", srv.Name, len(saved))
+		logger.Warn("tool exclusions matched nothing", "server", srv.Name, "saved", len(saved), "catalog", len(live))
+		return
+	}
+	if err := pushExcludeTools(ctx, srv, excluded); err != nil {
+		fmt.Fprintf(os.Stderr, "clown agent-relay: in-unit server %s: tool exclusions not applied: %v\n", srv.Name, err)
+		logger.Warn("tool exclusions not applied", "server", srv.Name, "err", err)
+		return
+	}
+	logger.Info("tool exclusions applied", "server", srv.Name, "saved", len(saved), "pushed", len(excluded), "catalog", len(live))
 }
 
 // runEgressConnect is `clown egress-connect SOCK HOST PORT`, an ssh

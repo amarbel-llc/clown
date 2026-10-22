@@ -194,29 +194,70 @@ func selectionFromSavedProfile(saved *profile.Profile, catalogs []serverCatalog)
 		}
 		if c.inUnit {
 			// No live catalog on the frontend: hand the saved names to the
-			// unit verbatim; the server itself ignores names it does not have.
+			// unit, whose relay resolves them against the catalog it fetches.
 			result.excludedTools[name] = append([]string(nil), savedExcluded...)
 			continue
 		}
-		liveTools := make(map[string]bool, len(savedExcluded))
+		var liveTools []string
 		for _, g := range c.groups {
-			for _, toolName := range g.tools {
-				liveTools[toolName] = true
-			}
+			liveTools = append(liveTools, g.tools...)
 		}
-		var excluded []string
-		for _, toolName := range savedExcluded {
-			if liveTools[toolName] {
-				excluded = append(excluded, toolName)
-			}
-			// A saved tool name absent from the live catalog is silently
-			// dropped — it no longer exists, so there is nothing to exclude.
-		}
-		if len(excluded) > 0 {
+		// A saved tool name absent from the live catalog is silently dropped:
+		// it no longer exists, so there is nothing to exclude.
+		if excluded := resolveExcludedTools(savedExcluded, liveTools); len(excluded) > 0 {
 			result.excludedTools[name] = excluded
 		}
 	}
 	return result, true
+}
+
+// resolveExcludedTools maps saved exclusion names onto the names a server
+// actually renders, which is what its /clown/exclude-tools matches. A saved
+// name matches a live one exactly or by the live name's claude-safe form:
+// claude shows moxy's "grit.branch" as "grit_branch", and the builtin
+// profiles' lists were taken from claude transcripts (clown#291). The result
+// is in live order, without duplicates.
+func resolveExcludedTools(saved, live []string) []string {
+	want := make(map[string]bool, len(saved))
+	for _, name := range saved {
+		want[name] = true
+	}
+	var out []string
+	for _, name := range live {
+		if want[name] || want[claudeSafeToolName(name)] {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// unmatchedExclusions are the saved names resolveExcludedTools matches to no
+// live name, for the log that tells "pushed" from "matched".
+func unmatchedExclusions(saved, live []string) []string {
+	have := make(map[string]bool, 2*len(live))
+	for _, name := range live {
+		have[name] = true
+		have[claudeSafeToolName(name)] = true
+	}
+	var out []string
+	for _, name := range saved {
+		if !have[name] {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// claudeSafeToolName is name with every character outside [A-Za-z0-9_-]
+// replaced by "_", the form claude gives an MCP tool name.
+func claudeSafeToolName(name string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-':
+			return r
+		}
+		return '_'
+	}, name)
 }
 
 // selectServers renders --cheap-context's picker as ONE screen and ONE
