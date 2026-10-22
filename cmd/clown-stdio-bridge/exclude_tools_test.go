@@ -242,6 +242,29 @@ func TestHTTP_ExcludedToolCallIsRefused(t *testing.T) {
 	}
 }
 
+func TestRefuseExcludedCall(t *testing.T) {
+	h := &httpHandler{}
+	h.setExcludeTools([]string{"folio_read"})
+	cases := []struct {
+		name, body         string
+		refused, hasAnswer bool
+	}{
+		{"excluded call", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"folio_read"}}`, true, true},
+		{"kept call", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"grit_status"}}`, false, false},
+		{"case-variant key cannot hide the name", `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"folio_read","NAME":"grit_status"}}`, true, true},
+		{"id-less call is dropped, not forwarded", `{"jsonrpc":"2.0","method":"tools/call","params":{"name":"folio_read"}}`, true, false},
+		{"other method", `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`, false, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			resp, refused := h.refuseExcludedCall([]byte(c.body))
+			if refused != c.refused || (resp != nil) != c.hasAnswer {
+				t.Errorf("refused=%v answer=%s, want refused=%v answer=%v", refused, resp, c.refused, c.hasAnswer)
+			}
+		})
+	}
+}
+
 // TestHandleExcludeTools_Contract verifies GET/POST /clown/exclude-tools
 // against the contract clown-stdio-bridge now shares with moxy's
 // independently-shipped endpoint (amarbel-llc/moxy#399): body key

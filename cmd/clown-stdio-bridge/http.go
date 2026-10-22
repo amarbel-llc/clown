@@ -257,6 +257,12 @@ func (h *httpHandler) handleMCP(w http.ResponseWriter, r *http.Request) {
 		}
 		if resp, refused := h.refuseExcludedCall(body); refused {
 			h.logger.Printf("clown-stdio-bridge: refused tools/call of an excluded tool")
+			if resp == nil {
+				// An id-less call is a notification: nothing to answer, and
+				// still never forwarded.
+				w.WriteHeader(http.StatusAccepted)
+				return
+			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write(resp)
 			return
@@ -266,30 +272,35 @@ func (h *httpHandler) handleMCP(w http.ResponseWriter, r *http.Request) {
 	h.mcp.HandleMCP(w, r)
 }
 
-// refuseExcludedCall returns the JSON-RPC response refusing body when it is a
-// tools/call request whose tool is in the exclude set.
+// refuseExcludedCall reports whether body is a tools/call whose tool is in the
+// exclude set, with the JSON-RPC response refusing it (nil for an id-less
+// call). Keys are matched exactly, as the child's own decoder does, not with
+// encoding/json's case-insensitive struct matching, which a crafted
+// {"name":"excluded","NAME":"other"} could otherwise slip past.
 func (h *httpHandler) refuseExcludedCall(body []byte) ([]byte, bool) {
-	var req struct {
-		ID     json.RawMessage `json:"id"`
-		Method string          `json:"method"`
-		Params struct {
-			Name string `json:"name"`
-		} `json:"params"`
-	}
-	if json.Unmarshal(body, &req) != nil || req.Method != "tools/call" || len(req.ID) == 0 {
+	var req, params map[string]json.RawMessage
+	var method, name string
+	if json.Unmarshal(body, &req) != nil ||
+		json.Unmarshal(req["method"], &method) != nil || method != "tools/call" ||
+		json.Unmarshal(req["params"], &params) != nil ||
+		json.Unmarshal(params["name"], &name) != nil {
 		return nil, false
 	}
 	h.excludeMu.RLock()
-	excluded := h.excludeTools[req.Params.Name]
+	excluded := h.excludeTools[name]
 	h.excludeMu.RUnlock()
 	if !excluded {
 		return nil, false
 	}
+	id := req["id"]
+	if len(id) == 0 {
+		return nil, true
+	}
 	resp, err := json.Marshal(map[string]any{
 		"jsonrpc": "2.0",
-		"id":      req.ID,
+		"id":      id,
 		"result": map[string]any{
-			"content": []map[string]string{{"type": "text", "text": fmt.Sprintf("tool %q is excluded for this session", req.Params.Name)}},
+			"content": []map[string]string{{"type": "text", "text": fmt.Sprintf("tool %q is excluded for this session", name)}},
 			"isError": true,
 		},
 	})
