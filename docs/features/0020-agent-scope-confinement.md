@@ -531,9 +531,13 @@ servers in `$HOME/.cache/clown/exclusion-readback.json` in the agent home.
 
 What the readback proves, and what it does not:
 - It checks LISTING only; the record says so (`"checks": "listing"`). moxy
-  refuses an excluded tool at call time too, but `clown-stdio-bridge` only
-  filters `tools/list`. So for a bridged server, a tool absent from the
-  listing was still callable by name until the bridge refused excluded calls.
+  refuses an excluded tool at call time too. `clown-stdio-bridge` used to only
+  filter `tools/list`, so for a bridged server (spinclass, just-us) a tool
+  absent from the listing was still callable by name. The bridge now answers
+  a `tools/call` naming an excluded tool itself, with moxy's
+  "excluded for this session" tool error, and never forwards it. That is
+  enforced only as far as the bridge process is: in the unit, the bridge is
+  the worker's own.
 - In-unit servers, and their `/clown/exclude-tools` route, run inside the
   worker's unit on its loopback. A worker able to reach that route could
   change its own exclusions. The in-unit record is written by that same unit.

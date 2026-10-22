@@ -7,7 +7,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -156,6 +158,87 @@ func TestHTTP_ExcludeToolsEndpointFiltersToolsList(t *testing.T) {
 	}
 	if len(parsed.Result.Tools) != 1 || parsed.Result.Tools[0].Name != "grit_status" {
 		t.Errorf("tools/list response = %+v, want only grit_status", parsed.Result.Tools)
+	}
+}
+
+// TestHTTP_ExcludedToolCallIsRefused: hiding a tool from tools/list is not
+// enough, so a tools/call naming an excluded tool is answered by the bridge
+// with moxy's tool-error shape and never reaches the child, while a call to
+// a kept tool still does.
+func TestHTTP_ExcludedToolCallIsRefused(t *testing.T) {
+	t.Setenv("CLOWN_BRIDGE_HEARTBEAT_INTERVAL", "0")
+
+	stdinR, stdinW := io.Pipe()
+	stdoutR, stdoutW := io.Pipe()
+	tr := newTranslator(stdinW, stdoutR, nullLogger{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = tr.Run(ctx) }()
+	defer func() {
+		_ = stdinR.Close()
+		_ = stdinW.Close()
+		_ = stdoutR.Close()
+		_ = stdoutW.Close()
+	}()
+
+	var mu sync.Mutex
+	var called []string
+	go func() {
+		dec := json.NewDecoder(stdinR)
+		for {
+			var msg struct {
+				ID     any    `json:"id"`
+				Method string `json:"method"`
+				Params struct {
+					Name string `json:"name"`
+				} `json:"params"`
+			}
+			if err := dec.Decode(&msg); err != nil {
+				return
+			}
+			if msg.Method != "tools/call" {
+				continue
+			}
+			mu.Lock()
+			called = append(called, msg.Params.Name)
+			mu.Unlock()
+			out, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": msg.ID, "result": map[string]any{"content": []any{}}})
+			_, _ = stdoutW.Write(append(out, '\n'))
+		}
+	}()
+
+	h := newHTTPHandler(tr, nullLogger{}, nil)
+	srv := httptest.NewServer(http.HandlerFunc(h.handleMCP))
+	defer srv.Close()
+	h.setExcludeTools([]string{"folio_read"})
+
+	call := func(name string) map[string]any {
+		t.Helper()
+		body := `{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"` + name + `","arguments":{}}}`
+		resp, err := http.Post(srv.URL, "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatalf("POST: %v", err)
+		}
+		defer resp.Body.Close()
+		var parsed map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+			t.Fatalf("response is not valid JSON: %v", err)
+		}
+		return parsed
+	}
+
+	refused := call("folio_read")
+	result, _ := refused["result"].(map[string]any)
+	if result["isError"] != true || refused["id"] != float64(7) {
+		t.Errorf("excluded call answered %v, want an isError result for id 7", refused)
+	}
+	if kept := call("grit_status"); kept["result"] == nil {
+		t.Errorf("kept call answered %v, want the child's result", kept)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Equal(called, []string{"grit_status"}) {
+		t.Errorf("child saw calls %v, want only grit_status", called)
 	}
 }
 

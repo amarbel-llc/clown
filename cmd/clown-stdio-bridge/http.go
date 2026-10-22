@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"sync"
@@ -241,6 +243,58 @@ func (h *httpHandler) filterResponse(method string, body json.RawMessage) json.R
 // handleMCP routes the /mcp endpoint at the mcphttp spine. Retained as a
 // method so the wiring in main.go and the bridge's tests keep a stable entry
 // point.
+//
+// A tools/call naming an excluded tool is answered here, never forwarded:
+// hiding a tool from tools/list alone leaves it callable by anyone who knows
+// its name. The answer is the tool-error result moxy gives for its own
+// excluded tools, so a caller sees one shape whichever server refused.
 func (h *httpHandler) handleMCP(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPost && mcphttp.ValidateOrigin(r) && len(h.excludedToolNames()) > 0 {
+		body, err := io.ReadAll(io.LimitReader(r.Body, 1024*1024))
+		if err != nil {
+			http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if resp, refused := h.refuseExcludedCall(body); refused {
+			h.logger.Printf("clown-stdio-bridge: refused tools/call of an excluded tool")
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(resp)
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
+	}
 	h.mcp.HandleMCP(w, r)
+}
+
+// refuseExcludedCall returns the JSON-RPC response refusing body when it is a
+// tools/call request whose tool is in the exclude set.
+func (h *httpHandler) refuseExcludedCall(body []byte) ([]byte, bool) {
+	var req struct {
+		ID     json.RawMessage `json:"id"`
+		Method string          `json:"method"`
+		Params struct {
+			Name string `json:"name"`
+		} `json:"params"`
+	}
+	if json.Unmarshal(body, &req) != nil || req.Method != "tools/call" || len(req.ID) == 0 {
+		return nil, false
+	}
+	h.excludeMu.RLock()
+	excluded := h.excludeTools[req.Params.Name]
+	h.excludeMu.RUnlock()
+	if !excluded {
+		return nil, false
+	}
+	resp, err := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      req.ID,
+		"result": map[string]any{
+			"content": []map[string]string{{"type": "text", "text": fmt.Sprintf("tool %q is excluded for this session", req.Params.Name)}},
+			"isError": true,
+		},
+	})
+	if err != nil {
+		return nil, false
+	}
+	return resp, true
 }
