@@ -303,6 +303,22 @@ func TestApplyCheapContextSelection_ProfileRefusesUnconfirmedExclusions(t *testi
 	}
 }
 
+// An in-unit server's CLOWN_BIN is this clown, not one inherited into the
+// frontend's env (round R: two clown store paths in one unit).
+func TestReserveInUnitServersUseThisClown(t *testing.T) {
+	host := &pluginhost.Host{BaseEnv: map[string]string{"CLOWN_BIN": "/nix/store/old/bin/clown", "CLOWN_SESSION_ID": "k"}}
+	servers := reserveInUnitServers(host, []pluginhost.DiscoveredServer{{PluginName: "moxy", ServerName: "moxy"}}, nil)
+	if len(servers) != 1 {
+		t.Fatalf("servers = %+v", servers)
+	}
+	if got := servers[0].Env["CLOWN_BIN"]; got != clownExePath() {
+		t.Errorf("CLOWN_BIN = %q, want this clown %q", got, clownExePath())
+	}
+	if _, ok := servers[0].Env["CLOWN_SESSION_ID"]; ok {
+		t.Error("CLOWN_SESSION_ID reached an in-unit server's env")
+	}
+}
+
 func TestNarrowInUnitServers(t *testing.T) {
 	servers := []agentscope.InUnitServer{{Name: "moxy/moxy"}, {Name: "just-us/just-us"}}
 	kept := []pluginhost.DiscoveredServer{{PluginName: "moxy", ServerName: "moxy"}}

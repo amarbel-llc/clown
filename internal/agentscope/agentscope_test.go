@@ -205,6 +205,38 @@ func TestClownUnitNamesTheUnitAndCannotBeSetFromOutside(t *testing.T) {
 	}
 }
 
+// The unit's CLOWN_BIN is the binary the frontend runs the unit with (the
+// shim), never an inherited one: round R saw in-unit producers on an older
+// clown than the unit's own because the frontend env carried a stray CLOWN_BIN.
+func TestClownBinIsTheShimWhateverWasInherited(t *testing.T) {
+	for name, mutate := range map[string]func(*Launch){
+		"none inherited": func(*Launch) {},
+		"inherited a different clown": func(l *Launch) {
+			l.FrontendEnv = append(l.FrontendEnv, "CLOWN_BIN=/nix/store/old/bin/clown")
+		},
+		"extra env and spec set one": func(l *Launch) {
+			l.FrontendEnv = append(l.FrontendEnv, "CLOWN_BIN=/nix/store/old/bin/clown")
+			l.ExtraEnv = []string{"CLOWN_BIN=/nix/store/extra/bin/clown"}
+			l.Spec.Env = map[string]string{"CLOWN_BIN": "/nix/store/spec/bin/clown"}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			l := testLaunch()
+			mutate(&l)
+			set, _ := l.environment()
+			var got []string
+			for _, kv := range set {
+				if strings.HasPrefix(kv, "CLOWN_BIN=") {
+					got = append(got, kv)
+				}
+			}
+			if !slices.Equal(got, []string{"CLOWN_BIN=" + l.Shim[0]}) {
+				t.Errorf("CLOWN_BIN entries = %v, want exactly the shim %s", got, l.Shim[0])
+			}
+		})
+	}
+}
+
 // clown#272: NIX_CONFIG carries access-tokens on the dev hosts. No nix
 // configuration key may reach the unit, whatever path it comes by.
 func TestNixConfigurationNeverReachesTheUnit(t *testing.T) {

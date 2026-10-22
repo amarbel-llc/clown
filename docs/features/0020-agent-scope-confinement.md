@@ -180,8 +180,15 @@ and clown unsets it. clown then sets exactly the following.
 - `PATH`, `TERM`, `COLORTERM`, `TERMINFO`, `TERMINFO_DIRS`, `LANG`, `TZ`,
   `TZDIR`, `LOCALE_ARCHIVE`, `USER`, `LOGNAME`, `SHELL`
 - `SSL_CERT_FILE`, `SSL_CERT_DIR`, `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`
-- `CLOWN_BIN`, `CLOWN_NAME`, `CLOWN_GROUP_ID`, `CLOWN_GROUP_DESCRIPTION`,
+- `CLOWN_NAME`, `CLOWN_GROUP_ID`, `CLOWN_GROUP_DESCRIPTION`,
   `CLOWN_XMPP_VHOST`
+
+`CLOWN_BIN` is no longer passed (2026-10-22, round R). It used to be copied
+from the frontend's env, and the frontend honors an inherited `CLOWN_BIN`. A
+stray value from the spawner's environment then put the unit's producers
+(`${CLOWN_BIN:-clown}`) and in-unit servers on an older clown build than the
+one running the unit's shim and egress: round R saw two clown store paths of the
+same `0.4.4` version string in one unit. Now clown sets it (below).
 
 **Pass prefixes** (`passPrefixes` in `internal/agentscope/unit.go`). Every key
 with one of these prefixes passes unless it is scrubbed. A prefix is a blanket
@@ -225,6 +232,9 @@ where the fetcher supports it.
   state then land inside the bound worktree instead of failing on the hidden
   real home.
 - The proxy variables (see Egress).
+- `CLOWN_BIN` is the shim's own binary, the clown the frontend runs the unit
+  with. It overrides anything the frontend env, the provider binding or the
+  spec's `env{}` carries, and in-unit servers get the same path.
 - `STATSD_HOST`/`STATSD_PORT` (the in-unit statsd relay), or
   `CLOWN_DISABLE_STATSD=1` when the frontend has it.
 - `SSH_AUTH_SOCK`, only when the spec passes the agent socket.

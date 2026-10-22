@@ -210,7 +210,7 @@ var passKeys = map[string]bool{
 	"USER": true, "LOGNAME": true, "SHELL": true,
 	"SSL_CERT_FILE": true, "SSL_CERT_DIR": true, "CURL_CA_BUNDLE": true, "GIT_SSL_CAINFO": true,
 	"XDG_RUNTIME_DIR": true,
-	"CLOWN_BIN":       true, "CLOWN_NAME": true, "CLOWN_GROUP_ID": true, "CLOWN_GROUP_DESCRIPTION": true, "CLOWN_XMPP_VHOST": true,
+	"CLOWN_NAME":      true, "CLOWN_GROUP_ID": true, "CLOWN_GROUP_DESCRIPTION": true, "CLOWN_XMPP_VHOST": true,
 }
 
 // passPrefixes are copied verbatim from the frontend when set there, minus
@@ -277,6 +277,14 @@ func (l Launch) environment() (set, unset []string) {
 	// absent. A hint for choosing defer-vs-ask, not a boundary: an agent inside
 	// can still set any variable in its own processes.
 	env["CLOWN_UNIT"] = l.Unit
+	// The frontend decides which clown the unit runs: CLOWN_BIN (what
+	// producers and in-unit servers call) is the shim's own binary, never a
+	// value inherited from the frontend's env or set by the spec. A stray
+	// inherited CLOWN_BIN once put in-unit producers on an older clown.
+	delete(env, "CLOWN_BIN")
+	if len(l.Shim) > 0 {
+		env["CLOWN_BIN"] = l.Shim[0]
+	}
 	// State, log and data dirs point at the operator's paths, where clown and
 	// the spec bind specific subdirs (job platform, hooks, moxy's logs, the
 	// madder store), so tools inside agree with the frontend on paths. Config

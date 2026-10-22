@@ -2302,9 +2302,11 @@ func reserveInUnitServers(host *pluginhost.Host, discovered []pluginhost.Discove
 			command = filepath.Join(d.PluginDir, command)
 		}
 		// Not host.BaseEnv: its CLOWN_SESSION_ID must not land in a file or
-		// an environ the agent can read; CLOWN_BIN is all a producer needs.
+		// an environ the agent can read, and its CLOWN_BIN may be one inherited
+		// from the frontend's env. CLOWN_BIN is all a producer needs, and it is
+		// this clown, the one the unit runs.
 		env := map[string]string{}
-		if bin := host.BaseEnv["CLOWN_BIN"]; bin != "" {
+		if bin := clownExePath(); bin != "" {
 			env["CLOWN_BIN"] = bin
 		}
 		for k, v := range d.Def.Env {
