@@ -72,6 +72,10 @@ type EgressProxy struct {
 	Logger *slog.Logger
 	// PeerCgroup reads a caller's cgroup from its pid; tests replace it.
 	PeerCgroup func(pid int) (string, error)
+	// LookupIP and Dial resolve and connect an allowed target; nil means the
+	// system resolver and a TCP dial. Tests replace them.
+	LookupIP func(host string) ([]net.IP, error)
+	Dial     func(addr string) (net.Conn, error)
 
 	mu sync.Mutex
 	ln net.Listener
@@ -134,7 +138,18 @@ func (p *EgressProxy) handle(c net.Conn) {
 		reply(c, http.StatusForbidden, "destination not on the agent scope's egress allowlist: "+target)
 		return
 	}
-	up, err := net.DialTimeout("tcp", target, 15*time.Second)
+	addrs, why := p.resolveNonLoopback(target)
+	if why != "" {
+		p.log("egress: refused loopback destination", "target", target, "why", why)
+		reply(c, http.StatusForbidden, "destination "+target+" refused: "+why+"; an agent unit never reaches the host's loopback")
+		return
+	}
+	var up net.Conn
+	for _, addr := range addrs {
+		if up, err = p.dial(addr); err == nil {
+			break
+		}
+	}
 	if err != nil {
 		reply(c, http.StatusBadGateway, err.Error())
 		return
@@ -151,6 +166,55 @@ func (p *EgressProxy) handle(c net.Conn) {
 		}
 	}
 	splice(c, up)
+}
+
+// resolveNonLoopback resolves target's host and returns the addresses to dial,
+// its resolved IPs with the port, or why the target is refused: a loopback or
+// unspecified host, by name or by any address it resolves to. Dialling the
+// checked IPs, not the name, keeps a second lookup from swapping in a
+// loopback address.
+func (p *EgressProxy) resolveNonLoopback(target string) (addrs []string, why string) {
+	host, port, err := net.SplitHostPort(target)
+	if err != nil {
+		return nil, "malformed host:port"
+	}
+	if IsLoopbackHost(host) {
+		return nil, "it names the loopback"
+	}
+	lookup := p.LookupIP
+	if lookup == nil {
+		lookup = net.LookupIP
+	}
+	ips, err := lookup(host)
+	if err != nil || len(ips) == 0 {
+		return nil, fmt.Sprintf("it does not resolve (%v)", err)
+	}
+	for _, ip := range ips {
+		if ip.IsLoopback() || ip.IsUnspecified() {
+			return nil, "it resolves to the loopback address " + ip.String()
+		}
+		addrs = append(addrs, net.JoinHostPort(ip.String(), port))
+	}
+	return addrs, ""
+}
+
+func (p *EgressProxy) dial(addr string) (net.Conn, error) {
+	if p.Dial != nil {
+		return p.Dial(addr)
+	}
+	return net.DialTimeout("tcp", addr, 15*time.Second)
+}
+
+// IsLoopbackHost reports whether host is the loopback by its literal form:
+// localhost (or a name under .localhost), 127.0.0.0/8, ::1, or an
+// unspecified address, which connects to the loopback too.
+func IsLoopbackHost(host string) bool {
+	host = strings.ToLower(strings.TrimSuffix(strings.Trim(host, "[]"), "."))
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && (ip.IsLoopback() || ip.IsUnspecified())
 }
 
 // authorize checks the caller's cgroup via SO_PEERCRED: only processes in the

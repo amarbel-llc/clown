@@ -100,6 +100,17 @@ traffic goes through a frontend-scope proxy:
    (`code.linenisgreat.com`, `forge.starbrandshoes.com`), `github.com`,
    `cache.nixos.org`, and the krone nix cache. Refusals are logged in the
    frontend.
+5. The proxy never reaches the host's loopback, whatever the allowlist says.
+   A `CONNECT` to `localhost` (or a name under `.localhost`), `127.0.0.0/8`,
+   `::1`, an unspecified address, or a name that resolves to any of these is
+   refused with a 403 that names the destination and the reason. The proxy
+   dials the addresses it checked, not the name again. A spec `egress_allow`
+   entry naming the loopback refuses the launch, naming the entry; a loopback
+   `ANTHROPIC_BASE_URL` is not added to the allowlist (logged). Unconfined
+   launches are unchanged. Loopback services a unit needs are given to it as
+   forwards (below), one chosen address each. Before this, a loopback
+   `ANTHROPIC_BASE_URL` was appended to the allowlist, and any process in the
+   unit could CONNECT to it (audit 2026-10-22, top 3).
 
 Per-tool status, to be measured by the launcher's test:
 

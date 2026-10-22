@@ -291,3 +291,28 @@ run_probe() {
   [ "$(grep -c '^FAIL' <<<"$output")" -eq 0 ]
   grep -c '^PASS' <<<"$output" | grep -qx 6
 }
+
+@test "agent_scope: the egress proxy never tunnels to the host's loopback" {
+  start_host_listeners
+  # A loopback model API (a local juggler) used to be appended to the
+  # allowlist, which let anything in the unit CONNECT to it.
+  ANTHROPIC_BASE_URL="http://127.0.0.1:$PORT" run run_in_unit '
+    for target in "127.0.0.1:'"$PORT"'" "localhost:'"$PORT"'"; do
+      code=$(curl -s -o /dev/null --noproxy "" -x "$HTTPS_PROXY" -p -m 5 -w "%{http_connect}" "http://$target/")
+      echo "connect $target -> $code"
+    done'
+  echo "$output"
+  [ "$status" -eq 0 ]
+  grep -qx "connect 127.0.0.1:$PORT -> 403" <<<"$output"
+  grep -qx "connect localhost:$PORT -> 403" <<<"$output"
+}
+
+@test "agent_scope: a loopback egress_allow entry refuses the launch, naming it" {
+  jq --arg e "127.0.0.1:8080" '.egress_allow = ["api.anthropic.com:443", $e]' \
+    "$WT/spec.json" >"$WT/spec.new" && mv "$WT/spec.new" "$WT/spec.json"
+  run run_in_unit 'echo UNIT-RAN'
+  echo "$output"
+  [ "$status" -ne 0 ]
+  [[ $output != *UNIT-RAN* ]]
+  [[ $output == *'"127.0.0.1:8080"'*loopback* ]]
+}

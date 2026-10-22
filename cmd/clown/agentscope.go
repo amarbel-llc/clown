@@ -137,8 +137,7 @@ func prepareAgentScope(specPath string, argv, extraEnv []string) (agentscope.Lau
 // recorded on the launch (EgressSocket, Forwards, StatsdSocket) so the unit
 // binds them and the shim relays them.
 //
-// The proxy's allowlist is the spec's egress_allow, else the default, plus
-// the host of ANTHROPIC_BASE_URL when clown routes the model API elsewhere.
+// The proxy's allowlist is agentEgressAllowlist's; no loopback is on it.
 //
 // The same directory holds the read-only files the unit is given: the list of
 // in-unit servers for `clown agent-relay`, and the in-unit moxy's global
@@ -168,12 +167,10 @@ func startFrontendEndpoints(launch *agentscope.Launch, forwardAddrs []string, in
 		return p, nil
 	}
 
-	allow := agentscope.Allowlist(launch.Spec.EgressAllow)
-	if len(allow) == 0 {
-		allow = agentscope.DefaultEgressAllow
-	}
-	if hp := baseURLHostPort(os.Getenv("ANTHROPIC_BASE_URL")); hp != "" {
-		allow = append(append(agentscope.Allowlist{}, allow...), hp)
+	allow, err := agentEgressAllowlist(launch.Spec.EgressAllow, os.Getenv("ANTHROPIC_BASE_URL"), logger)
+	if err != nil {
+		stop()
+		return nil, err
 	}
 	proxy := &agentscope.EgressProxy{Allow: allow, Unit: launch.Unit, Logger: logger}
 	sock, err := socket("egress.sock")
@@ -318,6 +315,35 @@ func baseURLHostPort(raw string) string {
 		return u.Host + ":80"
 	}
 	return u.Host + ":443"
+}
+
+// agentEgressAllowlist is the egress proxy's allowlist: the spec's
+// egress_allow, else the default, plus the host of baseURL when clown routes
+// the model API elsewhere. A loopback entry in the spec refuses the launch; a
+// loopback baseURL is not added, since the proxy refuses loopback targets and
+// an agent unit never reaches the host's loopback.
+func agentEgressAllowlist(specAllow []string, baseURL string, logger *slog.Logger) (agentscope.Allowlist, error) {
+	for _, e := range specAllow {
+		host, _, err := net.SplitHostPort(e)
+		if err == nil && agentscope.IsLoopbackHost(host) {
+			return nil, fmt.Errorf("agent scope spec egress_allow entry %q names the host's loopback; an agent unit never reaches it (forward a specific service instead)", e)
+		}
+	}
+	allow := agentscope.Allowlist(specAllow)
+	if len(allow) == 0 {
+		allow = agentscope.DefaultEgressAllow
+	}
+	hp := baseURLHostPort(baseURL)
+	if hp == "" {
+		return allow, nil
+	}
+	if host, _, err := net.SplitHostPort(hp); err == nil && agentscope.IsLoopbackHost(host) {
+		if logger != nil {
+			logger.Warn("agent scope: ANTHROPIC_BASE_URL is on the loopback; not adding it to the egress allowlist", "host", hp)
+		}
+		return allow, nil
+	}
+	return append(append(agentscope.Allowlist{}, allow...), hp), nil
 }
 
 type plumbingBinds struct{ rw, ro []string }
