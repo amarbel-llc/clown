@@ -48,18 +48,15 @@ func TestDecideClaudeSession_PreservesResume(t *testing.T) {
 		name string
 		args []string
 	}{
-		{"long form", []string{"--resume", "abc12300-0000-4000-8000-000000000123"}},
-		{"short form", []string{"-r", "abc12300-0000-4000-8000-000000000123"}},
-		{"equals form", []string{"--resume=abc12300-0000-4000-8000-000000000123"}},
+		{"long form", []string{"--resume", "abc-123"}},
+		{"short form", []string{"-r", "abc-123"}},
+		{"equals form", []string{"--resume=abc-123"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got, channelKey, id := decideClaudeSession(tc.args, "")
-			// claude session ids are UUIDs; a non-UUID --resume is a picker
-			// search (TestDecideClaudeSessionNonUUIDResume).
-			const want = "abc12300-0000-4000-8000-000000000123"
-			if id != want || channelKey != want {
-				t.Errorf("(channelKey,id) = (%q,%q), want both %s", channelKey, id, want)
+			if id != "abc-123" || channelKey != "abc-123" {
+				t.Errorf("(channelKey,id) = (%q,%q), want both abc-123", channelKey, id)
 			}
 			if !reflect.DeepEqual(got, tc.args) {
 				t.Errorf("forwarded mutated unexpectedly: %v", got)

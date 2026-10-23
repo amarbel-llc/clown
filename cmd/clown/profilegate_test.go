@@ -492,36 +492,41 @@ func TestProfileDecisionApprovesRecordFor(t *testing.T) {
 // id clown cannot see are refused when a profile is applied.
 const uuidR = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
 
-// The three readers of a claude --resume/-r must agree: it names a session
-// only when its value is a UUID (claude's session ids are); anything else
-// (no value, an empty value, a search term, a following flag) opens
-// claude's picker and is an unseen form.
+// Two readings of a claude --resume/-r share one parser (resumeArgRaw).
+// The strict one, used by the profile check, names a session only for a
+// UUID value (claude's session ids are); anything else (no value, an empty
+// value, a search term, a following flag) is an unseen form, refused when
+// a profile applies. The lenient one (claudeResumeValue, isBareResume)
+// keeps the pre-check behavior for unprofiled runs: any non-empty value,
+// but never a following flag.
 func TestResumeArgReaders(t *testing.T) {
 	cases := []struct {
 		args   []string
-		id     string // claudeResumeID
-		unseen string // unseenResumeForm
+		id     string // claudeResumeID (strict)
+		unseen string // unseenResumeForm (strict)
+		value  string // claudeResumeValue (lenient)
+		bare   bool   // isBareResume (lenient: no value)
 	}{
 		{args: nil},
 		{args: []string{"--session-id", uuidR}},
 		{args: []string{"-p", "hi"}},
-		{args: []string{"--resume", uuidR}, id: uuidR},
-		{args: []string{"-r", uuidR}, id: uuidR},
-		{args: []string{"--resume=" + uuidR}, id: uuidR},
+		{args: []string{"--resume", uuidR}, id: uuidR, value: uuidR},
+		{args: []string{"-r", uuidR}, id: uuidR, value: uuidR},
+		{args: []string{"--resume=" + uuidR}, id: uuidR, value: uuidR},
 		{args: []string{"-c"}, unseen: "-c"},
 		{args: []string{"--continue"}, unseen: "--continue"},
 		{args: []string{"--from-pr", "12"}, unseen: "--from-pr"},
 		{args: []string{"--from-pr"}, unseen: "--from-pr"},
-		{args: []string{"--resume"}, unseen: "--resume"},
-		{args: []string{"-r"}, unseen: "-r"},
-		{args: []string{"--resume="}, unseen: "--resume"},
-		{args: []string{"--resume", ""}, unseen: "--resume"},
-		{args: []string{"--resume", "fix tests"}, unseen: "--resume"},
-		{args: []string{"-r", "foo"}, unseen: "-r"},
-		{args: []string{"--resume=foo"}, unseen: "--resume"},
-		{args: []string{"--resume", "--model", "m"}, unseen: "--resume"},
-		{args: []string{"-r", "-p", "hi"}, unseen: "-r"},
-		{args: []string{"--resume", "--session-id", uuidR}, unseen: "--resume"},
+		{args: []string{"--resume"}, unseen: "--resume", bare: true},
+		{args: []string{"-r"}, unseen: "-r", bare: true},
+		{args: []string{"--resume="}, unseen: "--resume", bare: true},
+		{args: []string{"--resume", ""}, unseen: "--resume", bare: true},
+		{args: []string{"--resume", "fix tests"}, unseen: "--resume", value: "fix tests"},
+		{args: []string{"-r", "foo"}, unseen: "-r", value: "foo"},
+		{args: []string{"--resume=foo"}, unseen: "--resume", value: "foo"},
+		{args: []string{"--resume", "--model", "m"}, unseen: "--resume", bare: true},
+		{args: []string{"-r", "-p", "hi"}, unseen: "-r", bare: true},
+		{args: []string{"--resume", "--session-id", uuidR}, unseen: "--resume", bare: true},
 	}
 	for _, tc := range cases {
 		if got := claudeResumeID(tc.args); got != tc.id {
@@ -530,16 +535,20 @@ func TestResumeArgReaders(t *testing.T) {
 		if got := unseenResumeForm(tc.args); got != tc.unseen {
 			t.Errorf("unseenResumeForm(%q) = %q, want %q", tc.args, got, tc.unseen)
 		}
-		bare := tc.unseen == "--resume" || tc.unseen == "-r"
-		if got := isBareResume(tc.args); got != bare {
-			t.Errorf("isBareResume(%q) = %v, want %v", tc.args, got, bare)
+		if got := claudeResumeValue(tc.args); got != tc.value {
+			t.Errorf("claudeResumeValue(%q) = %q, want %q", tc.args, got, tc.value)
+		}
+		if got := isBareResume(tc.args); got != tc.bare {
+			t.Errorf("isBareResume(%q) = %v, want %v", tc.args, got, tc.bare)
 		}
 	}
 }
 
 // claudeSessionRef is the session a claude launch names for the [attach]
-// mode and the group-id command: an explicit --session-id, else a UUID
-// --resume. A flag after a bare --resume/--session-id is never taken as one.
+// mode and the group-id command: an explicit --session-id, else the
+// --resume value (lenient, as before the profile check: the bats fixtures'
+// `--resume my-fixed-id` still selects the resume template). A flag after a
+// bare --resume/--session-id is never taken as one.
 func TestClaudeSessionRef(t *testing.T) {
 	cases := []struct {
 		args []string
@@ -547,10 +556,12 @@ func TestClaudeSessionRef(t *testing.T) {
 	}{
 		{args: nil},
 		{args: []string{"--resume", uuidR}, want: uuidR},
+		{args: []string{"--resume", "my-fixed-id"}, want: "my-fixed-id"},
+		{args: []string{"-r", "foo"}, want: "foo"},
 		{args: []string{"--session-id", uuidR}, want: uuidR},
 		{args: []string{"--resume", "--session-id", uuidR}, want: uuidR},
 		{args: []string{"--resume", "--foo"}},
-		{args: []string{"--resume", "fix tests"}},
+		{args: []string{"--resume", ""}},
 		{args: []string{"--session-id", "--foo"}},
 		{args: []string{"-c"}},
 	}
@@ -561,15 +572,26 @@ func TestClaudeSessionRef(t *testing.T) {
 	}
 }
 
-// decideClaudeSession adopts only a UUID --resume, and still adopts an
-// explicit --session-id next to a bare --resume.
-func TestDecideClaudeSessionNonUUIDResume(t *testing.T) {
+// decideClaudeSession keeps its unprofiled behavior for a non-UUID
+// --resume value (adopts it), skips a --resume with no value like
+// --continue, and still adopts an explicit --session-id next to a bare
+// --resume.
+func TestDecideClaudeSessionResumeValues(t *testing.T) {
 	for _, args := range [][]string{
-		{"--resume", "fix tests"},
+		{"--resume", "my-fixed-id"},
 		{"-r", "foo"},
+		{"--resume=foo"},
+	} {
+		want := claudeResumeValue(args)
+		got, channelKey, hint := decideClaudeSession(args, "base")
+		if !slices.Equal(got, args) || channelKey != want || hint != want {
+			t.Errorf("decideClaudeSession(%q) = %q, %q, %q; want args unchanged and %q adopted", args, got, channelKey, hint, want)
+		}
+	}
+	for _, args := range [][]string{
 		{"--resume", ""},
 		{"--resume="},
-		{"--resume=foo"},
+		{"--resume"},
 	} {
 		got, channelKey, hint := decideClaudeSession(args, "base")
 		if !slices.Equal(got, args) || channelKey != "base" || hint != "" {

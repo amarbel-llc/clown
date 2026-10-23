@@ -286,11 +286,15 @@ resume has no local confirmation (decision 2), and the env names are final.
    pointing to `clown resume <id>` (`unseenResumeForm`). A `--resume`/`-r`
    names a session only when its value is a UUID (claude's session ids
    are); no value, an empty value, a search term or a following flag opens
-   claude's picker. One reader (`resumeArg`) backs `claudeResumeID`,
-   `unseenResumeForm` and `isBareResume`, and `decideClaudeSession`, the
-   `[attach]` mode and the group-id command (`claudeSessionRef`) use it, so
-   none of them adopts a search term or a following flag as a session id;
-   an explicit `--session-id` is still adopted next to a bare `--resume`.
+   claude's picker. That strict reading (`resumeArg`: `claudeResumeID`,
+   `unseenResumeForm`) is the profile check's. Unprofiled runs keep the
+   earlier lenient reading (`claudeResumeValue`, `isBareResume`):
+   `decideClaudeSession`, the `[attach]` mode and the group-id command
+   (`claudeSessionRef`) adopt any non-empty `--resume` value as before,
+   since a non-UUID value with a profile applied is refused by the check
+   anyway. Both readings share one parser (`resumeArgRaw`), which never
+   takes a following flag as the value; an explicit `--session-id` is still
+   adopted next to a bare `--resume`.
    When the profile was only defaulted (clownfile pin or build default),
    the refusal adds that `--provider claude` turns defaulting off
    (`resolveProfileName`), so the picker still works without a profile.

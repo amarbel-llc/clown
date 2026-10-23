@@ -220,41 +220,55 @@ func unseenResumeForm(args []string) string {
 	return ""
 }
 
-// resumeArg reads the first claude --resume/-r in args: flag is the
-// spelling found ("" when there is none) and id the session it names. claude
-// session ids are UUIDs, so id is set only for a UUID value; no value, an
-// empty value, a search term, or a following flag (taken as no value) all
-// open claude's own picker, and id is "". This is the one reader behind
-// claudeResumeID, unseenResumeForm and isBareResume, so they agree.
-func resumeArg(args []string) (flag, id string) {
+// resumeArgRaw reads the first claude --resume/-r in args: flag is the
+// spelling found ("" when there is none) and value what follows it ("" for
+// no value, an empty value, or a following flag, which is taken as no
+// value). It is the one parser behind both readings below.
+func resumeArgRaw(args []string) (flag, value string) {
 	for i, a := range args {
-		var v string
 		switch {
 		case a == "--resume" || a == "-r":
-			flag = a
 			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
-				v = args[i+1]
+				return a, args[i+1]
 			}
+			return a, ""
 		case strings.HasPrefix(a, "--resume="):
-			flag, v = "--resume", strings.TrimPrefix(a, "--resume=")
+			return "--resume", strings.TrimPrefix(a, "--resume=")
 		case strings.HasPrefix(a, "-r="):
-			flag, v = "-r", strings.TrimPrefix(a, "-r=")
-		default:
-			continue
+			return "-r", strings.TrimPrefix(a, "-r=")
 		}
-		if isUUID(v) {
-			return flag, v
-		}
-		return flag, ""
 	}
 	return "", ""
 }
 
+// resumeArg is the strict reading the profile check uses: id is set only for
+// a UUID value (claude session ids are UUIDs). No value, an empty value, a
+// search term or a following flag open claude's picker, so id is "" and
+// unseenResumeForm reports the flag, refused when a profile applies.
+func resumeArg(args []string) (flag, id string) {
+	flag, v := resumeArgRaw(args)
+	if isUUID(v) {
+		return flag, v
+	}
+	return flag, ""
+}
+
 // claudeResumeID returns the session a claude --resume/-r names (a UUID), or
-// "" (resumeArg).
+// "" (resumeArg). The profile check uses it.
 func claudeResumeID(args []string) string {
 	_, id := resumeArg(args)
 	return id
+}
+
+// claudeResumeValue is the lenient reading used where no profile is at stake
+// (decideClaudeSession, the [attach] mode, the group-id command): any
+// non-empty value, as before the profile check existed, except that a
+// following flag is never taken as the value. A launch that applies a
+// profile and passes a non-UUID value is refused by the profile check before
+// any of that matters.
+func claudeResumeValue(args []string) string {
+	_, v := resumeArgRaw(args)
+	return v
 }
 
 // claudeSessionIDArg returns a claude --session-id value, or "" when there is
@@ -268,10 +282,10 @@ func claudeSessionIDArg(args []string) string {
 }
 
 // claudeSessionRef is the session a claude launch names: an explicit
-// --session-id, else the --resume/-r id. It selects the [attach] resume
-// template and feeds the group-id command.
+// --session-id, else the --resume/-r value (lenient, claudeResumeValue). It
+// selects the [attach] resume template and feeds the group-id command.
 func claudeSessionRef(args []string) string {
-	return cmpOr(claudeSessionIDArg(args), claudeResumeID(args))
+	return cmpOr(claudeSessionIDArg(args), claudeResumeValue(args))
 }
 
 // gatedSessionID returns the existing session a claude launch continues, for

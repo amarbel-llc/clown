@@ -26,9 +26,9 @@ import (
 //     resumable and printing would pollute its stdout; --continue's id is
 //     unknown without a transcript scan). The channel key stays baseKey.
 //
-//   - --session-id <id> or --resume <uuid> already present: adopt that id as
+//   - --session-id <id> or --resume <id> already present: adopt that id as
 //     both the channel key and the hint; args unchanged. A --resume/-r with no
-//     UUID (claude's picker) is skipped like --continue.
+//     value (claude's picker) is skipped like --continue.
 //
 //   - baseKey is UUID-shaped (minted, or from CLAUDE_SESSION_ID): inject
 //     --session-id baseKey; channel key and hint are baseKey.
@@ -44,13 +44,14 @@ func decideClaudeSession(forwarded []string, baseKey string) (newForwarded []str
 	if id := claudeSessionIDArg(forwarded); id != "" {
 		return forwarded, id, id
 	}
-	// A --resume/-r that names no session (no value, a search term, a
-	// following flag: claude's own picker) is like --continue; only a UUID
-	// is adopted as the session id (resumeArg).
+	// A --resume/-r with no value (or followed by another flag: claude's own
+	// picker) is like --continue. Any other value is adopted as before; a
+	// non-UUID one with a profile applied is refused later by the profile
+	// check (resumeArg), so this lenient reading only serves unprofiled runs.
 	if isBareResume(forwarded) {
 		return forwarded, baseKey, ""
 	}
-	if id := claudeResumeID(forwarded); id != "" {
+	if id := claudeResumeValue(forwarded); id != "" {
 		return forwarded, id, id
 	}
 	if isUUID(baseKey) {
@@ -64,10 +65,10 @@ func decideClaudeSession(forwarded []string, baseKey string) (newForwarded []str
 	return append([]string{"--session-id", id}, forwarded...), channelKey, id
 }
 
-// isBareResume reports a --resume/-r that names no session (resumeArg).
+// isBareResume reports a --resume/-r with no value (resumeArgRaw).
 func isBareResume(args []string) bool {
-	flag, id := resumeArg(args)
-	return flag != "" && id == ""
+	flag, v := resumeArgRaw(args)
+	return flag != "" && v == ""
 }
 
 // isUUID reports whether s is shaped like an RFC 4122 UUID (36 chars, hyphens at
