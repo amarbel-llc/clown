@@ -79,12 +79,17 @@ func RecordSessionName(id, name, group string) error {
 // best-effort contract as RecordSessionName. A record with no id, or with
 // neither a name nor a profile, is a silent no-op.
 //
-// Durability: the whole record, newline included, goes out in ONE write(2)
-// on an O_APPEND descriptor, so concurrent writers never interleave inside a
-// line and a crash cannot leave a partial line in the middle of the file,
-// only (at worst) at its end. If the file already ends in such a fragment
-// (TruncatedTail), the record is prefixed with a newline in the same write,
-// so it starts a line of its own instead of being glued to the fragment.
+// Write shape (not crash durability): the whole record, newline included,
+// goes out in ONE write(2) on an O_APPEND descriptor, so it is appended as a
+// unit and concurrent writers do not interleave inside a line. There is no
+// fsync: a crash can lose the record or, on some filesystems, leave part of
+// it. A failed or short write (ENOSPC, say) can also leave a fragment at the
+// end of the file. Before writing, endsMidLine checks (with a separate read,
+// so another writer can race it) whether the file ends mid-line; if so the
+// record is prefixed with a newline in the same write so it is not glued to
+// the fragment. A fragment left after that check ran (by a concurrent writer
+// or this write failing) is not caught until the next record's check.
+// TruncatedTail reports a fragment at the end.
 func RecordSession(rec NameRecord) error {
 	if rec.SessionID == "" || (rec.Name == "" && rec.Profile == "") {
 		return nil

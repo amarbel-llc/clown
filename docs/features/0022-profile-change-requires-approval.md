@@ -192,10 +192,16 @@ Later answers (operator, 2026-10-23, relayed by the coordinator):
 11. Trust on first use is accepted: a session with no pin is pinned, in the
     session-names sidecar, to the profile its first profiled launch
     applies.
-12. Sidecar durability is the condition for the narrow corrupt-line rule:
+12. Sidecar write shape is the condition for the narrow corrupt-line rule:
     every record is one whole line written by a single `write(2)` on an
     `O_APPEND` descriptor, and a truncated last line is reported as a
-    warning naming the file, without failing.
+    warning naming the file, without failing. This is an atomic append (no
+    interleaving between writers), not crash durability: there is no
+    fsync, so a crash can lose a record or leave part of one, and a failed
+    or short write (ENOSPC) can leave a fragment at the end. A record that
+    follows a fragment is prefixed with a newline only if the separate
+    end-of-file check (a read before the write, so it can race another
+    writer) saw the fragment.
 
 Supersedes the earlier text in "What happens on resume" step 4: standalone
 resume has no local confirmation (decision 2), and the env names are final.
@@ -268,18 +274,26 @@ resume has no local confirmation (decision 2), and the env names are final.
    recognised by `--clown-attach-id`, which anyone launching clown can
    pass.
 
-   - Sidecar durability (decision 12): `sessions.RecordSession` writes each
-     record as one line in a single `write(2)` on an `O_APPEND` descriptor;
-     after a crash fragment it prefixes the newline in the same write. A
-     truncated last line (`sessions.TruncatedTail`) is warned about once
-     per launch on stderr, naming the file.
+   - Sidecar write shape (decision 12): `sessions.RecordSession` writes
+     each record as one line in a single `write(2)` on an `O_APPEND`
+     descriptor (atomic append, no fsync); when its prior end-of-file read
+     saw a fragment, it prefixes the newline in the same write. A truncated
+     last line (`sessions.TruncatedTail`) is warned about once per launch on
+     stderr, naming the file.
 3a. **Done.** Resume forms clown cannot identify (decision 9): with a
-   profile applied, claude `-c`/`--continue`, a bare `--resume`/`-r`
-   (claude's own picker, including one followed by another flag) and
-   `--from-pr` are refused with a message pointing to `clown resume <id>`
-   (`unseenResumeForm`). A `--resume`/`-r` followed by another flag is no
-   longer read as `--resume <that flag>`: `claudeResumeID` and
-   `decideClaudeSession` treat it as bare, like `--continue`.
+   profile applied, claude `-c`/`--continue`, `--from-pr`, and a
+   `--resume`/`-r` that does not name a session are refused with a message
+   pointing to `clown resume <id>` (`unseenResumeForm`). A `--resume`/`-r`
+   names a session only when its value is a UUID (claude's session ids
+   are); no value, an empty value, a search term or a following flag opens
+   claude's picker. One reader (`resumeArg`) backs `claudeResumeID`,
+   `unseenResumeForm` and `isBareResume`, and `decideClaudeSession`, the
+   `[attach]` mode and the group-id command (`claudeSessionRef`) use it, so
+   none of them adopts a search term or a following flag as a session id;
+   an explicit `--session-id` is still adopted next to a bare `--resume`.
+   When the profile was only defaulted (clownfile pin or build default),
+   the refusal adds that `--provider claude` turns defaulting off
+   (`resolveProfileName`), so the picker still works without a profile.
 3. The canonical-field diff function for the approval text (decision 4).
 
 ## Notes
