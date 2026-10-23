@@ -37,14 +37,27 @@ import (
 // and a profileless record reads exactly as it always did. The pair is a
 // claim of what the session launched with, not an authorization: `clown
 // resume` refuses when the name no longer resolves to the recorded digest.
+//
+// ProfileForm (clown#298) is the redacted form of the pinned profile
+// (pkg/profilelookup Resolved.RedactedForm), so a later refusal can show a
+// field diff after the definition changed. It is stored only beside a
+// profile, only when it is valid JSON of at most MaxProfileFormBytes; when
+// one was given but not stored, ProfileFormOmitted says why. Both are
+// omitted otherwise, and readers that predate them ignore them.
 type NameRecord struct {
-	SessionID     string    `json:"session_id"`
-	Name          string    `json:"name"`
-	Group         string    `json:"group,omitempty"`
-	Profile       string    `json:"profile,omitempty"`
-	ProfileDigest string    `json:"profile_digest,omitempty"`
-	TS            time.Time `json:"ts"`
+	SessionID          string          `json:"session_id"`
+	Name               string          `json:"name"`
+	Group              string          `json:"group,omitempty"`
+	Profile            string          `json:"profile,omitempty"`
+	ProfileDigest      string          `json:"profile_digest,omitempty"`
+	ProfileForm        json.RawMessage `json:"profile_form,omitempty"`
+	ProfileFormOmitted string          `json:"profile_form_omitted,omitempty"`
+	TS                 time.Time       `json:"ts"`
 }
+
+// MaxProfileFormBytes caps a stored ProfileForm. A larger form is not
+// stored (the pin is), so one record stays one short line.
+const MaxProfileFormBytes = 8192
 
 // UnpinnableDigest is the ProfileDigest recorded when a launch applied a
 // profile that pkg/profilelookup could not vouch for (for example an
@@ -102,6 +115,7 @@ func RecordSession(rec NameRecord) error {
 		return err
 	}
 	rec.TS = time.Now().UTC()
+	rec.ProfileForm, rec.ProfileFormOmitted = storableProfileForm(rec)
 	line, err := json.Marshal(rec)
 	if err != nil {
 		return err
@@ -118,6 +132,43 @@ func RecordSession(rec NameRecord) error {
 	defer f.Close()
 	_, err = f.Write(buf)
 	return err
+}
+
+// storableProfileForm returns the form RecordSession writes for rec and,
+// when a form was given but is not written, why.
+func storableProfileForm(rec NameRecord) (json.RawMessage, string) {
+	switch {
+	case len(rec.ProfileForm) == 0:
+		return nil, ""
+	case rec.Profile == "":
+		return nil, "" // a form describes a pin; without one there is nothing to describe
+	case len(rec.ProfileForm) > MaxProfileFormBytes:
+		return nil, fmt.Sprintf("exceeds %d bytes", MaxProfileFormBytes)
+	case !json.Valid(rec.ProfileForm):
+		return nil, "not valid JSON"
+	}
+	return rec.ProfileForm, ""
+}
+
+// ProfileFormFor returns the redacted form stored with a pin of digest: the
+// LAST record for digest that carries one. ok is false when none does. Like
+// NamesFor it is an enrichment: unparseable lines are skipped, and only a
+// failure to open or read the sidecar (other than its absence) is returned.
+// The form is what the writer claimed; nothing ties it to the digest.
+func ProfileFormFor(digest string) (form []byte, ok bool, err error) {
+	if digest == "" {
+		return nil, false, nil
+	}
+	err = scanRecords(func(_ string, rec *NameRecord) error {
+		if rec != nil && rec.ProfileDigest == digest && len(rec.ProfileForm) > 0 {
+			form, ok = rec.ProfileForm, true
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	return form, ok, nil
 }
 
 // endsMidLine reports whether the file at path is non-empty and does not end

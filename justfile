@@ -2218,7 +2218,8 @@ explore-clown-launch-plan PROFILE="porter": build-nix
 # dirs inside that directory, so no real state is read or written and no
 # credential reaches claude (it starts unauthenticated and exits on `-p`).
 # Scenarios: a profiled launch writes a pin; `clown resume` with the same
-# profile reaches claude; an edited profile is refused; a session with no pin,
+# profile reaches claude; an edited profile is refused with the field diff
+# from the pin's stored redacted form (clown#298); a session with no pin,
 # with and without a clownfile default profile (decision 13); trust on first
 # use via a clownfile profile on a direct launch; a launcher-approved re-pin. The
 # claude transcripts `clown resume` looks up are hand-written stubs.
@@ -2262,10 +2263,15 @@ explore-profile-pin-e2e: build-nix
     transcript "$s1"
     run "" resume "clown://claude/$s1" -- -p hi
 
-    echo "== 3. profile edited: refused"
+    echo "== 3. profile edited: refused, with the field diff from the pin's stored redacted form (clown#298)"
     write_profile e2e-model-b
     out="$(run "" resume "clown://claude/$s1" -- -p hi)"
     echo "$out"
+    if grep -qF 'model: "e2e-model-a" -> "e2e-model-b"' <<<"$out"; then
+        echo "--- 3: PASS (field diff shown)"
+    else
+        echo "--- 3: FAIL (no field diff in the refusal)"
+    fi
     newdigest="$(grep -oE 'now resolves to digest [0-9a-f]{64}' <<<"$out" | grep -oE '[0-9a-f]{64}' | head -n 1)"
 
     # This build bakes a default profile (buildcfg.DefaultProfile), so with no

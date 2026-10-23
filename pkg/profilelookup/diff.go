@@ -70,7 +70,11 @@ const RedactedURL = "<redacted: may contain credentials>"
 // Adding or changing Diff never changes the canonical form or the digest,
 // so it does not touch ProtocolVersion.
 func Diff(old, new *Resolved, maxLines int) (lines []string, more int) {
-	changes := diffChanges(old, new)
+	return capChanges(diffViews(viewOf(old), viewOf(new)), maxLines)
+}
+
+// capChanges applies Diff's maxLines contract to changes.
+func capChanges(changes []string, maxLines int) (lines []string, more int) {
 	total := len(changes)
 	switch {
 	case maxLines <= 0:
@@ -108,8 +112,7 @@ func viewOf(r *Resolved) diffView {
 	return diffView{present: true, fields: c, selected: c.ContextServers != nil}
 }
 
-func diffChanges(old, new *Resolved) []string {
-	o, n := viewOf(old), viewOf(new)
+func diffViews(o, n diffView) []string {
 	if !o.present && !n.present {
 		return nil
 	}
@@ -271,7 +274,7 @@ func urlMayCarryCredential(raw string) bool {
 }
 
 func shownURL(raw string) string {
-	if urlMayCarryCredential(raw) {
+	if raw == RedactedURL || urlMayCarryCredential(raw) { // RedactedURL: already redacted in a stored form
 		return RedactedURL
 	}
 	return quote(raw)

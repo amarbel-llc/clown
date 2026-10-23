@@ -705,19 +705,42 @@ func TestDescribeProfileChange(t *testing.T) {
 		return sessions.ProfilePin{Name: r.Name, Digest: r.DigestSHA256}
 	}
 
-	got := describeProfileChange(pin(p1), pin(p2), registry(p1, p2))
+	noForms := func(string) ([]byte, bool, error) { return nil, false, nil }
+	stored := func(rs ...*profilelookup.Resolved) func(string) ([]byte, bool, error) {
+		return func(digest string) ([]byte, bool, error) {
+			for _, r := range rs {
+				if r.DigestSHA256 == digest {
+					f, err := r.RedactedForm()
+					return f, err == nil, err
+				}
+			}
+			return nil, false, nil
+		}
+	}
+
+	got := describeProfileChange(pin(p1), pin(p2), registry(p1, p2), noForms)
 	if !strings.Contains(got, `name: "p1" -> "p2"`) || !strings.Contains(got, `model: "m1" -> "m2"`) {
 		t.Errorf("recoverable old: %q, want the field diff", got)
 	}
-	got = describeProfileChange(pin(p1), pin(p1Edited), registry(p1Edited))
+	got = describeProfileChange(pin(p1), pin(p1Edited), registry(p1Edited), noForms)
 	if !strings.Contains(got, "not recorded") || strings.Contains(got, "model:") {
 		t.Errorf("unrecoverable old: %q, want the not-recorded note and no diff", got)
 	}
-	got = describeProfileChange(pin(p1), pin(p2), registry(p1))
+	// clown#298: the old definition no longer resolves, but its redacted
+	// form was stored with the pin.
+	got = describeProfileChange(pin(p1), pin(p1Edited), registry(p1Edited), stored(p1))
+	if !strings.Contains(got, `model: "m1" -> "m-edited"`) || strings.Contains(got, "not recorded") {
+		t.Errorf("stored old form: %q, want the field diff", got)
+	}
+	got = describeProfileChange(pin(p1), pin(p1Display), registry(p1Display), stored(p1))
+	if got == "" || strings.Contains(got, "changes:") {
+		t.Errorf("stored form, display-only change: %q", got)
+	}
+	got = describeProfileChange(pin(p1), pin(p2), registry(p1), noForms)
 	if !strings.Contains(got, "could not be re-read") {
 		t.Errorf("unreadable new: %q", got)
 	}
-	got = describeProfileChange(pin(p1), pin(p1Display), registry(p1Display, p1))
+	got = describeProfileChange(pin(p1), pin(p1Display), registry(p1Display, p1), noForms)
 	if got == "" {
 		t.Errorf("display-only change produced no text")
 	}
@@ -727,7 +750,7 @@ func TestDescribeProfileChange(t *testing.T) {
 		many.Env[fmt.Sprintf("K%02d", i)] = "v"
 	}
 	rm := resolvedForTest(t, many)
-	got = describeProfileChange(pin(p1), pin(rm), registry(p1, rm))
+	got = describeProfileChange(pin(p1), pin(rm), registry(p1, rm), noForms)
 	if n := strings.Count(got, "\n  "); n != profileDiffLines {
 		t.Errorf("%d diff lines, want %d: %q", n, profileDiffLines, got)
 	}

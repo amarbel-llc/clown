@@ -11,7 +11,7 @@ promotion-criteria: >
 
 # Profile changes at runtime require user approval
 
-> **Implemented in clown:** slices 1, 2, 3a and 3b (see Implementation
+> **Implemented in clown:** slices 1, 2, 3a, 3b and 3c (see Implementation
 > slices); the spinclass half is design. The Problem section describes clown before them. Claims not read in
 > source are marked **UNVERIFIED**. clown owns profile resolution and the
 > digest; spinclass owns session state, the re-pin right and the grant
@@ -338,14 +338,43 @@ resume has no local confirmation (decision 2), and the env names are final.
    the canonical form or the digest, so `ProtocolVersion` is unchanged.
    clown's own pin-change refusals print up to 6 lines of it when the old
    definition is recoverable, which is only when the pinned name still
-   resolves to the pinned digest (a switch to another profile). When the
-   pinned profile itself was edited, the old definition is gone and the
-   refusal says so instead of inventing a diff.
-
-   Open question: keeping the old definition would need the pin store to
-   record the canonical form (or enough of it) next to the digest. That is
-   a sidecar-format change, and `Canonical` can contain a literal URL
-   credential (clown#292), so it was not done here.
+   resolves to the pinned digest (a switch to another profile).
+3c. **Done (clown#298).** The resolution of 3b's open question (how to
+   diff when the pinned profile itself was edited and the old definition no
+   longer resolves). Every pin record clown writes now carries
+   `profile_form`, the pinned profile's **redacted form**
+   (`Resolved.RedactedForm`), beside `profile` and `profile_digest`:
+   - The redacted form is derived from `Canonical`. It is not a second
+     canonical form, so the canonical JSON, the digest,
+     `CLOWN_PROFILE_DIGEST` and `ProtocolVersion` are unchanged. It
+     carries its own `form` version (`RedactedFormVersion`, 1).
+   - Nothing secret is stored. A URL that Diff would redact (the same
+     function, `urlMayCarryCredential`) is stored as the redaction text, so
+     its userinfo, query and fragment are never written. This replaces the
+     whole URL rather than stripping parts of it: stripping would be a
+     second rule. env is stored as its sorted keys only, with no values and
+     no value digests, because a low-entropy value is guessable from its
+     digest. The token is stored as `token_set` only.
+   - The record is still one line in one `O_APPEND` write. A form over
+     `MaxRedactedFormBytes` (8192) or not valid JSON is not stored. The pin
+     is kept, and `profile_form_omitted` says why.
+   - Compatibility: both fields are `omitempty`. Lines written before them
+     load unchanged, with no form. Older clowns ignore the unknown keys
+     (encoding/json), so their pins still read.
+   - Lookup is by digest. `profilelookup.RedactedFormByDigest(digest)`
+     returns the last stored form for that digest, which spinclass needs at
+     re-pin time, when it holds only the old digest. The form is display
+     only: it is redacted, so it cannot be verified against the digest, and
+     anyone who can write the state dir can forge it.
+   - `profilelookup.DiffRedacted(old, new, maxLines)` is Diff over two
+     stored forms, with the same line contract and cap. It cannot show what
+     the forms omit: an env value change, or a change between two
+     credential-bearing URLs.
+   - When the pinned definition no longer resolves, clown's refusals
+     (`clown resume` and the launch gate) diff the stored form against the
+     new definition's redacted form. They say "the previous definition is
+     not recorded" only when the pin stored no form, such as a pin written
+     before this change.
 
 ## Notes
 

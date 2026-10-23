@@ -53,27 +53,52 @@ type profileGate struct {
 const profileDiffLines = 6
 
 // describeProfileChange explains a change from the pinned profile old to new
-// for a refusal (FDR 0022 slice 3b). clown pins only a name and digest, so
-// the old definition is recoverable only when old's name still resolves to
-// old's digest (a switch to another profile while the pinned one is
-// unchanged); then it shows up to profileDiffLines lines of
-// profilelookup.Diff. Otherwise it says the old definition is not recorded,
-// rather than inventing a diff. resolve is profilelookup.Resolve bound to the
-// registry (a parameter for tests).
-func describeProfileChange(old, new sessions.ProfilePin, resolve func(name string) (*profilelookup.Resolved, error)) string {
-	o, err := resolve(old.Name)
-	if err != nil || o.DigestSHA256 != old.Digest {
-		return "the previous definition is not recorded (clown pins only its name and digest), so no field diff is shown"
+// for a refusal (FDR 0022 slice 3b), in up to profileDiffLines diff lines.
+// When old's name still resolves to old's digest (a switch to another
+// profile while the pinned one is unchanged) it diffs the two definitions
+// (profilelookup.Diff). Otherwise, as after a same-name edit, it diffs the
+// redacted form stored with the pin (clown#298, profilelookup.DiffRedacted),
+// which cannot show env value changes. Without a stored form it says the old
+// definition is not recorded, rather than inventing a diff. resolve is
+// profilelookup.Resolve bound to the registry and storedForm
+// profilelookup.RedactedFormByDigest (parameters for tests).
+func describeProfileChange(old, new sessions.ProfilePin, resolve func(name string) (*profilelookup.Resolved, error), storedForm func(digest string) ([]byte, bool, error)) string {
+	const unreadableNew = "the new definition could not be re-read, so no field diff is shown"
+	readNew := func() (*profilelookup.Resolved, bool) {
+		n, err := resolve(new.Name)
+		return n, err == nil && n.DigestSHA256 == new.Digest
 	}
-	n, err := resolve(new.Name)
-	if err != nil || n.DigestSHA256 != new.Digest {
-		return "the new definition could not be re-read, so no field diff is shown"
+	if o, err := resolve(old.Name); err == nil && o.DigestSHA256 == old.Digest {
+		n, ok := readNew()
+		if !ok {
+			return unreadableNew
+		}
+		lines, _ := profilelookup.Diff(o, n, profileDiffLines)
+		if len(lines) == 0 {
+			return "only fields the diff does not show (the display name) differ"
+		}
+		return "changes:\n  " + strings.Join(lines, "\n  ")
 	}
-	lines, _ := profilelookup.Diff(o, n, profileDiffLines)
-	if len(lines) == 0 {
-		return "only fields the diff does not show (the display name) differ"
+	oldForm, ok, err := storedForm(old.Digest)
+	if err != nil || !ok {
+		return "the previous definition is not recorded (this pin stored no redacted form of it), so no field diff is shown"
 	}
-	return "changes:\n  " + strings.Join(lines, "\n  ")
+	n, ok := readNew()
+	if !ok {
+		return unreadableNew
+	}
+	newForm, err := n.RedactedForm()
+	if err != nil {
+		return unreadableNew
+	}
+	lines, _, err := profilelookup.DiffRedacted(oldForm, newForm, profileDiffLines)
+	switch {
+	case err != nil:
+		return fmt.Sprintf("the redacted form recorded with the pin is unreadable (%v), so no field diff is shown", err)
+	case len(lines) == 0:
+		return "only fields the recorded redacted form does not show (the display name, env values, a url that may carry a credential) differ"
+	}
+	return "changes (against the redacted form recorded with the pin; env value changes are not shown):\n  " + strings.Join(lines, "\n  ")
 }
 
 // withChange appends g.describeChange's explanation of old -> new to msg.

@@ -22,6 +22,16 @@
 //     approver to read (FDR 0022 decision 4). Its full contract is on Diff.
 //     It reads Canonical and does not change it, so it is outside the
 //     ProtocolVersion rules below.
+//   - Resolved.RedactedForm renders the definition with nothing secret in it
+//     (a URL Diff would redact is replaced by RedactedURL, env as keys only,
+//     the token as token_set), and clown stores it beside each session pin.
+//     RedactedFormByDigest reads it back by digest from clown's
+//     session-names sidecar, for a caller that holds only an old digest
+//     whose definition no longer resolves. DiffRedacted is Diff over two
+//     such forms (FDR 0022 slice 3c, clown#298). The redacted form has its
+//     own version (RedactedFormVersion), is derived from Canonical, and
+//     never feeds the digest, so it is also outside the ProtocolVersion
+//     rules. It is display only: it cannot be checked against the digest.
 //
 // # Protocol version
 //

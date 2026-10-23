@@ -131,15 +131,28 @@ func verifyProfileBase(p profile.Profile, registryPath string) error {
 // (for example an unstamped registry, which the launch itself still reads),
 // the pin carries sessions.UnpinnableDigest: the launch proceeds, and a later
 // `clown resume` refuses instead of silently resuming without the profile.
-func launchProfilePin(selected *profile.Profile, registryPath string) (pin sessions.ProfilePin, ok bool) {
+//
+// form is the profile's redacted form (clown#298), stored beside the pin so
+// a later refusal can show a field diff; nil for an unpinnable profile.
+func launchProfilePin(selected *profile.Profile, registryPath string) (pin sessions.ProfilePin, form []byte, ok bool) {
 	if selected == nil {
-		return sessions.ProfilePin{}, false
+		return sessions.ProfilePin{}, nil, false
 	}
 	r, err := profilelookup.Resolve(selected.Name, profilelookup.Options{RegistryPath: registryPath})
 	if err != nil {
-		return sessions.ProfilePin{Name: selected.Name, Digest: sessions.UnpinnableDigest}, true
+		return sessions.ProfilePin{Name: selected.Name, Digest: sessions.UnpinnableDigest}, nil, true
 	}
-	return sessions.ProfilePin{Name: r.Name, Digest: r.DigestSHA256}, true
+	form, _ = r.RedactedForm() // cannot fail for a Resolve result; a nil form only loses the diff
+	return sessions.ProfilePin{Name: r.Name, Digest: r.DigestSHA256}, form, true
+}
+
+// withProfileForm attaches form to rec when rec carries a pin (the launch's
+// own: every caller sets rec's pin from the same launchProfilePin).
+func withProfileForm(rec sessions.NameRecord, form []byte) sessions.NameRecord {
+	if rec.Profile != "" {
+		rec.ProfileForm = form
+	}
+	return rec
 }
 
 // registrySkewError is registrySkewRefusal's refusal, typed so a read-only
@@ -711,7 +724,7 @@ func runWithFlags(flags parsedFlags) int {
 	// injected --session-id there (gatedSessionID). clown enforces only digest
 	// equality with CLOWN_PROFILE_DIGEST; see checkLaunchProfile for what that
 	// does and does not protect.
-	launchPin, _ := launchProfilePin(selectedProfile, profilesPath)
+	launchPin, launchForm, _ := launchProfilePin(selectedProfile, profilesPath)
 	// Once per launch or resume: the inner clown of an [attach] re-exec
 	// leaves it to the outer.
 	if attachedID == "" {
@@ -725,7 +738,7 @@ func runWithFlags(flags parsedFlags) int {
 	gate.describeChange = func(old, new sessions.ProfilePin) string {
 		return describeProfileChange(old, new, func(name string) (*profilelookup.Resolved, error) {
 			return profilelookup.Resolve(name, profilelookup.Options{RegistryPath: profilesPath})
-		})
+		}, profilelookup.RedactedFormByDigest)
 	}
 	decision, err := checkLaunchProfile(gate, sessions.ProfileOf)
 	if err != nil {
@@ -738,7 +751,9 @@ func runWithFlags(flags parsedFlags) int {
 	// about to apply. Not best-effort: without it the inner could refuse or
 	// the approval be lost, so a failed write refuses.
 	if decision.pinEarly != nil && !flags.printLaunchPlan {
-		if err := sessions.RecordSession(sessions.NameRecord{SessionID: gate.resumeID, Profile: decision.pinEarly.Name, ProfileDigest: decision.pinEarly.Digest}); err != nil {
+		// pinEarly is always the launch's own pin (checkLaunchProfile), so
+		// launchForm describes it.
+		if err := sessions.RecordSession(withProfileForm(sessions.NameRecord{SessionID: gate.resumeID, Profile: decision.pinEarly.Name, ProfileDigest: decision.pinEarly.Digest}, launchForm)); err != nil {
 			fmt.Fprintf(os.Stderr, "clown: recording the profile pin for session %s: %v; refusing\n", gate.resumeID, err)
 			return 1
 		}
@@ -879,7 +894,7 @@ func runWithFlags(flags parsedFlags) int {
 		}
 		for _, id := range ids {
 			base := sessions.NameRecord{SessionID: id, Name: flags.clownName, Group: flags.groupID}
-			if err := sessions.RecordSession(launchRecordFor(base, gate.launch, decision.approvesRecordFor(id), sessions.ProfileOf)); err != nil {
+			if err := sessions.RecordSession(withProfileForm(launchRecordFor(base, gate.launch, decision.approvesRecordFor(id), sessions.ProfileOf), launchForm)); err != nil {
 				fmt.Fprintf(os.Stderr, "clown: warning: recording session %s in the session-names sidecar: %v\n", id, err)
 			}
 		}

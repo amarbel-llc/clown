@@ -351,19 +351,23 @@ func TestLaunchProfilePin(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if pin, ok := launchProfilePin(nil, absent); ok {
-		t.Errorf("no profile: got pin %+v", pin)
+	if pin, form, ok := launchProfilePin(nil, absent); ok || form != nil {
+		t.Errorf("no profile: got pin %+v, form %s", pin, form)
 	}
-	pin, ok := launchProfilePin(canary, absent)
+	pin, form, ok := launchProfilePin(canary, absent)
 	if !ok || pin != (sessions.ProfilePin{Name: canary.Name, Digest: current.DigestSHA256}) {
 		t.Errorf("launchProfilePin = %+v, %v; want %s@%s", pin, ok, canary.Name, current.DigestSHA256)
+	}
+	// clown#298: the pin carries the redacted form of what it pins.
+	if want, err := current.RedactedForm(); err != nil || string(form) != string(want) {
+		t.Errorf("launchProfilePin form = %s (err %v); want %s", form, err, want)
 	}
 
 	unpinnable := func(p profile.Profile, registry string) {
 		t.Helper()
-		pin, ok := launchProfilePin(&p, registry)
-		if want := (sessions.ProfilePin{Name: p.Name, Digest: sessions.UnpinnableDigest}); !ok || pin != want {
-			t.Errorf("launchProfilePin(%s) = %+v, %v; want %+v", p.Name, pin, ok, want)
+		pin, form, ok := launchProfilePin(&p, registry)
+		if want := (sessions.ProfilePin{Name: p.Name, Digest: sessions.UnpinnableDigest}); !ok || pin != want || form != nil {
+			t.Errorf("launchProfilePin(%s) = %+v, %s, %v; want %+v and no form", p.Name, pin, form, ok, want)
 		}
 	}
 	unpinnable(profile.Profile{Name: "not-in-any-registry", Provider: "claude", Backend: "anthropic"}, absent)
@@ -382,4 +386,31 @@ func TestLaunchProfilePin(t *testing.T) {
 		t.Fatal(err)
 	}
 	unpinnable(mine, skewed)
+}
+
+// clown#298: a same-name edit no longer resolves to the pinned digest, but
+// the pin stored the redacted form, so the refusal shows the field diff.
+func TestResumeProfileShowsTheStoredFormDiff(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	const id = "11111111-2222-3333-4444-555555555555"
+	registry := filepath.Join(t.TempDir(), "profiles.toml")
+	p := profile.Profile{Name: "e2e-pin", Provider: "claude", Backend: "anthropic", Model: "model-a"}
+	if err := profile.Save(registry, []profile.Profile{p}, "0.4.5"); err != nil {
+		t.Fatal(err)
+	}
+	pin, form, ok := launchProfilePin(&p, registry)
+	if !ok || form == nil {
+		t.Fatalf("launchProfilePin = %+v, %s, %v", pin, form, ok)
+	}
+	if err := sessions.RecordSession(sessions.NameRecord{SessionID: id, Profile: pin.Name, ProfileDigest: pin.Digest, ProfileForm: form}); err != nil {
+		t.Fatal(err)
+	}
+	p.Model = "model-b"
+	if err := profile.Save(registry, []profile.Profile{p}, "0.4.5"); err != nil {
+		t.Fatal(err)
+	}
+	_, err := resumeProfile(id, false, profilelookup.Options{RegistryPath: registry})
+	if err == nil || !strings.Contains(err.Error(), `model: "model-a" -> "model-b"`) || strings.Contains(err.Error(), "not recorded") {
+		t.Fatalf("refusal = %v; want the stored-form field diff", err)
+	}
 }
