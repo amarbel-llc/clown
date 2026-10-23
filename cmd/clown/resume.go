@@ -27,6 +27,7 @@ type resumeArgs struct {
 	key              string // positional repo/worktree session key (clown#192); empty otherwise
 	keyName          string // optional third key segment: a clown-name filter
 	mcpCollapse      bool   // --mcp-collapse: opt into MCP-collapse mode on the resumed launch
+	profile          string // --profile: a requested profile, checked against the session's pin (FDR 0022)
 	forwarded        []string
 }
 
@@ -187,30 +188,51 @@ func resumePick(ss []sessions.Session, args resumeArgs) int {
 }
 
 func launchResume(s sessions.Session, args resumeArgs) int {
-	profileName, err := resumeProfile(s.ID, profilelookup.Options{})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
-		return 1
-	}
 	flags := parsedFlags{
 		provider:         "claude",
 		providerExplicit: true,
+		mcpCollapse:      args.mcpCollapse,
+		forwarded:        append(args.forwarded, "--resume", s.ID),
+	}
+	// A requested profile (--profile, else CLOWN_PROFILE, the same order as a
+	// plain launch) is a requested transition: runWithFlags' checkLaunchProfile
+	// allows it only when it equals the session's pin or the launcher approved
+	// it with CLOWN_PROFILE_DIGEST (FDR 0022 decisions 3, 8).
+	if requested := cmpOr(args.profile, os.Getenv("CLOWN_PROFILE")); requested != "" {
+		flags.profile = requested
+	} else {
+		name, err := resumeProfile(s.ID, os.Getenv("CLOWN_PROFILE_DIGEST") != "", profilelookup.Options{})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "clown: %v\n", err)
+			return 1
+		}
 		// A recorded profile goes through the same selection as --profile in
 		// runWithFlags (applyNamedProfile, the saved --cheap-context replay).
-		profile:     profileName,
-		mcpCollapse: args.mcpCollapse,
-		forwarded:   append(args.forwarded, "--resume", s.ID),
+		flags.profile = name
+		flags.profileFromRecord = name != ""
 	}
 	return runWithFlags(flags)
 }
 
+func cmpOr(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
+}
+
 // resumeProfile returns the named profile a resumed session launches with
-// (FDR 0022 slice 1, clown#295): "" when the session recorded none (launch
+// (FDR 0022, clown#295): "" when the session recorded none (launch
 // unchanged), else the recorded name, but only while it still resolves to
 // the recorded digest. A changed digest, or a name that no longer resolves
 // (unknown, *profilelookup.SkewError, *profilelookup.BaseError), is refused:
 // a session's profile never changes silently and never falls back to none.
-func resumeProfile(sessionID string, opts profilelookup.Options) (string, error) {
+//
+// approved (CLOWN_PROFILE_DIGEST is set) skips the digest comparison and
+// returns the recorded name: the launcher pinned an expected digest, and
+// runWithFlags' checkLaunchProfile refuses unless the name resolves to
+// exactly that. An unreadable record is refused either way.
+func resumeProfile(sessionID string, approved bool, opts profilelookup.Options) (string, error) {
 	pin, ok, err := sessions.ProfileOf(sessionID)
 	if err != nil {
 		return "", fmt.Errorf("cannot read the profile session %s was launched with: %w; refusing to resume without it", sessionID, err)
@@ -218,8 +240,11 @@ func resumeProfile(sessionID string, opts profilelookup.Options) (string, error)
 	if !ok {
 		return "", nil
 	}
+	if approved {
+		return pin.Name, nil
+	}
 	if pin.Digest == sessions.UnpinnableDigest {
-		return "", fmt.Errorf("session %s was launched with profile %q, which could not be pinned at launch (pkg/profilelookup could not vouch for it, e.g. an unstamped profiles.toml), so resume cannot verify the profile is unchanged; refusing to resume. Stamp the registry by saving a profile with `clown profile edit` so future launches are pinned; this session must be restarted fresh", sessionID, pin.Name)
+		return "", fmt.Errorf("session %s was launched with profile %q, which could not be pinned at launch (pkg/profilelookup could not vouch for it, e.g. an unstamped profiles.toml), so resume cannot verify the profile is unchanged; refusing to resume. Stamp the registry by saving a profile with `clown profile edit` so future launches are pinned; this session resumes only when its launcher approves a digest (CLOWN_PROFILE_DIGEST)", sessionID, pin.Name)
 	}
 	recorded := pin.Digest
 	if recorded == "" {
@@ -230,7 +255,7 @@ func resumeProfile(sessionID string, opts profilelookup.Options) (string, error)
 		return "", fmt.Errorf("session %s was launched with profile %q (digest %s), which no longer resolves: %w; refusing to resume without it", sessionID, pin.Name, recorded, err)
 	}
 	if current.DigestSHA256 != pin.Digest {
-		return "", fmt.Errorf("session %s was launched with profile %q (digest %s), which now resolves to digest %s; refusing to resume under a changed profile (restore the profile's previous definition, or start a new session)", sessionID, pin.Name, recorded, current.DigestSHA256)
+		return "", fmt.Errorf("session %s was launched with profile %q (digest %s), which now resolves to digest %s; refusing to resume under a changed profile (restore the profile's previous definition, have the launcher approve the new digest with CLOWN_PROFILE_DIGEST, or start a new session)", sessionID, pin.Name, recorded, current.DigestSHA256)
 	}
 	return pin.Name, nil
 }
@@ -348,6 +373,14 @@ func parseResumeArgs(args []string) (resumeArgs, error) {
 			out.yes = true
 		case arg == "--mcp-collapse":
 			out.mcpCollapse = true
+		case arg == "--profile":
+			if i+1 >= len(args) {
+				return resumeArgs{}, fmt.Errorf("--profile requires an argument")
+			}
+			out.profile = args[i+1]
+			i++
+		case strings.HasPrefix(arg, "--profile="):
+			out.profile = strings.TrimPrefix(arg, "--profile=")
 		case arg == "--help" || arg == "-h":
 			printResumeHelp()
 			os.Exit(0)
@@ -397,9 +430,9 @@ func validateResumeArgs(a resumeArgs) (resumeArgs, error) {
 }
 
 func printResumeHelp() {
-	fmt.Print(`Usage: clown resume [--provider <name>] [-y|--yes] [-- <provider-args>]
-       clown resume <uri>                       [-- <provider-args>]
-       clown resume <repo>/<worktree>[/<name>] [-y|--yes] [-- <provider-args>]
+	fmt.Print(`Usage: clown resume [--provider <name>] [-y|--yes] [--profile <name>] [-- <provider-args>]
+       clown resume <uri>                       [--profile <name>] [-- <provider-args>]
+       clown resume <repo>/<worktree>[/<name>] [-y|--yes] [--profile <name>] [-- <provider-args>]
 
 Picker mode (no positional):
   Lists resumable sessions whose recorded working directory exactly
@@ -440,6 +473,18 @@ Profiles (all modes):
   unstamped registry) or the record cannot be read. A session that
   recorded no profile resumes without one, as before.
 
+  --profile <name> (or CLOWN_PROFILE) asks to resume under a profile.
+  Naming the profile the session is pinned to, at the same digest, is a
+  no-op; any other profile is a profile change and is refused unless
+  approved. There is no local confirmation.
+
+  Approval: the launcher (spinclass, after verifying an operator grant)
+  sets CLOWN_PROFILE_DIGEST to the digest it approved. clown checks only
+  that the profile it resolves has exactly that digest, then records it
+  as the session's new pin; it does not see or verify the grant. With
+  CLOWN_PROFILE set but no CLOWN_PROFILE_DIGEST, a resume is refused.
+  The same checks apply to a direct clown --resume <id> launch.
+
 Flags (picker mode):
   --provider <name>   Provider to resume from (default: claude). Only
                       claude is supported in v1.
@@ -450,6 +495,8 @@ Flags (picker mode):
                       register one aggregator fronting all upstream MCP
                       servers (mcp_list/mcp_describe/mcp_call) instead of
                       every upstream tool flat.
+  --profile <name>    Resume under a named profile (all modes); see
+                      Profiles above.
   --help, -h          Show this help text.
 
 Args after -- are forwarded to the provider alongside --resume <id>.

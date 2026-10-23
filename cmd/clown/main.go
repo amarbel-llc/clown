@@ -661,6 +661,38 @@ func runWithFlags(flags parsedFlags) int {
 		return 1
 	}
 
+	// FDR 0022 slice 2 (clown#295): refuse a launch that would change a
+	// session's recorded profile without the launcher's approval, before any
+	// session state is written. The resumed id is the claude --resume/-r value
+	// (every `clown resume` form passes one; decideClaudeSession below keeps
+	// it). clown enforces only digest equality with CLOWN_PROFILE_DIGEST; the
+	// grant behind it is spinclass's to verify (see checkLaunchProfile).
+	launchPin, _ := launchProfilePin(selectedProfile, profilesPath)
+	gate := profileGate{
+		profileEnvSet:  os.Getenv("CLOWN_PROFILE") != "",
+		approvedDigest: os.Getenv("CLOWN_PROFILE_DIGEST"),
+	}
+	if !flags.profileFromRecord {
+		gate.requested = flagProfile
+	}
+	if selectedProfile != nil {
+		gate.launch = &launchPin
+	}
+	if flags.provider == "claude" {
+		gate.resumeID = claudeFlagValue(flags.forwarded, "--resume", "-r")
+	}
+	approved, err := checkLaunchProfile(gate, sessions.ProfileOf)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
+		return 1
+	}
+	// An approved pin is recorded now, before any [attach] re-exec, so the
+	// inner clown (which may not inherit CLOWN_PROFILE_DIGEST) finds the
+	// session already pinned to what it is about to apply.
+	if approved && gate.resumeID != "" && !flags.printLaunchPlan {
+		_ = sessions.RecordSession(sessions.NameRecord{SessionID: gate.resumeID, Profile: launchPin.Name, ProfileDigest: launchPin.Digest})
+	}
+
 	// Resolve the job-wakeup channel identity once, here, so the monitor synth
 	// (--session) and the plugin host (BaseEnv) below share the SAME final key
 	// (clown#136). No os.Setenv on clown's own process — the key is threaded
@@ -809,13 +841,12 @@ func runWithFlags(flags parsedFlags) int {
 	// The same record carries the applied profile's name and digest (FDR 0022,
 	// clown#295), which `clown resume` restores and re-verifies.
 	if !flags.naked && !flags.printLaunchPlan {
-		pin, _ := launchProfilePin(selectedProfile, profilesPath)
 		rec := sessions.NameRecord{
 			SessionID:     flags.identity.Key,
 			Name:          flags.clownName,
 			Group:         flags.groupID,
-			Profile:       pin.Name,
-			ProfileDigest: pin.Digest,
+			Profile:       launchPin.Name,
+			ProfileDigest: launchPin.Digest,
 		}
 		_ = sessions.RecordSession(rec)
 		if flags.provider == "claude" && flags.resumeHintID != "" && flags.resumeHintID != flags.identity.Key {
@@ -3040,6 +3071,10 @@ type parsedFlags struct {
 	// from buildcfg.DefaultProfile, not from --profile or the clownfile pin; it
 	// then yields to the clownfile [profile] model in applyNamedProfile.
 	profileIsBuildDefault bool
+	// profileFromRecord marks that profile was restored by `clown resume`
+	// from the session's recorded pin, so checkLaunchProfile does not treat it
+	// as a requested transition (FDR 0022).
+	profileFromRecord bool
 	// idleSocket is the frontend's idle-listener socket when self-close is
 	// armed (clown#287); an agent unit binds it in so the Stop hook can reach it.
 	idleSocket string

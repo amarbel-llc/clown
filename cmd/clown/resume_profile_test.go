@@ -48,7 +48,9 @@ func TestResumeProfile(t *testing.T) {
 		registry func(t *testing.T) string
 		// unreadableSidecar puts a directory where the sidecar file belongs.
 		unreadableSidecar bool
-		want              string
+		// approved: the launcher supplied CLOWN_PROFILE_DIGEST.
+		approved bool
+		want     string
 		// refuse lists substrings the refusal must carry; nil means no error.
 		refuse []string
 	}{
@@ -106,6 +108,30 @@ func TestResumeProfile(t *testing.T) {
 			unreadableSidecar: true,
 			refuse:            []string{"session-names.jsonl"},
 		},
+		// With launcher approval (CLOWN_PROFILE_DIGEST set) resume restores
+		// the recorded name without comparing digests here: runWithFlags'
+		// gate checks the resolved digest against the approved one instead.
+		{
+			name:     "approved launch restores a changed profile by name",
+			record:   &sessions.ProfilePin{Name: builtinName, Digest: stale},
+			registry: func(*testing.T) string { return absent },
+			approved: true,
+			want:     builtinName,
+		},
+		{
+			name:     "approved launch restores an unpinnable profile by name",
+			record:   &sessions.ProfilePin{Name: builtinName, Digest: sessions.UnpinnableDigest},
+			registry: func(*testing.T) string { return absent },
+			approved: true,
+			want:     builtinName,
+		},
+		{
+			name:              "approved launch still refuses an unreadable sidecar",
+			registry:          func(*testing.T) string { return absent },
+			unreadableSidecar: true,
+			approved:          true,
+			refuse:            []string{"session-names.jsonl"},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -122,7 +148,7 @@ func TestResumeProfile(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			got, err := resumeProfile(id, profilelookup.Options{RegistryPath: tc.registry(t)})
+			got, err := resumeProfile(id, tc.approved, profilelookup.Options{RegistryPath: tc.registry(t)})
 			if tc.refuse == nil {
 				if err != nil {
 					t.Fatalf("refused: %v", err)
