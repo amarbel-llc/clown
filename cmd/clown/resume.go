@@ -479,11 +479,14 @@ Profiles (all modes):
   approved. There is no local confirmation.
 
   Approval: the launcher (spinclass, after verifying an operator grant)
-  sets CLOWN_PROFILE_DIGEST to the digest it approved. clown checks only
+  passes --profile <name> as a flag, CLOWN_PROFILE_DIGEST (the approved
+  digest, bare lowercase hex) and CLOWN_PROFILE_SESSION (the session it
+  approves). CLOWN_PROFILE stays supported for a user's own shell, but
+  it is not how a launcher approves. clown checks only
   that the profile it resolves has exactly that digest, records it as
   the session's new pin by the time the provider runs (not under
-  --print-launch-plan), and removes CLOWN_PROFILE_DIGEST and
-  CLOWN_PROFILE_SESSION from the environment the provider and any
+  --print-launch-plan), and removes CLOWN_PROFILE, CLOWN_PROFILE_DIGEST
+  and CLOWN_PROFILE_SESSION from the environment the provider and any
   nested clown inherit. It does not see or verify the grant. When
   CLOWN_PROFILE_SESSION is set, it must equal the session being resumed
   (else refused) and the approval covers only that session; without it

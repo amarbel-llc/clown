@@ -123,9 +123,8 @@ func TestCheckLaunchProfile(t *testing.T) {
 			refuse: []string{"CLOWN_PROFILE", "CLOWN_PROFILE_DIGEST", id},
 		},
 		{
-			// The inner clown of an [attach] re-exec: the outer consumed (and
-			// scrubbed) CLOWN_PROFILE_DIGEST after recording the approved pin,
-			// while CLOWN_PROFILE is still inherited. Naming the pin is a no-op.
+			// Decision 8 as amended: a user's own CLOWN_PROFILE export naming
+			// the session's unchanged pin is a no-op.
 			name:     "CLOWN_PROFILE without CLOWN_PROFILE_DIGEST naming the pin is a no-op",
 			gate:     profileGate{resumeID: id, requested: "p1", profileEnvSet: true, launch: pin("p1", dOld)},
 			recorded: recordedP1,
@@ -281,7 +280,7 @@ func TestAttachReexecOfPrePinSession(t *testing.T) {
 	// Outer: `clown resume <id>` of an unpinned session; p1 came from the
 	// clownfile pin, so nothing was requested (flagProfile "").
 	outer := parsedFlags{provider: "claude", providerExplicit: true, profile: "p1", forwarded: []string{"--resume", id}}
-	g := newProfileGate(outer, "", "", "", launch, false, fakeProfileLookup(recorded, nil))
+	g := newProfileGate(outer, "", launcherProfileEnv{}, launch, false, fakeProfileLookup(recorded, nil))
 	d, err := checkLaunchProfile(g, fakeProfileLookup(recorded, nil))
 	if err != nil {
 		t.Fatalf("outer refused: %v", err)
@@ -301,16 +300,16 @@ func TestAttachReexecOfPrePinSession(t *testing.T) {
 
 	// Without the early pin, an inner that read --profile as a request would
 	// refuse (the regression); as the inner of a re-exec it does not.
-	if _, err := checkLaunchProfile(newProfileGate(inner, inner.profile, "", "", launch, false, fakeProfileLookup(recorded, nil)), fakeProfileLookup(recorded, nil)); err == nil {
+	if _, err := checkLaunchProfile(newProfileGate(inner, inner.profile, launcherProfileEnv{}, launch, false, fakeProfileLookup(recorded, nil)), fakeProfileLookup(recorded, nil)); err == nil {
 		t.Error("a non-inner launch requesting p1 for an unpinned session should need approval")
 	}
-	if _, err := checkLaunchProfile(newProfileGate(inner, inner.profile, "", "", launch, true, fakeProfileLookup(recorded, nil)), fakeProfileLookup(recorded, nil)); err != nil {
+	if _, err := checkLaunchProfile(newProfileGate(inner, inner.profile, launcherProfileEnv{}, launch, true, fakeProfileLookup(recorded, nil)), fakeProfileLookup(recorded, nil)); err != nil {
 		t.Errorf("inner refused even without the early pin: %v", err)
 	}
 
 	// With the early pin recorded (the outer's write), the inner passes too.
 	recorded[id] = *d.pinEarly
-	if _, err := checkLaunchProfile(newProfileGate(inner, inner.profile, "", "", launch, true, fakeProfileLookup(recorded, nil)), fakeProfileLookup(recorded, nil)); err != nil {
+	if _, err := checkLaunchProfile(newProfileGate(inner, inner.profile, launcherProfileEnv{}, launch, true, fakeProfileLookup(recorded, nil)), fakeProfileLookup(recorded, nil)); err != nil {
 		t.Errorf("inner refused after the early pin: %v", err)
 	}
 }
@@ -403,24 +402,64 @@ func TestLaunchRecordFor(t *testing.T) {
 	}
 }
 
-// After the gate, CLOWN_PROFILE_DIGEST and CLOWN_PROFILE_SESSION are
-// consumed: the provider, an [attach] re-exec child and nested clowns must
-// not inherit an approval. CLOWN_PROFILE stays.
-func TestConsumeApprovalEnv(t *testing.T) {
+// After parseFlags and launchResume have read them, CLOWN_PROFILE,
+// CLOWN_PROFILE_DIGEST and CLOWN_PROFILE_SESSION are consumed: the
+// provider, an [attach] re-exec child (which gets --profile in argv) and
+// nested clowns must not inherit a profile request or an approval.
+func TestConsumeLauncherProfileEnv(t *testing.T) {
 	t.Setenv("CLOWN_PROFILE_DIGEST", "aaaa")
 	t.Setenv("CLOWN_PROFILE_SESSION", "id-1")
 	t.Setenv("CLOWN_PROFILE", "p1")
-	digest, session := consumeApprovalEnv()
-	if digest != "aaaa" || session != "id-1" {
-		t.Errorf("consumeApprovalEnv = %q, %q; want aaaa, id-1", digest, session)
+	got := consumeLauncherProfileEnv()
+	if got != (launcherProfileEnv{profile: "p1", digest: "aaaa", session: "id-1"}) {
+		t.Errorf("consumeLauncherProfileEnv = %+v", got)
 	}
-	for _, k := range []string{"CLOWN_PROFILE_DIGEST", "CLOWN_PROFILE_SESSION"} {
+	for _, k := range []string{"CLOWN_PROFILE", "CLOWN_PROFILE_DIGEST", "CLOWN_PROFILE_SESSION"} {
 		if v, ok := os.LookupEnv(k); ok {
 			t.Errorf("%s still set (%q) after consumption", k, v)
 		}
 	}
-	if got := os.Getenv("CLOWN_PROFILE"); got != "p1" {
-		t.Errorf("CLOWN_PROFILE = %q, want p1 (must not be scrubbed)", got)
+}
+
+// How spinclass approves (it sets no CLOWN_PROFILE): `--profile X` as a
+// flag plus CLOWN_PROFILE_DIGEST (bare lowercase hex) and
+// CLOWN_PROFILE_SESSION. Through `clown resume <id> --profile X` and a
+// direct `clown --profile X -- --resume <id>`, that is an approved
+// transition (decision 3): the pin moves to X, for that session only.
+func TestLauncherApprovesTransitionByFlag(t *testing.T) {
+	t.Setenv("CLOWN_PROFILE", "")
+	const id = "11111111-2222-3333-4444-555555555555"
+	dNew := strings.Repeat("b", 64)
+	recorded := fakeProfileLookup(map[string]sessions.ProfilePin{id: {Name: "p1", Digest: strings.Repeat("a", 64)}}, nil)
+	launch := &sessions.ProfilePin{Name: "p2", Digest: dNew}
+	env := launcherProfileEnv{digest: dNew, session: id}
+
+	direct, err := parseFlags([]string{"--profile", "p2", "--", "--resume", id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	direct.provider = "claude" // set by the profile's selection in runWithFlags
+	for name, flags := range map[string]parsedFlags{
+		// launchResume with args.profile = "p2"
+		"clown resume <id> --profile p2":      {provider: "claude", providerExplicit: true, profile: "p2", forwarded: []string{"--resume", id}},
+		"clown --profile p2 -- --resume <id>": direct,
+	} {
+		t.Run(name, func(t *testing.T) {
+			g := newProfileGate(flags, flags.profile, env, launch, false, recorded)
+			if g.requested != "p2" || g.profileEnvSet || g.resumeID != id {
+				t.Fatalf("gate = %+v; want requested p2, no CLOWN_PROFILE, resumeID %s", g, id)
+			}
+			d, err := checkLaunchProfile(g, recorded)
+			if err != nil {
+				t.Fatalf("refused: %v", err)
+			}
+			if !d.approved || d.pinEarly == nil || *d.pinEarly != *launch {
+				t.Errorf("decision = %+v; want approved with pinEarly %+v", d, launch)
+			}
+			if !d.approvesRecordFor(id) || d.approvesRecordFor("operator-key") {
+				t.Errorf("approval scope wrong: covers %s=%v, other=%v", id, d.approvesRecordFor(id), d.approvesRecordFor("operator-key"))
+			}
+		})
 	}
 }
 
@@ -513,7 +552,7 @@ func TestCheckLaunchProfileRefusesUnseenResume(t *testing.T) {
 // newProfileGate picks the unseen form up from the forwarded claude args.
 func TestNewProfileGateUnseenResume(t *testing.T) {
 	t.Setenv("CLOWN_PROFILE", "")
-	g := newProfileGate(parsedFlags{provider: "claude", forwarded: []string{"--resume", "--model", "m"}}, "", "", "", nil, false, fakeProfileLookup(nil, nil))
+	g := newProfileGate(parsedFlags{provider: "claude", forwarded: []string{"--resume", "--model", "m"}}, "", launcherProfileEnv{}, nil, false, fakeProfileLookup(nil, nil))
 	if g.unseenResume != "--resume" || g.resumeID != "" {
 		t.Errorf("gate = unseen %q, resumeID %q; want --resume and no id (not --model)", g.unseenResume, g.resumeID)
 	}

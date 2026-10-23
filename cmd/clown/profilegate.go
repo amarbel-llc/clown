@@ -24,11 +24,11 @@ type profileGate struct {
 	requested string
 	// profileEnvSet reports a non-empty CLOWN_PROFILE in the environment.
 	profileEnvSet bool
-	// approvedDigest is CLOWN_PROFILE_DIGEST (consumeApprovalEnv), "" when
-	// unset.
+	// approvedDigest is CLOWN_PROFILE_DIGEST (consumeLauncherProfileEnv),
+	// "" when unset.
 	approvedDigest string
-	// approvedSession is CLOWN_PROFILE_SESSION (consumeApprovalEnv), ""
-	// when unset: the one session the launcher's approval is for.
+	// approvedSession is CLOWN_PROFILE_SESSION (consumeLauncherProfileEnv),
+	// "" when unset: the one session the launcher's approval is for.
 	approvedSession string
 	// launch is the applied profile's pin (launchProfilePin); nil when the
 	// launch applies no profile.
@@ -62,9 +62,10 @@ type profileGate struct {
 //     that digest (fresh launch or resume). A match is an approval.
 //   - Fresh launch otherwise: unchanged.
 //   - Resume with CLOWN_PROFILE set but no CLOWN_PROFILE_DIGEST: refused
-//     (decision 8), unless it names the session's pin exactly (the inner
-//     clown of an [attach] re-exec, whose outer consumed the digest after
-//     recording the approved pin).
+//     (decision 8, amended), unless it names the session's pin exactly. A
+//     launcher approves with --profile plus the digest, and clown consumes
+//     CLOWN_PROFILE so no child inherits it, so this case is a user's own
+//     shell export, where naming the unchanged pin changes nothing.
 //   - Resume of a session with a recorded pin: the applied profile must
 //     equal it, name and digest (an unpinnable record never matches).
 //     `clown resume --profile X` naming the pinned profile is a no-op;
@@ -177,11 +178,11 @@ func (d profileDecision) approvesRecordFor(id string) bool {
 // even when it was defaulted, and the outer already ran this gate, so the
 // inner does not count it as a request (rules that compare against a pin
 // still apply).
-func newProfileGate(flags parsedFlags, flagProfile, approvedDigest, approvedSession string, launch *sessions.ProfilePin, attachInner bool, recorded profileLookup) profileGate {
+func newProfileGate(flags parsedFlags, flagProfile string, env launcherProfileEnv, launch *sessions.ProfilePin, attachInner bool, recorded profileLookup) profileGate {
 	g := profileGate{
-		profileEnvSet:   os.Getenv("CLOWN_PROFILE") != "",
-		approvedDigest:  approvedDigest,
-		approvedSession: approvedSession,
+		profileEnvSet:   env.profile != "",
+		approvedDigest:  env.digest,
+		approvedSession: env.session,
 		launch:          launch,
 	}
 	if !flags.profileFromRecord && !attachInner {
@@ -274,18 +275,33 @@ func launchRecordFor(base sessions.NameRecord, launch *sessions.ProfilePin, appr
 	return base
 }
 
-// consumeApprovalEnv returns CLOWN_PROFILE_DIGEST and CLOWN_PROFILE_SESSION
-// and removes both from this process's environment, so the provider, an
-// [attach] re-exec child and any nested clown never inherit the launcher's
-// approval (an agent in the session could otherwise re-pin another session
-// with it). The approved pin is recorded before any re-exec, so the inner
-// clown needs neither. CLOWN_PROFILE is left in place.
-func consumeApprovalEnv() (digest, session string) {
-	digest = os.Getenv("CLOWN_PROFILE_DIGEST")
-	session = os.Getenv("CLOWN_PROFILE_SESSION")
-	_ = os.Unsetenv("CLOWN_PROFILE_DIGEST")
-	_ = os.Unsetenv("CLOWN_PROFILE_SESSION")
-	return digest, session
+// launcherProfileEnv is the profile environment a launch was given:
+// CLOWN_PROFILE (a user's own request; launchers pass --profile instead),
+// CLOWN_PROFILE_DIGEST and CLOWN_PROFILE_SESSION (a launcher's approval).
+type launcherProfileEnv struct {
+	profile, digest, session string
+}
+
+// consumeLauncherProfileEnv returns the profile environment and removes it
+// from this process's environment, so the provider, an [attach] re-exec
+// child and any nested clown inherit neither a profile request nor the
+// launcher's approval (an agent in the session could otherwise re-pin
+// another session with it, and a nested resume would trip decision 8).
+// Nothing reads CLOWN_PROFILE after this point: parseFlags and
+// launchResume have already read it, the re-exec child gets --profile in
+// its argv (reexecArgv), and the agent-scope unit's env allow-list never
+// carried it. The approved pin is recorded before any re-exec, so the inner
+// clown needs no digest either.
+func consumeLauncherProfileEnv() launcherProfileEnv {
+	env := launcherProfileEnv{
+		profile: os.Getenv("CLOWN_PROFILE"),
+		digest:  os.Getenv("CLOWN_PROFILE_DIGEST"),
+		session: os.Getenv("CLOWN_PROFILE_SESSION"),
+	}
+	for _, k := range []string{"CLOWN_PROFILE", "CLOWN_PROFILE_DIGEST", "CLOWN_PROFILE_SESSION"} {
+		_ = os.Unsetenv(k)
+	}
+	return env
 }
 
 // warnTruncatedSidecar writes one warning line to w when the session-names

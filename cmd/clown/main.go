@@ -707,8 +707,7 @@ func runWithFlags(flags parsedFlags) int {
 	if selectedProfile != nil {
 		launch = &launchPin
 	}
-	approvedDigest, approvedSession := consumeApprovalEnv()
-	gate := newProfileGate(flags, flagProfile, approvedDigest, approvedSession, launch, attachedID != "", sessions.ProfileOf)
+	gate := newProfileGate(flags, flagProfile, consumeLauncherProfileEnv(), launch, attachedID != "", sessions.ProfileOf)
 	decision, err := checkLaunchProfile(gate, sessions.ProfileOf)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
