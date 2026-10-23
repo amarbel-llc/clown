@@ -154,6 +154,8 @@ resume has no local confirmation (decision 2), and the env names are final.
    it, re-resolves, and fails closed on a mismatch (tests first).
 2. `CLOWN_PROFILE_DIGEST` enforcement at launch (decision 8) and
    `--profile` on resume as a requested transition (decision 3).
+   `runWithFlags` must check a session's existing pin before appending a
+   different one (today `clown --profile X --resume <id>` overwrites it).
 3. The canonical-field diff function for the approval text (decision 4).
 
 ## Notes
