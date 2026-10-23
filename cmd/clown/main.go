@@ -676,7 +676,7 @@ func runWithFlags(flags parsedFlags) int {
 	// launch as a resume). A user --resume/-r/--session-id, or the resume
 	// subcommand path (launchResume adds --resume), selects the resume template.
 	attachMode := clownfile.ModeStart
-	if claudeFlagValue(flags.forwarded, "--resume", "-r", "--session-id") != "" {
+	if claudeSessionRef(flags.forwarded) != "" {
 		attachMode = clownfile.ModeResume
 	}
 	// A detached-worker launch (orchestrator passes --clown-attach=spawn,
@@ -754,7 +754,7 @@ func runWithFlags(flags parsedFlags) int {
 	// Empty ⇒ ungrouped, no export.
 	var groupSessionID string
 	if flags.provider == "claude" && !flags.naked {
-		groupSessionID = claudeFlagValue(flags.forwarded, "--session-id", "--resume", "-r")
+		groupSessionID = claudeSessionRef(flags.forwarded)
 	}
 	groupCwd, _ := os.Getwd()
 	flags.groupID = resolveGroupID(cf.Attach, groupCwd, groupSessionID, runGroupIDCommand)

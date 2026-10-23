@@ -26,8 +26,9 @@ import (
 //     resumable and printing would pollute its stdout; --continue's id is
 //     unknown without a transcript scan). The channel key stays baseKey.
 //
-//   - --session-id <id> or --resume <id> already present: adopt that id as both
-//     the channel key and the hint; args unchanged.
+//   - --session-id <id> or --resume <uuid> already present: adopt that id as
+//     both the channel key and the hint; args unchanged. A --resume/-r with no
+//     UUID (claude's picker) is skipped like --continue.
 //
 //   - baseKey is UUID-shaped (minted, or from CLAUDE_SESSION_ID): inject
 //     --session-id baseKey; channel key and hint are baseKey.
@@ -37,13 +38,17 @@ import (
 //     key, keep it as the channel (claude gets its own id); when empty, adopt
 //     the minted id as the channel key too.
 func decideClaudeSession(forwarded []string, baseKey string) (newForwarded []string, channelKey, hintID string) {
-	// A bare --resume/-r (claude's own picker) names no id either; without
-	// this, the flag after it would be adopted as the session id.
-	if claudeFlagPresent(forwarded, "--print", "-p") || claudeFlagPresent(forwarded, "--continue", "-c") || isBareResume(forwarded) {
+	if claudeFlagPresent(forwarded, "--print", "-p") || claudeFlagPresent(forwarded, "--continue", "-c") {
 		return forwarded, baseKey, ""
 	}
-	if id := claudeFlagValue(forwarded, "--session-id"); id != "" {
+	if id := claudeSessionIDArg(forwarded); id != "" {
 		return forwarded, id, id
+	}
+	// A --resume/-r that names no session (no value, a search term, a
+	// following flag: claude's own picker) is like --continue; only a UUID
+	// is adopted as the session id (resumeArg).
+	if isBareResume(forwarded) {
+		return forwarded, baseKey, ""
 	}
 	if id := claudeResumeID(forwarded); id != "" {
 		return forwarded, id, id
@@ -59,10 +64,10 @@ func decideClaudeSession(forwarded []string, baseKey string) (newForwarded []str
 	return append([]string{"--session-id", id}, forwarded...), channelKey, id
 }
 
-// isBareResume reports a --resume/-r with no id (unseenResumeForm).
+// isBareResume reports a --resume/-r that names no session (resumeArg).
 func isBareResume(args []string) bool {
-	f := unseenResumeForm(args)
-	return f == "--resume" || f == "-r"
+	flag, id := resumeArg(args)
+	return flag != "" && id == ""
 }
 
 // isUUID reports whether s is shaped like an RFC 4122 UUID (36 chars, hyphens at

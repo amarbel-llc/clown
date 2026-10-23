@@ -509,11 +509,14 @@ Profiles (all modes):
   included; that needs spinclass as the sole launcher with a scrubbed
   environment and a read-only clown state dir.
 
-  Refused with a profile: claude --continue/-c, a bare --resume or -r
-  (claude's own picker, including one followed by another flag) and
-  --from-pr name no session id clown can check, so a launch that applies
-  a profile refuses them; use clown resume <id> (or --resume <id>).
-  Without a profile they pass through unchanged.
+  Refused with a profile: claude --continue/-c, a --resume or -r that
+  does not name a session id (no value, a search term, or followed by
+  another flag: claude's own picker) and --from-pr name no session clown
+  can check, so a launch that applies a profile refuses them; use
+  clown resume <id> (or --resume <id>). Without a profile they pass
+  through unchanged. When the profile only came from a clownfile pin or
+  the build default, --provider claude turns that defaulting off, so the
+  picker still works without a profile.
 
 Flags (picker mode):
   --provider <name>   Provider to resume from (default: claude). Only

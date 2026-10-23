@@ -93,7 +93,13 @@ type profileGate struct {
 // now depends on that file being readable.
 func checkLaunchProfile(g profileGate, recorded profileLookup) (profileDecision, error) {
 	if g.unseenResume != "" && g.launch != nil {
-		return profileDecision{}, fmt.Errorf("%s resumes a session clown cannot identify, so it cannot check that session's profile (%q); refusing. Resume it by id instead: clown resume <id> (or pass --resume <id>)", g.unseenResume, g.launch.Name)
+		hint := ""
+		if g.requested == "" {
+			// resolveProfileName: an explicit --provider suppresses the
+			// clownfile pin and the build default, so no profile applies.
+			hint = fmt.Sprintf(". Profile %q was defaulted (clownfile pin or build default); passing --provider claude turns profile defaulting off, so claude's own picker still works without a profile", g.launch.Name)
+		}
+		return profileDecision{}, fmt.Errorf("%s resumes a session clown cannot identify, so it cannot check that session's profile (%q); refusing. Resume it by id instead: clown resume <id> (or pass --resume <id>)%s", g.unseenResume, g.launch.Name, hint)
 	}
 	if g.approvedSession != "" && g.approvedSession != g.resumeID {
 		which := "a fresh launch"
@@ -196,37 +202,76 @@ func newProfileGate(flags parsedFlags, flagProfile string, env launcherProfileEn
 }
 
 // unseenResumeForm returns the claude flag in args that resumes a session
-// without naming an id clown can read: -c/--continue, --from-pr, or a bare
-// --resume/-r (no value, an empty value, or followed by another flag, which
-// opens claude's own picker). "" when there is none.
+// without naming an id clown can read: -c/--continue, --from-pr, or a
+// --resume/-r that does not name a session (resumeArg). "" when there is
+// none.
 func unseenResumeForm(args []string) string {
-	for i, a := range args {
+	for _, a := range args {
 		switch {
-		case a == "-c" || a == "--continue" || a == "--from-pr" || strings.HasPrefix(a, "--from-pr="):
-			if strings.HasPrefix(a, "--from-pr") {
-				return "--from-pr"
-			}
+		case a == "-c" || a == "--continue":
 			return a
-		case a == "--resume" || a == "-r":
-			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
-				return a
-			}
-		case a == "--resume=":
-			return "--resume"
+		case a == "--from-pr" || strings.HasPrefix(a, "--from-pr="):
+			return "--from-pr"
 		}
+	}
+	if flag, id := resumeArg(args); flag != "" && id == "" {
+		return flag
 	}
 	return ""
 }
 
-// claudeResumeID returns the session id a claude --resume/-r names, or ""
-// when there is none or the form is bare (unseenResumeForm), so a following
-// flag is never mistaken for an id.
+// resumeArg reads the first claude --resume/-r in args: flag is the
+// spelling found ("" when there is none) and id the session it names. claude
+// session ids are UUIDs, so id is set only for a UUID value; no value, an
+// empty value, a search term, or a following flag (taken as no value) all
+// open claude's own picker, and id is "". This is the one reader behind
+// claudeResumeID, unseenResumeForm and isBareResume, so they agree.
+func resumeArg(args []string) (flag, id string) {
+	for i, a := range args {
+		var v string
+		switch {
+		case a == "--resume" || a == "-r":
+			flag = a
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				v = args[i+1]
+			}
+		case strings.HasPrefix(a, "--resume="):
+			flag, v = "--resume", strings.TrimPrefix(a, "--resume=")
+		case strings.HasPrefix(a, "-r="):
+			flag, v = "-r", strings.TrimPrefix(a, "-r=")
+		default:
+			continue
+		}
+		if isUUID(v) {
+			return flag, v
+		}
+		return flag, ""
+	}
+	return "", ""
+}
+
+// claudeResumeID returns the session a claude --resume/-r names (a UUID), or
+// "" (resumeArg).
 func claudeResumeID(args []string) string {
-	id := claudeFlagValue(args, "--resume", "-r")
-	if strings.HasPrefix(id, "-") {
+	_, id := resumeArg(args)
+	return id
+}
+
+// claudeSessionIDArg returns a claude --session-id value, or "" when there is
+// none or the next token is another flag. claude itself validates the value.
+func claudeSessionIDArg(args []string) string {
+	v := claudeFlagValue(args, "--session-id")
+	if strings.HasPrefix(v, "-") {
 		return ""
 	}
-	return id
+	return v
+}
+
+// claudeSessionRef is the session a claude launch names: an explicit
+// --session-id, else the --resume/-r id. It selects the [attach] resume
+// template and feeds the group-id command.
+func claudeSessionRef(args []string) string {
+	return cmpOr(claudeSessionIDArg(args), claudeResumeID(args))
 }
 
 // gatedSessionID returns the existing session a claude launch continues, for
@@ -243,7 +288,7 @@ func gatedSessionID(forwarded []string, recorded profileLookup) string {
 	if id := claudeResumeID(forwarded); id != "" {
 		return id
 	}
-	id := claudeFlagValue(forwarded, "--session-id")
+	id := claudeSessionIDArg(forwarded)
 	if id == "" {
 		return ""
 	}

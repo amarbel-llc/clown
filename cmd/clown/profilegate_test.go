@@ -328,9 +328,10 @@ func TestGatedSessionID(t *testing.T) {
 		want    string
 	}{
 		{name: "no session flags", args: []string{"--model", "m"}},
-		{name: "--resume", args: []string{"--resume", "r1"}, want: "r1"},
-		{name: "-r", args: []string{"-r", "r1"}, want: "r1"},
-		{name: "--resume=", args: []string{"--resume=r1"}, want: "r1"},
+		{name: "--resume", args: []string{"--resume", uuidR}, want: uuidR},
+		{name: "-r", args: []string{"-r", uuidR}, want: uuidR},
+		{name: "--resume=", args: []string{"--resume=" + uuidR}, want: uuidR},
+		{name: "--resume with a search term is not a session", args: []string{"--resume", "fix tests"}},
 		{name: "--session-id of an unpinned id is a fresh launch", args: []string{"--session-id", fresh}},
 		{name: "--session-id of a pinned session", args: []string{"--session-id", victim}, want: victim},
 		{name: "--session-id with an unreadable record fails closed", args: []string{"--session-id", fresh}, readErr: errors.New("boom"), want: fresh},
@@ -489,49 +490,109 @@ func TestProfileDecisionApprovesRecordFor(t *testing.T) {
 
 // Slice 3a (operator answer to open question 1): resume forms whose session
 // id clown cannot see are refused when a profile is applied.
-func TestUnseenResumeForm(t *testing.T) {
+const uuidR = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+
+// The three readers of a claude --resume/-r must agree: it names a session
+// only when its value is a UUID (claude's session ids are); anything else
+// (no value, an empty value, a search term, a following flag) opens
+// claude's picker and is an unseen form.
+func TestResumeArgReaders(t *testing.T) {
+	cases := []struct {
+		args   []string
+		id     string // claudeResumeID
+		unseen string // unseenResumeForm
+	}{
+		{args: nil},
+		{args: []string{"--session-id", uuidR}},
+		{args: []string{"-p", "hi"}},
+		{args: []string{"--resume", uuidR}, id: uuidR},
+		{args: []string{"-r", uuidR}, id: uuidR},
+		{args: []string{"--resume=" + uuidR}, id: uuidR},
+		{args: []string{"-c"}, unseen: "-c"},
+		{args: []string{"--continue"}, unseen: "--continue"},
+		{args: []string{"--from-pr", "12"}, unseen: "--from-pr"},
+		{args: []string{"--from-pr"}, unseen: "--from-pr"},
+		{args: []string{"--resume"}, unseen: "--resume"},
+		{args: []string{"-r"}, unseen: "-r"},
+		{args: []string{"--resume="}, unseen: "--resume"},
+		{args: []string{"--resume", ""}, unseen: "--resume"},
+		{args: []string{"--resume", "fix tests"}, unseen: "--resume"},
+		{args: []string{"-r", "foo"}, unseen: "-r"},
+		{args: []string{"--resume=foo"}, unseen: "--resume"},
+		{args: []string{"--resume", "--model", "m"}, unseen: "--resume"},
+		{args: []string{"-r", "-p", "hi"}, unseen: "-r"},
+		{args: []string{"--resume", "--session-id", uuidR}, unseen: "--resume"},
+	}
+	for _, tc := range cases {
+		if got := claudeResumeID(tc.args); got != tc.id {
+			t.Errorf("claudeResumeID(%q) = %q, want %q", tc.args, got, tc.id)
+		}
+		if got := unseenResumeForm(tc.args); got != tc.unseen {
+			t.Errorf("unseenResumeForm(%q) = %q, want %q", tc.args, got, tc.unseen)
+		}
+		bare := tc.unseen == "--resume" || tc.unseen == "-r"
+		if got := isBareResume(tc.args); got != bare {
+			t.Errorf("isBareResume(%q) = %v, want %v", tc.args, got, bare)
+		}
+	}
+}
+
+// claudeSessionRef is the session a claude launch names for the [attach]
+// mode and the group-id command: an explicit --session-id, else a UUID
+// --resume. A flag after a bare --resume/--session-id is never taken as one.
+func TestClaudeSessionRef(t *testing.T) {
 	cases := []struct {
 		args []string
 		want string
 	}{
 		{args: nil},
-		{args: []string{"--resume", "id-1"}},
-		{args: []string{"-r", "id-1"}},
-		{args: []string{"--resume=id-1"}},
-		{args: []string{"--session-id", "id-1"}},
-		{args: []string{"-p", "hi"}},
-		{args: []string{"-c"}, want: "-c"},
-		{args: []string{"--continue"}, want: "--continue"},
-		{args: []string{"--resume"}, want: "--resume"},
-		{args: []string{"-r"}, want: "-r"},
-		{args: []string{"--resume="}, want: "--resume"},
-		{args: []string{"--resume", "--model", "m"}, want: "--resume"},
-		{args: []string{"-r", "-p", "hi"}, want: "-r"},
-		{args: []string{"--from-pr", "12"}, want: "--from-pr"},
-		{args: []string{"--from-pr"}, want: "--from-pr"},
+		{args: []string{"--resume", uuidR}, want: uuidR},
+		{args: []string{"--session-id", uuidR}, want: uuidR},
+		{args: []string{"--resume", "--session-id", uuidR}, want: uuidR},
+		{args: []string{"--resume", "--foo"}},
+		{args: []string{"--resume", "fix tests"}},
+		{args: []string{"--session-id", "--foo"}},
+		{args: []string{"-c"}},
 	}
 	for _, tc := range cases {
-		if got := unseenResumeForm(tc.args); got != tc.want {
-			t.Errorf("unseenResumeForm(%q) = %q, want %q", tc.args, got, tc.want)
+		if got := claudeSessionRef(tc.args); got != tc.want {
+			t.Errorf("claudeSessionRef(%q) = %q, want %q", tc.args, got, tc.want)
 		}
 	}
 }
 
-func TestClaudeResumeID(t *testing.T) {
-	cases := []struct {
-		args []string
-		want string
-	}{
-		{args: []string{"--resume", "id-1"}, want: "id-1"},
-		{args: []string{"-r", "id-1"}, want: "id-1"},
-		{args: []string{"--resume=id-1"}, want: "id-1"},
-		{args: []string{"--resume"}},
-		{args: []string{"--resume", "--model", "m"}},
-		{args: []string{"--resume="}},
+// decideClaudeSession adopts only a UUID --resume, and still adopts an
+// explicit --session-id next to a bare --resume.
+func TestDecideClaudeSessionNonUUIDResume(t *testing.T) {
+	for _, args := range [][]string{
+		{"--resume", "fix tests"},
+		{"-r", "foo"},
+		{"--resume", ""},
+		{"--resume="},
+		{"--resume=foo"},
+	} {
+		got, channelKey, hint := decideClaudeSession(args, "base")
+		if !slices.Equal(got, args) || channelKey != "base" || hint != "" {
+			t.Errorf("decideClaudeSession(%q) = %q, %q, %q; want args unchanged, base, no hint", args, got, channelKey, hint)
+		}
 	}
-	for _, tc := range cases {
-		if got := claudeResumeID(tc.args); got != tc.want {
-			t.Errorf("claudeResumeID(%q) = %q, want %q", tc.args, got, tc.want)
+	args := []string{"--resume", "--session-id", uuidR}
+	if _, channelKey, hint := decideClaudeSession(args, "base"); channelKey != uuidR || hint != uuidR {
+		t.Errorf("decideClaudeSession(%q) = %q, %q; want the explicit --session-id adopted", args, channelKey, hint)
+	}
+}
+
+// The fail-open the review found: a non-UUID --resume value must not pass
+// the gate as a resume of a session named by that string, nor be
+// trust-on-first-use pinned.
+func TestNonUUIDResumeIsRefusedWithAProfile(t *testing.T) {
+	t.Setenv("CLOWN_PROFILE", "")
+	p1 := &sessions.ProfilePin{Name: "p1", Digest: "aaaa"}
+	for _, fwd := range [][]string{{"-r", "foo"}, {"--resume", "fix tests"}, {"--resume", ""}, {"--resume="}, {"--resume=foo"}} {
+		g := newProfileGate(parsedFlags{provider: "claude", forwarded: fwd}, "", launcherProfileEnv{}, p1, false, fakeProfileLookup(nil, nil))
+		d, err := checkLaunchProfile(g, fakeProfileLookup(nil, nil))
+		if err == nil || g.resumeID != "" || d.pinEarly != nil {
+			t.Errorf("%q: resumeID %q, pinEarly %+v, err %v; want a refusal and no session", fwd, g.resumeID, d.pinEarly, err)
 		}
 	}
 }
@@ -539,9 +600,16 @@ func TestClaudeResumeID(t *testing.T) {
 func TestCheckLaunchProfileRefusesUnseenResume(t *testing.T) {
 	p1 := &sessions.ProfilePin{Name: "p1", Digest: "aaaa"}
 	for _, form := range []string{"-c", "--continue", "--resume", "-r", "--from-pr"} {
+		// Defaulted profile (clownfile pin / build default): the message also
+		// says --provider claude turns defaulting off.
 		_, err := checkLaunchProfile(profileGate{unseenResume: form, launch: p1}, fakeProfileLookup(nil, nil))
-		if err == nil || !strings.Contains(err.Error(), form) || !strings.Contains(err.Error(), "clown resume <id>") {
-			t.Errorf("%s with a profile: err = %v; want a refusal naming %s and pointing to clown resume <id>", form, err, form)
+		if err == nil || !strings.Contains(err.Error(), form) || !strings.Contains(err.Error(), "clown resume <id>") || !strings.Contains(err.Error(), "--provider claude") {
+			t.Errorf("%s with a defaulted profile: err = %v; want a refusal naming %s, clown resume <id> and --provider claude", form, err, form)
+		}
+		// Explicitly requested profile: --provider claude would not help.
+		_, err = checkLaunchProfile(profileGate{unseenResume: form, requested: "p1", launch: p1}, fakeProfileLookup(nil, nil))
+		if err == nil || strings.Contains(err.Error(), "--provider claude") {
+			t.Errorf("%s with --profile: err = %v; want a refusal without the --provider hint", form, err)
 		}
 	}
 	if _, err := checkLaunchProfile(profileGate{unseenResume: "-c"}, fakeProfileLookup(nil, nil)); err != nil {
