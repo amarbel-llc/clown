@@ -69,7 +69,9 @@ func TestResumeProfile(t *testing.T) {
 			name:     "changed digest refuses",
 			record:   &sessions.ProfilePin{Name: builtinName, Digest: stale},
 			registry: func(*testing.T) string { return absent },
-			refuse:   []string{builtinName, stale, current.DigestSHA256},
+			// The old definition is not recoverable (same name, new digest):
+			// the refusal says so instead of inventing a diff.
+			refuse: []string{builtinName, stale, current.DigestSHA256, "previous definition is not recorded"},
 		},
 		{
 			name:     "missing digest refuses",

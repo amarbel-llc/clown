@@ -16,6 +16,12 @@
 //     driver (job-wake and chat); Selection.Missing checks it against the
 //     keep-set so a launcher can refuse before spawning a mute worker.
 //   - A registry this build cannot vouch for fails closed with *SkewError.
+//   - Diff renders how one Resolved differs from another as at most maxLines
+//     short, printable lines in a fixed order, never printing the token, env
+//     values or digests, or a URL that may carry a credential, for an
+//     approver to read (FDR 0022 decision 4). Its full contract is on Diff.
+//     It reads Canonical and does not change it, so it is outside the
+//     ProtocolVersion rules below.
 //
 // # Protocol version
 //

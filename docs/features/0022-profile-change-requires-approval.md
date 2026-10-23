@@ -11,9 +11,8 @@ promotion-criteria: >
 
 # Profile changes at runtime require user approval
 
-> **Mostly implemented:** slices 1, 2 and 3a are in clown (see
-> Implementation slices); slice 3 (the field diff) and the spinclass half
-> are design. The Problem section describes clown before them. Claims not read in
+> **Implemented in clown:** slices 1, 2, 3a and 3b (see Implementation
+> slices); the spinclass half is design. The Problem section describes clown before them. Claims not read in
 > source are marked **UNVERIFIED**. clown owns profile resolution and the
 > digest; spinclass owns session state, the re-pin right and the grant
 > store; piggy owns the signing act. This document states clown's side and
@@ -298,7 +297,25 @@ resume has no local confirmation (decision 2), and the env names are final.
    When the profile was only defaulted (clownfile pin or build default),
    the refusal adds that `--provider claude` turns defaulting off
    (`resolveProfileName`), so the picker still works without a profile.
-3. The canonical-field diff function for the approval text (decision 4).
+3b. **Done.** The canonical-field diff for the approval text (decision 4):
+   `profilelookup.Diff(old, new, maxLines) (lines, more)`, public so
+   spinclass can link it. Its contract is on the function (fixed field
+   order; printable lines of at most 80 runes; the token only as
+   set/unset; env only as key added/removed/changed, never values or
+   digests; a URL with userinfo, any query, any fragment, or that does not
+   parse is redacted; `+N more changes` as the last line when capped; nil
+   old means every field added). It reads `Canonical` and does not change
+   the canonical form or the digest, so `ProtocolVersion` is unchanged.
+   clown's own pin-change refusals print up to 6 lines of it when the old
+   definition is recoverable, which is only when the pinned name still
+   resolves to the pinned digest (a switch to another profile). When the
+   pinned profile itself was edited, the old definition is gone and the
+   refusal says so instead of inventing a diff.
+
+   Open question: keeping the old definition would need the pin store to
+   record the canonical form (or enough of it) next to the digest. That is
+   a sidecar-format change, and `Canonical` can contain a literal URL
+   credential (clown#292), so it was not done here.
 
 ## Notes
 

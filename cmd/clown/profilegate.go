@@ -1,12 +1,14 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"strings"
 
 	"code.linenisgreat.com/clown/internal/sessions"
+	"code.linenisgreat.com/clown/pkg/profilelookup"
 )
 
 // profileLookup is sessions.ProfileOf's shape, a parameter for tests.
@@ -36,6 +38,47 @@ type profileGate struct {
 	// unseenResume names a claude resume form whose session id clown cannot
 	// see (unseenResumeForm); "" when none.
 	unseenResume string
+	// describeChange, when set, explains a pin change in the refusal
+	// (describeProfileChange); nil adds nothing.
+	describeChange func(old, new sessions.ProfilePin) string
+}
+
+// profileDiffLines caps the field diff a refusal prints.
+const profileDiffLines = 6
+
+// describeProfileChange explains a change from the pinned profile old to new
+// for a refusal (FDR 0022 slice 3b). clown pins only a name and digest, so
+// the old definition is recoverable only when old's name still resolves to
+// old's digest (a switch to another profile while the pinned one is
+// unchanged); then it shows up to profileDiffLines lines of
+// profilelookup.Diff. Otherwise it says the old definition is not recorded,
+// rather than inventing a diff. resolve is profilelookup.Resolve bound to the
+// registry (a parameter for tests).
+func describeProfileChange(old, new sessions.ProfilePin, resolve func(name string) (*profilelookup.Resolved, error)) string {
+	o, err := resolve(old.Name)
+	if err != nil || o.DigestSHA256 != old.Digest {
+		return "the previous definition is not recorded (clown pins only its name and digest), so no field diff is shown"
+	}
+	n, err := resolve(new.Name)
+	if err != nil || n.DigestSHA256 != new.Digest {
+		return "the new definition could not be re-read, so no field diff is shown"
+	}
+	lines, _ := profilelookup.Diff(o, n, profileDiffLines)
+	if len(lines) == 0 {
+		return "only fields the diff does not show (the display name) differ"
+	}
+	return "changes:\n  " + strings.Join(lines, "\n  ")
+}
+
+// withChange appends g.describeChange's explanation of old -> new to msg.
+func (g profileGate) withChange(msg string, old, new sessions.ProfilePin) string {
+	if g.describeChange == nil {
+		return msg
+	}
+	if d := g.describeChange(old, new); d != "" {
+		return msg + "\n" + d
+	}
+	return msg
 }
 
 // checkLaunchProfile refuses a launch whose profile would change a
@@ -150,7 +193,7 @@ func checkLaunchProfile(g profileGate, recorded profileLookup) (profileDecision,
 		return profileDecision{}, fmt.Errorf("session %s was launched with profile %q (digest %s); refusing to resume it without that profile", g.resumeID, existing.Name, existing.Digest)
 	}
 	if !matchesPin {
-		return profileDecision{}, fmt.Errorf("session %s was launched with profile %q (digest %s); this launch applies profile %q (digest %s); a profile change needs approval (CLOWN_PROFILE_DIGEST from the launcher); refusing", g.resumeID, existing.Name, existing.Digest, g.launch.Name, g.launch.Digest)
+		return profileDecision{}, errors.New(g.withChange(fmt.Sprintf("session %s was launched with profile %q (digest %s); this launch applies profile %q (digest %s); a profile change needs approval (CLOWN_PROFILE_DIGEST from the launcher); refusing", g.resumeID, existing.Name, existing.Digest, g.launch.Name, g.launch.Digest), existing, *g.launch))
 	}
 	return profileDecision{}, nil
 }

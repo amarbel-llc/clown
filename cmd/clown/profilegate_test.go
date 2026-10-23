@@ -2,12 +2,16 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
+	"code.linenisgreat.com/clown/internal/profile"
 	"code.linenisgreat.com/clown/internal/sessions"
+	"code.linenisgreat.com/clown/pkg/profilelookup"
 )
 
 // FDR 0022 slice 2 (clown#295, decisions 2, 3, 8): checkLaunchProfile is
@@ -655,6 +659,90 @@ func TestDecideClaudeSessionBareResume(t *testing.T) {
 	got, channelKey, hint := decideClaudeSession(args, "base")
 	if !slices.Equal(got, args) || channelKey != "base" || hint != "" {
 		t.Errorf("decideClaudeSession(%q) = %q, %q, %q; want args unchanged, base, no hint", args, got, channelKey, hint)
+	}
+}
+
+// Slice 3b: a pin change refusal shows the field diff when the old
+// definition is recoverable (the pinned name still resolves to the pinned
+// digest), and says so when it is not, never inventing one.
+func TestDescribeProfileChange(t *testing.T) {
+	mk := func(name, model, display string) *profilelookup.Resolved {
+		return resolvedForTest(t, profile.Profile{Name: name, Display: display, Provider: "claude", Backend: "anthropic", Model: model})
+	}
+	p1 := mk("p1", "m1", "")
+	p1Edited := mk("p1", "m-edited", "")
+	p2 := mk("p2", "m2", "")
+	p1Display := mk("p1", "m1", "renamed")
+	registry := func(rs ...*profilelookup.Resolved) func(string) (*profilelookup.Resolved, error) {
+		return func(name string) (*profilelookup.Resolved, error) {
+			for _, r := range rs {
+				if r.Name == name {
+					return r, nil
+				}
+			}
+			return nil, profilelookup.ErrNotFound
+		}
+	}
+	pin := func(r *profilelookup.Resolved) sessions.ProfilePin {
+		return sessions.ProfilePin{Name: r.Name, Digest: r.DigestSHA256}
+	}
+
+	got := describeProfileChange(pin(p1), pin(p2), registry(p1, p2))
+	if !strings.Contains(got, `name: "p1" -> "p2"`) || !strings.Contains(got, `model: "m1" -> "m2"`) {
+		t.Errorf("recoverable old: %q, want the field diff", got)
+	}
+	got = describeProfileChange(pin(p1), pin(p1Edited), registry(p1Edited))
+	if !strings.Contains(got, "not recorded") || strings.Contains(got, "model:") {
+		t.Errorf("unrecoverable old: %q, want the not-recorded note and no diff", got)
+	}
+	got = describeProfileChange(pin(p1), pin(p2), registry(p1))
+	if !strings.Contains(got, "could not be re-read") {
+		t.Errorf("unreadable new: %q", got)
+	}
+	got = describeProfileChange(pin(p1), pin(p1Display), registry(p1Display, p1))
+	if got == "" {
+		t.Errorf("display-only change produced no text")
+	}
+	// At most profileDiffLines diff lines.
+	many := profile.Profile{Name: "many", Provider: "claude", Backend: "anthropic", Env: map[string]string{}}
+	for i := range 20 {
+		many.Env[fmt.Sprintf("K%02d", i)] = "v"
+	}
+	rm := resolvedForTest(t, many)
+	got = describeProfileChange(pin(p1), pin(rm), registry(p1, rm))
+	if n := strings.Count(got, "\n  "); n != profileDiffLines {
+		t.Errorf("%d diff lines, want %d: %q", n, profileDiffLines, got)
+	}
+}
+
+// resolvedForTest resolves p through a throwaway registry holding only it.
+func resolvedForTest(t *testing.T, p profile.Profile) *profilelookup.Resolved {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "profiles.toml")
+	if err := profile.Save(path, []profile.Profile{p}, "0.4.5"); err != nil {
+		t.Fatal(err)
+	}
+	r, err := profilelookup.Resolve(p.Name, profilelookup.Options{RegistryPath: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+// The gate appends the description to a pin-change refusal.
+func TestCheckLaunchProfileDescribesChange(t *testing.T) {
+	const id = "11111111-2222-3333-4444-555555555555"
+	recorded := fakeProfileLookup(map[string]sessions.ProfilePin{id: {Name: "p1", Digest: "aaaa"}}, nil)
+	g := profileGate{
+		resumeID: id,
+		launch:   &sessions.ProfilePin{Name: "p2", Digest: "bbbb"},
+		describeChange: func(old, new sessions.ProfilePin) string {
+			return fmt.Sprintf("DESCRIBED %s->%s", old.Name, new.Name)
+		},
+	}
+	_, err := checkLaunchProfile(g, recorded)
+	if err == nil || !strings.Contains(err.Error(), "DESCRIBED p1->p2") {
+		t.Errorf("err = %v, want the change description", err)
 	}
 }
 

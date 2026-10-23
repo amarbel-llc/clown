@@ -255,7 +255,10 @@ func resumeProfile(sessionID string, approved bool, opts profilelookup.Options) 
 		return "", fmt.Errorf("session %s was launched with profile %q (digest %s), which no longer resolves: %w; refusing to resume without it", sessionID, pin.Name, recorded, err)
 	}
 	if current.DigestSHA256 != pin.Digest {
-		return "", fmt.Errorf("session %s was launched with profile %q (digest %s), which now resolves to digest %s; refusing to resume under a changed profile (restore the profile's previous definition, have the launcher approve the new digest with CLOWN_PROFILE_DIGEST, or start a new session)", sessionID, pin.Name, recorded, current.DigestSHA256)
+		detail := describeProfileChange(pin, sessions.ProfilePin{Name: pin.Name, Digest: current.DigestSHA256}, func(name string) (*profilelookup.Resolved, error) {
+			return profilelookup.Resolve(name, opts)
+		})
+		return "", fmt.Errorf("session %s was launched with profile %q (digest %s), which now resolves to digest %s; refusing to resume under a changed profile (restore the profile's previous definition, have the launcher approve the new digest with CLOWN_PROFILE_DIGEST, or start a new session)\n%s", sessionID, pin.Name, recorded, current.DigestSHA256, detail)
 	}
 	return pin.Name, nil
 }
