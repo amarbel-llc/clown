@@ -181,6 +181,22 @@ func TestEnvironmentAllowlistsAndUnsetsManagerKeys(t *testing.T) {
 	}
 }
 
+// clown#296: the frontend sets claude's MCP startup env before launching the
+// unit; both variables must survive into it.
+func TestClaudeMCPStartupEnvReachesTheUnit(t *testing.T) {
+	l := testLaunch()
+	l.FrontendEnv = append(l.FrontendEnv,
+		"MCP_CONNECTION_NONBLOCKING=false",
+		"CLAUDE_CODE_MCP_STARTUP_WAIT_MS=10000",
+	)
+	set, _ := l.environment()
+	for _, want := range []string{"MCP_CONNECTION_NONBLOCKING=false", "CLAUDE_CODE_MCP_STARTUP_WAIT_MS=10000"} {
+		if !slices.Contains(set, want) {
+			t.Errorf("%s did not reach the unit", want)
+		}
+	}
+}
+
 // CLOWN_UNIT is the in-unit marker spinclass's hook reads to tell it is
 // confined (FDR 0035): the unit's own name, present only inside a unit, and not
 // settable by an operator export, the extra env or the spec.

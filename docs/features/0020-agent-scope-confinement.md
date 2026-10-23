@@ -182,6 +182,11 @@ and clown unsets it. clown then sets exactly the following.
 - `SSL_CERT_FILE`, `SSL_CERT_DIR`, `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`
 - `CLOWN_NAME`, `CLOWN_GROUP_ID`, `CLOWN_GROUP_DESCRIPTION`,
   `CLOWN_XMPP_VHOST`
+- `MCP_CONNECTION_NONBLOCKING` (clown#296): the frontend sets it to `false`
+  (unless the operator set it) so claude connects its MCP servers before the
+  first model request. Not secret. Its companion
+  `CLAUDE_CODE_MCP_STARTUP_WAIT_MS` already passes under the `CLAUDE_CODE_`
+  prefix.
 
 `CLOWN_BIN` is no longer passed (2026-10-22, round R). It used to be copied
 from the frontend's env, and the frontend honors an inherited `CLOWN_BIN`. A

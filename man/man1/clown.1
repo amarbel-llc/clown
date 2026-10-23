@@ -406,12 +406,12 @@ independent temporary directories; that is no longer representable.
 Set by
 .Nm
 to
-.Li false
-in the environment of every
+.Li false ,
+only if unset, in its own environment before it launches
 .Cm claude
-launch (not
+(not
 .Fl -naked ,
-not other providers), only if unset, so
+not other providers), so
 .Xr claude-code 1
 connects its MCP servers before the first model request instead of sending
 that request with only its built-in tools (clown#296).
@@ -432,6 +432,21 @@ launches only, if unset: a detached spawn
 a
 .Fl p Ns / Ns Fl -print
 run, or a launch whose stdin or stderr is not a terminal.
+For a spawn wrapped in the
+.Sy [attach]
+multiplexer, the outer
+.Nm
+sets it, and it reaches claude only if the multiplexer passes the outer
+environment to the inner
+.Nm ;
+the inner one runs on a real pty and does not add it itself.
+.Pp
+Neither variable is delivered to a
+.Fl -tent
+container, which receives only its fixed passthrough list.
+An
+.Fl -agent-scope
+unit receives both.
 Both variable names come from the claude binary rather than its
 documentation and may change between claude versions.
 .It Ev CLOWN_PLUGIN_META

@@ -211,6 +211,9 @@ var passKeys = map[string]bool{
 	"SSL_CERT_FILE": true, "SSL_CERT_DIR": true, "CURL_CA_BUNDLE": true, "GIT_SSL_CAINFO": true,
 	"XDG_RUNTIME_DIR": true,
 	"CLOWN_NAME":      true, "CLOWN_GROUP_ID": true, "CLOWN_GROUP_DESCRIPTION": true, "CLOWN_XMPP_VHOST": true,
+	// clown#296: the frontend sets it so claude connects MCP servers before
+	// turn 1. FDR 0020 "Environment" records it.
+	"MCP_CONNECTION_NONBLOCKING": true,
 }
 
 // passPrefixes are copied verbatim from the frontend when set there, minus
