@@ -8,12 +8,15 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"unicode"
 	"unicode/utf8"
 )
 
 // MaxDiffLineRunes is the longest line Diff returns, in runes.
 const MaxDiffLineRunes = 80
+
+// MaxDiffValueRunes is the most runes each side of an `old -> new` line
+// keeps after elision.
+const MaxDiffValueRunes = 30
 
 // RedactedURL is what Diff prints in place of a URL that may carry a
 // credential.
@@ -31,19 +34,28 @@ const RedactedURL = "<redacted: may contain credentials>"
 //     context_excluded, base; within env, context_servers and
 //     context_excluded, keys (and tools) sorted bytewise. display is not
 //     compared.
-//   - Each line is printable (every rune passes unicode.IsPrint: values are
-//     quoted with strconv.QuoteToGraphic, so a newline, tab, escape or
-//     bidi-control in, say, a model name appears escaped) and at most
-//     MaxDiffLineRunes runes; a longer line is cut and ends in "…".
+//   - Each line is printable ASCII apart from the elision mark "…": every
+//     value (name, model, key, server, tool, url) is quoted with
+//     strconv.QuoteToASCII, so control characters and every non-ASCII rune,
+//     including invisible ones (U+3164, U+2800, variation selectors,
+//     combining marks), appear as \u escapes and two different values never
+//     look alike.
+//   - Each line is at most MaxDiffLineRunes runes, and clipping never drops
+//     the direction: an over-long quoted value is elided in its middle with
+//     "…" (keeping its first and last characters, quotes included), each
+//     side of `old -> new` is clipped to at most MaxDiffValueRunes, and the
+//     verb tail (added, removed, changed) is always kept whole.
 //   - Secrets are never printed. The token appears only as set/unset. env
 //     appears only as `env "KEY": added|removed|changed`, decided by
 //     comparing the per-value digests; neither the values nor the digests
 //     are printed.
 //   - url is printed verbatim unless it may carry a credential, then
 //     RedactedURL is printed instead. The rule is conservative: a URL is
-//     redacted when it does not parse, or has userinfo (user or user:pass@),
-//     or any query string, or any fragment, since API keys commonly ride in
-//     a query parameter. Only scheme, host and path are ever shown.
+//     redacted when it does not parse, has userinfo (user or user:pass@),
+//     is opaque or has no host (`https:user:pass@host`, `host/path`), has any
+//     query string or fragment (API keys commonly ride in a query), or has a
+//     `;` (path parameters) or `@` anywhere in its path. Only scheme, host
+//     and a plain path are ever shown.
 //   - When the changes do not fit in maxLines, the last returned line is
 //     "+N more changes" (it counts toward maxLines) and more is N. When they
 //     fit, more is 0. maxLines <= 0 returns no lines and more is the total
@@ -102,20 +114,26 @@ func diffChanges(old, new *Resolved) []string {
 		return nil
 	}
 	var out []string
-	add := func(line string) { out = append(out, fitLine(line)) }
+	add := func(line string) { out = append(out, line) }
+	// subject renders `prefix <value><tail>`, eliding value to what the
+	// line budget leaves after the fixed prefix and verb tail.
+	subject := func(prefix, value, tail string) string {
+		return prefix + clip(value, MaxDiffLineRunes-runes(prefix)-runes(tail)) + tail
+	}
 
 	scalar := func(field, ov, nv string, shown func(string) string) {
+		prefix := field + ": "
 		switch {
 		case !o.present:
 			if nv != "" {
-				add(fmt.Sprintf("%s: %s (added)", field, shown(nv)))
+				add(subject(prefix, shown(nv), " (added)"))
 			}
 		case !n.present:
 			if ov != "" {
-				add(fmt.Sprintf("%s: %s (removed)", field, shown(ov)))
+				add(subject(prefix, shown(ov), " (removed)"))
 			}
 		case ov != nv:
-			add(fmt.Sprintf("%s: %s -> %s", field, shown(ov), shown(nv)))
+			add(prefix + clip(shown(ov), MaxDiffValueRunes) + " -> " + clip(shown(nv), MaxDiffValueRunes))
 		}
 	}
 	scalar("name", o.fields.Name, n.fields.Name, quote)
@@ -148,11 +166,11 @@ func diffChanges(old, new *Resolved) []string {
 		nv, inNew := n.fields.Env[k]
 		switch {
 		case !inOld:
-			add(fmt.Sprintf("env %s: added", quote(k)))
+			add(subject("env ", quote(k), ": added"))
 		case !inNew:
-			add(fmt.Sprintf("env %s: removed", quote(k)))
+			add(subject("env ", quote(k), ": removed"))
 		case ov != nv:
-			add(fmt.Sprintf("env %s: changed", quote(k)))
+			add(subject("env ", quote(k), ": changed"))
 		}
 	}
 
@@ -167,12 +185,15 @@ func diffChanges(old, new *Resolved) []string {
 		}
 	}
 	for _, s := range listDiff(o.fields.ContextServers, n.fields.ContextServers) {
-		add(fmt.Sprintf("context_servers %s: %s", quote(s.item), s.change))
+		add(subject("context_servers ", quote(s.item), ": "+s.change))
 	}
 
 	for _, srv := range unionKeys(o.fields.ContextExcluded, n.fields.ContextExcluded) {
 		for _, tool := range listDiff(o.fields.ContextExcluded[srv], n.fields.ContextExcluded[srv]) {
-			add(fmt.Sprintf("context_excluded %s %s: %s", quote(srv), quote(tool.item), tool.change))
+			const prefix = "context_excluded "
+			tail := ": " + tool.change
+			each := (MaxDiffLineRunes - runes(prefix) - 1 - runes(tail)) / 2
+			add(prefix + clip(quote(srv), each) + " " + clip(quote(tool.item), each) + tail)
 		}
 	}
 
@@ -244,7 +265,9 @@ func urlMayCarryCredential(raw string) bool {
 	if err != nil {
 		return true
 	}
-	return u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.RawFragment != ""
+	return u.User != nil || u.Opaque != "" || u.Host == "" ||
+		u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.RawFragment != "" ||
+		strings.ContainsAny(u.Path, ";@") || strings.ContainsAny(u.RawPath, ";@")
 }
 
 func shownURL(raw string) string {
@@ -254,23 +277,28 @@ func shownURL(raw string) string {
 	return quote(raw)
 }
 
-// quote renders s printable: strconv.QuoteToGraphic escapes control and
-// format characters, and any graphic-but-not-printable rune left (a
-// non-ASCII space) becomes '?'.
+// quote renders s as a Go string literal in printable ASCII
+// (strconv.QuoteToASCII): control characters and every non-ASCII rune,
+// visible or not, become escapes.
 func quote(s string) string {
-	return strings.Map(func(r rune) rune {
-		if unicode.IsPrint(r) {
-			return r
-		}
-		return '?'
-	}, strconv.QuoteToGraphic(s))
+	return strconv.QuoteToASCII(s)
 }
 
-// fitLine cuts a line to MaxDiffLineRunes runes, ending it in "…".
-func fitLine(s string) string {
-	if utf8.RuneCountInString(s) <= MaxDiffLineRunes {
+func runes(s string) int { return utf8.RuneCountInString(s) }
+
+// clip elides s to at most n runes by replacing its middle with "…",
+// keeping its first and last characters (a quoted value keeps both
+// quotes). n below 3 is treated as 3.
+func clip(s string, n int) string {
+	if s == RedactedURL {
+		return s // fixed text, never elided (it fits every line budget)
+	}
+	n = max(n, 3)
+	r := []rune(s)
+	if len(r) <= n {
 		return s
 	}
-	r := []rune(s)
-	return string(r[:MaxDiffLineRunes-1]) + "…"
+	tail := (n - 1) / 2
+	head := n - 1 - tail
+	return string(r[:head]) + "…" + string(r[len(r)-tail:])
 }

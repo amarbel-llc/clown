@@ -147,10 +147,85 @@ func TestDiffLongURLIsTruncated(t *testing.T) {
 	old, new := baseProfile(), baseProfile()
 	new.URL = "https://gw.example/" + strings.Repeat("x", 200)
 	got, _ := Diff(mustResolved(t, old), mustResolved(t, new), 10)
-	if len(got) != 1 || !strings.HasSuffix(got[0], "…") {
-		t.Fatalf("Diff = %q, want one truncated url line", got)
+	if len(got) != 1 || !strings.Contains(got[0], "…") || !strings.HasPrefix(got[0], `url: "" -> "https://`) || !strings.HasSuffix(got[0], `xxx"`) {
+		t.Fatalf("Diff = %q, want one url line elided in the middle of the value", got)
 	}
 	checkLines(t, got)
+}
+
+// Clipping never drops the direction: values are elided in the middle,
+// each side of `old -> new` keeps its start and end, and the verb tail
+// (added/removed/changed) always survives.
+func TestDiffClipsSubjectsNotVerbs(t *testing.T) {
+	long := func(prefix string) string { return prefix + strings.Repeat("y", 120) + "END" }
+
+	old, new := baseProfile(), baseProfile()
+	old.Model, new.Model = long("OLDMODEL-"), long("NEWMODEL-")
+	old.Env = map[string]string{long("ENVKEY_"): "v"}
+	new.ContextServers = []string{"plug/x"}
+	new.ContextExcluded = map[string][]string{long("plug/server-"): {long("tool-")}}
+	got, _ := Diff(mustResolved(t, old), mustResolved(t, new), 20)
+	checkLines(t, got)
+
+	find := func(prefix string) string {
+		for _, l := range got {
+			if strings.HasPrefix(l, prefix) {
+				return l
+			}
+		}
+		t.Fatalf("no line starting %q in %q", prefix, got)
+		return ""
+	}
+	m := find("model: ")
+	if !strings.Contains(m, `"OLDMODEL-`) || !strings.Contains(m, `"NEWMODEL-`) || !strings.Contains(m, " -> ") || strings.Count(m, `END"`) != 2 {
+		t.Errorf("model line lost a side or its ends: %q", m)
+	}
+	e := find("env ")
+	if !strings.HasSuffix(e, ": removed") || !strings.Contains(e, `"ENVKEY_`) || !strings.Contains(e, `END"`) {
+		t.Errorf("env line lost its verb or key ends: %q", e)
+	}
+	x := find("context_excluded ")
+	if !strings.HasSuffix(x, ": added") || !strings.Contains(x, `"plug/server-`) || !strings.Contains(x, `"tool-`) {
+		t.Errorf("context_excluded line lost its verb or a subject: %q", x)
+	}
+}
+
+// Invisible-but-printable runes would make two different values look the
+// same to the approver, so every non-ASCII rune is escaped.
+func TestDiffEscapesInvisibleRunes(t *testing.T) {
+	for _, r := range []rune{0x2800, 0x3164, 0x115F, 0x1160, 0xFFA0, 0x034F, 0x17B4, 0x17B5, 0xFE00, 0xFE0F, 0xE0100, 0xE01EF, 0x0301, 0x20DD, 0x00A0, 0x200B} {
+		old, new := baseProfile(), baseProfile()
+		new.Model = "gpt-4" + string(r)
+		got, _ := Diff(mustResolved(t, old), mustResolved(t, new), 10)
+		if len(got) != 1 {
+			t.Fatalf("%U: Diff = %q", r, got)
+		}
+		for _, c := range got[0] {
+			if c > unicode.MaxASCII && c != '…' {
+				t.Errorf("%U: line carries non-ASCII %U unescaped: %q", r, c, got[0])
+			}
+		}
+		if !strings.Contains(got[0], `"gpt-4\u`) && !strings.Contains(got[0], `"gpt-4\U`) {
+			t.Errorf("%U: rune not shown as an escape: %q", r, got[0])
+		}
+	}
+}
+
+// More URL shapes that can hide a credential.
+func TestDiffRedactsOddURLs(t *testing.T) {
+	for _, u := range []string{
+		"https:user:hunter2@gw.example",      // opaque
+		"gw.example/v1",                      // no host
+		"https://gw.example/v1;key=hunter2",  // path parameters
+		"https://gw.example/user@hunter2/v1", // @ in the path
+	} {
+		old, new := baseProfile(), baseProfile()
+		new.URL = u
+		got, _ := Diff(mustResolved(t, old), mustResolved(t, new), 10)
+		if len(got) != 1 || !strings.Contains(got[0], RedactedURL) || strings.Contains(got[0], "hunter2") {
+			t.Errorf("url %q: Diff = %q, want one redacted line", u, got)
+		}
+	}
 }
 
 // A URL that can carry a credential is never shown: userinfo, any query
