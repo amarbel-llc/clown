@@ -2218,8 +2218,9 @@ explore-clown-launch-plan PROFILE="porter": build-nix
 # dirs inside that directory, so no real state is read or written and no
 # credential reaches claude (it starts unauthenticated and exits on `-p`).
 # Scenarios: a profiled launch writes a pin; `clown resume` with the same
-# profile reaches claude; an edited profile is refused; a session with no pin;
-# trust on first use via a clownfile profile; a launcher-approved re-pin. The
+# profile reaches claude; an edited profile is refused; a session with no pin,
+# with and without a clownfile default profile (decision 13); trust on first
+# use via a clownfile profile on a direct launch; a launcher-approved re-pin. The
 # claude transcripts `clown resume` looks up are hand-written stubs.
 #
 # run clown launch/resume profile-pin scenarios in an isolated environment
@@ -2267,10 +2268,21 @@ explore-profile-pin-e2e: build-nix
     echo "$out"
     newdigest="$(grep -oE 'now resolves to digest [0-9a-f]{64}' <<<"$out" | grep -oE '[0-9a-f]{64}' | head -n 1)"
 
-    echo "== 4. session with no pin record"
+    echo "== 4. session with no pin record, no default profile: resumes without one, says so"
     transcript "$s2"
     run "" resume "clown://claude/$s2" -- -p hi
     sidecar_show
+
+    echo "== 4b. session with no pin record, clownfile default profile: resumes with it, pinned (decision 13)"
+    s4=44444444-4444-4444-8444-444444444444
+    printf '[profile]\nprofile = "e2e-pin"\n' > "$cfg/clown/clownfile"
+    transcript "$s4"
+    run "" resume "clown://claude/$s4" -- -p hi
+    rm -f "$cfg/clown/clownfile"
+    echo "--- sidecar lines for $s4:"
+    grep "$s4" "$sidecar" || echo "(none)"
+    echo "== 4c. resume it again: the pin holds, no unpinned notice"
+    run "" resume "clown://claude/$s4" -- -p hi
 
     echo "== 5. trust on first use: clownfile profile, direct --resume of an unpinned session"
     printf '[profile]\nprofile = "e2e-pin"\n' > "$cfg/clown/clownfile"
