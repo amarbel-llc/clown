@@ -180,8 +180,9 @@ resume has no local confirmation (decision 2), and the env names are final.
    different one (`checkLaunchProfile`, `cmd/clown/profilegate.go`):
    - `CLOWN_PROFILE_DIGEST` set: the applied profile must resolve to that
      digest, on a fresh launch or a resume; a match is the approval. On a
-     resume the new pin is recorded before any `[attach]` re-exec, and a
-     failure to record it refuses the launch. clown then removes
+     resume the new pin is recorded by the time the provider runs (before
+     any `[attach]` re-exec; skipped under `--print-launch-plan`), and a
+     failure to record it refuses the launch. clown removes
      `CLOWN_PROFILE_DIGEST` from its environment, so the provider, the
      re-exec child and nested clowns never inherit the approval.
      `CLOWN_PROFILE` is kept.
@@ -200,18 +201,33 @@ resume has no local confirmation (decision 2), and the env names are final.
      unchanged pin.
    - Resume of an unpinned session: an explicit `--profile`/`CLOWN_PROFILE`
      needs approval; a clownfile pin or build default is allowed and pins
-     the session (trust on first use).
+     the session (trust on first use). That pin is also recorded early, by
+     the time the provider runs, with the same refuse-on-failure rule
+     (except for an unpinnable profile, whose pin would never match). The
+     inner clown of an `[attach]` re-exec receives the resolved name as
+     `--profile` even when it was defaulted, so it does not count its
+     `--profile` as a request (the outer already ran the check); rules that
+     compare against a pin still apply to it.
    - The write side never relies on the gate alone: every launch's record
      carries the launch pin only if the id has no pin, the same pin, or the
      launch was approved; otherwise (or if the pin cannot be read) it is
      a name-only record. This covers ids the gate does not check, such as
-     an operator `identity.Key` that is not the claude id. A failed
-     ordinary write is reported on stderr and does not stop the launch.
+     an operator `identity.Key` that is not the claude id. An approved
+     launch skips that comparison for both `identity.Key` and the claude
+     id, so approval is not bound to a session id (open question 2). A
+     failed ordinary write is reported on stderr and does not stop the
+     launch.
+   - Availability coupling: every fresh claude launch carries a
+     `--session-id`, which the check looks up, so a session-names sidecar
+     that exists but cannot be read refuses every resume and every fresh
+     claude launch (fail closed).
 
    Provisional: an empty `CLOWN_PROFILE_DIGEST` counts as unset; the
-   approved pin is written before the provider starts, so a launch that
-   fails after the check still re-pins; a non-claude provider has no
-   session continuity check.
+   approved or first-use pin is written before the provider starts, so a
+   launch that fails after the check still re-pins; a non-claude provider
+   has no session continuity check; the `[attach]` inner clown is
+   recognised by `--clown-attach-id`, which anyone launching clown can
+   pass.
 
    Not seen (gap, behavior unchanged): claude `--continue`/`-c`, a bare
    `--resume` (claude's own picker) and `--from-pr` resume a conversation
