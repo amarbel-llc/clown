@@ -4,14 +4,16 @@ date: 2026-10-23
 issue: clown#295
 related: FDR 0005 (hats), FDR 0006 (single-entrypoint matrix), spinclass FDR 0032 / 0034, spinclass#407, piggy RFC 0012 (operator-act@piggy, namespace piggy-escalation-v1)
 promotion-criteria: >
-  proposed once the operator has answered the open questions below;
-  experimental once clown#295 lands behind the decisions made here.
+  The operator has answered every open question (decision 8 amended,
+  decisions 9 to 12). experimental once the slice 3a work lands on master and spinclass
+  launches with --profile, CLOWN_PROFILE_DIGEST and CLOWN_PROFILE_SESSION.
 ---
 
 # Profile changes at runtime require user approval
 
-> **Partly implemented:** slices 1 and 2 (see Implementation slices); the
-> rest is design. The Problem section describes clown before them. Claims not read in
+> **Mostly implemented:** slices 1, 2 and 3a are in clown (see
+> Implementation slices); slice 3 (the field diff) and the spinclass half
+> are design. The Problem section describes clown before them. Claims not read in
 > source are marked **UNVERIFIED**. clown owns profile resolution and the
 > digest; spinclass owns session state, the re-pin right and the grant
 > store; piggy owns the signing act. This document states clown's side and
@@ -72,7 +74,7 @@ clown provides a function returning the canonical-field diff of two
 `Resolved` values, so the approver is shown what changed rather than two
 opaque digests. Whether the approval text carries the full diff is limited
 by piggy's operator-act text budget (spinclass reports ~15 rendered lines);
-see question 4.
+see decision 4.
 
 ## Who and what key approves
 
@@ -115,10 +117,13 @@ Problem.
    launch with it. Different digest, `SkewError`, `BaseError` or not found ->
    **fail closed**: refuse, print name, old/new digest and the field diff,
    and say how to approve. Never fall back to "no profile".
-4. Approval evidence: when spinclass launches clown it passes the pinned
-   expectation (`CLOWN_PROFILE`, `CLOWN_PROFILE_DIGEST`; env, clown#295
-   option 2, names provisional). clown refuses to start if the resolved
-   digest differs from the pinned one. spinclass is meant to be the only
+4. Approval evidence: when spinclass launches clown it passes the profile
+   as the flag `--profile X` and the pinned expectation in the environment:
+   `CLOWN_PROFILE_DIGEST` (bare lowercase hex) and `CLOWN_PROFILE_SESSION`
+   (the session it approves). It does not set `CLOWN_PROFILE`, which stays
+   a user's own shell convenience. clown refuses to start if the resolved
+   digest differs from the pinned one or the session is not the one being
+   resumed. spinclass is meant to be the only
    party that re-pins, after verifying a grant; clown just enforces
    equality, and anyone who controls clown's environment can supply the
    digest (see the guarantee under Problem). Standalone (no spinclass), a
@@ -165,6 +170,33 @@ selecting plugins by profile is orthogonal.
 8. The pin env var is `CLOWN_PROFILE_DIGEST`; clown fails closed when
    `CLOWN_PROFILE` is set without it.
 
+   **Amended (recorded at the operator's request, 2026-10-23):** a resume with
+   `CLOWN_PROFILE` set and no `CLOWN_PROFILE_DIGEST` is allowed only when
+   it names the session's pin exactly (name and digest; never an
+   `unpinnable` pin). Why: allowing the unchanged pin changes nothing, so
+   no approval is skipped, and refusing it would break a resume that only
+   restates the pin. Since a launcher approves with `--profile` plus the
+   digest and clown removes `CLOWN_PROFILE` from every child's environment,
+   this case now arises only from a user's own shell export.
+
+Later answers (operator, 2026-10-23, relayed by the coordinator):
+
+9. Resume forms clown cannot identify (`-c`/`--continue`, a bare
+   `--resume`/`-r`, `--from-pr`) are refused when a profile is applied,
+   pointing to `clown resume <id>` (slice 3a). Without a profile they pass
+   through.
+10. Approval is bound to a session: `CLOWN_PROFILE_SESSION`, when set, must
+    equal the gated session id, and the approval covers only that
+    session's records. Without it an approval stays unbound (current
+    behavior, no warning) until spinclass sends it.
+11. Trust on first use is accepted: a session with no pin is pinned, in the
+    session-names sidecar, to the profile its first profiled launch
+    applies.
+12. Sidecar durability is the condition for the narrow corrupt-line rule:
+    every record is one whole line written by a single `write(2)` on an
+    `O_APPEND` descriptor, and a truncated last line is reported as a
+    warning naming the file, without failing.
+
 Supersedes the earlier text in "What happens on resume" step 4: standalone
 resume has no local confirmation (decision 2), and the env names are final.
 
@@ -182,10 +214,19 @@ resume has no local confirmation (decision 2), and the env names are final.
      digest, on a fresh launch or a resume; a match is the approval. On a
      resume the new pin is recorded by the time the provider runs (before
      any `[attach]` re-exec; skipped under `--print-launch-plan`), and a
-     failure to record it refuses the launch. clown removes
-     `CLOWN_PROFILE_DIGEST` from its environment, so the provider, the
-     re-exec child and nested clowns never inherit the approval.
-     `CLOWN_PROFILE` is kept.
+     failure to record it refuses the launch.
+   - A launcher approves with the flag `--profile X` plus
+     `CLOWN_PROFILE_DIGEST` and `CLOWN_PROFILE_SESSION`; a test pins this
+     through `clown resume <id> --profile X` and
+     `clown --profile X -- --resume <id>`.
+   - `CLOWN_PROFILE_SESSION` set: it must equal the gated session id, and
+     the approval covers only that session's records (decision 10).
+   - Once read, `CLOWN_PROFILE`, `CLOWN_PROFILE_DIGEST` and
+     `CLOWN_PROFILE_SESSION` are removed from clown's environment, so the
+     provider, the `[attach]` re-exec child and nested clowns inherit
+     neither a profile request nor an approval. Nothing downstream reads
+     `CLOWN_PROFILE`: the re-exec child gets `--profile` in its argv, and
+     the agent-scope unit's environment allow-list never carried it.
    - The gated session is the claude `--resume`/`-r <id>` (every `clown
      resume` form passes one), or a `--session-id <id>` that already has a
      pin, including one injected from `CLOWN_SESSION_ID`/`CLAUDE_SESSION_ID`
@@ -194,14 +235,11 @@ resume has no local confirmation (decision 2), and the env names are final.
      (name and digest); otherwise refused, including resuming with no
      profile. `clown resume --profile X` naming the pin is a no-op.
    - Resume with `CLOWN_PROFILE` set and no `CLOWN_PROFILE_DIGEST`: refused,
-     unless it names the session's pin exactly. That exception exists for
-     the inner clown of an `[attach]` re-exec, which inherits
-     `CLOWN_PROFILE` but not the consumed digest; it is a narrowing of
-     decision 8's wording, and changes nothing because it allows only the
-     unchanged pin.
+     unless it names the session's pin exactly (decision 8 as amended; only
+     a user's own shell export can reach this).
    - Resume of an unpinned session: an explicit `--profile`/`CLOWN_PROFILE`
      needs approval; a clownfile pin or build default is allowed and pins
-     the session (trust on first use). That pin is also recorded early, by
+     the session (trust on first use, decision 11). That pin is also recorded early, by
      the time the provider runs, with the same refuse-on-failure rule
      (except for an unpinnable profile, whose pin would never match). The
      inner clown of an `[attach]` re-exec receives the resolved name as
@@ -213,10 +251,11 @@ resume has no local confirmation (decision 2), and the env names are final.
      launch was approved; otherwise (or if the pin cannot be read) it is
      a name-only record. This covers ids the gate does not check, such as
      an operator `identity.Key` that is not the claude id. An approved
-     launch skips that comparison for both `identity.Key` and the claude
-     id, so approval is not bound to a session id (open question 2). A
-     failed ordinary write is reported on stderr and does not stop the
-     launch.
+     launch skips that comparison only for the session
+     `CLOWN_PROFILE_SESSION` names; an unbound approval (no
+     `CLOWN_PROFILE_SESSION`) still skips it for both `identity.Key` and the
+     claude id. A failed ordinary write is reported on stderr and does not
+     stop the launch.
    - Availability coupling: every fresh claude launch carries a
      `--session-id`, which the check looks up, so a session-names sidecar
      that exists but cannot be read refuses every resume and every fresh
@@ -229,26 +268,19 @@ resume has no local confirmation (decision 2), and the env names are final.
    recognised by `--clown-attach-id`, which anyone launching clown can
    pass.
 
-   Not seen (gap, behavior unchanged): claude `--continue`/`-c`, a bare
-   `--resume` (claude's own picker) and `--from-pr` resume a conversation
-   whose id clown never learns, so they run as fresh launches, the
-   session's pin is neither checked nor updated, and the session runs with
-   whatever profile that launch applies. (A bare `--resume` followed by
-   another flag is read by clown as `--resume <that flag>`, a nonexistent
-   id.)
+   - Sidecar durability (decision 12): `sessions.RecordSession` writes each
+     record as one line in a single `write(2)` on an `O_APPEND` descriptor;
+     after a crash fragment it prefixes the newline in the same write. A
+     truncated last line (`sessions.TruncatedTail`) is warned about once
+     per launch on stderr, naming the file.
+3a. **Done.** Resume forms clown cannot identify (decision 9): with a
+   profile applied, claude `-c`/`--continue`, a bare `--resume`/`-r`
+   (claude's own picker, including one followed by another flag) and
+   `--from-pr` are refused with a message pointing to `clown resume <id>`
+   (`unseenResumeForm`). A `--resume`/`-r` followed by another flag is no
+   longer read as `--resume <that flag>`: `claudeResumeID` and
+   `decideClaudeSession` treat it as bare, like `--continue`.
 3. The canonical-field diff function for the approval text (decision 4).
-
-## Open questions (operator)
-
-1. Resume forms clown cannot see (`--continue`/`-c`, bare `--resume`,
-   `--from-pr`): refuse them when a profile is applied, learn the id after
-   the fact, or accept the gap?
-2. Approval is not bound to a session: a `CLOWN_PROFILE_DIGEST` approves
-   whichever session the launch names. Proposal: spinclass also passes
-   `CLOWN_PROFILE_SESSION`, which must equal the resumed id; needs a
-   spinclass-side change.
-3. Trust on first use for unpinned sessions (those predating pinning):
-   acceptable, or should their first profiled resume need approval too?
 
 ## Notes
 
