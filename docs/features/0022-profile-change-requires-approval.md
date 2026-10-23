@@ -219,7 +219,14 @@ Later answers (operator, 2026-10-23, relayed by the coordinator):
     clownfile pin and build default apply for that launch only. The pinned
     and explicitly requested paths are unchanged, and the `[attach]` inner
     clown, which does not inherit the flag, finds the session already
-    pinned.
+    pinned. The default is applied only when it can be pinned to the
+    claude session being resumed: a default whose provider is not claude
+    (it would switch the session to another harness and bypass the check)
+    or a session id that is not a UUID (claude reads it as a search term)
+    resumes without a profile, and the notice says why, e.g.
+    `... resuming without a profile (default profile P uses provider X,
+    which cannot resume a claude session)`. A pinned session whose id is
+    not a UUID is refused, naming the id as not a UUID.
 
 Supersedes the earlier text in "What happens on resume" step 4: standalone
 resume has no local confirmation (decision 2), and the env names are final.
@@ -319,11 +326,15 @@ resume has no local confirmation (decision 2), and the env names are final.
 3b. **Done.** The canonical-field diff for the approval text (decision 4):
    `profilelookup.Diff(old, new, maxLines) (lines, more)`, public so
    spinclass can link it. Its contract is on the function (fixed field
-   order; printable lines of at most 80 runes; the token only as
+   order; values quoted in printable ASCII, every non-ASCII rune escaped so
+   invisible runes cannot make two values look alike; lines of at most 80
+   runes, clipped by eliding the middle of a value with `…`, each side of
+   `old -> new` to 30 runes, never dropping the verb; the token only as
    set/unset; env only as key added/removed/changed, never values or
-   digests; a URL with userinfo, any query, any fragment, or that does not
-   parse is redacted; `+N more changes` as the last line when capped; nil
-   old means every field added). It reads `Canonical` and does not change
+   digests; a URL that does not parse, has userinfo, is opaque or hostless,
+   has any query or fragment, or has `;` or `@` in its path is redacted;
+   `+N more changes` as the last line when capped; nil old means every
+   field added). It reads `Canonical` and does not change
    the canonical form or the digest, so `ProtocolVersion` is unchanged.
    clown's own pin-change refusals print up to 6 lines of it when the old
    definition is recoverable, which is only when the pinned name still

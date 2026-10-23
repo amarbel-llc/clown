@@ -235,12 +235,33 @@ func resumeLaunchFlags(id string, args resumeArgs, requested, recorded string) p
 	return flags
 }
 
+// resumeDefaultSkipReason says why the default profile p must not be applied
+// to the unpinned resume of session id (decision 13), or "" when it may.
+// A default whose provider is not claude would switch the resumed claude
+// session to another harness and bypass the profile check, and a session
+// id that is not a UUID is read by claude as a search term and cannot be
+// gated or pinned; either way the session resumes without a profile, and
+// the notice says why.
+func resumeDefaultSkipReason(id string, p *profile.Profile) string {
+	switch {
+	case !isUUID(id):
+		return fmt.Sprintf("session id %q is not a UUID, so clown cannot pin a profile to it", id)
+	case p.Provider != "claude":
+		return fmt.Sprintf("default profile %s uses provider %s, which cannot resume a claude session", p.Name, p.Provider)
+	}
+	return ""
+}
+
 // unpinnedResumeNotice is the stderr line for `clown resume` of a session
 // with no pin (decision 13), so a session that predates pinning never loses
 // or gains a profile silently.
-func unpinnedResumeNotice(id string, selected *profile.Profile, pinned bool) string {
+// skipped is resumeDefaultSkipReason's reason when a default profile was not
+// applied.
+func unpinnedResumeNotice(id string, selected *profile.Profile, pinned bool, skipped string) string {
 	prefix := "session " + id + " has no recorded profile pin; "
 	switch {
+	case skipped != "":
+		return prefix + "resuming without a profile (" + skipped + ")"
 	case selected == nil:
 		return prefix + "resuming without a profile"
 	case pinned:
@@ -518,9 +539,12 @@ Profiles (all modes):
   would apply: the clownfile [profile] pin, else the build default. That
   profile is pinned to the session before claude starts (a failed write
   refuses the resume). Without such a default it resumes without a
+  profile. The default is not applied when its provider is not claude
+  or the session id is not a UUID; the session then resumes without a
   profile. Either way one line on stderr says which:
     session <id> has no recorded profile pin; resuming with profile <P> (now pinned)
     session <id> has no recorded profile pin; resuming without a profile
+    session <id> has no recorded profile pin; resuming without a profile (<why>)
 
   --profile <name> (or CLOWN_PROFILE) asks to resume under a profile.
   Naming the profile the session is pinned to, at the same digest, is a

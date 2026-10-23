@@ -643,6 +643,24 @@ func TestCheckLaunchProfileRefusesUnseenResume(t *testing.T) {
 	}
 }
 
+// A non-UUID --resume value gets an accurate refusal: it is not a session
+// id claude resumes. The --provider claude hint appears only where it
+// helps (a defaulted profile on a direct launch), never for a profile
+// restored from a session's pin by `clown resume`.
+func TestCheckLaunchProfileNonUUIDResume(t *testing.T) {
+	p1 := &sessions.ProfilePin{Name: "p1", Digest: "aaaa"}
+	none := fakeProfileLookup(nil, nil)
+
+	_, err := checkLaunchProfile(profileGate{unseenResume: "--resume", resumeValue: "legacy-id", launch: p1, restored: true}, none)
+	if err == nil || !strings.Contains(err.Error(), `"legacy-id" is not a UUID`) || strings.Contains(err.Error(), "--provider claude") {
+		t.Errorf("restored profile, non-UUID id: err = %v", err)
+	}
+	_, err = checkLaunchProfile(profileGate{unseenResume: "--resume", resumeValue: "fix tests", launch: p1}, none)
+	if err == nil || !strings.Contains(err.Error(), "not a UUID") || !strings.Contains(err.Error(), "--provider claude") {
+		t.Errorf("defaulted profile, search term: err = %v", err)
+	}
+}
+
 // newProfileGate picks the unseen form up from the forwarded claude args.
 func TestNewProfileGateUnseenResume(t *testing.T) {
 	t.Setenv("CLOWN_PROFILE", "")

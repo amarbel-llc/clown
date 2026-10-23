@@ -38,6 +38,12 @@ type profileGate struct {
 	// unseenResume names a claude resume form whose session id clown cannot
 	// see (unseenResumeForm); "" when none.
 	unseenResume string
+	// resumeValue is the --resume/-r value as given (claudeResumeValue), so
+	// a refusal can name a non-UUID one; "" when none.
+	resumeValue string
+	// restored marks a profile restored from the session's pin by `clown
+	// resume` (flags.profileFromRecord).
+	restored bool
 	// describeChange, when set, explains a pin change in the refusal
 	// (describeProfileChange); nil adds nothing.
 	describeChange func(old, new sessions.ProfilePin) string
@@ -137,10 +143,13 @@ func (g profileGate) withChange(msg string, old, new sessions.ProfilePin) string
 func checkLaunchProfile(g profileGate, recorded profileLookup) (profileDecision, error) {
 	if g.unseenResume != "" && g.launch != nil {
 		hint := ""
-		if g.requested == "" {
+		if g.requested == "" && !g.restored {
 			// resolveProfileName: an explicit --provider suppresses the
 			// clownfile pin and the build default, so no profile applies.
 			hint = fmt.Sprintf(". Profile %q was defaulted (clownfile pin or build default); passing --provider claude turns profile defaulting off, so claude's own picker still works without a profile", g.launch.Name)
+		}
+		if (g.unseenResume == "--resume" || g.unseenResume == "-r") && g.resumeValue != "" {
+			return profileDecision{}, fmt.Errorf("the %s value %q is not a UUID: claude reads it as a search term, not a session id, so clown cannot check that session's profile (%q); refusing%s", g.unseenResume, g.resumeValue, g.launch.Name, hint)
 		}
 		return profileDecision{}, fmt.Errorf("%s resumes a session clown cannot identify, so it cannot check that session's profile (%q); refusing. Resume it by id instead: clown resume <id> (or pass --resume <id>)%s", g.unseenResume, g.launch.Name, hint)
 	}
@@ -237,9 +246,11 @@ func newProfileGate(flags parsedFlags, flagProfile string, env launcherProfileEn
 	if !flags.profileFromRecord && !attachInner {
 		g.requested = flagProfile
 	}
+	g.restored = flags.profileFromRecord
 	if flags.provider == "claude" {
 		g.resumeID = gatedSessionID(flags.forwarded, recorded)
 		g.unseenResume = unseenResumeForm(flags.forwarded)
+		g.resumeValue = claudeResumeValue(flags.forwarded)
 	}
 	return g
 }

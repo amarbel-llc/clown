@@ -569,6 +569,15 @@ func runWithFlags(flags parsedFlags) int {
 		}
 		flags.provider = selectedProfile.Provider
 	}
+	// Decision 13: an unpinned `clown resume` applies its default profile only
+	// when that profile can be pinned to the claude session it resumes; else
+	// it resumes without one (the notice below says why).
+	var resumeDefaultSkipped string
+	if flags.resumeDefaultProfile && selectedProfile != nil {
+		if resumeDefaultSkipped = resumeDefaultSkipReason(claudeResumeValue(flags.forwarded), selectedProfile); resumeDefaultSkipped != "" {
+			selectedProfile, flags.profile, flags.provider = nil, "", "claude"
+		}
+	}
 
 	if selectedProfile == nil && !flags.version && !flags.naked && !flags.providerExplicit && term.IsTerminal(int(os.Stdin.Fd())) {
 		chosen, addRequested, err := pickProfile(profiles)
@@ -733,7 +742,7 @@ func runWithFlags(flags parsedFlags) int {
 	// it resumes with, so a pre-pin profiled session never silently loses or
 	// gains one. Not under --print-launch-plan, which writes no pin.
 	if flags.resumeDefaultProfile && !flags.printLaunchPlan {
-		fmt.Fprintf(os.Stderr, "clown: %s\n", unpinnedResumeNotice(cmpOr(gate.resumeID, claudeResumeValue(flags.forwarded)), selectedProfile, decision.pinEarly != nil))
+		fmt.Fprintf(os.Stderr, "clown: %s\n", unpinnedResumeNotice(cmpOr(gate.resumeID, claudeResumeValue(flags.forwarded)), selectedProfile, decision.pinEarly != nil, resumeDefaultSkipped))
 	}
 
 	// clown#169/#216: resolve this session's human-ergonomic clown name and

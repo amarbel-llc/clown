@@ -266,16 +266,38 @@ func TestUnpinnedResumeNotice(t *testing.T) {
 		name     string
 		selected *profile.Profile
 		pinned   bool
+		skipped  string
 		want     string
 	}{
 		{name: "default applied and pinned", selected: p, pinned: true, want: "session " + id + " has no recorded profile pin; resuming with profile p1 (now pinned)"},
 		{name: "no default", want: "session " + id + " has no recorded profile pin; resuming without a profile"},
 		{name: "default applied but not pinnable", selected: p, want: "session " + id + " has no recorded profile pin; resuming with profile p1 (not pinned)"},
+		{name: "default not applied", skipped: "because", want: "session " + id + " has no recorded profile pin; resuming without a profile (because)"},
 	}
 	for _, tc := range cases {
-		if got := unpinnedResumeNotice(id, tc.selected, tc.pinned); got != tc.want {
+		if got := unpinnedResumeNotice(id, tc.selected, tc.pinned, tc.skipped); got != tc.want {
 			t.Errorf("%s:\n got %q\nwant %q", tc.name, got, tc.want)
 		}
+	}
+}
+
+// Decision 13 applies a default profile only when it can be pinned to a
+// claude session: not when the default's provider is not claude (it would
+// switch the resumed claude session to another harness and skip the check),
+// and not when the session id is not a UUID (claude reads it as a search
+// term, and the check cannot gate it).
+func TestResumeDefaultSkipReason(t *testing.T) {
+	const id = "11111111-2222-3333-4444-555555555555"
+	claude := &profile.Profile{Name: "c", Provider: "claude"}
+	opencode := &profile.Profile{Name: "o", Provider: "opencode"}
+	if r := resumeDefaultSkipReason(id, claude); r != "" {
+		t.Errorf("claude default on a UUID session skipped: %q", r)
+	}
+	if r := resumeDefaultSkipReason(id, opencode); !strings.Contains(r, `default profile o uses provider opencode`) || !strings.Contains(r, "cannot resume a claude session") {
+		t.Errorf("opencode default: reason %q", r)
+	}
+	if r := resumeDefaultSkipReason("legacy-session", claude); !strings.Contains(r, "not a UUID") {
+		t.Errorf("non-UUID session: reason %q", r)
 	}
 }
 
