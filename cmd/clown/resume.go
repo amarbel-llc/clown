@@ -15,6 +15,7 @@ import (
 	"golang.org/x/term"
 
 	"code.linenisgreat.com/clown/internal/sessions"
+	"code.linenisgreat.com/clown/pkg/profilelookup"
 )
 
 // resumeArgs holds the parsed result of `clown resume <args>`.
@@ -186,13 +187,46 @@ func resumePick(ss []sessions.Session, args resumeArgs) int {
 }
 
 func launchResume(s sessions.Session, args resumeArgs) int {
+	profileName, err := resumeProfile(s.ID, profilelookup.Options{})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
+		return 1
+	}
 	flags := parsedFlags{
 		provider:         "claude",
 		providerExplicit: true,
-		mcpCollapse:      args.mcpCollapse,
-		forwarded:        append(args.forwarded, "--resume", s.ID),
+		// A recorded profile goes through the same selection as --profile in
+		// runWithFlags (applyNamedProfile, the saved --cheap-context replay).
+		profile:     profileName,
+		mcpCollapse: args.mcpCollapse,
+		forwarded:   append(args.forwarded, "--resume", s.ID),
 	}
 	return runWithFlags(flags)
+}
+
+// resumeProfile returns the named profile a resumed session launches with
+// (FDR 0022 slice 1, clown#295): "" when the session recorded none (launch
+// unchanged), else the recorded name, but only while it still resolves to
+// the recorded digest. A changed digest, or a name that no longer resolves
+// (unknown, *profilelookup.SkewError, *profilelookup.BaseError), is refused:
+// a session's profile never changes silently and never falls back to none.
+func resumeProfile(sessionID string, opts profilelookup.Options) (string, error) {
+	pin, ok := sessions.ProfileOf(sessionID)
+	if !ok {
+		return "", nil
+	}
+	recorded := pin.Digest
+	if recorded == "" {
+		recorded = "(none recorded)"
+	}
+	current, err := profilelookup.Resolve(pin.Name, opts)
+	if err != nil {
+		return "", fmt.Errorf("session %s was launched with profile %q (digest %s), which no longer resolves: %w; refusing to resume without it", sessionID, pin.Name, recorded, err)
+	}
+	if current.DigestSHA256 != pin.Digest {
+		return "", fmt.Errorf("session %s was launched with profile %q (digest %s), which now resolves to digest %s; refusing to resume under a changed profile (restore the profile's previous definition, or start a new session)", sessionID, pin.Name, recorded, current.DigestSHA256)
+	}
+	return pin.Name, nil
 }
 
 func isInteractiveTerminal() bool {
@@ -388,6 +422,15 @@ Key mode (positional repo/worktree):
   session-names sidecar).
   --provider is not accepted — a key implies claude. -y/--yes skips
   the confirmation as in picker mode.
+
+Profiles (all modes):
+  A launch records the named profile it applied and that profile's
+  digest. Resuming a session that recorded one relaunches it with the
+  same profile, but only while the name still resolves to the recorded
+  digest. If the profile changed, no longer exists, or its registry
+  cannot be vouched for, resume refuses and names the profile and both
+  digests; it never falls back to launching without the profile. A
+  session that recorded no profile resumes without one, as before.
 
 Flags (picker mode):
   --provider <name>   Provider to resume from (default: claude). Only

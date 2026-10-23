@@ -125,6 +125,23 @@ func verifyProfileBase(p profile.Profile, registryPath string) error {
 	return err
 }
 
+// launchProfilePin is the (name, pkg/profilelookup digest) a launch records
+// for the profile it applied (FDR 0022, clown#295). ok is false when no
+// profile was applied, or when the library cannot vouch for it (for example
+// an unstamped registry, which the launch itself still reads): recording is
+// best-effort and never fails a launch, and a session with no pin resumes as
+// it always did.
+func launchProfilePin(selected *profile.Profile, registryPath string) (pin sessions.ProfilePin, ok bool) {
+	if selected == nil {
+		return sessions.ProfilePin{}, false
+	}
+	r, err := profilelookup.Resolve(selected.Name, profilelookup.Options{RegistryPath: registryPath})
+	if err != nil {
+		return sessions.ProfilePin{}, false
+	}
+	return sessions.ProfilePin{Name: r.Name, Digest: r.DigestSHA256}, true
+}
+
 // registrySkewError is registrySkewRefusal's refusal, typed so a read-only
 // caller can still show the builtin profiles beside it.
 type registrySkewError struct{ msg string }
@@ -788,10 +805,22 @@ func runWithFlags(flags parsedFlags) int {
 	// keeps the operator key as the channel but mints a separate --session-id),
 	// so `clown resume repo/worktree/<name>` still resolves the dead
 	// conversation by the id claude actually persisted it under.
-	if !flags.naked && !flags.printLaunchPlan && flags.clownName != "" {
-		_ = sessions.RecordSessionName(flags.identity.Key, flags.clownName, flags.groupID)
+	//
+	// The same record carries the applied profile's name and digest (FDR 0022,
+	// clown#295), which `clown resume` restores and re-verifies.
+	if !flags.naked && !flags.printLaunchPlan {
+		pin, _ := launchProfilePin(selectedProfile, profilesPath)
+		rec := sessions.NameRecord{
+			SessionID:     flags.identity.Key,
+			Name:          flags.clownName,
+			Group:         flags.groupID,
+			Profile:       pin.Name,
+			ProfileDigest: pin.Digest,
+		}
+		_ = sessions.RecordSession(rec)
 		if flags.provider == "claude" && flags.resumeHintID != "" && flags.resumeHintID != flags.identity.Key {
-			_ = sessions.RecordSessionName(flags.resumeHintID, flags.clownName, flags.groupID)
+			rec.SessionID = flags.resumeHintID
+			_ = sessions.RecordSession(rec)
 		}
 	}
 
