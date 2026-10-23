@@ -378,6 +378,22 @@ To **emit** a waking record the monitor MUST:
 
    (the message-omission and ` · <result_ref>` rules are unchanged).
 
+   **Line budget** (informative, clown#293). The host that reads the monitor
+   (Claude Code) truncates every stdout line longer than 500 characters,
+   replacing the excess with `...(truncated)`; the cap is the host's, not this
+   channel's, and cannot be raised from here. The `[clown-job] <source>
+   <job-id> <type> from <from>: ` prefix with a full JID is about 130
+   characters, so a `message` body past roughly 370 characters is cut in the
+   wake line. The journal record keeps the whole `message`, but the wake line
+   is the only delivery for a `message` job: there is no pull-side fetch for
+   its body (contrast `chat_send`, whose body `chat_read` recovers). Producers
+   SHOULD therefore keep a `message` to a self-contained first line well under
+   the budget and send anything longer through a channel with a pull side.
+   Monitors SHOULD cut an over-budget line themselves, at a point of their
+   choosing and with their own marker, so the first three words
+   (`[clown-job] <source> <job-id>`) always survive intact. `just
+   verify-claude-monitor-line-cap` reports the host's current cap.
+
 5. Persist the ack: set the acked sequence for `job` to that record's `seq` in
    the ack file being serviced.
 

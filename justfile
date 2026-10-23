@@ -2227,3 +2227,23 @@ explore-claude-binary-strings REGEX:
     [[ -e "$wrapped" ]] && bin="$wrapped"
     echo "claude: $bin" >&2
     { grep -a -o -E '.{0,40}{{ REGEX }}.{0,40}' "$bin" || true; } | tr -c '[:print:]\n' '?' | sort -u | head -60
+
+# Report the claude monitor's per-line cap (RFC-0009 §9 "Line budget",
+# clown#293): fails if the module's constants are no longer found, so a
+# claude-code bump that moves or renames the cap is noticed, not silent.
+#
+# check the claude binary's monitor line cap is still found
+[group("verify")]
+verify-claude-monitor-line-cap:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    bin="$(readlink -f "$(command -v claude)")"
+    wrapped="$(dirname "$bin")/.claude-wrapped"
+    [[ -e "$wrapped" ]] && bin="$wrapped"
+    hit="$(grep -a -o -E 'var [A-Za-z_$]+=[0-9]+,[A-Za-z_$]+=[0-9]+,[A-Za-z_$]+=200,[A-Za-z_$]+=1048576' "$bin" | head -1 || true)"
+    if [[ -z "$hit" ]]; then
+        echo "monitor constants not found in $bin: re-measure the line cap (clown#293)" >&2
+        exit 1
+    fi
+    echo "claude: $bin"
+    echo "monitor constants: $hit (first value is the per-line cap)"
