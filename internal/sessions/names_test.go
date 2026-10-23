@@ -325,6 +325,81 @@ func TestProfileOfFailsClosed(t *testing.T) {
 	}
 }
 
+// A crash can leave the sidecar ending in half a line. TruncatedTail reports
+// it (so a launch can warn), and the next RecordSession starts on a fresh
+// line instead of gluing its record onto the fragment.
+func TestTruncatedTail(t *testing.T) {
+	good := `{"session_id":"id-1","name":"bozo","ts":"2026-01-01T00:00:00Z"}`
+	cases := []struct {
+		name    string
+		content *string
+		want    bool
+	}{
+		{name: "missing sidecar"},
+		{name: "empty sidecar", content: ptr("")},
+		{name: "whole lines", content: ptr(good + "\n" + good + "\n")},
+		{name: "no trailing newline", content: ptr(good + "\n" + `{"session_id":"id-2","na`), want: true},
+		{name: "unparseable last line", content: ptr(good + "\n" + `{"session_id":"id-2","na` + "\n"), want: true},
+		{name: "unparseable line mid-file only", content: ptr(`{"session_id":"x` + "\n" + good + "\n")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			state := t.TempDir()
+			t.Setenv("XDG_STATE_HOME", state)
+			path := filepath.Join(state, "clown", "session-names.jsonl")
+			if tc.content != nil {
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(*tc.content), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			gotPath, got, err := TruncatedTail()
+			if err != nil {
+				t.Fatalf("TruncatedTail: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("TruncatedTail = %v, want %v", got, tc.want)
+			}
+			if gotPath != path {
+				t.Errorf("TruncatedTail path = %q, want %q", gotPath, path)
+			}
+		})
+	}
+}
+
+func TestRecordSessionAfterTruncatedTail(t *testing.T) {
+	state := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", state)
+	writeSidecarRaw(t, filepath.Join(state, "clown", "session-names.jsonl"), `{"session_id":"id-0","name":"bo`)
+
+	if err := RecordSession(NameRecord{SessionID: "id-1", Name: "krusty", Profile: "p1", ProfileDigest: "aaa"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := NameOf("id-1"); got != "krusty" {
+		t.Errorf("NameOf(id-1) = %q, want krusty (record glued onto the fragment?)", got)
+	}
+	if pin, ok, err := ProfileOf("id-1"); err != nil || !ok || pin.Digest != "aaa" {
+		t.Errorf("ProfileOf(id-1) = %+v, %v, %v; want p1@aaa", pin, ok, err)
+	}
+	if _, truncated, err := TruncatedTail(); err != nil || truncated {
+		t.Errorf("TruncatedTail after a whole record = %v, %v; want false", truncated, err)
+	}
+}
+
+func ptr(s string) *string { return &s }
+
+func writeSidecarRaw(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func writeSidecar(t *testing.T, path string, lines ...string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

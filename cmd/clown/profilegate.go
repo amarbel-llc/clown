@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 
 	"code.linenisgreat.com/clown/internal/sessions"
@@ -213,6 +214,18 @@ func consumeApprovedDigest() string {
 	d := os.Getenv("CLOWN_PROFILE_DIGEST")
 	_ = os.Unsetenv("CLOWN_PROFILE_DIGEST")
 	return d
+}
+
+// warnTruncatedSidecar writes one warning line to w when the session-names
+// sidecar ends in an incomplete record (a crash mid-write). It never fails
+// the launch: the next record starts on a fresh line, and a fragment that
+// could be this session's pin is refused by sessions.ProfileOf anyway.
+func warnTruncatedSidecar(w io.Writer) {
+	path, truncated, err := sessions.TruncatedTail()
+	if err != nil || !truncated {
+		return
+	}
+	fmt.Fprintf(w, "clown: warning: %s ends in an incomplete record (an interrupted write?); later records are unaffected\n", path)
 }
 
 func digestSuffix(p *sessions.ProfilePin) string {

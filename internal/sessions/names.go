@@ -15,6 +15,7 @@ package sessions
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -77,6 +78,13 @@ func RecordSessionName(id, name, group string) error {
 // RecordSession appends rec, stamped with the current time. Same
 // best-effort contract as RecordSessionName. A record with no id, or with
 // neither a name nor a profile, is a silent no-op.
+//
+// Durability: the whole record, newline included, goes out in ONE write(2)
+// on an O_APPEND descriptor, so concurrent writers never interleave inside a
+// line and a crash cannot leave a partial line in the middle of the file,
+// only (at worst) at its end. If the file already ends in such a fragment
+// (TruncatedTail), the record is prefixed with a newline in the same write,
+// so it starts a line of its own instead of being glued to the fragment.
 func RecordSession(rec NameRecord) error {
 	if rec.SessionID == "" || (rec.Name == "" && rec.Profile == "") {
 		return nil
@@ -93,13 +101,65 @@ func RecordSession(rec NameRecord) error {
 	if err != nil {
 		return err
 	}
+	buf := make([]byte, 0, len(line)+2)
+	if endsMidLine(path) {
+		buf = append(buf, '\n')
+	}
+	buf = append(append(buf, line...), '\n')
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	_, err = f.Write(append(line, '\n'))
+	_, err = f.Write(buf)
 	return err
+}
+
+// endsMidLine reports whether the file at path is non-empty and does not end
+// in a newline. Unreadable or missing reads as false.
+func endsMidLine(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil || info.Size() == 0 {
+		return false
+	}
+	last := make([]byte, 1)
+	if _, err := f.ReadAt(last, info.Size()-1); err != nil {
+		return false
+	}
+	return last[0] != '\n'
+}
+
+// TruncatedTail reports whether the sidecar's last line is incomplete: no
+// trailing newline, or a final line that does not parse. That is what a
+// crash mid-write leaves. It returns the sidecar path so a caller can name
+// it in a warning. A missing sidecar is not truncated.
+func TruncatedTail() (path string, truncated bool, err error) {
+	path, err = namesPath()
+	if err != nil {
+		return "", false, err
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return path, false, nil
+		}
+		return path, false, err
+	}
+	if len(b) == 0 {
+		return path, false, nil
+	}
+	if b[len(b)-1] != '\n' {
+		return path, true, nil
+	}
+	body := b[:len(b)-1]
+	last := body[bytes.LastIndexByte(body, '\n')+1:]
+	var rec NameRecord
+	return path, len(last) > 0 && json.Unmarshal(last, &rec) != nil, nil
 }
 
 // NamesFor returns the recorded clown-name for each of ids that has one.

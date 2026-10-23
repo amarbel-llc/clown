@@ -698,6 +698,11 @@ func runWithFlags(flags parsedFlags) int {
 	// equality with CLOWN_PROFILE_DIGEST; see checkLaunchProfile for what that
 	// does and does not protect.
 	launchPin, _ := launchProfilePin(selectedProfile, profilesPath)
+	// Once per launch or resume: the inner clown of an [attach] re-exec
+	// leaves it to the outer.
+	if attachedID == "" {
+		warnTruncatedSidecar(os.Stderr)
+	}
 	var launch *sessions.ProfilePin
 	if selectedProfile != nil {
 		launch = &launchPin

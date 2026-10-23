@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -170,6 +171,32 @@ func TestResumeProfile(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A truncated final sidecar line is reported as a warning naming the file,
+// never as a failure; a whole sidecar says nothing.
+func TestWarnTruncatedSidecar(t *testing.T) {
+	state := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", state)
+	path := filepath.Join(state, "clown", "session-names.jsonl")
+
+	var quiet bytes.Buffer
+	warnTruncatedSidecar(&quiet)
+	if quiet.Len() != 0 {
+		t.Errorf("missing sidecar warned: %q", quiet.String())
+	}
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"session_id":"id-1","na`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var w bytes.Buffer
+	warnTruncatedSidecar(&w)
+	if got := w.String(); !strings.Contains(got, "warning") || !strings.Contains(got, path) || strings.Count(got, "\n") != 1 {
+		t.Errorf("warning = %q; want one line naming %s", got, path)
 	}
 }
 
