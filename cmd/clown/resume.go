@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/charmbracelet/huh"
 	"golang.org/x/term"
 
+	"code.linenisgreat.com/clown/internal/profile"
 	"code.linenisgreat.com/clown/internal/sessions"
 	"code.linenisgreat.com/clown/pkg/profilelookup"
 )
@@ -188,30 +190,66 @@ func resumePick(ss []sessions.Session, args resumeArgs) int {
 }
 
 func launchResume(s sessions.Session, args resumeArgs) int {
-	flags := parsedFlags{
-		provider:         "claude",
-		providerExplicit: true,
-		mcpCollapse:      args.mcpCollapse,
-		forwarded:        append(args.forwarded, "--resume", s.ID),
-	}
 	// A requested profile (--profile, else CLOWN_PROFILE, the same order as a
 	// plain launch) is a requested transition: runWithFlags' checkLaunchProfile
 	// allows it only when it equals the session's pin or the launcher approved
 	// it with CLOWN_PROFILE_DIGEST (FDR 0022 decisions 3, 8).
-	if requested := cmpOr(args.profile, os.Getenv("CLOWN_PROFILE")); requested != "" {
-		flags.profile = requested
-	} else {
-		name, err := resumeProfile(s.ID, os.Getenv("CLOWN_PROFILE_DIGEST") != "", profilelookup.Options{})
+	requested := cmpOr(args.profile, os.Getenv("CLOWN_PROFILE"))
+	var recorded string
+	if requested == "" {
+		var err error
+		recorded, err = resumeProfile(s.ID, os.Getenv("CLOWN_PROFILE_DIGEST") != "", profilelookup.Options{})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "clown: %v\n", err)
 			return 1
 		}
-		// A recorded profile goes through the same selection as --profile in
-		// runWithFlags (applyNamedProfile, the saved --cheap-context replay).
-		flags.profile = name
-		flags.profileFromRecord = name != ""
 	}
-	return runWithFlags(flags)
+	return runWithFlags(resumeLaunchFlags(s.ID, args, requested, recorded))
+}
+
+// resumeLaunchFlags builds the launch for resuming session id. The provider
+// stays explicit (claude), so the interactive profile picker and a clownfile
+// provider never apply. The profile is, in order: the requested one; the
+// session's recorded pin (profileFromRecord), both going through the same
+// selection as --profile in runWithFlags (applyNamedProfile, the saved
+// --cheap-context replay); else, for a session with no pin (FDR 0022
+// decision 13), resumeDefaultProfile lets the clownfile pin or build default
+// apply exactly as on a direct launch, which checkLaunchProfile then pins
+// on first use.
+func resumeLaunchFlags(id string, args resumeArgs, requested, recorded string) parsedFlags {
+	flags := parsedFlags{
+		provider:         "claude",
+		providerExplicit: true,
+		mcpCollapse:      args.mcpCollapse,
+		forwarded:        append(slices.Clone(args.forwarded), "--resume", id),
+	}
+	switch {
+	case requested != "":
+		flags.profile = requested
+	case recorded != "":
+		flags.profile = recorded
+		flags.profileFromRecord = true
+	default:
+		flags.resumeDefaultProfile = true
+	}
+	return flags
+}
+
+// unpinnedResumeNotice is the stderr line for `clown resume` of a session
+// with no pin (decision 13), so a session that predates pinning never loses
+// or gains a profile silently.
+func unpinnedResumeNotice(id string, selected *profile.Profile, pinned bool) string {
+	prefix := "session " + id + " has no recorded profile pin; "
+	switch {
+	case selected == nil:
+		return prefix + "resuming without a profile"
+	case pinned:
+		return prefix + "resuming with profile " + selected.Name + " (now pinned)"
+	default:
+		// An unpinnable profile (its registry not vouched for), or one
+		// whose provider is not claude, so no claude session is gated.
+		return prefix + "resuming with profile " + selected.Name + " (not pinned)"
+	}
 }
 
 func cmpOr(a, b string) string {
@@ -473,8 +511,16 @@ Profiles (all modes):
   cannot be vouched for, resume refuses and names the profile and both
   digests; it never falls back to launching without the profile. It
   also refuses when the profile could not be pinned at launch (an
-  unstamped registry) or the record cannot be read. A session that
-  recorded no profile resumes without one, as before.
+  unstamped registry) or the record cannot be read.
+
+  A session with no recorded pin (one that predates pinning, or was
+  launched without a profile) resumes with the profile a direct launch
+  would apply: the clownfile [profile] pin, else the build default. That
+  profile is pinned to the session before claude starts (a failed write
+  refuses the resume). Without such a default it resumes without a
+  profile. Either way one line on stderr says which:
+    session <id> has no recorded profile pin; resuming with profile <P> (now pinned)
+    session <id> has no recorded profile pin; resuming without a profile
 
   --profile <name> (or CLOWN_PROFILE) asks to resume under a profile.
   Naming the profile the session is pinned to, at the same digest, is a

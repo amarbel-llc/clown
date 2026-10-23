@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -173,6 +174,108 @@ func TestResumeProfile(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Decision 13: `clown resume` of a session with no pin applies the
+// clownfile/build-default profile like a direct launch (and the gate then
+// TOFU-pins it); a pinned or explicitly requested resume is unchanged.
+func TestResumeLaunchFlags(t *testing.T) {
+	const id = "11111111-2222-3333-4444-555555555555"
+	cases := []struct {
+		name               string
+		args               resumeArgs
+		requested          string
+		recorded           string
+		wantProfile        string
+		wantFromRecord     bool
+		wantDefaultProfile bool
+	}{
+		{name: "no pin, nothing requested: defaulting on", wantDefaultProfile: true},
+		{name: "pinned: the recorded profile, no defaulting", recorded: "p1", wantProfile: "p1", wantFromRecord: true},
+		{name: "explicit request: no defaulting", requested: "p2", wantProfile: "p2"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := resumeLaunchFlags(id, tc.args, tc.requested, tc.recorded)
+			if f.provider != "claude" || !f.providerExplicit {
+				t.Errorf("provider %q explicit %v; want claude, explicit (no picker, no clownfile provider)", f.provider, f.providerExplicit)
+			}
+			if f.profile != tc.wantProfile || f.profileFromRecord != tc.wantFromRecord || f.resumeDefaultProfile != tc.wantDefaultProfile {
+				t.Errorf("flags = profile %q fromRecord %v defaultProfile %v; want %q %v %v", f.profile, f.profileFromRecord, f.resumeDefaultProfile, tc.wantProfile, tc.wantFromRecord, tc.wantDefaultProfile)
+			}
+			if !slices.Equal(f.forwarded[len(f.forwarded)-2:], []string{"--resume", id}) {
+				t.Errorf("forwarded = %q, want it to end in --resume %s", f.forwarded, id)
+			}
+		})
+	}
+}
+
+// Through the gate: the defaulted profile of an unpinned resume is
+// trust-on-first-use pinned under the resumed id; an explicit --profile on
+// an unpinned session still needs approval.
+func TestUnpinnedResumeThroughGate(t *testing.T) {
+	const id = "11111111-2222-3333-4444-555555555555"
+	none := fakeProfileLookup(nil, nil)
+
+	f := resumeLaunchFlags(id, resumeArgs{}, "", "")
+	flagProfile := f.profile // what runWithFlags captures before defaulting
+	f.profile = launchProfileName(f, "cf-profile", "")
+	launch := &sessions.ProfilePin{Name: "cf-profile", Digest: "aaaa"}
+	g := newProfileGate(f, flagProfile, launcherProfileEnv{}, launch, false, none)
+	d, err := checkLaunchProfile(g, none)
+	if err != nil || g.resumeID != id || d.pinEarly == nil || *d.pinEarly != *launch {
+		t.Errorf("defaulted unpinned resume: resumeID %q pinEarly %+v err %v; want a TOFU pin under %s", g.resumeID, d.pinEarly, err, id)
+	}
+
+	f2 := resumeLaunchFlags(id, resumeArgs{profile: "p2"}, "p2", "")
+	g2 := newProfileGate(f2, f2.profile, launcherProfileEnv{}, &sessions.ProfilePin{Name: "p2", Digest: "bbbb"}, false, none)
+	if _, err := checkLaunchProfile(g2, none); err == nil || !strings.Contains(err.Error(), "needs approval") {
+		t.Errorf("explicit --profile on an unpinned session: err = %v, want approval needed", err)
+	}
+}
+
+// The profile name a launch resolves: resumeDefaultProfile lets the
+// clownfile pin and build default apply despite the explicit provider; it
+// does not leak into other launches.
+func TestLaunchProfileName(t *testing.T) {
+	cases := []struct {
+		name  string
+		flags parsedFlags
+		pin   string
+		def   string
+		want  string
+	}{
+		{name: "unpinned resume, clownfile pin", flags: parsedFlags{providerExplicit: true, resumeDefaultProfile: true}, pin: "cf", def: "bd", want: "cf"},
+		{name: "unpinned resume, build default", flags: parsedFlags{providerExplicit: true, resumeDefaultProfile: true}, def: "bd", want: "bd"},
+		{name: "unpinned resume, no default", flags: parsedFlags{providerExplicit: true, resumeDefaultProfile: true}},
+		{name: "explicit --provider still suppresses defaulting", flags: parsedFlags{providerExplicit: true}, pin: "cf", def: "bd"},
+		{name: "explicit profile wins", flags: parsedFlags{providerExplicit: true, resumeDefaultProfile: true, profile: "p"}, pin: "cf", want: "p"},
+	}
+	for _, tc := range cases {
+		if got := launchProfileName(tc.flags, tc.pin, tc.def); got != tc.want {
+			t.Errorf("%s: launchProfileName = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestUnpinnedResumeNotice(t *testing.T) {
+	const id = "11111111-2222-3333-4444-555555555555"
+	p := &profile.Profile{Name: "p1"}
+	cases := []struct {
+		name     string
+		selected *profile.Profile
+		pinned   bool
+		want     string
+	}{
+		{name: "default applied and pinned", selected: p, pinned: true, want: "session " + id + " has no recorded profile pin; resuming with profile p1 (now pinned)"},
+		{name: "no default", want: "session " + id + " has no recorded profile pin; resuming without a profile"},
+		{name: "default applied but not pinnable", selected: p, want: "session " + id + " has no recorded profile pin; resuming with profile p1 (not pinned)"},
+	}
+	for _, tc := range cases {
+		if got := unpinnedResumeNotice(id, tc.selected, tc.pinned); got != tc.want {
+			t.Errorf("%s:\n got %q\nwant %q", tc.name, got, tc.want)
+		}
 	}
 }
 

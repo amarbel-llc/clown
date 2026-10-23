@@ -107,8 +107,10 @@ Problem.
 
 `clown resume <id>` (and key/URI forms):
 
-1. Look up the session's recorded `(name, digest)`; absent -> today's
-   behavior (no profile), documented.
+1. Look up the session's recorded `(name, digest)`; absent -> the
+   clownfile/build-default profile a direct launch would apply, pinned on
+   first use, or no profile when there is no default, with a stderr line
+   either way (decision 13).
 2. Explicit `--profile` / `CLOWN_PROFILE`: accepted by resume; treated as a
    requested transition, not an override. If it resolves to the recorded
    digest it is a no-op; otherwise it needs approval.
@@ -201,6 +203,23 @@ Later answers (operator, 2026-10-23, relayed by the coordinator):
     follows a fragment is prefixed with a newline only if the separate
     end-of-file check (a read before the write, so it can race another
     writer) saw the fragment.
+
+13. `clown resume <id>` of a session with no pin record applies the
+    clownfile/build-default profile exactly as a direct launch would, and
+    pins it on first use (decision 11): the pin is written under the
+    resumed id before the provider starts, and a failed write refuses the
+    resume. Where no default profile applies it resumes without one. In
+    both cases one stderr line says so: `session <id> has no recorded
+    profile pin; resuming with profile <P> (now pinned)` or `... resuming
+    without a profile`. Why: a pre-pin profiled session looks like an
+    unprofiled one, and resume must not strip its profile silently.
+    Implementation: `resumeLaunchFlags` keeps the provider explicit
+    (claude; no interactive picker, no clownfile provider) and sets
+    `resumeDefaultProfile`, which `launchProfileName` reads to let the
+    clownfile pin and build default apply for that launch only. The pinned
+    and explicitly requested paths are unchanged, and the `[attach]` inner
+    clown, which does not inherit the flag, finds the session already
+    pinned.
 
 Supersedes the earlier text in "What happens on resume" step 4: standalone
 resume has no local confirmation (decision 2), and the env names are final.

@@ -488,7 +488,7 @@ func runWithFlags(flags parsedFlags) int {
 	// pin and the build-time default. A resolved name makes selectedProfile
 	// non-nil below, which is what suppresses the interactive picker.
 	flagProfile := flags.profile
-	flags.profile = resolveProfileName(flags.profile, flags.providerExplicit, cf.Profile.ProfileName, buildcfg.DefaultProfile)
+	flags.profile = launchProfileName(flags, cf.Profile.ProfileName, buildcfg.DefaultProfile)
 	flags.profileIsBuildDefault = profileIsBuildDefault(flags.profile, flagProfile, cf.Profile.ProfileName)
 
 	// clownfile [attach] escape-to-shell pty proxy: resolve the enable bit + key +
@@ -728,6 +728,12 @@ func runWithFlags(flags parsedFlags) int {
 			fmt.Fprintf(os.Stderr, "clown: recording the profile pin for session %s: %v; refusing\n", gate.resumeID, err)
 			return 1
 		}
+	}
+	// Decision 13: `clown resume` of a session with no pin says which profile
+	// it resumes with, so a pre-pin profiled session never silently loses or
+	// gains one. Not under --print-launch-plan, which writes no pin.
+	if flags.resumeDefaultProfile && !flags.printLaunchPlan {
+		fmt.Fprintf(os.Stderr, "clown: %s\n", unpinnedResumeNotice(cmpOr(gate.resumeID, claudeResumeValue(flags.forwarded)), selectedProfile, decision.pinEarly != nil))
 	}
 
 	// clown#169/#216: resolve this session's human-ergonomic clown name and
@@ -1048,6 +1054,14 @@ func resolveProfileName(flagProfile string, providerExplicit bool, pin, buildDef
 		return pin
 	}
 	return buildDefault
+}
+
+// launchProfileName is resolveProfileName for a launch: an explicit
+// provider suppresses defaulting, except on `clown resume` of a session with
+// no pin (flags.resumeDefaultProfile, FDR 0022 decision 13), where the
+// clownfile pin and build default apply as on a direct launch.
+func launchProfileName(flags parsedFlags, pin, buildDefault string) string {
+	return resolveProfileName(flags.profile, flags.providerExplicit && !flags.resumeDefaultProfile, pin, buildDefault)
 }
 
 // profileIsBuildDefault reports whether the resolved profile name came only
@@ -3085,6 +3099,12 @@ type parsedFlags struct {
 	// from the session's recorded pin, so checkLaunchProfile does not treat it
 	// as a requested transition (FDR 0022).
 	profileFromRecord bool
+	// resumeDefaultProfile marks `clown resume` of a session with no pin
+	// (FDR 0022 decision 13): the clownfile pin or build default applies as
+	// on a direct launch even though the provider is explicit
+	// (launchProfileName). Set only by resumeLaunchFlags; not carried by
+	// reexecArgv (the outer pins the session before any re-exec).
+	resumeDefaultProfile bool
 	// idleSocket is the frontend's idle-listener socket when self-close is
 	// armed (clown#287); an agent unit binds it in so the Stop hook can reach it.
 	idleSocket string
