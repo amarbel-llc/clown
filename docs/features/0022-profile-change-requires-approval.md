@@ -10,7 +10,8 @@ promotion-criteria: >
 
 # Profile changes at runtime require user approval
 
-> **Design record only.** Nothing here is implemented. Claims not read in
+> **Partly implemented:** slices 1 and 2 (see Implementation slices); the
+> rest is design. The Problem section describes clown before them. Claims not read in
 > source are marked **UNVERIFIED**. clown owns profile resolution and the
 > digest; spinclass owns session state, the re-pin right and the grant
 > store; piggy owns the signing act. This document states clown's side and
@@ -150,12 +151,32 @@ resume has no local confirmation (decision 2), and the env names are final.
 
 ## Implementation slices
 
-1. clown#295: record `(name, digest)` per session; `clown resume` restores
-   it, re-resolves, and fails closed on a mismatch (tests first).
-2. `CLOWN_PROFILE_DIGEST` enforcement at launch (decision 8) and
+1. **Done.** clown#295: record `(name, digest)` per session; `clown resume`
+   restores it, re-resolves, and fails closed on a mismatch (tests first).
+   A profile `profilelookup` cannot vouch for is recorded with the digest
+   `unpinnable`, which never matches.
+2. **Done.** `CLOWN_PROFILE_DIGEST` enforcement at launch (decision 8) and
    `--profile` on resume as a requested transition (decision 3).
-   `runWithFlags` must check a session's existing pin before appending a
-   different one (today `clown --profile X --resume <id>` overwrites it).
+   `runWithFlags` checks a session's existing pin before appending a
+   different one (`checkLaunchProfile`, `cmd/clown/profilegate.go`):
+   - `CLOWN_PROFILE_DIGEST` set: the applied profile must resolve to that
+     digest, on a fresh launch or a resume; a match is the approval, and on
+     a resume the new pin is recorded before any `[attach]` re-exec.
+   - Resume (claude `--resume`/`-r <id>`, which every `clown resume` form
+     passes) of a pinned session: the applied profile must equal the pin
+     (name and digest); otherwise refused, including resuming with no
+     profile. `clown resume --profile X` naming the pin is a no-op.
+   - Resume with `CLOWN_PROFILE` set and no `CLOWN_PROFILE_DIGEST`: refused.
+   - Resume of an unpinned session: an explicit `--profile`/`CLOWN_PROFILE`
+     needs approval; a clownfile pin or build default is still allowed.
+
+   Provisional: an empty `CLOWN_PROFILE_DIGEST` counts as unset; a session
+   is identified only by the claude `--resume` id (a non-claude provider,
+   or an operator key that is not the claude id, gets no continuity
+   check); the approved pin is written before the provider starts, so a
+   launch that fails after the gate still re-pins; clown does not scrub
+   `CLOWN_PROFILE`/`CLOWN_PROFILE_DIGEST` from the agent's environment, so
+   a nested `clown` launched inside the session inherits them.
 3. The canonical-field diff function for the approval text (decision 4).
 
 ## Notes
