@@ -696,6 +696,11 @@ func runWithFlags(flags parsedFlags) int {
 	}
 
 	if flags.provider == "claude" && !flags.naked {
+		// clown#296: hold turn 1 until claude's MCP servers connect. Decided
+		// here, before the [attach] re-exec, because only this process knows a
+		// spawn is a spawn: the inner clown runs on the multiplexer's pty.
+		applyClaudeMCPStartupEnv(flags.provider,
+			claudeLaunchIsHeadless(attachMode, flags.forwarded, pluginhost.IsInteractive()))
 		flags.forwarded, flags.identity.Key, flags.resumeHintID = decideClaudeSession(flags.forwarded, flags.identity.Key)
 	}
 

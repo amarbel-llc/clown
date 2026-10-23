@@ -402,6 +402,38 @@ and
 .Cm crush .
 It cannot restore the pre-staging behaviour of scattering artifacts across
 independent temporary directories; that is no longer representable.
+.It Ev MCP_CONNECTION_NONBLOCKING
+Set by
+.Nm
+to
+.Li false
+in the environment of every
+.Cm claude
+launch (not
+.Fl -naked ,
+not other providers), only if unset, so
+.Xr claude-code 1
+connects its MCP servers before the first model request instead of sending
+that request with only its built-in tools (clown#296).
+Claude bounds the wait with its own
+.Ev MCP_CONNECT_TIMEOUT_MS .
+Set it yourself, e.g. to
+.Li true ,
+to keep claude's non-blocking connect.
+.It Ev CLAUDE_CODE_MCP_STARTUP_WAIT_MS
+Set by
+.Nm
+to
+.Li 10000
+for headless
+.Cm claude
+launches only, if unset: a detached spawn
+.Pq Fl -clown-attach=spawn ,
+a
+.Fl p Ns / Ns Fl -print
+run, or a launch whose stdin or stderr is not a terminal.
+Both variable names come from the claude binary rather than its
+documentation and may change between claude versions.
 .It Ev CLOWN_PLUGIN_META
 Path to the plugin metadata directory containing
 .Pa plugin-dirs
