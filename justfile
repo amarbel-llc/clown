@@ -2268,7 +2268,10 @@ explore-profile-pin-e2e: build-nix
     echo "$out"
     newdigest="$(grep -oE 'now resolves to digest [0-9a-f]{64}' <<<"$out" | grep -oE '[0-9a-f]{64}' | head -n 1)"
 
-    echo "== 4. session with no pin record, no default profile: resumes without one, says so"
+    # This build bakes a default profile (buildcfg.DefaultProfile), so with no
+    # clownfile profile the build default applies; "resuming without a
+    # profile" needs a build with no default and is covered by unit tests.
+    echo "== 4. session with no pin record, no clownfile profile: the build default applies and is pinned"
     transcript "$s2"
     run "" resume "clown://claude/$s2" -- -p hi
     sidecar_show
