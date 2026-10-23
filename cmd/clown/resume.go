@@ -506,10 +506,11 @@ Profiles (all modes):
   included; that needs spinclass as the sole launcher with a scrubbed
   environment and a read-only clown state dir.
 
-  Not checked: claude --continue/-c, a bare --resume (claude's own
-  picker) and --from-pr name no session id clown can see; they launch
-  as fresh sessions and the session's pin is neither checked nor
-  updated.
+  Refused with a profile: claude --continue/-c, a bare --resume or -r
+  (claude's own picker, including one followed by another flag) and
+  --from-pr name no session id clown can check, so a launch that applies
+  a profile refuses them; use clown resume <id> (or --resume <id>).
+  Without a profile they pass through unchanged.
 
 Flags (picker mode):
   --provider <name>   Provider to resume from (default: claude). Only

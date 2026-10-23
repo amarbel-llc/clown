@@ -448,6 +448,87 @@ func TestProfileDecisionApprovesRecordFor(t *testing.T) {
 	}
 }
 
+// Slice 3a (operator answer to open question 1): resume forms whose session
+// id clown cannot see are refused when a profile is applied.
+func TestUnseenResumeForm(t *testing.T) {
+	cases := []struct {
+		args []string
+		want string
+	}{
+		{args: nil},
+		{args: []string{"--resume", "id-1"}},
+		{args: []string{"-r", "id-1"}},
+		{args: []string{"--resume=id-1"}},
+		{args: []string{"--session-id", "id-1"}},
+		{args: []string{"-p", "hi"}},
+		{args: []string{"-c"}, want: "-c"},
+		{args: []string{"--continue"}, want: "--continue"},
+		{args: []string{"--resume"}, want: "--resume"},
+		{args: []string{"-r"}, want: "-r"},
+		{args: []string{"--resume="}, want: "--resume"},
+		{args: []string{"--resume", "--model", "m"}, want: "--resume"},
+		{args: []string{"-r", "-p", "hi"}, want: "-r"},
+		{args: []string{"--from-pr", "12"}, want: "--from-pr"},
+		{args: []string{"--from-pr"}, want: "--from-pr"},
+	}
+	for _, tc := range cases {
+		if got := unseenResumeForm(tc.args); got != tc.want {
+			t.Errorf("unseenResumeForm(%q) = %q, want %q", tc.args, got, tc.want)
+		}
+	}
+}
+
+func TestClaudeResumeID(t *testing.T) {
+	cases := []struct {
+		args []string
+		want string
+	}{
+		{args: []string{"--resume", "id-1"}, want: "id-1"},
+		{args: []string{"-r", "id-1"}, want: "id-1"},
+		{args: []string{"--resume=id-1"}, want: "id-1"},
+		{args: []string{"--resume"}},
+		{args: []string{"--resume", "--model", "m"}},
+		{args: []string{"--resume="}},
+	}
+	for _, tc := range cases {
+		if got := claudeResumeID(tc.args); got != tc.want {
+			t.Errorf("claudeResumeID(%q) = %q, want %q", tc.args, got, tc.want)
+		}
+	}
+}
+
+func TestCheckLaunchProfileRefusesUnseenResume(t *testing.T) {
+	p1 := &sessions.ProfilePin{Name: "p1", Digest: "aaaa"}
+	for _, form := range []string{"-c", "--continue", "--resume", "-r", "--from-pr"} {
+		_, err := checkLaunchProfile(profileGate{unseenResume: form, launch: p1}, fakeProfileLookup(nil, nil))
+		if err == nil || !strings.Contains(err.Error(), form) || !strings.Contains(err.Error(), "clown resume <id>") {
+			t.Errorf("%s with a profile: err = %v; want a refusal naming %s and pointing to clown resume <id>", form, err, form)
+		}
+	}
+	if _, err := checkLaunchProfile(profileGate{unseenResume: "-c"}, fakeProfileLookup(nil, nil)); err != nil {
+		t.Errorf("-c without a profile refused: %v", err)
+	}
+}
+
+// newProfileGate picks the unseen form up from the forwarded claude args.
+func TestNewProfileGateUnseenResume(t *testing.T) {
+	t.Setenv("CLOWN_PROFILE", "")
+	g := newProfileGate(parsedFlags{provider: "claude", forwarded: []string{"--resume", "--model", "m"}}, "", "", "", nil, false, fakeProfileLookup(nil, nil))
+	if g.unseenResume != "--resume" || g.resumeID != "" {
+		t.Errorf("gate = unseen %q, resumeID %q; want --resume and no id (not --model)", g.unseenResume, g.resumeID)
+	}
+}
+
+// decideClaudeSession must not adopt the flag after a bare --resume as a
+// session id; it treats a bare --resume like --continue.
+func TestDecideClaudeSessionBareResume(t *testing.T) {
+	args := []string{"--resume", "--model", "m"}
+	got, channelKey, hint := decideClaudeSession(args, "base")
+	if !slices.Equal(got, args) || channelKey != "base" || hint != "" {
+		t.Errorf("decideClaudeSession(%q) = %q, %q, %q; want args unchanged, base, no hint", args, got, channelKey, hint)
+	}
+}
+
 func TestParseResumeArgsProfile(t *testing.T) {
 	for _, args := range [][]string{
 		{"--profile", "p1"},

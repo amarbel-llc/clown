@@ -37,13 +37,15 @@ import (
 //     key, keep it as the channel (claude gets its own id); when empty, adopt
 //     the minted id as the channel key too.
 func decideClaudeSession(forwarded []string, baseKey string) (newForwarded []string, channelKey, hintID string) {
-	if claudeFlagPresent(forwarded, "--print", "-p") || claudeFlagPresent(forwarded, "--continue", "-c") {
+	// A bare --resume/-r (claude's own picker) names no id either; without
+	// this, the flag after it would be adopted as the session id.
+	if claudeFlagPresent(forwarded, "--print", "-p") || claudeFlagPresent(forwarded, "--continue", "-c") || isBareResume(forwarded) {
 		return forwarded, baseKey, ""
 	}
 	if id := claudeFlagValue(forwarded, "--session-id"); id != "" {
 		return forwarded, id, id
 	}
-	if id := claudeFlagValue(forwarded, "--resume", "-r"); id != "" {
+	if id := claudeResumeID(forwarded); id != "" {
 		return forwarded, id, id
 	}
 	if isUUID(baseKey) {
@@ -55,6 +57,12 @@ func decideClaudeSession(forwarded []string, baseKey string) (newForwarded []str
 		channelKey = id
 	}
 	return append([]string{"--session-id", id}, forwarded...), channelKey, id
+}
+
+// isBareResume reports a --resume/-r with no id (unseenResumeForm).
+func isBareResume(args []string) bool {
+	f := unseenResumeForm(args)
+	return f == "--resume" || f == "-r"
 }
 
 // isUUID reports whether s is shaped like an RFC 4122 UUID (36 chars, hyphens at

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"code.linenisgreat.com/clown/internal/sessions"
 )
@@ -32,6 +33,9 @@ type profileGate struct {
 	// launch is the applied profile's pin (launchProfilePin); nil when the
 	// launch applies no profile.
 	launch *sessions.ProfilePin
+	// unseenResume names a claude resume form whose session id clown cannot
+	// see (unseenResumeForm); "" when none.
+	unseenResume string
 }
 
 // checkLaunchProfile refuses a launch whose profile would change a
@@ -77,15 +81,19 @@ type profileGate struct {
 // it (until spinclass sends one) they skip it for both identity.Key and the
 // claude id, so an unbound approval is not tied to one session.
 //
-// Not seen: claude --continue/-c, a bare --resume (claude's own picker) and
-// --from-pr resume a conversation whose id clown never learns, so they are
-// fresh launches here and the session's pin is neither checked nor updated.
+// First of all: claude --continue/-c, a bare --resume/-r (claude's own
+// picker) and --from-pr resume a conversation whose id clown never learns,
+// so a launch that applies a profile refuses them (slice 3a); without a
+// profile they pass through.
 //
 // recorded's error fails the resume closed. Since every fresh claude launch
 // carries a --session-id (decideClaudeSession), an unreadable session-names
 // sidecar blocks fresh claude launches too (gatedSessionID): availability
 // now depends on that file being readable.
 func checkLaunchProfile(g profileGate, recorded profileLookup) (profileDecision, error) {
+	if g.unseenResume != "" && g.launch != nil {
+		return profileDecision{}, fmt.Errorf("%s resumes a session clown cannot identify, so it cannot check that session's profile (%q); refusing. Resume it by id instead: clown resume <id> (or pass --resume <id>)", g.unseenResume, g.launch.Name)
+	}
 	if g.approvedSession != "" && g.approvedSession != g.resumeID {
 		which := "a fresh launch"
 		if g.resumeID != "" {
@@ -181,8 +189,43 @@ func newProfileGate(flags parsedFlags, flagProfile, approvedDigest, approvedSess
 	}
 	if flags.provider == "claude" {
 		g.resumeID = gatedSessionID(flags.forwarded, recorded)
+		g.unseenResume = unseenResumeForm(flags.forwarded)
 	}
 	return g
+}
+
+// unseenResumeForm returns the claude flag in args that resumes a session
+// without naming an id clown can read: -c/--continue, --from-pr, or a bare
+// --resume/-r (no value, an empty value, or followed by another flag, which
+// opens claude's own picker). "" when there is none.
+func unseenResumeForm(args []string) string {
+	for i, a := range args {
+		switch {
+		case a == "-c" || a == "--continue" || a == "--from-pr" || strings.HasPrefix(a, "--from-pr="):
+			if strings.HasPrefix(a, "--from-pr") {
+				return "--from-pr"
+			}
+			return a
+		case a == "--resume" || a == "-r":
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				return a
+			}
+		case a == "--resume=":
+			return "--resume"
+		}
+	}
+	return ""
+}
+
+// claudeResumeID returns the session id a claude --resume/-r names, or ""
+// when there is none or the form is bare (unseenResumeForm), so a following
+// flag is never mistaken for an id.
+func claudeResumeID(args []string) string {
+	id := claudeFlagValue(args, "--resume", "-r")
+	if strings.HasPrefix(id, "-") {
+		return ""
+	}
+	return id
 }
 
 // gatedSessionID returns the existing session a claude launch continues, for
@@ -193,9 +236,10 @@ func newProfileGate(flags parsedFlags, flagProfile, approvedDigest, approvedSess
 // --session-id, so `clown -- --session-id <pinned>` and
 // CLOWN_SESSION_ID=<pinned> are gated like a resume. A --session-id with no
 // pin is a fresh launch. --continue/-c, bare --resume and --from-pr carry no
-// id and are not seen (see checkLaunchProfile).
+// id; checkLaunchProfile refuses them when a profile is applied
+// (unseenResumeForm).
 func gatedSessionID(forwarded []string, recorded profileLookup) string {
-	if id := claudeFlagValue(forwarded, "--resume", "-r"); id != "" {
+	if id := claudeResumeID(forwarded); id != "" {
 		return id
 	}
 	id := claudeFlagValue(forwarded, "--session-id")
