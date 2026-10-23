@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -156,20 +157,20 @@ func TestCheckLaunchProfile(t *testing.T) {
 				p, ok := tc.recorded[sid]
 				return p, ok, nil
 			}
-			approved, err := checkLaunchProfile(tc.gate, lookup)
+			d, err := checkLaunchProfile(tc.gate, lookup)
 			if tc.refuse == nil {
 				if err != nil {
 					t.Fatalf("refused: %v", err)
 				}
-				if approved != tc.approved {
-					t.Errorf("approved = %v, want %v", approved, tc.approved)
+				if d.approved != tc.approved {
+					t.Errorf("approved = %v, want %v", d.approved, tc.approved)
 				}
 				return
 			}
 			if err == nil {
 				t.Fatal("allowed; want a refusal")
 			}
-			if approved {
+			if d.approved || d.pinEarly != nil {
 				t.Error("a refusal must not report approval")
 			}
 			for _, s := range tc.refuse {
@@ -188,6 +189,90 @@ func fakeProfileLookup(recorded map[string]sessions.ProfilePin, readErr error) f
 		}
 		p, ok := recorded[id]
 		return p, ok, nil
+	}
+}
+
+// pinEarly is the pin the outer clown records for the resumed session
+// before any [attach] re-exec: an approved pin, or a trust-on-first-use pin
+// for a session with none, so the inner clown finds the session pinned to
+// the profile it is about to apply.
+func TestCheckLaunchProfilePinEarly(t *testing.T) {
+	const id = "id-1"
+	p1 := &sessions.ProfilePin{Name: "p1", Digest: "aaaa"}
+	unpinnable := &sessions.ProfilePin{Name: "p1", Digest: sessions.UnpinnableDigest}
+	pinned := map[string]sessions.ProfilePin{id: *p1}
+	cases := []struct {
+		name     string
+		gate     profileGate
+		recorded map[string]sessions.ProfilePin
+		want     *sessions.ProfilePin
+	}{
+		{name: "fresh launch", gate: profileGate{launch: p1}},
+		{name: "approved fresh launch has no session to pin", gate: profileGate{approvedDigest: "aaaa", launch: p1}},
+		{name: "approved resume", gate: profileGate{resumeID: id, approvedDigest: "aaaa", launch: p1}, recorded: pinned, want: p1},
+		{name: "trust on first use", gate: profileGate{resumeID: id, launch: p1}, want: p1},
+		{name: "trust on first use of an unpinnable profile is not pinned early", gate: profileGate{resumeID: id, launch: unpinnable}},
+		{name: "already pinned", gate: profileGate{resumeID: id, launch: p1}, recorded: pinned},
+		{name: "no profile, no pin", gate: profileGate{resumeID: id}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d, err := checkLaunchProfile(tc.gate, fakeProfileLookup(tc.recorded, nil))
+			if err != nil {
+				t.Fatalf("refused: %v", err)
+			}
+			if (d.pinEarly == nil) != (tc.want == nil) || (d.pinEarly != nil && *d.pinEarly != *tc.want) {
+				t.Errorf("pinEarly = %+v, want %+v", d.pinEarly, tc.want)
+			}
+		})
+	}
+}
+
+// clown#295 review: an [attach]-wrapped resume of a session that predates
+// pinning, with a defaulted profile (clownfile pin or build default). The
+// outer passes the gate as trust on first use; its re-exec argv carries the
+// resolved name as --profile. The inner must not refuse that as a request
+// for an unpinned session.
+func TestAttachReexecOfPrePinSession(t *testing.T) {
+	t.Setenv("CLOWN_PROFILE", "")
+	const id = "11111111-2222-3333-4444-555555555555"
+	launch := &sessions.ProfilePin{Name: "p1", Digest: "aaaa"}
+	recorded := map[string]sessions.ProfilePin{}
+
+	// Outer: `clown resume <id>` of an unpinned session; p1 came from the
+	// clownfile pin, so nothing was requested (flagProfile "").
+	outer := parsedFlags{provider: "claude", providerExplicit: true, profile: "p1", forwarded: []string{"--resume", id}}
+	g := newProfileGate(outer, "", "", launch, false, fakeProfileLookup(recorded, nil))
+	d, err := checkLaunchProfile(g, fakeProfileLookup(recorded, nil))
+	if err != nil {
+		t.Fatalf("outer refused: %v", err)
+	}
+	if d.pinEarly == nil || *d.pinEarly != *launch {
+		t.Fatalf("outer pinEarly = %+v, want %+v (recorded before the re-exec)", d.pinEarly, launch)
+	}
+
+	argv := outer.reexecArgv()
+	if !slices.Contains(argv, "--profile") {
+		t.Fatalf("reexecArgv %q carries no --profile; the inner would lose the profile", argv)
+	}
+	inner, err := parseFlags(argv)
+	if err != nil {
+		t.Fatalf("parseFlags(reexecArgv): %v", err)
+	}
+
+	// Without the early pin, an inner that read --profile as a request would
+	// refuse (the regression); as the inner of a re-exec it does not.
+	if _, err := checkLaunchProfile(newProfileGate(inner, inner.profile, "", launch, false, fakeProfileLookup(recorded, nil)), fakeProfileLookup(recorded, nil)); err == nil {
+		t.Error("a non-inner launch requesting p1 for an unpinned session should need approval")
+	}
+	if _, err := checkLaunchProfile(newProfileGate(inner, inner.profile, "", launch, true, fakeProfileLookup(recorded, nil)), fakeProfileLookup(recorded, nil)); err != nil {
+		t.Errorf("inner refused even without the early pin: %v", err)
+	}
+
+	// With the early pin recorded (the outer's write), the inner passes too.
+	recorded[id] = *d.pinEarly
+	if _, err := checkLaunchProfile(newProfileGate(inner, inner.profile, "", launch, true, fakeProfileLookup(recorded, nil)), fakeProfileLookup(recorded, nil)); err != nil {
+		t.Errorf("inner refused after the early pin: %v", err)
 	}
 }
 

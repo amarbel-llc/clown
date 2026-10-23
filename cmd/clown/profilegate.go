@@ -61,49 +61,101 @@ type profileGate struct {
 //     (decisions 2, 3).
 //   - Resume of a session with no pin: an explicit --profile/CLOWN_PROFILE
 //     is a transition needing approval; a defaulted profile is allowed and
-//     then pinned on first use (trust on first use).
+//     pinned on first use (trust on first use), early, like an approved pin.
+//
+// Approved and trust-on-first-use pins are recorded by the time the
+// provider runs (before any [attach] re-exec; not under
+// --print-launch-plan). An approved launch's records (launchRecordFor) skip
+// the pin comparison for both identity.Key and the claude id, so approval
+// is not bound to a session id.
 //
 // Not seen: claude --continue/-c, a bare --resume (claude's own picker) and
 // --from-pr resume a conversation whose id clown never learns, so they are
 // fresh launches here and the session's pin is neither checked nor updated.
 //
-// recorded's error fails the resume closed.
-func checkLaunchProfile(g profileGate, recorded profileLookup) (approved bool, err error) {
+// recorded's error fails the resume closed. Since every fresh claude launch
+// carries a --session-id (decideClaudeSession), an unreadable session-names
+// sidecar blocks fresh claude launches too (gatedSessionID): availability
+// now depends on that file being readable.
+func checkLaunchProfile(g profileGate, recorded profileLookup) (profileDecision, error) {
 	if g.approvedDigest != "" {
 		switch {
 		case g.launch == nil:
-			return false, fmt.Errorf("CLOWN_PROFILE_DIGEST is set (%s) but no profile is applied; refusing", g.approvedDigest)
+			return profileDecision{}, fmt.Errorf("CLOWN_PROFILE_DIGEST is set (%s) but no profile is applied; refusing", g.approvedDigest)
 		case g.launch.Digest == sessions.UnpinnableDigest:
-			return false, fmt.Errorf("profile %q cannot be pinned (pkg/profilelookup cannot vouch for its registry), so it cannot match CLOWN_PROFILE_DIGEST %s; refusing", g.launch.Name, g.approvedDigest)
+			return profileDecision{}, fmt.Errorf("profile %q cannot be pinned (pkg/profilelookup cannot vouch for its registry), so it cannot match CLOWN_PROFILE_DIGEST %s; refusing", g.launch.Name, g.approvedDigest)
 		case g.launch.Digest != g.approvedDigest:
-			return false, fmt.Errorf("profile %q resolves to digest %s, not the CLOWN_PROFILE_DIGEST %s the launcher pinned; refusing", g.launch.Name, g.launch.Digest, g.approvedDigest)
+			return profileDecision{}, fmt.Errorf("profile %q resolves to digest %s, not the CLOWN_PROFILE_DIGEST %s the launcher pinned; refusing", g.launch.Name, g.launch.Digest, g.approvedDigest)
 		}
-		return true, nil
+		d := profileDecision{approved: true}
+		if g.resumeID != "" {
+			d.pinEarly = g.launch
+		}
+		return d, nil
 	}
 	if g.resumeID == "" {
-		return false, nil
+		return profileDecision{}, nil
 	}
 	existing, ok, err := recorded(g.resumeID)
 	if err != nil {
-		return false, fmt.Errorf("cannot read the profile session %s was launched with: %w; refusing to resume", g.resumeID, err)
+		return profileDecision{}, fmt.Errorf("cannot read the profile session %s was launched with: %w; refusing to resume", g.resumeID, err)
 	}
 	matchesPin := ok && g.launch != nil && *g.launch == existing && existing.Digest != sessions.UnpinnableDigest
 	if g.profileEnvSet && !matchesPin {
-		return false, fmt.Errorf("CLOWN_PROFILE is set for a resume of session %s without CLOWN_PROFILE_DIGEST and does not name the session's pin; refusing (a launcher that changes a profile must pin its digest)", g.resumeID)
+		return profileDecision{}, fmt.Errorf("CLOWN_PROFILE is set for a resume of session %s without CLOWN_PROFILE_DIGEST and does not name the session's pin; refusing (a launcher that changes a profile must pin its digest)", g.resumeID)
 	}
 	if !ok {
 		if g.requested != "" {
-			return false, fmt.Errorf("session %s recorded no profile; resuming it under profile %q%s is a profile change that needs approval (CLOWN_PROFILE_DIGEST from the launcher); refusing", g.resumeID, g.requested, digestSuffix(g.launch))
+			return profileDecision{}, fmt.Errorf("session %s recorded no profile; resuming it under profile %q%s is a profile change that needs approval (CLOWN_PROFILE_DIGEST from the launcher); refusing", g.resumeID, g.requested, digestSuffix(g.launch))
 		}
-		return false, nil
+		// Trust on first use: pin before any [attach] re-exec, so the inner
+		// clown finds the session pinned to what it applies. An unpinnable
+		// profile is not pinned early (its pin would never match).
+		if g.launch != nil && g.launch.Digest != sessions.UnpinnableDigest {
+			return profileDecision{pinEarly: g.launch}, nil
+		}
+		return profileDecision{}, nil
 	}
 	if g.launch == nil {
-		return false, fmt.Errorf("session %s was launched with profile %q (digest %s); refusing to resume it without that profile", g.resumeID, existing.Name, existing.Digest)
+		return profileDecision{}, fmt.Errorf("session %s was launched with profile %q (digest %s); refusing to resume it without that profile", g.resumeID, existing.Name, existing.Digest)
 	}
 	if !matchesPin {
-		return false, fmt.Errorf("session %s was launched with profile %q (digest %s); this launch applies profile %q (digest %s); a profile change needs approval (CLOWN_PROFILE_DIGEST from the launcher); refusing", g.resumeID, existing.Name, existing.Digest, g.launch.Name, g.launch.Digest)
+		return profileDecision{}, fmt.Errorf("session %s was launched with profile %q (digest %s); this launch applies profile %q (digest %s); a profile change needs approval (CLOWN_PROFILE_DIGEST from the launcher); refusing", g.resumeID, existing.Name, existing.Digest, g.launch.Name, g.launch.Digest)
 	}
-	return false, nil
+	return profileDecision{}, nil
+}
+
+// profileDecision is what checkLaunchProfile allowed.
+type profileDecision struct {
+	// approved: the launcher's CLOWN_PROFILE_DIGEST matched the applied
+	// profile.
+	approved bool
+	// pinEarly is the pin to record for the gated session before any
+	// [attach] re-exec (an approved pin, or a trust-on-first-use pin); nil
+	// for none. The write must succeed or the launch is refused.
+	pinEarly *sessions.ProfilePin
+}
+
+// newProfileGate builds the gate for a launch. flagProfile is --profile or
+// CLOWN_PROFILE as parseFlags read them (before clownfile/default
+// resolution). attachInner marks the inner clown of an [attach] re-exec: its
+// --profile comes from the outer's reexecArgv, which emits the resolved name
+// even when it was defaulted, and the outer already ran this gate, so the
+// inner does not count it as a request (rules that compare against a pin
+// still apply).
+func newProfileGate(flags parsedFlags, flagProfile, approvedDigest string, launch *sessions.ProfilePin, attachInner bool, recorded profileLookup) profileGate {
+	g := profileGate{
+		profileEnvSet:  os.Getenv("CLOWN_PROFILE") != "",
+		approvedDigest: approvedDigest,
+		launch:         launch,
+	}
+	if !flags.profileFromRecord && !attachInner {
+		g.requested = flagProfile
+	}
+	if flags.provider == "claude" {
+		g.resumeID = gatedSessionID(flags.forwarded, recorded)
+	}
+	return g
 }
 
 // gatedSessionID returns the existing session a claude launch continues, for

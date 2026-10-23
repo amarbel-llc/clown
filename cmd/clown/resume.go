@@ -481,14 +481,21 @@ Profiles (all modes):
   Approval: the launcher (spinclass, after verifying an operator grant)
   sets CLOWN_PROFILE_DIGEST to the digest it approved. clown checks only
   that the profile it resolves has exactly that digest, records it as
-  the session's new pin, and removes CLOWN_PROFILE_DIGEST from the
-  environment the provider and any nested clown inherit; it does not
+  the session's new pin by the time the provider runs (not under
+  --print-launch-plan), and removes CLOWN_PROFILE_DIGEST from the
+  environment the provider and any nested clown inherit. It does not
   see or verify the grant, and the approval is not bound to a session
-  id. With CLOWN_PROFILE set but no CLOWN_PROFILE_DIGEST, a resume is
-  refused unless it names the session's pin. The same checks apply to a
-  direct clown --resume <id> launch and to --session-id <id> (or
+  id: an approved launch records its pin for every id it writes. With
+  CLOWN_PROFILE set but no CLOWN_PROFILE_DIGEST, a resume is refused
+  unless it names the session's pin. The same checks apply to a direct
+  clown --resume <id> launch and to --session-id <id> (or
   CLOWN_SESSION_ID) naming a pinned session. A session that predates
-  pinning is pinned to whatever profile its next launch applies.
+  pinning is pinned to whatever profile its next launch applies (trust
+  on first use), likewise by the time the provider runs.
+
+  Availability: the checks read clown's session-names file
+  ($XDG_STATE_HOME/clown/session-names.jsonl). If it exists but cannot
+  be read, every resume and every fresh claude launch is refused.
 
   What this protects: operator mistakes and silent drift (an edited
   profiles.toml, a clown upgrade). It does not stop anyone who can run

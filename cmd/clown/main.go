@@ -698,31 +698,25 @@ func runWithFlags(flags parsedFlags) int {
 	// equality with CLOWN_PROFILE_DIGEST; see checkLaunchProfile for what that
 	// does and does not protect.
 	launchPin, _ := launchProfilePin(selectedProfile, profilesPath)
-	gate := profileGate{
-		profileEnvSet:  os.Getenv("CLOWN_PROFILE") != "",
-		approvedDigest: consumeApprovedDigest(),
-	}
-	if !flags.profileFromRecord {
-		gate.requested = flagProfile
-	}
+	var launch *sessions.ProfilePin
 	if selectedProfile != nil {
-		gate.launch = &launchPin
+		launch = &launchPin
 	}
-	if flags.provider == "claude" {
-		gate.resumeID = gatedSessionID(flags.forwarded, sessions.ProfileOf)
-	}
-	profileApproved, err := checkLaunchProfile(gate, sessions.ProfileOf)
+	gate := newProfileGate(flags, flagProfile, consumeApprovedDigest(), launch, attachedID != "", sessions.ProfileOf)
+	decision, err := checkLaunchProfile(gate, sessions.ProfileOf)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
 		return 1
 	}
-	// An approved pin is recorded now, before any [attach] re-exec, so the
-	// inner clown (which no longer inherits CLOWN_PROFILE_DIGEST) finds the
-	// session already pinned to what it is about to apply. Not best-effort:
-	// without it the approval would be lost, so a failed write refuses.
-	if profileApproved && gate.resumeID != "" && !flags.printLaunchPlan {
-		if err := sessions.RecordSession(sessions.NameRecord{SessionID: gate.resumeID, Profile: launchPin.Name, ProfileDigest: launchPin.Digest}); err != nil {
-			fmt.Fprintf(os.Stderr, "clown: recording the approved profile pin for session %s: %v; refusing\n", gate.resumeID, err)
+	profileApproved := decision.approved
+	// An approved or trust-on-first-use pin is recorded now, before any
+	// [attach] re-exec, so the inner clown (which no longer inherits
+	// CLOWN_PROFILE_DIGEST) finds the session already pinned to what it is
+	// about to apply. Not best-effort: without it the inner could refuse or
+	// the approval be lost, so a failed write refuses.
+	if decision.pinEarly != nil && !flags.printLaunchPlan {
+		if err := sessions.RecordSession(sessions.NameRecord{SessionID: gate.resumeID, Profile: decision.pinEarly.Name, ProfileDigest: decision.pinEarly.Digest}); err != nil {
+			fmt.Fprintf(os.Stderr, "clown: recording the profile pin for session %s: %v; refusing\n", gate.resumeID, err)
 			return 1
 		}
 	}
