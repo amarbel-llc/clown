@@ -1,5 +1,5 @@
 ---
-status: accepted-for-implementation
+status: experimental
 date: 2026-10-23
 issue: clown#295
 related: FDR 0005 (hats), FDR 0006 (single-entrypoint matrix), spinclass FDR 0032 / 0034, spinclass#407, piggy RFC 0012 (operator-act@piggy, namespace piggy-escalation-v1)
