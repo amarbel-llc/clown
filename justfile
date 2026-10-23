@@ -2212,6 +2212,83 @@ explore-clown-launch-plan PROFILE="porter": build-nix
     jq -r '.args as $a | [range(0; $a|length) | select($a[.] == "--settings") | $a[. + 1]][0] // "{}" | fromjson | "settings: \(tojson)"' <<<"$plan"
     jq -r '"plugin dirs: \([.args[] | select(. == "--plugin-dir")] | length)"' <<<"$plan"
 
+# End-to-end check of FDR 0022 profile pinning (clown#295) against the built
+# clown and the real claude, in a throwaway environment under
+# .tmp/profile-pin-e2e: every clown runs under `env -i` with HOME and the XDG
+# dirs inside that directory, so no real state is read or written and no
+# credential reaches claude (it starts unauthenticated and exits on `-p`).
+# Scenarios: a profiled launch writes a pin; `clown resume` with the same
+# profile reaches claude; an edited profile is refused; a session with no pin;
+# trust on first use via a clownfile profile; a launcher-approved re-pin. The
+# claude transcripts `clown resume` looks up are hand-written stubs.
+#
+# run clown launch/resume profile-pin scenarios in an isolated environment
+[group("explore")]
+explore-profile-pin-e2e: build-nix
+    #!/usr/bin/env bash
+    set -uo pipefail
+    clown="$(readlink -f result)/bin/clown"
+    root="$(pwd)/.tmp/profile-pin-e2e"
+    rm -rf "$root"
+    home="$root/home"; work="$home/work"; cfg="$root/config"; state="$root/state"
+    mkdir -p "$work" "$cfg/clown" "$state" "$root/cache"
+    sidecar="$state/clown/session-names.jsonl"
+    s1=11111111-1111-4111-8111-111111111111
+    s2=22222222-2222-4222-8222-222222222222
+    s3=33333333-3333-4333-8333-333333333333
+    write_profile() {
+        printf '[[profile]]\nname = "e2e-pin"\ndisplay = "e2e pin"\nprovider = "claude"\nbackend = "anthropic"\nmodel = "%s"\n\n[registry]\nclown_version = "e2e"\nprotocol = "1"\n' "$1" > "$cfg/clown/profiles.toml"
+    }
+    transcript() {
+        mkdir -p "$home/.claude/projects/e2e"
+        printf '{"type":"user","cwd":"%s","sessionId":"%s"}\n' "$work" "$1" > "$home/.claude/projects/e2e/$1.jsonl"
+    }
+    run() {
+        local extra="$1"; shift
+        echo "\$ ${extra:+$extra }clown $*"
+        (cd "$work" && env -i PATH="$PATH" HOME="$home" XDG_CONFIG_HOME="$cfg" XDG_STATE_HOME="$state" \
+            XDG_CACHE_HOME="$root/cache" TERM=dumb CLOWN_DISABLE_JOB_WAKEUP=1 CLOWN_DISABLE_STATSD=1 $extra \
+            timeout 180 "$clown" "$@" </dev/null 2>&1 | head -n 40; echo "[exit ${PIPESTATUS[0]}]")
+    }
+    sidecar_show() { echo "--- sidecar:"; cat "$sidecar" 2>/dev/null || echo "(none)"; echo "---"; }
+
+    echo "== 1. profiled launch writes a pin"
+    write_profile e2e-model-a
+    run "CLOWN_SESSION_ID=$s1" --profile e2e-pin -- -p hi
+    sidecar_show
+
+    echo "== 2. clown resume, same profile: reaches claude"
+    transcript "$s1"
+    run "" resume "clown://claude/$s1" -- -p hi
+
+    echo "== 3. profile edited: refused"
+    write_profile e2e-model-b
+    out="$(run "" resume "clown://claude/$s1" -- -p hi)"
+    echo "$out"
+    newdigest="$(grep -oE 'now resolves to digest [0-9a-f]{64}' <<<"$out" | grep -oE '[0-9a-f]{64}' | head -n 1)"
+
+    echo "== 4. session with no pin record"
+    transcript "$s2"
+    run "" resume "clown://claude/$s2" -- -p hi
+    sidecar_show
+
+    echo "== 5. trust on first use: clownfile profile, direct --resume of an unpinned session"
+    printf '[profile]\nprofile = "e2e-pin"\n' > "$cfg/clown/clownfile"
+    transcript "$s3"
+    run "" -- -p hi --resume "$s3"
+    rm -f "$cfg/clown/clownfile"
+    sidecar_show
+
+    echo "== 6. launcher-approved re-pin of session 1 (--profile + CLOWN_PROFILE_DIGEST + CLOWN_PROFILE_SESSION)"
+    if [[ -n "$newdigest" ]]; then
+        run "CLOWN_PROFILE_DIGEST=$newdigest CLOWN_PROFILE_SESSION=$s1" resume "clown://claude/$s1" --profile e2e-pin -- -p hi
+        echo "== 6b. plain resume after the re-pin"
+        run "" resume "clown://claude/$s1" -- -p hi
+        sidecar_show
+    else
+        echo "(skipped: step 3 printed no new digest)"
+    fi
+
 # Print the distinct strings in the claude binary on PATH that match REGEX (up
 # to 40 chars of context each side), so a setting or env var name can be taken
 # from the binary instead of memory (clown context-floor work).
