@@ -1,5 +1,5 @@
 ---
-status: exploring
+status: accepted-for-implementation
 date: 2026-10-23
 issue: clown#295
 related: FDR 0005 (hats), FDR 0006 (single-entrypoint matrix), spinclass FDR 0032 / 0034, spinclass#407, piggy RFC 0012 (operator-act@piggy, namespace piggy-escalation-v1)
@@ -102,8 +102,7 @@ only until the grant path replaces it).
    option 2, names provisional). clown refuses to start if the resolved
    digest differs from the pinned one. spinclass is the only party that can
    re-pin, after verifying a grant; clown just enforces equality. Standalone
-   (no spinclass), approval is a local interactive confirmation showing the
-   diff, which updates clown's own record; no signature (question 2).
+   (no spinclass), a mismatch is refused outright (decision 2).
 
 This keeps the check at two layers: spinclass refuses before launch
 (authoritative, grant-backed), clown refuses at launch (defense in depth,
@@ -121,7 +120,8 @@ and the only layer when spinclass is absent).
 - Protocol bumps: the canonical form embeds `protocol`, so bumping
   `ProtocolVersion` changes every digest (**inference**, not tested) and
   would force an approval for every profiled session. Announce bumps to
-  spinclass first (already the rule in AGENTS.md) and decide question 5.
+  spinclass first (already the rule in AGENTS.md); decision 5 covers the
+  approval.
 
 ## Non-goals
 
@@ -129,32 +129,36 @@ No mid-session profile switching. No change to digest canonicalization. No
 clown-side signature verification or grant store. Not Hats (FDR 0005):
 selecting plugins by profile is orthogonal.
 
-## Questions for the operator
+## Decisions (operator, 2026-10-23, relayed by the coordinator)
 
-1. Is "profile transition approved by card, recorded by spinclass; clown
-   only enforces a pinned digest" the right split, or should clown also
-   keep its own signed record?
-2. Without spinclass (plain `clown resume`), is a local interactive
-   diff-confirmation enough, or must standalone resume refuse on any
-   mismatch?
-3. Should explicit `--profile` on `clown resume` be allowed as a requested
-   transition (needs approval), or rejected outright?
-4. What must the signed text carry: both digests only, or a field diff
-   (budget ~15 rendered lines)?
-5. Should a clown-upgrade-induced digest change (builtin or protocol bump)
-   need the same per-session approval, or a once-per-upgrade operator
-   approval covering all sessions?
-6. Is a transition to a strictly *narrower* profile (fewer servers, same
-   provider) a narrowing that needs no card, or always an escalation?
-7. Who owns the markl purpose `clown-profile-digest-v1` (clown or
-   spinclass)?
-8. Env var names for the pin (`CLOWN_PROFILE_DIGEST`) and whether clown
-   fails closed when `CLOWN_PROFILE` is set but the digest is absent.
+1. spinclass records the card approval; clown only enforces the pinned
+   digest and keeps no signed record.
+2. Plain `clown resume` without spinclass refuses on any mismatch. There
+   is no local confirmation path.
+3. `clown resume --profile X` is a requested transition and needs approval.
+4. The signed text shows both digests plus a field diff, within piggy's
+   ~15-line budget.
+5. One approval per profile name and old->new digest covers every session
+   pinned to the old digest after an upgrade.
+6. v1: every change is an escalation; a narrowing exemption comes later.
+7. spinclass owns the markl purpose `clown-profile-digest-v1`.
+8. The pin env var is `CLOWN_PROFILE_DIGEST`; clown fails closed when
+   `CLOWN_PROFILE` is set without it.
+
+Supersedes the earlier text in "What happens on resume" step 4: standalone
+resume has no local confirmation (decision 2), and the env names are final.
+
+## Implementation slices
+
+1. clown#295: record `(name, digest)` per session; `clown resume` restores
+   it, re-resolves, and fails closed on a mismatch (tests first).
+2. `CLOWN_PROFILE_DIGEST` enforcement at launch (decision 8) and
+   `--profile` on resume as a requested transition (decision 3).
+3. The canonical-field diff function for the approval text (decision 4).
 
 ## Notes
 
-- clown#293 is about `job_message` wake-preview truncation, not profiles;
-  the brief's reference to it may be a wrong number.
+- #295 is the resume issue; #293 (wake truncation) was a wrong number.
 - spinclass FDR 0034's Tuning Levers table still says "warn" on digest
-  mismatch, contradicting its decision 12 (refuse); spinclass's session
-  owns that fix.
+  mismatch, contradicting its decision 12 (refuse); relayed to the
+  spinclass session.
