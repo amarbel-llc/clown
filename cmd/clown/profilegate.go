@@ -58,7 +58,7 @@ const profileDiffLines = 6
 // profile while the pinned one is unchanged) it diffs the two definitions
 // (profilelookup.Diff). Otherwise, as after a same-name edit, it diffs the
 // redacted form stored with the pin (clown#298, profilelookup.DiffRedacted),
-// which cannot show env value changes. Without a stored form it says the old
+// which cannot show url path, url credential or env value changes. Without a stored form it says the old
 // definition is not recorded, rather than inventing a diff. resolve is
 // profilelookup.Resolve bound to the registry and storedForm
 // profilelookup.RedactedFormByDigest (parameters for tests).
@@ -96,9 +96,9 @@ func describeProfileChange(old, new sessions.ProfilePin, resolve func(name strin
 	case err != nil:
 		return fmt.Sprintf("the redacted form recorded with the pin is unreadable (%v), so no field diff is shown", err)
 	case len(lines) == 0:
-		return "only fields the recorded redacted form does not show (the display name, env values, a url that may carry a credential) differ"
+		return "only fields the recorded redacted form does not show (the display name, env values, the url path, a url that may carry a credential) differ"
 	}
-	return "changes (against the redacted form recorded with the pin; env value changes are not shown):\n  " + strings.Join(lines, "\n  ")
+	return "changes (against the redacted form recorded with the pin; url path, url credential and env value changes are not shown):\n  " + strings.Join(lines, "\n  ")
 }
 
 // withChange appends g.describeChange's explanation of old -> new to msg.

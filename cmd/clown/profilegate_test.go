@@ -732,6 +732,12 @@ func TestDescribeProfileChange(t *testing.T) {
 	if !strings.Contains(got, `model: "m1" -> "m-edited"`) || strings.Contains(got, "not recorded") {
 		t.Errorf("stored old form: %q, want the field diff", got)
 	}
+	// The header names every limit of the stored form.
+	for _, limit := range []string{"url path", "credential", "env value"} {
+		if !strings.Contains(got, limit) {
+			t.Errorf("stored old form header %q does not say %q changes are not shown", got, limit)
+		}
+	}
 	got = describeProfileChange(pin(p1), pin(p1Display), registry(p1Display), stored(p1))
 	if got == "" || strings.Contains(got, "changes:") {
 		t.Errorf("stored form, display-only change: %q", got)

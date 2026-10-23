@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"sort"
 
 	"code.linenisgreat.com/clown/internal/sessions"
@@ -45,7 +46,8 @@ type redactedForm struct {
 //
 //   - the canonical fields, in canonical order, under a leading "form"
 //     (RedactedFormVersion); protocol is the canonical form's;
-//   - url is kept only when Diff would print it: a URL that may carry a
+//   - url is stored as scheme://host[:port] only, never its path (a key in a
+//     plain path segment passes Diff's rule); a URL that may carry a
 //     credential (the rule on Diff, the same function) is stored as
 //     RedactedURL, so its userinfo, query and fragment are never stored;
 //   - env is env_keys, the sorted keys only: neither values nor their
@@ -77,9 +79,7 @@ func (r *Resolved) RedactedForm() ([]byte, error) {
 		ContextExcluded: c.ContextExcluded,
 		Base:            c.Base,
 	}
-	if urlMayCarryCredential(f.URL) {
-		f.URL = RedactedURL
-	}
+	f.URL = storedURL(f.URL)
 	for k := range c.Env {
 		f.EnvKeys = append(f.EnvKeys, k)
 	}
@@ -96,9 +96,28 @@ func (r *Resolved) RedactedForm() ([]byte, error) {
 	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
 }
 
+// storedURL is the url a redacted form keeps: RedactedURL for one that may
+// carry a credential (urlMayCarryCredential, Diff's rule), else only
+// scheme://host[:port]. The path is dropped because a key in a plain path
+// segment passes that rule, and the sidecar is durable and world-readable.
+func storedURL(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	if urlMayCarryCredential(raw) {
+		return RedactedURL
+	}
+	u, err := url.Parse(raw) // parses: urlMayCarryCredential is true otherwise
+	if err != nil {
+		return RedactedURL
+	}
+	return (&url.URL{Scheme: u.Scheme, Host: u.Host}).String()
+}
+
 // DiffRedacted is Diff over two redacted forms (RedactedForm), with Diff's
 // line contract, order and cap. What the forms do not hold cannot be seen:
-// an env value change is invisible (only added and removed keys show), and
+// an env value change is invisible (only added and removed keys show), a
+// URL path change is invisible (only scheme://host[:port] is stored), and
 // two different credential-bearing URLs both read as RedactedURL, so they
 // do not show either. A caller that holds both Resolved values should use
 // Diff instead. It fails on a form that does not parse or has a form

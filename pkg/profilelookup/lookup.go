@@ -23,8 +23,8 @@
 //     It reads Canonical and does not change it, so it is outside the
 //     ProtocolVersion rules below.
 //   - Resolved.RedactedForm renders the definition with nothing secret in it
-//     (a URL Diff would redact is replaced by RedactedURL, env as keys only,
-//     the token as token_set), and clown stores it beside each session pin.
+//     (the url as scheme://host[:port] only, or RedactedURL where Diff would
+//     redact it; env as keys only; the token as token_set), and clown stores it beside each session pin.
 //     RedactedFormByDigest reads it back by digest from clown's
 //     session-names sidecar, for a caller that holds only an old digest
 //     whose definition no longer resolves. DiffRedacted is Diff over two

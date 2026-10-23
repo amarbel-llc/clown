@@ -77,6 +77,33 @@ func TestRedactedFormHoldsNoSecretsInTheSidecar(t *testing.T) {
 	}
 }
 
+// A secret in a plain path segment passes urlMayCarryCredential, so the
+// stored url keeps only scheme://host[:port]; a path change is not shown.
+func TestRedactedFormDropsTheURLPath(t *testing.T) {
+	state := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", state)
+	p := profile.Profile{Name: "pathy", Provider: "claude", Backend: "anthropic", URL: "https://gw.example:8443/v1/sk-PATHSECRET-7/chat"}
+	r := resolveOne(t, p)
+	pinWithForm(t, "id-1", r)
+	b, err := os.ReadFile(filepath.Join(state, "clown", "session-names.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "PATHSECRET") || strings.Contains(string(b), "/v1") {
+		t.Errorf("sidecar carries the url path: %s", b)
+	}
+	if !strings.Contains(string(b), `"url":"https://gw.example:8443"`) {
+		t.Errorf("sidecar lacks scheme://host:port: %s", b)
+	}
+
+	q := p
+	q.URL = "https://gw.example:8443/v2/other"
+	lines, _, err := profilelookup.DiffRedacted(redactedForm(t, r), redactedForm(t, resolveOne(t, q)), 6)
+	if err != nil || len(lines) != 0 {
+		t.Errorf("path-only change: DiffRedacted = %q, %v; want no lines", lines, err)
+	}
+}
+
 // The form is deterministic and leaves Canonical and the digest untouched.
 func TestRedactedFormIsDeterministic(t *testing.T) {
 	p := trimmed()
@@ -148,7 +175,8 @@ func TestDiffRedactedCapAndURL(t *testing.T) {
 	if len(lines) != 6 || more != 6 || lines[5] != "+6 more changes" {
 		t.Errorf("DiffRedacted = %q, %d; want 6 lines ending in +6 more changes", lines, more)
 	}
-	if lines[0] != `url: "https://gw.example/v1" -> `+profilelookup.RedactedURL {
+	// The stored url keeps only scheme and host.
+	if lines[0] != `url: "https://gw.example" -> `+profilelookup.RedactedURL {
 		t.Errorf("url line = %q", lines[0])
 	}
 	if strings.Contains(strings.Join(lines, "\n"), "u:p") {

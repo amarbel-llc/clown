@@ -350,11 +350,13 @@ resume has no local confirmation (decision 2), and the env names are final.
      carries its own `form` version (`RedactedFormVersion`, 1).
    - Nothing secret is stored. A URL that Diff would redact (the same
      function, `urlMayCarryCredential`) is stored as the redaction text, so
-     its userinfo, query and fragment are never written. This replaces the
-     whole URL rather than stripping parts of it: stripping would be a
-     second rule. env is stored as its sorted keys only, with no values and
-     no value digests, because a low-entropy value is guessable from its
-     digest. The token is stored as `token_set` only.
+     its userinfo, query and fragment are never written. Any other URL is
+     stored as `scheme://host[:port]` only. Its path is dropped because a
+     key in a plain path segment (`https://gw/v1/<key>/chat`) passes Diff's
+     rule, and the sidecar is durable and world-readable (mode 0644). env is
+     stored as its sorted keys only, with no values and no value digests,
+     because a low-entropy value is guessable from its digest. The token is
+     stored as `token_set` only.
    - The record is still one line in one `O_APPEND` write. A form over
      `MaxRedactedFormBytes` (8192) or not valid JSON is not stored. The pin
      is kept, and `profile_form_omitted` says why.
@@ -368,8 +370,8 @@ resume has no local confirmation (decision 2), and the env names are final.
      anyone who can write the state dir can forge it.
    - `profilelookup.DiffRedacted(old, new, maxLines)` is Diff over two
      stored forms, with the same line contract and cap. It cannot show what
-     the forms omit: an env value change, or a change between two
-     credential-bearing URLs.
+     the forms omit: an env value change, a URL path change, or a change
+     between two credential-bearing URLs. The refusal header says so.
    - When the pinned definition no longer resolves, clown's refusals
      (`clown resume` and the launch gate) diff the stored form against the
      new definition's redacted form. They say "the previous definition is
