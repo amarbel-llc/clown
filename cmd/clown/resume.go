@@ -211,9 +211,15 @@ func launchResume(s sessions.Session, args resumeArgs) int {
 // (unknown, *profilelookup.SkewError, *profilelookup.BaseError), is refused:
 // a session's profile never changes silently and never falls back to none.
 func resumeProfile(sessionID string, opts profilelookup.Options) (string, error) {
-	pin, ok := sessions.ProfileOf(sessionID)
+	pin, ok, err := sessions.ProfileOf(sessionID)
+	if err != nil {
+		return "", fmt.Errorf("cannot read the profile session %s was launched with: %w; refusing to resume without it", sessionID, err)
+	}
 	if !ok {
 		return "", nil
+	}
+	if pin.Digest == sessions.UnpinnableDigest {
+		return "", fmt.Errorf("session %s was launched with profile %q, which could not be pinned at launch (pkg/profilelookup could not vouch for it, e.g. an unstamped profiles.toml), so resume cannot verify the profile is unchanged; refusing to resume. Stamp the registry by saving a profile with `clown profile edit` so future launches are pinned; this session must be restarted fresh", sessionID, pin.Name)
 	}
 	recorded := pin.Digest
 	if recorded == "" {
@@ -429,8 +435,10 @@ Profiles (all modes):
   same profile, but only while the name still resolves to the recorded
   digest. If the profile changed, no longer exists, or its registry
   cannot be vouched for, resume refuses and names the profile and both
-  digests; it never falls back to launching without the profile. A
-  session that recorded no profile resumes without one, as before.
+  digests; it never falls back to launching without the profile. It
+  also refuses when the profile could not be pinned at launch (an
+  unstamped registry) or the record cannot be read. A session that
+  recorded no profile resumes without one, as before.
 
 Flags (picker mode):
   --provider <name>   Provider to resume from (default: claude). Only

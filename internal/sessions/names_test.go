@@ -180,7 +180,10 @@ func TestProfileOf(t *testing.T) {
 					t.Fatalf("RecordSession: %v", err)
 				}
 			}
-			got, ok := ProfileOf(tc.lookup)
+			got, ok, err := ProfileOf(tc.lookup)
+			if err != nil {
+				t.Fatalf("ProfileOf(%q): %v", tc.lookup, err)
+			}
 			if ok != tc.wantOK || got != tc.want {
 				t.Errorf("ProfileOf(%q) = %+v, %v; want %+v, %v", tc.lookup, got, ok, tc.want, tc.wantOK)
 			}
@@ -209,8 +212,8 @@ func TestSidecarProfileFieldsCompatible(t *testing.T) {
 	if got := NameOf("id-old"); got != "bozo" {
 		t.Errorf("NameOf(id-old) = %q, want bozo", got)
 	}
-	if _, ok := ProfileOf("id-old"); ok {
-		t.Error("ProfileOf(id-old) found a profile in a pre-FDR-0022 record")
+	if _, ok, err := ProfileOf("id-old"); ok || err != nil {
+		t.Errorf("ProfileOf(id-old) = ok %v, err %v; want no profile and no error for a pre-FDR-0022 record", ok, err)
 	}
 	if got := NameOf("id-new"); got != "krusty" {
 		t.Errorf("NameOf(id-new) = %q, want krusty", got)
@@ -250,8 +253,85 @@ func TestProfileOnlyRecordKeepsName(t *testing.T) {
 	if got := NameOf("id-1"); got != "bozo" {
 		t.Errorf("NameOf(id-1) = %q, want bozo", got)
 	}
-	if got, ok := ProfileOf("id-1"); !ok || got.Name != "p1" {
-		t.Errorf("ProfileOf(id-1) = %+v, %v; want p1", got, ok)
+	if got, ok, err := ProfileOf("id-1"); !ok || err != nil || got.Name != "p1" {
+		t.Errorf("ProfileOf(id-1) = %+v, %v, %v; want p1", got, ok, err)
+	}
+}
+
+// ProfileOf gates resume, so it fails closed: only a nonexistent sidecar
+// means "no pin". An unreadable sidecar, or a corrupt line for the session
+// that carries profile keys, is an error rather than "no profile recorded".
+// Corrupt lines that cannot be this session's pin are still skipped.
+func TestProfileOfFailsClosed(t *testing.T) {
+	const id = "id-1"
+	good := `{"session_id":"id-1","name":"bozo","profile":"p1","profile_digest":"aaa","ts":"2026-01-01T00:00:00Z"}`
+	cases := []struct {
+		name    string
+		sidecar func(t *testing.T, path string)
+		wantErr bool
+		wantOK  bool
+	}{
+		{
+			name:    "missing sidecar is no pin",
+			sidecar: func(*testing.T, string) {},
+		},
+		{
+			name: "unreadable sidecar is an error",
+			sidecar: func(t *testing.T, path string) {
+				// A directory where the file should be: opens, then fails to
+				// read, independent of the uid the test runs as.
+				if err := os.MkdirAll(path, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantErr: true,
+		},
+		{
+			name: "truncated profile line for the session is an error",
+			sidecar: func(t *testing.T, path string) {
+				writeSidecar(t, path, good, `{"session_id":"id-1","name":"bozo","profile":"p2","profile_dig`)
+			},
+			wantErr: true,
+		},
+		{
+			name: "corrupt line without profile keys is skipped",
+			sidecar: func(t *testing.T, path string) {
+				writeSidecar(t, path, good, `{"session_id":"id-1","name":"bo`)
+			},
+			wantOK: true,
+		},
+		{
+			name: "corrupt profile line for another session is skipped",
+			sidecar: func(t *testing.T, path string) {
+				writeSidecar(t, path, good, `{"session_id":"id-2","profile":"p2","profile_dig`)
+			},
+			wantOK: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			state := t.TempDir()
+			t.Setenv("XDG_STATE_HOME", state)
+			tc.sidecar(t, filepath.Join(state, "clown", "session-names.jsonl"))
+
+			_, ok, err := ProfileOf(id)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("ProfileOf err = %v, wantErr %v", err, tc.wantErr)
+			}
+			if ok != tc.wantOK {
+				t.Errorf("ProfileOf ok = %v, want %v", ok, tc.wantOK)
+			}
+		})
+	}
+}
+
+func writeSidecar(t *testing.T, path string, lines ...string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 

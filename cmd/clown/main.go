@@ -126,18 +126,18 @@ func verifyProfileBase(p profile.Profile, registryPath string) error {
 }
 
 // launchProfilePin is the (name, pkg/profilelookup digest) a launch records
-// for the profile it applied (FDR 0022, clown#295). ok is false when no
-// profile was applied, or when the library cannot vouch for it (for example
-// an unstamped registry, which the launch itself still reads): recording is
-// best-effort and never fails a launch, and a session with no pin resumes as
-// it always did.
+// for the profile it applied (FDR 0022, clown#295). ok is false only when no
+// profile was applied. When the library cannot vouch for the applied profile
+// (for example an unstamped registry, which the launch itself still reads),
+// the pin carries sessions.UnpinnableDigest: the launch proceeds, and a later
+// `clown resume` refuses instead of silently resuming without the profile.
 func launchProfilePin(selected *profile.Profile, registryPath string) (pin sessions.ProfilePin, ok bool) {
 	if selected == nil {
 		return sessions.ProfilePin{}, false
 	}
 	r, err := profilelookup.Resolve(selected.Name, profilelookup.Options{RegistryPath: registryPath})
 	if err != nil {
-		return sessions.ProfilePin{}, false
+		return sessions.ProfilePin{Name: selected.Name, Digest: sessions.UnpinnableDigest}, true
 	}
 	return sessions.ProfilePin{Name: r.Name, Digest: r.DigestSHA256}, true
 }

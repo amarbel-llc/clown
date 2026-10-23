@@ -46,7 +46,9 @@ func TestResumeProfile(t *testing.T) {
 		name     string
 		record   *sessions.ProfilePin
 		registry func(t *testing.T) string
-		want     string
+		// unreadableSidecar puts a directory where the sidecar file belongs.
+		unreadableSidecar bool
+		want              string
 		// refuse lists substrings the refusal must carry; nil means no error.
 		refuse []string
 	}{
@@ -92,10 +94,28 @@ func TestResumeProfile(t *testing.T) {
 			},
 			refuse: []string{`"mine"`, stale, "but the builtin now has"},
 		},
+		{
+			name:     "profile that could not be pinned at launch refuses",
+			record:   &sessions.ProfilePin{Name: builtinName, Digest: sessions.UnpinnableDigest},
+			registry: func(*testing.T) string { return absent },
+			refuse:   []string{builtinName, "could not be pinned", "clown profile edit"},
+		},
+		{
+			name:              "unreadable sidecar refuses",
+			registry:          func(*testing.T) string { return absent },
+			unreadableSidecar: true,
+			refuse:            []string{"session-names.jsonl"},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv("XDG_STATE_HOME", t.TempDir())
+			state := t.TempDir()
+			t.Setenv("XDG_STATE_HOME", state)
+			if tc.unreadableSidecar {
+				if err := os.MkdirAll(filepath.Join(state, "clown", "session-names.jsonl"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
 			const id = "11111111-2222-3333-4444-555555555555"
 			if tc.record != nil {
 				if err := sessions.RecordSession(sessions.NameRecord{SessionID: id, Name: "bozo", Profile: tc.record.Name, ProfileDigest: tc.record.Digest}); err != nil {
@@ -128,8 +148,9 @@ func TestResumeProfile(t *testing.T) {
 }
 
 // The pin a launch records is the profilelookup digest of the applied
-// profile; a launch with no profile, or one the library cannot vouch for,
-// records none (and still launches).
+// profile. A launch with no profile records none; one the library cannot
+// vouch for still records its name, with sessions.UnpinnableDigest, so a
+// later resume refuses instead of silently dropping the profile.
 func TestLaunchProfilePin(t *testing.T) {
 	absent := filepath.Join(t.TempDir(), "absent.toml")
 	builtins, err := profile.Builtin()
@@ -157,8 +178,28 @@ func TestLaunchProfilePin(t *testing.T) {
 	if !ok || pin != (sessions.ProfilePin{Name: canary.Name, Digest: current.DigestSHA256}) {
 		t.Errorf("launchProfilePin = %+v, %v; want %s@%s", pin, ok, canary.Name, current.DigestSHA256)
 	}
-	gone := profile.Profile{Name: "not-in-any-registry", Provider: "claude", Backend: "anthropic"}
-	if pin, ok := launchProfilePin(&gone, absent); ok {
-		t.Errorf("unresolvable profile: got pin %+v", pin)
+
+	unpinnable := func(p profile.Profile, registry string) {
+		t.Helper()
+		pin, ok := launchProfilePin(&p, registry)
+		if want := (sessions.ProfilePin{Name: p.Name, Digest: sessions.UnpinnableDigest}); !ok || pin != want {
+			t.Errorf("launchProfilePin(%s) = %+v, %v; want %+v", p.Name, pin, ok, want)
+		}
 	}
+	unpinnable(profile.Profile{Name: "not-in-any-registry", Provider: "claude", Backend: "anthropic"}, absent)
+
+	// A registry profilelookup refuses (*SkewError: an unknown key).
+	mine := profile.Profile{Name: "mine", Provider: "claude", Backend: "anthropic"}
+	skewed := filepath.Join(t.TempDir(), "profiles.toml")
+	if err := profile.Save(skewed, []profile.Profile{mine}, "0.4.5"); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(skewed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(skewed, append([]byte("from_a_newer_clown = true\n"), b...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	unpinnable(mine, skewed)
 }

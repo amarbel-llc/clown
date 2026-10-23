@@ -16,6 +16,10 @@ package sessions
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -40,6 +44,12 @@ type NameRecord struct {
 	ProfileDigest string    `json:"profile_digest,omitempty"`
 	TS            time.Time `json:"ts"`
 }
+
+// UnpinnableDigest is the ProfileDigest recorded when a launch applied a
+// profile that pkg/profilelookup could not vouch for (for example an
+// unstamped registry), so no digest exists. It never equals a real digest,
+// so a resume of that session refuses rather than drop the profile.
+const UnpinnableDigest = "unpinnable"
 
 // ProfilePin is the profile a session was launched with.
 type ProfilePin struct {
@@ -112,11 +122,13 @@ func NamesFor(ids []string) map[string]string {
 	}
 
 	out := map[string]string{}
-	if !scanRecords(func(rec NameRecord) {
-		if want[rec.SessionID] && rec.Name != "" {
+	err := scanRecords(func(_ string, rec *NameRecord) error {
+		if rec != nil && want[rec.SessionID] && rec.Name != "" {
 			out[rec.SessionID] = rec.Name
 		}
-	}) {
+		return nil
+	})
+	if err != nil {
 		return nil
 	}
 	return out
@@ -126,27 +138,48 @@ func NamesFor(ids []string) map[string]string {
 // LAST record for id that carries a profile. A later record without one
 // (a launch that applied no profile) does not clear it, so a session's
 // recorded profile never disappears silently. ok is false when no record
-// for id ever carried a profile, or the sidecar is missing.
-func ProfileOf(id string) (pin ProfilePin, ok bool) {
-	scanRecords(func(rec NameRecord) {
+// for id ever carried a profile.
+//
+// Unlike NamesFor, ProfileOf gates `clown resume`, so it fails closed:
+// only a nonexistent sidecar means "no pin". Any other open or read failure
+// is returned, and so is an unparseable line that mentions id and carries
+// a profile key (a torn write of this session's pin). Unparseable lines
+// that cannot be this session's pin are skipped, so one bad line elsewhere
+// in this never-pruned file does not block every resume.
+func ProfileOf(id string) (pin ProfilePin, ok bool, err error) {
+	err = scanRecords(func(line string, rec *NameRecord) error {
+		if rec == nil {
+			if strings.Contains(line, `"profile`) && strings.Contains(line, id) {
+				return fmt.Errorf("session-names sidecar holds an unparseable profile record for session %s: %.200s", id, line)
+			}
+			return nil
+		}
 		if rec.SessionID == id && rec.Profile != "" {
 			pin, ok = ProfilePin{Name: rec.Profile, Digest: rec.ProfileDigest}, true
 		}
+		return nil
 	})
-	return pin, ok
+	if err != nil {
+		return ProfilePin{}, false, err
+	}
+	return pin, ok, nil
 }
 
-// scanRecords calls fn for every parseable sidecar record in file order,
-// skipping unparseable lines. It reports false when the sidecar cannot be
-// opened.
-func scanRecords(fn func(NameRecord)) bool {
+// scanRecords calls fn for every non-empty sidecar line in file order, with
+// the parsed record or nil when the line does not parse; the first error fn
+// returns stops the scan. A nonexistent sidecar is no records and no error;
+// any other failure to open or read it is returned.
+func scanRecords(fn func(line string, rec *NameRecord) error) error {
 	path, err := namesPath()
 	if err != nil {
-		return false
+		return err
 	}
 	f, err := os.Open(path)
 	if err != nil {
-		return false
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return err
 	}
 	defer f.Close()
 
@@ -154,13 +187,20 @@ func scanRecords(fn func(NameRecord)) bool {
 	for {
 		line, readErr := r.ReadString('\n')
 		if trimmed := strings.TrimRight(line, "\n"); trimmed != "" {
-			var rec NameRecord
-			if json.Unmarshal([]byte(trimmed), &rec) == nil {
-				fn(rec)
+			var rec *NameRecord
+			var parsed NameRecord
+			if json.Unmarshal([]byte(trimmed), &parsed) == nil {
+				rec = &parsed
+			}
+			if err := fn(trimmed, rec); err != nil {
+				return err
 			}
 		}
+		if readErr == io.EOF {
+			return nil
+		}
 		if readErr != nil {
-			return true
+			return fmt.Errorf("reading %s: %w", path, readErr)
 		}
 	}
 }
