@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"os"
 	"strings"
 	"testing"
 
@@ -110,10 +111,23 @@ func TestCheckLaunchProfile(t *testing.T) {
 			refuse:   []string{dOld, dNew},
 		},
 		{
-			name:     "CLOWN_PROFILE without CLOWN_PROFILE_DIGEST on a resume refuses",
-			gate:     profileGate{resumeID: id, requested: "p1", profileEnvSet: true, launch: pin("p1", dOld)},
+			name:     "CLOWN_PROFILE without CLOWN_PROFILE_DIGEST on a resume that changes the pin refuses",
+			gate:     profileGate{resumeID: id, requested: "p1", profileEnvSet: true, launch: pin("p1", dNew)},
 			recorded: recordedP1,
 			refuse:   []string{"CLOWN_PROFILE", "CLOWN_PROFILE_DIGEST", id},
+		},
+		{
+			name:   "CLOWN_PROFILE without CLOWN_PROFILE_DIGEST on a resume of an unpinned session refuses",
+			gate:   profileGate{resumeID: id, requested: "p1", profileEnvSet: true, launch: pin("p1", dNew)},
+			refuse: []string{"CLOWN_PROFILE", "CLOWN_PROFILE_DIGEST", id},
+		},
+		{
+			// The inner clown of an [attach] re-exec: the outer consumed (and
+			// scrubbed) CLOWN_PROFILE_DIGEST after recording the approved pin,
+			// while CLOWN_PROFILE is still inherited. Naming the pin is a no-op.
+			name:     "CLOWN_PROFILE without CLOWN_PROFILE_DIGEST naming the pin is a no-op",
+			gate:     profileGate{resumeID: id, requested: "p1", profileEnvSet: true, launch: pin("p1", dOld)},
+			recorded: recordedP1,
 		},
 		{
 			name:   "resume --profile for a session that recorded none needs approval",
@@ -164,6 +178,121 @@ func TestCheckLaunchProfile(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func fakeProfileLookup(recorded map[string]sessions.ProfilePin, readErr error) func(string) (sessions.ProfilePin, bool, error) {
+	return func(id string) (sessions.ProfilePin, bool, error) {
+		if readErr != nil {
+			return sessions.ProfilePin{}, false, readErr
+		}
+		p, ok := recorded[id]
+		return p, ok, nil
+	}
+}
+
+// gatedSessionID picks the existing session a launch continues: a claude
+// --resume/-r id, or a --session-id (user-passed, or injected by
+// decideClaudeSession from CLOWN_SESSION_ID/CLAUDE_SESSION_ID) that already
+// carries a pin, so `--session-id <victim>` cannot dodge the gate.
+func TestGatedSessionID(t *testing.T) {
+	const victim, fresh = "victim-id", "fresh-id"
+	recorded := map[string]sessions.ProfilePin{victim: {Name: "p1", Digest: "aaaa"}}
+	cases := []struct {
+		name    string
+		args    []string
+		readErr error
+		want    string
+	}{
+		{name: "no session flags", args: []string{"--model", "m"}},
+		{name: "--resume", args: []string{"--resume", "r1"}, want: "r1"},
+		{name: "-r", args: []string{"-r", "r1"}, want: "r1"},
+		{name: "--resume=", args: []string{"--resume=r1"}, want: "r1"},
+		{name: "--session-id of an unpinned id is a fresh launch", args: []string{"--session-id", fresh}},
+		{name: "--session-id of a pinned session", args: []string{"--session-id", victim}, want: victim},
+		{name: "--session-id with an unreadable record fails closed", args: []string{"--session-id", fresh}, readErr: errors.New("boom"), want: fresh},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := gatedSessionID(tc.args, fakeProfileLookup(recorded, tc.readErr)); got != tc.want {
+				t.Errorf("gatedSessionID(%q) = %q, want %q", tc.args, got, tc.want)
+			}
+		})
+	}
+}
+
+// The `--session-id <victim>` attack end to end through the wiring: the
+// gate refuses, and even the record a launch would append cannot carry a
+// different pin for a pinned session without approval.
+func TestSessionIDCannotOverwriteAPin(t *testing.T) {
+	const victim = "victim-id"
+	lookup := fakeProfileLookup(map[string]sessions.ProfilePin{victim: {Name: "strong", Digest: "aaaa"}}, nil)
+	weak := &sessions.ProfilePin{Name: "weak", Digest: "bbbb"}
+
+	g := profileGate{requested: "weak", launch: weak, resumeID: gatedSessionID([]string{"--session-id", victim}, lookup)}
+	if _, err := checkLaunchProfile(g, lookup); err == nil {
+		t.Error("checkLaunchProfile allowed --session-id <pinned session> under a different profile")
+	}
+	rec := launchRecordFor(sessions.NameRecord{SessionID: victim, Name: "bozo"}, weak, false, lookup)
+	if rec.Profile != "" || rec.ProfileDigest != "" {
+		t.Errorf("launchRecordFor wrote pin %s@%s over the victim's", rec.Profile, rec.ProfileDigest)
+	}
+}
+
+// launchRecordFor is the record a launch appends: the launch pin only when
+// it does not replace a different existing pin, unless approved.
+func TestLaunchRecordFor(t *testing.T) {
+	const id = "id-1"
+	pinned := map[string]sessions.ProfilePin{id: {Name: "p1", Digest: "aaaa"}}
+	same := &sessions.ProfilePin{Name: "p1", Digest: "aaaa"}
+	other := &sessions.ProfilePin{Name: "p2", Digest: "bbbb"}
+	cases := []struct {
+		name     string
+		launch   *sessions.ProfilePin
+		approved bool
+		recorded map[string]sessions.ProfilePin
+		readErr  error
+		want     *sessions.ProfilePin
+	}{
+		{name: "no profile applied", recorded: pinned},
+		{name: "unpinned session gets the launch pin", launch: other, want: other},
+		{name: "same pin is re-recorded", launch: same, recorded: pinned, want: same},
+		{name: "different pin is dropped", launch: other, recorded: pinned},
+		{name: "approved different pin is recorded", launch: other, approved: true, recorded: pinned, want: other},
+		{name: "unreadable record drops the pin", launch: other, readErr: errors.New("boom")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			base := sessions.NameRecord{SessionID: id, Name: "bozo", Group: "r/w"}
+			got := launchRecordFor(base, tc.launch, tc.approved, fakeProfileLookup(tc.recorded, tc.readErr))
+			if got.SessionID != id || got.Name != "bozo" || got.Group != "r/w" {
+				t.Errorf("base fields changed: %+v", got)
+			}
+			var want sessions.ProfilePin
+			if tc.want != nil {
+				want = *tc.want
+			}
+			if got.Profile != want.Name || got.ProfileDigest != want.Digest {
+				t.Errorf("record pin = %s@%s, want %s@%s", got.Profile, got.ProfileDigest, want.Name, want.Digest)
+			}
+		})
+	}
+}
+
+// After the gate, CLOWN_PROFILE_DIGEST is consumed: the provider, an
+// [attach] re-exec child and nested clowns must not inherit an approval.
+// CLOWN_PROFILE stays.
+func TestConsumeApprovedDigest(t *testing.T) {
+	t.Setenv("CLOWN_PROFILE_DIGEST", "aaaa")
+	t.Setenv("CLOWN_PROFILE", "p1")
+	if got := consumeApprovedDigest(); got != "aaaa" {
+		t.Errorf("consumeApprovedDigest = %q, want aaaa", got)
+	}
+	if v, ok := os.LookupEnv("CLOWN_PROFILE_DIGEST"); ok {
+		t.Errorf("CLOWN_PROFILE_DIGEST still set (%q) after consumption", v)
+	}
+	if got := os.Getenv("CLOWN_PROFILE"); got != "p1" {
+		t.Errorf("CLOWN_PROFILE = %q, want p1 (must not be scrubbed)", got)
 	}
 }
 

@@ -480,10 +480,27 @@ Profiles (all modes):
 
   Approval: the launcher (spinclass, after verifying an operator grant)
   sets CLOWN_PROFILE_DIGEST to the digest it approved. clown checks only
-  that the profile it resolves has exactly that digest, then records it
-  as the session's new pin; it does not see or verify the grant. With
-  CLOWN_PROFILE set but no CLOWN_PROFILE_DIGEST, a resume is refused.
-  The same checks apply to a direct clown --resume <id> launch.
+  that the profile it resolves has exactly that digest, records it as
+  the session's new pin, and removes CLOWN_PROFILE_DIGEST from the
+  environment the provider and any nested clown inherit; it does not
+  see or verify the grant, and the approval is not bound to a session
+  id. With CLOWN_PROFILE set but no CLOWN_PROFILE_DIGEST, a resume is
+  refused unless it names the session's pin. The same checks apply to a
+  direct clown --resume <id> launch and to --session-id <id> (or
+  CLOWN_SESSION_ID) naming a pinned session. A session that predates
+  pinning is pinned to whatever profile its next launch applies.
+
+  What this protects: operator mistakes and silent drift (an edited
+  profiles.toml, a clown upgrade). It does not stop anyone who can run
+  clown with their own environment or write clown's state
+  ($XDG_STATE_HOME/clown/session-names.jsonl) or profiles.toml, an agent
+  included; that needs spinclass as the sole launcher with a scrubbed
+  environment and a read-only clown state dir.
+
+  Not checked: claude --continue/-c, a bare --resume (claude's own
+  picker) and --from-pr name no session id clown can see; they launch
+  as fresh sessions and the session's pin is neither checked nor
+  updated.
 
 Flags (picker mode):
   --provider <name>   Provider to resume from (default: claude). Only
