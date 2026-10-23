@@ -25,11 +25,26 @@ import (
 )
 
 // NameRecord is one line of the session-names sidecar.
+//
+// Profile and ProfileDigest (FDR 0022, clown#295) are the named profile the
+// launch applied and its pkg/profilelookup DigestSHA256. Both are omitted
+// when no profile was applied, so records written before them stay valid
+// and a profileless record reads exactly as it always did. The pair is a
+// claim of what the session launched with, not an authorization: `clown
+// resume` refuses when the name no longer resolves to the recorded digest.
 type NameRecord struct {
-	SessionID string    `json:"session_id"`
-	Name      string    `json:"name"`
-	Group     string    `json:"group,omitempty"`
-	TS        time.Time `json:"ts"`
+	SessionID     string    `json:"session_id"`
+	Name          string    `json:"name"`
+	Group         string    `json:"group,omitempty"`
+	Profile       string    `json:"profile,omitempty"`
+	ProfileDigest string    `json:"profile_digest,omitempty"`
+	TS            time.Time `json:"ts"`
+}
+
+// ProfilePin is the profile a session was launched with.
+type ProfilePin struct {
+	Name   string
+	Digest string
 }
 
 // namesPath resolves $XDG_STATE_HOME/clown/session-names.jsonl (throwaway
@@ -43,7 +58,17 @@ func namesPath() (string, error) {
 // missed record only degrades name-based resume for that conversation.
 // Empty id or name is a silent no-op (nothing meaningful to record).
 func RecordSessionName(id, name, group string) error {
-	if id == "" || name == "" {
+	if name == "" {
+		return nil
+	}
+	return RecordSession(NameRecord{SessionID: id, Name: name, Group: group})
+}
+
+// RecordSession appends rec, stamped with the current time. Same
+// best-effort contract as RecordSessionName. A record with no id, or with
+// neither a name nor a profile, is a silent no-op.
+func RecordSession(rec NameRecord) error {
+	if rec.SessionID == "" || (rec.Name == "" && rec.Profile == "") {
 		return nil
 	}
 	path, err := namesPath()
@@ -53,7 +78,8 @@ func RecordSessionName(id, name, group string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	line, err := json.Marshal(NameRecord{SessionID: id, Name: name, Group: group, TS: time.Now().UTC()})
+	rec.TS = time.Now().UTC()
+	line, err := json.Marshal(rec)
 	if err != nil {
 		return err
 	}
@@ -85,31 +111,58 @@ func NamesFor(ids []string) map[string]string {
 		want[id] = true
 	}
 
+	out := map[string]string{}
+	if !scanRecords(func(rec NameRecord) {
+		if want[rec.SessionID] && rec.Name != "" {
+			out[rec.SessionID] = rec.Name
+		}
+	}) {
+		return nil
+	}
+	return out
+}
+
+// ProfileOf returns the profile session id was last launched with: the
+// LAST record for id that carries a profile. A later record without one
+// (a launch that applied no profile) does not clear it, so a session's
+// recorded profile never disappears silently. ok is false when no record
+// for id ever carried a profile, or the sidecar is missing.
+func ProfileOf(id string) (pin ProfilePin, ok bool) {
+	scanRecords(func(rec NameRecord) {
+		if rec.SessionID == id && rec.Profile != "" {
+			pin, ok = ProfilePin{Name: rec.Profile, Digest: rec.ProfileDigest}, true
+		}
+	})
+	return pin, ok
+}
+
+// scanRecords calls fn for every parseable sidecar record in file order,
+// skipping unparseable lines. It reports false when the sidecar cannot be
+// opened.
+func scanRecords(fn func(NameRecord)) bool {
 	path, err := namesPath()
 	if err != nil {
-		return nil
+		return false
 	}
 	f, err := os.Open(path)
 	if err != nil {
-		return nil
+		return false
 	}
 	defer f.Close()
 
-	out := map[string]string{}
 	r := bufio.NewReader(f)
 	for {
 		line, readErr := r.ReadString('\n')
 		if trimmed := strings.TrimRight(line, "\n"); trimmed != "" {
 			var rec NameRecord
-			if json.Unmarshal([]byte(trimmed), &rec) == nil && want[rec.SessionID] {
-				out[rec.SessionID] = rec.Name
+			if json.Unmarshal([]byte(trimmed), &rec) == nil {
+				fn(rec)
 			}
 		}
 		if readErr != nil {
-			break
+			return true
 		}
 	}
-	return out
 }
 
 // NameOf returns the recorded clown-name for one session id, or "" when

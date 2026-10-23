@@ -117,6 +117,144 @@ func TestNamesForSurvivesOversizedCorruptLine(t *testing.T) {
 	}
 }
 
+// FDR 0022 slice 1 (clown#295): a launch records the profile name and
+// digest it was launched with; ProfileOf returns the last record that
+// carries one.
+func TestProfileOf(t *testing.T) {
+	cases := []struct {
+		name    string
+		records []NameRecord
+		lookup  string
+		want    ProfilePin
+		wantOK  bool
+	}{
+		{
+			name:   "no sidecar",
+			lookup: "id-1",
+		},
+		{
+			name:    "record without profile",
+			records: []NameRecord{{SessionID: "id-1", Name: "bozo"}},
+			lookup:  "id-1",
+		},
+		{
+			name:    "record with profile",
+			records: []NameRecord{{SessionID: "id-1", Name: "bozo", Profile: "claude-opus", ProfileDigest: "aaa"}},
+			lookup:  "id-1",
+			want:    ProfilePin{Name: "claude-opus", Digest: "aaa"},
+			wantOK:  true,
+		},
+		{
+			name: "last profile record wins",
+			records: []NameRecord{
+				{SessionID: "id-1", Name: "bozo", Profile: "p1", ProfileDigest: "aaa"},
+				{SessionID: "id-1", Name: "bozo", Profile: "p2", ProfileDigest: "bbb"},
+			},
+			lookup: "id-1",
+			want:   ProfilePin{Name: "p2", Digest: "bbb"},
+			wantOK: true,
+		},
+		{
+			// A later launch that applied no profile must not erase the pin:
+			// a session's profile never changes silently.
+			name: "profileless record after a profile record keeps the pin",
+			records: []NameRecord{
+				{SessionID: "id-1", Name: "bozo", Profile: "p1", ProfileDigest: "aaa"},
+				{SessionID: "id-1", Name: "krusty"},
+			},
+			lookup: "id-1",
+			want:   ProfilePin{Name: "p1", Digest: "aaa"},
+			wantOK: true,
+		},
+		{
+			name:    "other session's profile is not returned",
+			records: []NameRecord{{SessionID: "id-2", Name: "bozo", Profile: "p1", ProfileDigest: "aaa"}},
+			lookup:  "id-1",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("XDG_STATE_HOME", t.TempDir())
+			for _, r := range tc.records {
+				if err := RecordSession(r); err != nil {
+					t.Fatalf("RecordSession: %v", err)
+				}
+			}
+			got, ok := ProfileOf(tc.lookup)
+			if ok != tc.wantOK || got != tc.want {
+				t.Errorf("ProfileOf(%q) = %+v, %v; want %+v, %v", tc.lookup, got, ok, tc.want, tc.wantOK)
+			}
+		})
+	}
+}
+
+// A record written before FDR 0022 (no profile keys) still parses, and a
+// record carrying a profile still serves name lookups.
+func TestSidecarProfileFieldsCompatible(t *testing.T) {
+	state := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", state)
+
+	dir := filepath.Join(state, "clown")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	old := `{"session_id":"id-old","name":"bozo","group":"r/w","ts":"2026-01-01T00:00:00Z"}` + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "session-names.jsonl"), []byte(old), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := RecordSession(NameRecord{SessionID: "id-new", Name: "krusty", Profile: "p1", ProfileDigest: "aaa"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := NameOf("id-old"); got != "bozo" {
+		t.Errorf("NameOf(id-old) = %q, want bozo", got)
+	}
+	if _, ok := ProfileOf("id-old"); ok {
+		t.Error("ProfileOf(id-old) found a profile in a pre-FDR-0022 record")
+	}
+	if got := NameOf("id-new"); got != "krusty" {
+		t.Errorf("NameOf(id-new) = %q, want krusty", got)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "session-names.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"profile":"p1","profile_digest":"aaa"`) {
+		t.Errorf("sidecar line missing profile fields: %s", b)
+	}
+
+	if err := RecordSessionName("id-plain", "sideshow", ""); err != nil {
+		t.Fatal(err)
+	}
+	b, err = os.ReadFile(filepath.Join(dir, "session-names.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+	if last := lines[len(lines)-1]; strings.Contains(last, "profile") {
+		t.Errorf("profileless record must omit the profile keys: %s", last)
+	}
+}
+
+// A profile-only record (no clown-name) is still written, and must not
+// blank the name an earlier record bound.
+func TestProfileOnlyRecordKeepsName(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+
+	if err := RecordSession(NameRecord{SessionID: "id-1", Name: "bozo"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := RecordSession(NameRecord{SessionID: "id-1", Profile: "p1", ProfileDigest: "aaa"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := NameOf("id-1"); got != "bozo" {
+		t.Errorf("NameOf(id-1) = %q, want bozo", got)
+	}
+	if got, ok := ProfileOf("id-1"); !ok || got.Name != "p1" {
+		t.Errorf("ProfileOf(id-1) = %+v, %v; want p1", got, ok)
+	}
+}
+
 // The group rides along in the record (future queries; step 3 only reads
 // names, but the journal is append-only so the schema must be right now).
 func TestRecordSessionNamePersistsGroup(t *testing.T) {
