@@ -482,10 +482,12 @@ Profiles (all modes):
   sets CLOWN_PROFILE_DIGEST to the digest it approved. clown checks only
   that the profile it resolves has exactly that digest, records it as
   the session's new pin by the time the provider runs (not under
-  --print-launch-plan), and removes CLOWN_PROFILE_DIGEST from the
-  environment the provider and any nested clown inherit. It does not
-  see or verify the grant, and the approval is not bound to a session
-  id: an approved launch records its pin for every id it writes. With
+  --print-launch-plan), and removes CLOWN_PROFILE_DIGEST and
+  CLOWN_PROFILE_SESSION from the environment the provider and any
+  nested clown inherit. It does not see or verify the grant. When
+  CLOWN_PROFILE_SESSION is set, it must equal the session being resumed
+  (else refused) and the approval covers only that session; without it
+  an approved launch records its pin for every id it writes. With
   CLOWN_PROFILE set but no CLOWN_PROFILE_DIGEST, a resume is refused
   unless it names the session's pin. The same checks apply to a direct
   clown --resume <id> launch and to --session-id <id> (or

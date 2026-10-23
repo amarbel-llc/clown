@@ -707,13 +707,13 @@ func runWithFlags(flags parsedFlags) int {
 	if selectedProfile != nil {
 		launch = &launchPin
 	}
-	gate := newProfileGate(flags, flagProfile, consumeApprovedDigest(), launch, attachedID != "", sessions.ProfileOf)
+	approvedDigest, approvedSession := consumeApprovalEnv()
+	gate := newProfileGate(flags, flagProfile, approvedDigest, approvedSession, launch, attachedID != "", sessions.ProfileOf)
 	decision, err := checkLaunchProfile(gate, sessions.ProfileOf)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
 		return 1
 	}
-	profileApproved := decision.approved
 	// An approved or trust-on-first-use pin is recorded now, before any
 	// [attach] re-exec, so the inner clown (which no longer inherits
 	// CLOWN_PROFILE_DIGEST) finds the session already pinned to what it is
@@ -855,7 +855,7 @@ func runWithFlags(flags parsedFlags) int {
 		}
 		for _, id := range ids {
 			base := sessions.NameRecord{SessionID: id, Name: flags.clownName, Group: flags.groupID}
-			if err := sessions.RecordSession(launchRecordFor(base, gate.launch, profileApproved, sessions.ProfileOf)); err != nil {
+			if err := sessions.RecordSession(launchRecordFor(base, gate.launch, decision.approvesRecordFor(id), sessions.ProfileOf)); err != nil {
 				fmt.Fprintf(os.Stderr, "clown: warning: recording session %s in the session-names sidecar: %v\n", id, err)
 			}
 		}

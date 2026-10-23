@@ -148,6 +148,45 @@ func TestCheckLaunchProfile(t *testing.T) {
 			refuse:  []string{id, "sidecar is a directory"},
 		},
 	}
+	// CLOWN_PROFILE_SESSION (operator answer to open question 2) binds the
+	// launcher's approval to one session.
+	cases = append(cases, []struct {
+		name     string
+		gate     profileGate
+		recorded map[string]sessions.ProfilePin
+		readErr  error
+		approved bool
+		refuse   []string
+	}{
+		{
+			name:     "approval bound to the resumed session",
+			gate:     profileGate{resumeID: id, approvedDigest: dNew, approvedSession: id, launch: pin("p1", dNew)},
+			recorded: recordedP1,
+			approved: true,
+		},
+		{
+			name:     "approval bound to another session refuses",
+			gate:     profileGate{resumeID: id, approvedDigest: dNew, approvedSession: "other-id", launch: pin("p1", dNew)},
+			recorded: recordedP1,
+			refuse:   []string{"CLOWN_PROFILE_SESSION", "other-id", id},
+		},
+		{
+			name:   "approval bound to a session on a fresh launch refuses",
+			gate:   profileGate{approvedDigest: dNew, approvedSession: id, launch: pin("p1", dNew)},
+			refuse: []string{"CLOWN_PROFILE_SESSION", id},
+		},
+		{
+			name:     "session binding without a digest still has to match",
+			gate:     profileGate{resumeID: id, approvedSession: "other-id", launch: pin("p1", dOld)},
+			recorded: recordedP1,
+			refuse:   []string{"CLOWN_PROFILE_SESSION", "other-id"},
+		},
+		{
+			name:     "session binding without a digest, matching, unchanged pin",
+			gate:     profileGate{resumeID: id, approvedSession: id, launch: pin("p1", dOld)},
+			recorded: recordedP1,
+		},
+	}...)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			lookup := func(sid string) (sessions.ProfilePin, bool, error) {
@@ -242,7 +281,7 @@ func TestAttachReexecOfPrePinSession(t *testing.T) {
 	// Outer: `clown resume <id>` of an unpinned session; p1 came from the
 	// clownfile pin, so nothing was requested (flagProfile "").
 	outer := parsedFlags{provider: "claude", providerExplicit: true, profile: "p1", forwarded: []string{"--resume", id}}
-	g := newProfileGate(outer, "", "", launch, false, fakeProfileLookup(recorded, nil))
+	g := newProfileGate(outer, "", "", "", launch, false, fakeProfileLookup(recorded, nil))
 	d, err := checkLaunchProfile(g, fakeProfileLookup(recorded, nil))
 	if err != nil {
 		t.Fatalf("outer refused: %v", err)
@@ -262,16 +301,16 @@ func TestAttachReexecOfPrePinSession(t *testing.T) {
 
 	// Without the early pin, an inner that read --profile as a request would
 	// refuse (the regression); as the inner of a re-exec it does not.
-	if _, err := checkLaunchProfile(newProfileGate(inner, inner.profile, "", launch, false, fakeProfileLookup(recorded, nil)), fakeProfileLookup(recorded, nil)); err == nil {
+	if _, err := checkLaunchProfile(newProfileGate(inner, inner.profile, "", "", launch, false, fakeProfileLookup(recorded, nil)), fakeProfileLookup(recorded, nil)); err == nil {
 		t.Error("a non-inner launch requesting p1 for an unpinned session should need approval")
 	}
-	if _, err := checkLaunchProfile(newProfileGate(inner, inner.profile, "", launch, true, fakeProfileLookup(recorded, nil)), fakeProfileLookup(recorded, nil)); err != nil {
+	if _, err := checkLaunchProfile(newProfileGate(inner, inner.profile, "", "", launch, true, fakeProfileLookup(recorded, nil)), fakeProfileLookup(recorded, nil)); err != nil {
 		t.Errorf("inner refused even without the early pin: %v", err)
 	}
 
 	// With the early pin recorded (the outer's write), the inner passes too.
 	recorded[id] = *d.pinEarly
-	if _, err := checkLaunchProfile(newProfileGate(inner, inner.profile, "", launch, true, fakeProfileLookup(recorded, nil)), fakeProfileLookup(recorded, nil)); err != nil {
+	if _, err := checkLaunchProfile(newProfileGate(inner, inner.profile, "", "", launch, true, fakeProfileLookup(recorded, nil)), fakeProfileLookup(recorded, nil)); err != nil {
 		t.Errorf("inner refused after the early pin: %v", err)
 	}
 }
@@ -364,20 +403,48 @@ func TestLaunchRecordFor(t *testing.T) {
 	}
 }
 
-// After the gate, CLOWN_PROFILE_DIGEST is consumed: the provider, an
-// [attach] re-exec child and nested clowns must not inherit an approval.
-// CLOWN_PROFILE stays.
-func TestConsumeApprovedDigest(t *testing.T) {
+// After the gate, CLOWN_PROFILE_DIGEST and CLOWN_PROFILE_SESSION are
+// consumed: the provider, an [attach] re-exec child and nested clowns must
+// not inherit an approval. CLOWN_PROFILE stays.
+func TestConsumeApprovalEnv(t *testing.T) {
 	t.Setenv("CLOWN_PROFILE_DIGEST", "aaaa")
+	t.Setenv("CLOWN_PROFILE_SESSION", "id-1")
 	t.Setenv("CLOWN_PROFILE", "p1")
-	if got := consumeApprovedDigest(); got != "aaaa" {
-		t.Errorf("consumeApprovedDigest = %q, want aaaa", got)
+	digest, session := consumeApprovalEnv()
+	if digest != "aaaa" || session != "id-1" {
+		t.Errorf("consumeApprovalEnv = %q, %q; want aaaa, id-1", digest, session)
 	}
-	if v, ok := os.LookupEnv("CLOWN_PROFILE_DIGEST"); ok {
-		t.Errorf("CLOWN_PROFILE_DIGEST still set (%q) after consumption", v)
+	for _, k := range []string{"CLOWN_PROFILE_DIGEST", "CLOWN_PROFILE_SESSION"} {
+		if v, ok := os.LookupEnv(k); ok {
+			t.Errorf("%s still set (%q) after consumption", k, v)
+		}
 	}
 	if got := os.Getenv("CLOWN_PROFILE"); got != "p1" {
 		t.Errorf("CLOWN_PROFILE = %q, want p1 (must not be scrubbed)", got)
+	}
+}
+
+// A session-bound approval covers only that session's records: the other
+// id a launch writes (identity.Key when it differs from the claude id) goes
+// through the ordinary pin comparison.
+func TestProfileDecisionApprovesRecordFor(t *testing.T) {
+	cases := []struct {
+		name string
+		d    profileDecision
+		id   string
+		want bool
+	}{
+		{name: "not approved", d: profileDecision{}, id: "a"},
+		{name: "unbound approval covers any id", d: profileDecision{approved: true}, id: "a", want: true},
+		{name: "bound approval covers its session", d: profileDecision{approved: true, approvedSession: "a"}, id: "a", want: true},
+		{name: "bound approval does not cover another id", d: profileDecision{approved: true, approvedSession: "a"}, id: "b"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.d.approvesRecordFor(tc.id); got != tc.want {
+				t.Errorf("approvesRecordFor(%q) = %v, want %v", tc.id, got, tc.want)
+			}
+		})
 	}
 }
 
