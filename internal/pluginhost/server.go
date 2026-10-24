@@ -43,7 +43,16 @@ type ManagedServer struct {
 	waitState  *os.ProcessState
 	// reserved marks an entry from Host.Reserve: no process here.
 	reserved bool
+	// manifestAddress, when set, is the TCP address claude's manifest names
+	// instead of the handshake's (RouteManifestThrough).
+	manifestAddress string
 }
+
+// RouteManifestThrough makes the compiled manifest name addr (an in-unit
+// relay's listen address) for this server, while plugin-host keeps using
+// the handshake's own address. For a server on a unix socket that claude
+// reaches through a relay (F12, FDR 0020).
+func (s *ManagedServer) RouteManifestThrough(addr string) { s.manifestAddress = addr }
 
 // Reserved reports whether this entry was reserved for a server running
 // elsewhere (Host.Reserve) rather than started by this host.
@@ -146,7 +155,7 @@ func (s *ManagedServer) Start(ctx context.Context) error {
 	healthCtx, cancel := context.WithTimeout(ctx, s.Def.Healthcheck.Timeout.Duration)
 	defer cancel()
 
-	if err := WaitHealthy(healthCtx, hs.Address, s.Def.Healthcheck.Path, s.Def.Healthcheck.Interval.Duration); err != nil {
+	if err := WaitHealthyHandshake(healthCtx, hs, s.Def.Healthcheck.Path, s.Def.Healthcheck.Interval.Duration); err != nil {
 		log.Error("healthcheck failed", "err", err)
 		s.kill()
 		return fmt.Errorf("server %s: %w", s.Name, err)

@@ -595,14 +595,14 @@ func pushExcludeTools(ctx context.Context, srv *pluginhost.ManagedServer, names 
 	if err != nil {
 		return err
 	}
-	url := srv.Handshake().URL()
-	url = strings.TrimSuffix(url, "/mcp") + "/clown/exclude-tools"
+	hs := srv.Handshake()
+	url := strings.TrimSuffix(hs.URL(), "/mcp") + "/clown/exclude-tools"
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := hs.Client().Do(req)
 	if err != nil {
 		return err
 	}

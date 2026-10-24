@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1946,6 +1947,22 @@ func runWithPluginHost(executor Executor, pluginDirs []string, flags parsedFlags
 			return 1
 		}
 		flags.agentScopeInUnit = reserveInUnitServers(host, discovered, logger)
+		// F12: name the unit now, before any frontend server starts, so the
+		// serve bridge can admit exactly that unit from its first connection.
+		// A spec that does not load is refused, and recorded in its result,
+		// by runInAgentScope as before; nothing is routed then.
+		if spec, err := agentscope.LoadSpec(flags.agentScopeSpec); err == nil {
+			flags.agentScopeUnit = agentscope.UnitName(spec.UnitNameHint)
+			discovered, flags.agentScopeServeRoutes, err = routeServeSockets(discovered, host.BridgePath, os.Getenv("XDG_RUNTIME_DIR"), flags.identity.Key, flags.agentScopeUnit)
+			if err != nil {
+				err = agentscope.Launch{Spec: spec, Unit: flags.agentScopeUnit}.Fail(err)
+				fmt.Fprintf(os.Stderr, "clown: agent scope: %v\n", err)
+				return 1
+			}
+			for _, r := range flags.agentScopeServeRoutes {
+				defer os.Remove(filepath.Dir(r.Socket)) // after runManaged has stopped the bridge
+			}
+		}
 	}
 
 	// v2 (unlike v1): the --cheap-context picker no longer runs here, before
@@ -2032,6 +2049,8 @@ func runProvider(executor Executor, bound Command, logger *slog.Logger, flags pa
 			stagingRoot:  flags.stagingRootPath,
 			forwardAddrs: flags.agentScopeForwards,
 			inUnit:       flags.agentScopeInUnit,
+			unit:         flags.agentScopeUnit,
+			serve:        flags.agentScopeServe,
 			monitors:     flags.agentScopeMonitors,
 			argv:         append([]string{binary}, argv...),
 			extraEnv:     extraEnv,
@@ -2227,6 +2246,13 @@ func runManaged(
 	logger.Info("launching plugin servers", "count", len(discovered))
 
 	report := host.StartAll(ctx, startableHere(host, discovered))
+	// F12: claude reaches a serve-socket server through the in-unit relay's
+	// port, never the socket path the handshake names.
+	for _, srv := range report.Started {
+		if r, ok := flags.agentScopeServeRoutes[srv.Name]; ok {
+			srv.RouteManifestThrough(r.Listen)
+		}
+	}
 	for _, f := range report.Failed {
 		fmt.Fprintf(os.Stderr, "clown: %s failed: %v\n", f.Server.Name(), f.Err)
 		logger.Error("plugin server failed to start", "server", f.Server.Name(), "err", f.Err)
@@ -2378,8 +2404,22 @@ func runManaged(
 
 	if flags.agentScopeSpec != "" {
 		flags.agentScopeForwards = frontendServerAddrs(host.Servers)
+		flags.agentScopeServe = startedServeRelay(flags.agentScopeServeRoutes, report.Started, discovered)
 	}
 	return runProvider(executor, bound, logger, flags)
+}
+
+// startedServeRelay is the serve socket's relay when its server started and
+// the session still binds it (a cheap-context selection may drop it); zero
+// otherwise.
+func startedServeRelay(routes map[string]agentscope.Relay, started []*pluginhost.ManagedServer, kept []pluginhost.DiscoveredServer) agentscope.Relay {
+	for _, srv := range started {
+		r, ok := routes[srv.Name]
+		if ok && slices.ContainsFunc(kept, func(d pluginhost.DiscoveredServer) bool { return d.Name() == srv.Name }) {
+			return r
+		}
+	}
+	return agentscope.Relay{}
 }
 
 // frontendServerAddrs lists the loopback addresses of the started
@@ -2388,7 +2428,9 @@ func runManaged(
 func frontendServerAddrs(servers []*pluginhost.ManagedServer) []string {
 	var addrs []string
 	for _, s := range servers {
-		if s.Def.Scope == pluginhost.ScopeFrontend && s.Handshake().Address != "" {
+		// A serve-socket server (unix handshake) is bound in directly, not
+		// forwarded (F12).
+		if s.Def.Scope == pluginhost.ScopeFrontend && s.Handshake().Address != "" && s.Handshake().NetworkType != "unix" {
 			addrs = append(addrs, s.Handshake().Address)
 		}
 	}
@@ -3067,6 +3109,15 @@ type parsedFlags struct {
 	// frontend for the agent unit (set in runWithFlags), each relayed to the
 	// unit over its own socket.
 	agentScopeMonitors []agentscope.MonitorSpec
+	// agentScopeUnit is the agent unit's name, chosen before the plugin
+	// servers start (set in runWithPluginHost) because the serve bridge's peer
+	// check needs it (F12).
+	agentScopeUnit string
+	// agentScopeServeRoutes are the servers routed to a serve socket
+	// (routeServeSockets), keyed by "<plugin>/<server>"; agentScopeServe is
+	// the started one's relay (set in runManaged), bound into the unit.
+	agentScopeServeRoutes map[string]agentscope.Relay
+	agentScopeServe       agentscope.Relay
 	// mcpCollapse opts this launch into MCP-collapse mode (all-or-nothing for
 	// the prototype): after the discovered upstream MCP servers are started,
 	// clown launches ONE clown-mcp-collapse aggregator fronting them all and

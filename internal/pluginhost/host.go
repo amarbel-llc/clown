@@ -297,6 +297,9 @@ func (h *Host) ServerEntry(srv *ManagedServer) MCPServerEntry {
 // before the entry is returned (see URLHostRewrite for context).
 func (h *Host) serverEntryForManaged(srv *ManagedServer) MCPServerEntry {
 	hs := srv.Handshake()
+	if srv.manifestAddress != "" {
+		hs = Handshake{NetworkType: "tcp", Address: srv.manifestAddress, Protocol: hs.Protocol}
+	}
 	typ := hs.Protocol
 	if typ == "streamable-http" {
 		typ = "http"
@@ -335,7 +338,8 @@ func (h *Host) FetchPromptFragments(ctx context.Context) []string {
 }
 
 func (h *Host) fetchOnePromptFragment(ctx context.Context, srv *ManagedServer, path string) (string, bool) {
-	url := "http://" + srv.Handshake().Address + path
+	hs := srv.Handshake()
+	url := hs.BaseURL() + path
 	reqCtx, cancel := context.WithTimeout(ctx, promptFetchBudget)
 	defer cancel()
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, url, nil)
@@ -343,7 +347,7 @@ func (h *Host) fetchOnePromptFragment(ctx context.Context, srv *ManagedServer, p
 		h.logPromptSkip(srv, err)
 		return "", false
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := hs.Client().Do(req)
 	if err != nil {
 		h.logPromptSkip(srv, err)
 		return "", false
@@ -389,20 +393,22 @@ func (h *Host) FetchToolCatalog(ctx context.Context, srv *ManagedServer) ([]Tool
 	reqCtx, cancel := context.WithTimeout(ctx, toolCatalogFetchBudget)
 	defer cancel()
 
-	url := srv.Handshake().URL()
+	hs := srv.Handshake()
+	url := hs.URL()
+	client := hs.Client()
 	// initialize is required by the MCP spec before tools/list is valid on a
 	// fresh session; the response BODY is unused, but the Mcp-Session-Id
 	// header it returns (when the server implements session continuity,
 	// e.g. moxy's internal/streamhttp) must be captured and echoed back on
 	// tools/list, or the follow-up call 400s ("missing Mcp-Session-Id
 	// header") even though initialize itself succeeded.
-	_, sessionID, err := mcphttp.PostJSONRPC(reqCtx, url, "", `{"jsonrpc":"2.0","id":"cheap-context-init","method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"clown-cheap-context","version":"1"}}}`, maxToolCatalogBytes)
+	_, sessionID, err := mcphttp.PostJSONRPCWith(reqCtx, client, url, "", `{"jsonrpc":"2.0","id":"cheap-context-init","method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"clown-cheap-context","version":"1"}}}`, maxToolCatalogBytes)
 	if err != nil {
 		h.logToolCatalogSkip(srv, err)
 		return nil, false
 	}
 
-	body, _, err := mcphttp.PostJSONRPC(reqCtx, url, sessionID, `{"jsonrpc":"2.0","id":"cheap-context-tools","method":"tools/list","params":{}}`, maxToolCatalogBytes)
+	body, _, err := mcphttp.PostJSONRPCWith(reqCtx, client, url, sessionID, `{"jsonrpc":"2.0","id":"cheap-context-tools","method":"tools/list","params":{}}`, maxToolCatalogBytes)
 	if err != nil {
 		h.logToolCatalogSkip(srv, err)
 		return nil, false

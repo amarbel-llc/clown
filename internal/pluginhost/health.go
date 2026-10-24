@@ -7,9 +7,17 @@ import (
 	"time"
 )
 
+// WaitHealthy polls http://<addr><path> until it answers 200 or ctx ends.
 func WaitHealthy(ctx context.Context, addr, path string, interval time.Duration) error {
-	url := "http://" + addr + path
-	client := &http.Client{Timeout: 2 * time.Second}
+	return WaitHealthyHandshake(ctx, Handshake{NetworkType: "tcp", Address: addr}, path, interval)
+}
+
+// WaitHealthyHandshake is WaitHealthy for the server hs announced, over its
+// own transport (a unix socket for a unix handshake).
+func WaitHealthyHandshake(ctx context.Context, hs Handshake, path string, interval time.Duration) error {
+	url := hs.BaseURL() + path
+	client := *hs.Client()
+	client.Timeout = 2 * time.Second
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 

@@ -33,7 +33,7 @@ import (
 // file once the unit is active. Any failure refuses the launch: there is no
 // unconfined fallback.
 func runInAgentScope(req agentScopeRequest, logger *slog.Logger) int {
-	launch, err := prepareAgentScope(req.specPath, req.argv, req.extraEnv)
+	launch, err := prepareAgentScope(req.specPath, req.unit, req.argv, req.extraEnv)
 	if err != nil {
 		// A spec that loaded names a trusted result_path; record the refusal
 		// there (launch.Spec is empty when the spec itself was refused).
@@ -43,6 +43,7 @@ func runInAgentScope(req agentScopeRequest, logger *slog.Logger) int {
 	}
 	launch.Principal = req.principal
 	launch.IdleSocket = req.idleSocket
+	launch.Serve = req.serve
 	if req.stagingRoot != "" && !strings.HasPrefix(req.stagingRoot, launch.Spec.Worktree+"/") {
 		launch.PlumbingRO = append(launch.PlumbingRO, req.stagingRoot)
 	}
@@ -84,6 +85,11 @@ type agentScopeRequest struct {
 	// idleSocket is the frontend's self-close idle socket (clown#287); empty
 	// when not armed.
 	idleSocket string
+	// unit is the unit name chosen before the plugin servers started (F12);
+	// empty: prepareAgentScope names it.
+	unit string
+	// serve is the session's serve socket relay (F12); zero: none.
+	serve agentscope.Relay
 }
 
 // agentScopeTools resolves systemd-run and systemctl from PATH (overridable
@@ -100,14 +106,17 @@ func agentScopeTools() agentscope.Tools {
 // prepareAgentScope loads the spec and assembles the Launch: unit name, agent
 // home, the in-unit exec shim, and clown's own plumbing binds (claude's config
 // and transcripts, the job platform's state and runtime dirs, hook state).
-func prepareAgentScope(specPath string, argv, extraEnv []string) (agentscope.Launch, error) {
+func prepareAgentScope(specPath, unit string, argv, extraEnv []string) (agentscope.Launch, error) {
 	spec, err := agentscope.LoadSpec(specPath)
 	if err != nil {
 		return agentscope.Launch{}, err
 	}
+	if unit == "" {
+		unit = agentscope.UnitName(spec.UnitNameHint)
+	}
 	// From here on a refusal carries the spec and unit, so the caller can
 	// record it in the result file.
-	refused := agentscope.Launch{Spec: spec, Unit: agentscope.UnitName(spec.UnitNameHint)}
+	refused := agentscope.Launch{Spec: spec, Unit: unit}
 	cwd, err := os.Getwd()
 	if err != nil {
 		return refused, err

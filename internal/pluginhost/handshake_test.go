@@ -71,8 +71,9 @@ func TestParseHandshake(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:    "unsupported network type",
-			input:   "1|1|unix|/tmp/sock|streamable-http",
+			name: "unsupported network type",
+			// unix is supported since F12 (unix_test.go); udp never was.
+			input:   "1|1|udp|127.0.0.1:1|streamable-http",
 			wantErr: true,
 		},
 		{

@@ -255,7 +255,8 @@ func Run(l Launch, tools Tools, logger *slog.Logger) (int, error) {
 		reporting.Store(true)
 		go func() {
 			st, err := tools.waitActive(ctx, l.Unit)
-			res := Result{Unit: l.Unit, Principal: l.Principal, Cgroup: st.ControlGroup, InvocationID: st.InvocationID, UID: os.Getuid(), Pty: pty, MainPID: st.MainPID}
+			res := l.baseResult()
+			res.Cgroup, res.InvocationID, res.Pty, res.MainPID = st.ControlGroup, st.InvocationID, pty, st.MainPID
 			if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, errUnitEnded) {
 				// The unit failed, or the provider did not start in time:
 				// say so now, not only when the unit exits.
@@ -316,7 +317,7 @@ func Run(l Launch, tools Tools, logger *slog.Logger) (int, error) {
 	default:
 		// The unit exited before clown saw the provider start: a provider
 		// that ran briefly, observed by its exit alone.
-		o.res = Result{Unit: l.Unit, Principal: l.Principal, UID: os.Getuid()}
+		o.res = l.baseResult()
 	}
 	exit := code
 	o.res.ExitCode = &exit

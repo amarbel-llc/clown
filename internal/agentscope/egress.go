@@ -231,25 +231,34 @@ func (p *EgressProxy) authorize(c net.Conn) error {
 // kernel translates SO_PEERCRED's pid into the reader's pid namespace, so a
 // caller inside the unit's private pid namespace still resolves here.
 func authorizeUnitPeer(c net.Conn, unitName string, read func(pid int) (string, error)) error {
+	pid, err := peerPID(c)
+	if err != nil {
+		return err
+	}
+	return checkUnitCgroup(pid, unitName, read)
+}
+
+// peerPID is a unix connection's peer pid from SO_PEERCRED.
+func peerPID(c net.Conn) (int, error) {
 	uc, ok := c.(*net.UnixConn)
 	if !ok {
-		return errors.New("not a unix connection")
+		return 0, errors.New("not a unix connection")
 	}
 	raw, err := uc.SyscallConn()
 	if err != nil {
-		return err
+		return 0, err
 	}
 	var cred *unix.Ucred
 	var credErr error
 	if err := raw.Control(func(fd uintptr) {
 		cred, credErr = unix.GetsockoptUcred(int(fd), unix.SOL_SOCKET, unix.SO_PEERCRED)
 	}); err != nil {
-		return err
+		return 0, err
 	}
 	if credErr != nil {
-		return credErr
+		return 0, credErr
 	}
-	return checkUnitCgroup(int(cred.Pid), unitName, read)
+	return int(cred.Pid), nil
 }
 
 // checkUnitCgroup reports whether pid runs in the agent unit's cgroup:

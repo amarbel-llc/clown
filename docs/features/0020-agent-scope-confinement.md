@@ -751,7 +751,7 @@ By tool, for a brief to state plainly:
 | circus read-only cloud moxins (hetzner, cloudflare, nfsn) | absent for now | Not on the allowlist. They could be added as read-only after review. |
 | ringmaster, troupe MCP (jobs, chat) | available | Forwarded from the frontend. |
 | `ringmaster`/`troupe` CLI from Bash, and in-unit job producers (e.g. moxy's async jobs) | **not supported in confinement** | Decision (a), coordinator, 2026-10-22: confined workers use the frontend MCP job tools (ringmaster, troupe). In-unit moxy async jobs and `ringmaster`/`troupe` CLI use from Bash are not supported: no ringmaster or troupe directory is bound, so a journal write from inside the unit is expected to fail (inferred from the binds; not observed). An in-unit moxy also gets no `CLOWN_SESSION_ID` (pre-existing), so before this it journaled to a channel no monitor watched. Revisit (bind the session's own channel dir, pass the key to in-unit servers) only if a worker needs moxy async in confinement and the operator asks. |
-| spinclass serve | available once spinclass marks it `"scope":"frontend"` | Until then it runs in-unit with what the unit sees. |
+| spinclass serve | available (`"scope":"frontend"`), over the session's serve socket (F12) | Its bridge admits only the unit and the frontend; it has no TCP listener in confined mode. |
 | claude.ai connectors (e.g. Krone's issue-filer) | available | Through the egress proxy (`mcp-proxy.anthropic.com`, `mcp.starbrandshoes.com` on the default allowlist). |
 | Bash network tools | only allowlisted `host:port` over the proxy | `HTTPS_PROXY`/`HTTP_PROXY` are set. Tools that ignore proxy env get no network. |
 | local juggler model (loopback `ANTHROPIC_BASE_URL`) | unavailable | The unit's loopback is its own. |
@@ -760,11 +760,63 @@ By tool, for a brief to state plainly:
 because `-p` mode does not start them. A loopback `ANTHROPIC_BASE_URL` (a
 local juggler) is not reachable from the unit.
 
-## Proposed: a per-session serve socket (F12)
+## A per-session serve socket (F12)
 
-**Status: PROPOSED, plan of record (coordinator, 2026-10-22). Not built.**
-Trigger to build: round Q's proxy-side F12 probe is quoted, and the operator
-gives the go on timing.
+**Status: BUILT (2026-10-24), option (y) with one shared child.** Unit tests
+pass; the host bats run (`just verify-agent-scope`) has **not** been run for
+it, and no confined spinclass session has used it yet.
+
+What was built:
+- `clown-stdio-bridge --listen-unix <sock> --peer-unit <unit>` serves its
+  usual streamable-HTTP on the unix socket instead of loopback TCP. Its
+  listener (`agentscope.ListenServeSocket`) creates the socket 0600 in a
+  0700 directory, `$XDG_RUNTIME_DIR/clown/serve/<principal>/<server>.sock`.
+  On every accepted connection it checks the peer (SO_PEERCRED, then
+  `/proc/<pid>/cgroup` against `.../clown-agent.slice/<unit>`). It refuses
+  and logs anyone else.
+- **The frontend is admitted by pid.** The bridge's parent clown (its
+  `getppid()`) health-checks the server, fetches its prompt fragment and
+  pushes cheap-context exclusions over the same socket. It is accepted by
+  pid rather than cgroup. No other host process is admitted.
+- The handshake gains a unix form (`1|1|unix|<abs path>|streamable-http`).
+  pluginhost dials the socket for its own requests (`Handshake.Client`,
+  `BaseURL`). The compiled manifest names the in-unit relay's port
+  (`ManagedServer.RouteManifestThrough`, `127.0.0.1:19000`,
+  `agentscope.ServePortBase`).
+- Only spinclass's bridged frontend server is routed this way
+  (`routeServeSockets` in cmd/clown). ringmaster, troupe and every other
+  bridge user keep loopback TCP and their forwards, unchanged.
+- clown names the unit before pluginhost starts the frontend servers
+  (`flags.agentScopeUnit`), so the bridge admits the unit from claude's
+  first connection.
+- The socket is bound into the unit as a single inode and relayed from the
+  port (`Launch.Serve`). The result gains `serve_socket`, and the
+  capability list gains `frontend-serve-socket`. SpecVersion is unchanged.
+
+**Child lifetime: one shared child (changed plan).** An intermediate plan was
+one child per accepted connection. It is **withdrawn**: claude speaks
+streamable-HTTP to the bridge, and one MCP session spans several HTTP
+connections (POSTs and the SSE GET), so a child per connection would split a
+session. The bridge keeps its one child for all connections, as on TCP.
+
+**Known limit (clown#286): within-session cross-talk.** Every connection
+shares the one child. The bridge does not remap JSON-RPC ids. A request
+whose id is already in flight is refused ("duplicate JSON-RPC id"), and every
+server-to-client message is broadcast to every SSE subscriber. With F12 those
+connections can only come from the session's own unit and its frontend, so
+another session cannot reach the child; a second client inside the same unit
+still shares it. The alternative, a child per MCP session inside the bridge
+(keyed on initialize / `Mcp-Session-Id`), is recorded on clown#286 and not
+built.
+
+**Not verified:**
+- the host bats: MCP over the socket from inside a unit, a host process
+  refused on the socket, and no TCP listener for the confined serve;
+- spinclass serve itself over the socket (prompt fragment and tools);
+- a cheap-context exclusion push over the socket in a real launch;
+- spinclass reading `serve_socket` and requiring the capability.
+
+The proposal it implements, for the record:
 
 **Problem.** spinclass serve speaks MCP over stdio only (spinclass
 `cmd/spinclass/commands_mcp.go`, `transport.NewStdio`, per

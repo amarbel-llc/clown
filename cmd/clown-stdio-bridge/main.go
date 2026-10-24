@@ -15,8 +15,11 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
+
+	"code.linenisgreat.com/clown/internal/agentscope"
 )
 
 const stopGracePeriod = 5 * time.Second
@@ -33,6 +36,11 @@ func main() {
 type parsedArgs struct {
 	command string
 	args    []string
+	// listenUnix and peerUnit (F12, FDR 0020): serve on this unix socket,
+	// admitting only callers in the agent unit peerUnit (and the parent
+	// clown), instead of on loopback TCP. Both or neither.
+	listenUnix string
+	peerUnit   string
 }
 
 func parseArgs(args []string) (parsedArgs, error) {
@@ -43,20 +51,52 @@ func parseArgs(args []string) (parsedArgs, error) {
 		case args[i] == "--":
 			p.args = append([]string(nil), args[i+1:]...)
 			i = len(args)
-		case args[i] == "--command":
+		case args[i] == "--command" || args[i] == "--listen-unix" || args[i] == "--peer-unit":
 			if i+1 >= len(args) {
-				return p, fmt.Errorf("--command requires an argument")
+				return p, fmt.Errorf("%s requires an argument", args[i])
 			}
-			p.command = args[i+1]
+			switch args[i] {
+			case "--command":
+				p.command = args[i+1]
+			case "--listen-unix":
+				p.listenUnix = args[i+1]
+			default:
+				p.peerUnit = args[i+1]
+			}
 			i += 2
 		default:
-			return p, fmt.Errorf("unknown flag %q (expected --command or --)", args[i])
+			return p, fmt.Errorf("unknown flag %q (expected --command, --listen-unix, --peer-unit or --)", args[i])
 		}
 	}
 	if p.command == "" {
 		return p, fmt.Errorf("--command is required")
 	}
+	if (p.listenUnix == "") != (p.peerUnit == "") {
+		return p, fmt.Errorf("--listen-unix and --peer-unit go together")
+	}
+	if p.listenUnix != "" && !filepath.IsAbs(p.listenUnix) {
+		return p, fmt.Errorf("--listen-unix %q must be an absolute path", p.listenUnix)
+	}
 	return p, nil
+}
+
+// listen opens the bridge's listener: loopback TCP, or with --listen-unix a
+// unix socket whose Accept admits only the agent unit and the parent clown
+// (agentscope.ListenServeSocket). It returns the handshake's network type.
+func listen(p parsedArgs) (net.Listener, string, error) {
+	if p.listenUnix == "" {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		return ln, "tcp", err
+	}
+	logger := log.New(os.Stderr, "clown-stdio-bridge: ", 0)
+	ln, err := agentscope.ListenServeSocket(p.listenUnix, p.peerUnit, os.Getppid(), nil, logger.Printf)
+	return ln, "unix", err
+}
+
+// handshakeLine is the plugin-protocol handshake; its format must match
+// internal/pluginhost/handshake.go.
+func handshakeLine(network, addr string) string {
+	return fmt.Sprintf("1|1|%s|%s|streamable-http", network, addr)
 }
 
 func run(p parsedArgs) int {
@@ -92,15 +132,14 @@ func run(p parsedArgs) int {
 	childDone := make(chan error, 1)
 	go func() { childDone <- cmd.Wait() }()
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, network, err := listen(p)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown-stdio-bridge: listen: %v\n", err)
 		terminate(cmd, childDone)
 		return 1
 	}
 
-	// Handshake format must match internal/pluginhost/handshake.go.
-	fmt.Printf("1|1|tcp|%s|streamable-http\n", ln.Addr().String())
+	fmt.Println(handshakeLine(network, ln.Addr().String()))
 	_ = os.Stdout.Sync()
 
 	stdLogger := log.New(os.Stderr, "", 0)

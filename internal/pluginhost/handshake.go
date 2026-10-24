@@ -1,8 +1,11 @@
 package pluginhost
 
 import (
+	"context"
 	"fmt"
 	"net"
+	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -38,13 +41,16 @@ func ParseHandshake(line string) (Handshake, error) {
 	}
 
 	netType := parts[2]
-	if netType != "tcp" {
-		return Handshake{}, fmt.Errorf("handshake: unsupported network type %q (expected tcp)", netType)
+	if netType != "tcp" && netType != "unix" {
+		return Handshake{}, fmt.Errorf("handshake: unsupported network type %q (expected tcp or unix)", netType)
 	}
 
 	addr := parts[3]
 	if addr == "" {
 		return Handshake{}, fmt.Errorf("handshake: empty network address")
+	}
+	if netType == "unix" && !filepath.IsAbs(addr) {
+		return Handshake{}, fmt.Errorf("handshake: unix socket path %q is not absolute", addr)
 	}
 
 	proto := parts[4]
@@ -65,6 +71,39 @@ func (h Handshake) URL() string {
 	return h.URLWithHostRewrite("")
 }
 
+// unixHost is the Host a request to a unix-socket server carries; the
+// connection itself goes to the socket (Client).
+const unixHost = "unix"
+
+// BaseURL is the scheme and host plugin-host's own requests to this server
+// use; paths are appended to it. A unix server's host is a placeholder: its
+// Client dials the socket.
+func (h Handshake) BaseURL() string {
+	if h.NetworkType == "unix" {
+		return "http://" + unixHost
+	}
+	return "http://" + h.Address
+}
+
+// Client is the HTTP client plugin-host's own requests to this server use:
+// one that dials the socket for a unix server (F12, FDR 0020), the default
+// client otherwise.
+func (h Handshake) Client() *http.Client {
+	if h.NetworkType != "unix" {
+		return http.DefaultClient
+	}
+	sock := h.Address
+	// No keep-alives: each call builds its own transport, which must not
+	// leave idle connections to the bridge behind.
+	return &http.Client{Transport: &http.Transport{
+		DisableKeepAlives: true,
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, "unix", sock)
+		},
+	}}
+}
+
 // URLWithHostRewrite returns the same URL as URL(), but with the host
 // portion of the address replaced when hostOverride is non-empty. The
 // port and path components are preserved. An empty hostOverride is a
@@ -81,6 +120,9 @@ func (h Handshake) URLWithHostRewrite(hostOverride string) string {
 	path := "/mcp"
 	if h.Protocol == "sse" {
 		path = "/sse"
+	}
+	if h.NetworkType == "unix" {
+		return h.BaseURL() + path
 	}
 	addr := h.Address
 	if hostOverride != "" {

@@ -43,6 +43,12 @@ const DefaultMaxResponseBytes = 1 << 20
 // env var per-fetch, so both must be handled here rather than assuming
 // plain JSON.
 func PostJSONRPC(ctx context.Context, url, sessionID, body string, maxBytes int64) ([]byte, string, error) {
+	return PostJSONRPCWith(ctx, http.DefaultClient, url, sessionID, body, maxBytes)
+}
+
+// PostJSONRPCWith is PostJSONRPC over client (e.g. one that dials a unix
+// socket).
+func PostJSONRPCWith(ctx context.Context, client *http.Client, url, sessionID, body string, maxBytes int64) ([]byte, string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader([]byte(body)))
 	if err != nil {
 		return nil, "", err
@@ -52,7 +58,7 @@ func PostJSONRPC(ctx context.Context, url, sessionID, body string, maxBytes int6
 	if sessionID != "" {
 		req.Header.Set(MCPSessionIDHeader, sessionID)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, "", err
 	}

@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -69,16 +70,28 @@ type Launch struct {
 	MonitorSockets []string
 	// Principal is reported in the result (CLOWN_SESSION_ID).
 	Principal string
+	// Serve is the session's serve socket (F12, FDR 0020): the frontend
+	// bridge's peer-checked unix socket, bound in as a single inode and
+	// relayed from the in-unit port claude's manifest names. Zero: none.
+	Serve Relay
 }
 
 // relays is every in-unit relay the shim starts: the egress proxy's, then the
-// forwards, then the statsd relay.
+// forwards, then the serve socket's, then the statsd relay.
 func (l Launch) relays() []Relay {
 	rs := append([]Relay{{Listen: RelayAddr(), Socket: l.EgressSocket}}, l.Forwards...)
+	if l.Serve.Socket != "" {
+		rs = append(rs, l.Serve)
+	}
 	if l.StatsdSocket != "" {
 		rs = append(rs, Relay{Listen: StatsdAddr(), Socket: l.StatsdSocket, UDP: true})
 	}
 	return rs
+}
+
+// baseResult is the result fields known from the launch alone.
+func (l Launch) baseResult() Result {
+	return Result{Unit: l.Unit, Principal: l.Principal, UID: os.Getuid(), ServeSocket: l.Serve.Socket}
 }
 
 // UnitName turns spinclass's hint into a valid, unique service name.
@@ -170,6 +183,9 @@ func (l Launch) properties() []string {
 	}
 	for _, f := range l.Forwards {
 		props = append(props, "BindPaths="+f.Socket)
+	}
+	if l.Serve.Socket != "" {
+		props = append(props, "BindPaths="+l.Serve.Socket)
 	}
 	if l.StatsdSocket != "" {
 		props = append(props, "BindPaths="+l.StatsdSocket)

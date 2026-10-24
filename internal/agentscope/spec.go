@@ -160,13 +160,14 @@ func exposesWhole(p, target string) bool {
 // refuses a confined launch unless the ones it requires are listed, so a
 // capability is added here only with the code that provides it.
 var Capabilities = []string{
-	"agent-unit",           // transient user service, mount/pid/devpts namespaces
-	"private-network",      // PrivateNetwork=yes, always
-	"egress-proxy",         // frontend CONNECT proxy with a host:port allowlist
-	"frontend-mcp-sockets", // only frontend-class servers, over per-session peer-checked unix sockets
-	"in-unit-moxy",         // agent-side servers (moxy & co.) run inside the unit, moxy under InUnitMoxyfile
-	"statsd-relay",         // in-unit UDP 127.0.0.1:8125 relayed over a peer-checked unixgram socket to the frontend's statsd
-	"frontend-monitors",    // job-platform monitors run in the frontend; no ringmaster or troupe state is bound into the unit
+	"agent-unit",            // transient user service, mount/pid/devpts namespaces
+	"private-network",       // PrivateNetwork=yes, always
+	"egress-proxy",          // frontend CONNECT proxy with a host:port allowlist
+	"frontend-mcp-sockets",  // only frontend-class servers, over per-session peer-checked unix sockets
+	"in-unit-moxy",          // agent-side servers (moxy & co.) run inside the unit, moxy under InUnitMoxyfile
+	"statsd-relay",          // in-unit UDP 127.0.0.1:8125 relayed over a peer-checked unixgram socket to the frontend's statsd
+	"frontend-monitors",     // job-platform monitors run in the frontend; no ringmaster or troupe state is bound into the unit
+	"frontend-serve-socket", // spinclass serve's bridge listens on a per-session unix socket admitting only the unit (Result.ServeSocket); no TCP listener
 }
 
 // Result is what clown reports back once the unit is active (FDR 0020
@@ -184,6 +185,10 @@ type Result struct {
 	UID          int    `json:"uid"`
 	Pty          string `json:"pty,omitempty"`
 	MainPID      int    `json:"main_pid,omitempty"`
+	// ServeSocket is the session's serve socket (F12): the frontend unix
+	// socket spinclass serve's bridge listens on, which admits only this unit
+	// (and the frontend). Absent when the session has none.
+	ServeSocket string `json:"serve_socket,omitempty"`
 	// ExitCode is set once the unit has exited after its provider started.
 	ExitCode *int   `json:"exit_code,omitempty"`
 	Error    string `json:"error,omitempty"`
