@@ -9,6 +9,8 @@ import (
 	"strings"
 	"syscall"
 
+	"golang.org/x/term"
+
 	"code.linenisgreat.com/clown/internal/clownfile"
 )
 
@@ -99,17 +101,20 @@ func stringsCutPrefix(s, prefix string) (string, bool) {
 }
 
 // titleTerminalAvailable reports whether this session has a terminal to title at
-// all. It is deliberately the SAME condition the [attach] wrap uses, down to the
-// CLOWN_ATTACH_FORCE=1 override (the escape hatch for terminals where detection
-// misfires, and the seam the title tests drive), so a session that wraps is a
-// session that titles.
-//
-// Note it asks about stdin/stdout while the write below goes to stderr, so a
-// redirected stderr under an otherwise interactive terminal still receives the
-// escape bytes. That mismatch predates the emission-point move and is left
-// as-is here rather than quietly diverging this gate from the wrap's.
+// all: the [attach] wrap's condition (stdin and stdout are terminals, or the
+// CLOWN_ATTACH_FORCE=1 override, the escape hatch for terminals where detection
+// misfires and the seam the title tests drive), plus stderr being a terminal,
+// since the title is written there (clown#233, option 1). So `clown -p x 2>log`
+// writes no escape bytes into log. The two gates now differ only when stderr
+// alone is redirected; a wrapped session's inner clown has a pty on all three.
 func titleTerminalAvailable() bool {
-	return isInteractiveTerminal() || os.Getenv("CLOWN_ATTACH_FORCE") == "1"
+	return titleGate(isInteractiveTerminal(), term.IsTerminal(int(os.Stderr.Fd())), os.Getenv("CLOWN_ATTACH_FORCE") == "1")
+}
+
+// titleGate is titleTerminalAvailable's decision: forced, or an interactive
+// stdin/stdout with a stderr terminal to write the title to.
+func titleGate(interactive, stderrTTY, forced bool) bool {
+	return forced || (interactive && stderrTTY)
 }
 
 // gitRepoAndBranch best-effort resolves "<repo-basename>/<branch>" for the

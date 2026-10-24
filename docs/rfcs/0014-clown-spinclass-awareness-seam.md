@@ -302,7 +302,10 @@ Three corrections to §3.1.2, all still **title-display only**. Design record:
   interactively later, so it MUST be titled like any other. clown gates
   emission solely on the emitting process having an interactive terminal
   (`CLOWN_ATTACH_FORCE=1` overrides, as for the wrap): a spawn's inner clown
-  passes with its pty; its outer, with `/dev/null` stdio, does not.
+  passes with its pty; its outer, with `/dev/null` stdio, does not. Because
+  the title is written to stderr, emission also requires stderr to be a
+  terminal (clown#233, option 1), so `clown -p x 2>log` writes no escape
+  bytes into `log`. Only then does the title gate differ from the wrap's.
 
 ##### 3.1.4 Amendment: tier 3 renders the clown-name once (clown#229)
 
