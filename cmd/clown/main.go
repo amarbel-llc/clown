@@ -2393,7 +2393,7 @@ func runManaged(
 	// fetch or write failure degrades to the static prompt, never blocks the
 	// launch.
 	if appendFile != "" {
-		if frags := host.FetchPromptFragments(ctx); len(frags) > 0 {
+		if frags := mergeSessionIdentity(host.FetchPromptFragments(ctx)); len(frags) > 0 {
 			if err := appendPromptFragments(appendFile, frags); err != nil {
 				logger.Warn("appending dynamic prompt fragments failed; continuing with static prompt", "err", err)
 			} else {
