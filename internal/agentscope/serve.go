@@ -76,36 +76,46 @@ type serveListener struct {
 	logf        func(format string, args ...any)
 }
 
+// ServeConn is a connection the serve socket accepted, with its peer class:
+// Frontend is true for the frontend clown itself, false for a caller in the
+// unit. The bridge serves the control routes only to the frontend
+// (clown#301).
+type ServeConn struct {
+	net.Conn
+	Frontend bool
+}
+
 func (l *serveListener) Accept() (net.Conn, error) {
 	for {
 		c, err := l.Listener.Accept()
 		if err != nil {
 			return nil, err
 		}
-		if err := authorizeServePeer(c, l.unit, l.frontendPID, l.peerCgroup); err != nil {
+		frontend, err := authorizeServePeer(c, l.unit, l.frontendPID, l.peerCgroup)
+		if err != nil {
 			if l.logf != nil {
 				l.logf("serve socket: refused caller: %v", err)
 			}
 			c.Close()
 			continue
 		}
-		return c, nil
+		return &ServeConn{Conn: c, Frontend: frontend}, nil
 	}
 }
 
-// authorizeServePeer admits the frontend's current pid, else only callers in
-// the unit's cgroup. It fails closed: a peer whose pid cannot be read is
-// refused. The error names the caller's pid and cgroup, or says the cgroup is
-// unknown.
-func authorizeServePeer(c net.Conn, unitName string, frontendPID func() int, read func(int) (string, error)) error {
+// authorizeServePeer admits the frontend's current pid (frontend true), else
+// only callers in the unit's cgroup. It fails closed: a peer whose pid cannot
+// be read is refused. The error names the caller's pid and cgroup, or says
+// the cgroup is unknown.
+func authorizeServePeer(c net.Conn, unitName string, frontendPID func() int, read func(int) (string, error)) (frontend bool, err error) {
 	pid, err := peerPID(c)
 	if err != nil {
-		return fmt.Errorf("caller's pid unreadable, cgroup unknown: %w", err)
+		return false, fmt.Errorf("caller's pid unreadable, cgroup unknown: %w", err)
 	}
 	if frontendPID != nil {
 		if fp := frontendPID(); fp > 1 && pid == fp {
-			return nil
+			return true, nil
 		}
 	}
-	return checkUnitCgroup(pid, unitName, read)
+	return false, checkUnitCgroup(pid, unitName, read)
 }

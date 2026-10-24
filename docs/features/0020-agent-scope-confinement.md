@@ -685,7 +685,10 @@ What the readback proves, and what it does not:
   case, e.g. `{"name":"kept","Name":"excluded"}`. This is still policy, not
   a boundary: in a unit, the bridge belongs to the worker, and its
   `/clown/exclude-tools` is unauthenticated loopback (ADR 0006's premise does
-  not hold there; not reopened yet).
+  not hold there; not reopened yet). The exception is spinclass serve's
+  frontend bridge on the serve socket. Its call refusal runs in the frontend,
+  and its control routes refuse the unit (F12, clown#301), so there the
+  exclusions hold against the worker.
 - In-unit servers, and their `/clown/exclude-tools` route, run inside the
   worker's unit on its loopback. A worker able to reach that route could
   change its own exclusions. The in-unit record is written by that same unit.
@@ -789,12 +792,19 @@ What was built:
   answers, it refuses ("serve socket … is live") instead of unlinking the
   first session's socket; only a stale socket file is replaced. Two launches
   of one principal racing in the same instant are not guarded against.
-- **Not a boundary within the unit: the control routes.** The socket serves
-  the bridge's whole mux, so a process in the unit can also reach
-  `/clown/system-prompt` and `/clown/exclude-tools`. It can clear the
-  profile's tool exclusions for this server. The exclusions are policy, not a
-  boundary (as for every bridged server); the boundary F12 adds is between
-  sessions and against host processes.
+- **The control routes are the frontend's only (clown#301).** On the serve
+  socket the bridge tags each accepted connection with its peer class
+  (`agentscope.ServeConn.Frontend`).
+  - `/clown/system-prompt` and `/clown/exclude-tools` answer 403 to a caller
+    in the unit, or to any request without a class (fail closed). So the
+    unit cannot read or clear the profile's tool exclusions for this server,
+    or fetch the fragment.
+  - `/mcp` and `/healthz` stay open to the unit.
+  - The frontend still pushes and reads back exclusions and fetches the
+    fragment.
+  - The loopback-TCP bridges (ringmaster, troupe, and every unconfined
+    session) are unchanged: their control routes are loopback-only, which is
+    not a boundary.
 - The handshake gains a unix form (`1|1|unix|<abs path>|streamable-http`).
   pluginhost dials the socket for its own requests (`Handshake.Client`,
   `BaseURL`). The compiled manifest names the in-unit relay's port

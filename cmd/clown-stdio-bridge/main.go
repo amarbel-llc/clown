@@ -8,7 +8,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"net/http"
@@ -174,47 +173,11 @@ func run(p parsedArgs) int {
 	}()
 
 	handler := newHTTPHandler(tr, stdLogger, newStatsdFromEnv())
-	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		select {
-		case <-childDone:
-			http.Error(w, "wrapped child has exited", http.StatusServiceUnavailable)
-		default:
-			w.WriteHeader(http.StatusOK)
-		}
-	})
-	mux.HandleFunc("/mcp", handler.handleMCP)
-	// Dynamic system-prompt contribution (RFC-0002 §dynamic fragments).
-	// clown GETs this path after the server is healthy and folds a 200 body
-	// into claude's --append-system-prompt-file. The bridge answers by
-	// issuing an MCP prompts/get for the well-known "system-prompt-append"
-	// prompt to the wrapped child, so the fragment is child-owned and
-	// computed at request time (live state). A child that exposes no such
-	// prompt — or any error — yields 204, which clown treats as "no
-	// fragment". The path literal MUST match pluginhost.BridgeSystemPromptPath.
-	mux.HandleFunc("/clown/system-prompt", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		text, ok := fetchChildSystemPrompt(r.Context(), tr)
-		if !ok || text == "" {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
-		_, _ = io.WriteString(w, text)
-	})
-	// --cheap-context v2 (cmd/clown/cheapcontext.go): clown GETs/POSTs the set
-	// of tool names to exclude from every subsequent tools/list response,
-	// after the user's picker selection is known. Loopback-only per
-	// mcphttp.ValidateOrigin, like every other /clown/* control endpoint on
-	// this bridge — this is a clown-internal control surface, not part of MCP.
-	// Contract matches moxy's independently-shipped /clown/exclude-tools
-	// (amarbel-llc/moxy#399): see httpHandler.handleExcludeTools.
-	mux.HandleFunc("/clown/exclude-tools", handler.handleExcludeTools)
-
-	srv := &http.Server{Handler: mux}
+	serveMode := network == "unix"
+	srv := &http.Server{Handler: newMux(handler, tr, childDone, serveMode)}
+	if serveMode {
+		srv.ConnContext = serveConnContext
+	}
 	serveErr := make(chan error, 1)
 	go func() {
 		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {

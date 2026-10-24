@@ -51,7 +51,7 @@ func TestServePeerCheckFailsClosedWhenThePeerIsUnreadable(t *testing.T) {
 	a, b := net.Pipe() // not a unix connection: no SO_PEERCRED
 	defer a.Close()
 	defer b.Close()
-	err := authorizeServePeer(a, "u-1.service", func() int { return os.Getpid() }, func(int) (string, error) { return unitCgroup, nil })
+	_, err := authorizeServePeer(a, "u-1.service", func() int { return os.Getpid() }, func(int) (string, error) { return unitCgroup, nil })
 	if err == nil {
 		t.Fatal("an unreadable peer was admitted")
 	}
