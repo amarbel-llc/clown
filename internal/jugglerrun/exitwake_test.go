@@ -207,10 +207,19 @@ func TestExitWake_GivesUpWhenDoneNeverSucceeds(t *testing.T) {
 	alwaysFails := &countingDoneRingmaster{Ringmaster: h.deps.Ringmaster, failCount: 1 << 30, err: errors.New("ringmaster: permanently down")}
 	deps := h.deps
 	deps.Ringmaster = alwaysFails
-	deps.DoneRetryBackoff = 5 * time.Millisecond
-
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	// clown#268: no wall clock. The retry wait is a hook that lets exactly
+	// one retry through and then ends the caller's ctx, as an expiring hook
+	// budget would, so the outcome does not depend on host load.
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	waits := 0
+	deps.WaitBeforeDoneRetry = func(ctx context.Context, _ time.Duration) error {
+		waits++
+		if waits == 2 {
+			cancel()
+		}
+		return ctx.Err()
+	}
 	out, err := ExitWake(ctx, deps, ExitWakeRequest{Job: job, Target: testRoot, Service: ServiceResult{Result: "exit-code"}})
 	if err == nil {
 		t.Fatal("want an error when done never succeeds")
@@ -223,6 +232,9 @@ func TestExitWake_GivesUpWhenDoneNeverSucceeds(t *testing.T) {
 	}
 	if alwaysFails.calls < 2 {
 		t.Errorf("Done was called %d times, want at least one retry", alwaysFails.calls)
+	}
+	if alwaysFails.calls != 2 || waits != 2 {
+		t.Errorf("Done calls = %d, retry waits = %d; want 2 and 2 (one retry, then the ended ctx stops it)", alwaysFails.calls, waits)
 	}
 	if n := countTerminals(h.fakes.Records(t, testRoot, job)); n != 0 {
 		t.Errorf("terminal records = %d, want 0: the journal must stay untouched", n)

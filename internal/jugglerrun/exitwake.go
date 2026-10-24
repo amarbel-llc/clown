@@ -85,6 +85,23 @@ type LifecycleDeps struct {
 	// loop fast. Bounded by the caller's ctx (the hook's own overall
 	// timeout), not a fixed attempt count.
 	DoneRetryBackoff time.Duration
+	// WaitBeforeDoneRetry waits backoff before the next retry, or returns
+	// ctx's error once ctx is done, which ends the retries. nil waits on a
+	// timer (waitOrDone). Tests inject it so the retry is observable without
+	// racing wall-clock time (clown#268).
+	WaitBeforeDoneRetry func(ctx context.Context, backoff time.Duration) error
+}
+
+// waitOrDone waits d, or returns ctx's error if ctx ends first.
+func waitOrDone(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
 }
 
 // defaultDoneRetryBackoff is production's pace for ExitWake's done retry:
@@ -106,6 +123,9 @@ func (d LifecycleDeps) withDefaults() LifecycleDeps {
 	}
 	if d.DoneRetryBackoff <= 0 {
 		d.DoneRetryBackoff = defaultDoneRetryBackoff
+	}
+	if d.WaitBeforeDoneRetry == nil {
+		d.WaitBeforeDoneRetry = waitOrDone
 	}
 	if d.NewPrincipal == nil {
 		d.NewPrincipal = NewPrincipal
@@ -231,10 +251,8 @@ func doneWithRetry(ctx context.Context, deps LifecycleDeps, req ExitWakeRequest,
 				return t, false, nil
 			}
 		}
-		select {
-		case <-ctx.Done():
+		if deps.WaitBeforeDoneRetry(ctx, deps.DoneRetryBackoff) != nil {
 			return JobRecord{}, false, fmt.Errorf("ringmaster done %s: giving up after repeated failures: %w", req.Job, doneErr)
-		case <-time.After(deps.DoneRetryBackoff):
 		}
 	}
 }
