@@ -19,7 +19,7 @@ const otherUnitCgroup = "/user.slice/user-1001.slice/user@1001.service/clown.sli
 // cgroup reads as callerCgroup, whether its connection was accepted.
 func serveOnce(t *testing.T, path, unit string, frontendPID int, callerCgroup string) bool {
 	t.Helper()
-	ln, err := ListenServeSocket(path, unit, frontendPID, func(int) (string, error) { return callerCgroup, nil }, nil)
+	ln, err := ListenServeSocket(path, unit, func() int { return frontendPID }, func(int) (string, error) { return callerCgroup, nil }, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestServeSocketAcceptsOnlyItsUnitAndTheFrontend(t *testing.T) {
 
 func TestServeSocketModes(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "serve", "p1", "spinclass.sock")
-	ln, err := ListenServeSocket(path, "u-1.service", 0, nil, nil)
+	ln, err := ListenServeSocket(path, "u-1.service", nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

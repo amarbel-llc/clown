@@ -773,11 +773,28 @@ What was built:
   0700 directory, `$XDG_RUNTIME_DIR/clown/serve/<principal>/<server>.sock`.
   On every accepted connection it checks the peer (SO_PEERCRED, then
   `/proc/<pid>/cgroup` against `.../clown-agent.slice/<unit>`). It refuses
-  and logs anyone else.
-- **The frontend is admitted by pid.** The bridge's parent clown (its
-  `getppid()`) health-checks the server, fetches its prompt fragment and
-  pushes cheap-context exclusions over the same socket. It is accepted by
-  pid rather than cgroup. No other host process is admitted.
+  and logs anyone else: the log names the caller's pid and cgroup. When the
+  pid itself cannot be read, the caller is refused (fail closed) and the log
+  says its cgroup is unknown.
+- **The frontend is admitted by pid.** The bridge's parent clown health-checks
+  the server, fetches its prompt fragment and pushes cheap-context
+  exclusions over the same socket. It is accepted by pid rather than cgroup.
+  The check is against `getppid()` at each accept, never pid 1, so once the
+  parent dies its old pid no longer matches. The serve bridge also polls its
+  parent and shuts down once it is gone, so no reused pid can reach the
+  child. No other host process is admitted.
+- **A live socket is not taken over.** The socket is keyed on the session's
+  principal, which a resume or a pinned `CLOWN_SESSION_ID` can repeat. A
+  second bridge for the same principal first probes the path. If a listener
+  answers, it refuses ("serve socket … is live") instead of unlinking the
+  first session's socket; only a stale socket file is replaced. Two launches
+  of one principal racing in the same instant are not guarded against.
+- **Not a boundary within the unit: the control routes.** The socket serves
+  the bridge's whole mux, so a process in the unit can also reach
+  `/clown/system-prompt` and `/clown/exclude-tools`. It can clear the
+  profile's tool exclusions for this server. The exclusions are policy, not a
+  boundary (as for every bridged server); the boundary F12 adds is between
+  sessions and against host processes.
 - The handshake gains a unix form (`1|1|unix|<abs path>|streamable-http`).
   pluginhost dials the socket for its own requests (`Handshake.Client`,
   `BaseURL`). The compiled manifest names the in-unit relay's port

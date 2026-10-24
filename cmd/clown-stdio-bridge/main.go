@@ -89,8 +89,31 @@ func listen(p parsedArgs) (net.Listener, string, error) {
 		return ln, "tcp", err
 	}
 	logger := log.New(os.Stderr, "clown-stdio-bridge: ", 0)
-	ln, err := agentscope.ListenServeSocket(p.listenUnix, p.peerUnit, os.Getppid(), nil, logger.Printf)
+	ln, err := agentscope.ListenServeSocket(p.listenUnix, p.peerUnit, os.Getppid, nil, logger.Printf)
 	return ln, "unix", err
+}
+
+// parentPollInterval paces watchParent.
+const parentPollInterval = time.Second
+
+// watchParent calls onGone once getppid no longer returns initial (the
+// parent clown died and the bridge was reparented), then returns. A serve
+// bridge admits its parent by pid, so it must not outlive it: a process that
+// later took the dead parent's pid would otherwise be admitted.
+func watchParent(ctx context.Context, initial int, getppid func() int, interval time.Duration, onGone func()) {
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if getppid() != initial {
+				onGone()
+				return
+			}
+		}
+	}
 }
 
 // handshakeLine is the plugin-protocol handshake; its format must match
@@ -203,12 +226,21 @@ func run(p parsedArgs) int {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 
+	parentGone := make(chan struct{})
+	if network == "unix" {
+		go watchParent(ctx, os.Getppid(), os.Getppid, parentPollInterval, func() { close(parentGone) })
+	}
+
 	exit := 0
 	terminateChild := false
 	select {
 	case sig := <-sigCh:
 		fmt.Fprintf(os.Stderr, "clown-stdio-bridge: received %s; shutting down\n", sig)
 		terminateChild = true
+	case <-parentGone:
+		fmt.Fprintln(os.Stderr, "clown-stdio-bridge: parent clown is gone; shutting down the serve socket")
+		terminateChild = true
+		exit = 1
 	case err := <-childDone:
 		// Re-fill the channel so terminate() doesn't block if it's
 		// invoked elsewhere (defensive — it's not, in this path).

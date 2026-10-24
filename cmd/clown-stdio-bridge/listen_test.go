@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // F12 (FDR 0020): a confined session's serve bridge listens on a per-session
@@ -35,6 +37,27 @@ func TestHandshakeLineNamesTheListener(t *testing.T) {
 	sock := filepath.Join(t.TempDir(), "s.sock")
 	if got := handshakeLine("unix", sock); got != "1|1|unix|"+sock+"|streamable-http" {
 		t.Errorf("unix handshake = %q", got)
+	}
+}
+
+// A serve bridge admits its parent clown by pid, so it must not outlive it:
+// once the parent is gone the bridge stops (F12 review).
+func TestWatchParentReportsAParentChange(t *testing.T) {
+	ppids := []int{42, 42, 1}
+	i := 0
+	getppid := func() int {
+		p := ppids[min(i, len(ppids)-1)]
+		i++
+		return p
+	}
+	gone := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go watchParent(ctx, 42, getppid, time.Millisecond, func() { close(gone) })
+	select {
+	case <-gone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a changed parent pid was not reported")
 	}
 }
 

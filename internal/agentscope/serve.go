@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // ServePortBase is the in-unit loopback port claude's manifest names for the
@@ -38,17 +39,27 @@ func ServeSocketPath(runtimeDir, principal, server string) (string, error) {
 
 // ListenServeSocket creates the serve socket at path (its directory 0700,
 // the socket 0600) and returns a listener whose Accept yields only callers
-// that run in unit's cgroup, or that are the frontend itself (frontendPID,
-// the bridge's parent clown, which health-checks the server and fetches its
-// prompt fragment; 0 for none). Every other caller is closed and logged with
-// its cgroup. peerCgroup resolves a pid's cgroup (nil: ProcCgroup); logf may
-// be nil.
-func ListenServeSocket(path, unit string, frontendPID int, peerCgroup func(int) (string, error), logf func(format string, args ...any)) (net.Listener, error) {
+// that run in unit's cgroup, or that are the frontend itself: the pid
+// frontendPID returns at that accept (the bridge's current parent clown,
+// which health-checks the server and fetches its prompt fragment; nil for
+// none). Every other caller is closed and logged. peerCgroup resolves a pid's
+// cgroup (nil: ProcCgroup); logf may be nil.
+//
+// A socket at path that still answers belongs to a live bridge (the same
+// principal launched again, e.g. a resume or a pinned CLOWN_SESSION_ID): it
+// is refused, not unlinked. Only a stale socket file is replaced. Between the
+// probe and the replacement another bridge could still bind; two launches of
+// one principal racing on the same instant are not guarded against.
+func ListenServeSocket(path, unit string, frontendPID func() int, peerCgroup func(int) (string, error), logf func(format string, args ...any)) (net.Listener, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
 	if err := os.Chmod(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
+	}
+	if c, err := net.DialTimeout("unix", path, time.Second); err == nil {
+		c.Close()
+		return nil, fmt.Errorf("serve socket %s is live: another bridge serves this session's principal; refusing to take it over", path)
 	}
 	ln, err := listenUnix(path)
 	if err != nil {
@@ -60,7 +71,7 @@ func ListenServeSocket(path, unit string, frontendPID int, peerCgroup func(int) 
 type serveListener struct {
 	net.Listener
 	unit        string
-	frontendPID int
+	frontendPID func() int
 	peerCgroup  func(int) (string, error)
 	logf        func(format string, args ...any)
 }
@@ -82,15 +93,19 @@ func (l *serveListener) Accept() (net.Conn, error) {
 	}
 }
 
-// authorizeServePeer admits the frontend's own pid, else only callers in the
-// unit's cgroup.
-func authorizeServePeer(c net.Conn, unitName string, frontendPID int, read func(int) (string, error)) error {
+// authorizeServePeer admits the frontend's current pid, else only callers in
+// the unit's cgroup. It fails closed: a peer whose pid cannot be read is
+// refused. The error names the caller's pid and cgroup, or says the cgroup is
+// unknown.
+func authorizeServePeer(c net.Conn, unitName string, frontendPID func() int, read func(int) (string, error)) error {
 	pid, err := peerPID(c)
 	if err != nil {
-		return err
+		return fmt.Errorf("caller's pid unreadable, cgroup unknown: %w", err)
 	}
-	if frontendPID > 0 && pid == frontendPID {
-		return nil
+	if frontendPID != nil {
+		if fp := frontendPID(); fp > 1 && pid == fp {
+			return nil
+		}
 	}
 	return checkUnitCgroup(pid, unitName, read)
 }
