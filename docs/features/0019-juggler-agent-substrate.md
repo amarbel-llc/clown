@@ -20,14 +20,17 @@ promotion-criteria: >
 
 > **Erratum (2026-10-20, clown#283).** §5's *Headless posture* paragraph
 > and the *headless permission posture* row of the Tuning Levers table
-> state that any moxy permission tier other than `always-allow` resolves
-> to deny for a juggler agent. That is an intent, not moxy's behaviour:
+> stated that any moxy permission tier other than `always-allow` resolves
+> to deny for a juggler agent (both now read "intended; not enforced
+> today"). That is an intent, not moxy's behaviour:
 > moxy's `tools/call` funnel never consults its permission resolver on a
 > plain call (moxy#485; moxy's skipped test from bb446c3), so an
 > `each-use`, `delegate-to-client` or `dynamic` tool a juggler agent can
 > reach runs ungated, bounded only by the brief's `tools` list, the
 > derived `allow-tools`, and the unit the agent runs in. The missing
-> server-side enforcement is moxy#486 (an `enforce` mode); FDR 0021 §3
+> server-side enforcement is moxy#486 (an `enforce` mode; closed by
+> 2026-10-24, its outcome not yet recorded here, see
+> docs/plans/2026-10-24-fdr-rfc-audit.md); FDR 0021 §3
 > (`docs/features/0021-headless-agent-loop-for-confined-workers.md`)
 > records what moxy enforces today and where enforcement is to live.
 
@@ -1314,7 +1317,7 @@ The router, before any subagent exists:
   user's. moxy pins the reference at startup and judges every reload
   against the pinned copy, so the exposure is only a reference rewritten
   before the agent's moxy starts — negligible today (the agent process
-  has run no model turn yet), closed by clown#252 (a DynamicUser or
+  has run no model turn yet), to be closed by clown#252 (open; a DynamicUser or
   per-run user) or by handing moxy the recorded digest to verify.
 - **Staged files persist per child until `juggler clean --resolved`
   sweeps them.** `<digest>.brief.toml`, `<digest>.moxyfile.toml` and
@@ -1435,10 +1438,11 @@ The router, before any subagent exists:
   installed ringmaster (which spelled the state `cancelled`) will not
   interoperate. **troupe ≥ 4c52b3b is required** for `mint
   --password-file`, `mint-revoke --password-file`, `muc create` and `muc
-  affiliate`; an older troupe rejects the flag and every mint fails. In
-  v1 both binaries are found on PATH or via
-  `JUGGLER_{RINGMASTER,TROUPE}_BIN`; the nix-pinned paths (brief 6,
-  clown#246) must satisfy both minimums.
+  affiliate`; an older troupe rejects the flag and every mint fails. Both
+  binaries are resolved by flag, then `JUGGLER_{RINGMASTER,TROUPE}_BIN`,
+  then the burned-in nix path (`cmd/juggler/buildcfg.go`, clown#246,
+  closed), then the bare name on PATH; the burned-in paths must satisfy
+  both minimums.
 - **The hardened webhook host.** troupe 4c52b3b's privilege-free mint
   (troupe#43: a minter credential instead of `sudo -n prosodyctl
   register`, password to a file, domain and c2s inputs) is what a
@@ -1452,9 +1456,9 @@ The router, before any subagent exists:
   manager is root-equivalent and is rejected. Exit wakes are slice-0 journal messages to the
   holder's session key (`troupe message`), not stanzas to a holder JID,
   and the parent's JID is not yet passed into the unit (FDR 0032 D7).
-- **Toolset granularity is the moxyfile's.** A brief that wants fewer
-  tools than a server exposes needs a tool allowlist in the runtime,
-  which is a later addition.
+- **Toolset granularity** (resolved): a brief's `tools` is enforced per tool
+  by the loop and by the derived `allow-tools` (clown#261, closed;
+  `internal/jugglerrun/agentmoxyfile.go`).
 - **Not verified yet:** whether llama-server's Anthropic endpoint
   implements tool use. If not, local falls back to its OpenAI-compatible
   endpoint and the codec becomes a registry field rather than a kind

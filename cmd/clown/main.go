@@ -2992,9 +2992,10 @@ Clown flags (must appear before --):
                              Manage the named-profile registry (user profiles.toml)
   sessions-complete          Emit fish-completion lines for sessions
   list [--json]              List live clown sessions (spinclass-list-shaped table)
-  job <start|progress|done|read>
-                             Job-wakeup channel producer/read surface (RFC-0009)
-  job-watch                  Run the job-wakeup monitor for this session
+  presence list              List live presence records (clown-presence(1))
+
+The job-wakeup producer/read surface and monitor are ringmaster's
+(ringmaster start|progress|done|read, ringmaster monitor; RFC-0015).
 
 All arguments after -- are forwarded verbatim to the provider.
 `, defaultProvider, defaultProfileSuffix)

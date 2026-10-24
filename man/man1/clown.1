@@ -54,8 +54,13 @@ Valid values are
 .Cm claude
 (default),
 .Cm codex ,
+.Cm juggler ,
+.Cm opencode ,
+.Cm openrouter ,
+.Cm crush ,
 and
-.Cm opencode .
+.Cm clownbox
+(disabled in the shipped build).
 Can also be set via the
 .Ev CLOWN_PROVIDER
 environment variable.
@@ -63,7 +68,15 @@ environment variable.
 Bypass all clown wrapping (prompt injection, plugin loading, tool
 restrictions) and exec the provider CLI directly.
 Not supported with
-.Cm --provider opencode .
+.Cm --provider opencode
+or
+.Cm crush ,
+nor with
+.Fl -tent ,
+.Fl -agent-scope ,
+.Fl -mcp-collapse
+or
+.Fl -print-launch-plan .
 .It Fl -skip-failed
 When any discovered HTTP MCP plugin server fails to start,
 .Nm
@@ -305,7 +318,6 @@ replacements provided by plugins (e.g.\&
 .Bl -column "EnterWorktree" "Replacement" -compact
 .It Sy Tool Ta Sy Replacement
 .It Li Bash(*) Ta moxy tools
-.It Li Agent(Explore) Ta \(em
 .It Li Glob Ta folio.glob
 .It Li Grep Ta rg.search
 .It Li LSP Ta \(em
@@ -317,31 +329,40 @@ replacements provided by plugins (e.g.\&
 .It Li PowerShell Ta \(em
 .El
 .Pp
+.Li Agent(Explore)
+is not disallowed: the clown-hook-allow PreToolUse hook redirects an
+Explore subagent to clown's read-only Discover subagent instead.
+.Pp
 To bypass all disallowed tools (and all other clown wrapping), use
 .Fl -naked .
-.Sh MANAGED SETTINGS
+.Sh SETTINGS
 .Nm
-patches the upstream
+ships no managed settings and runs an unpatched
 .Xr claude-code 1
-bundle to read managed settings from a path under its own Nix store
-output instead of
-.Pa /etc/claude-code .
-The shipped managed settings enforce:
+(clown#133).
+For the claude provider it passes a
+.Fl -settings
+document that sets, each only when the user has not:
 .Bl -bullet
 .It
-.Cm disableAutoMode : \(lqdisable\(rq
+.Ev CLAUDE_AFK_TIMEOUT_MS
+to its maximum, so an AskUserQuestion decision is never auto-continued;
 .It
-.Cm disableBypassPermissionsMode : \(lqdisable\(rq
+.Ev CLAUDE_CODE_DISABLE_AUTO_MEMORY Ns = Ns Li 1 ;
 .It
-.Cm autoMemoryEnabled : Cm false
-.Pq Disables Claude Code's auto-memory feature; no MEMORY.md is loaded or written.
+.Cm remoteControlAtStartup : Cm false
+(always set);
 .It
-A deny list for destructive Bash patterns
-.Pq Li "rm -rf *" , Li "sudo *" , Li "curl * | sh" , Li "wget * | sh"
+.Ev CLOWN_SESSION_ID ,
+so hooks see the session identity.
 .El
 .Pp
-These sit at the highest precedence tier; neither user settings nor CLI
-flags can override them.
+Auto-mode and bypass-permissions mode are
+.Em not
+blocked (clown#143).
+.Fl -settings
+outranks user, project and local settings; a managed source on the host
+can still override it.
 See
 .Xr claude-code-settings 5
 for the precedence chain.
@@ -351,11 +372,8 @@ for the precedence chain.
 Default provider CLI.
 Overridden by
 .Fl -provider .
-Valid values:
-.Cm claude
-(default),
-.Cm codex ,
-.Cm opencode .
+Valid values: as for
+.Fl -provider .
 .It Ev CLOWN_SKIP_FAILED_PLUGINS
 When set to
 .Li 1 ,

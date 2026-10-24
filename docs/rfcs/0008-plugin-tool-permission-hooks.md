@@ -160,7 +160,7 @@ matching entries into the compiled plugin manifest (or
   `clown-json(5)`, normative MUST/SHOULD/MAY language for the
   reconciliation rules).
 
-Tracked in [#38](https://github.com/amarbel-llc/clown/issues/38).
+Tracked in [#38](https://forge.starbrandshoes.com/linenisgreat/clown/issues/38).
 
 ## References
 

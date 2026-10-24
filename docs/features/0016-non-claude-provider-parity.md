@@ -34,6 +34,11 @@ corrected inline below and marked.
 
 ## Problem Statement
 
+*This section describes clown before phase 1. Since then
+`providerUsesPluginDirs` includes opencode, openrouter and crush, and
+`runOpencode`/`runCrush` go through `runWithPluginHost`
+(`cmd/clown/opencode.go`, `cmd/clown/crush.go`; 2026-10-24 audit).*
+
 Today, `internal/pluginhost`'s plugin protocol (RFC 0002: HTTP MCP
 server lifecycle, tool injection, and FDR 0003's system-prompt-fragment
 contribution) only runs for the claude family (`claude`, `clownbox`).

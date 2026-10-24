@@ -37,9 +37,11 @@ or an exec-replacing provider, and not when
 List the live presence records.
 By default the output is a human listing grouped by
 .Sy decoration
-(the group-id), each line showing a record's per-instance key and description \(em
-the same shape as
-.Nm clown chat list .
+(the group-id), each line showing a record's per-instance key and
+description; when the record has a clown-name the line starts
+.Ar name Pq Ar key
+instead of the bare key \(em the same shape as
+.Nm troupe list .
 .Fl -group
 restricts the listing to records whose
 .Sy decoration
@@ -51,7 +53,8 @@ passing
 with an empty value selects the ungrouped records.
 .Fl -json
 emits one JSON record per line
-.Pq Li {sessionKey,channelId,decoration,description,lastSeen} .
+.Pq Li {sessionKey,channelId,decoration,description,lastSeen,...} ,
+ringmaster's presence record, which also carries the clown-name when set.
 .Fl -quiet
 suppresses output and turns the command into a liveness predicate: it exits
 .Sy 0

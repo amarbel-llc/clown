@@ -8,7 +8,7 @@ date: 2026-04-20
 ## Abstract
 
 Clown currently hardcodes two Claude Code plugins (moxy and bob) as flake
-inputs. This specification defines a `mkCircus` function interface that allows
+inputs. This specification defines a `mkJuggler` function interface that allows
 consumers to supply an arbitrary list of plugin definitions — each consisting
 of a flake input and a list of plugin directory paths (literal or glob) within
 that flake's package output. Plugin directories, version metadata, and
@@ -126,11 +126,11 @@ The Claude Code plugin.json schema supports a `version` field (see
 claude-code-settings(5), PLUGIN MANIFEST section). Plugins SHOULD populate
 this field to enable per-plugin version tracking.
 
-### 2. mkCircus Interface
+### 2. mkJuggler Interface
 
-Clown's flake MUST export a `lib.mkCircus` function within the
+Clown's flake MUST export a `lib.mkJuggler` function within the
 `eachDefaultSystem` callback. At the flake output level, this appears as
-`lib.${system}.mkCircus` due to how `eachDefaultSystem` merges per-system
+`lib.${system}.mkJuggler` due to how `eachDefaultSystem` merges per-system
 attribute sets.
 
 This follows the nixpkgs stdlib pattern where builder functions like
@@ -142,7 +142,7 @@ export path is `lib.${system}`.
 The function accepts a single attribute set argument:
 
 ```nix
-mkCircus {
+mkJuggler {
   plugins = [
     {
       flake = moxy;
@@ -162,15 +162,17 @@ The function MUST return an attribute set containing at minimum:
 |-----------|------|-------------|
 | `packages.default` | derivation | The clown wrapper with plugins burned in |
 | `devShells.default` | derivation | Development shell |
-| `checks.*` | derivation(s) | Managed-settings and plugin-validation tests |
+
+(An earlier revision also listed `checks.*`. The function returns no
+checks today, see `flake.nix` `mkJuggler`.)
 
 Note: these are per-system attributes (without the `${system}` key) because
-`mkCircus` is called inside `eachDefaultSystem`, which handles the
+`mkJuggler` is called inside `eachDefaultSystem`, which handles the
 per-system wrapping.
 
 #### 2.1 Plugin Directory Resolution
 
-For each element in `plugins`, `mkCircus` MUST:
+For each element in `plugins`, `mkJuggler` MUST:
 
 1. Resolve the default package: `plugin.flake.packages.${system}.default`
 2. For each path in `plugin.dirs`:
@@ -267,7 +269,7 @@ desired plugin flakes:
   outputs = { self, nixpkgs, clown, moxy, bob, ... }:
     let
       system = "aarch64-darwin";
-      circus = clown.lib.${system}.mkCircus {
+      circus = clown.lib.${system}.mkJuggler {
         plugins = [
           { flake = moxy; dirs = [ "share/purse-first/moxy" ]; }
           { flake = bob;  dirs = [ "share/purse-first/*" ]; }
@@ -299,7 +301,7 @@ When this specification is implemented:
 5. The hardcoded version printf lines for bob and moxy MUST be replaced with
    the version-info file mechanism
 6. The existing consumer (`~/eng/flake.nix`) MUST be updated to call
-   `mkCircus` with explicit plugin definitions
+   `mkJuggler` with explicit plugin definitions
 7. Clown's README and `clown(1)` manpage MUST be updated to document the
    new plugin interface
 
@@ -315,10 +317,12 @@ Consumers MUST only supply plugin flake inputs from sources they trust.
 Pinning plugin flake inputs to specific revisions (rather than following
 a branch HEAD) is RECOMMENDED to prevent supply-chain drift.
 
-Clown's existing managed-settings guardrails (Bash disabled, auto-mode
-disabled) apply regardless of which plugins are loaded. Plugins cannot
-override managed settings because those are burned into the patched
-claude-code derivation at a higher precedence tier.
+Clown's guardrails apply regardless of which plugins are loaded. *Amended
+2026-10-24:* clown ships no managed settings and runs an unpatched
+claude-code (clown#133; `flake.nix`). Bash is blocked with
+`--disallowed-tools`. Auto-mode blocking was not carried over (clown#143).
+The original text said both were burned into a patched claude-code at a
+higher precedence tier.
 
 When using literal `dirs` paths, the consumer explicitly controls which
 plugin directories are loaded, preventing a malicious or buggy plugin
@@ -331,11 +335,11 @@ convenience and SHOULD only be used with trusted flake inputs.
 
 This is a breaking change to clown's flake interface. Consumers that
 currently depend on `clown.packages.${system}.default` receiving moxy
-and bob automatically will need to update their flakes to call `mkCircus`
+and bob automatically will need to update their flakes to call `mkJuggler`
 with explicit plugin definitions.
 
 After migration, `clown.packages.${system}.default` will be a bare clown
-wrapper with no plugins. Consumers MUST use `mkCircus` to produce a
+wrapper with no plugins. Consumers MUST use `mkJuggler` to produce a
 plugin-equipped build.
 
 Since clown has a small number of known consumers (primarily
@@ -347,7 +351,7 @@ deprecation period is necessary.
 ### Normative
 
 - [Claude Code --plugin-dir](https://docs.anthropic.com/en/docs/claude-code) — Plugin directory structure and `plugin.json` manifest format
-- [claude-code-settings(5), PLUGIN MANIFEST](man/man5/claude-code-settings.5) — Plugin manifest schema including `name`, `version`, `description`, `skills`, `commands`, `hooks` fields
+- [claude-code-settings(5), PLUGIN MANIFEST](../../man/man5/claude-code-settings.5) — Plugin manifest schema including `name`, `version`, `description`, `skills`, `commands`, `hooks` fields
 - [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119) — Requirement keyword definitions
 
 ### Informative

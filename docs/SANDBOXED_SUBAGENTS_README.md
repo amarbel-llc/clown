@@ -1,5 +1,11 @@
 # Sandboxed Subagents Design Docs
 
+> **Historical (2026-10-24 audit).** FDR-0001 is superseded (see its banner)
+> and nothing here was built. Live confinement is agent scope (FDR 0020). The
+> "Proposed numbering", "Status" and "Next actions" sections below describe
+> April 2026: `docs/rfcs/` now holds 0001-0017, and `zz-pocs/0003` (the
+> mitmproxy egress broker) exists.
+
 This directory contains the design documentation for clown's Nix-derivation-sandboxed subagents, proposed in FDR-0001.
 
 ## Read order

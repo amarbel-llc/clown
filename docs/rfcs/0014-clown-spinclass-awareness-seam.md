@@ -360,7 +360,8 @@ clown#137 is the implementation vehicle.
 #### 4.1 Location and per-record schema
 
 - The index is a directory of per-instance JSON files at
-  `$XDG_STATE_HOME/clown/presence/`, mode `0700`, one file per instance named
+  `$XDG_STATE_HOME/ringmaster/presence/` (originally `clown/presence/`; moved
+  with the job platform, RFC-0015), mode `0700`, one file per instance named
   `<channelId>.json`.
 - Each record MUST contain the following fields:
 
@@ -466,7 +467,7 @@ interpolate (§2). These names are normative:
   clownfiles.
 - The producer-side semantics — when each variable is set, that the
   orchestrator-owned variables are written last (authoritative over user env),
-  and the `CLOWN_SESSION_ID`/`CLAUDE_SESSION_ID` strip rule (clown#169) — are
+  and the `CLOWN_SESSION_ID`/`CLAUDE_SESSION_ID` strip rule (spinclass#169) — are
   specified by the spinclass export contract (see References) and are normative
   there. clown relies only on the names above being present in its environment
   when grouping is desired.
@@ -523,14 +524,14 @@ that gap is eliminated:
   group key is not recoverable from the channel id, but knowledge of the
   `group-id` value confers group membership.
 - **Presence is host-local and best-effort.** The presence index lives under
-  `$XDG_STATE_HOME/clown/presence/` at mode `0700` (§4) and MUST NOT be
+  `$XDG_STATE_HOME/ringmaster/presence/` at mode `0700` (§4) and MUST NOT be
   transmitted off-host. It carries a human-readable `description` and the
   decoration; these MUST be considered local-trust metadata, not secrets. A
   stale or missing presence record MUST degrade liveness to "unknown/dead", never
   to a false "alive".
 - **Spawn-mode env passthrough.** §5.3 requires preserving the decoration env
   into the spawned worker. Implementations MUST continue to honor the
-  `CLOWN_SESSION_ID`/`CLAUDE_SESSION_ID` strip rule (clown#169, owned by the
+  `CLOWN_SESSION_ID`/`CLAUDE_SESSION_ID` strip rule (spinclass#169, owned by the
   orchestrator) so a spawned worker does not inherit and arm the launcher's
   routing channel.
 
@@ -636,4 +637,4 @@ Tests use binary injection via `bats-emo`:
   a session.
 - [clown#145 / clown#146] The `[attach]` multiplexer self-wrap and its burned-in
   defaults.
-- [clown#169] The `CLOWN_SESSION_ID`/`CLAUDE_SESSION_ID` strip rule.
+- [spinclass#169] The `CLOWN_SESSION_ID`/`CLAUDE_SESSION_ID` strip rule.

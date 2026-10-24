@@ -96,8 +96,8 @@ before serving requests:
 .It Sy Pos Ta Sy Name Ta Sy Values
 .It 0 Ta Core protocol version Ta MUST be Li 1
 .It 1 Ta App protocol version Ta Integer; MUST be Li 1 No (reserved)
-.It 2 Ta Network type Ta MUST be Li tcp
-.It 3 Ta Network address Ta Ar host Ns Li \&: Ns Ar port
+.It 2 Ta Network type Ta Li tcp No or Li unix
+.It 3 Ta Network address Ta Ar host Ns Li \&: Ns Ar port No (tcp) or an absolute socket path (unix)
 .It 4 Ta Protocol Ta Li streamable-http No or Li sse
 .El
 .Ss Requirements
@@ -105,7 +105,18 @@ before serving requests:
 .It
 The server MUST bind to
 .Li 127.0.0.1:0
-(ephemeral port, loopback only).
+(ephemeral port, loopback only), except for the unix form.
+.It
+The unix form,
+.Li 1|1|unix| Ns Ar path Ns Li |streamable-http ,
+is announced only by
+.Xr clown-stdio-bridge 1
+with
+.Fl -listen-unix
+for a confined session's serve socket.
+The path MUST be absolute.
+The host makes its own requests over the socket; the compiled manifest
+names the in-unit relay address instead.
 .It
 The server MUST print the handshake line to stdout and flush.
 .It
@@ -497,9 +508,10 @@ Servers inherit the same trust level as any other code in the plugin \(em
 they can read files, make network requests, and serve MCP tools that
 influence model behavior.
 .It
-Clown's managed-settings guardrails (Bash disabled, auto-mode disabled)
-apply regardless of which HTTP MCP servers are running.
-Servers cannot override managed settings.
+Clown's guardrails apply regardless of which HTTP MCP servers are running:
+Bash is blocked with
+.Fl -disallowed-tools .
+clown ships no managed settings (clown#133).
 .It
 A dynamic system-prompt fragment
 .Pq see Sx DYNAMIC SYSTEM-PROMPT CONTRIBUTION

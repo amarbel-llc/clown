@@ -144,13 +144,13 @@ CORE_VER|APP_VER|NET_TYPE|NET_ADDR|PROTOCOL\n
 |-------|----------|------|----------|--------|
 | Core protocol version | 0 | integer | Yes | MUST be `1` |
 | App protocol version | 1 | integer | Yes | Integer (reserved, MUST be `1`) |
-| Network type | 2 | string | Yes | MUST be `tcp` |
-| Network address | 3 | string | Yes | `<host>:<port>` |
+| Network type | 2 | string | Yes | `tcp`, or `unix` (see 2.2) |
+| Network address | 3 | string | Yes | `<host>:<port>` for `tcp`; an absolute socket path for `unix` |
 | Protocol | 4 | string | Yes | `streamable-http` or `sse` |
 
 #### 2.2 Behavior
 
-1. The server MUST bind to `127.0.0.1:0` (ephemeral port)
+1. The server MUST bind to `127.0.0.1:0` (ephemeral port), except as below
 2. The server MUST print the handshake line to stdout
 3. The server MUST flush stdout after printing the handshake
 4. The server MUST begin serving HTTP requests after the handshake
@@ -158,6 +158,16 @@ CORE_VER|APP_VER|NET_TYPE|NET_ADDR|PROTOCOL\n
 Extra fields beyond position 4 MAY be present and MUST be ignored by the
 host. The line MUST be terminated by `\n`. Leading and trailing whitespace
 MUST be tolerated by the parser.
+
+**Unix form (amended 2026-10-24, FDR 0020 F12).** A server MAY announce
+`1|1|unix|<absolute socket path>|streamable-http` instead. Today only
+clown-stdio-bridge does, with `--listen-unix <path> --peer-unit <unit>`, for
+a confined session's spinclass serve. The host MUST reject a relative path.
+The host makes its own requests (healthcheck, prompt fragment, exclusion
+push, tool catalog) over the socket. The compiled manifest never names the
+socket: it names the in-unit relay address the host routes the server
+through (`ManagedServer.RouteManifestThrough`). The app version field is
+parsed but not checked by the current host.
 
 #### 2.3 Protocol Authority
 
@@ -475,7 +485,10 @@ a prompt file; it is not executed and is not interpolated.
 
 Servers MUST bind to `127.0.0.1` (loopback only). The handshake protocol does
 not support remote addresses. This ensures MCP servers are not exposed to the
-network.
+network. The unix form (§2.2) is local by construction. Its one user, the
+serve bridge, admits only the session's agent unit and the frontend clown
+(SO_PEERCRED and cgroup), and serves its control routes to the frontend
+only (FDR 0020 F12, clown#301).
 
 ### Process Isolation
 
@@ -492,9 +505,10 @@ inherit the same trust level as any other code in the plugin — they can read
 files, make network requests (if permitted), and serve MCP tools that
 influence model behavior.
 
-Clown's managed-settings guardrails (Bash disabled, auto-mode disabled)
-apply regardless of which HTTP MCP servers are running. Servers cannot
-override managed settings.
+Clown's guardrails apply regardless of which HTTP MCP servers are running.
+*Amended 2026-10-24:* clown ships no managed settings (clown#133). Bash is
+blocked with `--disallowed-tools`, and auto-mode blocking was not carried
+over (clown#143).
 
 ### Stdio Channel
 

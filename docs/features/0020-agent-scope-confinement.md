@@ -99,7 +99,11 @@ traffic goes through a frontend-scope proxy:
    from the sweatfile, via the spec. Its default is: the model API, the forges
    (`code.linenisgreat.com`, `forge.starbrandshoes.com`), `github.com`,
    `cache.nixos.org`, and the krone nix cache. Refusals are logged in the
-   frontend.
+   frontend. **Open (clown#300):** the krone nix cache is not in
+   `DefaultEgressAllow` (`internal/agentscope/egress.go`) today. That list
+   also has the claude.ai and console/platform login hosts and more GitHub
+   hosts than are named here. Whether to add the cache or correct this
+   sentence is the operator's decision.
 5. The proxy never reaches the host's loopback, whatever the allowlist says.
    A `CONNECT` to `localhost` (or a name under `.localhost`), `127.0.0.0/8`,
    `::1`, an unspecified address, or a name that resolves to any of these is
@@ -310,10 +314,14 @@ Consequences:
 Every socket below except piggy-agent's is created per session by clown,
 under a frontend-owned directory: `$XDG_RUNTIME_DIR/clown/agent/<unit>/`,
 except the monitor sockets (`$XDG_RUNTIME_DIR/clown/monitors/<principal>/`,
-named before the unit is) and the idle socket (`clown/idle/`).
+named before the unit is), the idle socket (`clown/idle/`) and the serve
+socket (`clown/serve/<principal>/`, F12).
 Each is bound into the unit as a single inode at the same path. The frontend
 end checks `SO_PEERCRED` (or, for the statsd datagram socket,
-`SCM_CREDENTIALS`) and `/proc/<pid>/cgroup` against the unit's cgroup.
+`SCM_CREDENTIALS`) and `/proc/<pid>/cgroup` against the unit's cgroup. The
+exception is the idle socket, which has no peer check
+(`cmd/clown/selfclose.go`): any datagram only triggers this session's own
+`spinclass close-self-run`.
 Because of `PrivateNetwork`, loopback TCP is not offered to confined sessions
 at all.
 
@@ -495,7 +503,8 @@ Built (`internal/agentscope`, `cmd/clown/agentscope.go`):
 - The unit with every property above except `PrivateNetwork` (host netns,
   so **not yet a confined unit**: the egress proxy and the frontend MCP
   sockets come next, and the confinement switch must not be offered before
-  them).
+  them). *Superseded: `PrivateNetwork=yes` has been unconditional since
+  2026-10-19 (below).*
 - `clown agent-exec`, the in-unit shim (`setsid` + `TIOCSCTTY(0)`), and the
   ptysuspend relay with `DetachSlave`/`NoEscape`.
 - clown's plumbing binds for the base launcher: a per-session
@@ -609,10 +618,13 @@ Since then (2026-10-19, all on flic):
   2026-10-19). `--mcp-collapse` is refused with `--agent-scope`.
 - **`clown agent-scope-capabilities`** prints
   `{"version":1,"capabilities":[...]}`, and every result echoes the same
-  list. Today's list is `agent-unit`, `private-network`, `egress-proxy` and
-  `frontend-mcp-sockets`; `in-unit-moxy` and `frontend-monitors` are added
-  only with their code.
-- **Evidence.** `just verify-agent-scope` passes 11/11, including a
+  list. The list on that day was `agent-unit`, `private-network`,
+  `egress-proxy` and `frontend-mcp-sockets`. Capabilities are added only
+  with their code. The current list is `Capabilities` in
+  `internal/agentscope/spec.go`: those four plus `in-unit-moxy`,
+  `statsd-relay`, `frontend-monitors` and `frontend-serve-socket`.
+- **Evidence (that day).** `just verify-agent-scope` passed 11/11 (18/18 at
+  2026-10-24), including a
   forwarded loopback listener being reachable while unforwarded ones and a
   host abstract socket stay unreachable. Real claude -p inside the unit
   called ringmaster `job_read` and troupe `chat_list` over the forwards

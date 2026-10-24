@@ -96,7 +96,7 @@ launch (a bare `clown` outside spinclass with no `CLOWN_SESSION_ID`, or claude
 freshly minted) there is no stable lineage and the name is not preserved. The
 fleet's primary paths ARE covered: spinclass sessions carry a stable
 `CLOWN_SESSION_ID`, and `clown resume` / the `[attach]` multiplexer-resume
-preserve the claude `--session-id`.
+preserve the claude `--session-id`. Tracked as clown#218.
 
 **The session-names journal records only stable ids (clown#219).** It is
 still never pruned. A launch writes its `id→name` record only under an id a
@@ -119,7 +119,7 @@ resumes, A reclaims its bound name unconditionally — so both are briefly live
 under the same name until the next presence cycle. Reuse is unconditional by
 design (the issue's intent is "the same session keeps its name"); perfectly
 avoiding this would require reserving a dead session's name against recycling,
-which contradicts clownname's model.
+which contradicts clownname's model. Tracked as clown#220.
 
 **Best-effort, never fails the launch.** Both the `NameOf` lookup and the
 `RecordSessionName` write are best-effort (matching the presence-registration

@@ -80,6 +80,7 @@ no configuration in which it would have carried information.
 
 Tier 2 keeps its dedup unchanged. Its scope is a working directory, which
 genuinely can hold one clown or several, so the count is informative there.
+*Superseded by the clown#234 amendment below: no tier dedups any more.*
 
 ### Amendment (clown#231, clown#232): emitted from the inner clown, unconditionally by mode
 
@@ -99,7 +100,8 @@ The title was emitted pre-exec by the OUTER clown, and only for `ModeStart` /
   to the durable session the spawn created. Since essentially every fleet
   session is spawned, essentially none got a title. The mode gate is removed;
   emission is gated only on this process having an interactive terminal
-  (`CLOWN_ATTACH_FORCE=1` overrides, matching the wrap gate). A spawn's inner
+  (`CLOWN_ATTACH_FORCE=1` overrides, matching the wrap gate), and, since
+  clown#233, on stderr, where the title is written, being a terminal too. A spawn's inner
   clown passes that check with a real pty and its outer, with `/dev/null` stdio,
   does not.
 
@@ -206,7 +208,7 @@ does not re-emit the OSC-2 sequence.
 | ~~dedup threshold (tier 2)~~ | ~~2+ live sessions sharing a cwd~~ | RETIRED by clown#234 — the lever's own change signal ("users want the id shown even solo") fired; tier 2 now always shows the id | — |
 | ~~dedup threshold (tier 1)~~ | ~~2+ live sessions~~ | RETIRED by clown#230 — the threshold was unsatisfiable under spinclass, so the id was never shown; tier 1 now always shows it | — |
 | ~~presence staleness reused for dedup~~ | ~~2 minutes (existing `presenceStale`)~~ | RETIRED by clown#234 — no tier dedups any more, so the title reads no presence records at all | — |
-| emission gate | this process has an interactive terminal (`CLOWN_ATTACH_FORCE=1` overrides) | the emitter is whichever process owns the terminal; keeps OSC bytes out of a redirected stderr | non-interactive runs turn out to want a title anyway, or a mux gives the inner process a pty that fails TTY detection |
+| emission gate | this process has an interactive terminal and a stderr terminal (clown#233; `CLOWN_ATTACH_FORCE=1` overrides) | the emitter is whichever process owns the terminal; keeps OSC bytes out of a redirected stderr | non-interactive runs turn out to want a title anyway, or a mux gives the inner process a pty that fails TTY detection |
 
 ## More Information
 

@@ -7,13 +7,13 @@ date: 2026-05-21
 
 ## Abstract
 
-Plugins loaded via `mkCircus` today contribute only `--plugin-dir` content
+Plugins loaded via `mkJuggler` today contribute only `--plugin-dir` content
 (skills, hooks, MCP servers). They have no mechanism to ship prompt
 fragments alongside clown's builtin `system-prompt-append.d/`. This record
 specifies a convention by which a plugin MAY ship `*.md` fragments under
-`<plugin>/.clown-plugin/system-prompt-append.d/`, and `mkCircus` resolves
+`<plugin>/.clown-plugin/system-prompt-append.d/`, and `mkJuggler` resolves
 those paths at build time so `clown(1)` injects them between its builtin
-fragments and the user's `.circus/system-prompt.d/` fragments.
+fragments and the user's `.clown/system-prompt.d/` fragments.
 
 The design is motivated by issue #10. It introduces the `.clown-plugin/`
 directory inside a plugin tree as the namespace for clown-specific
@@ -27,7 +27,7 @@ prompt — a plugin shipping MCP tools may also need prompt context
 explaining when/how to use those tools, and a plugin shipping skills
 may need instructions about when to invoke them. Today this requires
 the consumer to manually duplicate those instructions in their own
-`.circus/system-prompt.d/` directory, which defeats the purpose of
+`.clown/system-prompt.d/` directory, which defeats the purpose of
 self-contained plugins.
 
 Plugins already have prompt-injection capability via skills and hooks
@@ -50,7 +50,7 @@ asymmetric, but moving it is a coordinated migration of every known
 plugin and is tracked separately as #32.
 
 This design does **not** add a "replace mode" for plugin-contributed
-fragments. Plugins append; only the user's `.circus/system-prompt`
+fragments. Plugins append; only the user's `.clown/system-prompt`
 file may replace.
 
 ## Design Overview
@@ -70,14 +70,14 @@ claude-code manifest dir would conflate two protocols.
 
 ### 2. Build-time resolution
 
-`mkCircus`'s `resolvePlugins` step (per RFC 0001 §2.1) is extended:
+`mkJuggler`'s `resolvePlugins` step (per RFC 0001 §2.1) is extended:
 for every resolved plugin directory, if
 `<plugin-dir>/.clown-plugin/system-prompt-append.d/` exists and is a
 directory, its absolute store path is appended to a new file
 `$out/plugin-fragment-dirs` inside the `CLOWN_PLUGIN_META`
 derivation. The file's format mirrors `plugin-dirs`: one absolute
 path per line, in plugin-list order (the order the consumer wrote
-in `mkCircus`).
+in `mkJuggler`).
 
 `plugin-fragment-dirs` is always present in `CLOWN_PLUGIN_META`,
 even when no plugin contributes fragments — it MAY be empty.
@@ -94,12 +94,18 @@ append directories in this order:
 That list is passed to `promptwalk.WalkPrompts`. Within each
 directory the existing rule applies: `*.md` files in
 lexicographically sorted order, separated by two newlines. The
-user's `.circus/system-prompt.d/` fragments still come last,
+user's `.clown/system-prompt.d/` fragments still come last,
 shallowest-first.
+
+Since this record, two layers were added around it (`cmd/clown/main.go`,
+`runWithFlags` and `runManaged`). Lead fragments (build identity, host
+identity, session identity) come before the builtins. The servers'
+dynamic fragments (RFC 0002, `/clown/system-prompt`) are appended last,
+after the provider's servers are healthy.
 
 ### 4. Replace-mode interaction
 
-When the user supplies a `.circus/system-prompt` file (replace mode),
+When the user supplies a `.clown/system-prompt` file (replace mode),
 clown invokes `--system-prompt-file` AND `--append-system-prompt-file`.
 Plugin-contributed fragments continue to flow through the latter and
 are still injected. Replace mode applies to the user-supplied prompt,
@@ -111,7 +117,7 @@ would surprise plugin authors and break tool affordances.
 
 Plugin-contributed fragments inherit the plugin's existing trust
 tier (RFC 0001 §Security). Consumers who load a plugin via
-`mkCircus` already trust it to register skills, hooks, and MCP
+`mkJuggler` already trust it to register skills, hooks, and MCP
 tools. Prompt fragments are a strictly weaker capability than any
 of those.
 
@@ -154,7 +160,7 @@ there would risk a future name collision if claude-code ever defines
 its own meaning for `system-prompt-append.d`. The `.clown-plugin/`
 prefix scopes the directory unambiguously to clown.
 
-### B. Opt-in per plugin in `mkCircus`
+### B. Opt-in per plugin in `mkJuggler`
 
 Require consumers to write
 `{ flake = bob; dirs = [...]; promptFragments = true; }` to opt into
@@ -167,7 +173,7 @@ isolation. Consumers who mistrust a plugin should not load it.
 
 ### C. Plugins symlinked into a unified at-build-time directory
 
-Have `mkCircus` create a single store-path directory containing
+Have `mkJuggler` create a single store-path directory containing
 symlinks to clown's builtin fragments and every plugin's fragments,
 then pass that single path through `buildcfg.SystemPromptAppendD`.
 
@@ -180,7 +186,7 @@ loop.
 ## References
 
 - Issue #10 — Explore plugin-contributed system-prompt-append.d
-  fragments in mkCircus
+  fragments in mkJuggler
 - Issue #32 — Migrate clown.json into .clown-plugin/ namespace
 - RFC 0001 — Parameterized Plugin Loading
 - RFC 0002 — Clown Plugin Protocol

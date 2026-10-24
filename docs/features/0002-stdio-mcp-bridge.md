@@ -5,6 +5,15 @@ date: 2026-05-21
 
 # Stdio MCP Servers via Host-Side HTTP Bridge
 
+> **Since this record (2026-10-24 audit).**
+> - The bridge also serves clown's control routes `/clown/system-prompt` and
+>   `/clown/exclude-tools`, and refuses `tools/call` of an excluded tool.
+> - POST responses stream as SSE with heartbeats.
+> - A serve-socket mode (`--listen-unix --peer-unit`) exists for confined
+>   sessions (FDR 0020 F12).
+> - See clown-stdio-bridge(1). The prior audit's open rows for this record
+>   are in docs/plans/2026-10-24-fdr-rfc-audit.md.
+
 ## Abstract
 
 Clown today supports two paths for plugin-supplied MCP servers: HTTP servers

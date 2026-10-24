@@ -1,9 +1,14 @@
 ---
-status: accepted
+status: superseded (with FDR-0001; never built)
 date: 2026-04-24
 ---
 
 # ADR-0003: Per-Subagent Broker Instance Over Shared Broker with Auth
+
+> **Superseded (2026-10-24 audit).** This decision served FDR-0001's
+> sandboxed subagents, which were superseded and never built; the only
+> broker code is `zz-pocs/0003`. Live egress control is the agent-scope proxy
+> (FDR 0020).
 
 ## Context
 

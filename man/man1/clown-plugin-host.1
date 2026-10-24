@@ -148,8 +148,8 @@ The fields are:
 .It Sy Field Ta Sy Name Ta Sy Values
 .It 0 Ta Core protocol version Ta Must be Li 1
 .It 1 Ta App protocol version Ta Integer (reserved, must be Li 1 )
-.It 2 Ta Network type Ta Must be Li tcp
-.It 3 Ta Network address Ta Ar host Ns Li \&: Ns Ar port
+.It 2 Ta Network type Ta Li tcp No or Li unix
+.It 3 Ta Network address Ta Ar host Ns Li \&: Ns Ar port No (tcp) or an absolute socket path (unix)
 .It 4 Ta Protocol Ta Li streamable-http No or Li sse
 .El
 .Pp
@@ -158,6 +158,11 @@ The server MUST bind to
 .Li 127.0.0.1:0
 (ephemeral port), write the handshake line, flush stdout, then begin
 serving.
+The unix form is used only by
+.Xr clown-stdio-bridge 1
+.Fl -listen-unix
+(see
+.Xr clown-plugin-protocol 7 ) .
 .Sh PLUGIN MANIFEST COMPILATION
 For each plugin directory whose
 .Pa clown.json

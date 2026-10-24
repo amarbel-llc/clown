@@ -65,8 +65,8 @@ rendered in the notification as
 `[clown-job] <source> <job> message from <from>: <body>`. `--target '*'`
 addresses the reserved **broadcast channel**: one record, delivered by every
 session's monitor, each reader tracking its own ack watermark
-(`.ack-<reader-channel-id>.json` in the broadcast channel dir; growth/GC is
-clown#113). Broadcast has **condvar semantics** — a reader's first attach
+(`.ack-<reader-channel-id>.json` in the broadcast channel dir; growth/GC was
+clown#113, now closed). Broadcast has **condvar semantics** — a reader's first attach
 initializes its watermark at the channel's current end, so a session only
 sees broadcasts sent after its monitor first attached; pre-existing
 broadcasts are never replayed to new sessions. Broadcast records get no

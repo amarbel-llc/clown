@@ -5,6 +5,17 @@ date: 2026-04-29
 
 # ADR-0006: clown-stdio-bridge Trusts Loopback Clients (no HTTP hardening)
 
+> **Note (2026-10-24 audit), facts only; whether to reopen is a decision.**
+> - The bridge also serves `/clown/system-prompt` and
+>   `/clown/exclude-tools`, not only `/mcp` and `/healthz`.
+> - It has a second listener mode: `--listen-unix --peer-unit` (FDR 0020
+>   F12). There it admits only the agent unit and the parent clown, and
+>   refuses the unit on the control routes (clown#301).
+> - The loopback mode this ADR describes is unchanged, and clown#288 (open)
+>   challenges its premise that any local process may connect.
+> - Inside an agent unit, an in-unit bridge's loopback belongs to the
+>   worker (FDR 0020).
+
 ## Context
 
 `clown-stdio-bridge` (FDR-0002) wraps a stdio MCP server and exposes it

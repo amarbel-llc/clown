@@ -8,6 +8,7 @@
 .Nd bridge a stdio MCP server to streamable-HTTP for clown-plugin-host
 .Sh SYNOPSIS
 .Nm
+.Op Fl -listen-unix Ar path Fl -peer-unit Ar unit
 .Fl -command Ar cmd
 .Cm --
 .Op Ar args
@@ -47,9 +48,26 @@ binds
 and serves
 .Li GET /healthz
 and
-.Li {GET,POST,DELETE} /mcp .
+.Li {GET,POST,DELETE} /mcp ,
+plus the clown control routes
+.Li GET /clown/system-prompt
+and
+.Li {GET,POST} /clown/exclude-tools .
 .Sh OPTIONS
 .Bl -tag -width Ds
+.It Fl -listen-unix Ar path Fl -peer-unit Ar unit
+Serve on the unix socket
+.Ar path
+(absolute; created 0600 in a 0700 directory) instead of loopback TCP, and
+announce the unix handshake form.
+Each connection is admitted only from a process in the systemd unit
+.Ar unit Ns 's
+cgroup (SO_PEERCRED) or from the bridge's parent clown.
+The control routes answer 403 to the unit.
+A socket that still answers is not taken over.
+The bridge exits once its parent is gone.
+clown uses this for a confined session's spinclass serve (FDR 0020 F12);
+the two flags go together.
 .It Fl -command Ar cmd
 The wrapped stdio MCP server binary.
 Resolved against the caller's

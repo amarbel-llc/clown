@@ -1,9 +1,13 @@
 ---
-status: accepted
+status: superseded (with FDR-0001; never built)
 date: 2026-04-24
 ---
 
 # ADR-0001: MCP Tool Dispatch Over `--agents` Stub
+
+> **Superseded (2026-10-24 audit).** This decision served FDR-0001's
+> sandboxed subagents, which were superseded and never built. "ringmaster"
+> now names the external job platform (RFC-0015), not this dispatcher.
 
 ## Context
 
