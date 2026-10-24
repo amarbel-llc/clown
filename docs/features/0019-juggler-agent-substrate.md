@@ -714,10 +714,10 @@ allowlist and the child sets none at all, the violation is instead
 pass-tools (a parent with `pass-tools` always has an allowlist, so its
 child always sets one too, if only `[]` beside the tools it passes on).
 
-**Escalation note (moxy#461): three paths, stated precisely.** moxy
-documents an open risk: a session able to rewrite its own moxyfile and
-then call moxy's own `restart` tool can widen its own tool access,
-because moxy's reload check validates only against the *parent*
+**Escalation note (moxy#461): three paths, stated precisely.** Before
+moxy cc75d1d (see the end of this note), a session able to rewrite its own
+moxyfile and then call moxy's own `restart` tool could widen its own tool
+access, because moxy's reload check validated only against the *parent*
 reference pinned at spawn. The agent's own moxyfile IS writable by
 itself today — it is written to `<AgentStateDir>/moxyfile`
 (`internal/jugglerrun/toolplane.go`), which is moxy's own CWD, and
@@ -757,8 +757,24 @@ call would actually get there:
   the external moxy's own configuration decides, entirely outside
   clown#261's reach.
 
-moxy's own general risk for a non-juggler client remains moxy's own
-open issue, out of scope here.
+**moxy closed the pass-to-use lift on reload at cc75d1d (moxy#461,
+closed).** A `restart` reload is now judged by `narrowing.CheckReload`.
+It refuses to raise a tool the parent reference holds at pass into the
+session's `allow-tools`, unless that tool was already in `allow-tools`
+when the moxy process started; moxy pins that set on its first serving
+check. Use-level widening by moxyfile edit plus `restart` is unchanged.
+Two limits, read from that diff:
+- The bound applies only to tools the parent holds at pass.
+- It applies only when the process started with `allow-tools` set. A
+  moxy started with `allow-tools` unset (unrestricted) has no baseline to
+  bound against.
+
+juggler's own moxy always starts with a derived `allow-tools` (clown#261),
+so it gets the bound. The juggler-specific layers above (the loop filter,
+Validate's reserved builtins, the derived `allow-tools`) still apply. A
+juggler agent benefits only where the host's moxy is at or after cc75d1d;
+the krone fleet ran 11521ef when clown#262 was filed, which predates both
+pass-tools and this fix.
 
 Headless posture (intended; **not enforced today**, see the erratum at
 the top, moxy#485/moxy#486): any moxy permission tier other than
