@@ -98,11 +98,19 @@ fleet's primary paths ARE covered: spinclass sessions carry a stable
 `CLOWN_SESSION_ID`, and `clown resume` / the `[attach]` multiplexer-resume
 preserve the claude `--session-id`.
 
-**The session-names journal is never pruned, and now grows on non-claude
-launches too.** Every non-`--naked` launch writes an `id→name` record;
-for an ephemeral non-claude launch with a fresh id, nothing later looks that
-record up. Records are tiny and the file is append-only by design (clown#192),
-so this is minor, but it is unbounded in launch count.
+**The session-names journal records only stable ids (clown#219).** It is
+still never pruned. A launch writes its `id→name` record only under an id a
+later launch can look up again (`lineageRecordIDs`):
+- `identity.Key` when a launcher provided it (`CLOWN_SESSION_ID` or
+  `CLAUDE_SESSION_ID`, e.g. spinclass, for any provider);
+- for claude, the key when it is the id claude persists the conversation
+  under (decideClaudeSession's resume hint), plus that conversation id when
+  it differs from the key.
+
+A key minted for one launch is not recorded: a bare `clown --provider
+codex` or claude `-p` / `--continue` with no `CLOWN_SESSION_ID`.
+`clown resume ... -- -p` used to append one such dead record per run under
+a freshly minted key.
 
 **Narrow re-collision window across a session's downtime.** clownname recycles
 a name once its presence record goes stale (recycle-on-death, clown#169). If
@@ -124,7 +132,7 @@ name-based resume for that one session, never the launch.
 |---|---|---|---|
 | lineage key | `identity.Key` (harness session id) | the one per-session id clown already threads to presence/monitor/producers; stable across restart, fresh per new session | a harness surfaces a better lineage id than its session id |
 | reuse-vs-liveness on a bound hit | reuse unconditionally | the issue's intent is "keep the name"; the re-collision window is narrow | bound-name re-collisions become common enough to warrant a liveness check + generation bump on conflict |
-| journal write scope | all non-`--naked` providers | harness-agnostic persistence | journal growth from ephemeral non-claude launches becomes a real cost (then gate the write on a stable-id signal) |
+| journal write scope | stable ids only: a launcher-provided key (any provider), or claude's persisted conversation id (clown#219) | ephemeral launches accreted records nothing looks up | a provider gains a stable session id of its own that clown can read |
 
 ## More Information
 

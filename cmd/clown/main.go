@@ -282,6 +282,10 @@ func main() {
 type sessionIdentity struct {
 	Key string // per-instance routing key (RFC-0009 §2; RFC-0013 §2.3)
 	Bin string // absolute clown path, for producers' ${CLOWN_BIN:-clown}
+	// Provided: Key came from CLOWN_SESSION_ID or CLAUDE_SESSION_ID (a
+	// launcher's stable id, e.g. spinclass), not minted for this launch
+	// (clown#219).
+	Provided bool
 }
 
 // resolveSessionIdentity resolves the channel key and clown binary path WITHOUT
@@ -300,7 +304,29 @@ func resolveSessionIdentity() sessionIdentity {
 	if key == "" {
 		key = jobwake.SessionKey()
 	}
-	return sessionIdentity{Key: key, Bin: bin}
+	provided := os.Getenv("CLOWN_SESSION_ID") != "" || os.Getenv("CLAUDE_SESSION_ID") != ""
+	return sessionIdentity{Key: key, Bin: bin, Provided: provided}
+}
+
+// lineageRecordIDs are the ids a launch records its clown-name (and profile
+// pin) under in the session-names journal: only ids a later launch can look
+// up again (clown#219). identity.Key counts when a launcher provided it, or,
+// for claude, when it is the id claude persists the conversation under
+// (decideClaudeSession's hint). A key minted for one launch (a bare
+// non-claude launch, claude -p or --continue) is not recorded: nothing would
+// ever look it up. For claude the conversation id is also recorded when it
+// differs from the key (the operator-key edge), so `clown resume
+// repo/worktree/<name>` finds the id claude persisted.
+func lineageRecordIDs(provider string, identity sessionIdentity, resumeHintID string) []string {
+	var ids []string
+	isClaude := provider == "claude"
+	if identity.Provided || (isClaude && resumeHintID != "" && resumeHintID == identity.Key) {
+		ids = append(ids, identity.Key)
+	}
+	if isClaude && resumeHintID != "" && resumeHintID != identity.Key {
+		ids = append(ids, resumeHintID)
+	}
+	return ids
 }
 
 // resolveClownName decides this process's clown#169 human-ergonomic name.
@@ -870,8 +896,8 @@ func runWithFlags(flags parsedFlags) int {
 	// identity.Key is the lineage key for every provider — for claude,
 	// decideClaudeSession has unified it with the claude --session-id — so this
 	// is harness-agnostic: a provider carrying a stable session id gets
-	// persistence, one minting a fresh id each launch simply records a new
-	// binding nothing later looks up. This point runs exactly once per
+	// persistence, and a key minted for this launch alone is not recorded
+	// (lineageRecordIDs, clown#219). This point runs exactly once per
 	// proceeding process (any [attach] re-exec has already decided which
 	// process carries on). Best-effort like the presence registration above: a
 	// miss only degrades name persistence / name-based resume for this session.
@@ -889,11 +915,7 @@ func runWithFlags(flags parsedFlags) int {
 		// session's different pin without approval (or whose pin cannot be
 		// read), so this write never re-pins a session the gate did not clear.
 		// Best-effort, but a failure is reported.
-		ids := []string{flags.identity.Key}
-		if flags.provider == "claude" && flags.resumeHintID != "" && flags.resumeHintID != flags.identity.Key {
-			ids = append(ids, flags.resumeHintID)
-		}
-		for _, id := range ids {
+		for _, id := range lineageRecordIDs(flags.provider, flags.identity, flags.resumeHintID) {
 			base := sessions.NameRecord{SessionID: id, Name: flags.clownName, Group: flags.groupID}
 			if err := sessions.RecordSession(withProfileForm(launchRecordFor(base, gate.launch, decision.approvesRecordFor(id), sessions.ProfileOf), launchForm)); err != nil {
 				fmt.Fprintf(os.Stderr, "clown: warning: recording session %s in the session-names sidecar: %v\n", id, err)
