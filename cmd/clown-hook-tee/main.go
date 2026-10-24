@@ -145,6 +145,7 @@ func run(stdin io.Reader, troupeBin string) error {
 		return err
 	}
 	waitTranscriptQuiet(in.TranscriptPath)
+	pruneCursorsBesides(in.TranscriptPath)
 	offset, hasCursor := loadCursor(in.TranscriptPath)
 	text, consumed, err := extractSince(in.TranscriptPath, offset, hasCursor)
 	if err != nil {
@@ -236,6 +237,54 @@ func saveCursor(transcriptPath string, offset int64) error {
 		return err
 	}
 	return os.Rename(tmp, path)
+}
+
+// cursorMaxAge is how long a cursor file outlives its last post (clown#225).
+// Every post rewrites the cursor of a live transcript, so only a session idle
+// this long loses it; resuming it later bootstraps in last-turn mode, as a
+// first post does.
+const cursorMaxAge = 30 * 24 * time.Hour
+
+// pruneStaleCursors removes the cursor files (and leftover .cursor.tmp
+// files) in dir whose mtime is older than maxAge, except keep (the cursor this
+// run writes), and returns how many it removed. Best-effort: an unreadable
+// directory or a failed unlink is skipped.
+func pruneStaleCursors(dir string, now time.Time, maxAge time.Duration, keep string) int {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0
+	}
+	removed := 0
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !(strings.HasSuffix(name, ".cursor") || strings.HasSuffix(name, ".cursor.tmp")) {
+			continue
+		}
+		p := filepath.Join(dir, name)
+		if p == keep {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil || now.Sub(info.ModTime()) <= maxAge {
+			continue
+		}
+		if os.Remove(p) == nil {
+			removed++
+		}
+	}
+	return removed
+}
+
+// pruneCursorsBesides runs pruneStaleCursors over the cursor directory,
+// keeping transcriptPath's own cursor.
+func pruneCursorsBesides(transcriptPath string) {
+	keep, err := cursorPath(transcriptPath)
+	if err != nil {
+		return
+	}
+	if n := pruneStaleCursors(filepath.Dir(keep), time.Now(), cursorMaxAge, keep); n > 0 {
+		debugLog("pruned stale cursors", strconv.Itoa(n))
+	}
 }
 
 // deriveWorktreeRoom computes the per-worktree channel JID

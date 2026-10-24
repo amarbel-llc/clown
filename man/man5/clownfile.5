@@ -452,6 +452,8 @@ Extraction is cursor-based (clown#224): a per-transcript byte offset under
 records how far the previous post consumed, so a reply block the harness had
 not yet flushed to the transcript when the hook ran is carried by the next
 post instead of being dropped, and no post repeats text.
+Each post prunes cursor files not written for 30 days (clown#225); a session
+resumed after that long starts again from its last turn, like a first post.
 The same handler also runs as a
 .Sy SessionEnd
 hook (clown#226) to flush the tail of the session's final turn, which has no
