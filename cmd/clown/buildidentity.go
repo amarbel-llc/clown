@@ -30,7 +30,7 @@ func buildIdentityFragment() string {
 	if version == "" && shortSha == "" && commit == "" {
 		return "You are running an unversioned local dev build of clown (no " +
 			"published version or commit). When signing off as Clown, do not " +
-			"fabricate a version or a commit link."
+			"fabricate a version or a commit link." + pinnedComponentsSection()
 	}
 
 	id := buildIdentifier(version, shortSha)
@@ -46,7 +46,36 @@ func buildIdentityFragment() string {
 		fmt.Fprintf(&b, "When you sign off as Clown on git commits, pull "+
 			"requests, or comments, include this build identifier (%s).", id)
 	}
+	b.WriteString(pinnedComponentsSection())
 	return b.String()
+}
+
+// pinnedComponentsSection renders the `clown version` table's rows after
+// clown's own (claude-code, codex, ringmaster, troupe and the plugins), so an
+// agent has the deployed versions without shelling out (clown#227). A
+// component this build did not pin (no version) is left out; with none
+// pinned the section is empty. It follows the sign-off sentence, which stays
+// as it was.
+func pinnedComponentsSection() string {
+	var lines []string
+	for _, r := range buildVersionRows()[1:] {
+		switch {
+		case r.version != "" && r.rev != "":
+			lines = append(lines, fmt.Sprintf("- %s %s (%s)", r.component, r.version, r.rev))
+		case r.version != "":
+			lines = append(lines, fmt.Sprintf("- %s %s", r.component, r.version))
+		case strings.ContainsAny(r.component, " \t"):
+			// A plugin's preformatted version-info line ("name version rev").
+			lines = append(lines, "- "+strings.Join(strings.Fields(r.component), " "))
+		}
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return "\n\nComponents pinned into this build at build time (the `clown version` " +
+		"table, as component version (rev)). They are authoritative for what is " +
+		"deployed and running; the source HEAD in a git-status snapshot is not, " +
+		"and can be ahead of the running binaries.\n" + strings.Join(lines, "\n")
 }
 
 // buildIdentifier formats the human-facing build token. With both a version
