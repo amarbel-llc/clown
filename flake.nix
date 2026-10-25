@@ -1117,6 +1117,10 @@
               testEnv = {
                 CLOWN_TEST_FAKESERVER = "${fakeserver-go}/bin/fakeserver";
                 CLOWN_TEST_FAKE_LLAMA_SERVER = "${fake-llama-server-go}/bin/fake-llama-server";
+                # The prompt sources, for the fragment-content tests
+                # (cmd/clown/builtinfragments_test.go); not in goSrc.
+                CLOWN_TEST_SYSTEM_PROMPT_APPEND_D = "${./system-prompt-append.d}";
+                CLOWN_TEST_SUBAGENTS_D = "${./subagents}";
               };
             }
             // extra

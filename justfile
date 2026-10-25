@@ -134,6 +134,7 @@ debug-godyn-tests-verbose *flags:
     fakeserver=$(out "$(grep -- '-fakeserver-' <<<"$fixtures")")
     fakellama=$(out "$(grep -- '-fake-llama-server-' <<<"$fixtures")")
     git=$(out "$(grep -- '-git-[0-9]' <<<"$fixtures")")
+    root=$PWD
     work=$(mktemp -d)
     trap 'chmod -R u+w "$work"; rm -rf "$work"' EXIT
     total_skip=0
@@ -147,6 +148,8 @@ debug-godyn-tests-verbose *flags:
         log=$(cd "$work/cwd" && env HOME="$work" PATH="$git/bin:$PATH" \
             CLOWN_TEST_FAKESERVER="$fakeserver/bin/fakeserver" \
             CLOWN_TEST_FAKE_LLAMA_SERVER="$fakellama/bin/fake-llama-server" \
+            CLOWN_TEST_SYSTEM_PROMPT_APPEND_D="$root/system-prompt-append.d" \
+            CLOWN_TEST_SUBAGENTS_D="$root/subagents" \
             "$bin" -test.v {{flags}} 2>&1 || true)
         pass=$(grep -cE '^ *--- PASS' <<<"$log" || true)
         skip=$(grep -cE '^ *--- SKIP' <<<"$log" || true)
