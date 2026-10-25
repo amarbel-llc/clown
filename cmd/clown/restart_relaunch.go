@@ -58,6 +58,11 @@ var (
 	providerMu   sync.Mutex
 )
 
+// restartUnderway reports that a restart has recorded its plan: from then
+// until the relaunch, the idle poke runs nothing and the control socket
+// refuses another restart.
+func restartUnderway() bool { return pendingRelaunch.Load() != nil }
+
 // setProviderRunning marks the provider running (its SIGTERM forwarding is
 // in place) with how to kill it.
 func setProviderRunning(kill func()) {
@@ -190,6 +195,9 @@ type frontendRestarter struct {
 	kill func()
 	// graceChecked, when set, is told whether the grace check killed (tests).
 	graceChecked func(killed bool)
+	// worktree is the session's working directory, checked before the
+	// relaunch (relaunchPlan.worktree).
+	worktree string
 	// notify gets one line when a restart the preflight consumed is
 	// cancelled (the frontend's stderr); nil: the log only.
 	notify io.Writer
@@ -242,7 +250,7 @@ func (fr frontendRestarter) restart(req restartRequest, v preflightVerdict) {
 		logSelfClose(fr.logPath, "restart (%s): the provider exited during the countdown; not restarting", fr.principal)
 		return
 	}
-	plan := &relaunchPlan{principal: fr.principal, reason: reason, argv: fr.argv}
+	plan := &relaunchPlan{principal: fr.principal, reason: reason, argv: fr.argv, worktree: fr.worktree}
 	pendingRelaunch.Store(plan)
 	logSelfClose(fr.logPath, "restart (%s): stopping the provider to relaunch (%s)", fr.principal, reason)
 	fr.stop()
@@ -303,8 +311,20 @@ func newRelauncher() relauncher {
 
 // relaunch waits until no serve socket of the principal answers (a relaunched
 // bridge refuses a live one, fdda002), then execs `clown` from PATH, so a new
-// clown build is picked up. It returns only on failure, with the exit code.
+// clown build is picked up. It returns only when it does not relaunch, with
+// the exit code.
+//
+// A session closed while the restart waited (spinclass removes its
+// worktree on close) is not relaunched: that would resurrect it and re-mint
+// a revoked principal. An exit the user asked for in that window (/exit) is
+// not told apart from the stop's and does relaunch.
 func (r relauncher) relaunch(plan *relaunchPlan) int {
+	if plan.worktree != "" {
+		if fi, err := os.Stat(plan.worktree); err != nil || !fi.IsDir() {
+			fmt.Fprintf(r.stderr, "clown: restart: the session's worktree %s is gone, so the session was closed during the restart; not relaunching\n", plan.worktree)
+			return 0
+		}
+	}
 	if r.runtimeDir != "" {
 		dir := filepath.Join(r.runtimeDir, "clown", "serve", plan.principal)
 		if err := waitServeSocketsGone(dir, r.serveWait); err != nil {

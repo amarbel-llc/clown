@@ -117,6 +117,13 @@ type idleRunner struct {
 }
 
 func (r *idleRunner) onIdle() {
+	// Once a restart has stopped (or is stopping) the provider, an idle poke
+	// must not start a close or another restart: the session is between two
+	// frontends.
+	if restartUnderway() {
+		logSelfClose(r.logPath, "idle poke ignored: a restart is underway")
+		return
+	}
 	_ = r.closer.run()
 	if r.queue == nil {
 		return

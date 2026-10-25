@@ -1026,6 +1026,7 @@ func runWithFlags(flags parsedFlags) int {
 		profileCheck: newRestartProfileCheck(flags, attachedID).check,
 		busy:         turnRunning.Load,
 		notify:       os.Stderr,
+		worktree:     cwd,
 		logPath:      restartLog,
 	}
 	idleDir, idleSock, closeIdle := armSelfClose(flags, root, restarts, restarter.restart, turnRunning)

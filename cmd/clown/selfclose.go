@@ -218,8 +218,11 @@ func startIdleListenerTracking(path string, busy *atomic.Bool, run func()) (*idl
 	return l, nil
 }
 
-// Close stops listening and removes the socket. A run already in flight is left
-// to finish: killing a half-done teardown would strand the session.
+// Close stops listening and removes the socket. It does not wait for a run in
+// flight: close-self-run runs in its own session and outlives the frontend;
+// a restart in flight has stored its plan, and while it is stored the idle
+// runner starts nothing (restartUnderway), so the exec cannot cut a close or
+// a second restart in half.
 func (l *idleListener) Close() {
 	l.once.Do(func() {
 		l.conn.Close()

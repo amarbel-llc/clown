@@ -86,6 +86,9 @@ func restartControlHandler(provider, unarmedReason string, q *restartQueue) func
 		if m.When != "idle" {
 			return controlReply{Error: fmt.Sprintf("restart --when %q is not supported; only idle", m.When)}
 		}
+		if restartUnderway() {
+			return controlReply{Error: "a restart is already underway for this session; ask again once it has relaunched"}
+		}
 		if unarmedReason != "" {
 			if provider != "claude" {
 				return controlReply{Error: fmt.Sprintf("restart needs an idle trigger; %s has none", provider)}
