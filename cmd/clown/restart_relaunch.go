@@ -43,7 +43,28 @@ var (
 	// providerRunning is true while runProvider waits on the provider, the
 	// only time stopping it unwinds to main.
 	providerRunning atomic.Bool
+	// providerKill SIGKILLs the running provider; set with providerRunning.
+	providerKill atomic.Pointer[func()]
 )
+
+// setProviderRunning marks the provider running (its SIGTERM forwarding is
+// in place) with how to kill it.
+func setProviderRunning(kill func()) {
+	providerKill.Store(&kill)
+	providerRunning.Store(true)
+}
+
+func clearProviderRunning() {
+	providerRunning.Store(false)
+	providerKill.Store(nil)
+}
+
+// killProvider SIGKILLs the running provider, if one is recorded.
+func killProvider() {
+	if k := providerKill.Load(); k != nil {
+		(*k)()
+	}
+}
 
 // restartArgv is this launch's argv for the relaunch: the resolved flags
 // (reexecArgv, as the [attach] re-exec uses), with any --session-id/--resume
@@ -145,6 +166,11 @@ type frontendRestarter struct {
 	// stopGrace bounds the wait for the provider to exit after the stop;
 	// zero: defaultStopGrace.
 	stopGrace time.Duration
+
+	// kill SIGKILLs the provider after stopGrace; nil: killProvider.
+	kill func()
+	// graceChecked, when set, is told whether the grace check killed (tests).
+	graceChecked func(killed bool)
 }
 
 func (fr frontendRestarter) restart(req restartRequest, v preflightVerdict) {
@@ -176,26 +202,42 @@ func (fr frontendRestarter) restart(req restartRequest, v preflightVerdict) {
 		logSelfClose(fr.logPath, "restart (%s): a turn started; not stopping the provider", fr.principal)
 		return
 	}
+	// The provider may have exited during the countdown: nothing to stop,
+	// and a plan stored now would relaunch a session that ended.
+	if !providerRunning.Load() {
+		logSelfClose(fr.logPath, "restart (%s): the provider exited during the countdown; not restarting", fr.principal)
+		return
+	}
 	plan := &relaunchPlan{principal: fr.principal, reason: reason, argv: fr.argv}
 	pendingRelaunch.Store(plan)
 	logSelfClose(fr.logPath, "restart (%s): stopping the provider to relaunch (%s)", fr.principal, reason)
 	fr.stop()
-	// A provider that ignores the stop keeps the session; the plan must not
-	// outlive the attempt, or a later /exit would relaunch it.
+	// A provider that ignores the SIGTERM is killed after the grace period.
+	// The plan stays: whenever the provider does exit, main relaunches.
 	grace := fr.stopGrace
 	if grace == 0 {
 		grace = defaultStopGrace
 	}
+	kill := fr.kill
+	if kill == nil {
+		kill = killProvider
+	}
 	go func() {
 		time.Sleep(grace)
-		if providerRunning.Load() && pendingRelaunch.CompareAndSwap(plan, nil) {
-			logSelfClose(fr.logPath, "restart (%s): the provider did not exit within %s of the stop; restart abandoned, the session keeps running", fr.principal, grace)
+		killed := false
+		if providerRunning.Load() {
+			logSelfClose(fr.logPath, "restart (%s): the provider did not exit within %s of the stop; sending it SIGKILL", fr.principal, grace)
+			kill()
+			killed = true
+		}
+		if fr.graceChecked != nil {
+			fr.graceChecked(killed)
 		}
 	}()
 }
 
-// defaultStopGrace is how long a stopped provider has to exit before the
-// restart is abandoned.
+// defaultStopGrace is how long a stopped provider has to exit before it is
+// killed.
 const defaultStopGrace = 30 * time.Second
 
 // stopProviderBySignal ends the provider the way an external SIGTERM to clown

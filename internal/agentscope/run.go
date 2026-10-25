@@ -251,10 +251,10 @@ func Run(l Launch, tools Tools, logger *slog.Logger) (int, error) {
 	defer cancel()
 	outcome := make(chan startOutcome, 1)
 	var reporting atomic.Bool
-	report := func(pty string) {
+	report := func(pty string, pid int) {
 		reporting.Store(true)
 		if l.OnStarted != nil {
-			l.OnStarted()
+			l.OnStarted(pid)
 		}
 		go func() {
 			st, err := tools.waitActive(ctx, l.Unit)
@@ -281,7 +281,7 @@ func Run(l Launch, tools Tools, logger *slog.Logger) (int, error) {
 		code, err = ptysuspend.Run(argv, os.Stdin, ptysuspend.Options{
 			DetachSlave: true,
 			NoEscape:    true,
-			OnStart:     func(slave string, _ int) { report(slave) },
+			OnStart:     func(slave string, pid int) { report(slave, pid) },
 		})
 	} else {
 		code, err = runPiped(argv, report)
@@ -349,7 +349,7 @@ func (l Launch) writeResult(r Result, logger *slog.Logger) {
 	}
 }
 
-func runPiped(argv []string, report func(pty string)) (int, error) {
+func runPiped(argv []string, report func(pty string, pid int)) (int, error) {
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	sigCh := make(chan os.Signal, 1)
@@ -363,7 +363,7 @@ func runPiped(argv []string, report func(pty string)) (int, error) {
 			_ = cmd.Process.Signal(s)
 		}
 	}()
-	report("")
+	report("", cmd.Process.Pid)
 	err := cmd.Wait()
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {

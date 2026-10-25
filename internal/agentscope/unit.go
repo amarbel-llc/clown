@@ -63,8 +63,9 @@ type Launch struct {
 	IdleSocket string
 	// OnStarted, when set, is called once systemd-run runs and a SIGTERM or
 	// SIGINT to the frontend is forwarded to it (clown's restart stops the
-	// provider by signalling itself, spinclass#419).
-	OnStarted func()
+	// provider by signalling itself, spinclass#419), with systemd-run's pid
+	// (killing it ends the wait; Run then stops the unit).
+	OnStarted func(pid int)
 	// ServeFile lists the agent-side servers the relay starts inside the
 	// unit (WriteInUnitServers); bound in read-only. Empty: none.
 	ServeFile string

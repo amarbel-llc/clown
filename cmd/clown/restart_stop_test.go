@@ -10,36 +10,84 @@ import (
 	"time"
 )
 
-// M2: a provider that ignores the stop keeps running; the plan is dropped
-// after the grace period, so a later /exit ends the session instead of
-// relaunching it.
-func TestRestartDropsThePlanWhenTheProviderDoesNotExit(t *testing.T) {
+// F2: a provider that ignores the stop is killed after the grace period and
+// the plan is kept, so its exit still relaunches the session.
+func TestRestartKillsAProviderThatIgnoresTheStop(t *testing.T) {
 	pendingRelaunch.Store(nil)
 	providerRunning.Store(true)
 	t.Cleanup(func() { pendingRelaunch.Store(nil); providerRunning.Store(false) })
 	logPath := filepath.Join(t.TempDir(), "l.log")
-	fr := frontendRestarter{principal: restartTestPrincipal, stop: func() {}, stopGrace: 50 * time.Millisecond, logPath: logPath}
+	killed := make(chan struct{}, 1)
+	checked := make(chan bool, 1)
+	fr := frontendRestarter{
+		principal: restartTestPrincipal, stop: func() {}, stopGrace: 50 * time.Millisecond, logPath: logPath,
+		kill:         func() { killed <- struct{}{} },
+		graceChecked: func(k bool) { checked <- k },
+	}
 	fr.restart(restartRequest{When: "idle"}, preflightVerdict{Verdict: "restart", Reason: "r"})
-	if pendingRelaunch.Load() == nil {
+	plan := pendingRelaunch.Load()
+	if plan == nil {
 		t.Fatal("the plan must be recorded before the stop")
 	}
-	waitFor(t, "the plan to be dropped", func() bool { return pendingRelaunch.Load() == nil })
+	select {
+	case <-killed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the provider was not killed after the grace period")
+	}
+	select {
+	case k := <-checked:
+		if !k || pendingRelaunch.Load() != plan {
+			t.Fatal("the plan must survive the kill, so the exit relaunches")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the grace check never ran")
+	}
 	b, _ := os.ReadFile(logPath)
-	if !strings.Contains(string(b), "did not exit") {
+	if !strings.Contains(string(b), "SIGKILL") {
 		t.Fatalf("log = %s", b)
 	}
 }
 
-// A provider that does exit keeps its plan.
-func TestRestartKeepsThePlanWhenTheProviderExits(t *testing.T) {
+// A provider that exits in time is not killed, and keeps its plan.
+func TestRestartDoesNotKillAProviderThatExits(t *testing.T) {
 	pendingRelaunch.Store(nil)
 	providerRunning.Store(true)
 	t.Cleanup(func() { pendingRelaunch.Store(nil); providerRunning.Store(false) })
-	fr := frontendRestarter{principal: restartTestPrincipal, stop: func() { providerRunning.Store(false) }, stopGrace: 50 * time.Millisecond, logPath: filepath.Join(t.TempDir(), "l.log")}
+	kills := 0
+	checked := make(chan bool, 1)
+	fr := frontendRestarter{
+		principal: restartTestPrincipal, stop: func() { providerRunning.Store(false) }, stopGrace: 50 * time.Millisecond,
+		logPath: filepath.Join(t.TempDir(), "l.log"),
+		kill:    func() { kills++ }, graceChecked: func(k bool) { checked <- k },
+	}
 	fr.restart(restartRequest{When: "idle"}, preflightVerdict{Verdict: "restart", Reason: "r"})
-	time.Sleep(200 * time.Millisecond)
+	select {
+	case k := <-checked:
+		if k || kills != 0 {
+			t.Fatalf("an exited provider was killed (%v, %d)", k, kills)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the grace check never ran")
+	}
 	if pendingRelaunch.Load() == nil {
 		t.Fatal("an exited provider's plan must stay for main")
+	}
+}
+
+// F9: a provider that exited during the countdown is not "stopped", and no
+// plan is stored for it.
+func TestRestartRechecksTheProviderAfterTheCountdown(t *testing.T) {
+	pendingRelaunch.Store(nil)
+	providerRunning.Store(true)
+	t.Cleanup(func() { pendingRelaunch.Store(nil); providerRunning.Store(false) })
+	stops := 0
+	fr := frontendRestarter{
+		principal: restartTestPrincipal, stop: func() { stops++ }, logPath: filepath.Join(t.TempDir(), "l.log"),
+		countdown: func(string) (bool, string) { providerRunning.Store(false); return true, "elapsed" },
+	}
+	fr.restart(restartRequest{When: "idle"}, preflightVerdict{Verdict: "restart", Reason: "r"})
+	if stops != 0 || pendingRelaunch.Load() != nil {
+		t.Fatalf("stops %d, plan %v; the provider had already exited", stops, pendingRelaunch.Load())
 	}
 }
 

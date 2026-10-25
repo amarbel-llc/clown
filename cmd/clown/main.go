@@ -2101,9 +2101,19 @@ func runProvider(executor Executor, bound Command, logger *slog.Logger, flags pa
 
 	// A restart may stop the provider only while one runs and a SIGTERM to
 	// clown reaches it (spinclass#419): each path below sets providerRunning
-	// once its forwarding is in place.
-	defer providerRunning.Store(false)
-	markProviderRunning := func() { providerRunning.Store(true) }
+	// once its forwarding is in place, with how to SIGKILL the provider if it
+	// ignores the stop.
+	defer clearProviderRunning()
+	markProviderRunning := setProviderRunning
+	// killPid kills target (a pid, or -pgid); 0 and -1 would hit clown's own
+	// group or every process, and are ignored.
+	killPid := func(target int) func() {
+		return func() {
+			if target != 0 && target != -1 {
+				_ = syscall.Kill(target, syscall.SIGKILL)
+			}
+		}
+	}
 
 	if flags.agentScopeSpec != "" {
 		return runInAgentScope(agentScopeRequest{
@@ -2118,7 +2128,9 @@ func runProvider(executor Executor, bound Command, logger *slog.Logger, flags pa
 			extraEnv:     extraEnv,
 			principal:    flags.identity.Key,
 			idleSocket:   flags.idleSocket,
-			onStarted:    markProviderRunning,
+			// systemd-run: killing it ends the wait, and the unit is
+			// stopped on the way out (stopIfActive).
+			onStarted: func(pid int) { markProviderRunning(killPid(pid)) },
 		}, logger)
 	}
 
@@ -2137,7 +2149,8 @@ func runProvider(executor Executor, bound Command, logger *slog.Logger, flags pa
 			if onStart != nil {
 				onStart(slave, pid)
 			}
-			markProviderRunning()
+			// The child leads its own session: kill its process group.
+			markProviderRunning(killPid(-pid))
 		}
 		code, err := ptysuspend.Run(append([]string{binary}, argv...), os.Stdin, ptyOpts)
 		if err != nil {
@@ -2192,7 +2205,7 @@ func runProvider(executor Executor, bound Command, logger *slog.Logger, flags pa
 		return 1
 	}
 	startElapsed := time.Since(preStart)
-	markProviderRunning()
+	markProviderRunning(func() { _ = cmd.Process.Kill() })
 	if logger != nil {
 		logger.Info("downstream process started", "pid", cmd.Process.Pid, "start_elapsed", startElapsed.String())
 	}
