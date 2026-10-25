@@ -14,7 +14,7 @@ import (
 
 // ConfigPath resolves a per-user CONFIG path:
 // $XDG_CONFIG_HOME/clown/<parts...>, or ~/.config/clown/<parts...> when
-// XDG_CONFIG_HOME is unset or empty. Config is user-edited (profiles,
+// XDG_CONFIG_HOME is unset, empty or relative. Config is user-edited (profiles,
 // provider settings); throwaway machine state belongs in StatePath.
 func ConfigPath(parts ...string) (string, error) {
 	return resolve("XDG_CONFIG_HOME", []string{".config"}, parts)
@@ -47,17 +47,19 @@ func ConfigFile(name string) (path string, legacy bool, err error) {
 
 // StatePath resolves a per-user STATE path:
 // $XDG_STATE_HOME/clown/<parts...>, or ~/.local/state/clown/<parts...> when
-// XDG_STATE_HOME is unset or empty. State is machine-managed and never
+// XDG_STATE_HOME is unset, empty or relative. State is machine-managed and never
 // user-edited (name-allocator lock, session-name journal, hook cursors).
 func StatePath(parts ...string) (string, error) {
 	return resolve("XDG_STATE_HOME", []string{".local", "state"}, parts)
 }
 
-// resolve implements the shared ladder: the XDG env var when set, else the
-// home-relative default, always with the "clown" app directory appended.
+// resolve implements the shared ladder: the XDG env var when set to an
+// absolute path, else the home-relative default (the XDG base-directory spec
+// says a relative value is invalid and to be ignored), always with the
+// "clown" app directory appended.
 func resolve(envVar string, homeDefault, parts []string) (string, error) {
 	base := os.Getenv(envVar)
-	if base == "" {
+	if !filepath.IsAbs(base) {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return "", fmt.Errorf("home dir: %w", err)

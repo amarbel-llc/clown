@@ -121,6 +121,43 @@ func TestASymlinkedLeafLeavesItsTargetAlone(t *testing.T) {
 	assertUntouched(t, victim, names)
 }
 
+// The same swap, made after the dir's lstat and before it is opened (the
+// beforeRootOpenHook seam): the opened root is not the lstat'ed dir, so it is
+// refused before anything is removed, created or chmod'd there. Written with
+// the fix (the seam is new), so never red.
+func TestALeafSwappedAfterTheLstatIsRefused(t *testing.T) {
+	victim := t.TempDir()
+	if err := os.Chmod(victim, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	names := []string{"package.json", stateName(31)}
+	for _, n := range names {
+		writeAged(t, filepath.Join(victim, n), 0, 30*24*time.Hour)
+	}
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "permstat")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	beforeRootOpenHook = func() {
+		if err := os.Rename(dir, filepath.Join(parent, "moved")); err != nil {
+			t.Error(err)
+		}
+		if err := os.Symlink(victim, dir); err != nil {
+			t.Error(err)
+		}
+	}
+	t.Cleanup(func() { beforeRootOpenHook = nil })
+	ms, err := Handle(ev("PermissionRequest", "Bash", bash), dir)
+	if err == nil {
+		t.Fatal("a state dir swapped for a symlink after its lstat was not refused")
+	}
+	if len(ms) != 1 {
+		t.Fatalf("PermissionRequest = %v, want prompted still counted", ms)
+	}
+	assertUntouched(t, victim, names)
+}
+
 func assertUntouched(t *testing.T, victim string, names []string) {
 	t.Helper()
 	for _, n := range names {

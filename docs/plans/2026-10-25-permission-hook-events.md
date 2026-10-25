@@ -122,22 +122,34 @@ SessionEnd it already had:
   next call starts.
 - State: one file per session under `$XDG_STATE_HOME/clown/hook-toolcost/
   permstat` (`~/.local/state/...` without XDG_STATE_HOME: the toolcost
-  hook's own `userpath.StatePath` ladder; `$TMPDIR/clown-permstat-<uid>` only
-  when no home dir is known either), 0600 in a 0700 dir, flock'd,
-  O_NOFOLLOW, at most 32 pending requests, read bounded at 64 KiB,
-  corruption read as empty, removed when the turn ends. The state dir itself
-  is refused if it is a symlink, not a directory, or not owned by the user,
-  and is chmod'd to 0700 if it is wider; only that leaf is checked, its parent
-  being the user's own `hook-toolcost` state dir (or the sticky temp dir). A
+  hook's own `userpath.StatePath` ladder, which ignores a relative value;
+  `$TMPDIR/clown-permstat-<uid>` only when no home dir is known either), 0600
+  in a 0700 dir, flock'd, O_NOFOLLOW, at most 32 pending requests, read
+  bounded at 64 KiB, corruption read as empty, removed when the turn ends. A
   PostToolUse with nothing pending creates no file. It used to live under
   `$XDG_RUNTIME_DIR/clown/permstat`; files left there are not migrated or
-  swept (the tmpfs clears them on reboot).
-- Files left by sessions killed mid-turn are swept on each PermissionRequest:
-  an empty one past 24h, one still holding a pending request only past 7
-  days (mtime is the last write, not liveness: a person can sit at a dialog
-  for a day). At most 16 are removed per sweep, out of at most 4096 entries
-  looked at. The state dir survives reboots, so this sweep is what bounds it
-  (tested in that dir: `TestSweepRunsInTheStateDirAndIgnoresTheOldLocation`).
+  swept (the tmpfs clears them on reboot). Under `--tent` the variable is
+  forwarded but the dir is not bound, so the state is container-local there
+  (R, `internal/tent/tent.go`).
+- The dir is agent-writable: inside `--agent-scope` the agent runs as the
+  same uid, and the host-side hook uses the same dir. So nothing in it is
+  trusted. The dir is lstat'ed (a symlink or non-directory is refused), then
+  opened as an `os.Root`, which must be the very directory lstat'ed (a swap
+  in between is refused before anything is done there); every later
+  operation (open, lock, remove, the sweep's listing and reads) is relative
+  to that root and cannot leave it, and the 0700 narrowing is an fchmod on
+  it. The owner check only keeps out other users; it does not protect
+  against the agent, which is the same uid. Keys read back from a state file
+  reach statsd only if they have the toolcost key shape
+  (`toolcost.ValidKey`), and at most 32 entries are read.
+- Files left by sessions killed mid-turn are swept on each PermissionRequest,
+  only those whose name has the state-file shape (32 hex digits, `.json`),
+  never any other file however old: an empty or unreadable one past 24h, one
+  still holding a pending request only past 7 days (mtime is the last write,
+  not liveness: a person can sit at a dialog for a day). At most 16 are
+  removed per sweep, and at most 4096 entries are looked at. The state dir
+  survives reboots, so this sweep is what bounds it (tested in that dir:
+  `TestSweepRunsInTheStateDirAndIgnoresTheOldLocation`).
 - Locking is best effort: up to 5 attempts share one 200ms deadline overall,
   the lock tried without blocking, then the hook skips the bookkeeping
   (prompted still counts) rather than stall the agent. After locking, the
@@ -168,6 +180,7 @@ SessionEnd it already had:
   | inside `--agent-scope` | yes | yes (I) | yes (I) |
 
   Inside a unit the hook gets `XDG_STATE_HOME` set to the frontend's value
+  when that is absolute, else the operator's `~/.local/state`
   (`agentscope.OperatorXDG`, `internal/agentscope/unit.go`), so
   `permstat.Dir` is the same path inside and out (R), and `stageAgentHome`
   binds its parent `$XDG_STATE_HOME/clown/hook-toolcost` read-write (R,

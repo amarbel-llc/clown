@@ -52,7 +52,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
+	"regexp"
 	"syscall"
 	"time"
 
@@ -122,7 +122,7 @@ func Handle(payload []byte, dir string) ([]toolcost.Metric, error) {
 	if in.SessionID == "" {
 		return nil, errors.New("hook input carries no session_id")
 	}
-	path := statePath(dir, in.SessionID)
+	name := stateFileName(in.SessionID)
 	switch in.HookEventName {
 	case "PermissionRequest":
 		if in.ToolName == "" {
@@ -130,7 +130,13 @@ func Handle(payload []byte, dir string) ([]toolcost.Metric, error) {
 		}
 		key := toolcost.ToolKey(in.ToolName, in.ToolInput)
 		ms := []toolcost.Metric{counter(key, "prompted")}
-		err := update(path, true, func(st *state) bool {
+		// The prompt counts even when the state cannot be kept.
+		root, err := openStateDir(dir, true)
+		if err != nil {
+			return ms, err
+		}
+		defer root.Close()
+		err = update(root, name, true, func(st *state) bool {
 			st.Pending = append(st.Pending, pending{Key: key, Match: match(in)})
 			if n := len(st.Pending); n > maxPending {
 				st.Pending = st.Pending[n-maxPending:]
@@ -138,15 +144,23 @@ func Handle(payload []byte, dir string) ([]toolcost.Metric, error) {
 			return true
 		})
 		if err == nil {
-			err = sweepStale(dir, path)
+			err = sweepStale(root, name)
 		}
-		// The prompt counts even when the state cannot be kept.
 		return ms, err
 	case "PostToolUse", "PostToolUseFailure":
+		// No dir or no file: nothing is pending (an auto-allowed call), and
+		// none is made.
+		root, err := openStateDir(dir, false)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		defer root.Close()
 		var ms []toolcost.Metric
 		m := match(in)
-		// No file: nothing is pending (an auto-allowed call), and none is made.
-		err := update(path, false, func(st *state) bool {
+		err = update(root, name, false, func(st *state) bool {
 			for i, p := range st.Pending {
 				if p.Match == m {
 					ms = append(ms, counter(p.Key, "approved"))
@@ -161,7 +175,15 @@ func Handle(payload []byte, dir string) ([]toolcost.Metric, error) {
 		}
 		return ms, err
 	case "Stop", "UserPromptSubmit", "SessionEnd":
-		st, err := take(path)
+		root, err := openStateDir(dir, false)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		defer root.Close()
+		st, err := take(root, name)
 		var ms []toolcost.Metric
 		for _, p := range st.Pending {
 			ms = append(ms, counter(p.Key, "declined"))
@@ -197,20 +219,36 @@ func canonicalJSON(raw json.RawMessage) []byte {
 	return out
 }
 
-// statePath is <dir>/<sha256(session)>.json.
-func statePath(dir, session string) string {
+// stateFileName is a session's state file name, <sha256(session)[:16] hex>.json:
+// the only shape stateFileShape (and so the sweep) accepts.
+func stateFileName(session string) string {
 	sum := sha256.Sum256([]byte(session))
-	return filepath.Join(dir, hex.EncodeToString(sum[:16])+".json")
+	return hex.EncodeToString(sum[:16]) + ".json"
+}
+
+// stateFileShape matches exactly the names stateFileName makes.
+var stateFileShape = regexp.MustCompile(`^[0-9a-f]{32}\.json$`)
+
+// statePath is <dir>/<stateFileName(session)> (tests).
+func statePath(dir, session string) string {
+	return filepath.Join(dir, stateFileName(session))
 }
 
 // Dir is where the state files live: $XDG_STATE_HOME/clown/hook-toolcost/
 // permstat (~/.local/state without XDG_STATE_HOME), beside the toolcost
 // hook's own state and resolved the same way (userpath.StatePath). An
 // --agent-scope unit binds that hook-toolcost dir read-write and sets
-// XDG_STATE_HOME to the frontend's, so the path is the same inside and out
-// and all three counters work there; XDG_RUNTIME_DIR is a read-only tmpfs in
-// a unit. Only when neither XDG_STATE_HOME nor a home dir is known does it
-// fall back to a per-user directory under the temp dir.
+// XDG_STATE_HOME to the frontend's (absolute) value, so the path is the same
+// inside and out and, inferred rather than seen live, all three counters work
+// there; XDG_RUNTIME_DIR is a read-only tmpfs in a unit. Under --tent the
+// variable is forwarded but the dir is not bound, so the state is
+// container-local there. Only when neither an absolute XDG_STATE_HOME nor a
+// home dir is known does it fall back to a per-user directory under the temp
+// dir.
+//
+// The dir is writable by the agent (inside a unit it runs as the same uid)
+// and used by the host-side hook too, so nothing in it is trusted: it is
+// opened as an os.Root (openStateDir) and every operation stays inside it.
 func Dir() string {
 	if d, err := userpath.StatePath("hook-toolcost", "permstat"); err == nil {
 		return d
@@ -218,11 +256,12 @@ func Dir() string {
 	return filepath.Join(os.TempDir(), fmt.Sprintf("clown-permstat-%d", os.Getuid()))
 }
 
-// update applies fn to the state at path under an exclusive lock (hooks for
-// parallel tool calls run concurrently) and writes it back when fn says so.
-// Without create, a missing file is os.ErrNotExist and nothing is made.
-func update(path string, create bool, fn func(*state) bool) error {
-	f, err := lockState(path, create)
+// update applies fn to the state file name in root under an exclusive lock
+// (hooks for parallel tool calls run concurrently) and writes it back when fn
+// says so. Without create, a missing file is os.ErrNotExist and nothing is
+// made.
+func update(root *os.Root, name string, create bool, fn func(*state) bool) error {
+	f, err := lockState(root, name, create)
 	if err != nil {
 		return err
 	}
@@ -243,9 +282,10 @@ func update(path string, create bool, fn func(*state) bool) error {
 	return err
 }
 
-// take returns the state at path and removes the file (the turn is over).
-func take(path string) (state, error) {
-	f, err := lockState(path, false)
+// take returns the state file name in root and removes it (the turn is
+// over).
+func take(root *os.Root, name string) (state, error) {
+	f, err := lockState(root, name, false)
 	if errors.Is(err, os.ErrNotExist) {
 		return state{}, nil
 	}
@@ -255,18 +295,15 @@ func take(path string) (state, error) {
 	defer f.Close()
 	st := readState(f)
 	// Removed under the lock: a hook that opened this file and is waiting on
-	// it sees, once it gets the lock, that the path no longer names it
+	// it sees, once it gets the lock, that the name no longer names it
 	// (lockState) and opens afresh, instead of writing to the unlinked file.
-	return st, os.Remove(path)
+	return st, root.Remove(name)
 }
 
-// lockState opens the state file 0600 in a private directory (creating both
-// when create is set), refusing a symlink at its path, and locks it. It
-// returns only a file that the path still names once locked.
-func lockState(path string, create bool) (*os.File, error) {
-	if err := ensureDir(filepath.Dir(path), create); err != nil {
-		return nil, err
-	}
+// lockState opens the state file name in root, 0600 (creating it when create
+// is set), and locks it. It returns only a regular file that the name, not
+// followed if it is a symlink, still names once locked.
+func lockState(root *os.Root, name string, create bool) (*os.File, error) {
 	flags := os.O_RDWR | syscall.O_NOFOLLOW
 	if create {
 		flags |= os.O_CREATE
@@ -274,7 +311,7 @@ func lockState(path string, create bool) (*os.File, error) {
 	// One deadline for all attempts, so a hook never waits much past lockWait.
 	deadline := time.Now().Add(lockWait)
 	for attempt := 0; attempt < maxReopen; attempt++ {
-		f, err := os.OpenFile(path, flags, 0o600)
+		f, err := root.OpenFile(name, flags, 0o600)
 		if err != nil {
 			return nil, err
 		}
@@ -286,13 +323,13 @@ func lockState(path string, create bool) (*os.File, error) {
 			afterLockHook()
 		}
 		fi, ferr := f.Stat()
-		pi, perr := os.Lstat(path)
-		if ferr == nil && perr == nil && os.SameFile(fi, pi) {
+		pi, perr := root.Lstat(name)
+		if ferr == nil && perr == nil && fi.Mode().IsRegular() && os.SameFile(fi, pi) {
 			return f, nil
 		}
 		f.Close()
 	}
-	return nil, fmt.Errorf("state file %s kept being replaced", path)
+	return nil, fmt.Errorf("state file %s kept being replaced", name)
 }
 
 // afterLockHook, when set (tests), runs in lockState between taking the lock
@@ -316,69 +353,102 @@ func flockUntil(f *os.File, deadline time.Time) error {
 	}
 }
 
-// ensureDir makes sure dir is a real directory (not a symlink) owned by this
-// user and closed to others, creating it when create is set. Without create
-// a missing dir is os.ErrNotExist.
-func ensureDir(dir string, create bool) error {
+// beforeRootOpenHook, when set (tests), runs in openStateDir between the
+// lstat of the dir and opening it as a root.
+var beforeRootOpenHook func()
+
+// openStateDir opens dir as an os.Root, so that every later operation is
+// relative to that directory and cannot leave it, creating it (0700) when
+// create is set; without create a missing dir is os.ErrNotExist. dir must be
+// a plain directory (a symlink is refused), and the root must be the very
+// directory that was lstat'ed: a dir swapped for a symlink in between is
+// refused before anything is done in it. It must be owned by this user,
+// which protects only against other users; the agent, which can write the
+// dir, is the same uid. Its mode is narrowed to 0700 through the opened
+// directory (fchmod) when wider.
+func openStateDir(dir string, create bool) (*os.Root, error) {
 	if create {
 		if err := os.MkdirAll(filepath.Dir(dir), 0o700); err != nil {
-			return err
+			return nil, err
 		}
 		if err := os.Mkdir(dir, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
-			return err
+			return nil, err
 		}
 	}
-	fi, err := os.Lstat(dir)
+	li, err := os.Lstat(dir)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if fi.Mode()&os.ModeSymlink != 0 || !fi.IsDir() {
-		return fmt.Errorf("state dir %s is not a plain directory", dir)
+	if li.Mode()&os.ModeSymlink != 0 || !li.IsDir() {
+		return nil, fmt.Errorf("state dir %s is not a plain directory", dir)
 	}
-	if st, ok := fi.Sys().(*syscall.Stat_t); !ok || int(st.Uid) != os.Getuid() {
-		return fmt.Errorf("state dir %s is not owned by this user", dir)
+	if beforeRootOpenHook != nil {
+		beforeRootOpenHook()
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, err
+	}
+	d, err := root.Open(".")
+	if err != nil {
+		root.Close()
+		return nil, err
+	}
+	defer d.Close()
+	ri, err := d.Stat()
+	if err != nil || !os.SameFile(li, ri) {
+		root.Close()
+		return nil, fmt.Errorf("state dir %s was replaced while it was opened", dir)
+	}
+	if st, ok := ri.Sys().(*syscall.Stat_t); !ok || int(st.Uid) != os.Getuid() {
+		root.Close()
+		return nil, fmt.Errorf("state dir %s is not owned by this user", dir)
 	}
 	// Keep it private even if it was made with a wider umask or by an older
-	// build. It was just seen as a directory we own, not a symlink.
-	if fi.Mode().Perm()&0o077 != 0 {
-		return os.Chmod(dir, 0o700)
+	// build: fchmod on the opened directory, never a path.
+	if ri.Mode().Perm()&0o077 != 0 {
+		if err := d.Chmod(0o700); err != nil {
+			root.Close()
+			return nil, err
+		}
 	}
-	return nil
+	return root, nil
 }
 
-// sweepStale removes up to maxSweep abandoned state files in dir (sessions
+// sweepStale removes up to maxSweep abandoned state files in root (sessions
 // killed before their turn ended), other than keep, looking at no more than
-// maxSweepScan entries. mtime is the last write, not liveness (a person can
-// sit at a dialog for a day), so a file still holding a pending request is
-// removed only past pendingStaleAge; an empty or unreadable one past
-// staleAge.
-func sweepStale(dir, keep string) error {
-	d, err := os.Open(dir)
+// maxSweepScan entries. Only names of the state-file shape are ever removed,
+// never other files however old. mtime is the last write, not liveness (a
+// person can sit at a dialog for a day), so a file still holding a pending
+// request is removed only past pendingStaleAge; an empty or unreadable one
+// past staleAge.
+func sweepStale(root *os.Root, keep string) error {
+	d, err := root.Open(".")
 	if err != nil {
 		return err
 	}
 	defer d.Close()
 	removed, scanned := 0, 0
-	for scanned < maxSweepScan && removed < maxSweep {
+	for {
 		entries, err := d.ReadDir(256)
 		for _, e := range entries {
-			scanned++
-			if removed == maxSweep {
-				break
+			if scanned == maxSweepScan || removed == maxSweep {
+				return nil
 			}
-			path := filepath.Join(dir, e.Name())
-			if !e.Type().IsRegular() || !strings.HasSuffix(e.Name(), ".json") || path == keep {
+			scanned++
+			name := e.Name()
+			if !e.Type().IsRegular() || name == keep || !stateFileShape.MatchString(name) {
 				continue
 			}
-			fi, ierr := e.Info()
-			if ierr != nil {
-				continue // removed meanwhile
+			fi, ierr := root.Lstat(name)
+			if ierr != nil || !fi.Mode().IsRegular() {
+				continue // removed or replaced meanwhile
 			}
 			age := time.Since(fi.ModTime())
-			if age <= staleAge || (age <= pendingStaleAge && len(loadState(path).Pending) > 0) {
+			if age <= staleAge || (age <= pendingStaleAge && len(loadStateIn(root, name).Pending) > 0) {
 				continue
 			}
-			if os.Remove(path) == nil {
+			if root.Remove(name) == nil {
 				removed++
 			}
 		}
@@ -386,13 +456,15 @@ func sweepStale(dir, keep string) error {
 			return nil
 		}
 		if err != nil {
-			return fmt.Errorf("sweeping %s: %w", dir, err)
+			return fmt.Errorf("sweeping the state dir: %w", err)
 		}
 	}
-	return nil
 }
 
 // readState reads a bounded state; anything unreadable is the empty state.
+// The file is agent-writable, so only entries whose key is a metric key of
+// the toolcost alphabet are kept (a key reaches statsd), at most maxPending
+// of them (the most recent).
 func readState(f *os.File) state {
 	data, err := io.ReadAll(io.LimitReader(io.NewSectionReader(f, 0, maxStateBytes), maxStateBytes))
 	if err != nil {
@@ -402,10 +474,36 @@ func readState(f *os.File) state {
 	if json.Unmarshal(data, &st) != nil || st.Version != stateVersion {
 		return state{}
 	}
+	valid := st.Pending[:0]
+	for _, p := range st.Pending {
+		if toolcost.ValidKey(p.Key) {
+			valid = append(valid, p)
+		}
+	}
+	if n := len(valid); n > maxPending {
+		valid = valid[n-maxPending:]
+	}
+	st.Pending = valid
 	return st
 }
 
-// loadState reads the state at path without locking it (the sweep, tests).
+// loadStateIn reads the state file name in root without locking it (the
+// sweep), refusing anything but the regular file the name itself is.
+func loadStateIn(root *os.Root, name string) state {
+	f, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return state{}
+	}
+	defer f.Close()
+	fi, ferr := f.Stat()
+	li, lerr := root.Lstat(name)
+	if ferr != nil || lerr != nil || !fi.Mode().IsRegular() || !os.SameFile(fi, li) {
+		return state{}
+	}
+	return readState(f)
+}
+
+// loadState reads the state at path without locking it (tests).
 func loadState(path string) state {
 	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if err != nil {

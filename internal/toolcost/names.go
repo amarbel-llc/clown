@@ -104,6 +104,26 @@ func sanitize(s string) string {
 	}, s)
 }
 
+// maxKeyLen bounds a metric key read back from outside (ValidKey).
+const maxKeyLen = 256
+
+// ValidKey reports whether k has the shape of a key this package builds
+// (ToolKey): one or more non-empty segments of the statsd-safe alphabet,
+// joined by dots, at most maxKeyLen bytes. A key read back from a file
+// someone else can write is checked with it before it reaches statsd, where
+// ':', '|' or a newline would forge metrics.
+func ValidKey(k string) bool {
+	if k == "" || len(k) > maxKeyLen {
+		return false
+	}
+	for _, seg := range strings.Split(k, ".") {
+		if seg == "" || sanitize(seg) != seg {
+			return false
+		}
+	}
+	return true
+}
+
 // Segment sanitizes one caller-supplied name segment (host, repo).
 func Segment(s string) string {
 	if s == "" {
