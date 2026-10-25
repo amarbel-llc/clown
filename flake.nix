@@ -1207,6 +1207,7 @@
         clownAuthoredManPages = [
           "man1/clown.1"
           "man1/clown-presence.1"
+          "man1/clown-restart.1"
           "man1/clown-plugin-host.1"
           "man1/clown-stdio-bridge.1"
           "man1/juggler.1"

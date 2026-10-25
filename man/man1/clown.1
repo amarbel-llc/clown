@@ -17,6 +17,11 @@
 .Nm
 .Fl -naked
 .Op Ar args
+.Nm
+.Cm restart
+.Fl -session Ar key
+.Op Fl -when Cm idle
+.Op Fl -reason Ar text
 .Sh DESCRIPTION
 .Nm
 is a Go binary that wraps
@@ -48,6 +53,12 @@ binary remains available for backward compatibility.
 .It Cm version
 Print version information for all components (clown, claude-code, codex,
 and loaded plugins) and exit.
+.It Cm restart Fl -session Ar key
+Queue a restart of the live session
+.Ar key
+for its next idle transition: spinclass's restart hand-off.
+See
+.Xr clown-restart 1 .
 .It Fl -provider Ar name
 Select the provider CLI.
 Valid values are
@@ -491,6 +502,7 @@ build time and layered between the builtin fragments and the user's
 .Sh SEE ALSO
 .Xr claude-code 1 ,
 .Xr clown-plugin-host 1 ,
+.Xr clown-restart 1 ,
 .Xr codex 1 ,
 .Xr claude-code-hooks 5 ,
 .Xr claude-code-settings 5 ,

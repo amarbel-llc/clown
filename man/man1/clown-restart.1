@@ -1,0 +1,172 @@
+.\" Copyright (c) 2026 amarbel, LLC
+.\" SPDX-License-Identifier: MIT
+.Dd @MDOCDATE@
+.Dt CLOWN-RESTART 1
+.Os
+.Sh NAME
+.Nm clown-restart
+.Nd queue a restart of a live clown session
+.Sh SYNOPSIS
+.Nm clown restart
+.Fl -session Ar key
+.Op Fl -when Cm idle
+.Op Fl -reason Ar text
+.Sh DESCRIPTION
+.Nm clown restart
+is the clown half of a spinclass session restart (spinclass#419, spinclass FDR
+0037).
+spinclass authorizes and records the restart, then runs the operator's
+.Sy [session-entry].restart
+hand-off, normally
+.Dl clown restart --session {principal} --when {when} --reason {reason}
+which reaches the live
+.Nm clown
+frontend of
+.Ar key
+over its control socket,
+.Pa $XDG_RUNTIME_DIR/clown/control/ Ns Ar key Ns Pa .sock ,
+and queues the request.
+It returns as soon as the frontend has queued it.
+The command authorizes nothing: a queued request only makes the frontend ask
+spinclass again at the next idle transition.
+.Pp
+Only
+.Fl -when Cm idle ,
+the default, is accepted.
+A newer request replaces a queued one.
+.Ss The idle transition
+The frontend's idle trigger is the self-close Stop hook (clown#287): after
+each turn the agent's
+.Cm clown idle-notify
+pokes the frontend, which runs, in this fixed order:
+.Bl -enum
+.It
+.Ic spinclass close-self-run ,
+as on every idle transition.
+.It
+Only when a restart is queued: it takes the request and runs
+.Ic spinclass restart-preflight
+with
+.Ev CLOWN_SESSION_ID
+set to the session's principal.
+The preflight prints one JSON line,
+.Li {\(dqverdict\(dq:\(dqrestart\(dq|\(dqnone\(dq|\(dqrefused\(dq,\(dqreason\(dq:...,\(dqwhen\(dq:...} ,
+and consumes the request itself, so a relaunched session does not restart
+again.
+Only
+.Li restart
+proceeds.
+.Li none
+(for example because the close in step 1 landed),
+.Li refused ,
+a non-zero exit, a timeout, or anything but exactly one such line drops the
+request and leaves the session running.
+.El
+.Pp
+Each decision is appended to
+.Pa $XDG_STATE_HOME/clown/close-self-run.log .
+.Ss The restart
+On a
+.Li restart
+verdict an attached session first gets a 30 second countdown.
+Inside a
+.Xr posh 1
+session
+.Pq Ev POSH_SESSION No set
+whose
+.Ic posh modal --probe
+answers, the countdown is posh's app modal: exit 0 (the countdown ran out, or
+.Dq restart now ,
+or nobody is attached) proceeds and exit 10 (a viewer cancelled) keeps the
+session running.
+Any other attached terminal gets a one-line
+.Dq restart pending
+notice on standard error and the same wait, with no cancel.
+A detached session restarts at once.
+.Pp
+The frontend then stops the provider as an external
+.Dv SIGTERM
+would (claude, its plugin servers including the serve bridge, and an
+.Fl -agent-scope
+unit), waits up to 15 seconds for every socket under
+.Pa $XDG_RUNTIME_DIR/clown/serve/ Ns Ar principal Ns Pa /
+to stop answering (a relaunched bridge refuses a live one), and replaces
+itself with the
+.Nm clown
+found on
+.Ev PATH ,
+so a new build is picked up.
+It is the same process, terminal and multiplexer pane.
+The relaunch has the launch's own resolved flags, including
+.Fl -profile ,
+with claude's
+.Fl -session-id
+or
+.Fl -resume
+replaced by
+.Fl -resume Ar principal ,
+and
+.Ev CLOWN_SESSION_ID Ns = Ns Ar principal ;
+the profile check of
+.Cm clown resume
+applies unchanged, so a session whose profile changed is refused, not
+relaunched under the new one.
+The resumed session's system prompt starts with
+.Dq restarted: Ar reason .
+If the serve socket stays live or no
+.Nm clown
+is on
+.Ev PATH ,
+the frontend says so and exits without relaunching; the session can still be
+resumed with
+.Cm clown resume Ar principal .
+.Pp
+A restart is not a close: nothing on the restart path revokes or releases the
+session's identity.
+The frontend never runs
+.Ic troupe mint-revoke ;
+the relaunch re-runs the idempotent
+.Ic troupe mint
+for the same principal and registers the same presence key.
+.Ss Which frontends answer
+Every launch that runs its provider as a child binds the control socket (not
+.Fl -naked ,
+not the exec-replacing
+.Cm codex ,
+not
+.Fl -print-launch-plan ) .
+Only a claude launch with the idle trigger armed queues; the others refuse
+with a message saying why.
+A second frontend for the same key does not take over a live control socket.
+.Sh ENVIRONMENT
+.Bl -tag -width Ds
+.It Ev XDG_RUNTIME_DIR
+Root of the control and serve sockets.
+.It Ev CLOWN_RESTARTED_REASON
+Set by a restarting frontend for the relaunched one, which reads and unsets it
+before starting anything.
+Not for manual use.
+.El
+.Sh EXIT STATUS
+.Nm clown restart
+exits
+.Sy 0
+once the request is queued,
+.Sy 1
+when it is not, with the reason on standard error:
+.Bl -tag -width Ds
+.It Li no live clown frontend for Ar key
+No frontend listens on the control socket.
+.It Li restart needs an idle trigger; Ar provider Li has none
+The frontend runs a provider without the idle trigger
+(claude with the trigger off names the gate instead).
+.El
+.Pp
+A usage error exits
+.Sy 2 .
+.Sh SEE ALSO
+.Xr clown 1 ,
+.Xr clown-presence 1 ,
+.Xr posh 1
+.Sh STANDARDS
+spinclass FDR 0037 (session restart), FDR 0020 (agent-scope confinement).

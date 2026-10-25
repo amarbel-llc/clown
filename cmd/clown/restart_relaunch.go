@@ -136,8 +136,11 @@ type frontendRestarter struct {
 	principal string
 	argv      []string
 	// stop ends the provider; runWithFlags then returns to main.
-	stop    func()
-	logPath string
+	stop func()
+	// countdown runs before the stop and may cancel the restart; nil
+	// restarts at once.
+	countdown func(reason string) (proceed bool, how string)
+	logPath   string
 }
 
 func (fr frontendRestarter) restart(req restartRequest, v preflightVerdict) {
@@ -146,6 +149,13 @@ func (fr frontendRestarter) restart(req restartRequest, v preflightVerdict) {
 		return
 	}
 	reason := cmpOr(req.Reason, v.Reason)
+	if fr.countdown != nil {
+		proceed, how := fr.countdown(reason)
+		logSelfClose(fr.logPath, "restart (%s): countdown: %s", fr.principal, how)
+		if !proceed {
+			return
+		}
+	}
 	pendingRelaunch.Store(&relaunchPlan{principal: fr.principal, reason: reason, argv: fr.argv})
 	logSelfClose(fr.logPath, "restart (%s): stopping the provider to relaunch (%s)", fr.principal, reason)
 	fr.stop()

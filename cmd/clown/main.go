@@ -1018,6 +1018,7 @@ func runWithFlags(flags parsedFlags) int {
 		principal: flags.identity.Key,
 		argv:      restartArgv(flags, attachedID),
 		stop:      stopProviderBySignal,
+		countdown: newRestartCountdown().proceed,
 		logPath:   restartLog,
 	}
 	idleDir, idleSock, closeIdle := armSelfClose(flags, root, restarts, restarter.restart)
