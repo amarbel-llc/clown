@@ -123,23 +123,35 @@ SessionEnd it already had:
 - State: one file per session under `$XDG_RUNTIME_DIR/clown/permstat`
   (`$TMPDIR/clown-permstat-<uid>` without a runtime dir), 0600 in a 0700 dir,
   flock'd, O_NOFOLLOW, at most 32 pending requests, read bounded at 64 KiB,
-  corruption read as empty, removed when the turn ends. The dir is refused if
-  it is a symlink, not a directory, or not owned by the user, and is chmod'd
-  to 0700 if it is wider. A PostToolUse with nothing pending creates no
-  file. Files left by sessions killed mid-turn are swept once 24h old (at
-  most 16 per PermissionRequest).
-- Locking is best effort: the lock is tried without blocking for 200ms, then
-  the hook skips the bookkeeping (prompted still counts) rather than stall
-  the agent. After locking, the file must still be the one the path names
-  (a turn boundary may have removed it meanwhile); otherwise it is reopened,
-  up to 5 times, so no request is written to an unlinked file.
+  corruption read as empty, removed when the turn ends. The state dir itself
+  is refused if it is a symlink, not a directory, or not owned by the user,
+  and is chmod'd to 0700 if it is wider; only that leaf is checked, its parent
+  being the user's private `$XDG_RUNTIME_DIR` (or the sticky temp dir). A
+  PostToolUse with nothing pending creates no file.
+- Files left by sessions killed mid-turn are swept on each PermissionRequest:
+  an empty one past 24h, one still holding a pending request only past 7
+  days (mtime is the last write, not liveness: a person can sit at a dialog
+  for a day). At most 16 are removed per sweep, out of at most 4096 entries
+  looked at.
+- Locking is best effort: up to 5 attempts share one 200ms deadline overall,
+  the lock tried without blocking, then the hook skips the bookkeeping
+  (prompted still counts) rather than stall the agent. After locking, the
+  file must still be the one the path names (a turn boundary may have
+  removed it meanwhile); otherwise the next attempt reopens it, so no request
+  is written to an unlinked file, and no end-of-turn hook reads one that
+  another already took. The toolcost transcript budget (1s at SessionEnd)
+  starts before the permission bookkeeping, so the two together stay within
+  it.
 - Pairing is by session, tool name and a hash of the tool input, decoded and
   re-encoded with sorted keys so key order and whitespace do not matter.
   PermissionRequest has no tool_use_id, and PreToolUse's cannot be borrowed:
   with parallel calls nothing ties a PreToolUse to the PermissionRequest that
   follows. It is first in first out; for two identical requests in one turn
-  the counts are right even when it cannot say which ran. Past 32 pending,
-  the oldest is dropped uncounted.
+  the counts are right even when it cannot say which ran. Inputs that
+  canonicalise alike (duplicate keys, invalid UTF-8) pair with each other,
+  which is harmless: the tool name is part of the key, and a mispairing
+  within one tool leaves the counts right. Past 32 pending, the oldest is
+  dropped, counted neither approved nor declined.
 - The hook prints nothing on any of these events and always exits 0
   (tested with malformed input and statsd unreachable); prompted is sent even
   when the state file cannot be written.

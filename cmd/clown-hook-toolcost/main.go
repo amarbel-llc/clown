@@ -134,6 +134,13 @@ func run(stdin io.Reader) error {
 	if err := json.Unmarshal(data, &in); err != nil {
 		return fmt.Errorf("parsing hook input: %w", err)
 	}
+	// The budget runs from here, so the permission bookkeeping below spends
+	// it rather than extend the run (SessionEnd's is the harness's own).
+	budget := runBudget
+	if in.HookEventName == "SessionEnd" {
+		budget = sessionEndBudget
+	}
+	deadline := time.Now().Add(budget)
 	// Permission counters (clown#302). Nothing here writes to stdout: for
 	// PermissionRequest, stdout would be read as the permission decision.
 	if slices.Contains(permstat.Events, in.HookEventName) {
@@ -161,12 +168,6 @@ func run(stdin io.Reader) error {
 	if err != nil {
 		return err
 	}
-	budget := runBudget
-	if in.HookEventName == "SessionEnd" {
-		budget = sessionEndBudget
-	}
-	deadline := time.Now().Add(budget)
-
 	// One run per transcript at a time: a concurrent Stop + SessionEnd would
 	// otherwise both read the same State and double-emit. A non-final loser
 	// just yields (the winner covers the same bytes); a final run must not —

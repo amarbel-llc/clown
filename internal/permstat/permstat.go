@@ -24,12 +24,20 @@
 // is paired with its PostToolUse by session, tool name and a hash of the
 // canonical tool input (decoded and re-encoded, so key order and whitespace do
 // not matter); two identical requests in one turn are paired first in, first
-// out, which keeps the counts right even when it cannot say which ran.
+// out, which keeps the counts right even when it cannot say which ran. Inputs
+// that canonicalise alike (duplicate keys, invalid UTF-8 replaced) pair with
+// each other; that is harmless, since the tool name is part of the key and a
+// mispairing within one tool still leaves the counts right. Past maxPending
+// pending requests the oldest is dropped, counted neither approved nor
+// declined.
 //
-// The state is best effort: the lock is waited on for lockWait at most, and a
-// hook that cannot get it skips the bookkeeping (a prompt still counts) rather
-// than stall the agent. Files of sessions killed before their turn ended are
-// swept once they are staleAge old.
+// The state is best effort: up to maxReopen attempts share one lockWait
+// deadline, and a hook that cannot get the lock in time skips the bookkeeping
+// (a prompt still counts) rather than stall the agent. Files of sessions
+// killed before their turn ended are swept: empty ones past staleAge, ones
+// still holding a pending request past pendingStaleAge. Only the state dir
+// itself is checked (lstat: not a symlink, owned by this user); its parent is
+// the user's private $XDG_RUNTIME_DIR, or the sticky temp dir.
 package permstat
 
 import (
@@ -52,14 +60,19 @@ import (
 // lockWait bounds the wait for a state file's lock.
 const lockWait = 200 * time.Millisecond
 
-// maxReopen bounds the retries when the state file is replaced between open
-// and lock (a turn boundary removed it).
+// maxReopen bounds the attempts when the state file is replaced between open
+// and lock (a turn boundary removed it); all of them share one lockWait
+// deadline.
 const maxReopen = 5
 
-// staleAge and maxSweep bound the sweep of abandoned state files.
+// The sweep of abandoned state files: an empty file is stale past staleAge,
+// one still holding a pending request past pendingStaleAge; one sweep removes
+// at most maxSweep and looks at no more than maxSweepScan entries.
 const (
-	staleAge = 24 * time.Hour
-	maxSweep = 16
+	staleAge        = 24 * time.Hour
+	pendingStaleAge = 7 * 24 * time.Hour
+	maxSweep        = 16
+	maxSweepScan    = 4096
 )
 
 // maxPending bounds the pending list; past it the oldest request is dropped
@@ -122,7 +135,7 @@ func Handle(payload []byte, dir string) ([]toolcost.Metric, error) {
 			return true
 		})
 		if err == nil {
-			sweepStale(dir, path)
+			err = sweepStale(dir, path)
 		}
 		// The prompt counts even when the state cannot be kept.
 		return ms, err
@@ -249,14 +262,19 @@ func lockState(path string, create bool) (*os.File, error) {
 	if create {
 		flags |= os.O_CREATE
 	}
+	// One deadline for all attempts, so a hook never waits much past lockWait.
+	deadline := time.Now().Add(lockWait)
 	for attempt := 0; attempt < maxReopen; attempt++ {
 		f, err := os.OpenFile(path, flags, 0o600)
 		if err != nil {
 			return nil, err
 		}
-		if err := flockWithin(f, lockWait); err != nil {
+		if err := flockUntil(f, deadline); err != nil {
 			f.Close()
 			return nil, err
+		}
+		if afterLockHook != nil {
+			afterLockHook()
 		}
 		fi, ferr := f.Stat()
 		pi, perr := os.Lstat(path)
@@ -268,9 +286,12 @@ func lockState(path string, create bool) (*os.File, error) {
 	return nil, fmt.Errorf("state file %s kept being replaced", path)
 }
 
-// flockWithin takes an exclusive lock on f, giving up after wait.
-func flockWithin(f *os.File, wait time.Duration) error {
-	deadline := time.Now().Add(wait)
+// afterLockHook, when set (tests), runs in lockState between taking the lock
+// and checking that the path still names the locked file.
+var afterLockHook func()
+
+// flockUntil takes an exclusive lock on f, giving up at deadline.
+func flockUntil(f *os.File, deadline time.Time) error {
 	for {
 		err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
 		if err == nil {
@@ -280,7 +301,7 @@ func flockWithin(f *os.File, wait time.Duration) error {
 			return err
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("state file locked for over %v; skipping", wait)
+			return fmt.Errorf("state file locked for over %v; skipping", lockWait)
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
@@ -316,30 +337,50 @@ func ensureDir(dir string, create bool) error {
 	return nil
 }
 
-// sweepStale removes up to maxSweep state files in dir older than staleAge
-// (sessions killed before their turn ended), other than keep. Best effort.
-func sweepStale(dir, keep string) {
+// sweepStale removes up to maxSweep abandoned state files in dir (sessions
+// killed before their turn ended), other than keep, looking at no more than
+// maxSweepScan entries. mtime is the last write, not liveness (a person can
+// sit at a dialog for a day), so a file still holding a pending request is
+// removed only past pendingStaleAge; an empty or unreadable one past
+// staleAge.
+func sweepStale(dir, keep string) error {
 	d, err := os.Open(dir)
 	if err != nil {
-		return
+		return err
 	}
 	defer d.Close()
-	entries, _ := d.ReadDir(256)
-	removed := 0
-	for _, e := range entries {
-		if removed == maxSweep {
-			return
-		}
-		path := filepath.Join(dir, e.Name())
-		if !e.Type().IsRegular() || !strings.HasSuffix(e.Name(), ".json") || path == keep {
-			continue
-		}
-		if fi, err := e.Info(); err == nil && time.Since(fi.ModTime()) > staleAge {
+	removed, scanned := 0, 0
+	for scanned < maxSweepScan && removed < maxSweep {
+		entries, err := d.ReadDir(256)
+		for _, e := range entries {
+			scanned++
+			if removed == maxSweep {
+				break
+			}
+			path := filepath.Join(dir, e.Name())
+			if !e.Type().IsRegular() || !strings.HasSuffix(e.Name(), ".json") || path == keep {
+				continue
+			}
+			fi, ierr := e.Info()
+			if ierr != nil {
+				continue // removed meanwhile
+			}
+			age := time.Since(fi.ModTime())
+			if age <= staleAge || (age <= pendingStaleAge && len(loadState(path).Pending) > 0) {
+				continue
+			}
 			if os.Remove(path) == nil {
 				removed++
 			}
 		}
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("sweeping %s: %w", dir, err)
+		}
 	}
+	return nil
 }
 
 // readState reads a bounded state; anything unreadable is the empty state.
@@ -355,9 +396,9 @@ func readState(f *os.File) state {
 	return st
 }
 
-// loadState reads the state at path (tests).
+// loadState reads the state at path without locking it (the sweep, tests).
 func loadState(path string) state {
-	f, err := os.Open(path)
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return state{}
 	}
