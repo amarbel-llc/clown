@@ -61,6 +61,10 @@ type Launch struct {
 	// bound in as a single inode so a Stop hook inside can tell the frontend
 	// the agent is idle. Empty: self-close is not armed for this launch.
 	IdleSocket string
+	// OnStarted, when set, is called once systemd-run runs and a SIGTERM or
+	// SIGINT to the frontend is forwarded to it (clown's restart stops the
+	// provider by signalling itself, spinclass#419).
+	OnStarted func()
 	// ServeFile lists the agent-side servers the relay starts inside the
 	// unit (WriteInUnitServers); bound in read-only. Empty: none.
 	ServeFile string

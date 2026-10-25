@@ -253,6 +253,9 @@ func Run(l Launch, tools Tools, logger *slog.Logger) (int, error) {
 	var reporting atomic.Bool
 	report := func(pty string) {
 		reporting.Store(true)
+		if l.OnStarted != nil {
+			l.OnStarted()
+		}
 		go func() {
 			st, err := tools.waitActive(ctx, l.Unit)
 			res := l.baseResult()

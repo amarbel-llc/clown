@@ -2093,9 +2093,11 @@ func runProvider(executor Executor, bound Command, logger *slog.Logger, flags pa
 		return 0
 	}
 
-	// A restart may stop the provider only while one runs (spinclass#419).
-	providerRunning.Store(true)
+	// A restart may stop the provider only while one runs and a SIGTERM to
+	// clown reaches it (spinclass#419): each path below sets providerRunning
+	// once its forwarding is in place.
 	defer providerRunning.Store(false)
+	markProviderRunning := func() { providerRunning.Store(true) }
 
 	if flags.agentScopeSpec != "" {
 		return runInAgentScope(agentScopeRequest{
@@ -2110,6 +2112,7 @@ func runProvider(executor Executor, bound Command, logger *slog.Logger, flags pa
 			extraEnv:     extraEnv,
 			principal:    flags.identity.Key,
 			idleSocket:   flags.idleSocket,
+			onStarted:    markProviderRunning,
 		}, logger)
 	}
 
@@ -2123,6 +2126,13 @@ func runProvider(executor Executor, bound Command, logger *slog.Logger, flags pa
 			logger.Info("running downstream via pty-suspend proxy", "binary", binary, "args", argv)
 		}
 		ptyOpts.Env = extraEnv
+		onStart := ptyOpts.OnStart
+		ptyOpts.OnStart = func(slave string, pid int) {
+			if onStart != nil {
+				onStart(slave, pid)
+			}
+			markProviderRunning()
+		}
 		code, err := ptysuspend.Run(append([]string{binary}, argv...), os.Stdin, ptyOpts)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "clown: pty-suspend: %v\n", err)
@@ -2176,6 +2186,7 @@ func runProvider(executor Executor, bound Command, logger *slog.Logger, flags pa
 		return 1
 	}
 	startElapsed := time.Since(preStart)
+	markProviderRunning()
 	if logger != nil {
 		logger.Info("downstream process started", "pid", cmd.Process.Pid, "start_elapsed", startElapsed.String())
 	}

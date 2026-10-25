@@ -62,8 +62,9 @@ type Options struct {
 	// when the relay is mandatory (agent scope) rather than opted into via
 	// [attach] pty-suspend, so ^Z keeps reaching the child.
 	NoEscape bool
-	// OnStart, when set, is called once the child has started, with the inner
-	// slave's path and the child's pid.
+	// OnStart, when set, is called once the child has started and a
+	// process-level SIGTERM is forwarded to it, with the inner slave's path and
+	// the child's pid.
 	OnStart func(slavePath string, pid int)
 }
 
@@ -107,9 +108,7 @@ func Run(argv []string, outer *os.File, opts Options) (int, error) {
 		slave.Close()
 		return 1, fmt.Errorf("ptysuspend: start %q: %w", argv[0], err)
 	}
-	if opts.OnStart != nil {
-		opts.OnStart(slave.Name(), cmd.Process.Pid)
-	}
+	slaveName := slave.Name()
 	slave.Close() // the parent does not need the slave once the child holds it
 
 	r := &relay{outer: outer, master: master, childPid: cmd.Process.Pid, escapeArgv: opts.EscapeArgv}
@@ -144,6 +143,11 @@ func Run(argv []string, outer *os.File, opts Options) (int, error) {
 			}
 		}
 	}()
+	// Only now: from here a SIGTERM to this process reaches the child, which
+	// is what a caller stopping the child by signalling itself relies on.
+	if opts.OnStart != nil {
+		opts.OnStart(slaveName, cmd.Process.Pid)
+	}
 
 	// Child output -> user terminal (pausable while the escape command holds the
 	// terminal). User input -> child, with the escape key intercepted.

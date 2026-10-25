@@ -44,6 +44,7 @@ func runInAgentScope(req agentScopeRequest, logger *slog.Logger) int {
 	launch.Principal = req.principal
 	launch.IdleSocket = req.idleSocket
 	launch.Serve = req.serve
+	launch.OnStarted = req.onStarted
 	if req.stagingRoot != "" && !strings.HasPrefix(req.stagingRoot, launch.Spec.Worktree+"/") {
 		launch.PlumbingRO = append(launch.PlumbingRO, req.stagingRoot)
 	}
@@ -90,6 +91,8 @@ type agentScopeRequest struct {
 	unit string
 	// serve is the session's serve socket relay (F12); zero: none.
 	serve agentscope.Relay
+	// onStarted is called once a SIGTERM to clown reaches systemd-run.
+	onStarted func()
 }
 
 // agentScopeTools resolves systemd-run and systemctl from PATH (overridable
