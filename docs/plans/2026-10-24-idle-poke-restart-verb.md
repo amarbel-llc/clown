@@ -204,3 +204,88 @@ This note records what was built, the decisions taken, and what is unverified.
   instructions in which a turn can still start.
 - A profile edited after the dry run and before the relaunch is still refused
   after the stop.
+
+## Design note: `--when now` (not built)
+
+Status: design only, nothing implemented. The semantics below are as agreed
+with spinclass (bozo) in conversation; open choices are marked **Q**.
+
+### Semantics
+
+- `clown restart --session K --when now --reason R` still only asks: it
+  queues on the control socket like `idle`, exit 0 meaning accepted or queued
+  and non-zero meaning refused (spinclass reads only 0 against non-zero).
+- The frontend runs `spinclass restart-preflight` itself, at once, instead
+  of waiting for an idle poke. A `restart` verdict consumes the request as
+  today; with `when:now` spinclass treats the running-job obstacle as
+  pre-approved (its side, not clown's).
+- The profile gate dry run still runs before anything is stopped; a refusal
+  drops the restart as today.
+- After the verdict the provider is stopped at once (the same SIGTERM path),
+  killing the current turn: the turn-running mark is expected to be set and
+  is not a reason to wait or cancel.
+- Countdown, clown and posh's decision. The lean: keep the 30 s posh modal
+  (or the inline notice) so a viewer can still cancel, but a turn start is
+  not a cancel (busy is the normal state for `now`). **Q:** keep the
+  countdown at all for `now`, or stop immediately? **Q:** a detached session
+  restarts at once, as for `idle`?
+- Everything after the stop is unchanged: the kept plan, the 30 s SIGKILL
+  grace, the serve-socket wait, the `--peek` before the exec and the second
+  peek after the relaunch's mint.
+
+### What the frontend needs
+
+- A non-idle trigger: today the idle poke is what takes the queued request
+  and runs the preflight (`idleRunner.onIdle`). `now` needs the control
+  handler (or a goroutine it starts) to do the take, preflight and restart
+  itself, serialized with the idle runner so the two never run a preflight
+  for the same request (one mutex around take-preflight-restart, shared with
+  `onIdle`).
+- `restartControlHandler` accepts `when == "now"` only when the trigger is
+  armed for it; `frontendRestarter.restart` gets the `when` so it can skip
+  the busy re-check and the turn-start cancel for `now`.
+- The control reply must come back within the verb's 10 s read deadline
+  while the preflight can take 30 s: answer `{ok:true}` once the request is
+  accepted, then run the preflight asynchronously. **Q:** or keep the verb
+  waiting for the verdict and raise its deadline (spinclass's hand-off is
+  bounded at 15 s, so probably not)?
+
+### Races
+
+- A turn running: expected; it is killed by the stop. The kill is the point
+  of `now`.
+- An idle poke arriving while a `now` preflight runs: the shared mutex makes
+  it wait; once the plan is stored, `restartUnderway` makes the poke a no-op
+  as today.
+- A second `clown restart` (either `when`) while one is underway: refused as
+  today ("already underway"). A `now` arriving while an `idle` request is
+  queued but not taken: **Q:** replace it and act at once (the queue's
+  newest-wins rule), or refuse?
+- A close racing a `now` restart: as for `idle` (the two peeks); spinclass's
+  RestartingAt stamp (ae042dd) makes close refuse for 2 minutes after a
+  consumed restart.
+
+### What stays refused
+
+- `now` for a provider with no idle trigger (non-claude) or an unarmed one,
+  as `idle` is today; a launch whose claude conversation id is not its
+  principal; a second restart while one is underway; a profile the
+  relaunch's gate would refuse.
+
+### Tests that would be needed
+
+- Verb: `--when now` exits 0 and queues `when:now` (today exit 2, pinned in
+  `TestRestartVerbArgvContract`; that row flips).
+- Handler: `now` accepted only when armed; reply before the preflight
+  finishes.
+- Restarter: `now` stops a busy session without the turn-start cancel;
+  profile refusal still drops it; a viewer cancel still cancels.
+- Serialization: a concurrent idle poke does not run a second preflight.
+- spinclass contract: a fake spinclass returning `restart` with
+  `when:"now"`.
+
+### Size
+
+M: one new trigger path and its locking, a `when` threaded through the
+restarter, the verb and handler acceptance, the countdown policy, and the
+tests above; no new external interface beyond accepting `now`.
