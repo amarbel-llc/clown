@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -38,6 +39,8 @@ func TestRelaunchPeeksAtTheSessionBeforeExec(t *testing.T) {
 	old := buildcfg.TroupePath
 	buildcfg.TroupePath = troupe
 	t.Cleanup(func() { buildcfg.TroupePath = old })
+	// troupe is also first on PATH, for clown and for the peek's child.
+	t.Setenv("PATH", filepath.Dir(troupe)+":"+os.Getenv("PATH"))
 
 	for _, c := range []struct {
 		name, body string
@@ -45,13 +48,16 @@ func TestRelaunchPeeksAtTheSessionBeforeExec(t *testing.T) {
 		code       int
 		log        string
 	}{
-		{"closed", `echo '{"verdict":"none","reason":"tombstoned","when":"","state":"closed"}'`, false, 0, "closed"},
+		// The worktree is present in every case: a closed state wins over it.
+		{"closed, worktree present", `echo '{"verdict":"none","reason":"tombstoned","when":"","state":"closed"}'`, false, 0, "closed"},
+		{"closed but verdict not none", `echo '{"verdict":"restart","state":"closed"}'`, true, 1, "unknown"},
+		{"closed without verdict", `echo '{"state":"closed"}'`, true, 1, "unknown"},
 		{"live", `echo '{"verdict":"none","reason":"","when":"","state":"live"}'`, true, 1, "live"},
 		{"non-zero (no --peek)", `echo 'unknown flag: --peek' >&2; exit 2`, true, 1, "unknown"},
 		{"garbage", `echo 'not json'`, true, 1, "unknown"},
 		{"missing state", `echo '{"verdict":"none","reason":"","when":""}'`, true, 1, "unknown"},
 		{"other state", `echo '{"verdict":"none","state":"maybe"}'`, true, 1, "unknown"},
-		{"timeout", `exec sleep 30`, true, 1, "unknown"},
+		{"timeout", "sleep 30 &\nwait", true, 1, "unknown"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			bin, calls := fakePeekSpinclass(t, c.body)
@@ -60,6 +66,7 @@ func TestRelaunchPeeksAtTheSessionBeforeExec(t *testing.T) {
 			r.stderr = &bytes.Buffer{}
 			r.logPath = filepath.Join(t.TempDir(), "close-self-run.log")
 			r.spinclass = bin
+			r.environ = os.Environ()
 			r.peekTimeout = 300 * time.Millisecond
 			start := time.Now()
 			code := r.relaunch(&relaunchPlan{principal: restartTestPrincipal, worktree: t.TempDir()})
@@ -98,8 +105,95 @@ func TestRelaunchWithoutSpinclassFallsBackToTheWorktreeCheck(t *testing.T) {
 	if code := r.relaunch(&relaunchPlan{principal: restartTestPrincipal, worktree: gone}); code != 0 || len(execs) != 0 {
 		t.Fatalf("code %d, execs %d; the worktree check must still skip a closed session", code, len(execs))
 	}
+	r.logPath = filepath.Join(t.TempDir(), "close-self-run.log")
 	r.relaunch(&relaunchPlan{principal: restartTestPrincipal, worktree: t.TempDir()})
 	if len(execs) != 1 {
 		t.Fatalf("execs = %d, want a relaunch", len(execs))
+	}
+	log, _ := os.ReadFile(r.logPath)
+	if !strings.Contains(string(log), "spinclass is not on PATH") || !strings.Contains(string(log), "unknown") {
+		t.Fatalf("log = %q, want the missing spinclass logged as unknown", log)
+	}
+}
+
+// The peek runs with the launch environment (plus the principal), not the
+// frontend's current one, which runWithFlags has added to.
+func TestPeekUsesTheLaunchEnvironment(t *testing.T) {
+	t.Setenv("CLOWN_PEEK_TEST_RUNTIME_ONLY", "leaked")
+	envFile := filepath.Join(t.TempDir(), "env")
+	bin, _ := fakePeekSpinclass(t, "env > '"+envFile+"'\necho '{\"verdict\":\"none\",\"state\":\"live\"}'")
+	launch := []string{"PATH=" + os.Getenv("PATH"), "CLOWN_PEEK_TEST_LAUNCH=kept", "CLOWN_SESSION_ID=stale"}
+	if state, err := peekSessionState(bin, restartTestPrincipal, launch, 5*time.Second); err != nil || state != "live" {
+		t.Fatalf("state %q, err %v", state, err)
+	}
+	b, _ := os.ReadFile(envFile)
+	env := string(b)
+	if !strings.Contains(env, "CLOWN_PEEK_TEST_LAUNCH=kept") || strings.Contains(env, "CLOWN_PEEK_TEST_RUNTIME_ONLY") {
+		t.Fatalf("peek env = %q; want the launch env only", env)
+	}
+	if !strings.Contains(env, "CLOWN_SESSION_ID="+restartTestPrincipal) || strings.Contains(env, "CLOWN_SESSION_ID=stale") {
+		t.Fatalf("peek env = %q; want CLOWN_SESSION_ID the principal, once", env)
+	}
+}
+
+// A timed-out peek is killed with its whole process group, so a grandchild
+// it left behind does not survive.
+func TestPeekTimeoutKillsTheProcessGroup(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "grandchild.pid")
+	killGrandchildAfter(t, pidFile)
+	bin, _ := fakePeekSpinclass(t, "sleep 30 &\necho $! > '"+pidFile+"'\nwait")
+	start := time.Now()
+	if _, err := peekSessionState(bin, restartTestPrincipal, os.Environ(), 300*time.Millisecond); err == nil {
+		t.Fatal("want a timeout")
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Fatalf("took %v", took)
+	}
+	b, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid := strings.TrimSpace(string(b))
+	waitFor(t, "the grandchild to be gone", func() bool {
+		stat, err := os.ReadFile("/proc/" + pid + "/stat")
+		if err != nil {
+			return true
+		}
+		// A zombie waiting for its reaper is gone too.
+		fields := strings.Fields(string(stat[bytes.LastIndexByte(stat, ')')+1:]))
+		return len(fields) > 0 && fields[0] == "Z"
+	})
+}
+
+// The peek runs after the old serve socket is gone, never before.
+func TestPeekRunsAfterTheServeSocketWait(t *testing.T) {
+	runtime := shortSocketDir(t)
+	ln := listenTestServeSocket(t, runtime)
+	closedAt := make(chan time.Time, 1)
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		closedAt <- time.Now()
+		ln.Close()
+	}()
+	// The fake stamps its start with the fine-grained wall clock (a file
+	// mtime is too coarse for this).
+	stamp := filepath.Join(t.TempDir(), "peek.at")
+	bin, _ := fakePeekSpinclass(t, "date +%s%N > '"+stamp+"'\necho '{\"verdict\":\"none\",\"state\":\"live\"}'")
+	var execs []execCall
+	r := testRelauncher(t, runtime, &execs)
+	r.stderr = &bytes.Buffer{}
+	r.spinclass = bin
+	r.environ = os.Environ()
+	r.relaunch(&relaunchPlan{principal: restartTestPrincipal, worktree: t.TempDir()})
+	b, err := os.ReadFile(stamp)
+	if err != nil {
+		t.Fatalf("no peek: %v", err)
+	}
+	at, err := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if at < (<-closedAt).UnixNano() {
+		t.Fatal("the peek ran before the serve socket was gone")
 	}
 }

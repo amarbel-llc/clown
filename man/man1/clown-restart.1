@@ -184,8 +184,12 @@ means the session is not relaunched: the frontend says so and exits 0.
 relaunches.
 Anything else (a non-zero exit, as from a spinclass without
 .Fl -peek ,
-a timeout, unparsable output, a missing or other state) is unknown and
-relaunches.
+a timeout, which kills the peek's whole process group, unparsable output, a
+verdict other than
+.Li none ,
+a missing or other state) is unknown and relaunches; so is a spinclass not on
+.Ev PATH .
+The peek runs with the frontend's launch environment, as the relaunch does.
 As a fallback it then checks that the session's worktree (the frontend's
 working directory at launch) still exists, and if not, does not relaunch
 either.

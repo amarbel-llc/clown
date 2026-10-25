@@ -392,7 +392,7 @@ func (r relauncher) relaunch(plan *relaunchPlan) int {
 	// started (ClosingAt) as closed. Anything but closed or live is unknown,
 	// which relaunches; a spinclass without --peek exits non-zero.
 	if r.spinclass != "" {
-		state, err := peekSessionState(r.spinclass, plan.principal, r.peekTimeout)
+		state, err := peekSessionState(r.spinclass, plan.principal, r.environ, r.peekTimeout)
 		switch {
 		case err != nil:
 			logSelfClose(r.logPath, "relaunch (%s): session state unknown (%v); relaunching on the worktree check", plan.principal, err)
@@ -401,6 +401,8 @@ func (r relauncher) relaunch(plan *relaunchPlan) int {
 		default:
 			logSelfClose(r.logPath, "relaunch (%s): spinclass reports the session %s", plan.principal, state)
 		}
+	} else {
+		logSelfClose(r.logPath, "relaunch (%s): spinclass is not on PATH, session state unknown; relaunching on the worktree check", plan.principal)
 	}
 	// Fallback: spinclass removes the worktree on close (last).
 	if plan.worktree != "" {
@@ -420,14 +422,21 @@ const defaultPeekTimeout = 20 * time.Second
 // principal in CLOWN_SESSION_ID and returns its state, "closed" or "live".
 // A non-zero exit, a timeout, output that is not exactly one JSON line, or
 // any other state is an error: the caller treats it as unknown.
-func peekSessionState(bin, principal string, timeout time.Duration) (string, error) {
+func peekSessionState(bin, principal string, environ []string, timeout time.Duration) (string, error) {
 	if timeout <= 0 {
 		timeout = defaultPeekTimeout
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin, "restart-preflight", "--peek")
-	cmd.Env = append(os.Environ(), "CLOWN_SESSION_ID="+principal)
+	// The launch environment, as the relaunch gets (restartEnv), not
+	// clown's current one, which runWithFlags has added to.
+	cmd.Env = append(environWithout(environ, "CLOWN_SESSION_ID"), "CLOWN_SESSION_ID="+principal)
+	// Its own process group, killed whole on timeout, so nothing it started
+	// outlives the peek.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = time.Second
 	out, err := outputViaFile(cmd)
 	if ctx.Err() != nil {
 		return "", fmt.Errorf("restart-preflight --peek timed out after %s", timeout)
@@ -440,10 +449,15 @@ func peekSessionState(bin, principal string, timeout time.Duration) (string, err
 		return "", fmt.Errorf("restart-preflight --peek: want one JSON line, got %q", line)
 	}
 	var v struct {
-		State string `json:"state"`
+		Verdict string `json:"verdict"`
+		State   string `json:"state"`
 	}
 	if err := json.Unmarshal([]byte(line), &v); err != nil {
 		return "", fmt.Errorf("restart-preflight --peek: %w", err)
+	}
+	// A peek never restarts anything: its verdict is always none.
+	if v.Verdict != "none" {
+		return "", fmt.Errorf("restart-preflight --peek: verdict %q, want none", v.Verdict)
 	}
 	if v.State != "closed" && v.State != "live" {
 		return "", fmt.Errorf("restart-preflight --peek: state %q", v.State)
