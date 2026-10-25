@@ -8,7 +8,32 @@ import (
 	"testing"
 
 	"code.linenisgreat.com/clown/internal/agentscope"
+	"code.linenisgreat.com/clown/internal/permstat"
 )
+
+// clown#302: the permission counters' state dir (permstat.Dir) lies under a
+// read-write bind of the unit, so all three counters work inside
+// --agent-scope. The unit sets XDG_STATE_HOME to the frontend's value
+// (agentscope.OperatorXDG), so the path is the same inside and out.
+func TestStageAgentHomeBindsThePermstatDir(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	p, err := stageAgentHome(agentscope.Spec{OperatorHome: t.TempDir()}, t.TempDir(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := permstat.Dir()
+	for _, b := range p.rw {
+		src, _, _ := strings.Cut(b, ":")
+		if src == dir || strings.HasPrefix(dir, strings.TrimSuffix(src, "/")+"/") {
+			if fi, err := os.Stat(src); err != nil || !fi.IsDir() {
+				t.Fatalf("the bind source %s is not a directory: %v", src, err)
+			}
+			return
+		}
+	}
+	t.Fatalf("no read-write bind covers the permstat dir %s: %v", dir, p.rw)
+}
 
 // TestStageAgentHomeBindsTheOperatorCredentialReadOnly: a worker can read the
 // operator's claude credential but must not overwrite or truncate it.

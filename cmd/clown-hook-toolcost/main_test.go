@@ -46,7 +46,7 @@ func runHookWithArgs(t *testing.T, args []string, stdin string, env ...string) (
 // hook mode they are ignored.
 func TestBadArgumentsStillExitZero(t *testing.T) {
 	in := `{"hook_event_name":"PermissionRequest","session_id":"s-1","tool_name":"Bash","tool_input":{"command":"touch X"}}`
-	out, code := runHookWithArgs(t, []string{"-bogus"}, in, "XDG_RUNTIME_DIR="+t.TempDir(), "STATSD_HOST=127.0.0.1", "STATSD_PORT=9")
+	out, code := runHookWithArgs(t, []string{"-bogus"}, in, "XDG_RUNTIME_DIR="+t.TempDir(), "XDG_STATE_HOME="+t.TempDir(), "STATSD_HOST=127.0.0.1", "STATSD_PORT=9")
 	if out != "" || code != 0 {
 		t.Fatalf("stdout %q, exit %d; want nothing and 0", out, code)
 	}
@@ -65,7 +65,7 @@ func TestPermissionRequestHookPrintsNothing(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			start := time.Now()
-			out, code := runHook(t, in, "XDG_RUNTIME_DIR="+runtime, "STATSD_HOST=127.0.0.1", "STATSD_PORT=9")
+			out, code := runHook(t, in, "XDG_RUNTIME_DIR="+runtime, "XDG_STATE_HOME="+runtime, "STATSD_HOST=127.0.0.1", "STATSD_PORT=9")
 			if out != "" || code != 0 {
 				t.Fatalf("stdout %q, exit %d; want nothing and 0", out, code)
 			}
@@ -84,7 +84,7 @@ func TestPermissionCountersAreSent(t *testing.T) {
 	}
 	defer pc.Close()
 	port := pc.LocalAddr().(*net.UDPAddr).Port
-	env := []string{"XDG_RUNTIME_DIR=" + t.TempDir(), "STATSD_HOST=127.0.0.1", "STATSD_PORT=" + itoa(port)}
+	env := []string{"XDG_RUNTIME_DIR=" + t.TempDir(), "XDG_STATE_HOME=" + t.TempDir(), "STATSD_HOST=127.0.0.1", "STATSD_PORT=" + itoa(port)}
 	tool := `"tool_name":"mcp__plugin_moxy_moxy__rg_search","tool_input":{"pattern":"x"}`
 	for _, ev := range []string{"PermissionRequest", "PostToolUse"} {
 		if out, code := runHook(t, `{"hook_event_name":"`+ev+`","session_id":"s-2",`+tool+`}`, env...); out != "" || code != 0 {
@@ -107,11 +107,11 @@ func TestPermissionCountersAreSent(t *testing.T) {
 	}
 }
 
-// clown#302: with a state dir that cannot be created (as inside an
-// --agent-scope unit, whose /run/user is a read-only tmpfs without the
-// permstat dir bound in), the hook still prints nothing and exits 0, prompted
-// still reaches statsd, and approved and declined are not counted.
-func TestUncreatableStateDirSendsOnlyPrompted(t *testing.T) {
+// clown#302: as inside an --agent-scope unit, XDG_RUNTIME_DIR is read-only
+// (a tmpfs under ProtectHome=tmpfs) while XDG_STATE_HOME/clown/hook-toolcost
+// is writable (bound in): all three counters reach statsd, nothing is
+// printed, and every hook exits 0.
+func TestReadOnlyRuntimeDirStillCountsAllThree(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Fatal("needs a non-root user: root can create the dir under a read-only parent")
 	}
@@ -126,7 +126,7 @@ func TestUncreatableStateDirSendsOnlyPrompted(t *testing.T) {
 	}
 	defer pc.Close()
 	port := pc.LocalAddr().(*net.UDPAddr).Port
-	env := []string{"XDG_RUNTIME_DIR=" + runtime, "STATSD_HOST=127.0.0.1", "STATSD_PORT=" + itoa(port)}
+	env := []string{"XDG_RUNTIME_DIR=" + runtime, "XDG_STATE_HOME=" + t.TempDir(), "STATSD_HOST=127.0.0.1", "STATSD_PORT=" + itoa(port)}
 	tool := `"tool_name":"Bash","tool_input":{"command":"touch X"}`
 	for _, ev := range []string{"PermissionRequest", "PostToolUse", "PermissionRequest", "UserPromptSubmit"} {
 		if out, code := runHook(t, `{"hook_event_name":"`+ev+`","session_id":"s-3",`+tool+`}`, env...); out != "" || code != 0 {
@@ -143,9 +143,12 @@ func TestUncreatableStateDirSendsOnlyPrompted(t *testing.T) {
 		}
 		got = append(got, strings.Split(string(buf[:n]), "\n")...)
 	}
-	want := []string{"clown.permission.builtin.Bash.prompted:1|c", "clown.permission.builtin.Bash.prompted:1|c"}
+	want := []string{
+		"clown.permission.builtin.Bash.prompted:1|c", "clown.permission.builtin.Bash.approved:1|c",
+		"clown.permission.builtin.Bash.prompted:1|c", "clown.permission.builtin.Bash.declined:1|c",
+	}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Fatalf("sent %q, want %q (prompted only)", got, want)
+		t.Fatalf("sent %q, want %q", got, want)
 	}
 }
 
