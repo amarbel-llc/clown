@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -1014,15 +1015,19 @@ func runWithFlags(flags parsedFlags) int {
 	// "restart" verdict, the restarter stops the provider so main relaunches.
 	restarts := &restartQueue{}
 	restartLog, _ := userStateWritePath("close-self-run.log")
+	turnRunning := &atomic.Bool{}
+	countdown := newRestartCountdown()
+	countdown.busy = turnRunning.Load
 	restarter := frontendRestarter{
 		principal:    flags.identity.Key,
 		argv:         restartArgv(flags, attachedID),
 		stop:         stopProviderBySignal,
-		countdown:    newRestartCountdown().proceed,
+		countdown:    countdown.proceed,
 		profileCheck: newRestartProfileCheck(flags, attachedID).check,
+		busy:         turnRunning.Load,
 		logPath:      restartLog,
 	}
-	idleDir, idleSock, closeIdle := armSelfClose(flags, root, restarts, restarter.restart)
+	idleDir, idleSock, closeIdle := armSelfClose(flags, root, restarts, restarter.restart, turnRunning)
 	defer closeIdle()
 	if idleDir != "" {
 		pluginDirs = append(pluginDirs, idleDir)

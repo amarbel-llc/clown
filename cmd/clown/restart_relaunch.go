@@ -144,6 +144,8 @@ type frontendRestarter struct {
 	// profileCheck dry-runs the relaunch's profile gate before anything is
 	// stopped (restartProfileCheck); nil skips it.
 	profileCheck func() error
+	// busy reports a turn running (the UserPromptSubmit hook); nil: never.
+	busy func() bool
 }
 
 func (fr frontendRestarter) restart(req restartRequest, v preflightVerdict) {
@@ -164,6 +166,13 @@ func (fr frontendRestarter) restart(req restartRequest, v preflightVerdict) {
 		if !proceed {
 			return
 		}
+	}
+	// Re-checked after the countdown: a turn that started during it is not
+	// stopped mid-turn. The request was consumed by the preflight, so the
+	// restart is dropped; the requester asks again.
+	if fr.busy != nil && fr.busy() {
+		logSelfClose(fr.logPath, "restart (%s): a turn started; not stopping the provider", fr.principal)
+		return
 	}
 	pendingRelaunch.Store(&relaunchPlan{principal: fr.principal, reason: reason, argv: fr.argv})
 	logSelfClose(fr.logPath, "restart (%s): stopping the provider to relaunch (%s)", fr.principal, reason)

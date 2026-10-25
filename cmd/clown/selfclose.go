@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -130,7 +131,21 @@ type idleListener struct {
 	once sync.Once
 }
 
+// turnStartedDatagram is what `clown idle-notify --busy` sends from the
+// UserPromptSubmit hook: it marks a turn running and wakes nothing. Every
+// other datagram is an idle poke.
+const turnStartedDatagram = 'B'
+
 func startIdleListener(path string, run func()) (*idleListener, error) {
+	return startIdleListenerTracking(path, nil, run)
+}
+
+// startIdleListenerTracking is startIdleListener that also records, in busy
+// (nil: not recorded), whether a turn is running: set by a turn-start
+// datagram, cleared by the next idle poke. A forged datagram can only cancel
+// a restart that is counting down, or let one proceed into a turn that the
+// next Stop poke would have reported anyway.
+func startIdleListenerTracking(path string, busy *atomic.Bool, run func()) (*idleListener, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
@@ -147,9 +162,19 @@ func startIdleListener(path string, run func()) (*idleListener, error) {
 	go func() {
 		buf := make([]byte, 64)
 		for {
-			if _, _, err := conn.ReadFromUnix(buf); err != nil {
+			n, _, err := conn.ReadFromUnix(buf)
+			if err != nil {
 				close(l.wake)
 				return
+			}
+			if n == 1 && buf[0] == turnStartedDatagram {
+				if busy != nil {
+					busy.Store(true)
+				}
+				continue
+			}
+			if busy != nil {
+				busy.Store(false)
 			}
 			select {
 			case l.wake <- struct{}{}:
@@ -183,6 +208,10 @@ func (l *idleListener) Close() {
 // worktree's .tmp, which the operator can read).
 func runIdleNotify(args []string) int {
 	record := filepath.Join(os.TempDir(), "clown-idle-notify.log")
+	datagram := byte(1)
+	if len(args) == 2 && args[0] == "--busy" {
+		datagram, args = turnStartedDatagram, args[1:]
+	}
 	if len(args) != 1 {
 		logSelfClose(record, "idle-notify: want one socket argument, got %d", len(args))
 		return 0
@@ -194,7 +223,7 @@ func runIdleNotify(args []string) int {
 	}
 	defer conn.Close()
 	_ = conn.SetWriteDeadline(time.Now().Add(250 * time.Millisecond))
-	if _, err := conn.Write([]byte{1}); err != nil {
+	if _, err := conn.Write([]byte{datagram}); err != nil {
 		logSelfClose(record, "idle-notify: write failed: %v", err)
 		return 0
 	}
@@ -224,12 +253,18 @@ func synthIdlePluginDir(root *staging.Root, clownBin, sock string) (string, erro
 	if err := os.WriteFile(filepath.Join(manifestDir, "plugin.json"), manifest, 0o600); err != nil {
 		return "", err
 	}
-	hooks, err := json.MarshalIndent(map[string]any{"hooks": map[string]any{
-		"Stop": []any{map[string]any{"hooks": []any{map[string]any{
+	hook := func(command string) []any {
+		return []any{map[string]any{"hooks": []any{map[string]any{
 			"type":    "command",
-			"command": clownBin + " idle-notify " + sock,
+			"command": command,
 			"timeout": 5,
-		}}}},
+		}}}}
+	}
+	// Stop pokes the frontend at idle; UserPromptSubmit tells it a turn
+	// started, so a restart counting down does not stop the agent mid-turn.
+	hooks, err := json.MarshalIndent(map[string]any{"hooks": map[string]any{
+		"Stop":             hook(clownBin + " idle-notify " + sock),
+		"UserPromptSubmit": hook(clownBin + " idle-notify --busy " + sock),
 	}}, "", "  ")
 	if err != nil {
 		return "", err
@@ -246,7 +281,7 @@ func synthIdlePluginDir(root *staging.Root, clownBin, sock string) (string, erro
 // session that cannot self-close is still a working session). Each idle poke
 // runs close-self-run and then, when restarts holds one, the restart preflight
 // (idleRunner); restart performs an allowed restart. restarts may be nil.
-func armSelfClose(flags parsedFlags, root *staging.Root, restarts *restartQueue, restart func(restartRequest, preflightVerdict)) (pluginDir, sock string, closeFn func()) {
+func armSelfClose(flags parsedFlags, root *staging.Root, restarts *restartQueue, restart func(restartRequest, preflightVerdict), busy *atomic.Bool) (pluginDir, sock string, closeFn func()) {
 	bin, reason := selfCloseDecision(flags)
 	logPath, logErr := userStateWritePath("close-self-run.log")
 	notArmed := func(why string) (string, string, func()) {
@@ -275,7 +310,7 @@ func armSelfClose(flags parsedFlags, root *staging.Root, restarts *restartQueue,
 		restart:   restart,
 		logPath:   logPath,
 	}
-	l, err := startIdleListener(sock, idle.onIdle)
+	l, err := startIdleListenerTracking(sock, busy, idle.onIdle)
 	if err != nil {
 		return notArmed(err.Error())
 	}

@@ -32,6 +32,8 @@ type restartCountdown struct {
 	interactive bool
 	notify      io.Writer
 	sleep       func(time.Duration)
+	// busy reports a turn running (nil: never).
+	busy func() bool
 }
 
 func newRestartCountdown() restartCountdown {
@@ -64,11 +66,21 @@ func runForCountdown(argv []string) ([]byte, int, error) {
 }
 
 // proceed reports whether to restart, and how the countdown went (for the log).
+//
+// A turn that starts during the countdown (busy, from the UserPromptSubmit
+// hook) cancels the restart: it is not stopped mid-turn.
 func (c restartCountdown) proceed(reason string) (bool, string) {
+	busy := c.busy
+	if busy == nil {
+		busy = func() bool { return false }
+	}
 	how := ""
 	if c.poshSession != "" {
 		ok, decided, note := c.poshModal(reason)
 		if decided {
+			if ok && busy() {
+				return false, note + "; a turn started during the countdown, not restarting"
+			}
 			return ok, note
 		}
 		how = note + "; "
@@ -77,9 +89,17 @@ func (c restartCountdown) proceed(reason string) (bool, string) {
 		return true, how + "detached: no countdown"
 	}
 	fmt.Fprintf(c.notify, "\r\nclown: restart pending (%s); restarting in %ds\r\n", reason, restartCountdownSeconds)
-	c.sleep(restartCountdownSeconds * time.Second)
+	for waited := time.Duration(0); waited < restartCountdownSeconds*time.Second; waited += countdownPoll {
+		if busy() {
+			return false, how + "a turn started during the countdown, not restarting"
+		}
+		c.sleep(countdownPoll)
+	}
 	return true, how + "inline countdown elapsed"
 }
+
+// countdownPoll is how often the inline countdown checks for a turn start.
+const countdownPoll = 250 * time.Millisecond
 
 // poshModal raises posh's restart modal when this posh has one. decided is
 // false when it could not (no posh, no modal, busy or invalid), so the caller
@@ -107,8 +127,13 @@ func (c restartCountdown) poshModal(reason string) (proceed, decided bool, note 
 		return true, true, "posh modal: proceed"
 	case code == 10:
 		return false, true, "posh modal: cancelled by a viewer"
+	case code == 11 || code == 12:
+		// busy or invalid: posh showed nothing.
+		return false, false, fmt.Sprintf("posh modal refused (exit %d)", code)
 	}
-	return false, false, fmt.Sprintf("posh modal exited %d", code)
+	// The modal was up and ended without an answer (posh killed at the
+	// bound, or another exit): its countdown ran, so no second wait.
+	return true, true, fmt.Sprintf("posh modal ended without an answer (exit %d); proceeding", code)
 }
 
 func poshProbeHasModal(out []byte) bool {
