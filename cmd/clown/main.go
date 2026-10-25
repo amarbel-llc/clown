@@ -488,7 +488,7 @@ func run(rawArgs []string) int {
 func runWithFlags(flags parsedFlags) int {
 	// A frontend relaunched by a restart (spinclass#419) reads its notice
 	// before it starts any child, so none inherits it.
-	restartNotice := consumeRestartedNotice()
+	restartNotice, restartRelaunched := consumeRestartedNotice()
 	if flags.agentScopeSpec != "" && (flags.tent || flags.naked) {
 		fmt.Fprintln(os.Stderr, "clown: --agent-scope is mutually exclusive with --tent and --naked")
 		return 1
@@ -899,6 +899,17 @@ func runWithFlags(flags parsedFlags) int {
 	// inherited credential was already dropped where the clownfile's [messaging]
 	// env is applied (clown#267).
 	provisionSessionXMPPCredential(&flags)
+
+	// A restart's relaunch asks spinclass once more, now that it has minted
+	// and registered (spinclass#419): a session closed since the old
+	// frontend's peek is not started. Unknown starts.
+	if restartRelaunched && !flags.printLaunchPlan {
+		peek := postMintPeek{spinclass: lookPathOrEmpty("spinclass"), principal: flags.identity.Key, environ: launchEnviron, logPath: relaunchLogPath()}
+		if peek.closed() {
+			fmt.Fprintf(os.Stderr, "clown: restart: spinclass reports session %s closed; not starting it\n", flags.identity.Key)
+			return 0
+		}
+	}
 
 	// clown#216 + clown#192 step 3: bind this session's clown-name to its
 	// harness session lineage (identity.Key) so a restart/resume of the SAME

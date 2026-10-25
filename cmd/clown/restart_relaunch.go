@@ -169,17 +169,60 @@ func restartEnv(environ []string, plan *relaunchPlan) []string {
 const restartedReasonEnv = "CLOWN_RESTARTED_REASON"
 
 // consumeRestartedNotice reads and unsets CLOWN_RESTARTED_REASON, returning
-// the prompt notice for a relaunched session ("" for any other launch).
-func consumeRestartedNotice() string {
+// the prompt notice for a relaunched session ("" for any other launch) and
+// whether this launch is a restart's relaunch: the variable is set only by
+// restartEnv, so its presence, not the notice text, is the marker.
+func consumeRestartedNotice() (notice string, relaunched bool) {
 	reason, ok := os.LookupEnv(restartedReasonEnv)
 	if !ok {
-		return ""
+		return "", false
 	}
 	_ = os.Unsetenv(restartedReasonEnv)
 	if reason == "" {
 		reason = "no reason given"
 	}
-	return restartedNotice(reason)
+	return restartedNotice(reason), true
+}
+
+// postMintPeek is the relaunched frontend's second look at its session
+// (spinclass#419): right after the identity mint and presence registration,
+// before the provider starts, it asks `spinclass restart-preflight --peek`
+// again, the same way the old frontend did before the exec
+// (peekSessionState: launch env, principal, bounded, own process group). It
+// narrows the window in which a close that started after the old frontend's
+// peek could be undone by the relaunch.
+type postMintPeek struct {
+	// spinclass is the binary; "" means not on PATH (unknown).
+	spinclass string
+	principal string
+	environ   []string
+	logPath   string
+	timeout   time.Duration
+}
+
+// closed reports whether spinclass says the session is closed, in which case
+// the relaunch must not start the provider. Anything else, including a
+// failed or unknown peek (a spinclass without --peek), lets it start. It
+// never revokes anything: only a close revokes the identity (and clown never
+// runs `troupe mint-revoke`); the presence record this launch registered is
+// left to go stale, there being no clean removal path in clown.
+func (p postMintPeek) closed() bool {
+	if p.spinclass == "" {
+		logSelfClose(p.logPath, "relaunched (%s): spinclass is not on PATH, session state unknown; starting", p.principal)
+		return false
+	}
+	state, err := peekSessionState(p.spinclass, p.principal, p.environ, p.timeout)
+	switch {
+	case err != nil:
+		logSelfClose(p.logPath, "relaunched (%s): session state unknown after the mint (%v); starting", p.principal, err)
+		return false
+	case state == "closed":
+		logSelfClose(p.logPath, "relaunched (%s): spinclass reports the session closed after the mint; not starting the provider (nothing revoked here)", p.principal)
+		return true
+	default:
+		logSelfClose(p.logPath, "relaunched (%s): spinclass reports the session %s after the mint; starting", p.principal, state)
+		return false
+	}
 }
 
 // restartedNotice is the system-prompt fragment telling a resumed session it
