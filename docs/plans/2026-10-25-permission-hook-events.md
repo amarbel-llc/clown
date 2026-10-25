@@ -96,3 +96,40 @@ Consequences for the design (I):
   an interactive run shows a distinguishing event.
 - A PermissionRequest hook must not answer (no output), or it would make the
   decision itself.
+
+## As built (step 2)
+
+`internal/permstat`, driven by `clown-hook-toolcost` (the same binary and
+statsd emitter as `clown.tool_result.*`), registered by the synthesized
+clown-builtin-jobs plugin for PermissionRequest, PostToolUse and
+PostToolUseFailure (matcher `.*`), UserPromptSubmit, and the Stop and
+SessionEnd it already had:
+
+    clown.permission.<key>.prompted:1|c   PermissionRequest
+    clown.permission.<key>.approved:1|c   PostToolUse / PostToolUseFailure of a pending request
+    clown.permission.<key>.declined:1|c   still pending at Stop, the next UserPromptSubmit or SessionEnd
+
+- `<key>` is `toolcost.ToolKey` (`builtin.<Tool>`, `<server>.<tool>` for MCP,
+  the plugin segment dropped), as for `clown.tool_result.*`; no host segment.
+- **declined is rejected-or-interrupted**: hooks show neither (above). The
+  names leave room for `rejected` and `interrupted` if an interactive run finds
+  an event that tells them apart.
+- A later PreToolUse does not decline a pending request: parallel tool calls
+  interleave (I). So a decline is counted when the turn ends, not when the
+  next call starts.
+- State: one file per session under `$XDG_RUNTIME_DIR/clown/permstat`
+  (`$TMPDIR/clown-permstat-<uid>` without a runtime dir), 0600 in a 0700 dir,
+  flock'd, O_NOFOLLOW, at most 32 pending requests, read bounded at 64 KiB,
+  corruption read as empty, removed when the turn ends. Pairing is by session,
+  tool name and a hash of the tool input (PermissionRequest has no
+  tool_use_id), first in first out; for two identical requests in one turn
+  the counts are right even when it cannot say which ran. Past 32 pending,
+  the oldest is dropped uncounted.
+- The hook prints nothing on any of these events and always exits 0
+  (tested with malformed input and statsd unreachable); prompted is sent even
+  when the state file cannot be written.
+- Inside an `--agent-scope` unit the runtime dir is a read-only tmpfs (I, from
+  ProtectHome=tmpfs): the state file then cannot be created, so approved and
+  declined are not counted there; prompted still is. Unverified.
+- Cost: the binary now also runs on every PostToolUse (I: one short process
+  per tool call).

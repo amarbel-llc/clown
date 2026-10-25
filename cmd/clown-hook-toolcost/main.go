@@ -24,9 +24,14 @@
 // the warning and the counter (the floor gauge stays). CLOWN_HOOK_DEBUG_LOG,
 // when set, receives the failures. CLOWN_DISABLE_STATSD=1 turns it off entirely.
 //
+// It also counts permission prompts and their outcomes (package
+// internal/permstat, clown#302) on PermissionRequest, PostToolUse,
+// PostToolUseFailure, UserPromptSubmit, Stop and SessionEnd. On those it
+// prints nothing: a PermissionRequest hook's stdout is its decision.
+//
 // Wire-up: clown's synthesized clown-builtin-jobs plugin registers this
-// binary for Stop, SubagentStop and SessionEnd (hooks/hooks.json) — see
-// cmd/clown/jobmonitor.go.
+// binary for Stop, SubagentStop and SessionEnd, and for the permission
+// events above (hooks/hooks.json) — see cmd/clown/jobmonitor.go.
 package main
 
 import (
@@ -38,10 +43,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"syscall"
 	"time"
 
+	"code.linenisgreat.com/clown/internal/permstat"
 	"code.linenisgreat.com/clown/internal/sessions"
 	"code.linenisgreat.com/clown/internal/toolcost"
 )
@@ -118,6 +125,21 @@ func run(stdin io.Reader) error {
 	var in hookInput
 	if err := json.Unmarshal(data, &in); err != nil {
 		return fmt.Errorf("parsing hook input: %w", err)
+	}
+	// Permission counters (clown#302). Nothing here writes to stdout: for
+	// PermissionRequest, stdout would be read as the permission decision.
+	if slices.Contains(permstat.Events, in.HookEventName) {
+		ms, err := permstat.Handle(data, permstat.Dir())
+		if sendErr := toolcost.Send(toolcost.Encode(ms)); sendErr != nil {
+			debugLog("permstat send", sendErr.Error())
+		}
+		if err != nil {
+			debugLog("permstat", err.Error())
+		}
+	}
+	switch in.HookEventName {
+	case "PermissionRequest", "PostToolUse", "PostToolUseFailure", "UserPromptSubmit":
+		return nil // permission counters only; the transcript is read at Stop
 	}
 	path, final := in.TranscriptPath, in.HookEventName == "SessionEnd"
 	if in.HookEventName == "SubagentStop" {

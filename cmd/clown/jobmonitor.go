@@ -451,6 +451,19 @@ func synthJobMonitorPluginDir(root *staging.Root, sessionKey string) (string, er
 		for _, event := range []string{"Stop", "SubagentStop", "SessionEnd"} {
 			addHookEntries(hookEvents, event, entry)
 		}
+		// Permission prompt and outcome counters (clown#302, internal/
+		// permstat): the binary prints nothing on these, so the
+		// PermissionRequest hook never decides a prompt. Stop and SessionEnd,
+		// above, close the turn's pending requests.
+		for _, event := range []string{"PermissionRequest", "PostToolUse", "PostToolUseFailure"} {
+			addHookEntries(hookEvents, event, map[string]any{
+				"matcher": ".*",
+				"hooks":   []any{map[string]any{"type": "command", "command": buildcfg.HookToolcostPath, "timeout": 5}},
+			})
+		}
+		addHookEntries(hookEvents, "UserPromptSubmit", map[string]any{
+			"hooks": []any{map[string]any{"type": "command", "command": buildcfg.HookToolcostPath, "timeout": 5}},
+		})
 	}
 	if len(hookEvents) > 0 {
 		hooksDir := filepath.Join(dir, "hooks")

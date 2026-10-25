@@ -471,6 +471,12 @@ func TestJobMonitorPluginDirRegistersToolcostAlongsideTee(t *testing.T) {
 	if cmds := commands("SubagentStop"); len(cmds) != 1 || cmds[0] != buildcfg.HookToolcostPath {
 		t.Fatalf("SubagentStop commands = %q, want only the toolcost collector", cmds)
 	}
+	// clown#302: the same binary counts permission prompts and outcomes.
+	for _, event := range []string{"PermissionRequest", "PostToolUse", "PostToolUseFailure", "UserPromptSubmit"} {
+		if cmds := commands(event); len(cmds) != 1 || cmds[0] != buildcfg.HookToolcostPath {
+			t.Fatalf("%s commands = %q, want the toolcost binary (permission counters)", event, cmds)
+		}
+	}
 }
 
 // The session output tee (troupe#21): on an xmpp-native session with a minted
