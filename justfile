@@ -2404,6 +2404,22 @@ explore-permission-hook-events model="haiku":
     run_case reject deny "" "" "Run exactly this one Bash command, once, verbatim: touch X"
     run_case dontask "" dontAsk "" "Run exactly this one Bash command, once, verbatim: touch X"
 
+# Show the signature status (%G? code, signer) of the last n commits, for
+# agents checking that their commits were signed (the git MCP log shows no
+# signatures).
+#
+# show signature status of recent commits
+[group("debug")]
+debug-commit-signatures n="3":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # %G? needs a configured verifier (gpg.ssh.allowedSignersFile for ssh
+    # signatures); the gpgsig header shows whether a signature exists at all.
+    git log -n {{ quote(n) }} --format='%H' | while read -r sha; do
+        hdr=$(git cat-file commit "$sha" | grep -m1 -E '^gpgsig(-sha256)? ' || true)
+        printf '%s %s %s\n' "$(git log -1 --format='%h %G?' "$sha")" "${hdr:-NO-gpgsig}" "$(git log -1 --format='%s' "$sha")"
+    done
+
 # Report the claude monitor's per-line cap (RFC-0009 §9 "Line budget",
 # clown#293): fails if the module's constants are no longer found, so a
 # claude-code bump that moves or renames the cap is noticed, not silent.
