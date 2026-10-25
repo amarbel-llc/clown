@@ -2142,7 +2142,7 @@ func runProvider(executor Executor, bound Command, logger *slog.Logger, flags pa
 				onStart(slave, proc)
 			}
 			// Through the process handle, never a pid that may be reused.
-			markProviderRunning(func() { _ = killProcess(proc) })
+			markProviderRunning(func() error { return killProcess(proc) })
 		}
 		code, err := ptysuspend.Run(append([]string{binary}, argv...), os.Stdin, ptyOpts)
 		if err != nil {
@@ -2197,7 +2197,7 @@ func runProvider(executor Executor, bound Command, logger *slog.Logger, flags pa
 		return 1
 	}
 	startElapsed := time.Since(preStart)
-	markProviderRunning(func() { _ = killProcess(cmd.Process) })
+	markProviderRunning(func() error { return killProcess(cmd.Process) })
 	if logger != nil {
 		logger.Info("downstream process started", "pid", cmd.Process.Pid, "start_elapsed", startElapsed.String())
 	}

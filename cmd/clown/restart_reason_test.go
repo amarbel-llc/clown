@@ -43,11 +43,14 @@ func TestRestartReasonComesFromTheVerdict(t *testing.T) {
 	} {
 		pendingRelaunch.Store(nil)
 		providerRunning.Store(true)
+		graceDone := make(chan struct{}, 1)
 		fr := frontendRestarter{
 			principal: restartTestPrincipal, stop: func() {}, logPath: filepath.Join(t.TempDir(), "l.log"),
-			stopGrace: time.Millisecond, kill: func() {},
+			stopGrace: time.Millisecond, kill: func() error { return nil },
+			graceChecked: func(bool) { graceDone <- struct{}{} },
 		}
 		fr.restart(restartRequest{When: "idle", Reason: c.req}, preflightVerdict{Verdict: "restart", Reason: c.verdict})
+		<-graceDone
 		if p := pendingRelaunch.Load(); p == nil || p.reason != c.want {
 			t.Fatalf("req %q verdict %q: plan %+v, want reason %q", c.req, c.verdict, p, c.want)
 		}

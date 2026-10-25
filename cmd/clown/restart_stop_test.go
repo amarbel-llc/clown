@@ -21,7 +21,7 @@ func TestRestartKillsAProviderThatIgnoresTheStop(t *testing.T) {
 	checked := make(chan bool, 1)
 	fr := frontendRestarter{
 		principal: restartTestPrincipal, stop: func() {}, stopGrace: 50 * time.Millisecond, logPath: logPath,
-		kill:         func() { killed <- struct{}{} },
+		kill:         func() error { killed <- struct{}{}; return nil },
 		graceChecked: func(k bool) { checked <- k },
 	}
 	fr.restart(restartRequest{When: "idle"}, preflightVerdict{Verdict: "restart", Reason: "r"})
@@ -58,7 +58,7 @@ func TestRestartDoesNotKillAProviderThatExits(t *testing.T) {
 	fr := frontendRestarter{
 		principal: restartTestPrincipal, stop: func() { providerRunning.Store(false) }, stopGrace: 50 * time.Millisecond,
 		logPath: filepath.Join(t.TempDir(), "l.log"),
-		kill:    func() { kills++ }, graceChecked: func(k bool) { checked <- k },
+		kill:    func() error { kills++; return nil }, graceChecked: func(k bool) { checked <- k },
 	}
 	fr.restart(restartRequest{When: "idle"}, preflightVerdict{Verdict: "restart", Reason: "r"})
 	select {

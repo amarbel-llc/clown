@@ -93,7 +93,7 @@ type agentScopeRequest struct {
 	serve agentscope.Relay
 	// onStarted is called once a SIGTERM to clown reaches systemd-run, with
 	// a kill of the unit.
-	onStarted func(kill func())
+	onStarted func(kill func() error)
 }
 
 // agentScopeTools resolves systemd-run and systemctl from PATH (overridable

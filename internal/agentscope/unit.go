@@ -65,7 +65,7 @@ type Launch struct {
 	// SIGINT to the frontend is forwarded to it (clown's restart stops the
 	// provider by signalling itself, spinclass#419), with a kill that sends
 	// SIGKILL to the unit's processes; after Run returns it does nothing.
-	OnStarted func(kill func())
+	OnStarted func(kill func() error)
 	// ServeFile lists the agent-side servers the relay starts inside the
 	// unit (WriteInUnitServers); bound in read-only. Empty: none.
 	ServeFile string

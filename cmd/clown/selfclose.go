@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -76,10 +77,25 @@ func selfCloseDecision(flags parsedFlags) (spinclassPath, reason string) {
 
 // logSelfClose appends one timestamped line to the close-self-run log, best
 // effort: the log is the only record of why a launch did or did not arm.
+var (
+	// logWarnings gets the one "cannot write" line per process.
+	logWarnings io.Writer = os.Stderr
+	logWarnOnce           = newOnce()
+)
+
+func newOnce() *sync.Once { return &sync.Once{} }
+
 func logSelfClose(logPath, format string, args ...any) {
+	if logPath == "" {
+		return
+	}
 	f, err := openLogForAppend(logPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "clown: cannot write %s: %v\n", logPath, err)
+		// Once per process: this runs on every idle transition, and stderr is
+		// claude's TUI.
+		logWarnOnce.Do(func() {
+			fmt.Fprintf(logWarnings, "clown: cannot write %s: %v (further log failures are not reported)\n", logPath, err)
+		})
 		return
 	}
 	defer f.Close()
@@ -115,7 +131,9 @@ type selfCloseRunner struct {
 func (r *selfCloseRunner) run() error {
 	log, err := openLogForAppend(r.logPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "clown: cannot write %s: %v; close-self-run not run\n", r.logPath, err)
+		logWarnOnce.Do(func() {
+			fmt.Fprintf(logWarnings, "clown: cannot write %s: %v; close-self-run not run (further log failures are not reported)\n", r.logPath, err)
+		})
 		return err
 	}
 	defer log.Close()

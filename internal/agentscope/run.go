@@ -257,12 +257,22 @@ func Run(l Launch, tools Tools, logger *slog.Logger) (int, error) {
 	// nothing.
 	var killMu sync.Mutex
 	owned := true
-	killUnit := func() {
+	killUnit := func() error {
 		killMu.Lock()
-		defer killMu.Unlock()
-		if owned {
-			_ = exec.Command(tools.systemctl(), "--user", "kill", "--signal=SIGKILL", l.Unit).Run()
+		own := owned
+		killMu.Unlock()
+		if !own {
+			return nil
 		}
+		// Bounded, and outside the lock: a hung systemctl must not hold up
+		// Run's return. The unit name is this launch's own, so a kill that
+		// lands after Run returned hits nothing else.
+		ctx, cancel := context.WithTimeout(context.Background(), systemctlKillTimeout)
+		defer cancel()
+		if err := exec.CommandContext(ctx, tools.systemctl(), "--user", "kill", "--signal=SIGKILL", l.Unit).Run(); err != nil {
+			return fmt.Errorf("systemctl --user kill --signal=SIGKILL %s: %w", l.Unit, err)
+		}
+		return nil
 	}
 	defer func() {
 		killMu.Lock()
@@ -393,11 +403,21 @@ func runPiped(argv []string, report func(pty string)) (int, error) {
 	return 0, nil
 }
 
+// systemctlKillTimeout bounds the restart's `systemctl --user kill`.
+var systemctlKillTimeout = 10 * time.Second
+
+// systemctlStopTimeout bounds stopIfActive's `systemctl --user stop`, past
+// systemd's own default stop timeout (90 s), so a hung client cannot hold Run
+// (and with it a restart's relaunch) forever.
+var systemctlStopTimeout = 2 * time.Minute
+
 // stopIfActive makes sure the unit does not outlive the systemd-run client
 // (an interrupted client leaves --wait units running).
 func (t Tools) stopIfActive(unit string) {
 	if st, err := t.Show(unit); err == nil && (st.ActiveState == "active" || st.ActiveState == "activating") {
-		_ = exec.Command(t.systemctl(), "--user", "stop", unit).Run()
+		ctx, cancel := context.WithTimeout(context.Background(), systemctlStopTimeout)
+		defer cancel()
+		_ = exec.CommandContext(ctx, t.systemctl(), "--user", "stop", unit).Run()
 	}
 }
 

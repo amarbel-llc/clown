@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -54,7 +55,7 @@ var (
 	providerRunning atomic.Bool
 	// providerKill SIGKILLs the running provider; set and cleared with
 	// providerRunning, under providerMu.
-	providerKill func()
+	providerKill func() error
 	providerMu   sync.Mutex
 )
 
@@ -65,7 +66,7 @@ func restartUnderway() bool { return pendingRelaunch.Load() != nil }
 
 // setProviderRunning marks the provider running (its SIGTERM forwarding is
 // in place) with how to kill it.
-func setProviderRunning(kill func()) {
+func setProviderRunning(kill func() error) {
 	providerMu.Lock()
 	defer providerMu.Unlock()
 	providerKill = kill
@@ -80,14 +81,32 @@ func clearProviderRunning() {
 }
 
 // killProvider SIGKILLs the running provider, only while it is still recorded
-// as running: the check and the kill hold the lock clearProviderRunning takes
-// when runProvider returns.
-func killProvider() {
+// as running. The check takes the lock clearProviderRunning takes; the kill
+// runs after it is released, so a hung kill (systemctl) cannot hold up the
+// provider's exit. That leaves no reused-pid window: the direct and pty kills
+// go through the process handle (os.ErrProcessDone once reaped) and the unit
+// kill names this launch's own unit.
+func killProvider() error {
+	providerMu.Lock()
+	kill, running := providerKill, providerRunning.Load()
+	providerMu.Unlock()
+	if !running || kill == nil {
+		return nil
+	}
+	return kill()
+}
+
+// storePlanIfRunning records plan only while the provider still runs, in
+// the same critical section as clearProviderRunning, so a provider that has
+// just exited never gets a plan that main would act on.
+func storePlanIfRunning(plan *relaunchPlan) bool {
 	providerMu.Lock()
 	defer providerMu.Unlock()
-	if providerRunning.Load() && providerKill != nil {
-		providerKill()
+	if !providerRunning.Load() {
+		return false
 	}
+	pendingRelaunch.Store(plan)
+	return true
 }
 
 // restartArgv is this launch's argv for the relaunch: the resolved flags
@@ -192,7 +211,7 @@ type frontendRestarter struct {
 	stopGrace time.Duration
 
 	// kill SIGKILLs the provider after stopGrace; nil: killProvider.
-	kill func()
+	kill func() error
 	// graceChecked, when set, is told whether the grace check killed (tests).
 	graceChecked func(killed bool)
 	// worktree is the session's working directory, checked before the
@@ -244,14 +263,14 @@ func (fr frontendRestarter) restart(req restartRequest, v preflightVerdict) {
 		fr.cancelled("a turn started during the countdown")
 		return
 	}
-	// The provider may have exited during the countdown: nothing to stop,
-	// and a plan stored now would relaunch a session that ended.
-	if !providerRunning.Load() {
+	// The plan is stored only while the provider still runs, checked under
+	// the lock its exit takes: a provider that exited (during the countdown or
+	// just now) gets no plan, so main does not relaunch a session that ended.
+	plan := &relaunchPlan{principal: fr.principal, reason: reason, argv: fr.argv, worktree: fr.worktree}
+	if !storePlanIfRunning(plan) {
 		logSelfClose(fr.logPath, "restart (%s): the provider exited during the countdown; not restarting", fr.principal)
 		return
 	}
-	plan := &relaunchPlan{principal: fr.principal, reason: reason, argv: fr.argv, worktree: fr.worktree}
-	pendingRelaunch.Store(plan)
 	logSelfClose(fr.logPath, "restart (%s): stopping the provider to relaunch (%s)", fr.principal, reason)
 	fr.stop()
 	// A provider that ignores the SIGTERM is killed after the grace period.
@@ -269,7 +288,9 @@ func (fr frontendRestarter) restart(req restartRequest, v preflightVerdict) {
 		killed := false
 		if providerRunning.Load() {
 			logSelfClose(fr.logPath, "restart (%s): the provider did not exit within %s of the stop; sending it SIGKILL", fr.principal, grace)
-			kill()
+			if err := kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+				logSelfClose(fr.logPath, "restart (%s): SIGKILL failed: %v", fr.principal, err)
+			}
 			killed = true
 		}
 		if fr.graceChecked != nil {
@@ -296,6 +317,8 @@ type relauncher struct {
 	stderr     io.Writer
 	// serveWait bounds the wait for the old serve socket.
 	serveWait time.Duration
+	// logPath is close-self-run.log, where every outcome is recorded.
+	logPath string
 }
 
 func newRelauncher() relauncher {
@@ -306,7 +329,17 @@ func newRelauncher() relauncher {
 		exec:       syscall.Exec,
 		stderr:     os.Stderr,
 		serveWait:  15 * time.Second,
+		logPath:    relaunchLogPath(),
 	}
+}
+
+// relaunchLogPath is close-self-run.log, "" when the state dir is unknown.
+func relaunchLogPath() string {
+	p, err := userStateWritePath("close-self-run.log")
+	if err != nil {
+		return ""
+	}
+	return p
 }
 
 // relaunch waits until no serve socket of the principal answers (a relaunched
@@ -314,32 +347,38 @@ func newRelauncher() relauncher {
 // clown build is picked up. It returns only when it does not relaunch, with
 // the exit code.
 //
-// A session closed while the restart waited (spinclass removes its
-// worktree on close) is not relaunched: that would resurrect it and re-mint
-// a revoked principal. An exit the user asked for in that window (/exit) is
-// not told apart from the stop's and does relaunch.
+// A session closed while the restart waited is not relaunched: that would
+// resurrect it and re-mint a revoked principal. spinclass removes the
+// worktree last on close (after stopping the unit and revoking), so the
+// check runs as late as it can, immediately before the exec; it is best
+// effort, and a close that has not yet reached the worktree removal by then
+// is missed. An exit the user asked for in that window (/exit) is not told
+// apart from the stop's and does relaunch. Every outcome is also logged.
 func (r relauncher) relaunch(plan *relaunchPlan) int {
-	if plan.worktree != "" {
-		if fi, err := os.Stat(plan.worktree); err != nil || !fi.IsDir() {
-			fmt.Fprintf(r.stderr, "clown: restart: the session's worktree %s is gone, so the session was closed during the restart; not relaunching\n", plan.worktree)
-			return 0
-		}
+	fail := func(code int, format string, args ...any) int {
+		msg := fmt.Sprintf(format, args...)
+		fmt.Fprintf(r.stderr, "clown: restart: %s\n", msg)
+		logSelfClose(r.logPath, "relaunch (%s): %s", plan.principal, msg)
+		return code
 	}
 	if r.runtimeDir != "" {
 		dir := filepath.Join(r.runtimeDir, "clown", "serve", plan.principal)
 		if err := waitServeSocketsGone(dir, r.serveWait); err != nil {
-			fmt.Fprintf(r.stderr, "clown: restart: %v; not relaunching (resume with `clown resume %s`)\n", err, plan.principal)
-			return 1
+			return fail(1, "%v; not relaunching (resume with `clown resume %s`)", err, plan.principal)
 		}
 	}
 	bin, err := r.lookPath("clown")
 	if err != nil {
-		fmt.Fprintf(r.stderr, "clown: restart: no clown on PATH: %v; not relaunching (resume with `clown resume %s`)\n", err, plan.principal)
-		return 1
+		return fail(1, "no clown on PATH: %v; not relaunching (resume with `clown resume %s`)", err, plan.principal)
 	}
+	if plan.worktree != "" {
+		if fi, err := os.Stat(plan.worktree); err != nil || !fi.IsDir() {
+			return fail(0, "the session's worktree %s is gone, so the session was closed during the restart; not relaunching", plan.worktree)
+		}
+	}
+	logSelfClose(r.logPath, "relaunch (%s): relaunching: exec %s", plan.principal, bin)
 	err = r.exec(bin, append([]string{bin}, plan.argv...), restartEnv(r.environ, plan))
-	fmt.Fprintf(r.stderr, "clown: restart: exec %s: %v; not relaunched (resume with `clown resume %s`)\n", bin, err, plan.principal)
-	return 1
+	return fail(1, "exec %s: %v; not relaunched (resume with `clown resume %s`)", bin, err, plan.principal)
 }
 
 // waitServeSocketsGone polls dir until none of its sockets accepts a

@@ -169,12 +169,17 @@ func TestFrontendRestarterStopsTheProviderOnce(t *testing.T) {
 	pendingRelaunch.Store(nil)
 	t.Cleanup(func() { pendingRelaunch.Store(nil); providerRunning.Store(false) })
 	stops := 0
-	fr := frontendRestarter{principal: restartTestPrincipal, argv: []string{"--provider", "claude"}, stop: func() {
-		stops++
-		if pendingRelaunch.Load() == nil {
-			t.Error("the plan must be recorded before the provider is stopped")
-		}
-	}, logPath: filepath.Join(t.TempDir(), "l.log"), stopGrace: time.Millisecond, kill: func() {}}
+	graceDone := make(chan struct{}, 1)
+	t.Cleanup(func() { <-graceDone })
+	fr := frontendRestarter{
+		principal: restartTestPrincipal, argv: []string{"--provider", "claude"}, stop: func() {
+			stops++
+			if pendingRelaunch.Load() == nil {
+				t.Error("the plan must be recorded before the provider is stopped")
+			}
+		}, logPath: filepath.Join(t.TempDir(), "l.log"), stopGrace: time.Millisecond, kill: func() error { return nil },
+		graceChecked: func(bool) { graceDone <- struct{}{} },
+	}
 
 	providerRunning.Store(false)
 	fr.restart(restartRequest{When: "idle", Reason: "r"}, preflightVerdict{Verdict: "restart"})
@@ -215,9 +220,12 @@ func TestRestartNeverRevokesTheIdentity(t *testing.T) {
 	q.put(restartRequest{When: "idle", Reason: "r"})
 	stopped := 0
 	logPath := filepath.Join(t.TempDir(), "l.log")
+	graceDone := make(chan struct{}, 1)
+	t.Cleanup(func() { <-graceDone })
 	fr := frontendRestarter{
 		principal: restartTestPrincipal, argv: []string{"--provider", "claude"}, stop: func() { stopped++ }, logPath: logPath,
-		stopGrace: time.Millisecond, kill: func() {},
+		stopGrace: time.Millisecond, kill: func() error { return nil },
+		graceChecked: func(bool) { graceDone <- struct{}{} },
 	}
 	idle := &idleRunner{
 		closer:    &selfCloseRunner{bin: bin, principal: restartTestPrincipal, logPath: logPath},
