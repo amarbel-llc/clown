@@ -4,28 +4,38 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
-	"sort"
 	"strings"
 )
 
 // catalogTrim is what a cheap-context selection removed from the agent's MCP
-// tool catalog (clown#265): the servers it stopped and, per kept server, the
-// tool names it hid. profile names the profile whose saved selection applied,
+// tool catalog (clown#265): the servers it stopped and, per kept server, how
+// many tools it hid. profile names the profile whose saved selection applied,
 // "" for the interactive picker.
+//
+// Tool and group names are deliberately absent: they come from the servers'
+// own catalogs, which a server controls, so nothing of them reaches the
+// prompt but a count.
 type catalogTrim struct {
 	profile string
 	stopped []string
-	hidden  map[string][]string
+	hidden  map[string]hiddenTools
 }
 
-// Bounds on the notice: names come from profiles.toml and plugin manifests,
-// so each is shape-checked, each list shows at most maxCatalogTrimRows rows
-// and each server row at most maxCatalogTrimGroups groups, and the whole
-// notice stays within maxCatalogTrimBytes.
+// hiddenTools is how many tools a kept server hides. upTo marks a count of
+// requested names rather than names matched against the live catalog (an
+// in-unit server, whose catalog only the unit sees).
+type hiddenTools struct {
+	count int
+	upTo  bool
+}
+
+// Bounds on the notice: server and profile names come from plugin manifests
+// and profiles.toml, so each is shape-checked; each list shows at most
+// maxCatalogTrimRows rows, and the whole notice stays within
+// maxCatalogTrimBytes.
 const (
-	maxCatalogTrimRows   = 16
-	maxCatalogTrimGroups = 24
-	maxCatalogTrimBytes  = 2048
+	maxCatalogTrimRows  = 16
+	maxCatalogTrimBytes = 2048
 )
 
 var (
@@ -33,20 +43,10 @@ var (
 	trimServerShape = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}/[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$`)
 )
 
-// toolGroupName is the group a tool name belongs to: the part before its
-// first "." (moxy's own rendering, "folio.read") or "_" (the claude-safe form
-// a saved selection uses, "folio_read"), or the whole name.
-func toolGroupName(tool string) string {
-	if i := strings.IndexAny(tool, "._"); i > 0 {
-		return tool[:i]
-	}
-	return tool
-}
-
 // catalogTrimFragment renders the prompt notice for t: which profile (or the
-// picker) narrowed the catalog, the servers it stopped and the tool groups it
-// hid, by name only. It is empty when nothing was stopped or hidden, so a
-// launch without a narrowing selection keeps its prompt byte for byte.
+// picker) narrowed the catalog, the servers it stopped and how many tools
+// each kept server hides. It is empty when nothing was stopped or hidden, so
+// a launch without a narrowing selection keeps its prompt byte for byte.
 func catalogTrimFragment(t catalogTrim) string {
 	var stopped []string
 	for _, s := range t.stopped {
@@ -57,43 +57,22 @@ func catalogTrimFragment(t catalogTrim) string {
 	slices.Sort(stopped)
 	stopped = slices.Compact(stopped)
 
-	servers := make([]string, 0, len(t.hidden))
-	for s := range t.hidden {
-		servers = append(servers, s)
-	}
-	sort.Strings(servers)
 	var hidden []string
-	for _, s := range servers {
-		if !trimServerShape.MatchString(s) {
+	for s, h := range t.hidden {
+		if h.count <= 0 || !trimServerShape.MatchString(s) {
 			continue
 		}
-		count := 0
-		var groups []string
-		for _, tool := range t.hidden[s] {
-			if !trimNameShape.MatchString(tool) {
-				continue
-			}
-			count++
-			if g := toolGroupName(tool); !slices.Contains(groups, g) {
-				groups = append(groups, g)
-			}
-		}
-		if count == 0 {
-			continue
-		}
-		sort.Strings(groups)
 		noun := "tools"
-		if count == 1 {
+		if h.count == 1 {
 			noun = "tool"
 		}
-		shown := groups
-		suffix := ""
-		if len(groups) > maxCatalogTrimGroups {
-			shown = groups[:maxCatalogTrimGroups]
-			suffix = fmt.Sprintf("; %d more groups", len(groups)-maxCatalogTrimGroups)
+		upTo := ""
+		if h.upTo {
+			upTo = "up to "
 		}
-		hidden = append(hidden, fmt.Sprintf("- %s: %d %s (%s%s)", s, count, noun, strings.Join(shown, ", "), suffix))
+		hidden = append(hidden, fmt.Sprintf("- %s: %s%d %s hidden", s, upTo, h.count, noun))
 	}
+	slices.Sort(hidden)
 	if len(stopped) == 0 && len(hidden) == 0 {
 		return ""
 	}
@@ -130,7 +109,7 @@ func catalogTrimFragment(t catalogTrim) string {
 		}
 	}
 	writeList("Servers stopped:", stopped)
-	writeList("Tools hidden, by server (tool groups):", hidden)
+	writeList("Tools hidden, by server:", hidden)
 	return b.String()
 }
 

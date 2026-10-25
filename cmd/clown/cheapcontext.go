@@ -499,12 +499,7 @@ func applyCheapContextSelection(
 		}
 	}
 	slices.Sort(out.trim.stopped)
-	hide := func(name string, tools []string) {
-		if out.trim.hidden == nil {
-			out.trim.hidden = map[string][]string{}
-		}
-		out.trim.hidden[name] = tools
-	}
+	hide := out.hide
 	pushedExclusions, pushFailures := 0, 0
 	if replayed {
 		// The raw saved lists, not result.excludedTools: a server whose saved
@@ -517,7 +512,12 @@ func applyCheapContextSelection(
 			}
 			if inUnitNames[name] {
 				out.inUnitExcluded[name] = append([]string(nil), saved...)
-				hide(name, out.inUnitExcluded[name])
+				// The unit's relay resolves, pushes and reads these back, and
+				// refuses the confined launch when any is unconfirmed
+				// (runAgentRelay, recordInUnitExclusionReadback), so a launch
+				// that reaches the agent has them hidden. Saved names that
+				// match nothing live are counted too, hence "up to".
+				hide(name, hiddenTools{count: len(saved), upTo: true})
 				continue
 			}
 			srv, ok := serversByName[name]
@@ -529,31 +529,11 @@ func applyCheapContextSelection(
 				"matched", len(rb.Matched), "unmatched", rb.Unmatched, "still_listed", rb.StillListed, "problem", rb.Problem)
 			out.readbacks = append(out.readbacks, rb)
 			if rb.Problem == "" {
-				hide(name, rb.Matched)
+				hide(name, hiddenTools{count: len(rb.Matched)})
 			}
 		}
 	} else {
-		for name, excludedTools := range result.excludedTools {
-			if inUnitNames[name] {
-				out.inUnitExcluded[name] = excludedTools
-				hide(name, excludedTools)
-				continue
-			}
-			srv, ok := serversByName[name]
-			if !ok {
-				continue
-			}
-			if err := pushExcludeTools(ctx, srv, excludedTools); err != nil {
-				// Best-effort without a profile: a push failure means this
-				// server's deselected tools stay visible, not that the launch fails.
-				logger.Warn("cheap-context: failed to push tool exclusions; server keeps its full catalog",
-					"server", name, "err", err)
-				pushFailures++
-			} else {
-				pushedExclusions++
-				hide(name, excludedTools)
-			}
-		}
+		pushedExclusions, pushFailures = out.applyPickerExclusions(ctx, result.excludedTools, serversByName, inUnitNames, logger)
 	}
 
 	logger.Info("cheap-context: selection applied",
@@ -567,6 +547,50 @@ func applyCheapContextSelection(
 		}
 	}
 	return out, nil
+}
+
+// hide records that server name hides h for the prompt notice.
+func (out *cheapContextOutcome) hide(name string, h hiddenTools) {
+	if out.trim.hidden == nil {
+		out.trim.hidden = map[string]hiddenTools{}
+	}
+	out.trim.hidden[name] = h
+}
+
+// applyPickerExclusions applies the picker's per-tool exclusions: an in-unit
+// server's go to the unit, a started server's are pushed best-effort. Only a
+// push that succeeded counts as hidden.
+func (out *cheapContextOutcome) applyPickerExclusions(
+	ctx context.Context,
+	excluded map[string][]string,
+	serversByName map[string]*pluginhost.ManagedServer,
+	inUnitNames map[string]bool,
+	logger *slog.Logger,
+) (pushed, failed int) {
+	for name, excludedTools := range excluded {
+		if inUnitNames[name] {
+			out.inUnitExcluded[name] = excludedTools
+			// The unit's relay reads these back and refuses the confined
+			// launch when any is unconfirmed (runAgentRelay).
+			out.hide(name, hiddenTools{count: len(excludedTools), upTo: true})
+			continue
+		}
+		srv, ok := serversByName[name]
+		if !ok {
+			continue
+		}
+		if err := pushExcludeTools(ctx, srv, excludedTools); err != nil {
+			// Best-effort without a profile: a push failure means this
+			// server's deselected tools stay visible, not that the launch fails.
+			logger.Warn("cheap-context: failed to push tool exclusions; server keeps its full catalog",
+				"server", name, "err", err)
+			failed++
+			continue
+		}
+		pushed++
+		out.hide(name, hiddenTools{count: len(excludedTools)})
+	}
+	return pushed, failed
 }
 
 // cheapContextOutcome is what applyCheapContextSelection decided: the kept
