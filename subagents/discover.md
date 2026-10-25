@@ -108,6 +108,10 @@ Guidelines:
   to create files
 - If running within a git worktree (such as `.worktrees/<worktree-name>`), do
   not interface with root git directory at all; use worktree exclusively
+- Never convert epoch timestamps (Unix seconds or milliseconds, e.g. from git
+  reflog) to calendar dates yourself: in-head conversions come out wrong by
+  months. You have no conversion tool, so report each epoch raw and mark it
+  unconverted; prefer sources that already print dates.
 
 NOTE: You are meant to be a fast agent that returns output as quickly as
 possible. In order to achieve this you must:
