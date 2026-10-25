@@ -134,7 +134,6 @@ debug-godyn-tests-verbose *flags:
     fakeserver=$(out "$(grep -- '-fakeserver-' <<<"$fixtures")")
     fakellama=$(out "$(grep -- '-fake-llama-server-' <<<"$fixtures")")
     git=$(out "$(grep -- '-git-[0-9]' <<<"$fixtures")")
-    root=$PWD
     work=$(mktemp -d)
     trap 'chmod -R u+w "$work"; rm -rf "$work"' EXIT
     total_skip=0
@@ -143,13 +142,16 @@ debug-godyn-tests-verbose *flags:
         ip=$(grep -o 'echo "ok [^"]*"' <<<"$cmd" | sed 's/^echo "ok //; s/"$//')
         cwd=$(sed -n 's/^cd //p' <<<"$cmd")
         bin=$(ls "$(out "$(input_drvs "$run" | grep -- '-godyn-testbin-')")"/*.test)
+        # A package with testFiles runs from a module-shaped tree
+        # (/nix/store/<x>-godyn-testtree-<pkg>/<dir>): copy the whole tree so
+        # its ../../ reads resolve, and cd to the same subdir.
+        tree=$(sed -E 's|^(/nix/store/[^/]+).*|\1|' <<<"$cwd")
+        sub=${cwd#"$tree"}
         rm -rf "$work/cwd"
-        cp -r --no-preserve=mode "$cwd" "$work/cwd"
-        log=$(cd "$work/cwd" && env HOME="$work" PATH="$git/bin:$PATH" \
+        cp -r --no-preserve=mode "$tree" "$work/cwd"
+        log=$(cd "$work/cwd$sub" && env HOME="$work" PATH="$git/bin:$PATH" \
             CLOWN_TEST_FAKESERVER="$fakeserver/bin/fakeserver" \
             CLOWN_TEST_FAKE_LLAMA_SERVER="$fakellama/bin/fake-llama-server" \
-            CLOWN_TEST_SYSTEM_PROMPT_APPEND_D="$root/system-prompt-append.d" \
-            CLOWN_TEST_SUBAGENTS_D="$root/subagents" \
             "$bin" -test.v {{flags}} 2>&1 || true)
         pass=$(grep -cE '^ *--- PASS' <<<"$log" || true)
         skip=$(grep -cE '^ *--- SKIP' <<<"$log" || true)
@@ -159,6 +161,21 @@ debug-godyn-tests-verbose *flags:
         total_skip=$((total_skip + skip))
     done <<<"$runs"
     echo "total skips: $total_skip"
+
+# List each godyn per-package test run's derivation path, one per line
+# (path, name sorted), to see which packages' runs an edit invalidates:
+# diff the output before and after the edit. Evaluates only (plus godyn's
+# graph IFD); builds no test.
+#
+# list each godyn test run's drv path, to diff across an edit
+[group("debug")]
+debug-godyn-test-drvs:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    nix derivation show "$(nix eval --raw .#clown-godyn-tests.drvPath)" \
+        | jq -r '(.derivations // .) | to_entries[0].value | (.inputDrvs // .inputs.drvs) | keys[]' \
+        | sed 's|^\([^/]\)|/nix/store/\1|' | grep -- '-godyn-test-' \
+        | awk '{n=$0; sub(/^\/nix\/store\/[^-]+-/, "", n); print n, $0}' | sort
 
 # Smoke-run every Go binary bundled in the default package (version/help)
 # and check juggler's burned-in llama-server path — the godyn-migration

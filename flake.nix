@@ -312,6 +312,12 @@
             ./cmd
             ./internal
             ./pkg
+            # Not compiled: read by cmd/clown's fragment-content tests via
+            # the godyn lane's testFiles (each package's build and run take
+            # only filtered copies of their own files, so these do not reach
+            # any other package's derivations).
+            ./system-prompt-append.d
+            ./subagents
           ];
         };
 
@@ -1117,10 +1123,17 @@
               testEnv = {
                 CLOWN_TEST_FAKESERVER = "${fakeserver-go}/bin/fakeserver";
                 CLOWN_TEST_FAKE_LLAMA_SERVER = "${fake-llama-server-go}/bin/fake-llama-server";
-                # The prompt sources, for the fragment-content tests
-                # (cmd/clown/builtinfragments_test.go); not in goSrc.
-                CLOWN_TEST_SYSTEM_PROMPT_APPEND_D = "${./system-prompt-append.d}";
-                CLOWN_TEST_SUBAGENTS_D = "${./subagents}";
+              };
+              # The prompt sources for the fragment-content tests
+              # (cmd/clown/builtinfragments_test.go), placed at their
+              # module-relative paths in cmd/clown's run tree only, so an edit
+              # to a fragment re-runs that package's tests and no other's
+              # (unlike testEnv, which every package's run depends on).
+              testFiles = {
+                "cmd/clown" = [
+                  "system-prompt-append.d"
+                  "subagents"
+                ];
               };
             }
             // extra

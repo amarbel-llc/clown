@@ -9,38 +9,38 @@ import (
 	"code.linenisgreat.com/clown/internal/promptwalk"
 )
 
+// The prompt sources, at their module-relative paths: the godyn lane places
+// them in cmd/clown's run tree (flake.nix testFiles), as `go test` would see
+// them in a checkout. Missing is a failure, not a skip.
+const (
+	systemPromptAppendD = "../../system-prompt-append.d"
+	subagentsD          = "../../subagents"
+)
+
 // The builtin system-prompt-append.d fragments, assembled as clown does at
 // launch (promptwalk.WalkPrompts with buildcfg.SystemPromptAppendD first).
-// The godyn lane hands the source directory in as
-// CLOWN_TEST_SYSTEM_PROMPT_APPEND_D (flake.nix testEnv).
 func builtinAppendPrompt(t *testing.T) string {
 	t.Helper()
-	dir := os.Getenv("CLOWN_TEST_SYSTEM_PROMPT_APPEND_D")
-	if dir == "" {
-		t.Fatal("CLOWN_TEST_SYSTEM_PROMPT_APPEND_D is unset; the godyn test lane sets it to system-prompt-append.d")
+	if fi, err := os.Stat(systemPromptAppendD); err != nil || !fi.IsDir() {
+		t.Fatalf("%s is missing (%v); the godyn lane places it via testFiles", systemPromptAppendD, err)
 	}
 	home := t.TempDir()
-	res, err := promptwalk.WalkPrompts(home, home, []string{dir})
+	res, err := promptwalk.WalkPrompts(home, home, []string{systemPromptAppendD})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if res.AppendFragments == "" {
-		t.Fatalf("no fragments assembled from %s", dir)
+		t.Fatalf("no fragments assembled from %s", systemPromptAppendD)
 	}
 	return res.AppendFragments
 }
 
-// subagentPrompt reads a clown subagent definition (subagents/<name>.md),
-// handed in as CLOWN_TEST_SUBAGENTS_D.
+// subagentPrompt reads a clown subagent definition (subagents/<name>.md).
 func subagentPrompt(t *testing.T, name string) string {
 	t.Helper()
-	dir := os.Getenv("CLOWN_TEST_SUBAGENTS_D")
-	if dir == "" {
-		t.Fatal("CLOWN_TEST_SUBAGENTS_D is unset; the godyn test lane sets it to subagents")
-	}
-	data, err := os.ReadFile(filepath.Join(dir, name))
+	data, err := os.ReadFile(filepath.Join(subagentsD, name))
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("%v; the godyn lane places %s via testFiles", err, subagentsD)
 	}
 	return string(data)
 }
