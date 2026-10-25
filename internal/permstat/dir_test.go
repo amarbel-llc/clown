@@ -44,10 +44,10 @@ func TestSweepRunsInTheStateDirAndIgnoresTheOldLocation(t *testing.T) {
 	if err := os.MkdirAll(oldDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	emptyOld := filepath.Join(dir, "0000empty.json")
-	pendingWeek := filepath.Join(dir, "0000pending.json")
-	pendingAbandoned := filepath.Join(dir, "0000abandoned.json")
-	leftover := filepath.Join(oldDir, "0000leftover.json")
+	emptyOld := filepath.Join(dir, stateName(1))
+	pendingWeek := filepath.Join(dir, stateName(2))
+	pendingAbandoned := filepath.Join(dir, stateName(3))
+	leftover := filepath.Join(oldDir, stateName(4))
 	writeAged(t, emptyOld, 0, 48*time.Hour)
 	writeAged(t, pendingWeek, 1, 48*time.Hour)
 	writeAged(t, pendingAbandoned, 1, 8*24*time.Hour)

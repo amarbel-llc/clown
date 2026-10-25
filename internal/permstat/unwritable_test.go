@@ -9,12 +9,11 @@ import (
 	"code.linenisgreat.com/clown/internal/toolcost"
 )
 
-// Inside an --agent-scope unit the state dir ($XDG_RUNTIME_DIR/clown/
-// permstat) is not bound in, and the unit's /run/user is a tmpfs mounted
-// read-only (ProtectHome=tmpfs), so it cannot be created. This pins what is
-// counted then: prompted still is, with an error from the PermissionRequest
-// (logged by the hook, never printed); approved and declined are not, and
-// their events report no error.
+// A state dir that cannot be created (as happened inside --agent-scope while
+// the state lived under the unit's read-only $XDG_RUNTIME_DIR, and still
+// could under a read-only XDG_STATE_HOME): prompted still counts, with an
+// error from the PermissionRequest (logged by the hook, never printed);
+// approved and declined do not, and their events report no error.
 func TestUncreatableStateDirCountsOnlyPrompted(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Fatal("needs a non-root user: root can create the dir under a read-only parent")

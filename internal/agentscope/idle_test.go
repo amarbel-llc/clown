@@ -46,29 +46,6 @@ func TestTheControlSocketIsNotReachableFromTheUnit(t *testing.T) {
 	}
 }
 
-// clown#302: nothing under the unit's runtime dir is bound in for the
-// permission counters. Their state lived at $XDG_RUNTIME_DIR/clown/permstat,
-// which a unit's read-only /run/user tmpfs (ProtectHome=tmpfs) could not
-// hold, so only `prompted` counted inside --agent-scope; it now lives under
-// $XDG_STATE_HOME/clown/hook-toolcost (permstat.Dir), which cmd/clown's
-// stageAgentHome binds read-write (TestStageAgentHomeBindsThePermstatDir).
-// This pins the unit's systemd-run arguments only (not checked live): the old
-// runtime-dir location stays unbound, so nothing may move back there.
-func TestThePermstatDirIsNotBoundIntoTheUnit(t *testing.T) {
-	l := testLaunch()
-	l.IdleSocket = "/run/user/1001/clown/idle/k.sock"
-	args, err := l.SystemdRunArgs()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !slices.Contains(args, "--property=ProtectHome=tmpfs") {
-		t.Fatalf("ProtectHome=tmpfs missing: %v", args)
-	}
-	if bound := bindsCovering(args, "/run/user/1001/clown/permstat/0123456789abcdef.json"); len(bound) > 0 {
-		t.Errorf("the permstat state dir or a parent of it is bound in: %q", bound)
-	}
-}
-
 // bindsCovering returns the BindPaths=/BindReadOnlyPaths= properties in args
 // whose source is path or a directory above it.
 func bindsCovering(args []string, path string) []string {

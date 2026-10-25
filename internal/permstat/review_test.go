@@ -62,8 +62,8 @@ func TestAnAutoAllowedCallCreatesNoStateFile(t *testing.T) {
 // they are old; recent ones stay.
 func TestStaleStateFilesAreSwept(t *testing.T) {
 	dir := t.TempDir()
-	old := filepath.Join(dir, "0000old.json")
-	recent := filepath.Join(dir, "0000new.json")
+	old := filepath.Join(dir, stateName(10))
+	recent := filepath.Join(dir, stateName(11))
 	for _, p := range []string{old, recent} {
 		if err := os.WriteFile(p, []byte(`{"version":1}`), 0o600); err != nil {
 			t.Fatal(err)
@@ -210,46 +210,37 @@ func TestConcurrentRequestsAndBoundariesCountEachRequestOnce(t *testing.T) {
 	}
 }
 
-// A hook waiting on the lock of a file that is then replaced at its path
-// (renamed over) works on the file the path now names, not the old one.
+// A hook holding the lock of a file that is then replaced at its path
+// (renamed over, here from the after-lock seam, deterministically) works on
+// the file the path now names, not the old one.
 func TestAReplacedFileIsReopened(t *testing.T) {
 	dir := t.TempDir()
 	if _, err := Handle(ev("PermissionRequest", "Bash", bash), dir); err != nil {
 		t.Fatal(err)
 	}
 	path := statePath(dir, "s-1")
-	old, err := os.OpenFile(path, os.O_RDWR, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := syscall.Flock(int(old.Fd()), syscall.LOCK_EX); err != nil {
-		t.Fatal(err)
-	}
 	content, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	done := make(chan []toolcost.Metric, 1)
-	go func() {
-		ms, _ := Handle(ev("PostToolUse", "Bash", bash), dir)
-		done <- ms
-	}()
-	// Let the hook open the old file and start waiting on its lock, then put
-	// a copy in its place and release the old one.
-	time.Sleep(50 * time.Millisecond)
-	tmp := filepath.Join(dir, "replacement.tmp")
-	if err := os.WriteFile(tmp, content, 0o600); err != nil {
-		t.Fatal(err)
+	replaced := false
+	afterLockHook = func() {
+		if replaced {
+			return
+		}
+		replaced = true
+		tmp := filepath.Join(dir, "replacement.tmp")
+		if err := os.WriteFile(tmp, content, 0o600); err != nil {
+			t.Error(err)
+		}
+		if err := os.Rename(tmp, path); err != nil {
+			t.Error(err)
+		}
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		t.Fatal(err)
-	}
-	old.Close()
-	var ms []toolcost.Metric
-	select {
-	case ms = <-done:
-	case <-time.After(4 * time.Second):
-		t.Fatal("PostToolUse stalled")
+	t.Cleanup(func() { afterLockHook = nil })
+	ms, err := Handle(ev("PostToolUse", "Bash", bash), dir)
+	if err != nil || !replaced {
+		t.Fatalf("PostToolUse: %v (replaced %v)", err, replaced)
 	}
 	if len(ms) != 1 || !strings.HasSuffix(ms[0].Name, ".approved") {
 		t.Fatalf("PostToolUse = %v, want approved", ms)
@@ -259,6 +250,10 @@ func TestAReplacedFileIsReopened(t *testing.T) {
 		t.Fatalf("Stop = %v, %v; want nothing declined (the request was approved in the file the path names)", ms, err)
 	}
 }
+
+// stateName is a state-file-shaped name (32 hex digits, as statePath makes)
+// for fixture n.
+func stateName(n int) string { return fmt.Sprintf("%032x.json", n) }
 
 // writeAged writes a state file with the given pending count, last
 // modified age ago.
@@ -286,9 +281,9 @@ func writeAged(t *testing.T, path string, pendingN int, age time.Duration) {
 // empty one past 24h.
 func TestSweepKeepsPendingRequestsForAWeek(t *testing.T) {
 	dir := t.TempDir()
-	awayADay := filepath.Join(dir, "0000away.json")
-	abandoned := filepath.Join(dir, "0000abandoned.json")
-	emptyOld := filepath.Join(dir, "0000empty.json")
+	awayADay := filepath.Join(dir, stateName(20))
+	abandoned := filepath.Join(dir, stateName(21))
+	emptyOld := filepath.Join(dir, stateName(22))
 	writeAged(t, awayADay, 1, 48*time.Hour)
 	writeAged(t, abandoned, 1, 8*24*time.Hour)
 	writeAged(t, emptyOld, 0, 48*time.Hour)
@@ -309,14 +304,14 @@ func TestSweepKeepsPendingRequestsForAWeek(t *testing.T) {
 func TestSweepRemovesAtMost16(t *testing.T) {
 	dir := t.TempDir()
 	for i := 0; i < 20; i++ {
-		writeAged(t, filepath.Join(dir, fmt.Sprintf("old%02d.json", i)), 0, 48*time.Hour)
+		writeAged(t, filepath.Join(dir, stateName(100+i)), 0, 48*time.Hour)
 	}
 	if _, err := Handle(ev("PermissionRequest", "Bash", bash), dir); err != nil {
 		t.Fatal(err)
 	}
 	left := 0
 	for i := 0; i < 20; i++ {
-		if _, err := os.Stat(filepath.Join(dir, fmt.Sprintf("old%02d.json", i))); err == nil {
+		if _, err := os.Stat(filepath.Join(dir, stateName(100+i))); err == nil {
 			left++
 		}
 	}
@@ -329,11 +324,11 @@ func TestSweepRemovesAtMost16(t *testing.T) {
 func TestSweepReadsPastTheFirstBatch(t *testing.T) {
 	dir := t.TempDir()
 	for i := 0; i < 1000; i++ {
-		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("recent%04d.json", i)), []byte(`{"version":1}`), 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, stateName(1000+i)), []byte(`{"version":1}`), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	old := filepath.Join(dir, "zzzold.json")
+	old := filepath.Join(dir, stateName(5000))
 	writeAged(t, old, 0, 48*time.Hour)
 	if _, err := Handle(ev("PermissionRequest", "Bash", bash), dir); err != nil {
 		t.Fatal(err)

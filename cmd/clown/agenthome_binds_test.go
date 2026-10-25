@@ -15,24 +15,39 @@ import (
 // read-write bind of the unit, so all three counters work inside
 // --agent-scope. The unit sets XDG_STATE_HOME to the frontend's value
 // (agentscope.OperatorXDG), so the path is the same inside and out.
+//
+// Pinned exactly: the bind is $XDG_STATE_HOME/clown/hook-toolcost itself (not
+// a wider prefix such as all of XDG_STATE_HOME), permstat.Dir() is directly
+// under it, and it is not under the runtime dir (a read-only tmpfs in a
+// unit), so it fails if the state moves back there or out of the bind.
 func TestStageAgentHomeBindsThePermstatDir(t *testing.T) {
-	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	runtime, state := t.TempDir(), t.TempDir()
+	t.Setenv("XDG_RUNTIME_DIR", runtime)
+	t.Setenv("XDG_STATE_HOME", state)
 	p, err := stageAgentHome(agentscope.Spec{OperatorHome: t.TempDir()}, t.TempDir(), t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
+	bind := filepath.Join(state, "clown", "hook-toolcost")
 	dir := permstat.Dir()
+	if filepath.Dir(dir) != bind {
+		t.Fatalf("permstat.Dir() = %s, want a directory directly under %s", dir, bind)
+	}
+	if strings.HasPrefix(dir, runtime+"/") {
+		t.Fatalf("permstat.Dir() %s is under XDG_RUNTIME_DIR", dir)
+	}
+	if !slices.Contains(p.rw, bind) {
+		t.Fatalf("read-write binds %v, want exactly %s", p.rw, bind)
+	}
 	for _, b := range p.rw {
 		src, _, _ := strings.Cut(b, ":")
-		if src == dir || strings.HasPrefix(dir, strings.TrimSuffix(src, "/")+"/") {
-			if fi, err := os.Stat(src); err != nil || !fi.IsDir() {
-				t.Fatalf("the bind source %s is not a directory: %v", src, err)
-			}
-			return
+		if src != bind && strings.HasPrefix(bind, strings.TrimSuffix(src, "/")+"/") {
+			t.Errorf("a wider read-write bind %s covers %s", src, bind)
 		}
 	}
-	t.Fatalf("no read-write bind covers the permstat dir %s: %v", dir, p.rw)
+	if fi, err := os.Stat(bind); err != nil || !fi.IsDir() {
+		t.Fatalf("the bind source %s is not a directory: %v", bind, err)
+	}
 }
 
 // TestStageAgentHomeBindsTheOperatorCredentialReadOnly: a worker can read the
