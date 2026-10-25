@@ -116,20 +116,16 @@ func consumeRestartedNotice() string {
 // was restarted, and why. The reason comes from whoever asked spinclass, so it
 // is reduced to one line of printable text and bounded.
 func restartedNotice(reason string) string {
-	if reason == "" {
+	clean := sanitizeRestartReason(reason)
+	if clean == "" {
 		return ""
-	}
-	clean := strings.Join(strings.Fields(strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f {
-			return ' '
-		}
-		return r
-	}, reason)), " ")
-	if r := []rune(clean); len(r) > 300 {
-		clean = string(r[:300]) + "..."
 	}
 	return "restarted: " + clean + "\n\nThis session was stopped and relaunched by its clown frontend at spinclass's request (spinclass#419). The conversation is the same session under the same principal; its tools and configuration were loaded afresh and may have changed."
 }
+
+// restartFallbackReason is the relaunch's reason when spinclass's verdict
+// gives none.
+const restartFallbackReason = "requested through spinclass"
 
 // frontendRestarter performs a restart the preflight allowed.
 type frontendRestarter struct {
@@ -159,7 +155,10 @@ func (fr frontendRestarter) restart(req restartRequest, v preflightVerdict) {
 			return
 		}
 	}
-	reason := cmpOr(req.Reason, v.Reason)
+	// spinclass's own reason, from the verdict. The queued one came over the
+	// control socket, which any same-uid process can write, so it is not
+	// used.
+	reason := cmpOr(sanitizeRestartReason(v.Reason), restartFallbackReason)
 	if fr.countdown != nil {
 		proceed, how := fr.countdown(reason)
 		logSelfClose(fr.logPath, "restart (%s): countdown: %s", fr.principal, how)

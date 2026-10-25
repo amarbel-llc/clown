@@ -186,7 +186,7 @@ func TestFrontendRestarterStopsTheProviderOnce(t *testing.T) {
 	if stops != 1 {
 		t.Fatalf("stops = %d", stops)
 	}
-	if p := pendingRelaunch.Load(); p == nil || p.reason != "new tools" || p.principal != restartTestPrincipal {
+	if p := pendingRelaunch.Load(); p == nil || p.reason != "other" || p.principal != restartTestPrincipal {
 		t.Fatalf("plan = %+v", p)
 	}
 }

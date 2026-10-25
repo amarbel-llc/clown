@@ -13,6 +13,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode"
 )
 
 // `clown restart` is the clown half of spinclass#419 (spinclass FDR 0037).
@@ -91,9 +92,32 @@ func restartControlHandler(provider, unarmedReason string, q *restartQueue) func
 			}
 			return controlReply{Error: fmt.Sprintf("restart needs an idle trigger; %s's is not armed (%s)", provider, unarmedReason)}
 		}
-		q.put(restartRequest{When: m.When, Reason: m.Reason})
+		q.put(restartRequest{When: m.When, Reason: sanitizeRestartReason(m.Reason)})
 		return controlReply{OK: true}
 	}
+}
+
+// restartReasonMaxRunes caps a restart reason.
+const restartReasonMaxRunes = 300
+
+// sanitizeRestartReason reduces a restart reason to one line of printable
+// text: control characters (C0, C1, newlines) become spaces, other
+// non-printing runes (bidi controls, zero-width characters) are dropped,
+// runs of space collapse, and it is capped at restartReasonMaxRunes.
+func sanitizeRestartReason(s string) string {
+	clean := strings.Join(strings.Fields(strings.Map(func(r rune) rune {
+		switch {
+		case unicode.IsControl(r) || unicode.IsSpace(r):
+			return ' '
+		case !unicode.IsPrint(r):
+			return -1
+		}
+		return r
+	}, s)), " ")
+	if r := []rune(clean); len(r) > restartReasonMaxRunes {
+		clean = string(r[:restartReasonMaxRunes]) + "..."
+	}
+	return clean
 }
 
 // controlListener serves the control socket.
