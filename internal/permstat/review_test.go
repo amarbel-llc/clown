@@ -124,7 +124,7 @@ func TestAHeldLockDoesNotStall(t *testing.T) {
 		}()
 		select {
 		case ms := <-done:
-			if took := time.Since(start); took > 2*time.Second {
+			if took := time.Since(start); took > 3*lockWait {
 				t.Fatalf("%s took %v under a held lock", e, took)
 			}
 			if e == "PermissionRequest" && (len(ms) != 1 || !strings.HasSuffix(ms[0].Name, ".prompted")) {
@@ -320,7 +320,10 @@ func TestSweepRemovesAtMost16(t *testing.T) {
 	}
 }
 
-// The sweep looks past the first batch of directory entries.
+// The sweep looks past the first batch of directory entries. Deterministic
+// whatever the directory order: 1001 entries are well within the
+// 4096-entry scan bound, so every one is looked at and the old one is found
+// wherever it sits.
 func TestSweepReadsPastTheFirstBatch(t *testing.T) {
 	dir := t.TempDir()
 	for i := 0; i < 1000; i++ {

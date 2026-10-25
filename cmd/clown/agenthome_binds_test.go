@@ -50,6 +50,33 @@ func TestStageAgentHomeBindsThePermstatDir(t *testing.T) {
 	}
 }
 
+// The agent can write the permission state dir, but not the rest of
+// $XDG_STATE_HOME/clown: among clown's own binds, the only read-write ones
+// under it are the two hook dirs, and none is clown/ itself or a parent.
+// Pinned on stageAgentHome's binds only: the spinclass spec's BindsRW is
+// outside this check (I), and so is the live unit.
+func TestStageAgentHomeBindsNoMoreOfTheClownStateDir(t *testing.T) {
+	state := t.TempDir()
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	t.Setenv("XDG_STATE_HOME", state)
+	p, err := stageAgentHome(agentscope.Spec{OperatorHome: t.TempDir()}, t.TempDir(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	clownState := filepath.Join(state, "clown")
+	want := map[string]bool{filepath.Join(clownState, "hook-toolcost"): true, filepath.Join(clownState, "hook-tee"): true}
+	for _, b := range p.rw {
+		src, _, _ := strings.Cut(b, ":")
+		src = strings.TrimSuffix(src, "/")
+		switch {
+		case src == clownState || strings.HasPrefix(clownState, src+"/"):
+			t.Errorf("read-write bind %s covers all of %s", src, clownState)
+		case strings.HasPrefix(src, clownState+"/") && !want[src]:
+			t.Errorf("unexpected read-write bind under %s: %s", clownState, src)
+		}
+	}
+}
+
 // TestStageAgentHomeBindsTheOperatorCredentialReadOnly: a worker can read the
 // operator's claude credential but must not overwrite or truncate it.
 func TestStageAgentHomeBindsTheOperatorCredentialReadOnly(t *testing.T) {
