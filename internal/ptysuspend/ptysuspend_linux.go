@@ -64,8 +64,9 @@ type Options struct {
 	NoEscape bool
 	// OnStart, when set, is called once the child has started and a
 	// process-level SIGTERM is forwarded to it, with the inner slave's path and
-	// the child's pid.
-	OnStart func(slavePath string, pid int)
+	// the child's process (signal it through this handle, which never reaches
+	// a reused pid once the child is reaped).
+	OnStart func(slavePath string, proc *os.Process)
 }
 
 func (o Options) escapeKey() byte {
@@ -146,7 +147,7 @@ func Run(argv []string, outer *os.File, opts Options) (int, error) {
 	// Only now: from here a SIGTERM to this process reaches the child, which
 	// is what a caller stopping the child by signalling itself relies on.
 	if opts.OnStart != nil {
-		opts.OnStart(slaveName, cmd.Process.Pid)
+		opts.OnStart(slaveName, cmd.Process)
 	}
 
 	// Child output -> user terminal (pausable while the escape command holds the

@@ -91,8 +91,9 @@ type agentScopeRequest struct {
 	unit string
 	// serve is the session's serve socket relay (F12); zero: none.
 	serve agentscope.Relay
-	// onStarted is called once a SIGTERM to clown reaches systemd-run.
-	onStarted func(pid int)
+	// onStarted is called once a SIGTERM to clown reaches systemd-run, with
+	// a kill of the unit.
+	onStarted func(kill func())
 }
 
 // agentScopeTools resolves systemd-run and systemctl from PATH (overridable

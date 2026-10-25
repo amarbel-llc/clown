@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -34,7 +35,15 @@ type relaunchPlan struct {
 	reason    string
 	// argv is clown's arguments, without argv[0].
 	argv []string
+	// worktree is the session's working directory at launch; "" skips the
+	// check.
+	worktree string
 }
+
+// killProcess SIGKILLs p through its handle: once the frontend has reaped it
+// this returns os.ErrProcessDone instead of signalling a pid that may since
+// belong to another process.
+func killProcess(p *os.Process) error { return p.Signal(syscall.SIGKILL) }
 
 var (
 	// pendingRelaunch is set by the idle runner just before it stops the
@@ -43,26 +52,36 @@ var (
 	// providerRunning is true while runProvider waits on the provider, the
 	// only time stopping it unwinds to main.
 	providerRunning atomic.Bool
-	// providerKill SIGKILLs the running provider; set with providerRunning.
-	providerKill atomic.Pointer[func()]
+	// providerKill SIGKILLs the running provider; set and cleared with
+	// providerRunning, under providerMu.
+	providerKill func()
+	providerMu   sync.Mutex
 )
 
 // setProviderRunning marks the provider running (its SIGTERM forwarding is
 // in place) with how to kill it.
 func setProviderRunning(kill func()) {
-	providerKill.Store(&kill)
+	providerMu.Lock()
+	defer providerMu.Unlock()
+	providerKill = kill
 	providerRunning.Store(true)
 }
 
 func clearProviderRunning() {
+	providerMu.Lock()
+	defer providerMu.Unlock()
 	providerRunning.Store(false)
-	providerKill.Store(nil)
+	providerKill = nil
 }
 
-// killProvider SIGKILLs the running provider, if one is recorded.
+// killProvider SIGKILLs the running provider, only while it is still recorded
+// as running: the check and the kill hold the lock clearProviderRunning takes
+// when runProvider returns.
 func killProvider() {
-	if k := providerKill.Load(); k != nil {
-		(*k)()
+	providerMu.Lock()
+	defer providerMu.Unlock()
+	if providerRunning.Load() && providerKill != nil {
+		providerKill()
 	}
 }
 

@@ -2106,15 +2106,6 @@ func runProvider(executor Executor, bound Command, logger *slog.Logger, flags pa
 	// ignores the stop.
 	defer clearProviderRunning()
 	markProviderRunning := setProviderRunning
-	// killPid kills target (a pid, or -pgid); 0 and -1 would hit clown's own
-	// group or every process, and are ignored.
-	killPid := func(target int) func() {
-		return func() {
-			if target != 0 && target != -1 {
-				_ = syscall.Kill(target, syscall.SIGKILL)
-			}
-		}
-	}
 
 	if flags.agentScopeSpec != "" {
 		return runInAgentScope(agentScopeRequest{
@@ -2129,9 +2120,8 @@ func runProvider(executor Executor, bound Command, logger *slog.Logger, flags pa
 			extraEnv:     extraEnv,
 			principal:    flags.identity.Key,
 			idleSocket:   flags.idleSocket,
-			// systemd-run: killing it ends the wait, and the unit is
-			// stopped on the way out (stopIfActive).
-			onStarted: func(pid int) { markProviderRunning(killPid(pid)) },
+			// The kill SIGKILLs the unit (systemctl kill), not systemd-run.
+			onStarted: markProviderRunning,
 		}, logger)
 	}
 
@@ -2146,12 +2136,12 @@ func runProvider(executor Executor, bound Command, logger *slog.Logger, flags pa
 		}
 		ptyOpts.Env = extraEnv
 		onStart := ptyOpts.OnStart
-		ptyOpts.OnStart = func(slave string, pid int) {
+		ptyOpts.OnStart = func(slave string, proc *os.Process) {
 			if onStart != nil {
-				onStart(slave, pid)
+				onStart(slave, proc)
 			}
-			// The child leads its own session: kill its process group.
-			markProviderRunning(killPid(-pid))
+			// Through the process handle, never a pid that may be reused.
+			markProviderRunning(func() { _ = killProcess(proc) })
 		}
 		code, err := ptysuspend.Run(append([]string{binary}, argv...), os.Stdin, ptyOpts)
 		if err != nil {
@@ -2206,7 +2196,7 @@ func runProvider(executor Executor, bound Command, logger *slog.Logger, flags pa
 		return 1
 	}
 	startElapsed := time.Since(preStart)
-	markProviderRunning(func() { _ = cmd.Process.Kill() })
+	markProviderRunning(func() { _ = killProcess(cmd.Process) })
 	if logger != nil {
 		logger.Info("downstream process started", "pid", cmd.Process.Pid, "start_elapsed", startElapsed.String())
 	}

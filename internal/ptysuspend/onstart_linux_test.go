@@ -28,7 +28,7 @@ func TestOnStartRunsAfterSIGTERMIsForwarded(t *testing.T) {
 	go func() {
 		code, _ := Run([]string{"/bin/sh", "-c", "read x"}, outer, Options{
 			NoEscape: true,
-			OnStart:  func(string, int) { _ = syscall.Kill(os.Getpid(), syscall.SIGTERM) },
+			OnStart:  func(string, *os.Process) { _ = syscall.Kill(os.Getpid(), syscall.SIGTERM) },
 		})
 		done <- code
 	}()

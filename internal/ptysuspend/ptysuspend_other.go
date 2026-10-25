@@ -31,7 +31,7 @@ type Options struct {
 	// DetachSlave, NoEscape and OnStart mirror the linux build's fields.
 	DetachSlave bool
 	NoEscape    bool
-	OnStart     func(slavePath string, pid int)
+	OnStart     func(slavePath string, proc *os.Process)
 }
 
 // Supported reports that the pty-suspend proxy is not implemented here, so

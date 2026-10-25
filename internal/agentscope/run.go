@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -251,10 +252,27 @@ func Run(l Launch, tools Tools, logger *slog.Logger) (int, error) {
 	defer cancel()
 	outcome := make(chan startOutcome, 1)
 	var reporting atomic.Bool
-	report := func(pty string, pid int) {
+	// killUnit SIGKILLs the unit's processes while this Run still owns it;
+	// once Run returns the unit is gone or about to be, and the kill does
+	// nothing.
+	var killMu sync.Mutex
+	owned := true
+	killUnit := func() {
+		killMu.Lock()
+		defer killMu.Unlock()
+		if owned {
+			_ = exec.Command(tools.systemctl(), "--user", "kill", "--signal=SIGKILL", l.Unit).Run()
+		}
+	}
+	defer func() {
+		killMu.Lock()
+		owned = false
+		killMu.Unlock()
+	}()
+	report := func(pty string) {
 		reporting.Store(true)
 		if l.OnStarted != nil {
-			l.OnStarted(pid)
+			l.OnStarted(killUnit)
 		}
 		go func() {
 			st, err := tools.waitActive(ctx, l.Unit)
@@ -281,7 +299,7 @@ func Run(l Launch, tools Tools, logger *slog.Logger) (int, error) {
 		code, err = ptysuspend.Run(argv, os.Stdin, ptysuspend.Options{
 			DetachSlave: true,
 			NoEscape:    true,
-			OnStart:     func(slave string, pid int) { report(slave, pid) },
+			OnStart:     func(slave string, _ *os.Process) { report(slave) },
 		})
 	} else {
 		code, err = runPiped(argv, report)
@@ -349,7 +367,7 @@ func (l Launch) writeResult(r Result, logger *slog.Logger) {
 	}
 }
 
-func runPiped(argv []string, report func(pty string, pid int)) (int, error) {
+func runPiped(argv []string, report func(pty string)) (int, error) {
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	sigCh := make(chan os.Signal, 1)
@@ -363,7 +381,7 @@ func runPiped(argv []string, report func(pty string, pid int)) (int, error) {
 			_ = cmd.Process.Signal(s)
 		}
 	}()
-	report("", cmd.Process.Pid)
+	report("")
 	err := cmd.Wait()
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
