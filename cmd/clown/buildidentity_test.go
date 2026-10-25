@@ -184,6 +184,37 @@ func TestPluginRowsAreShapeChecked(t *testing.T) {
 	mustNotContain(t, got, "authoritative")
 }
 
+// The version-info of a real clown build (2026-10-25) passes the shape check
+// whole, "-" versions included.
+func TestRealPluginRowsPass(t *testing.T) {
+	setBuildcfg(t, "0.4.4", "a1b2c3d", "")
+	setPinnedComponents(t, "", "", "", "")
+	writePluginMeta(t,
+		"moxy/moxy            0.6.46+2037822 2037822f8b4bbe72bd1cd0d591e03823059e6890",
+		"spinclass-0.2.1/spinclass 0.2.1+6b83346 6b833464ed1afad3232f43f86fa63479d27505ea",
+		"circus-eng-plugin/eng -            995910efb987",
+		"circus-plugin/circus -            995910efb987",
+		"madder-clown-plugin/madder 0.1.0        f0f488bdfe117f34e766b67e7bbd39129dc16193",
+		"dodder-clown-plugin/dodder 0.2.16       9f5a0c7cbfaf716a76d267e3723a278f9a718e97",
+		"cutting-garden-clown-plugin/cutting-garden 0.1.30       da72137eac47e582222ab0ad5f71b0c015544974",
+		"just-us-clown-plugin/just-us 0.1.2        45b97898c17973fc0228350255ff8389396999f0",
+	)
+	got := buildIdentityFragment()
+	for _, want := range []string{
+		"- moxy/moxy 0.6.46+2037822 (2037822f8b4bbe72bd1cd0d591e03823059e6890)",
+		"- spinclass-0.2.1/spinclass 0.2.1+6b83346 (6b833464ed1afad3232f43f86fa63479d27505ea)",
+		"- circus-eng-plugin/eng unversioned (995910efb987)",
+		"- circus-plugin/circus unversioned (995910efb987)",
+		"- madder-clown-plugin/madder 0.1.0 (f0f488bdfe117f34e766b67e7bbd39129dc16193)",
+		"- dodder-clown-plugin/dodder 0.2.16 (9f5a0c7cbfaf716a76d267e3723a278f9a718e97)",
+		"- cutting-garden-clown-plugin/cutting-garden 0.1.30 (da72137eac47e582222ab0ad5f71b0c015544974)",
+		"- just-us-clown-plugin/just-us 0.1.2 (45b97898c17973fc0228350255ff8389396999f0)",
+	} {
+		mustContain(t, got, want)
+	}
+	mustNotContain(t, got, "more plugin rows not shown")
+}
+
 // At most 16 plugin rows, the first 16 in sorted order, with a note of how
 // many were left out; the whole section stays within 2 KiB.
 func TestPluginRowsAreCapped(t *testing.T) {

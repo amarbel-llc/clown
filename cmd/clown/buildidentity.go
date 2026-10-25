@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"code.linenisgreat.com/clown/internal/buildcfg"
@@ -50,32 +51,75 @@ func buildIdentityFragment() string {
 	return b.String()
 }
 
-// pinnedComponentsSection renders the `clown version` table's rows after
-// clown's own (claude-code, codex, ringmaster, troupe and the plugins), so an
-// agent has the deployed versions without shelling out (clown#227). A
-// component this build did not pin (no version) is left out; with none
-// pinned the section is empty. It follows the sign-off sentence, which stays
-// as it was.
+// Bounds on the pinned-components section: plugin rows are self-reported
+// (each plugin's plugin.json name and version, via the flake's
+// version-info), so they are shape-checked, at most maxPluginRows are
+// listed, and the whole section stays within maxPinnedSectionBytes.
+const (
+	maxPluginRows         = 16
+	maxPinnedSectionBytes = 2048
+)
+
+// pluginRowShape is a plugin version-info line after whitespace collapse:
+// "<flake>/<plugin> <version> <rev>", each a plain token. A line of any
+// other shape (prose, markup, extra words) is dropped.
+var pluginRowShape = regexp.MustCompile(`^([A-Za-z0-9._+/-]{1,64}) ([A-Za-z0-9._+~-]{1,32}) ([A-Za-z0-9._+-]{1,64})$`)
+
+// pinnedComponentsSection renders the `clown version` table's rows other
+// than clown's own (claude-code, codex, ringmaster, troupe, then the
+// plugins), so an agent can see what this build pinned without shelling out
+// (clown#227). Build-time rows come first; a component this build did not
+// pin (no version) is left out, and with none pinned the section is empty.
+// It follows the sign-off sentence, which stays as it was.
 func pinnedComponentsSection() string {
-	var lines []string
-	for _, r := range buildVersionRows()[1:] {
+	var pinned, plugins []string
+	for _, r := range buildVersionRows() {
 		switch {
+		case r.component == "clown":
+			// The first sentence already states clown's own build.
 		case r.version != "" && r.rev != "":
-			lines = append(lines, fmt.Sprintf("- %s %s (%s)", r.component, r.version, r.rev))
+			pinned = append(pinned, fmt.Sprintf("- %s %s (%s)", r.component, r.version, r.rev))
 		case r.version != "":
-			lines = append(lines, fmt.Sprintf("- %s %s", r.component, r.version))
-		case strings.ContainsAny(r.component, " \t"):
-			// A plugin's preformatted version-info line ("name version rev").
-			lines = append(lines, "- "+strings.Join(strings.Fields(r.component), " "))
+			pinned = append(pinned, fmt.Sprintf("- %s %s", r.component, r.version))
+		default:
+			// A plugin's version-info line, or an unpinned component (one
+			// bare word), which the shape check drops.
+			m := pluginRowShape.FindStringSubmatch(strings.Join(strings.Fields(r.component), " "))
+			if m == nil {
+				continue
+			}
+			version := m[2]
+			if version == "-" { // no version in the plugin's plugin.json
+				version = "unversioned"
+			}
+			plugins = append(plugins, fmt.Sprintf("- %s %s (%s)", m[1], version, m[3]))
 		}
 	}
-	if len(lines) == 0 {
+	if len(pinned) == 0 && len(plugins) == 0 {
 		return ""
 	}
-	return "\n\nComponents pinned into this build at build time (the `clown version` " +
-		"table, as component version (rev)). They are authoritative for what is " +
-		"deployed and running; the source HEAD in a git-status snapshot is not, " +
-		"and can be ahead of the running binaries.\n" + strings.Join(lines, "\n")
+	var b strings.Builder
+	b.WriteString("\n\nComponents pinned into this build at build time (the `clown version` " +
+		"table), as component version (rev); plugin rows are self-reported by " +
+		"each plugin's plugin.json. They describe this build, not the worktree: " +
+		"the source HEAD in a git-status snapshot can differ from them.")
+	for _, l := range pinned {
+		b.WriteString("\n" + l)
+	}
+	// Room for the "N more" note, so it always fits.
+	const noteRoom = 48
+	shown := 0
+	for _, l := range plugins {
+		if shown == maxPluginRows || b.Len()+1+len(l)+noteRoom > maxPinnedSectionBytes {
+			break
+		}
+		b.WriteString("\n" + l)
+		shown++
+	}
+	if more := len(plugins) - shown; more > 0 {
+		fmt.Fprintf(&b, "\n- (%d more plugin rows not shown)", more)
+	}
+	return b.String()
 }
 
 // buildIdentifier formats the human-facing build token. With both a version
