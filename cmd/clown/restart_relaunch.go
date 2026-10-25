@@ -141,12 +141,21 @@ type frontendRestarter struct {
 	// restarts at once.
 	countdown func(reason string) (proceed bool, how string)
 	logPath   string
+	// profileCheck dry-runs the relaunch's profile gate before anything is
+	// stopped (restartProfileCheck); nil skips it.
+	profileCheck func() error
 }
 
 func (fr frontendRestarter) restart(req restartRequest, v preflightVerdict) {
 	if !providerRunning.Load() {
 		logSelfClose(fr.logPath, "restart (%s): no provider is running; not restarting", fr.principal)
 		return
+	}
+	if fr.profileCheck != nil {
+		if err := fr.profileCheck(); err != nil {
+			logSelfClose(fr.logPath, "restart (%s): the relaunch's profile gate would refuse, so the session keeps running: %v", fr.principal, err)
+			return
+		}
 	}
 	reason := cmpOr(req.Reason, v.Reason)
 	if fr.countdown != nil {

@@ -1015,11 +1015,12 @@ func runWithFlags(flags parsedFlags) int {
 	restarts := &restartQueue{}
 	restartLog, _ := userStateWritePath("close-self-run.log")
 	restarter := frontendRestarter{
-		principal: flags.identity.Key,
-		argv:      restartArgv(flags, attachedID),
-		stop:      stopProviderBySignal,
-		countdown: newRestartCountdown().proceed,
-		logPath:   restartLog,
+		principal:    flags.identity.Key,
+		argv:         restartArgv(flags, attachedID),
+		stop:         stopProviderBySignal,
+		countdown:    newRestartCountdown().proceed,
+		profileCheck: newRestartProfileCheck(flags, attachedID).check,
+		logPath:      restartLog,
 	}
 	idleDir, idleSock, closeIdle := armSelfClose(flags, root, restarts, restarter.restart)
 	defer closeIdle()
