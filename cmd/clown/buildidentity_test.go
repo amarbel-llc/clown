@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -114,6 +116,28 @@ func TestBuildIdentityFragmentListsPinnedComponents(t *testing.T) {
 	// Unpinned components (no version) are left out.
 	mustNotContain(t, got, "claude-code")
 	mustNotContain(t, got, "codex")
+}
+
+// clown#227: plugin rows from CLOWN_PLUGIN_META/version-info (preformatted
+// "name version rev" lines) are listed too, whitespace collapsed; with
+// nothing pinned at all there is no section.
+func TestBuildIdentityFragmentListsPluginVersions(t *testing.T) {
+	setBuildcfg(t, "0.3.10", "a1b2c3d", "")
+	setPinnedComponents(t, "", "", "", "")
+	t.Setenv("CLOWN_PLUGIN_META", "")
+	if got := buildIdentityFragment(); strings.Contains(got, "`clown version`") {
+		t.Fatalf("nothing pinned, yet a components section:\n%s", got)
+	}
+
+	meta := t.TempDir()
+	line := "moxy/moxy            1.2.3        abc1234\n"
+	if err := os.WriteFile(filepath.Join(meta, "version-info"), []byte(line), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CLOWN_PLUGIN_META", meta)
+	got := buildIdentityFragment()
+	mustContain(t, got, "- moxy/moxy 1.2.3 abc1234")
+	mustContain(t, got, "`clown version`")
 }
 
 func mustContain(t *testing.T, haystack, needle string) {
