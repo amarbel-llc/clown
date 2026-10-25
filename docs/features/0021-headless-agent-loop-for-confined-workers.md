@@ -307,14 +307,26 @@ in-unit servers are **not** fetched (FDR 0020 "What a confined worker loses").
 Claude Code adds its own base prompt, `CLAUDE.md`/`AGENTS.md`, skills and
 memory on top. A juggler agent's system prompt is `brief.system` verbatim.
 
-**Resolved (read this pass):** clown's `system-prompt-append.d/` holds three
-fragments. `00-identity.md` names Claude Code only as what Clown is a fork of,
-and directs the agent to the `man.*` MCP tools, which the in-unit moxyfile
-allows (`agentscope.InUnitMoxyfile` lists `man`). `01-runtime-claims.md` and
-`02-pii-redaction.md` are harness-neutral. None names a Claude-Code-only tool.
-The composed prompt can therefore be reused as `brief.system` with no
-per-fragment review for these three; plugin fragments that opt in with
-`systemPrompt: true` still need a look when the loop is first pointed at them.
+**Resolved (re-read 2026-10-25):** clown's `system-prompt-append.d/` holds
+five fragments. `00-identity.md` names Claude Code only as what Clown is a
+fork of, and directs the agent to the `man.*` MCP tools, which the in-unit
+moxyfile allows (`agentscope.InUnitMoxyfile` lists `man`).
+`01-runtime-claims.md` now also says to convert epochs with moxy's `env_date`
+tool or `date -d @N`; `env` is in the in-unit allow-list, and a loop with no
+shell is covered by the fragment's own fallback (report the epoch raw).
+`02-pii-redaction.md` and `03-todo-issue-refs.md` are harness-neutral.
+`04-no-file-memory.md` names a Claude Code feature, the file-based memory
+under `~/.claude/projects/<project>/memory/` and `MEMORY.md`, but no tool: a
+juggler agent has no such memory section to override, so the rule is inert
+there, and its prohibition (do not read or write that directory) is still
+right for an agent whose folio tools could reach it. No fragment names a
+Claude-Code-only tool, so the conclusion stands: the composed prompt can be
+reused as `brief.system` with no per-fragment exclusion. There is no
+mechanism to exclude a fragment from the brief; if a future fragment should
+not reach juggler agents, the composer needs one (a per-fragment
+harness tag, say) and this section must say so. Plugin fragments that opt in
+with `systemPrompt: true` still need a look when the loop is first pointed at
+them.
 
 Disposition: **reproduce selectively**. The composer (`internal/promptwalk`)
 runs in clown's frontend and produces the brief's `system`. Loading the repo's

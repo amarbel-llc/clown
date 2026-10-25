@@ -313,9 +313,14 @@
             ./internal
             ./pkg
             # Not compiled: read by cmd/clown's fragment-content tests via
-            # the godyn lane's testFiles (each package's build and run take
-            # only filtered copies of their own files, so these do not reach
-            # any other package's derivations).
+            # the godyn lane's testFiles. godyn's per-package builds and runs
+            # take only filtered copies of their own files, so these reach no
+            # other godyn derivation (checked with `just
+            # debug-godyn-test-drvs`). They do reach every derivation that
+            # uses the whole goSrc: bga builds (clown-bats-bins, hence
+            # clown-cover, and the race/bga passthrus), the godyn graph
+            # generation, and the juggler-boundary check, which an edit here
+            # rebuilds.
             ./system-prompt-append.d
             ./subagents
           ];

@@ -3,7 +3,10 @@
 Scope: all 153 open issues on code.linenisgreat.com/clown as of 2026-10-25.
 Each issue was read with comments (smith issue-get) and checked against this
 worktree (`pure-teak`, HEAD 196d338) by reading code, docs and git log.
-Nothing was implemented, built or tested.
+Nothing was implemented, built or tested then. Since then (on pure-teak,
+2f0097a and the docs/justfile commit after it) batch 1 has landed: #18,
+#243 and #120, with the fragment-content test
+`cmd/clown/builtinfragments_test.go`; their rows below say so.
 
 Buckets:
 
@@ -24,9 +27,9 @@ Counts: **a 14 / b 92 / c 23 / d 24**, 153 in total.
 
 | # | Title | Fix sketch; failing test; risk | Ev |
 |---|---|---|---|
-| 18 | Allow/prefer `TODO(#NNN):` | Add a `system-prompt-append.d/03-todo-issue-refs.md` fragment preferring `TODO(#NNN)`/`FIXME(#NNN)`. Test: the assembled append prompt contains `TODO(#`. No existing fragment-content test was found, so the test's location still has to be picked. S | V,I |
-| 243 | Never use the file-based memory | Add a fragment forbidding reads and writes of `~/.claude/projects/*/memory` and `MEMORY.md`. `CLAUDE_CODE_DISABLE_AUTO_MEMORY` is already injected (`cmd/clown/claudesettings_test.go:182`), but MEMORY.md was still loaded in a live session. Test: the composed prompt contains the directive. S | R,V |
-| 120 | Subagents hand-convert epoch timestamps | Add a rule to `system-prompt-append.d/01-runtime-claims.md` (and `subagents/`): use the env date tool or `date -d @N`, never convert by hand. Test: the assembled prompt contains the rule. S | R,I |
+| 18 | Allow/prefer `TODO(#NNN):` | **Done** (90065cd): `system-prompt-append.d/03-todo-issue-refs.md`. Tested by `cmd/clown/builtinfragments_test.go` (added for this batch: it assembles the append dir as a launch does; godyn `testFiles` hands it the fragments). S | V |
+| 243 | Never use the file-based memory | **Done in the prompt, unverified live** (bd338b9, 61b7af2): `04-no-file-memory.md`, with an explicit-user-request carve-out. `CLAUDE_CODE_DISABLE_AUTO_MEMORY` is already injected (`cmd/clown/claudesettings_test.go:182`), but MEMORY.md was still loaded in a live session, so it stays open until a live check. S | V,R |
+| 120 | Subagents hand-convert epoch timestamps | **Done** (3dece13, 2f0097a): the rule is in `01-runtime-claims.md` (moxy `env_date`, `date -d @N`) and `subagents/discover.md` (report raw, unconverted: Discover has no conversion tool). S | V |
 | 56 | juggler has no -h/--help | `cmd/juggler/main.go:23-25,87-89`: add `-h`/`--help`/`help` cases that print the usage to stdout and exit 0. Test: `run([]string{"-h"})` returns 0 with the usage on stdout. Completions stay a separate follow-up. S | R |
 | 84 | justfile verb/lifecycle taxonomy | The renames are done; what is left is adding `[group]` to the ungrouped root recipes (build, build-nix, clean-result, codemod, default, lint, test, verify, update-inputs, run-*) and to `explore::`. Test: a lint recipe that fails when `just --dump` shows a public recipe with no groups. S | V,R |
 | 227 | Prompt includes the `clown version` table | `cmd/clown/buildidentity.go:23-50` renders only the build id. Append the pinned-component rows from the version-table builder (`main.go:3071`), labelled as build-time pins. Test: `buildIdentityFragment()` names a buildcfg-pinned component. S | R |

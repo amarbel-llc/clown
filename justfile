@@ -120,20 +120,31 @@ debug-toolcost-transcript transcript:
 # lane's fixtures and git on PATH, and prints each package's PASS/SKIP/FAIL
 # counts plus every skip reason: the parity check igloo asks for before the bga
 # lane stops gating a godyn host (madder a39cfa7). Extra flags go to each
-# binary (e.g. -test.run=^TestFoo$).
+# binary (e.g. -test.run=^TestFoo$). The flags are spliced into the script
+# unquoted, so bash word-splits them and a regex with ( ) | or spaces breaks
+# the script: keep -test.run patterns to plain words. Needs a godyn host
+# (clown-godyn-tests exists only there).
 #
 # re-run every godyn test binary verbosely and report skips
 [group("debug")]
 debug-godyn-tests-verbose *flags:
     #!/usr/bin/env bash
     set -euo pipefail
+    need() { [ -n "$2" ] || { echo "debug-godyn-tests-verbose: found no $1" >&2; exit 1; }; }
     input_drvs() { nix derivation show "$1" | jq -r '(.derivations // .) | to_entries[0].value | (.inputDrvs // .inputs.drvs) | keys[]' | sed 's|^\([^/]\)|/nix/store/\1|'; }
     out() { nix build --no-link --print-out-paths "$1^out"; }
-    runs=$(input_drvs "$(nix eval --raw .#clown-godyn-tests.drvPath)" | grep -- '-godyn-test-')
+    runs=$(input_drvs "$(nix eval --raw .#clown-godyn-tests.drvPath)" | grep -- '-godyn-test-' || true)
+    need "godyn test runs in clown-godyn-tests" "$runs"
     fixtures=$(input_drvs "$(head -n1 <<<"$runs")")
-    fakeserver=$(out "$(grep -- '-fakeserver-' <<<"$fixtures")")
-    fakellama=$(out "$(grep -- '-fake-llama-server-' <<<"$fixtures")")
-    git=$(out "$(grep -- '-git-[0-9]' <<<"$fixtures")")
+    fakeserver_drv=$(grep -- '-fakeserver-' <<<"$fixtures" || true)
+    need "fakeserver fixture among the first run's inputs" "$fakeserver_drv"
+    fakellama_drv=$(grep -- '-fake-llama-server-' <<<"$fixtures" || true)
+    need "fake-llama-server fixture among the first run's inputs" "$fakellama_drv"
+    git_drv=$(grep -- '-git-[0-9]' <<<"$fixtures" || true)
+    need "git among the first run's inputs" "$git_drv"
+    fakeserver=$(out "$fakeserver_drv")
+    fakellama=$(out "$fakellama_drv")
+    git=$(out "$git_drv")
     work=$(mktemp -d)
     trap 'chmod -R u+w "$work"; rm -rf "$work"' EXIT
     total_skip=0
@@ -162,20 +173,22 @@ debug-godyn-tests-verbose *flags:
     done <<<"$runs"
     echo "total skips: $total_skip"
 
-# List each godyn per-package test run's derivation path, one per line
-# (path, name sorted), to see which packages' runs an edit invalidates:
-# diff the output before and after the edit. Evaluates only (plus godyn's
-# graph IFD); builds no test.
+# List each godyn per-package test run's derivation path, one line per run
+# ("<name> <path>", sorted by name), to see which packages' runs an edit
+# invalidates: diff the output before and after the edit. Evaluates only
+# (plus godyn's graph IFD); builds no test. Needs a godyn host
+# (clown-godyn-tests exists only there).
 #
 # list each godyn test run's drv path, to diff across an edit
 [group("debug")]
 debug-godyn-test-drvs:
     #!/usr/bin/env bash
     set -euo pipefail
-    nix derivation show "$(nix eval --raw .#clown-godyn-tests.drvPath)" \
+    runs=$(nix derivation show "$(nix eval --raw .#clown-godyn-tests.drvPath)" \
         | jq -r '(.derivations // .) | to_entries[0].value | (.inputDrvs // .inputs.drvs) | keys[]' \
-        | sed 's|^\([^/]\)|/nix/store/\1|' | grep -- '-godyn-test-' \
-        | awk '{n=$0; sub(/^\/nix\/store\/[^-]+-/, "", n); print n, $0}' | sort
+        | sed 's|^\([^/]\)|/nix/store/\1|' | grep -- '-godyn-test-' || true)
+    [ -n "$runs" ] || { echo "debug-godyn-test-drvs: found no godyn test runs in clown-godyn-tests" >&2; exit 1; }
+    awk '{n=$0; sub(/^\/nix\/store\/[^-]+-/, "", n); print n, $0}' <<<"$runs" | sort
 
 # Smoke-run every Go binary bundled in the default package (version/help)
 # and check juggler's burned-in llama-server path — the godyn-migration
