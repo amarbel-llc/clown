@@ -124,7 +124,22 @@ func sanitizeRestartReason(s string) string {
 type controlListener struct {
 	ln   *net.UnixListener
 	path string
-	once sync.Once
+	// bound is the socket file this listener created; Close removes path
+	// only while it is still that file.
+	bound os.FileInfo
+	once  sync.Once
+}
+
+// unixSocketPathMax is sun_path's size, its terminating NUL included.
+const unixSocketPathMax = 108
+
+// checkControlSocketPath refuses a path a unix socket cannot have, so neither
+// end mistakes it for a missing frontend.
+func checkControlSocketPath(path string) error {
+	if len(path) >= unixSocketPathMax {
+		return fmt.Errorf("control socket path %s is too long for a unix socket (%d bytes, at most %d); shorten XDG_RUNTIME_DIR", path, len(path), unixSocketPathMax-1)
+	}
+	return nil
 }
 
 // startControlListener creates the control socket at path (0600 in a 0700
@@ -133,6 +148,9 @@ type controlListener struct {
 // refused, not taken over; a stale one is replaced. Only callers running as
 // this user are answered.
 func startControlListener(path string, handle func(controlMessage) controlReply) (*controlListener, error) {
+	if err := checkControlSocketPath(path); err != nil {
+		return nil, err
+	}
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
@@ -149,11 +167,18 @@ func startControlListener(path string, handle func(controlMessage) controlReply)
 	if err != nil {
 		return nil, err
 	}
+	// Close unlinks the path itself, and only while it is still this socket.
+	ln.SetUnlinkOnClose(false)
 	if err := os.Chmod(path, 0o600); err != nil {
 		ln.Close()
 		return nil, err
 	}
-	l := &controlListener{ln: ln, path: path}
+	bound, err := os.Stat(path)
+	if err != nil {
+		ln.Close()
+		return nil, err
+	}
+	l := &controlListener{ln: ln, path: path, bound: bound}
 	go func() {
 		for {
 			c, err := ln.AcceptUnix()
@@ -205,11 +230,14 @@ func peerIsSameUser(c *net.UnixConn) bool {
 	return int(cred.Uid) == os.Getuid()
 }
 
-// Close stops listening and removes the socket.
+// Close stops listening and removes the socket, unless the path now holds
+// another listener's socket (a successor that replaced it).
 func (l *controlListener) Close() {
 	l.once.Do(func() {
 		l.ln.Close()
-		_ = os.Remove(l.path)
+		if fi, err := os.Stat(l.path); err == nil && os.SameFile(fi, l.bound) {
+			_ = os.Remove(l.path)
+		}
 	})
 }
 
@@ -300,7 +328,12 @@ func runRestartVerb(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "no live clown frontend for %s\n", session)
 		return 1
 	}
-	reply, err := sendControl(controlSocketPath(runtime, session), controlMessage{Op: "restart", When: when, Reason: reason})
+	path := controlSocketPath(runtime, session)
+	if err := checkControlSocketPath(path); err != nil {
+		fmt.Fprintf(stderr, "clown restart: %v\n", err)
+		return 1
+	}
+	reply, err := sendControl(path, controlMessage{Op: "restart", When: when, Reason: reason})
 	if errors.Is(err, errNoFrontend) {
 		fmt.Fprintf(stderr, "no live clown frontend for %s\n", session)
 		return 1
