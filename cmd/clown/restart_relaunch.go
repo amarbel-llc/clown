@@ -207,7 +207,7 @@ type frontendRestarter struct {
 // nothing will retry it, so the operator and the log are told the requester
 // must ask again.
 func (fr frontendRestarter) cancelled(why string) {
-	why = strings.Join(strings.Fields(why), " ")
+	why = printableOneLine(why)
 	logSelfClose(fr.logPath, "restart (%s) cancelled after spinclass consumed the request: %s; the requester must ask again", fr.principal, why)
 	if fr.notify != nil {
 		fmt.Fprintf(fr.notify, "\r\nclown: restart cancelled (%s); its requester must ask again\r\n", why)

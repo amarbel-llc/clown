@@ -8,9 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -59,10 +57,7 @@ type restartPreflight struct {
 // principal in CLOWN_SESSION_ID. A non-zero exit, a timeout or unparsable
 // output is an error. Its stderr and the verdict line go to the log.
 func (p *restartPreflight) run() (preflightVerdict, error) {
-	if err := os.MkdirAll(filepath.Dir(p.logPath), 0o700); err != nil {
-		return preflightVerdict{}, err
-	}
-	log, err := os.OpenFile(p.logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY|syscall.O_NOFOLLOW, 0o600)
+	log, err := openLogForAppend(p.logPath)
 	if err != nil {
 		return preflightVerdict{}, err
 	}

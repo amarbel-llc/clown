@@ -109,7 +109,18 @@ const restartReasonMaxRunes = 300
 // runs of space collapse, and it is capped at restartReasonMaxRunes runes,
 // the "..." marking a cut included.
 func sanitizeRestartReason(s string) string {
-	clean := strings.Join(strings.Fields(strings.Map(func(r rune) rune {
+	clean := printableOneLine(s)
+	if r := []rune(clean); len(r) > restartReasonMaxRunes {
+		clean = string(r[:restartReasonMaxRunes-3]) + "..."
+	}
+	return clean
+}
+
+// printableOneLine is s as one line of printable text: control characters
+// (C0, C1, newlines) become spaces, other non-printing runes (bidi controls,
+// zero-width characters) are dropped, and runs of space collapse.
+func printableOneLine(s string) string {
+	return strings.Join(strings.Fields(strings.Map(func(r rune) rune {
 		switch {
 		case unicode.IsControl(r) || unicode.IsSpace(r):
 			return ' '
@@ -118,10 +129,6 @@ func sanitizeRestartReason(s string) string {
 		}
 		return r
 	}, s)), " ")
-	if r := []rune(clean); len(r) > restartReasonMaxRunes {
-		clean = string(r[:restartReasonMaxRunes-3]) + "..."
-	}
-	return clean
 }
 
 // controlListener serves the control socket.
@@ -137,11 +144,11 @@ type controlListener struct {
 // unixSocketPathMax is sun_path's size, its terminating NUL included.
 const unixSocketPathMax = 108
 
-// checkControlSocketPath refuses a path a unix socket cannot have, so neither
-// end mistakes it for a missing frontend.
-func checkControlSocketPath(path string) error {
+// checkUnixSocketPath refuses a path a unix socket cannot have (the control
+// and idle sockets), so neither end mistakes it for a missing frontend.
+func checkUnixSocketPath(path string) error {
 	if len(path) >= unixSocketPathMax {
-		return fmt.Errorf("control socket path %s is too long for a unix socket (%d bytes, at most %d); shorten XDG_RUNTIME_DIR", path, len(path), unixSocketPathMax-1)
+		return fmt.Errorf("socket path %s is too long for a unix socket (%d bytes, at most %d); shorten XDG_RUNTIME_DIR", path, len(path), unixSocketPathMax-1)
 	}
 	return nil
 }
@@ -152,7 +159,7 @@ func checkControlSocketPath(path string) error {
 // refused, not taken over; a stale one is replaced. Only callers running as
 // this user are answered.
 func startControlListener(path string, handle func(controlMessage) controlReply) (*controlListener, error) {
-	if err := checkControlSocketPath(path); err != nil {
+	if err := checkUnixSocketPath(path); err != nil {
 		return nil, err
 	}
 	dir := filepath.Dir(path)
@@ -175,11 +182,13 @@ func startControlListener(path string, handle func(controlMessage) controlReply)
 	ln.SetUnlinkOnClose(false)
 	if err := os.Chmod(path, 0o600); err != nil {
 		ln.Close()
+		_ = os.Remove(path)
 		return nil, err
 	}
 	bound, err := os.Stat(path)
 	if err != nil {
 		ln.Close()
+		_ = os.Remove(path)
 		return nil, err
 	}
 	l := &controlListener{ln: ln, path: path, bound: bound}
@@ -333,7 +342,7 @@ func runRestartVerb(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	path := controlSocketPath(runtime, session)
-	if err := checkControlSocketPath(path); err != nil {
+	if err := checkUnixSocketPath(path); err != nil {
 		fmt.Fprintf(stderr, "clown restart: %v\n", err)
 		return 1
 	}

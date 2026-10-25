@@ -77,17 +77,24 @@ func selfCloseDecision(flags parsedFlags) (spinclassPath, reason string) {
 // logSelfClose appends one timestamped line to the close-self-run log, best
 // effort: the log is the only record of why a launch did or did not arm.
 func logSelfClose(logPath, format string, args ...any) {
-	if err := os.MkdirAll(filepath.Dir(logPath), 0o700); err != nil {
-		return
-	}
-	// O_NOFOLLOW: idle-notify's log has a fixed name in a temp dir, where a
-	// planted symlink must not redirect the append.
-	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY|syscall.O_NOFOLLOW, 0o600)
+	f, err := openLogForAppend(logPath)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "clown: cannot write %s: %v\n", logPath, err)
 		return
 	}
 	defer f.Close()
 	fmt.Fprintf(f, "%s %s\n", time.Now().UTC().Format(time.RFC3339), fmt.Sprintf(format, args...))
+}
+
+// openLogForAppend opens a log for appending (0600, its directory 0700).
+// O_NOFOLLOW: idle-notify's log has a fixed name in a temp dir, where a
+// planted symlink must not redirect the append. O_NONBLOCK: a FIFO planted
+// there must not block the serial idle runner on open.
+func openLogForAppend(path string) (*os.File, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, err
+	}
+	return os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0o600)
 }
 
 // selfCloseRunner runs `spinclass close-self-run` for one session.
@@ -106,11 +113,9 @@ type selfCloseRunner struct {
 // never the terminal claude owns, and never a pipe the exiting frontend would
 // break under it.
 func (r *selfCloseRunner) run() error {
-	if err := os.MkdirAll(filepath.Dir(r.logPath), 0o700); err != nil {
-		return err
-	}
-	log, err := os.OpenFile(r.logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY|syscall.O_NOFOLLOW, 0o600)
+	log, err := openLogForAppend(r.logPath)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "clown: cannot write %s: %v; close-self-run not run\n", r.logPath, err)
 		return err
 	}
 	defer log.Close()
@@ -161,6 +166,9 @@ func startIdleListener(path string, run func()) (*idleListener, error) {
 // either (see the top of this file): a forged turn start cancels a restart
 // counting down, a forged poke lets an authorized one proceed mid-turn.
 func startIdleListenerTracking(path string, busy *atomic.Bool, run func()) (*idleListener, error) {
+	if err := checkUnixSocketPath(path); err != nil {
+		return nil, err
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
@@ -178,11 +186,13 @@ func startIdleListenerTracking(path string, busy *atomic.Bool, run func()) (*idl
 	}
 	if err := os.Chmod(path, 0o600); err != nil {
 		conn.Close()
+		_ = os.Remove(path)
 		return nil, err
 	}
 	bound, err := os.Stat(path)
 	if err != nil {
 		conn.Close()
+		_ = os.Remove(path)
 		return nil, err
 	}
 	l := &idleListener{conn: conn, path: path, bound: bound, wake: make(chan struct{}, 1), done: make(chan struct{})}
