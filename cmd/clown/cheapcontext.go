@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -476,20 +477,34 @@ func applyCheapContextSelection(
 	for _, d := range result.kept {
 		keptNames[d.Name()] = true
 	}
+	replayed := savedProfile != nil && savedProfile.ContextServers != nil
+	out := cheapContextOutcome{kept: result.kept, inUnitExcluded: map[string][]string{}}
+	if replayed {
+		out.trim.profile = savedProfile.Name
+	}
 	stopped := 0
 	for name, srv := range serversByName {
 		if !keptNames[name] {
 			srv.Stop()
 			stopped++
+			out.trim.stopped = append(out.trim.stopped, name)
 		}
 	}
 
 	inUnitNames := make(map[string]bool, len(inUnit))
 	for _, d := range inUnit {
 		inUnitNames[d.Name()] = true
+		if !keptNames[d.Name()] {
+			out.trim.stopped = append(out.trim.stopped, d.Name())
+		}
 	}
-	out := cheapContextOutcome{kept: result.kept, inUnitExcluded: map[string][]string{}}
-	replayed := savedProfile != nil && savedProfile.ContextServers != nil
+	slices.Sort(out.trim.stopped)
+	hide := func(name string, tools []string) {
+		if out.trim.hidden == nil {
+			out.trim.hidden = map[string][]string{}
+		}
+		out.trim.hidden[name] = tools
+	}
 	pushedExclusions, pushFailures := 0, 0
 	if replayed {
 		// The raw saved lists, not result.excludedTools: a server whose saved
@@ -502,6 +517,7 @@ func applyCheapContextSelection(
 			}
 			if inUnitNames[name] {
 				out.inUnitExcluded[name] = append([]string(nil), saved...)
+				hide(name, out.inUnitExcluded[name])
 				continue
 			}
 			srv, ok := serversByName[name]
@@ -512,11 +528,15 @@ func applyCheapContextSelection(
 			logger.Info("cheap-context: tool exclusions read back", "server", name, "saved", rb.Saved,
 				"matched", len(rb.Matched), "unmatched", rb.Unmatched, "still_listed", rb.StillListed, "problem", rb.Problem)
 			out.readbacks = append(out.readbacks, rb)
+			if rb.Problem == "" {
+				hide(name, rb.Matched)
+			}
 		}
 	} else {
 		for name, excludedTools := range result.excludedTools {
 			if inUnitNames[name] {
 				out.inUnitExcluded[name] = excludedTools
+				hide(name, excludedTools)
 				continue
 			}
 			srv, ok := serversByName[name]
@@ -531,6 +551,7 @@ func applyCheapContextSelection(
 				pushFailures++
 			} else {
 				pushedExclusions++
+				hide(name, excludedTools)
 			}
 		}
 	}
@@ -555,6 +576,9 @@ type cheapContextOutcome struct {
 	kept           []pluginhost.DiscoveredServer
 	inUnitExcluded map[string][]string
 	readbacks      []exclusionReadback
+	// trim is what the selection removed, for the prompt notice
+	// (catalogTrimFragment, clown#265).
+	trim catalogTrim
 }
 
 // narrowInUnitServers drops the in-unit servers a selection did not keep, so

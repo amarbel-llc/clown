@@ -213,6 +213,10 @@ and
 .Sy context_excluded .
 Launching with a profile that carries them replays the selection without
 the picker.
+When a selection stops a server or hides tools, a claude session's system
+prompt ends with a short notice naming the profile, the stopped servers and
+the hidden tool groups, by name only and bounded in size; a launch that
+narrows nothing gets no notice.
 .Pp
 Tools are hidden by a
 .Li POST /clown/exclude-tools

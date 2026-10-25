@@ -2412,6 +2412,7 @@ func runManaged(
 	// reserved for the unit were never started here: they are selected by
 	// name, and the relay pushes their exclusions once it starts them inside
 	// the unit (clown#290).
+	var trim catalogTrim
 	if cheapContextActive {
 		inUnit := reservedServers(host, discovered)
 		outcome, err := applyCheapContextSelection(ctx, host, discovered, report.Started, inUnit, logger, flags.cheapContextProfile, flags.cheapContextSave)
@@ -2421,6 +2422,7 @@ func runManaged(
 			logger.Error("cheap-context selection failed", "err", err)
 			return 1
 		}
+		trim = outcome.trim
 		offered := discovered
 		discovered = outcome.kept
 		flags.agentScopeInUnit = narrowInUnitServers(flags.agentScopeInUnit, outcome.kept, outcome.inUnitExcluded)
@@ -2488,9 +2490,10 @@ func runManaged(
 	// claude reads. Append-last — dynamic fragments land after the static
 	// (identity → builtin → plugin-static → user) content. Best-effort: a
 	// fetch or write failure degrades to the static prompt, never blocks the
-	// launch.
+	// launch. A cheap-context selection that narrowed the catalog adds its
+	// notice last (clown#265).
 	if appendFile != "" {
-		if frags := mergeSessionIdentity(host.FetchPromptFragments(ctx)); len(frags) > 0 {
+		if frags := dynamicPromptFragments(host.FetchPromptFragments(ctx), trim); len(frags) > 0 {
 			if err := appendPromptFragments(appendFile, frags); err != nil {
 				logger.Warn("appending dynamic prompt fragments failed; continuing with static prompt", "err", err)
 			} else {
