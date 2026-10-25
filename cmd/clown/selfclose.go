@@ -71,7 +71,9 @@ func logSelfClose(logPath, format string, args ...any) {
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o700); err != nil {
 		return
 	}
-	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	// O_NOFOLLOW: idle-notify's log has a fixed name in a temp dir, where a
+	// planted symlink must not redirect the append.
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
 		return
 	}
@@ -98,7 +100,7 @@ func (r *selfCloseRunner) run() error {
 	if err := os.MkdirAll(filepath.Dir(r.logPath), 0o700); err != nil {
 		return err
 	}
-	log, err := os.OpenFile(r.logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	log, err := os.OpenFile(r.logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
 		return err
 	}

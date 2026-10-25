@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -61,7 +62,7 @@ func (p *restartPreflight) run() (preflightVerdict, error) {
 	if err := os.MkdirAll(filepath.Dir(p.logPath), 0o700); err != nil {
 		return preflightVerdict{}, err
 	}
-	log, err := os.OpenFile(p.logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	log, err := os.OpenFile(p.logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
 		return preflightVerdict{}, err
 	}
@@ -130,9 +131,9 @@ func (r *idleRunner) onIdle() {
 	case err != nil:
 		logSelfClose(r.logPath, "restart-preflight failed (%s); not restarting: %v", principal, err)
 	case v.Verdict != "restart":
-		logSelfClose(r.logPath, "restart-preflight verdict %s (%s): %s; not restarting", v.Verdict, principal, v.Reason)
+		logSelfClose(r.logPath, "restart-preflight verdict %s (%s): %s; not restarting", v.Verdict, principal, sanitizeRestartReason(v.Reason))
 	default:
-		logSelfClose(r.logPath, "restart-preflight verdict restart (%s): %s; restarting", principal, v.Reason)
+		logSelfClose(r.logPath, "restart-preflight verdict restart (%s): %s; restarting", principal, sanitizeRestartReason(v.Reason))
 		r.restart(req, v)
 	}
 }

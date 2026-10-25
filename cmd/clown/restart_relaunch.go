@@ -171,6 +171,20 @@ type frontendRestarter struct {
 	kill func()
 	// graceChecked, when set, is told whether the grace check killed (tests).
 	graceChecked func(killed bool)
+	// notify gets one line when a restart the preflight consumed is
+	// cancelled (the frontend's stderr); nil: the log only.
+	notify io.Writer
+}
+
+// cancelled records a restart dropped after spinclass consumed the request:
+// nothing will retry it, so the operator and the log are told the requester
+// must ask again.
+func (fr frontendRestarter) cancelled(why string) {
+	why = strings.Join(strings.Fields(why), " ")
+	logSelfClose(fr.logPath, "restart (%s) cancelled after spinclass consumed the request: %s; the requester must ask again", fr.principal, why)
+	if fr.notify != nil {
+		fmt.Fprintf(fr.notify, "\r\nclown: restart cancelled (%s); its requester must ask again\r\n", why)
+	}
 }
 
 func (fr frontendRestarter) restart(req restartRequest, v preflightVerdict) {
@@ -180,7 +194,7 @@ func (fr frontendRestarter) restart(req restartRequest, v preflightVerdict) {
 	}
 	if fr.profileCheck != nil {
 		if err := fr.profileCheck(); err != nil {
-			logSelfClose(fr.logPath, "restart (%s): the relaunch's profile gate would refuse, so the session keeps running: %v", fr.principal, err)
+			fr.cancelled(fmt.Sprintf("the relaunch's profile gate would refuse, so the session keeps running: %v", err))
 			return
 		}
 	}
@@ -192,6 +206,7 @@ func (fr frontendRestarter) restart(req restartRequest, v preflightVerdict) {
 		proceed, how := fr.countdown(reason)
 		logSelfClose(fr.logPath, "restart (%s): countdown: %s", fr.principal, how)
 		if !proceed {
+			fr.cancelled(how)
 			return
 		}
 	}
@@ -199,7 +214,7 @@ func (fr frontendRestarter) restart(req restartRequest, v preflightVerdict) {
 	// stopped mid-turn. The request was consumed by the preflight, so the
 	// restart is dropped; the requester asks again.
 	if fr.busy != nil && fr.busy() {
-		logSelfClose(fr.logPath, "restart (%s): a turn started; not stopping the provider", fr.principal)
+		fr.cancelled("a turn started during the countdown")
 		return
 	}
 	// The provider may have exited during the countdown: nothing to stop,
