@@ -66,8 +66,8 @@ This note records what was built, the decisions taken, and what is unverified.
     only, 300 runes) and fixed text when empty; the socket's reason is
     sanitized at queue time and otherwise unused;
   - preflight and posh stdout go to a file, so a grandchild cannot stall idle;
-  - a provider that has not exited 30 s after the stop keeps the session and
-    the plan is dropped; exec failure names `clown resume <principal>`;
+  - (superseded in round 2: the plan is now kept and the provider SIGKILLed,
+    see below) exec failure names `clown resume <principal>`;
   - the control socket unlinks only its own inode, and an over-long path is a
     clear error;
   - providerRunning is set only once each runProvider path forwards SIGTERM
@@ -109,6 +109,21 @@ This note records what was built, the decisions taken, and what is unverified.
   O_NOFOLLOW.
 - The reason cap is 300 runes including the "...".
 
+## Third review (65cc3ad..)
+
+- The grace-period SIGKILL hits the unit under --agent-scope
+  (`systemctl --user kill --signal=SIGKILL <unit>`, only while that Run
+  owns it), and claude through the frontend's own process handle otherwise
+  (never a reused pid); killProvider checks and kills under one lock.
+- Keeping the plan made any exit after the stop relaunch, including a close
+  in the window. Now, while a plan is stored, idle pokes run nothing and the
+  control socket refuses a second restart; before the exec the frontend
+  checks the worktree still exists (spinclass removes it on close) and exits
+  0 without relaunching if not.
+- Log opens are O_NOFOLLOW|O_NONBLOCK and a failed open says so on stderr;
+  the idle socket path gets the length check; listeners remove the socket
+  file on Chmod/Stat failure; the cancel line is printable text only.
+
 ## Limits accepted after review
 
 - The idle poke is not authenticated (second review #1). The idle socket is
@@ -126,7 +141,20 @@ This note records what was built, the decisions taken, and what is unverified.
   unverified (#7).
 - Failures after the stop are stop-then-hope: a provider that survives even
   SIGKILL, or a relaunch that fails, leaves the session for `clown resume`
-  (#8).
+  (#8). While such a plan stays stored, idle pokes run nothing, so the
+  session cannot self-close until it exits.
+- A user /exit during the grace window is not told apart from the stop's
+  exit and relaunches the session (third review R1c).
+- The worktree check is the only liveness check before the exec; a close
+  that has not yet removed the worktree when the frontend checks is missed.
+- Live-socket refusal (control and idle) is best effort: two frontends
+  starting at the same instant can both see no live socket (third review
+  #6).
+- Under pty-suspend the SIGKILL now reaches claude only, not its process
+  group (a reaped group leader's pgid could be reused); claude's own
+  children are left to the session teardown.
+- L2 (inline countdown line over the TUI) stands; the round-3 #8 hygiene
+  notes are accepted as is.
 
 - The inline countdown line is written to stderr, over claude's TUI (L2).
 - L3 and L4 of the review are accepted as documented here, not changed.

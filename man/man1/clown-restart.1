@@ -156,13 +156,29 @@ when cut; a fixed text when it gave none), never the one passed to
 .Nm clown restart .
 .Pp
 A provider that has not exited 30 seconds after the stop is sent
-.Dv SIGKILL
-(claude itself, its process group under pty-suspend, or systemd-run under
+.Dv SIGKILL :
+claude itself (directly or under pty-suspend, through the frontend's own
+process handle, so a reaped and reused pid is never hit), or, under
 .Fl -agent-scope ,
-whose exit stops the unit); the relaunch stays planned, so its exit, however
-late, still relaunches.
+every process of the unit
+.Pq Li systemctl --user kill --signal=SIGKILL Ar unit .
+The relaunch stays planned, so the exit, however late, still relaunches.
 Failures after the stop are not recovered: if the provider never exits, the
 session stays as it is.
+.Pp
+From the moment the restart is planned until the relaunch, the frontend
+runs nothing on an idle poke (no close, no second preflight) and refuses a
+second
+.Nm clown restart
+with
+.Dq a restart is already underway .
+Before the exec it checks that the session's worktree (the frontend's
+working directory at launch) still exists; spinclass removes it on close,
+so a session closed during the restart is not relaunched: the frontend says
+so and exits 0.
+A
+.Ic /exit
+typed in that window is not told apart from the stop and relaunches.
 If the serve socket stays live, no
 .Nm clown
 is on
@@ -190,8 +206,10 @@ and not without a session key or with
 unset or not absolute).
 Only a claude launch with the idle trigger armed queues; the others refuse
 with a message saying why.
-A second frontend for the same key does not take over a live control socket,
-and a frontend that exits removes the socket only while it is still its own.
+A second frontend for the same key does not take over a control or idle
+socket that still answers, best effort: two frontends starting at the same
+instant can both see none and race.
+A frontend that exits removes a socket only while it is still its own.
 The socket is not reachable from an
 .Fl -agent-scope
 unit: the unit's
@@ -219,6 +237,8 @@ No frontend listens on the control socket.
 .It Li restart needs an idle trigger; Ar provider Li has none
 The frontend runs a provider without the idle trigger
 (claude with the trigger off names the gate instead).
+.It Li a restart is already underway for this session ...
+A restart has stopped, or is stopping, the provider.
 .El
 .Pp
 A usage error exits

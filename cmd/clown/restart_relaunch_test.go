@@ -174,7 +174,7 @@ func TestFrontendRestarterStopsTheProviderOnce(t *testing.T) {
 		if pendingRelaunch.Load() == nil {
 			t.Error("the plan must be recorded before the provider is stopped")
 		}
-	}, logPath: filepath.Join(t.TempDir(), "l.log")}
+	}, logPath: filepath.Join(t.TempDir(), "l.log"), stopGrace: time.Millisecond, kill: func() {}}
 
 	providerRunning.Store(false)
 	fr.restart(restartRequest{When: "idle", Reason: "r"}, preflightVerdict{Verdict: "restart"})
@@ -215,7 +215,10 @@ func TestRestartNeverRevokesTheIdentity(t *testing.T) {
 	q.put(restartRequest{When: "idle", Reason: "r"})
 	stopped := 0
 	logPath := filepath.Join(t.TempDir(), "l.log")
-	fr := frontendRestarter{principal: restartTestPrincipal, argv: []string{"--provider", "claude"}, stop: func() { stopped++ }, logPath: logPath}
+	fr := frontendRestarter{
+		principal: restartTestPrincipal, argv: []string{"--provider", "claude"}, stop: func() { stopped++ }, logPath: logPath,
+		stopGrace: time.Millisecond, kill: func() {},
+	}
 	idle := &idleRunner{
 		closer:    &selfCloseRunner{bin: bin, principal: restartTestPrincipal, logPath: logPath},
 		preflight: &restartPreflight{bin: bin, principal: restartTestPrincipal, logPath: logPath},

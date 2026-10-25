@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 )
 
@@ -42,7 +43,10 @@ func TestRestartReasonComesFromTheVerdict(t *testing.T) {
 	} {
 		pendingRelaunch.Store(nil)
 		providerRunning.Store(true)
-		fr := frontendRestarter{principal: restartTestPrincipal, stop: func() {}, logPath: filepath.Join(t.TempDir(), "l.log")}
+		fr := frontendRestarter{
+			principal: restartTestPrincipal, stop: func() {}, logPath: filepath.Join(t.TempDir(), "l.log"),
+			stopGrace: time.Millisecond, kill: func() {},
+		}
 		fr.restart(restartRequest{When: "idle", Reason: c.req}, preflightVerdict{Verdict: "restart", Reason: c.verdict})
 		if p := pendingRelaunch.Load(); p == nil || p.reason != c.want {
 			t.Fatalf("req %q verdict %q: plan %+v, want reason %q", c.req, c.verdict, p, c.want)
