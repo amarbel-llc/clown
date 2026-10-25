@@ -17,7 +17,7 @@ draw the causal link — or explicitly test for it.
 
 You MUST NOT convert epoch timestamps (Unix seconds or milliseconds, as in git
 reflog or job records) to calendar dates by mental arithmetic: in-head
-conversions are confidently wrong, by months. Use a tool: the env date tool
-(moxy `env.date`), `date -d @N`, or a formatted source such as
+conversions are confidently wrong, by months. Use a tool: the moxy `env_date`
+tool, `date -d @N`, or a formatted source such as
 `git log --format=%ci`. If no tool is available, report the raw epoch and say
 it is unconverted.
