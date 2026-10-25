@@ -51,18 +51,15 @@ func newRestartCountdown() restartCountdown {
 func runForCountdown(argv []string) ([]byte, int, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), (restartCountdownSeconds+15)*time.Second)
 	defer cancel()
-	var out bytes.Buffer
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
-	cmd.Stdout = &out
-	err := cmd.Run()
+	out, err := outputViaFile(exec.CommandContext(ctx, argv[0], argv[1:]...))
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
-		return out.Bytes(), exitErr.ExitCode(), nil
+		return out, exitErr.ExitCode(), nil
 	}
 	if err != nil {
 		return nil, -1, err
 	}
-	return out.Bytes(), 0, nil
+	return out, 0, nil
 }
 
 // proceed reports whether to restart, and how the countdown went (for the log).

@@ -1,11 +1,11 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -68,17 +68,38 @@ func (p *restartPreflight) run() (preflightVerdict, error) {
 	defer log.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), preflightTimeout)
 	defer cancel()
-	var out bytes.Buffer
 	cmd := exec.CommandContext(ctx, p.bin, "restart-preflight")
 	cmd.Env = append(os.Environ(), "CLOWN_SESSION_ID="+p.principal)
-	cmd.Stdout = &out
 	cmd.Stderr = log
-	err = cmd.Run()
-	fmt.Fprintf(log, "%s restart-preflight %s: %q\n", time.Now().UTC().Format(time.RFC3339), p.principal, out.String())
+	out, err := outputViaFile(cmd)
+	fmt.Fprintf(log, "%s restart-preflight %s: %q\n", time.Now().UTC().Format(time.RFC3339), p.principal, out)
 	if err != nil {
 		return preflightVerdict{}, err
 	}
-	return parsePreflightVerdict(out.Bytes())
+	return parsePreflightVerdict(out)
+}
+
+// outputViaFile runs cmd with its stdout in an unlinked temporary file and
+// returns what it wrote (64 KiB at most). Unlike a pipe, a file does not hold
+// Wait until every process that inherited stdout has closed it, so a
+// grandchild the command leaves behind cannot stall the serial idle runner.
+func outputViaFile(cmd *exec.Cmd) ([]byte, error) {
+	f, err := os.CreateTemp("", "clown-restart-out-*")
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	_ = os.Remove(f.Name())
+	cmd.Stdout = f
+	runErr := cmd.Run()
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return nil, err
+	}
+	out, err := io.ReadAll(io.LimitReader(f, 64<<10))
+	if err != nil {
+		return nil, err
+	}
+	return out, runErr
 }
 
 // idleRunner is what one idle transition does, in a fixed order: run
