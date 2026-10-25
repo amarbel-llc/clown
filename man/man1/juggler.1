@@ -84,6 +84,8 @@
 .Op Fl -min-confidence Ar n
 .Op Fl -question Ar id
 .Op Fl -run-key Ar key
+.Nm
+.Fl h | Fl -help | Cm help
 .Sh DESCRIPTION
 .Nm
 is the CLI of two things that share one binary: the
@@ -162,6 +164,11 @@ as external binaries; see
 .Sx ENVIRONMENT .
 .Sh SUBCOMMANDS
 .Bl -tag -width Ds
+.It Fl h | Fl -help | Cm help
+Print the usage line, listing the subcommands, to stdout and exit 0.
+Run with no arguments,
+.Nm
+prints the same line to stderr and exits 1.
 .It Cm daemon Op Fl -socket Ar path Op Fl -llama-server Ar path
 Run the llama-server control-plane daemon that the instance-management
 and registry subcommands dial.

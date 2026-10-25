@@ -19,13 +19,20 @@ func main() {
 	os.Exit(run(os.Args[1:]))
 }
 
+const usage = "usage: juggler <daemon|start|stop|status|list|models|model|prompt|decide|run|spawn|exit-wake|resolve|clean|job-ledger|handles|mcp|download> [args]\n" +
+	"       juggler -h | --help | help\n" +
+	"See juggler(1) for each subcommand's flags."
+
 func run(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: juggler <daemon|start|stop|status|list|models|model|prompt|decide|run|spawn|exit-wake|resolve|clean|job-ledger|handles|mcp|download> [args]")
+		fmt.Fprintln(os.Stderr, usage)
 		return jr.ExitUsage
 	}
 
 	switch args[0] {
+	case "-h", "--help", "help":
+		fmt.Fprintln(os.Stdout, usage)
+		return 0
 	// The FDR 0019 lifecycle verbs need no daemon: run and decide resolve
 	// remote models from the models file and dial the daemon only for local
 	// ones.
