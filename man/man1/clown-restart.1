@@ -227,13 +227,18 @@ and exits without relaunching.
 .Pp
 The relaunched frontend asks
 .Ic spinclass restart-preflight --peek
-once more, the same way, right after its
-.Ic troupe mint
-and presence registration and before it starts the provider:
+once more, the same way but bounded at 5 seconds, before its first identity
+side effect: before it registers its presence and before its
+.Ic troupe mint ,
+printing
+.Dq clown: checking session state
+on standard error first.
 .Li closed
-means it starts nothing, logs it, and exits 0 (the presence record is left
-to go stale, and nothing is revoked); anything else, including an unknown
-peek, starts the session.
+means it registers nothing, mints nothing and starts nothing: it prints one
+line on standard error, records it in
+.Pa close-self-run.log
+(the durable record), and exits 0; nothing is revoked.
+Anything else, including an unknown or timed-out peek, starts the session.
 .Pp
 A restart is not a close: nothing on the restart path revokes or releases the
 session's identity.
@@ -274,8 +279,13 @@ is a tmpfs holding only the sockets bound into it.
 Root of the control and serve sockets.
 .It Ev CLOWN_RESTARTED_REASON
 Set by a restarting frontend for the relaunched one, which reads and unsets it
-before starting anything.
-Not for manual use.
+before starting anything, so no child inherits it.
+Not for manual use: its presence, whatever its value, marks the launch as a
+restart's relaunch, so setting it by hand makes
+.Nm clown
+run the peek above before registering and minting, and adds the
+.Dq restarted: Ar reason
+notice to the session's system prompt.
 .El
 .Sh EXIT STATUS
 .Nm clown restart
@@ -294,11 +304,6 @@ The trigger is off for this claude launch;
 .Ar reason
 names the gate, or says the launch's claude conversation id is not its
 principal.
-.It Li restart --when Ar when Li is not supported; only idle
-The frontend refused a
-.Fl -when
-other than
-.Cm idle .
 .It Li a restart is already underway for this session ...
 A restart has stopped, or is stopping, the provider.
 .El
@@ -314,7 +319,7 @@ other than
 .Cm idle
 (so
 .Fl -when Cm now
-exits 2 for now).
+exits 2 for now); these are checked before any frontend is contacted.
 spinclass reads only 0 against non-zero.
 .Sh SEE ALSO
 .Xr clown 1 ,

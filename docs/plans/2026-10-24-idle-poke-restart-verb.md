@@ -6,8 +6,10 @@ clown-restart(1); spinclass's half is spinclass FDR 0037. This note was
 first written against spinclass c942d87; the contract has moved since
 (through spinclass ae042dd, read in conversation, not re-checked here):
 `restart-preflight --peek` exists (read-only, reports `closed` for a close
-that has started) and clown uses it before the exec and again after the
-relaunch's mint; a force restart is refused until `--when now` exists (see
+that has started) and clown uses it before the exec (20 s bound) and again
+in the relaunched frontend before its presence registration and `troupe
+mint` (5 s bound, "clown: checking session state" on stderr; closed exits 0
+with one stderr line, close-self-run.log being the durable record); a force restart is refused until `--when now` exists (see
 the design note below); a queued `cancel-restart` is dropped when the
 preflight answers `none`; and spinclass stamps `RestartingAt` when it
 consumes a restart, so a close is refused for 2 minutes after that. The
@@ -179,8 +181,12 @@ This note records what was built, the decisions taken, and what is unverified.
   starts after the peek and revokes the principal before the relaunched
   clown starts could be undone by it, since the relaunch runs the
   idempotent `troupe mint --session-key <principal>` and re-registers its
-  presence. Closing this needs spinclass to order a close against a
-  restart it has consumed; clown can only narrow it.
+  presence. Narrowed since: the relaunched frontend peeks again before it
+  registers or mints (preMintPeek), and spinclass ae042dd refuses a close
+  for 2 minutes after a consumed restart; what is left is a close landing
+  between that second peek and the mint, or one the peek cannot report.
+  Closing it fully needs spinclass to order a close against a restart it
+  has consumed.
 - Liveness before the exec: `spinclass restart-preflight --peek`
   (spinclass 2a79497, read-only) reports `closed` for a session not found,
   tombstoned, abandoned or with a close started (ClosingAt), so a close in
@@ -246,7 +252,7 @@ with spinclass (bozo) in conversation; open choices are marked **Q**.
   restarts at once, as for `idle`?
 - Everything after the stop is unchanged: the kept plan, the 30 s SIGKILL
   grace, the serve-socket wait, the `--peek` before the exec and the second
-  peek after the relaunch's mint.
+  peek before the relaunch's presence registration and mint.
 
 ### What the frontend needs
 
