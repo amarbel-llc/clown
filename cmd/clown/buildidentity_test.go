@@ -73,6 +73,49 @@ func TestBuildIdentityFragment(t *testing.T) {
 	})
 }
 
+// setPinnedComponents overwrites the build-time-pinned component vars for the
+// duration of a test.
+func setPinnedComponents(t *testing.T, troupeVersion, troupeRev, ringmasterVersion, ringmasterRev string) {
+	t.Helper()
+	ov := []string{
+		buildcfg.TroupeVersion, buildcfg.TroupeRev, buildcfg.RingmasterVersion, buildcfg.RingmasterRev,
+		buildcfg.ClaudeCodeVersion, buildcfg.ClaudeCodeRev, buildcfg.CodexVersion, buildcfg.CodexRev,
+	}
+	t.Cleanup(func() {
+		buildcfg.TroupeVersion, buildcfg.TroupeRev, buildcfg.RingmasterVersion, buildcfg.RingmasterRev = ov[0], ov[1], ov[2], ov[3]
+		buildcfg.ClaudeCodeVersion, buildcfg.ClaudeCodeRev, buildcfg.CodexVersion, buildcfg.CodexRev = ov[4], ov[5], ov[6], ov[7]
+	})
+	buildcfg.TroupeVersion, buildcfg.TroupeRev = troupeVersion, troupeRev
+	buildcfg.RingmasterVersion, buildcfg.RingmasterRev = ringmasterVersion, ringmasterRev
+	buildcfg.ClaudeCodeVersion, buildcfg.ClaudeCodeRev, buildcfg.CodexVersion, buildcfg.CodexRev = "", "", "", ""
+}
+
+// clown#227: the fragment carries the `clown version` table's pinned
+// components (not clown's own row, which the first line already states),
+// labelled as build-time pins rather than the worktree's source HEAD. The
+// build-identifier and sign-off sentences stay exactly as they were.
+func TestBuildIdentityFragmentListsPinnedComponents(t *testing.T) {
+	const fullSha = "a1b2c3d4e5f60718293a4b5c6d7e8f9001122334"
+	setBuildcfg(t, "0.3.10", "a1b2c3d", fullSha)
+	setPinnedComponents(t, "0.2.7", "deadbee", "0.5.1", "cafef00")
+	t.Setenv("CLOWN_PLUGIN_META", "")
+	got := buildIdentityFragment()
+
+	signOff := "You are running clown 0.3.10+a1b2c3d.\nWhen you sign off as Clown on git commits, pull " +
+		"requests, or comments, include this build identifier (0.3.10+a1b2c3d) and link " +
+		"to the exact commit it was built from: " + clownRepoURL + "/commit/" + fullSha + "."
+	if !strings.HasPrefix(got, signOff) {
+		t.Fatalf("the identity and sign-off sentences changed:\n%s", got)
+	}
+	mustContain(t, got, "troupe 0.2.7 (deadbee)")
+	mustContain(t, got, "ringmaster 0.5.1 (cafef00)")
+	mustContain(t, got, "`clown version`")
+	mustContain(t, got, "source HEAD")
+	// Unpinned components (no version) are left out.
+	mustNotContain(t, got, "claude-code")
+	mustNotContain(t, got, "codex")
+}
+
 func mustContain(t *testing.T, haystack, needle string) {
 	t.Helper()
 	if !strings.Contains(haystack, needle) {
