@@ -184,45 +184,87 @@ func consumeRestartedNotice() (notice string, relaunched bool) {
 	return restartedNotice(reason), true
 }
 
-// postMintPeek is the relaunched frontend's second look at its session
-// (spinclass#419): right after the identity mint and presence registration,
-// before the provider starts, it asks `spinclass restart-preflight --peek`
-// again, the same way the old frontend did before the exec
-// (peekSessionState: launch env, principal, bounded, own process group). It
-// narrows the window in which a close that started after the old frontend's
-// peek could be undone by the relaunch.
-type postMintPeek struct {
+// preMintPeekTimeout bounds the relaunch's own peek: it only narrows a window
+// the old frontend's 20 s pre-exec peek already checked, so it must not hold
+// up the launch long.
+const preMintPeekTimeout = 5 * time.Second
+
+// preMintPeek is the relaunched frontend's second look at its session
+// (spinclass#419): before its first identity side effect (presence
+// registration, then `troupe mint`), it asks `spinclass restart-preflight
+// --peek` again, the same way the old frontend did before the exec
+// (peekSessionState: launch env, principal, own process group), bounded at
+// preMintPeekTimeout. A session closed since the old frontend's peek is then
+// neither registered nor re-minted, so a close's revocation is not undone.
+type preMintPeek struct {
 	// spinclass is the binary; "" means not on PATH (unknown).
 	spinclass string
 	principal string
 	environ   []string
 	logPath   string
-	timeout   time.Duration
+	// timeout, zero: preMintPeekTimeout.
+	timeout time.Duration
 }
 
 // closed reports whether spinclass says the session is closed, in which case
-// the relaunch must not start the provider. Anything else, including a
-// failed or unknown peek (a spinclass without --peek), lets it start. It
-// never revokes anything: only a close revokes the identity (and clown never
-// runs `troupe mint-revoke`); the presence record this launch registered is
-// left to go stale, there being no clean removal path in clown.
-func (p postMintPeek) closed() bool {
+// the relaunch must not register, mint or start anything. Anything else,
+// including a failed, timed-out or unknown peek (a spinclass without
+// --peek), lets it go on. It never revokes anything (clown never runs `troupe
+// mint-revoke`).
+func (p preMintPeek) closed() bool {
 	if p.spinclass == "" {
 		logSelfClose(p.logPath, "relaunched (%s): spinclass is not on PATH, session state unknown; starting", p.principal)
 		return false
 	}
-	state, err := peekSessionState(p.spinclass, p.principal, p.environ, p.timeout)
+	timeout := p.timeout
+	if timeout == 0 {
+		timeout = preMintPeekTimeout
+	}
+	state, err := peekSessionState(p.spinclass, p.principal, p.environ, timeout)
 	switch {
 	case err != nil:
-		logSelfClose(p.logPath, "relaunched (%s): session state unknown after the mint (%v); starting", p.principal, err)
+		logSelfClose(p.logPath, "relaunched (%s): session state unknown before the mint (%v); starting", p.principal, err)
 		return false
 	case state == "closed":
-		logSelfClose(p.logPath, "relaunched (%s): spinclass reports the session closed after the mint; not starting the provider (nothing revoked here)", p.principal)
+		logSelfClose(p.logPath, "relaunched (%s): spinclass reports the session closed before the mint; not registering, minting or starting it (nothing revoked here)", p.principal)
 		return true
 	default:
-		logSelfClose(p.logPath, "relaunched (%s): spinclass reports the session %s after the mint; starting", p.principal, state)
+		logSelfClose(p.logPath, "relaunched (%s): spinclass reports the session %s before the mint; starting", p.principal, state)
 		return false
 	}
+}
+
+// sessionIdentitySteps are a launch's first identity side effects, in their
+// fixed order: for a restart's relaunch the peek, then the presence
+// registration, then the XMPP mint. run is what orders them, so a test can
+// prove that a closed peek leaves neither of the others run.
+type sessionIdentitySteps struct {
+	// relaunchClosed is the relaunch's peek; nil for any other launch.
+	relaunchClosed   func() bool
+	registerPresence func()
+	mint             func()
+}
+
+// identitySteps builds the steps: the peek only for a restart's relaunch,
+// and not under --print-launch-plan.
+func identitySteps(relaunched, printLaunchPlan bool, peekClosed func() bool, registerPresence, mint func()) sessionIdentitySteps {
+	s := sessionIdentitySteps{registerPresence: registerPresence, mint: mint}
+	if relaunched && !printLaunchPlan {
+		s.relaunchClosed = peekClosed
+	}
+	return s
+}
+
+// run runs the steps in order and reports whether the launch goes on: false
+// only when the relaunch's peek found the session closed, and then neither
+// the presence registration nor the mint ran.
+func (s sessionIdentitySteps) run() bool {
+	if s.relaunchClosed != nil && s.relaunchClosed() {
+		return false
+	}
+	s.registerPresence()
+	s.mint()
+	return true
 }
 
 // restartedNotice is the system-prompt fragment telling a resumed session it

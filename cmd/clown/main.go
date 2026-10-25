@@ -884,31 +884,41 @@ func runWithFlags(flags parsedFlags) int {
 			_ = os.Setenv("CLOWN_XMPP_VHOST", vhost)
 		}
 	}
-	// Not under --print-launch-plan: a plan leaves no presence record (clown#284).
-	if !flags.naked && !flags.printLaunchPlan && !jobWakeupDisabled() {
-		_ = jobwake.RegisterPresenceKey(flags.identity.Key, time.Now())
-	}
-
-	// Mint this session's per-session XMPP account when it opts into the
-	// xmpp-native transport (troupe#3), before the receiver + troupe mcp child
-	// are wired below, so both inherit the minted credential
-	// (TROUPE_XMPP_USER/PASSWORD_FILE). Best-effort: a mint miss logs and leaves
-	// the credential unset, so the receiver is not registered (opt-in transport)
-	// and the launch is never broken. Skipped for --naked and when job-wakeup is
-	// disabled (no receiver to feed), and deferred under --print-launch-plan. The
-	// inherited credential was already dropped where the clownfile's [messaging]
-	// env is applied (clown#267).
-	provisionSessionXMPPCredential(&flags)
-
-	// A restart's relaunch asks spinclass once more, now that it has minted
-	// and registered (spinclass#419): a session closed since the old
-	// frontend's peek is not started. Unknown starts.
-	if restartRelaunched && !flags.printLaunchPlan {
-		peek := postMintPeek{spinclass: lookPathOrEmpty("spinclass"), principal: flags.identity.Key, environ: launchEnviron, logPath: relaunchLogPath()}
-		if peek.closed() {
-			fmt.Fprintf(os.Stderr, "clown: restart: spinclass reports session %s closed; not starting it\n", flags.identity.Key)
-			return 0
-		}
+	// The first identity side effects, in order (sessionIdentitySteps). A
+	// restart's relaunch first asks spinclass once more (spinclass#419,
+	// preMintPeek): a session closed since the old frontend's peek is neither
+	// registered nor re-minted, and does not start; unknown goes on. Nothing
+	// between the final identity (decideClaudeSession above) and here touches
+	// the identity or XMPP: the clown-name claim, the group id, the [attach]
+	// wrap (a relaunch keeps its attach id, so it does not re-wrap) and the
+	// title are local.
+	steps := identitySteps(restartRelaunched, flags.printLaunchPlan,
+		func() bool {
+			fmt.Fprintln(os.Stderr, "clown: checking session state")
+			return preMintPeek{spinclass: lookPathOrEmpty("spinclass"), principal: flags.identity.Key, environ: launchEnviron, logPath: relaunchLogPath()}.closed()
+		},
+		func() {
+			// Not under --print-launch-plan: a plan leaves no presence record (clown#284).
+			if !flags.naked && !flags.printLaunchPlan && !jobWakeupDisabled() {
+				_ = jobwake.RegisterPresenceKey(flags.identity.Key, time.Now())
+			}
+		},
+		// Mint this session's per-session XMPP account when it opts into the
+		// xmpp-native transport (troupe#3), before the receiver + troupe mcp
+		// child are wired below, so both inherit the minted credential
+		// (TROUPE_XMPP_USER/PASSWORD_FILE). Best-effort: a mint miss logs and
+		// leaves the credential unset, so the receiver is not registered
+		// (opt-in transport) and the launch is never broken. Skipped for
+		// --naked and when job-wakeup is disabled (no receiver to feed), and
+		// deferred under --print-launch-plan. The inherited credential was
+		// already dropped where the clownfile's [messaging] env is applied
+		// (clown#267).
+		func() { provisionSessionXMPPCredential(&flags) },
+	)
+	if !steps.run() {
+		// One stderr line; close-self-run.log is the durable record.
+		fmt.Fprintf(os.Stderr, "clown: restart: spinclass reports session %s closed; not starting it\n", flags.identity.Key)
+		return 0
 	}
 
 	// clown#216 + clown#192 step 3: bind this session's clown-name to its
