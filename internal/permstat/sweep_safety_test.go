@@ -59,6 +59,51 @@ func TestSweepRemovesStateNamedSpecialFilesButNotTheirTargets(t *testing.T) {
 	}
 }
 
+// A dir an agent filled with thousands of state-named files that hold a
+// pending entry and are a few days old (so each needs a read to tell it from
+// an empty one), plus oversized ones: one sweep reads at most maxSweepLoads
+// of them and removes the oversized ones unread. Uses the sweepLoadHook seam
+// added with the budget, so written with the fix and never red.
+func TestOneSweepDoesBoundedWork(t *testing.T) {
+	dir := t.TempDir()
+	for i := 0; i < 3000; i++ {
+		writeAged(t, filepath.Join(dir, stateName(10000+i)), 1, 48*time.Hour)
+	}
+	var oversized []string
+	for i := 0; i < 10; i++ {
+		p := filepath.Join(dir, stateName(20000+i))
+		writeAged(t, p, 1, 48*time.Hour)
+		// Sparse: past maxStateBytes without using the disk.
+		if err := os.Truncate(p, maxStateBytes+1); err != nil {
+			t.Fatal(err)
+		}
+		oversized = append(oversized, p)
+	}
+	loads := 0
+	sweepLoadHook = func() { loads++ }
+	t.Cleanup(func() { sweepLoadHook = nil })
+	if _, err := Handle(ev("PermissionRequest", "Bash", bash), dir); err != nil {
+		t.Fatal(err)
+	}
+	if loads > maxSweepLoads {
+		t.Errorf("one sweep read %d state files, want at most %d", loads, maxSweepLoads)
+	}
+	for _, p := range oversized {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("oversized %s was not removed: %v", filepath.Base(p), err)
+		}
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The 3000 pending files stay (2 days old, under the 7-day rule), plus
+	// this session's own file.
+	if len(entries) != 3001 {
+		t.Errorf("%d entries left, want 3001", len(entries))
+	}
+}
+
 // A FIFO (or anything not regular) at a session's state-file name is
 // refused at once with a clear error, not retried as if it had been
 // replaced; the prompt still counts.

@@ -146,10 +146,21 @@ SessionEnd it already had:
   only those whose name has the state-file shape (32 hex digits, `.json`),
   never any other file however old: an empty or unreadable one past 24h, one
   still holding a pending request only past 7 days (mtime is the last write,
-  not liveness: a person can sit at a dialog for a day). At most 16 are
-  removed per sweep, and at most 4096 entries are looked at. The state dir
+  not liveness: a person can sit at a dialog for a day). Under a state name,
+  a directory is left alone, anything else that is not a regular file (a
+  symlink, a FIFO) is removed (the entry itself, through the root), and a
+  regular file over 64 KiB is removed unread: a state file is only ever a
+  small regular file, so these were planted. One sweep removes at most 16,
+  looks at at most 4096 entries and reads at most 64 files (1 MiB in all);
+  files it had no budget to read are left for a later sweep. The state dir
   survives reboots, so this sweep is what bounds it (tested in that dir:
-  `TestSweepRunsInTheStateDirAndIgnoresTheOldLocation`).
+  `TestSweepRunsInTheStateDirAndIgnoresTheOldLocation`). A non-regular
+  entry at a session's own state-file name is refused at once (prompted
+  still counts).
+- Only the two hook dirs under `$XDG_STATE_HOME/clown` are among clown's own
+  read-write binds into a unit (R, pinned by
+  `TestStageAgentHomeBindsNoMoreOfTheClownStateDir`); a spinclass spec's
+  extra `BindsRW` and the live unit are not checked (I).
 - Locking is best effort: up to 5 attempts share one 200ms deadline overall,
   the lock tried without blocking, then the hook skips the bookkeeping
   (prompted still counts) rather than stall the agent. After locking, the

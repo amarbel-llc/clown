@@ -76,6 +76,10 @@ const (
 	pendingStaleAge = 7 * 24 * time.Hour
 	maxSweep        = 16
 	maxSweepScan    = 4096
+	// maxSweepLoads and maxSweepLoadBytes bound the state files one sweep
+	// reads (to tell a pending file from an empty one).
+	maxSweepLoads     = 64
+	maxSweepLoadBytes = 1 << 20
 )
 
 // maxPending bounds the pending list; past it the oldest request is dropped
@@ -304,7 +308,8 @@ func take(root *os.Root, name string) (state, error) {
 // is set), and locks it. It returns only a regular file that the name, not
 // followed if it is a symlink, still names once locked.
 func lockState(root *os.Root, name string, create bool) (*os.File, error) {
-	flags := os.O_RDWR | syscall.O_NOFOLLOW
+	// O_NONBLOCK: a FIFO planted at the name must not hang the open.
+	flags := os.O_RDWR | syscall.O_NOFOLLOW | syscall.O_NONBLOCK
 	if create {
 		flags |= os.O_CREATE
 	}
@@ -314,6 +319,15 @@ func lockState(root *os.Root, name string, create bool) (*os.File, error) {
 		f, err := root.OpenFile(name, flags, 0o600)
 		if err != nil {
 			return nil, err
+		}
+		// A state file is only ever regular; anything else at its name was
+		// planted, and reopening would find it again, so refuse at once.
+		if fi, err := f.Stat(); err != nil || !fi.Mode().IsRegular() {
+			f.Close()
+			if err != nil {
+				return nil, err
+			}
+			return nil, fmt.Errorf("state file %s is not a regular file (%s)", name, fi.Mode().Type())
 		}
 		if err := flockUntil(f, deadline); err != nil {
 			f.Close()
@@ -415,20 +429,40 @@ func openStateDir(dir string, create bool) (*os.Root, error) {
 	return root, nil
 }
 
+// sweepLoadHook, when set (tests), is called for each state file the sweep
+// reads.
+var sweepLoadHook func()
+
 // sweepStale removes up to maxSweep abandoned state files in root (sessions
 // killed before their turn ended), other than keep, looking at no more than
-// maxSweepScan entries. Only names of the state-file shape are ever removed,
-// never other files however old. mtime is the last write, not liveness (a
-// person can sit at a dialog for a day), so a file still holding a pending
-// request is removed only past pendingStaleAge; an empty or unreadable one
-// past staleAge.
+// maxSweepScan entries and reading at most maxSweepLoads files
+// (maxSweepLoadBytes in all), so one sweep does bounded work however the
+// agent fills the dir. Only names of the state-file shape are ever removed,
+// never other files however old. Under such a name:
+//   - a directory is left alone;
+//   - anything else that is not a regular file (a symlink, a FIFO) was
+//     planted, a state file being only ever regular: the entry itself is
+//     removed through the root, never what it points at;
+//   - a regular file larger than maxStateBytes was planted too (a state file
+//     is a few KiB): removed unread;
+//   - otherwise mtime decides. It is the last write, not liveness (a person
+//     can sit at a dialog for a day), so a file still holding a pending
+//     request is removed only past pendingStaleAge, an empty or unreadable
+//     one past staleAge. Telling the two apart needs a read; once the load
+//     budget is spent, such files are left for a later sweep.
 func sweepStale(root *os.Root, keep string) error {
 	d, err := root.Open(".")
 	if err != nil {
 		return err
 	}
 	defer d.Close()
-	removed, scanned := 0, 0
+	removed, scanned, loads := 0, 0, 0
+	var loadBytes int64
+	remove := func(name string) {
+		if root.Remove(name) == nil {
+			removed++
+		}
+	}
 	for {
 		entries, err := d.ReadDir(256)
 		for _, e := range entries {
@@ -437,20 +471,45 @@ func sweepStale(root *os.Root, keep string) error {
 			}
 			scanned++
 			name := e.Name()
-			if !e.Type().IsRegular() || name == keep || !stateFileShape.MatchString(name) {
+			if name == keep || !stateFileShape.MatchString(name) || e.IsDir() {
+				continue
+			}
+			if !e.Type().IsRegular() {
+				remove(name)
 				continue
 			}
 			fi, ierr := root.Lstat(name)
-			if ierr != nil || !fi.Mode().IsRegular() {
-				continue // removed or replaced meanwhile
+			if ierr != nil {
+				continue // removed meanwhile
 			}
-			age := time.Since(fi.ModTime())
-			if age <= staleAge || (age <= pendingStaleAge && len(loadStateIn(root, name).Pending) > 0) {
+			if !fi.Mode().IsRegular() {
+				if !fi.IsDir() { // replaced by a special file meanwhile
+					remove(name)
+				}
 				continue
 			}
-			if root.Remove(name) == nil {
-				removed++
+			if fi.Size() > maxStateBytes {
+				remove(name)
+				continue
 			}
+			age := time.Since(fi.ModTime())
+			if age <= staleAge {
+				continue
+			}
+			if age <= pendingStaleAge {
+				if loads == maxSweepLoads || loadBytes+fi.Size() > maxSweepLoadBytes {
+					continue // budget spent: left for a later sweep
+				}
+				loads++
+				loadBytes += fi.Size()
+				if sweepLoadHook != nil {
+					sweepLoadHook()
+				}
+				if len(loadStateIn(root, name).Pending) > 0 {
+					continue
+				}
+			}
+			remove(name)
 		}
 		if errors.Is(err, io.EOF) {
 			return nil
