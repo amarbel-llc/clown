@@ -34,14 +34,88 @@ const (
 	downloadUsage = "usage: juggler download <name> [--url URL] [--sha256 HEX] [--size BYTES]"
 )
 
-// subcommandUsage is each subcommand's usage line, printed to stdout for
-// `juggler <subcommand> -h|--help`.
-var subcommandUsage = map[string]string{
-	"daemon": daemonUsage, "start": startUsage, "stop": stopUsage, "status": statusUsage,
-	"list": listUsage, "models": modelsUsage, "model": modelUsage, "prompt": promptUsage,
-	"mcp": mcpUsage, "decide": decideUsage, "run": runUsage, "spawn": spawnUsage,
-	"exit-wake": exitWakeUsage, "resolve": resolveUsage, "clean": cleanUsage,
-	"job-ledger": jobLedgerUsage, "handles": handlesUsage, "download": downloadUsage,
+// verb is one juggler subcommand: its usage line (printed to stdout for
+// `juggler <verb> ... -h|--help`) and what it runs. verbs is the only
+// dispatch table, so a verb cannot exist without a usage line.
+type verb struct {
+	usage string
+	run   func(args []string) int
+}
+
+var verbs = map[string]verb{
+	// The FDR 0019 lifecycle verbs need no daemon: run and decide resolve
+	// remote models from the models file and dial the daemon only for local
+	// ones.
+	"run": {runUsage, func(args []string) int {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		return cmdRun(ctx, resolveAgentModel, http.DefaultClient, args, os.Stdin, os.Stdout, os.Stderr)
+	}},
+	"spawn":      {spawnUsage, func(args []string) int { return cmdSpawn(args, os.Stdin, os.Stdout, os.Stderr) }},
+	"exit-wake":  {exitWakeUsage, func(args []string) int { return cmdExitWake(os.Getenv, args, os.Stdout, os.Stderr) }},
+	"resolve":    {resolveUsage, func(args []string) int { return cmdResolve(args, os.Stdout, os.Stderr) }},
+	"clean":      {cleanUsage, func(args []string) int { return cmdClean(args, os.Stdout, os.Stderr) }},
+	"job-ledger": {jobLedgerUsage, func(args []string) int { return cmdJobLedger(args, os.Stdout, os.Stderr) }},
+	"handles":    {handlesUsage, func(args []string) int { return cmdHandles(args, os.Stdout, os.Stderr) }},
+	// The llama-server control-plane daemon (FDR-0010). Runs the server the
+	// other verbs dial via withClient. The daemon stays clown-side; the job
+	// platform it once shared a binary with was extracted into the standalone
+	// code.linenisgreat.com/ringmaster module.
+	"daemon": {daemonUsage, runDaemon},
+	"start": {startUsage, func(args []string) int {
+		return withClient(func(cli *rm.Client) int { return cmdStart(cli, args) })
+	}},
+	"stop": {stopUsage, func(args []string) int {
+		return withClient(func(cli *rm.Client) int { return cmdStop(cli, args) })
+	}},
+	"status": {statusUsage, func(args []string) int {
+		return withClient(func(cli *rm.Client) int { return cmdStatus(cli, args) })
+	}},
+	"list":   {listUsage, func([]string) int { return withClient(cmdList) }},
+	"models": {modelsUsage, func([]string) int { return withClient(cmdModels) }},
+	"model": {modelUsage, func(args []string) int {
+		return withClient(func(cli *rm.Client) int { return cmdModel(cli, args) })
+	}},
+	"prompt": {promptUsage, func(args []string) int {
+		return withClient(func(cli *rm.Client) int { return cmdPrompt(cli, args) })
+	}},
+	// Deliberately bypasses withClient's fail-fast semantics: Serve is
+	// designed to run with a nil cli (see mcp.go), degrading every tools/call
+	// to a graceful per-call isError response instead of exiting before the
+	// JSON-RPC loop even starts. clown's plugin host spawns this as a
+	// long-lived stdio server for the whole session, so a daemon that isn't up
+	// yet (e.g. started mid-session) must not prevent initialize/tools/list
+	// from working.
+	"mcp": {mcpUsage, func([]string) int {
+		cli, _ := dialClient()
+		if cli != nil {
+			defer cli.Close()
+		}
+		Serve(os.Stdin, os.Stdout, cli)
+		return 0
+	}},
+	"decide": {decideUsage, func(args []string) int {
+		return cmdDecide(resolveAgentModel, http.DefaultClient, args, os.Stdin, os.Stdout, os.Stderr)
+	}},
+	"download": {downloadUsage, cmdDownload},
+}
+
+// wantsHelp reports a -h or --help among args before a literal "--". It is
+// checked before the verb sees its arguments, so it holds wherever the flag
+// sits, including as another flag's value or as prompt text: start/stop/
+// status would otherwise take it for a model or alias, the flag-parsing
+// verbs return flag.ErrHelp as a usage error, and daemon and mcp would start
+// serving. After "--" (passthrough) it is left alone.
+func wantsHelp(args []string) bool {
+	for _, a := range args {
+		switch a {
+		case "--":
+			return false
+		case "-h", "--help":
+			return true
+		}
+	}
+	return false
 }
 
 func run(args []string) int {
@@ -49,83 +123,21 @@ func run(args []string) int {
 		fmt.Fprintln(os.Stderr, usage)
 		return jr.ExitUsage
 	}
-	// Help as the first argument after a subcommand, before the subcommand
-	// sees it: start/stop/status would take it for a model or alias, the
-	// flag-parsing verbs return flag.ErrHelp as a usage error, and daemon and
-	// mcp would start serving.
-	if len(args) > 1 && (args[1] == "-h" || args[1] == "--help") {
-		if u, ok := subcommandUsage[args[0]]; ok {
-			fmt.Fprintln(os.Stdout, u)
-			return 0
-		}
-	}
-
 	switch args[0] {
 	case "-h", "--help", "help":
 		fmt.Fprintln(os.Stdout, usage)
 		return 0
-	// The FDR 0019 lifecycle verbs need no daemon: run and decide resolve
-	// remote models from the models file and dial the daemon only for local
-	// ones.
-	case "run":
-		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-		defer stop()
-		return cmdRun(ctx, resolveAgentModel, http.DefaultClient, args[1:], os.Stdin, os.Stdout, os.Stderr)
-	case "spawn":
-		return cmdSpawn(args[1:], os.Stdin, os.Stdout, os.Stderr)
-	case "exit-wake":
-		return cmdExitWake(os.Getenv, args[1:], os.Stdout, os.Stderr)
-	case "resolve":
-		return cmdResolve(args[1:], os.Stdout, os.Stderr)
-	case "clean":
-		return cmdClean(args[1:], os.Stdout, os.Stderr)
-	case "job-ledger":
-		return cmdJobLedger(args[1:], os.Stdout, os.Stderr)
-	case "handles":
-		return cmdHandles(args[1:], os.Stdout, os.Stderr)
-	case "daemon":
-		// The llama-server control-plane daemon (FDR-0010). Runs the
-		// server the other verbs dial via withClient. The daemon stays
-		// clown-side; the job platform it once shared a binary with was
-		// extracted into the standalone code.linenisgreat.com/ringmaster
-		// module.
-		return runDaemon(args[1:])
-	case "start":
-		return withClient(func(cli *rm.Client) int { return cmdStart(cli, args[1:]) })
-	case "stop":
-		return withClient(func(cli *rm.Client) int { return cmdStop(cli, args[1:]) })
-	case "status":
-		return withClient(func(cli *rm.Client) int { return cmdStatus(cli, args[1:]) })
-	case "list":
-		return withClient(func(cli *rm.Client) int { return cmdList(cli) })
-	case "models":
-		return withClient(func(cli *rm.Client) int { return cmdModels(cli) })
-	case "model":
-		return withClient(func(cli *rm.Client) int { return cmdModel(cli, args[1:]) })
-	case "prompt":
-		return withClient(func(cli *rm.Client) int { return cmdPrompt(cli, args[1:]) })
-	case "mcp":
-		// Deliberately bypasses withClient's fail-fast semantics: Serve
-		// is designed to run with a nil cli (see mcp.go), degrading every
-		// tools/call to a graceful per-call isError response instead of
-		// exiting before the JSON-RPC loop even starts. clown's plugin
-		// host spawns this as a long-lived stdio server for the whole
-		// session, so a daemon that isn't up yet (e.g. started mid-
-		// session) must not prevent initialize/tools/list from working.
-		cli, _ := dialClient()
-		if cli != nil {
-			defer cli.Close()
-		}
-		Serve(os.Stdin, os.Stdout, cli)
-		return 0
-	case "decide":
-		return cmdDecide(resolveAgentModel, http.DefaultClient, args[1:], os.Stdin, os.Stdout, os.Stderr)
-	case "download":
-		return cmdDownload(args[1:])
-	default:
+	}
+	v, ok := verbs[args[0]]
+	if !ok {
 		fmt.Fprintf(os.Stderr, "juggler: unknown command %q\n", args[0])
 		return jr.ExitUsage
 	}
+	if wantsHelp(args[1:]) {
+		fmt.Fprintln(os.Stdout, v.usage)
+		return 0
+	}
+	return v.run(args[1:])
 }
 
 // withClient dials juggler, runs fn with the connected client, and

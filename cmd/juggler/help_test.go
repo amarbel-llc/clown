@@ -68,15 +68,26 @@ func TestBareAndUnknownCommandAreUsageErrors(t *testing.T) {
 	}
 }
 
-// `daemon -h` and `mcp -h` print their usage and return, rather than binding
-// a control socket or serving MCP on stdin. Not run red: before the fix they
-// would have started for real.
-func TestDaemonAndMCPHelpDoNotStartAnything(t *testing.T) {
-	for _, sub := range []string{"daemon", "mcp"} {
+// Every verb the dispatch accepts (the verbs table is the dispatch) has a
+// usage line naming it, appears in the top-level usage, and answers
+// `<verb> -h` / `--help` with exactly that line and exit 0, without running
+// (daemon and mcp included: before the help check they would have started a
+// daemon and served MCP on stdin).
+func TestEveryVerbHasHelp(t *testing.T) {
+	if len(verbs) == 0 {
+		t.Fatal("no verbs")
+	}
+	for name, v := range verbs {
+		if !strings.HasPrefix(v.usage, "usage: juggler "+name+" ") && v.usage != "usage: juggler "+name {
+			t.Errorf("verb %s: usage %q does not start with %q", name, v.usage, "usage: juggler "+name)
+		}
+		if !strings.Contains(usage, "|"+name+"|") && !strings.Contains(usage, "<"+name+"|") && !strings.Contains(usage, "|"+name+">") {
+			t.Errorf("verb %s is missing from the top-level usage %q", name, usage)
+		}
 		for _, flag := range []string{"-h", "--help"} {
-			code, out := runBounded(t, sub, flag)
-			if code != 0 || out != subcommandUsage[sub]+"\n" {
-				t.Errorf("juggler %s %s: exit %d, stdout %q; want 0 and exactly its usage", sub, flag, code, out)
+			code, out := runBounded(t, name, flag)
+			if code != 0 || out != v.usage+"\n" {
+				t.Errorf("juggler %s %s: exit %d, stdout %q; want 0 and exactly %q", name, flag, code, out, v.usage)
 			}
 		}
 	}
@@ -116,33 +127,23 @@ func TestHelpAnywhereBeforeDoubleDash(t *testing.T) {
 		{"prompt", "m", "--max-tokens", "5", "-h"},
 	} {
 		code, out := runBounded(t, args...)
-		if code != 0 || out != subcommandUsage[args[0]]+"\n" {
-			t.Errorf("juggler %v: exit %d, stdout %q; want 0 and exactly %q", args, code, out, subcommandUsage[args[0]])
+		if code != 0 || out != verbs[args[0]].usage+"\n" {
+			t.Errorf("juggler %v: exit %d, stdout %q; want 0 and exactly %q", args, code, out, verbs[args[0]].usage)
 		}
 	}
 	// models is read-only, so this is harmless even where a daemon answers.
-	if _, out := runBounded(t, "models", "--", "-h"); out == subcommandUsage["models"]+"\n" {
+	if _, out := runBounded(t, "models", "--", "-h"); out == verbs["models"].usage+"\n" {
 		t.Errorf("juggler models -- -h printed the usage; a -h after -- is not a help request")
 	}
 }
 
-// clown#56: <subcommand> -h / --help prints that subcommand's usage to
-// stdout and exits 0, instead of being taken as a positional (start, stop,
-// status: a model or alias named "-h") or exiting 1 on flag.ErrHelp (run,
-// spawn, decide, ...). daemon and mcp are covered in
-// TestDaemonAndMCPHelpDoNotStartAnything: before the fix, `daemon -h`
-// started a daemon and `mcp -h` served on stdin.
-func TestSubcommandHelpPrintsItsUsage(t *testing.T) {
-	for _, sub := range []string{"start", "stop", "status", "list", "models", "model", "prompt", "decide", "run", "spawn", "exit-wake", "resolve", "clean", "job-ledger", "handles", "download"} {
-		for _, flag := range []string{"-h", "--help"} {
-			var code int
-			out, _ := captureOutput(t, func() { code = run([]string{sub, flag}) })
-			if code != 0 {
-				t.Errorf("juggler %s %s: exit %d, want 0", sub, flag, code)
-			}
-			if out != subcommandUsage[sub]+"\n" {
-				t.Errorf("juggler %s %s: stdout %q, want exactly %q", sub, flag, out, subcommandUsage[sub])
-			}
+// A verb a test enumerates by hand would drift from the table; the table
+// test above covers them all. This keeps the explicit list as a check that
+// the known verbs are all still in the table.
+func TestKnownVerbsAreDispatched(t *testing.T) {
+	for _, sub := range []string{"daemon", "start", "stop", "status", "list", "models", "model", "prompt", "mcp", "decide", "run", "spawn", "exit-wake", "resolve", "clean", "job-ledger", "handles", "download"} {
+		if _, ok := verbs[sub]; !ok {
+			t.Errorf("verb %s is no longer dispatched", sub)
 		}
 	}
 }

@@ -170,11 +170,20 @@ and exit 0.
 Run with no arguments,
 .Nm
 prints the same usage to stderr and exits 1.
+A
+.Fl h
+or
+.Fl -help
+anywhere after a subcommand and before a literal
+.Fl - ,
+including as another flag's value or as
+.Cm prompt
+text, makes
 .Nm
-.Ar subcommand
-.Fl h | Fl -help ,
-with the help flag first after the subcommand, prints that subcommand's
-usage line to stdout and exits 0, without running it.
+print that subcommand's usage line to stdout and exit 0 without running
+it; after
+.Fl -
+it is passed through.
 .It Cm daemon Op Fl -socket Ar path Op Fl -llama-server Ar path
 Run the llama-server control-plane daemon that the instance-management
 and registry subcommands dial.
