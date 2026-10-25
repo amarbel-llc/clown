@@ -23,10 +23,41 @@ const usage = "usage: juggler <daemon|start|stop|status|list|models|model|prompt
 	"       juggler -h | --help | help\n" +
 	"See juggler(1) for each subcommand's flags."
 
+const (
+	daemonUsage   = "usage: juggler daemon [--socket <path>] [--llama-server <path>]"
+	startUsage    = "usage: juggler start <model> [--alias name] [--bind addr] [-- ...passthrough]"
+	stopUsage     = "usage: juggler stop <alias>"
+	statusUsage   = "usage: juggler status [alias]"
+	listUsage     = "usage: juggler list"
+	modelsUsage   = "usage: juggler models"
+	mcpUsage      = "usage: juggler mcp  (a stdio MCP server; clown's plugin host starts it)"
+	downloadUsage = "usage: juggler download <name> [--url URL] [--sha256 HEX] [--size BYTES]"
+)
+
+// subcommandUsage is each subcommand's usage line, printed to stdout for
+// `juggler <subcommand> -h|--help`.
+var subcommandUsage = map[string]string{
+	"daemon": daemonUsage, "start": startUsage, "stop": stopUsage, "status": statusUsage,
+	"list": listUsage, "models": modelsUsage, "model": modelUsage, "prompt": promptUsage,
+	"mcp": mcpUsage, "decide": decideUsage, "run": runUsage, "spawn": spawnUsage,
+	"exit-wake": exitWakeUsage, "resolve": resolveUsage, "clean": cleanUsage,
+	"job-ledger": jobLedgerUsage, "handles": handlesUsage, "download": downloadUsage,
+}
+
 func run(args []string) int {
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, usage)
 		return jr.ExitUsage
+	}
+	// Help as the first argument after a subcommand, before the subcommand
+	// sees it: start/stop/status would take it for a model or alias, the
+	// flag-parsing verbs return flag.ErrHelp as a usage error, and daemon and
+	// mcp would start serving.
+	if len(args) > 1 && (args[1] == "-h" || args[1] == "--help") {
+		if u, ok := subcommandUsage[args[0]]; ok {
+			fmt.Fprintln(os.Stdout, u)
+			return 0
+		}
 	}
 
 	switch args[0] {
@@ -265,7 +296,7 @@ parse:
 		}
 	}
 	if model == "" {
-		fmt.Fprintln(os.Stderr, "juggler: missing required model argument\nusage: juggler start <model> [--alias name] [--bind addr] [-- ...passthrough]")
+		fmt.Fprintln(os.Stderr, "juggler: missing required model argument\n"+startUsage)
 		return 1
 	}
 	if alias == "" {
@@ -294,7 +325,7 @@ parse:
 // margin.
 func cmdStop(cli *rm.Client, args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "juggler: missing alias\nusage: juggler stop <alias>")
+		fmt.Fprintln(os.Stderr, "juggler: missing alias\n"+stopUsage)
 		return 1
 	}
 	alias := args[0]

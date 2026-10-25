@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 // captureOutput runs fn with os.Stdout and os.Stderr redirected and returns
@@ -64,6 +65,31 @@ func TestBareAndUnknownCommandAreUsageErrors(t *testing.T) {
 	out, errOut = captureOutput(t, func() { code = run([]string{"frobnicate"}) })
 	if code == 0 || out != "" || !strings.Contains(errOut, `unknown command "frobnicate"`) {
 		t.Errorf("juggler frobnicate: exit %d, stdout %q, stderr %q; want non-zero, nothing, unknown command", code, out, errOut)
+	}
+}
+
+// `daemon -h` and `mcp -h` print their usage and return, rather than binding
+// a control socket or serving MCP on stdin. Not run red: before the fix they
+// would have started for real.
+func TestDaemonAndMCPHelpDoNotStartAnything(t *testing.T) {
+	for _, sub := range []string{"daemon", "mcp"} {
+		for _, flag := range []string{"-h", "--help"} {
+			done := make(chan struct{})
+			var code int
+			var out string
+			go func() {
+				out, _ = captureOutput(t, func() { code = run([]string{sub, flag}) })
+				close(done)
+			}()
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatalf("juggler %s %s did not return", sub, flag)
+			}
+			if code != 0 || !strings.HasPrefix(out, "usage: juggler "+sub) {
+				t.Errorf("juggler %s %s: exit %d, stdout %q; want 0 and its usage", sub, flag, code, out)
+			}
+		}
 	}
 }
 

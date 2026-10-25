@@ -165,10 +165,16 @@ as external binaries; see
 .Sh SUBCOMMANDS
 .Bl -tag -width Ds
 .It Fl h | Fl -help | Cm help
-Print the usage line, listing the subcommands, to stdout and exit 0.
+Print the usage, listing the subcommands and these help forms, to stdout
+and exit 0.
 Run with no arguments,
 .Nm
-prints the same line to stderr and exits 1.
+prints the same usage to stderr and exits 1.
+.Nm
+.Ar subcommand
+.Fl h | Fl -help ,
+with the help flag first after the subcommand, prints that subcommand's
+usage line to stdout and exits 0, without running it.
 .It Cm daemon Op Fl -socket Ar path Op Fl -llama-server Ar path
 Run the llama-server control-plane daemon that the instance-management
 and registry subcommands dial.

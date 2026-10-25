@@ -114,11 +114,11 @@ func cmdDownload(args []string) int {
 	name, urlOverride, shaOverride, sizeOverride, err := parseDownloadArgs(args)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "juggler: download: %v\n", err)
-		fmt.Fprintln(os.Stderr, "usage: juggler download <name> [--url URL] [--sha256 HEX] [--size BYTES]")
+		fmt.Fprintln(os.Stderr, downloadUsage)
 		return 1
 	}
 	if name == "" {
-		fmt.Fprintln(os.Stderr, "usage: juggler download <name> [--url URL] [--sha256 HEX] [--size BYTES]")
+		fmt.Fprintln(os.Stderr, downloadUsage)
 		return 1
 	}
 
