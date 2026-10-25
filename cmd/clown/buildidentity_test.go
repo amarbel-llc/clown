@@ -184,6 +184,34 @@ func TestPluginRowsAreShapeChecked(t *testing.T) {
 	mustNotContain(t, got, "authoritative")
 }
 
+// clown#227 review: a plugin row cannot pose as clown or as a build-time
+// component (any case), and a plugin name has at most one "/". Plugin rows
+// sit under their own label, after the build-time rows.
+func TestPluginRowsCannotImpersonateBuildPins(t *testing.T) {
+	setBuildcfg(t, "0.3.10", "a1b2c3d", "")
+	setPinnedComponents(t, "0.2.7", "deadbee", "", "")
+	writePluginMeta(t,
+		"clown                9.9.9        deadbee",
+		"troupe               9.9.9        x",
+		"Ringmaster           9.9.9        x",
+		"claude-code          9.9.9        x",
+		"CODEX                9.9.9        x",
+		"claude               9.9.9        x",
+		"a/b/c                1.0          abc1234",
+		"moxy/moxy            1.2.3        abc1234",
+	)
+	got := pinnedSection(buildIdentityFragment())
+	for _, bad := range []string{"9.9.9", "a/b/c"} {
+		mustNotContain(t, got, bad)
+	}
+	pins := strings.Index(got, "- troupe 0.2.7 (deadbee)")
+	label := strings.Index(got, "\nPlugins (self-reported")
+	moxy := strings.Index(got, "- moxy/moxy 1.2.3 (abc1234)")
+	if pins < 0 || label < 0 || moxy < 0 || !(pins < label && label < moxy) {
+		t.Fatalf("want the build-time row, then the plugin label, then the plugin row:\n%s", got)
+	}
+}
+
 // The version-info of a real clown build (2026-10-25) passes the shape check
 // whole, "-" versions included.
 func TestRealPluginRowsPass(t *testing.T) {
