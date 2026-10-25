@@ -172,13 +172,26 @@ second
 .Nm clown restart
 with
 .Dq a restart is already underway .
-Immediately before the exec (after the serve-socket wait) it checks that the
-session's worktree (the frontend's working directory at launch) still
-exists, and if not, says so and exits 0 without relaunching.
-This is best effort: spinclass's close stops the unit and revokes the
-session's credentials first and removes the worktree last, so a close
-still between those steps when the frontend checks is missed, and the
-session is relaunched.
+Immediately before the exec (after the serve-socket wait) it asks
+.Ic spinclass restart-preflight --peek
+(read-only, with
+.Ev CLOWN_SESSION_ID
+set, bounded at 20 seconds).
+.Li \(dqstate\(dq:\(dqclosed\(dq ,
+which spinclass also reports for a close that has started but not finished,
+means the session is not relaunched: the frontend says so and exits 0.
+.Li \(dqlive\(dq
+relaunches.
+Anything else (a non-zero exit, as from a spinclass without
+.Fl -peek ,
+a timeout, unparsable output, a missing or other state) is unknown and
+relaunches.
+As a fallback it then checks that the session's worktree (the frontend's
+working directory at launch) still exists, and if not, does not relaunch
+either.
+What remains is a close that starts after the peek, or one the peek could
+not report (unknown) before spinclass reaches the worktree removal, its last
+step.
 Each relaunch outcome (relaunching, skipped, or failed, with the reason)
 and a failed
 .Dv SIGKILL

@@ -145,12 +145,15 @@ This note records what was built, the decisions taken, and what is unverified.
   session cannot self-close until it exits.
 - A user /exit during the grace window is not told apart from the stop's
   exit and relaunches the session (third review R1c).
-- The worktree check is the only liveness check before the exec. It now
-  runs immediately before the exec, but spinclass's close stops the unit
-  and revokes first and removes the worktree last (close.go), so a close
-  still between those steps is missed and the session relaunched. Reading
-  spinclass's tombstone was considered and skipped: its index/records
-  layout is internal, not a contract clown can rely on (fourth review S1b).
+- Liveness before the exec: `spinclass restart-preflight --peek`
+  (spinclass 2a79497, read-only) reports `closed` for a session not found,
+  tombstoned, abandoned or with a close started (ClosingAt), so a close in
+  progress is now caught, not only one that reached the worktree removal.
+  An unknown peek (non-zero exit, as from the deployed spinclass 22e43a0
+  without `--peek`, a timeout, garbage, a missing state) relaunches, and the
+  worktree check stays as the fallback. What remains: a close that starts
+  after the peek, or one the peek cannot report, until spinclass removes
+  the worktree (its last step).
 - Under pty-suspend the SIGKILL reaches claude only; its children survive
   only if they also ignore the SIGTERM, and pluginhost group-kills the
   serve children (fourth review #7).

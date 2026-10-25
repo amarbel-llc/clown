@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -319,6 +321,11 @@ type relauncher struct {
 	serveWait time.Duration
 	// logPath is close-self-run.log, where every outcome is recorded.
 	logPath string
+	// spinclass is the spinclass binary asked `restart-preflight --peek`
+	// before the exec; "" skips the peek.
+	spinclass string
+	// peekTimeout bounds the peek.
+	peekTimeout time.Duration
 }
 
 func newRelauncher() relauncher {
@@ -330,7 +337,16 @@ func newRelauncher() relauncher {
 		stderr:     os.Stderr,
 		serveWait:  15 * time.Second,
 		logPath:    relaunchLogPath(),
+		spinclass:  lookPathOrEmpty("spinclass"),
 	}
+}
+
+func lookPathOrEmpty(name string) string {
+	p, err := exec.LookPath(name)
+	if err != nil {
+		return ""
+	}
+	return p
 }
 
 // relaunchLogPath is close-self-run.log, "" when the state dir is unknown.
@@ -371,6 +387,22 @@ func (r relauncher) relaunch(plan *relaunchPlan) int {
 	if err != nil {
 		return fail(1, "no clown on PATH: %v; not relaunching (resume with `clown resume %s`)", err, plan.principal)
 	}
+	// spinclass's own word first: `restart-preflight --peek` reads the
+	// session without consuming anything, and reports a close that has only
+	// started (ClosingAt) as closed. Anything but closed or live is unknown,
+	// which relaunches; a spinclass without --peek exits non-zero.
+	if r.spinclass != "" {
+		state, err := peekSessionState(r.spinclass, plan.principal, r.peekTimeout)
+		switch {
+		case err != nil:
+			logSelfClose(r.logPath, "relaunch (%s): session state unknown (%v); relaunching on the worktree check", plan.principal, err)
+		case state == "closed":
+			return fail(0, "spinclass reports the session closed; not relaunching")
+		default:
+			logSelfClose(r.logPath, "relaunch (%s): spinclass reports the session %s", plan.principal, state)
+		}
+	}
+	// Fallback: spinclass removes the worktree on close (last).
 	if plan.worktree != "" {
 		if fi, err := os.Stat(plan.worktree); err != nil || !fi.IsDir() {
 			return fail(0, "the session's worktree %s is gone, so the session was closed during the restart; not relaunching", plan.worktree)
@@ -379,6 +411,44 @@ func (r relauncher) relaunch(plan *relaunchPlan) int {
 	logSelfClose(r.logPath, "relaunch (%s): relaunching: exec %s", plan.principal, bin)
 	err = r.exec(bin, append([]string{bin}, plan.argv...), restartEnv(r.environ, plan))
 	return fail(1, "exec %s: %v; not relaunched (resume with `clown resume %s`)", bin, err, plan.principal)
+}
+
+// defaultPeekTimeout bounds `spinclass restart-preflight --peek`.
+const defaultPeekTimeout = 20 * time.Second
+
+// peekSessionState runs `spinclass restart-preflight --peek` with the
+// principal in CLOWN_SESSION_ID and returns its state, "closed" or "live".
+// A non-zero exit, a timeout, output that is not exactly one JSON line, or
+// any other state is an error: the caller treats it as unknown.
+func peekSessionState(bin, principal string, timeout time.Duration) (string, error) {
+	if timeout <= 0 {
+		timeout = defaultPeekTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, "restart-preflight", "--peek")
+	cmd.Env = append(os.Environ(), "CLOWN_SESSION_ID="+principal)
+	out, err := outputViaFile(cmd)
+	if ctx.Err() != nil {
+		return "", fmt.Errorf("restart-preflight --peek timed out after %s", timeout)
+	}
+	if err != nil {
+		return "", fmt.Errorf("restart-preflight --peek: %w", err)
+	}
+	line := strings.TrimSpace(string(out))
+	if line == "" || strings.Contains(line, "\n") {
+		return "", fmt.Errorf("restart-preflight --peek: want one JSON line, got %q", line)
+	}
+	var v struct {
+		State string `json:"state"`
+	}
+	if err := json.Unmarshal([]byte(line), &v); err != nil {
+		return "", fmt.Errorf("restart-preflight --peek: %w", err)
+	}
+	if v.State != "closed" && v.State != "live" {
+		return "", fmt.Errorf("restart-preflight --peek: state %q", v.State)
+	}
+	return v.State, nil
 }
 
 // waitServeSocketsGone polls dir until none of its sockets accepts a
