@@ -46,12 +46,14 @@ func TestTheControlSocketIsNotReachableFromTheUnit(t *testing.T) {
 	}
 }
 
-// clown#302: the permission counters' state dir ($XDG_RUNTIME_DIR/clown/
-// permstat, permstat.Dir) is not bound into the unit, so under
-// ProtectHome=tmpfs the hook cannot create it there and only `prompted` is
-// counted inside --agent-scope. This pins the unit's systemd-run arguments
-// (not checked live); it changes when the state dir is moved somewhere the
-// unit can write.
+// clown#302: nothing under the unit's runtime dir is bound in for the
+// permission counters. Their state lived at $XDG_RUNTIME_DIR/clown/permstat,
+// which a unit's read-only /run/user tmpfs (ProtectHome=tmpfs) could not
+// hold, so only `prompted` counted inside --agent-scope; it now lives under
+// $XDG_STATE_HOME/clown/hook-toolcost (permstat.Dir), which cmd/clown's
+// stageAgentHome binds read-write (TestStageAgentHomeBindsThePermstatDir).
+// This pins the unit's systemd-run arguments only (not checked live): the old
+// runtime-dir location stays unbound, so nothing may move back there.
 func TestThePermstatDirIsNotBoundIntoTheUnit(t *testing.T) {
 	l := testLaunch()
 	l.IdleSocket = "/run/user/1001/clown/idle/k.sock"

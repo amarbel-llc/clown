@@ -35,9 +35,11 @@
 // deadline, and a hook that cannot get the lock in time skips the bookkeeping
 // (a prompt still counts) rather than stall the agent. Files of sessions
 // killed before their turn ended are swept: empty ones past staleAge, ones
-// still holding a pending request past pendingStaleAge. Only the state dir
-// itself is checked (lstat: not a symlink, owned by this user); its parent is
-// the user's private $XDG_RUNTIME_DIR, or the sticky temp dir.
+// still holding a pending request past pendingStaleAge; the state dir (Dir)
+// is not cleared on reboot, so the sweep is what bounds it. Only the state
+// dir itself is checked (lstat: not a symlink, owned by this user); its
+// parent is the user's own $XDG_STATE_HOME/clown/hook-toolcost, or the
+// sticky temp dir in the last-resort fallback.
 package permstat
 
 import (
@@ -55,6 +57,7 @@ import (
 	"time"
 
 	"code.linenisgreat.com/clown/internal/toolcost"
+	"code.linenisgreat.com/clown/internal/userpath"
 )
 
 // lockWait bounds the wait for a state file's lock.
@@ -200,11 +203,17 @@ func statePath(dir, session string) string {
 	return filepath.Join(dir, hex.EncodeToString(sum[:16])+".json")
 }
 
-// Dir is where the state files live: $XDG_RUNTIME_DIR/clown/permstat, or,
-// without a runtime dir, a per-user directory under the temp dir.
+// Dir is where the state files live: $XDG_STATE_HOME/clown/hook-toolcost/
+// permstat (~/.local/state without XDG_STATE_HOME), beside the toolcost
+// hook's own state and resolved the same way (userpath.StatePath). An
+// --agent-scope unit binds that hook-toolcost dir read-write and sets
+// XDG_STATE_HOME to the frontend's, so the path is the same inside and out
+// and all three counters work there; XDG_RUNTIME_DIR is a read-only tmpfs in
+// a unit. Only when neither XDG_STATE_HOME nor a home dir is known does it
+// fall back to a per-user directory under the temp dir.
 func Dir() string {
-	if rt := os.Getenv("XDG_RUNTIME_DIR"); filepath.IsAbs(rt) {
-		return filepath.Join(rt, "clown", "permstat")
+	if d, err := userpath.StatePath("hook-toolcost", "permstat"); err == nil {
+		return d
 	}
 	return filepath.Join(os.TempDir(), fmt.Sprintf("clown-permstat-%d", os.Getuid()))
 }

@@ -120,19 +120,24 @@ SessionEnd it already had:
 - A later PreToolUse does not decline a pending request: parallel tool calls
   interleave (I). So a decline is counted when the turn ends, not when the
   next call starts.
-- State: one file per session under `$XDG_RUNTIME_DIR/clown/permstat`
-  (`$TMPDIR/clown-permstat-<uid>` without a runtime dir), 0600 in a 0700 dir,
-  flock'd, O_NOFOLLOW, at most 32 pending requests, read bounded at 64 KiB,
+- State: one file per session under `$XDG_STATE_HOME/clown/hook-toolcost/
+  permstat` (`~/.local/state/...` without XDG_STATE_HOME: the toolcost
+  hook's own `userpath.StatePath` ladder; `$TMPDIR/clown-permstat-<uid>` only
+  when no home dir is known either), 0600 in a 0700 dir, flock'd,
+  O_NOFOLLOW, at most 32 pending requests, read bounded at 64 KiB,
   corruption read as empty, removed when the turn ends. The state dir itself
   is refused if it is a symlink, not a directory, or not owned by the user,
   and is chmod'd to 0700 if it is wider; only that leaf is checked, its parent
-  being the user's private `$XDG_RUNTIME_DIR` (or the sticky temp dir). A
-  PostToolUse with nothing pending creates no file.
+  being the user's own `hook-toolcost` state dir (or the sticky temp dir). A
+  PostToolUse with nothing pending creates no file. It used to live under
+  `$XDG_RUNTIME_DIR/clown/permstat`; files left there are not migrated or
+  swept (the tmpfs clears them on reboot).
 - Files left by sessions killed mid-turn are swept on each PermissionRequest:
   an empty one past 24h, one still holding a pending request only past 7
   days (mtime is the last write, not liveness: a person can sit at a dialog
   for a day). At most 16 are removed per sweep, out of at most 4096 entries
-  looked at.
+  looked at. The state dir survives reboots, so this sweep is what bounds it
+  (tested in that dir: `TestSweepRunsInTheStateDirAndIgnoresTheOldLocation`).
 - Locking is best effort: up to 5 attempts share one 200ms deadline overall,
   the lock tried without blocking, then the hook skips the bookkeeping
   (prompted still counts) rather than stall the agent. After locking, the
@@ -160,29 +165,20 @@ SessionEnd it already had:
   | where | prompted | approved | declined |
   |---|---|---|---|
   | outside a unit | yes | yes | yes |
-  | inside `--agent-scope` | yes | no | no |
+  | inside `--agent-scope` | yes | yes (I) | yes (I) |
 
-  Inside a unit the hook runs with the frontend's `XDG_RUNTIME_DIR` (passed
-  in, `internal/agentscope/unit.go`), so `permstat.Dir` is
-  `$XDG_RUNTIME_DIR/clown/permstat` (R). That dir is not bound into the
-  unit (R, pinned on the unit's systemd-run arguments by
-  `TestThePermstatDirIsNotBoundIntoTheUnit`; not checked live), and the
-  unit's `/run/user` is a tmpfs that systemd mounts read-only under
-  ProtectHome=tmpfs, with ProtectSystem=strict besides (I, from systemd's
-  documentation). So the dir cannot be created there: the PermissionRequest
-  still counts `prompted` (its error is only logged), and the PostToolUse,
-  Stop, UserPromptSubmit and SessionEnd find no state and count nothing,
-  without an error, stdout or a non-zero exit. That much is pinned with an
-  uncreatable dir outside a unit (`TestUncreatableStateDirCountsOnlyPrompted`
-  in permstat, `TestUncreatableStateDirSendsOnlyPrompted` through the hook
-  binary); the in-unit mount itself is unverified without a live unit.
-- Proposal, not done: the unit already binds
-  `$XDG_STATE_HOME/clown/hook-toolcost` read-write for this same hook
-  (`stageAgentHome`, `cmd/clown/agentscope.go`), at the same path inside
-  and out. Keeping the permstat files under it (say `.../hook-toolcost/
-  permstat`) would make all three counters work inside `--agent-scope`, at
-  the cost of a state dir that is not wiped on reboot (the 24h/7d sweep
-  covers that).
+  Inside a unit the hook gets `XDG_STATE_HOME` set to the frontend's value
+  (`agentscope.OperatorXDG`, `internal/agentscope/unit.go`), so
+  `permstat.Dir` is the same path inside and out (R), and `stageAgentHome`
+  binds its parent `$XDG_STATE_HOME/clown/hook-toolcost` read-write (R,
+  pinned by `TestStageAgentHomeBindsThePermstatDir`). That all three counters
+  then work inside a running unit is inferred, not seen live (I): the
+  hook-level test `TestReadOnlyRuntimeDirStillCountsAllThree` reproduces
+  the unit's read-only `XDG_RUNTIME_DIR` with a writable `XDG_STATE_HOME`
+  outside a unit. Earlier, with the state under `$XDG_RUNTIME_DIR` (a
+  read-only tmpfs in a unit, ProtectHome=tmpfs), only `prompted` counted
+  inside `--agent-scope`; with a state dir that cannot be created, that is
+  still the behaviour anywhere (`TestUncreatableStateDirCountsOnlyPrompted`).
 - Cost: the binary now also runs on every PostToolUse (I: one short process
   per tool call).
 
