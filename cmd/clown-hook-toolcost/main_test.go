@@ -22,7 +22,12 @@ func TestMain(m *testing.M) {
 
 func runHook(t *testing.T, stdin string, env ...string) (stdout string, code int) {
 	t.Helper()
-	cmd := exec.Command(os.Args[0])
+	return runHookWithArgs(t, nil, stdin, env...)
+}
+
+func runHookWithArgs(t *testing.T, args []string, stdin string, env ...string) (stdout string, code int) {
+	t.Helper()
+	cmd := exec.Command(os.Args[0], args...)
 	cmd.Env = append(os.Environ(), append([]string{"CLOWN_HOOK_TOOLCOST_RUN_MAIN=1"}, env...)...)
 	cmd.Stdin = strings.NewReader(stdin)
 	var out bytes.Buffer
@@ -35,6 +40,16 @@ func runHook(t *testing.T, stdin string, env ...string) (stdout string, code int
 		t.Fatal(err)
 	}
 	return out.String(), code
+}
+
+// Bad arguments must not exit 2 (which blocks a Stop) or print anything: in
+// hook mode they are ignored.
+func TestBadArgumentsStillExitZero(t *testing.T) {
+	in := `{"hook_event_name":"PermissionRequest","session_id":"s-1","tool_name":"Bash","tool_input":{"command":"touch X"}}`
+	out, code := runHookWithArgs(t, []string{"-bogus"}, in, "XDG_RUNTIME_DIR="+t.TempDir(), "STATSD_HOST=127.0.0.1", "STATSD_PORT=9")
+	if out != "" || code != 0 {
+		t.Fatalf("stdout %q, exit %d; want nothing and 0", out, code)
+	}
 }
 
 // clown#302: the hook runs for PermissionRequest, where any stdout would be

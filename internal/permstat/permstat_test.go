@@ -23,8 +23,8 @@ func ev(event, tool string, input string) []byte {
 	return b
 }
 
-// replay feeds payloads through Step with a fresh state each time it is
-// loaded and saved in between, the way separate hook processes see it.
+// replay feeds payloads through Handle one at a time, the state going
+// through its file in between, the way separate hook processes see it.
 func replay(t *testing.T, payloads ...[]byte) []string {
 	t.Helper()
 	dir := t.TempDir()
@@ -188,7 +188,9 @@ func TestStateFileHygiene(t *testing.T) {
 	if err := os.Symlink(victim, path); err != nil {
 		t.Fatal(err)
 	}
-	_, _ = Handle(ev("PermissionRequest", "Bash", bash), dir)
+	if _, err := Handle(ev("PermissionRequest", "Bash", bash), dir); err == nil {
+		t.Fatal("a symlinked state file must be refused with an error")
+	}
 	if b, _ := os.ReadFile(victim); len(b) != 0 {
 		t.Fatalf("wrote through a symlink: %q", b)
 	}
@@ -204,7 +206,7 @@ func TestPendingIsBounded(t *testing.T) {
 		}
 	}
 	st := loadState(statePath(dir, "s-1"))
-	if len(st.Pending) > maxPending {
-		t.Fatalf("pending = %d, want at most %d", len(st.Pending), maxPending)
+	if len(st.Pending) != maxPending {
+		t.Fatalf("pending = %d, want exactly %d", len(st.Pending), maxPending)
 	}
 }
