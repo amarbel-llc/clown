@@ -107,6 +107,48 @@ func TestPermissionCountersAreSent(t *testing.T) {
 	}
 }
 
+// clown#302: with a state dir that cannot be created (as inside an
+// --agent-scope unit, whose /run/user is a read-only tmpfs without the
+// permstat dir bound in), the hook still prints nothing and exits 0, prompted
+// still reaches statsd, and approved and declined are not counted.
+func TestUncreatableStateDirSendsOnlyPrompted(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Fatal("needs a non-root user: root can create the dir under a read-only parent")
+	}
+	runtime := t.TempDir()
+	if err := os.Chmod(runtime, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(runtime, 0o700) })
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pc.Close()
+	port := pc.LocalAddr().(*net.UDPAddr).Port
+	env := []string{"XDG_RUNTIME_DIR=" + runtime, "STATSD_HOST=127.0.0.1", "STATSD_PORT=" + itoa(port)}
+	tool := `"tool_name":"Bash","tool_input":{"command":"touch X"}`
+	for _, ev := range []string{"PermissionRequest", "PostToolUse", "PermissionRequest", "UserPromptSubmit"} {
+		if out, code := runHook(t, `{"hook_event_name":"`+ev+`","session_id":"s-3",`+tool+`}`, env...); out != "" || code != 0 {
+			t.Fatalf("%s: stdout %q, exit %d; want nothing and 0", ev, out, code)
+		}
+	}
+	var got []string
+	buf := make([]byte, 2048)
+	_ = pc.SetReadDeadline(time.Now().Add(2 * time.Second))
+	for {
+		n, _, err := pc.ReadFrom(buf)
+		if err != nil {
+			break // the deadline: nothing more was sent
+		}
+		got = append(got, strings.Split(string(buf[:n]), "\n")...)
+	}
+	want := []string{"clown.permission.builtin.Bash.prompted:1|c", "clown.permission.builtin.Bash.prompted:1|c"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("sent %q, want %q (prompted only)", got, want)
+	}
+}
+
 func itoa(n int) string {
 	var b []byte
 	for n > 0 {

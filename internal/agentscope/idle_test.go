@@ -46,6 +46,27 @@ func TestTheControlSocketIsNotReachableFromTheUnit(t *testing.T) {
 	}
 }
 
+// clown#302: the permission counters' state dir ($XDG_RUNTIME_DIR/clown/
+// permstat, permstat.Dir) is not bound into the unit, so under
+// ProtectHome=tmpfs the hook cannot create it there and only `prompted` is
+// counted inside --agent-scope. This pins the unit's systemd-run arguments
+// (not checked live); it changes when the state dir is moved somewhere the
+// unit can write.
+func TestThePermstatDirIsNotBoundIntoTheUnit(t *testing.T) {
+	l := testLaunch()
+	l.IdleSocket = "/run/user/1001/clown/idle/k.sock"
+	args, err := l.SystemdRunArgs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(args, "--property=ProtectHome=tmpfs") {
+		t.Fatalf("ProtectHome=tmpfs missing: %v", args)
+	}
+	if bound := bindsCovering(args, "/run/user/1001/clown/permstat/0123456789abcdef.json"); len(bound) > 0 {
+		t.Errorf("the permstat state dir or a parent of it is bound in: %q", bound)
+	}
+}
+
 // bindsCovering returns the BindPaths=/BindReadOnlyPaths= properties in args
 // whose source is path or a directory above it.
 func bindsCovering(args []string, path string) []string {

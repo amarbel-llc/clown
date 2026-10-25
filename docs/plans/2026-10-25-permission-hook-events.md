@@ -155,9 +155,34 @@ SessionEnd it already had:
 - The hook prints nothing on any of these events and always exits 0
   (tested with malformed input and statsd unreachable); prompted is sent even
   when the state file cannot be written.
-- Inside an `--agent-scope` unit the runtime dir is a read-only tmpfs (I, from
-  ProtectHome=tmpfs): the state file then cannot be created, so approved and
-  declined are not counted there; prompted still is. Unverified.
+- Which counters work where:
+
+  | where | prompted | approved | declined |
+  |---|---|---|---|
+  | outside a unit | yes | yes | yes |
+  | inside `--agent-scope` | yes | no | no |
+
+  Inside a unit the hook runs with the frontend's `XDG_RUNTIME_DIR` (passed
+  in, `internal/agentscope/unit.go`), so `permstat.Dir` is
+  `$XDG_RUNTIME_DIR/clown/permstat` (R). That dir is not bound into the
+  unit (R, pinned on the unit's systemd-run arguments by
+  `TestThePermstatDirIsNotBoundIntoTheUnit`; not checked live), and the
+  unit's `/run/user` is a tmpfs that systemd mounts read-only under
+  ProtectHome=tmpfs, with ProtectSystem=strict besides (I, from systemd's
+  documentation). So the dir cannot be created there: the PermissionRequest
+  still counts `prompted` (its error is only logged), and the PostToolUse,
+  Stop, UserPromptSubmit and SessionEnd find no state and count nothing,
+  without an error, stdout or a non-zero exit. That much is pinned with an
+  uncreatable dir outside a unit (`TestUncreatableStateDirCountsOnlyPrompted`
+  in permstat, `TestUncreatableStateDirSendsOnlyPrompted` through the hook
+  binary); the in-unit mount itself is unverified without a live unit.
+- Proposal, not done: the unit already binds
+  `$XDG_STATE_HOME/clown/hook-toolcost` read-write for this same hook
+  (`stageAgentHome`, `cmd/clown/agentscope.go`), at the same path inside
+  and out. Keeping the permstat files under it (say `.../hook-toolcost/
+  permstat`) would make all three counters work inside `--agent-scope`, at
+  the cost of a state dir that is not wiped on reboot (the 24h/7d sweep
+  covers that).
 - Cost: the binary now also runs on every PostToolUse (I: one short process
   per tool call).
 
