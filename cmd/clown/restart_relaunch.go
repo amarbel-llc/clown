@@ -142,6 +142,9 @@ type frontendRestarter struct {
 	profileCheck func() error
 	// busy reports a turn running (the UserPromptSubmit hook); nil: never.
 	busy func() bool
+	// stopGrace bounds the wait for the provider to exit after the stop;
+	// zero: defaultStopGrace.
+	stopGrace time.Duration
 }
 
 func (fr frontendRestarter) restart(req restartRequest, v preflightVerdict) {
@@ -173,10 +176,27 @@ func (fr frontendRestarter) restart(req restartRequest, v preflightVerdict) {
 		logSelfClose(fr.logPath, "restart (%s): a turn started; not stopping the provider", fr.principal)
 		return
 	}
-	pendingRelaunch.Store(&relaunchPlan{principal: fr.principal, reason: reason, argv: fr.argv})
+	plan := &relaunchPlan{principal: fr.principal, reason: reason, argv: fr.argv}
+	pendingRelaunch.Store(plan)
 	logSelfClose(fr.logPath, "restart (%s): stopping the provider to relaunch (%s)", fr.principal, reason)
 	fr.stop()
+	// A provider that ignores the stop keeps the session; the plan must not
+	// outlive the attempt, or a later /exit would relaunch it.
+	grace := fr.stopGrace
+	if grace == 0 {
+		grace = defaultStopGrace
+	}
+	go func() {
+		time.Sleep(grace)
+		if providerRunning.Load() && pendingRelaunch.CompareAndSwap(plan, nil) {
+			logSelfClose(fr.logPath, "restart (%s): the provider did not exit within %s of the stop; restart abandoned, the session keeps running", fr.principal, grace)
+		}
+	}()
 }
+
+// defaultStopGrace is how long a stopped provider has to exit before the
+// restart is abandoned.
+const defaultStopGrace = 30 * time.Second
 
 // stopProviderBySignal ends the provider the way an external SIGTERM to clown
 // does: every runProvider path (direct, pty-suspend, agent scope) forwards it
@@ -222,7 +242,7 @@ func (r relauncher) relaunch(plan *relaunchPlan) int {
 		return 1
 	}
 	err = r.exec(bin, append([]string{bin}, plan.argv...), restartEnv(r.environ, plan))
-	fmt.Fprintf(r.stderr, "clown: restart: exec %s: %v\n", bin, err)
+	fmt.Fprintf(r.stderr, "clown: restart: exec %s: %v; not relaunched (resume with `clown resume %s`)\n", bin, err, plan.principal)
 	return 1
 }
 
