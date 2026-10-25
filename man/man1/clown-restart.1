@@ -107,7 +107,8 @@ nothing) falls back to the inline countdown, and any other end of a modal
 that was shown proceeds without a second wait.
 Any other attached terminal gets a one-line
 .Dq restart pending
-notice on standard error and the same wait, with no cancel.
+notice on standard error and the same wait, with no viewer cancel (a turn
+start still cancels it, as below).
 A detached session restarts at once.
 A turn that starts during the countdown (the self-close plugin's
 UserPromptSubmit hook,
@@ -149,7 +150,9 @@ still refused there, after the stop.
 The resumed session's system prompt carries a
 .Dq restarted: Ar reason
 fragment, appended after clown's build-identity, host-identity and
-session-identity fragments; the reason is the one spinclass's verdict gave
+session-identity fragments; the reason is the one spinclass's verdict gave,
+which spinclass words as
+.Dq restart of Ar key Li requested by Ar requester : Ar reason
 (one line of printable text, at most 300 characters including a trailing
 .Dq ...
 when cut; a fixed text when it gave none), never the one passed to
@@ -222,6 +225,16 @@ or the exec fails, the frontend says so on standard error, names
 .Cm clown resume Ar principal ,
 and exits without relaunching.
 .Pp
+The relaunched frontend asks
+.Ic spinclass restart-preflight --peek
+once more, the same way, right after its
+.Ic troupe mint
+and presence registration and before it starts the provider:
+.Li closed
+means it starts nothing, logs it, and exits 0 (the presence record is left
+to go stale, and nothing is revoked); anything else, including an unknown
+peek, starts the session.
+.Pp
 A restart is not a close: nothing on the restart path revokes or releases the
 session's identity.
 The frontend never runs
@@ -239,8 +252,13 @@ not
 and not without a session key or with
 .Ev XDG_RUNTIME_DIR
 unset or not absolute).
-Only a claude launch with the idle trigger armed queues; the others refuse
-with a message saying why.
+Only a claude launch with the idle trigger armed, whose claude conversation
+id is its principal, queues; the others refuse with a message saying why.
+A launch whose conversation id is something else (as with
+.Fl p ,
+.Fl -continue
+or a non-UUID operator key) is refused because its relaunch could not resume
+it under the same principal.
 A second frontend for the same key does not take over a control or idle
 socket that still answers, best effort: two frontends starting at the same
 instant can both see none and race.
@@ -270,14 +288,34 @@ when it is not, with the reason on standard error:
 .It Li no live clown frontend for Ar key
 No frontend listens on the control socket.
 .It Li restart needs an idle trigger; Ar provider Li has none
-The frontend runs a provider without the idle trigger
-(claude with the trigger off names the gate instead).
+The frontend runs a provider without the idle trigger.
+.It Li restart needs an idle trigger; claude's is not armed Pq Ar reason
+The trigger is off for this claude launch;
+.Ar reason
+names the gate, or says the launch's claude conversation id is not its
+principal.
+.It Li restart --when Ar when Li is not supported; only idle
+The frontend refused a
+.Fl -when
+other than
+.Cm idle .
 .It Li a restart is already underway for this session ...
 A restart has stopped, or is stopping, the provider.
 .El
 .Pp
 A usage error exits
-.Sy 2 .
+.Sy 2 :
+a missing
+.Fl -session ,
+an unknown argument, a flag without its value, a session key that is not
+one path segment, or a
+.Fl -when
+other than
+.Cm idle
+(so
+.Fl -when Cm now
+exits 2 for now).
+spinclass reads only 0 against non-zero.
 .Sh SEE ALSO
 .Xr clown 1 ,
 .Xr clown-presence 1 ,

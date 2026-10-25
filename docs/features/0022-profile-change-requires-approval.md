@@ -4,15 +4,22 @@ date: 2026-10-23
 issue: clown#295
 related: FDR 0005 (hats), FDR 0006 (single-entrypoint matrix), spinclass FDR 0032 / 0034, spinclass#407, piggy RFC 0012 (operator-act@piggy, namespace piggy-escalation-v1)
 promotion-criteria: >
-  The operator has answered every open question (decision 8 amended,
-  decisions 9 to 12). experimental once the slice 3a work lands on master and spinclass
+  experimental (reached): the operator answered the open questions
+  (decision 8 amended, decisions 9 to 12), slice 3a landed, and spinclass
   launches with --profile, CLOWN_PROFILE_DIGEST and CLOWN_PROFILE_SESSION.
+  The next stage's criteria are not set; decisions 4 to 6 wait on the
+  operator and spinclass.
 ---
 
 # Profile changes at runtime require user approval
 
 > **Implemented in clown:** slices 1, 2, 3a, 3b and 3c (see Implementation
-> slices); the spinclass half is design. The Problem section describes clown before them. Claims not read in
+> slices). spinclass's half is no longer only design: its checkout has the
+> grant store (`internal/0/profilegrant`), the re-pin gate
+> (`cmd/spinclass/resume_profile.go`), the digest resolver
+> (`internal/foxtrot/spawn/clownresolver.go`) and the env scrub (read on
+> disk; spinclass master not verified). The Problem section describes clown
+> before the slices. Claims not read in
 > source are marked **UNVERIFIED**. clown owns profile resolution and the
 > digest; spinclass owns session state, the re-pin right and the grant
 > store; piggy owns the signing act. This document states clown's side and
@@ -66,8 +73,12 @@ The approved object is the transition, bound by digest, never a bare name:
 - a human-readable diff of the canonical fields (provider, backend, model,
   url, token_set, env keys, context servers/excluded, base). Env values
   and token are never shown (the canonical form carries them only as
-  digests/booleans); the URL is shown, since it is in the digest verbatim
-  (clown#292 tracks URL credentials).
+  digests/booleans). The URL is shown verbatim only when it cannot carry a
+  credential; one that does not parse, has userinfo, is opaque or hostless,
+  has a query or fragment, or has `;` or `@` in its path is shown redacted
+  (`profilelookup.Diff`, `pkg/profilelookup/diff.go`, and the slice 3b
+  contract). The canonical form still carries the URL verbatim (clown#292
+  tracks URL credentials).
 
 clown provides a function returning the canonical-field diff of two
 `Resolved` values, so the approver is shown what changed rather than two
@@ -358,7 +369,7 @@ resume has no local confirmation (decision 2), and the env names are final.
      because a low-entropy value is guessable from its digest. The token is
      stored as `token_set` only.
    - The record is still one line in one `O_APPEND` write. A form over
-     `MaxRedactedFormBytes` (8192) or not valid JSON is not stored. The pin
+     `sessions.MaxProfileFormBytes` (8192) or not valid JSON is not stored. The pin
      is kept, and `profile_form_omitted` says why.
    - Compatibility: both fields are `omitempty`. Lines written before them
      load unchanged, with no form. Older clowns ignore the unknown keys
@@ -380,6 +391,15 @@ resume has no local confirmation (decision 2), and the env names are final.
 
 ## Notes
 
+- The restart path (`clown restart`, spinclass#419) applies this gate too:
+  before it stops anything, the frontend dry-runs the relaunch's profile
+  check (`cmd/clown/restart_gate.go`, the `clown resume` check against the
+  recorded pin with no launcher approval) and drops the restart if it would
+  refuse; the relaunch itself then runs the same check again. Because the
+  dry run uses the resolved profile name, a defaulted profile counts as
+  requested for an unpinned session (I).
+- #296 (hold the first turn until MCP servers connect) shipped alongside
+  and touches the same launch path, not this gate.
 - #295 is the resume issue; #293 (wake truncation) was a wrong number.
 - spinclass FDR 0034's Tuning Levers table still says "warn" on digest
   mismatch, contradicting its decision 12 (refuse); relayed to the

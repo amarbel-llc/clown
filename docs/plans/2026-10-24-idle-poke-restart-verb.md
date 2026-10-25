@@ -2,7 +2,17 @@
 
 Status: built on pure-teak (see the commits that add `cmd/clown/restart*.go`);
 not yet run against a live session. The user-facing description is
-clown-restart(1); spinclass's half is spinclass FDR 0037 (spinclass c942d87).
+clown-restart(1); spinclass's half is spinclass FDR 0037. This note was
+first written against spinclass c942d87; the contract has moved since
+(through spinclass ae042dd, read in conversation, not re-checked here):
+`restart-preflight --peek` exists (read-only, reports `closed` for a close
+that has started) and clown uses it before the exec and again after the
+relaunch's mint; a force restart is refused until `--when now` exists (see
+the design note below); a queued `cancel-restart` is dropped when the
+preflight answers `none`; and spinclass stamps `RestartingAt` when it
+consumes a restart, so a close is refused for 2 minutes after that. The
+verdict's reason reads "restart of KEY requested by REQUESTER: REASON",
+which is what reaches the resumed session's prompt.
 This note records what was built, the decisions taken, and what is unverified.
 
 ## Contract (spinclass side)
@@ -25,7 +35,12 @@ This note records what was built, the decisions taken, and what is unverified.
   sends `{op,when,reason}` and reads `{ok,error}`. Exit 1 with
   "no live clown frontend for K" when nothing answers, or the frontend's
   refusal ("restart needs an idle trigger; <provider> has none"; claude with
-  the trigger off names the gate). Only `--when idle`.
+  the trigger off names the gate, and so does a claude launch whose
+  conversation id is not its principal, which a relaunch could not resume).
+  Only `--when idle`; anything else, and every usage error, exits 2
+  (pinned by `TestRestartVerbArgvContract`).
+- The inline countdown (no posh modal) has no viewer cancel, but a turn
+  start during it still cancels the restart, as with the modal.
 - The frontend binds the control socket for every launch that runs its
   provider as a child (not --naked, codex or --print-launch-plan), so an
   unarmed frontend can say why. Decision: the brief said "listens only when
