@@ -2326,6 +2326,84 @@ explore-claude-binary-strings REGEX:
     echo "claude: $bin" >&2
     { grep -a -o -E '.{0,40}{{ REGEX }}.{0,40}' "$bin" || true; } | tr -c '[:print:]\n' '?' | sort -u | head -60
 
+# Record which Claude Code hook events fire around a permission request and
+# what each one's stdin carries (clown#302, permission metrics). Each case runs
+# a throwaway `claude -p` in its own temp git repo with ONLY project settings
+# (--setting-sources project: no user plugins), where every candidate event
+# (PreToolUse, PermissionRequest, PermissionDenied, PostToolUse,
+# PostToolUseFailure, Notification, UserPromptSubmit, Stop) runs a hook that
+# appends its stdin JSON to hook.log. The PermissionRequest hook answers per
+# case: allow, deny, or nothing (claude's own -p default). Cases:
+#   auto     Read of a file in the repo, allowed by --allowedTools (no prompt)
+#   default  `touch X` in default mode, no allow, no hook decision
+#   approve  same, PermissionRequest hook answers allow
+#   reject   same, PermissionRequest hook answers deny
+#   dontask  same, --permission-mode dontAsk
+# Makes one small model call per case. Output goes under
+# .tmp/permission-hooks/<case>/ (hook.log, claude.out); the dirs are kept.
+#
+# record hook events around permission requests in throwaway claude sessions
+[group("explore")]
+explore-permission-hook-events model="haiku":
+    #!/usr/bin/env bash
+    set -uo pipefail
+    command -v claude >/dev/null || { echo "no claude on PATH"; exit 1; }
+    claude --help | grep -q -- '--setting-sources' || { echo "this claude has no --setting-sources; refusing (user plugins would load)"; exit 1; }
+    root="$PWD/.tmp/permission-hooks"
+    rm -rf "$root"
+    mkdir -p "$root"
+    events="PreToolUse PermissionRequest PermissionDenied PostToolUse PostToolUseFailure Notification UserPromptSubmit Stop"
+    run_case() {
+        local name=$1 decision=$2 mode=$3 allow=$4 prompt=$5 dir
+        dir="$root/$name"
+        mkdir -p "$dir/.claude"
+        git -C "$dir" init -q
+        echo "hello" >"$dir/inside.txt"
+        cat >"$dir/record.sh" <<'EOF'
+    #!/bin/sh
+    # $1 is the event name; stdin is the hook input.
+    input=$(cat)
+    printf '{"recorded_event":"%s","input":%s}\n' "$1" "$input" >>"$(dirname "$0")/hook.log"
+    if [ "$1" = PermissionRequest ]; then
+        case "$(cat "$(dirname "$0")/decision")" in
+        allow) printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}' ;;
+        deny) printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny","message":"probe hook deny"}}}' ;;
+        esac
+    fi
+    EOF
+        chmod +x "$dir/record.sh"
+        printf '%s' "$decision" >"$dir/decision"
+        {
+            printf '{"hooks":{'
+            local first=1 ev
+            for ev in $events; do
+                [ $first = 1 ] || printf ','
+                first=0
+                printf '"%s":[{"matcher":"*","hooks":[{"type":"command","command":"%s %s"}]}]' "$ev" "$dir/record.sh" "$ev"
+            done
+            printf '}}\n'
+        } >"$dir/.claude/settings.json"
+        local args=(-p "$prompt" --setting-sources project --model {{ quote(model) }})
+        [ -n "$mode" ] && args+=(--permission-mode "$mode")
+        [ -n "$allow" ] && args+=(--allowedTools "$allow")
+        (cd "$dir" && env -u CLOWN_SESSION_ID -u SPINCLASS_SESSION_ID -u CLAUDE_SESSION_ID claude "${args[@]}" >"$dir/claude.out" 2>&1)
+        echo "== case $name (decision=${decision:-none} mode=${mode:-default} allow=${allow:-none}) exit=$?"
+        if [ -s "$dir/hook.log" ] && ! command -v jq >/dev/null; then
+            cat "$dir/hook.log"
+        elif [ -s "$dir/hook.log" ]; then
+            jq -c '{e: .recorded_event, tool: .input.tool_name, mode: .input.permission_mode, ntype: .input.notification_type, keys: (.input | keys)}' "$dir/hook.log"
+        else
+            echo "(no hook fired)"
+        fi
+        [ -e "$dir/X" ] && echo "touch ran: yes" || echo "touch ran: no"
+    }
+    claude --version
+    run_case auto "" "" "Read" "Use the Read tool to read the file inside.txt in the current directory, then stop."
+    run_case default "" "" "" "Run exactly this one Bash command, once, verbatim: touch X"
+    run_case approve allow "" "" "Run exactly this one Bash command, once, verbatim: touch X"
+    run_case reject deny "" "" "Run exactly this one Bash command, once, verbatim: touch X"
+    run_case dontask "" dontAsk "" "Run exactly this one Bash command, once, verbatim: touch X"
+
 # Report the claude monitor's per-line cap (RFC-0009 §9 "Line budget",
 # clown#293): fails if the module's constants are no longer found, so a
 # claude-code bump that moves or renames the cap is noticed, not silent.

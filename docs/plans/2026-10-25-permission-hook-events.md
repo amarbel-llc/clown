@@ -1,0 +1,98 @@
+# Permission hook events in Claude Code 2.1.308 (clown#302, step 1)
+
+Status: findings draft, no product code. Labels: **V** observed in a run,
+**R** read (binary strings, docs), **I** inferred.
+
+Method: `just explore-permission-hook-events` (justfile, explore group). Each
+case is a throwaway `claude -p` (haiku) in its own git repo under
+`.tmp/permission-hooks/<case>/` with only project settings
+(`--setting-sources project`). Every candidate event (PreToolUse,
+PermissionRequest, PermissionDenied, PostToolUse, PostToolUseFailure,
+Notification, UserPromptSubmit, Stop) runs a hook that appends its stdin JSON
+to `hook.log`; the PermissionRequest hook can answer allow or deny. The raw
+sequences are in `.tmp/permission-hooks/*/hook.log` (not committed).
+
+## Event names in the binary (R)
+
+`just explore-claude-binary-strings` on claude-code 2.1.308 lists, among the
+hook events: `PreToolUse`, `PermissionRequest`, `PermissionDenied`,
+`PostToolUse`, `PostToolUseFailure`, `PostToolBatch`, `Notification`,
+`UserPromptSubmit`, `Stop`. Notification has a `notification_type` of
+`permission_prompt` ("Claude needs your permission to use ..."), among
+`idle_prompt`, `auth_success`, `elicitation...`. PermissionRequest runs on the
+"ask path" (`decideLocation:"ask-path"`), and its hook output can decide
+(`decision.behavior` allow/deny, deny with a `message`). PermissionDenied takes
+a `retry` output ("to tell the model it may retry"): it is the event for a
+denial made without asking, by the auto-mode classifier (R/I; not exercised).
+
+## Observed sequences (V)
+
+| case | setup | events, in order | tool ran |
+|---|---|---|---|
+| auto | Read, allowed by `--allowedTools` | UserPromptSubmit, PreToolUse(Read), PostToolUse(Read), Stop | yes |
+| default | `touch X`, no allow, no hook decision (`-p`) | UserPromptSubmit, PreToolUse(Bash), PermissionRequest(Bash), Stop | no |
+| approve | same, PermissionRequest hook answers allow | UserPromptSubmit, PreToolUse, PermissionRequest, PostToolUse, Stop | yes |
+| reject | same, PermissionRequest hook answers deny | UserPromptSubmit, PreToolUse, PermissionRequest, Stop | no |
+| dontask | same, `--permission-mode dontAsk` | UserPromptSubmit, PreToolUse, Stop | no |
+
+Payloads (V):
+
+- **PreToolUse**: `session_id`, `prompt_id`, `permission_mode`, `effort`,
+  `tool_name`, `tool_input`, `tool_use_id`, `cwd`, `transcript_path`. No
+  decision field: PreToolUse runs before the permission check and says nothing
+  about whether a prompt follows.
+- **PermissionRequest**: `session_id`, `prompt_id`, `permission_mode`,
+  `effort`, `tool_name`, `tool_input`, `permission_suggestions` (e.g.
+  `addDirectories`, `setMode acceptEdits`), `cwd`, `transcript_path`. **No
+  `tool_use_id`**: it can be tied to its PreToolUse only by session, prompt_id,
+  tool_name and tool_input (I: ambiguous if the same call repeats in one turn).
+- **PostToolUse**: as PreToolUse, plus `tool_response`, `duration_ms`.
+- **Stop**: `last_assistant_message`, `stop_hook_active`, `background_tasks`,
+  `session_crons`, no tool fields.
+- **UserPromptSubmit**: `prompt`, `prompt_id`, `permission_mode`.
+
+Not seen in any `-p` case (V): Notification, PostToolUseFailure,
+PermissionDenied. A refusal (the `-p` default denial, a hook deny) is marked by
+no event of its own: after PermissionRequest there is simply no PostToolUse
+or PostToolUseFailure for that call. dontAsk denies an unallowed tool without
+a PermissionRequest at all.
+
+## Not reproducible non-interactively (unverified)
+
+- **A person approving or rejecting at the dialog.** In `-p` there is no
+  dialog: an unallowed call is denied after PermissionRequest (case default).
+  Whether the interactive dialog fires PermissionRequest first, then
+  Notification(permission_prompt), and what follows an approval or a reject
+  at the dialog, needs an interactive session (I: the same PermissionRequest
+  then PostToolUse / nothing, from the shared "ask path").
+- **Interrupted** (Esc at the dialog, or ^C): needs an interactive session;
+  no event for it is known (I: the turn ends, Stop may or may not fire).
+- **MCP tools**: not run (no MCP server in the throwaway repo). `tool_name`
+  is `mcp__<server>__<tool>` per Claude Code's docs (R); the events should be
+  the same as for built-in tools (I).
+- **PermissionDenied**: needs auto mode (classifier) (I).
+
+## Proposed event -> counter mapping (clown.permission.<server>.<tool>.*)
+
+`<server>` is the MCP server for `mcp__<server>__<tool>`, else `builtin`;
+`<tool>` the tool name.
+
+| counter | from | observable |
+|---|---|---|
+| `prompted` | PermissionRequest | V (fires whenever the ask path is taken, also in `-p`) |
+| `approved` | PostToolUse (or PostToolUseFailure) for a call that had a PermissionRequest | V via a hook allow; I for a person's approval |
+| `rejected` | a PermissionRequest with no PostToolUse/PostToolUseFailure for that call by the next PreToolUse/Stop | V, but only by absence; cannot tell rejected from interrupted |
+| `interrupted` | none known | not observable from hooks (unverified) |
+| (auto-denied) | PermissionDenied | R only (auto mode) |
+
+Consequences for the design (I):
+
+- The counters need per-session state: remember each PermissionRequest
+  (keyed by prompt_id, tool_name and a hash of tool_input, since it carries no
+  tool_use_id) and resolve it on the next PostToolUse/PostToolUseFailure
+  (approved) or on the next PreToolUse/Stop without one (rejected or
+  interrupted).
+- "rejected" and "interrupted" may have to be one counter (`declined`) unless
+  an interactive run shows a distinguishing event.
+- A PermissionRequest hook must not answer (no output), or it would make the
+  decision itself.
