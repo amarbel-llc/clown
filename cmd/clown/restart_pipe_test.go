@@ -3,17 +3,36 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
+
+// killGrandchildAfter kills the process whose pid the test's script wrote to
+// pidFile, so the grandchild does not outlive the test.
+func killGrandchildAfter(t *testing.T, pidFile string) {
+	t.Cleanup(func() {
+		b, err := os.ReadFile(pidFile)
+		if err != nil {
+			return
+		}
+		if pid, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil && pid > 0 {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+		}
+	})
+}
 
 // M1: a preflight that leaves a grandchild holding its stdout must not stall
 // the serial idle goroutine: the verdict is read once the preflight exits.
 func TestPreflightDoesNotWaitForAGrandchildHoldingStdout(t *testing.T) {
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "spinclass")
+	pidFile := filepath.Join(dir, "grandchild.pid")
+	killGrandchildAfter(t, pidFile)
 	script := "#!/bin/sh\ncase \"$1\" in\n" +
-		"restart-preflight) sleep 20 & echo '{\"verdict\":\"none\",\"reason\":\"r\",\"when\":\"\"}' ;;\n" +
+		"restart-preflight) sleep 20 & echo $! > '" + pidFile + "'; echo '{\"verdict\":\"none\",\"reason\":\"r\",\"when\":\"\"}' ;;\n" +
 		"esac\n"
 	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
@@ -31,8 +50,10 @@ func TestPreflightDoesNotWaitForAGrandchildHoldingStdout(t *testing.T) {
 
 // M1: the same for the countdown's posh calls.
 func TestCountdownRunDoesNotWaitForAGrandchildHoldingStdout(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "grandchild.pid")
+	killGrandchildAfter(t, pidFile)
 	start := time.Now()
-	out, code, err := runForCountdown([]string{"/bin/sh", "-c", "sleep 20 & echo '{\"modal\":\"ok\"}'"})
+	out, code, err := runForCountdown([]string{"/bin/sh", "-c", "sleep 20 & echo $! > '" + pidFile + "'; echo '{\"modal\":\"ok\"}'"})
 	if took := time.Since(start); took > 5*time.Second {
 		t.Fatalf("took %v", took)
 	}

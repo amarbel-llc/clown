@@ -125,9 +125,13 @@ func (r *selfCloseRunner) run() error {
 // once per poke, serially. Pokes that arrive during a run collapse into one
 // more run: spinclass's runner is not safe to overlap.
 type idleListener struct {
-	conn *net.UnixConn
-	path string
-	wake chan struct{}
+	conn  *net.UnixConn
+	path  string
+	bound os.FileInfo
+	wake  chan struct{}
+	// done closes once the run goroutine has drained every queued wake after
+	// Close.
+	done chan struct{}
 	once sync.Once
 }
 
@@ -149,6 +153,13 @@ func startIdleListenerTracking(path string, busy *atomic.Bool, run func()) (*idl
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
+	// A socket another listener still has bound (connect succeeds on a bound
+	// unixgram socket) belongs to a live frontend of the same key: refused,
+	// not taken over. Only a stale file is replaced.
+	if c, err := net.DialTimeout("unixgram", path, time.Second); err == nil {
+		c.Close()
+		return nil, fmt.Errorf("idle socket %s is live: another clown frontend serves this key", path)
+	}
 	_ = os.Remove(path)
 	conn, err := net.ListenUnixgram("unixgram", &net.UnixAddr{Name: path, Net: "unixgram"})
 	if err != nil {
@@ -158,7 +169,12 @@ func startIdleListenerTracking(path string, busy *atomic.Bool, run func()) (*idl
 		conn.Close()
 		return nil, err
 	}
-	l := &idleListener{conn: conn, path: path, wake: make(chan struct{}, 1)}
+	bound, err := os.Stat(path)
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+	l := &idleListener{conn: conn, path: path, bound: bound, wake: make(chan struct{}, 1), done: make(chan struct{})}
 	go func() {
 		buf := make([]byte, 64)
 		for {
@@ -183,6 +199,7 @@ func startIdleListenerTracking(path string, busy *atomic.Bool, run func()) (*idl
 		}
 	}()
 	go func() {
+		defer close(l.done)
 		for range l.wake {
 			run()
 		}
@@ -195,7 +212,11 @@ func startIdleListenerTracking(path string, busy *atomic.Bool, run func()) (*idl
 func (l *idleListener) Close() {
 	l.once.Do(func() {
 		l.conn.Close()
-		_ = os.Remove(l.path)
+		// Only while the path is still this listener's socket, not a
+		// successor's.
+		if fi, err := os.Stat(l.path); err == nil && os.SameFile(fi, l.bound) {
+			_ = os.Remove(l.path)
+		}
 	})
 }
 

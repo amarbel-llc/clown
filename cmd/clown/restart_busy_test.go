@@ -25,14 +25,36 @@ func TestIdleListenerTracksTurnStarts(t *testing.T) {
 		t.Fatalf("exit = %d", code)
 	}
 	waitFor(t, "the busy mark", busy.Load)
-	time.Sleep(50 * time.Millisecond)
-	if runs.Load() != 0 {
-		t.Fatal("a turn start must not run the idle work")
-	}
 	pokeIdle(t, sock)
-	waitFor(t, "the idle run", func() bool { return runs.Load() == 1 })
+	waitFor(t, "the idle run", func() bool { return runs.Load() >= 1 })
 	if busy.Load() {
 		t.Fatal("a Stop poke must clear the busy mark")
+	}
+	// Closing ends the reader and lets the run goroutine drain every queued
+	// wake: had the turn start woken the idle work too, a second run would
+	// have been queued behind the first.
+	l.Close()
+	<-l.done
+	if n := runs.Load(); n != 1 {
+		t.Fatalf("runs = %d; a turn start must not run the idle work", n)
+	}
+}
+
+// A turn start alone, then close: the run goroutine ends with no run.
+func TestATurnStartAloneRunsNothing(t *testing.T) {
+	sock := filepath.Join(shortSocketDir(t), "k.sock")
+	var busy atomic.Bool
+	var runs atomic.Int32
+	l, err := startIdleListenerTracking(sock, &busy, func() { runs.Add(1) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	runIdleNotify([]string{"--busy", sock})
+	waitFor(t, "the busy mark", busy.Load)
+	l.Close()
+	<-l.done
+	if runs.Load() != 0 {
+		t.Fatal("a turn start ran the idle work")
 	}
 }
 
