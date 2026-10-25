@@ -143,8 +143,29 @@ This note records what was built, the decisions taken, and what is unverified.
   SIGKILL, or a relaunch that fails, leaves the session for `clown resume`
   (#8). While such a plan stays stored, idle pokes run nothing, so the
   session cannot self-close until it exits.
-- A user /exit during the grace window is not told apart from the stop's
-  exit and relaunches the session (third review R1c).
+- A user /exit typed between the stop's SIGTERM and the provider's exit
+  (normally well under a second; up to the 30 s grace only for a provider
+  that does not exit on SIGTERM) is not told apart from the stop's exit and
+  relaunches the session (third review R1c); one typed during the countdown
+  ends the session without a relaunch (the plan is stored only while the
+  provider still runs). Telling the two exits apart by status or signal
+  would differ across the direct, pty-suspend and agent-scope paths and
+  depend on claude-code's SIGTERM handling (I, unchecked); the cost is one
+  relaunch the user can /exit again.
+- The forged idle poke above is reachable by design and low severity: the
+  idle socket is bound into the agent unit on purpose (`BindPaths=` in
+  `internal/agentscope/unit.go`) because the in-unit Stop and
+  UserPromptSubmit hooks must reach it, and without --agent-scope any
+  same-uid process can send one. ProtectHome=tmpfs protects the control
+  socket, not the idle one. The harm is the agent timing or cancelling its
+  own already-authorised restart, which it could do by exiting anyway, so
+  no mitigation is planned.
+- Close racing the restart, remaining gap after the peek (I): a close that
+  starts after the peek and revokes the principal before the relaunched
+  clown starts could be undone by it, since the relaunch runs the
+  idempotent `troupe mint --session-key <principal>` and re-registers its
+  presence. Closing this needs spinclass to order a close against a
+  restart it has consumed; clown can only narrow it.
 - Liveness before the exec: `spinclass restart-preflight --peek`
   (spinclass 2a79497, read-only) reports `closed` for a session not found,
   tombstoned, abandoned or with a close started (ClosingAt), so a close in

@@ -207,7 +207,13 @@ are also written to
 .Pa close-self-run.log .
 A
 .Ic /exit
-typed in that window is not told apart from the stop and relaunches.
+typed between the stop's
+.Dv SIGTERM
+and the provider's exit (normally well under a second; up to the 30 second
+grace only for a provider that does not exit on
+.Dv SIGTERM )
+is not told apart from the stop and relaunches; one typed during the
+countdown ends the session without a relaunch.
 If the serve socket stays live, no
 .Nm clown
 is on
