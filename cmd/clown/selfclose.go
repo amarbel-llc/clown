@@ -21,8 +21,17 @@ import (
 // trigger: a Stop hook in the agent pokes the frontend over a unix datagram
 // socket, and the frontend — outside the unit — runs close-self-run. The runner
 // is a no-op without a request and re-checks everything itself, so poking it on
-// every idle transition is safe, and nothing here needs to authenticate the
-// poke: forging one can only run a no-op.
+// every idle transition is safe.
+//
+// The poke is not authenticated: the socket is bound into the unit, and
+// anything there running as the session's uid (the agent's own Bash, not only
+// the hooks) can send it, with no way to tell the two apart. Forging one runs
+// close-self-run (a no-op without a request spinclass recorded) and, when
+// `clown restart` queued a restart, the preflight, whose verdict still gates
+// it: a forged poke cannot start a restart spinclass did not authorize. What it
+// can do is choose when an already-authorized restart happens: a poke clears
+// the turn-running mark, so the agent can let a queued restart proceed while
+// it is mid-turn (and a forged turn-start byte can cancel one).
 
 // idleSocketPath is where the frontend listens for idle pokes.
 func idleSocketPath(runtimeDir, key string) string {
@@ -148,9 +157,9 @@ func startIdleListener(path string, run func()) (*idleListener, error) {
 
 // startIdleListenerTracking is startIdleListener that also records, in busy
 // (nil: not recorded), whether a turn is running: set by a turn-start
-// datagram, cleared by the next idle poke. A forged datagram can only cancel
-// a restart that is counting down, or let one proceed into a turn that the
-// next Stop poke would have reported anyway.
+// datagram, cleared by the next idle poke. Anything in the unit can send
+// either (see the top of this file): a forged turn start cancels a restart
+// counting down, a forged poke lets an authorized one proceed mid-turn.
 func startIdleListenerTracking(path string, busy *atomic.Bool, run func()) (*idleListener, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err

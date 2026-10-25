@@ -103,7 +103,8 @@ const restartReasonMaxRunes = 300
 // sanitizeRestartReason reduces a restart reason to one line of printable
 // text: control characters (C0, C1, newlines) become spaces, other
 // non-printing runes (bidi controls, zero-width characters) are dropped,
-// runs of space collapse, and it is capped at restartReasonMaxRunes.
+// runs of space collapse, and it is capped at restartReasonMaxRunes runes,
+// the "..." marking a cut included.
 func sanitizeRestartReason(s string) string {
 	clean := strings.Join(strings.Fields(strings.Map(func(r rune) rune {
 		switch {
@@ -115,7 +116,7 @@ func sanitizeRestartReason(s string) string {
 		return r
 	}, s)), " ")
 	if r := []rune(clean); len(r) > restartReasonMaxRunes {
-		clean = string(r[:restartReasonMaxRunes]) + "..."
+		clean = string(r[:restartReasonMaxRunes-3]) + "..."
 	}
 	return clean
 }

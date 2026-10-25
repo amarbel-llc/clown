@@ -14,7 +14,7 @@ func TestSanitizeRestartReason(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 	long := sanitizeRestartReason(strings.Repeat("é", 5000))
-	if n := utf8.RuneCountInString(long); n > 303 {
+	if n := utf8.RuneCountInString(long); n != 300 || !strings.HasSuffix(long, "...") {
 		t.Fatalf("not capped: %d runes", n)
 	}
 }
@@ -27,7 +27,7 @@ func TestRestartControlSanitizesTheQueuedReason(t *testing.T) {
 		t.Fatalf("reply = %+v", reply)
 	}
 	got, _ := q.take()
-	if strings.ContainsRune(got.Reason, '‮') || utf8.RuneCountInString(got.Reason) > 303 {
+	if strings.ContainsRune(got.Reason, '‮') || utf8.RuneCountInString(got.Reason) > 300 {
 		t.Fatalf("queued reason not sanitized: %d runes", utf8.RuneCountInString(got.Reason))
 	}
 }

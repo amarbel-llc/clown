@@ -26,9 +26,13 @@ frontend of
 over its control socket,
 .Pa $XDG_RUNTIME_DIR/clown/control/ Ns Ar key Ns Pa .sock ,
 and queues the request.
-It returns as soon as the frontend has queued it.
+It returns as soon as the frontend has queued it:
+.Dq queued
+means
+.Dq at the next idle transition ,
+which is the next Stop of the agent, not a time.
 The command authorizes nothing: a queued request only makes the frontend ask
-spinclass again at the next idle transition.
+spinclass again at that transition.
 .Pp
 Only
 .Fl -when Cm idle ,
@@ -65,6 +69,18 @@ request and leaves the session running.
 .Pp
 Each decision is appended to
 .Pa $XDG_STATE_HOME/clown/close-self-run.log .
+.Pp
+The idle poke is not authenticated.
+The idle socket is bound into an
+.Fl -agent-scope
+unit, and anything there running as the session's user, the agent's own
+shell included, can send a poke or a turn-start byte.
+Once a restart is queued, a poke is therefore not a no-op: it runs the
+preflight.
+The verdict still gates the restart, so a forged poke cannot start one spinclass
+did not authorize; but the agent can choose when an authorized restart
+happens, including mid-turn (a poke clears the turn-running mark), or cancel
+one with a forged turn start.
 .Ss The restart
 On a
 .Li restart
@@ -96,8 +112,12 @@ A detached session restarts at once.
 A turn that starts during the countdown (the self-close plugin's
 UserPromptSubmit hook,
 .Cm clown idle-notify --busy )
-cancels the restart; spinclass has already consumed the request, so the
-requester asks again.
+cancels the restart.
+So does a cancelled countdown or a profile refusal.
+spinclass has already consumed the request, so a cancel is reported on the
+frontend's standard error and in the log, and the requester must ask again.
+A turn interrupted before its Stop leaves the turn-running mark set, so a
+restart queued then waits for the next Stop.
 .Pp
 The frontend then stops the provider as an external
 .Dv SIGTERM
@@ -126,14 +146,23 @@ the profile check of
 .Cm clown resume
 applies unchanged; a profile edited between the dry run and the relaunch is
 still refused there, after the stop.
-The resumed session's system prompt starts with
-.Dq restarted: Ar reason ,
-the reason spinclass's verdict gave (one line of printable text, at most 300
-characters; a fixed text when it gave none), never the one passed to
+The resumed session's system prompt carries a
+.Dq restarted: Ar reason
+fragment, appended after clown's build-identity, host-identity and
+session-identity fragments; the reason is the one spinclass's verdict gave
+(one line of printable text, at most 300 characters including a trailing
+.Dq ...
+when cut; a fixed text when it gave none), never the one passed to
 .Nm clown restart .
 .Pp
-A provider that has not exited 30 seconds after the stop keeps the session:
-the restart is abandoned and a later exit does not relaunch.
+A provider that has not exited 30 seconds after the stop is sent
+.Dv SIGKILL
+(claude itself, its process group under pty-suspend, or systemd-run under
+.Fl -agent-scope ,
+whose exit stops the unit); the relaunch stays planned, so its exit, however
+late, still relaunches.
+Failures after the stop are not recovered: if the provider never exits, the
+session stays as it is.
 If the serve socket stays live, no
 .Nm clown
 is on
@@ -155,7 +184,10 @@ Every launch that runs its provider as a child binds the control socket (not
 not the exec-replacing
 .Cm codex ,
 not
-.Fl -print-launch-plan ) .
+.Fl -print-launch-plan ,
+and not without a session key or with
+.Ev XDG_RUNTIME_DIR
+unset or not absolute).
 Only a claude launch with the idle trigger armed queues; the others refuse
 with a message saying why.
 A second frontend for the same key does not take over a live control socket,

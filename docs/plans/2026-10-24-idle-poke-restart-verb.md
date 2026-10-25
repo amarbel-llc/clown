@@ -95,7 +95,38 @@ This note records what was built, the decisions taken, and what is unverified.
 - "restart pending (waiting for idle)" at queue time is not shown (it would
   draw over the TUI mid-turn).
 
+## Second review (f3a4f93..)
+
+- A provider still running 30 s after the stop gets SIGKILL and the plan is
+  kept (it was dropped before, stranding the session); providerRunning is
+  re-checked after the countdown.
+- The idle socket refuses a live listener of the same key and unlinks only
+  its own inode.
+- A restart cancelled after the preflight consumed it (profile refusal,
+  countdown cancel, turn start) is reported on stderr and in the log; the
+  requester must ask again.
+- The verdict's reason is sanitized in the log; the log files are opened
+  O_NOFOLLOW.
+- The reason cap is 300 runes including the "...".
+
 ## Limits accepted after review
+
+- The idle poke is not authenticated (second review #1). The idle socket is
+  bound into the unit and anything there running as the session's uid can
+  send a poke or a turn-start byte; hooks and the agent's own Bash cannot be
+  told apart by cgroup, and a token in the hook command would be readable by
+  the agent. A forged poke cannot start a restart spinclass did not
+  authorize (the preflight verdict gates it), but once one is queued the
+  agent can time it, including mid-turn, or cancel it with a forged turn
+  start.
+- A turn interrupted before its Stop leaves the turn-running mark set; a
+  queued restart then waits for the next Stop ("queued" means "at the next
+  idle") (#5).
+- A SIGTERM very early in an agent-scope launch could leave an orphan unit;
+  unverified (#7).
+- Failures after the stop are stop-then-hope: a provider that survives even
+  SIGKILL, or a relaunch that fails, leaves the session for `clown resume`
+  (#8).
 
 - The inline countdown line is written to stderr, over claude's TUI (L2).
 - L3 and L4 of the review are accepted as documented here, not changed.

@@ -41,10 +41,46 @@ func TestTheControlSocketIsNotReachableFromTheUnit(t *testing.T) {
 	if !slices.Contains(args, "--property=ProtectHome=tmpfs") {
 		t.Fatalf("ProtectHome=tmpfs missing: %v", args)
 	}
+	if bound := bindsCovering(args, "/run/user/1001/clown/control/k.sock"); len(bound) > 0 {
+		t.Errorf("the control socket or a parent of it is bound in: %q", bound)
+	}
+}
+
+// bindsCovering returns the BindPaths=/BindReadOnlyPaths= properties in args
+// whose source is path or a directory above it.
+func bindsCovering(args []string, path string) []string {
+	var out []string
 	for _, a := range args {
-		if strings.Contains(a, "/clown/control") || a == "--property=BindPaths=/run/user/1001" || a == "--property=BindPaths=/run/user/1001/clown" {
-			t.Errorf("the control socket or its parents are bound in: %q", a)
+		v, ok := strings.CutPrefix(a, "--property=BindPaths=")
+		if !ok {
+			v, ok = strings.CutPrefix(a, "--property=BindReadOnlyPaths=")
 		}
+		if !ok {
+			continue
+		}
+		src, _, _ := strings.Cut(strings.TrimPrefix(v, "-"), ":")
+		src = strings.TrimSuffix(src, "/")
+		if src == path || strings.HasPrefix(path, src+"/") || src == "" {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// The check itself catches a bind of the runtime dir, a parent, or the
+// control dir, rw or ro, with or without the optional "-".
+func TestBindsCoveringCatchesParents(t *testing.T) {
+	for _, a := range []string{
+		"--property=BindPaths=/run/user/1001",
+		"--property=BindReadOnlyPaths=-/run/user/1001/clown/",
+		"--property=BindPaths=/run/user/1001/clown/control:/x",
+	} {
+		if len(bindsCovering([]string{a}, "/run/user/1001/clown/control/k.sock")) != 1 {
+			t.Errorf("%q not caught", a)
+		}
+	}
+	if got := bindsCovering([]string{"--property=BindPaths=/run/user/1001/clown/idle/k.sock"}, "/run/user/1001/clown/control/k.sock"); len(got) != 0 {
+		t.Errorf("a sibling socket was flagged: %q", got)
 	}
 }
 
