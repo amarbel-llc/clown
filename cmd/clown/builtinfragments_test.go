@@ -45,10 +45,14 @@ func subagentPrompt(t *testing.T, name string) string {
 	return string(data)
 }
 
+// requireAll checks each phrase is in text, whitespace-insensitively (the
+// fragments are wrapped at ~80 columns). Each phrase is one only its own
+// fragment carries, so gutting that fragment fails the test.
 func requireAll(t *testing.T, what, text string, wants ...string) {
 	t.Helper()
+	flat := strings.Join(strings.Fields(text), " ")
 	for _, w := range wants {
-		if !strings.Contains(text, w) {
+		if !strings.Contains(flat, strings.Join(strings.Fields(w), " ")) {
 			t.Errorf("%s lacks %q", what, w)
 		}
 	}
@@ -62,17 +66,21 @@ func TestBuiltinPromptPrefersTODOIssueRefs(t *testing.T) {
 		"`TODO(#NNN): <description>`",
 		"`FIXME(#NNN): <description>`",
 		"`TODO(owner/repo#NNN):`",
-		"PR-scoped",
+		"still holds for PR-scoped, after-the-fact references",
+		"It does not forbid a forward-looking `TODO(#NNN):` anchor",
 	)
 }
 
-// clown#243: agents never read or write the harness's file-based memory.
+// clown#243: agents never read or write the harness's file-based memory,
+// unless the user asks for it in the conversation.
 func TestBuiltinPromptForbidsFileBasedMemory(t *testing.T) {
 	requireAll(t, "the builtin append prompt", builtinAppendPrompt(t),
-		"~/.claude/projects/<project>/memory/",
-		"`MEMORY.md`",
-		"MUST NOT",
-		"overrides",
+		"You MUST NOT use the harness's persistent file-based memory",
+		"unless the user explicitly asks you to in this conversation",
+		`This overrides any "# Memory" or auto-memory section elsewhere in your instructions`,
+		"files under `~/.claude/projects/<project>/memory/`",
+		"do not add entries to `MEMORY.md`",
+		"CLAUDE.md/AGENTS.md",
 	)
 }
 
@@ -80,12 +88,13 @@ func TestBuiltinPromptForbidsFileBasedMemory(t *testing.T) {
 // main session and in the Discover subagent (which has no conversion tool).
 func TestPromptsForbidHandConvertingEpochs(t *testing.T) {
 	requireAll(t, "the builtin append prompt", builtinAppendPrompt(t),
-		"epoch",
+		"You MUST NOT convert epoch timestamps",
+		"moxy `env_date` tool",
 		"`date -d @N`",
-		"date tool",
+		"report the raw epoch and say it is unconverted",
 	)
 	requireAll(t, "subagents/discover.md", subagentPrompt(t, "discover.md"),
-		"epoch",
-		"unconverted",
+		"Never convert epoch timestamps",
+		"report each epoch raw and mark it unconverted",
 	)
 }
