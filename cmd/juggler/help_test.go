@@ -7,25 +7,33 @@ import (
 	"testing"
 )
 
-// captureStdout runs fn with os.Stdout redirected and returns what it wrote.
-func captureStdout(t *testing.T, fn func()) string {
+// captureOutput runs fn with os.Stdout and os.Stderr redirected and returns
+// what each received.
+func captureOutput(t *testing.T, fn func()) (stdout, stderr string) {
 	t.Helper()
-	r, w, err := os.Pipe()
+	read := func(r *os.File, into chan<- string) {
+		b, _ := io.ReadAll(r)
+		into <- string(b)
+	}
+	outR, outW, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
 	}
-	saved := os.Stdout
-	os.Stdout = w
-	done := make(chan string, 1)
-	go func() {
-		b, _ := io.ReadAll(r)
-		done <- string(b)
-	}()
-	defer func() { os.Stdout = saved }()
+	errR, errW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	savedOut, savedErr := os.Stdout, os.Stderr
+	os.Stdout, os.Stderr = outW, errW
+	outC, errC := make(chan string, 1), make(chan string, 1)
+	go read(outR, outC)
+	go read(errR, errC)
+	defer func() { os.Stdout, os.Stderr = savedOut, savedErr }()
 	fn()
-	w.Close()
-	os.Stdout = saved
-	return <-done
+	outW.Close()
+	errW.Close()
+	os.Stdout, os.Stderr = savedOut, savedErr
+	return <-outC, <-errC
 }
 
 // clown#56: -h, --help and help print the usage to stdout and exit 0,
@@ -33,13 +41,48 @@ func captureStdout(t *testing.T, fn func()) string {
 func TestHelpPrintsUsageAndExitsZero(t *testing.T) {
 	for _, arg := range []string{"-h", "--help", "help"} {
 		var code int
-		out := captureStdout(t, func() { code = run([]string{arg}) })
+		out, _ := captureOutput(t, func() { code = run([]string{arg}) })
 		if code != 0 {
 			t.Errorf("juggler %s: exit %d, want 0", arg, code)
 		}
 		for _, want := range []string{"usage: juggler", "spawn", "daemon", "download"} {
 			if !strings.Contains(out, want) {
 				t.Errorf("juggler %s: stdout %q lacks %q", arg, out, want)
+			}
+		}
+	}
+}
+
+// A bare juggler prints the usage to stderr and exits 1 (usage); an unknown
+// command does too, naming it.
+func TestBareAndUnknownCommandAreUsageErrors(t *testing.T) {
+	var code int
+	out, errOut := captureOutput(t, func() { code = run(nil) })
+	if code != 1 || out != "" || !strings.Contains(errOut, "usage: juggler") {
+		t.Errorf("bare juggler: exit %d, stdout %q, stderr %q; want 1, nothing, the usage", code, out, errOut)
+	}
+	out, errOut = captureOutput(t, func() { code = run([]string{"frobnicate"}) })
+	if code == 0 || out != "" || !strings.Contains(errOut, `unknown command "frobnicate"`) {
+		t.Errorf("juggler frobnicate: exit %d, stdout %q, stderr %q; want non-zero, nothing, unknown command", code, out, errOut)
+	}
+}
+
+// clown#56: <subcommand> -h / --help prints that subcommand's usage to
+// stdout and exits 0, instead of being taken as a positional (start, stop,
+// status: a model or alias named "-h") or exiting 1 on flag.ErrHelp (run,
+// spawn, decide, ...). daemon and mcp are covered in
+// TestDaemonAndMCPHelpDoNotStartAnything: before the fix, `daemon -h`
+// started a daemon and `mcp -h` served on stdin.
+func TestSubcommandHelpPrintsItsUsage(t *testing.T) {
+	for _, sub := range []string{"start", "stop", "status", "list", "models", "model", "prompt", "decide", "run", "spawn", "exit-wake", "resolve", "clean", "job-ledger", "handles", "download"} {
+		for _, flag := range []string{"-h", "--help"} {
+			var code int
+			out, _ := captureOutput(t, func() { code = run([]string{sub, flag}) })
+			if code != 0 {
+				t.Errorf("juggler %s %s: exit %d, want 0", sub, flag, code)
+			}
+			if !strings.HasPrefix(out, "usage: juggler "+sub) {
+				t.Errorf("juggler %s %s: stdout %q, want it to start with %q", sub, flag, out, "usage: juggler "+sub)
 			}
 		}
 	}
