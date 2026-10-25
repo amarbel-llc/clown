@@ -446,6 +446,8 @@ func run(rawArgs []string) int {
 			return runEgressConnect(rawArgs[1:])
 		case "idle-notify":
 			return runIdleNotify(rawArgs[1:])
+		case "restart":
+			return runRestartVerb(rawArgs[1:], os.Stdout, os.Stderr)
 		case "agent-monitor":
 			return runAgentMonitor(rawArgs[1:])
 		case "agent-monitor-serve":
@@ -1004,6 +1006,11 @@ func runWithFlags(flags parsedFlags) int {
 		pluginDirs = append(pluginDirs, idleDir)
 		flags.idleSocket = idleSock
 	}
+	// spinclass#419: `clown restart` reaches this frontend over its control
+	// socket and queues a restart for the next idle transition, which needs
+	// the idle trigger armed above.
+	restarts := &restartQueue{}
+	defer armRestartControl(flags, restartUnarmedReason(flags, idleDir != ""), restarts)()
 
 	// Per FDR 0003, plugin-contributed system-prompt-append.d
 	// fragments are layered between clown's builtin fragments and
@@ -2993,6 +3000,9 @@ Clown flags (must appear before --):
   sessions-complete          Emit fish-completion lines for sessions
   list [--json]              List live clown sessions (spinclass-list-shaped table)
   presence list              List live presence records (clown-presence(1))
+  restart --session KEY [--when idle] [--reason TEXT]
+                             Queue a restart of KEY's live frontend for its next
+                             idle transition (spinclass's [session-entry].restart)
 
 The job-wakeup producer/read surface and monitor are ringmaster's
 (ringmaster start|progress|done|read, ringmaster monitor; RFC-0015).
