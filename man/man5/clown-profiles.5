@@ -38,7 +38,20 @@ A user profile with a builtin's name replaces that builtin; builtins
 cannot be removed.
 Each profile is validated when it is selected.
 .Cm clown profile list
-shows the builtins: one per provider and backend, and worker templates
+shows the builtins: one each for
+.Cm claude ,
+.Cm opencode
+and
+.Cm crush
+with the
+.Cm anthropic
+and the
+.Cm local
+backend (there is no builtin
+.Cm gateway
+or
+.Cm openrouter
+profile), and claude worker templates
 .Pq Li reviewer , Li porter , Li canary No and its variants
 that keep only the MCP servers and tools their task uses and set
 .Ev CLOWN_DISABLE_CLAUDEAI_CONNECTORS
@@ -153,6 +166,7 @@ A table keyed by a kept server's
 name whose values are lists of that server's own tool names to hide from
 the agent.
 It is a deny-list only; there is no per-tool allow-list.
+A key naming a server the profile does not keep is ignored.
 A name matches a live tool exactly or by the claude-safe form claude
 shows it under (moxy's
 .Li grit.branch
@@ -211,12 +225,17 @@ existing; the saved fields are
 .Sy context_servers
 and
 .Sy context_excluded .
+Saving into an existing profile replaces both with this launch's picker
+result: exclusions for a server the picker could not show tool by tool (one
+inside an agent unit, one not started this launch, one whose catalog could
+not be fetched) are dropped (clown#305).
 Launching with a profile that carries them replays the selection without
 the picker.
 When a selection stops a server or hides tools, a claude session's system
-prompt ends with a short notice naming the profile, the stopped servers and
-the hidden tool groups, by name only and bounded in size; a launch that
-narrows nothing gets no notice.
+prompt ends with a short notice naming the profile (or the picker) and the
+stopped servers, and giving each kept server's hidden-tool count; tool names
+are not printed, and the notice is bounded in size.
+A launch that narrows nothing gets no notice.
 .Pp
 Tools are hidden by a
 .Li POST /clown/exclude-tools
@@ -228,11 +247,17 @@ a native HTTP server must implement it itself, as moxy does
 (moxy#399).
 Without a profile a failed push is logged and that server keeps its full
 catalog.
-Under a profile's saved selection the exclusions are pushed, the catalog is
-fetched again, and the launch is refused unless every saved name that
-matches a live tool is gone from it; a saved name that could mean a live
-tool without matching it exactly, or a server whose catalog cannot be
-fetched, also refuses.
+Under a profile's saved selection each kept server's saved names are
+matched against its live catalog, the matches are pushed, the catalog is
+fetched again, and the launch is refused unless every match is gone from
+it.
+It is also refused when none of a server's saved names matches a live tool
+(an all-stale list; a partly stale one is accepted, the stale names
+skipped, see clown#304), when a saved name could mean a live tool without
+matching it exactly or matches more than one, and when the server's catalog
+cannot be fetched.
+Servers inside an agent unit are checked the same way by the unit, which
+refuses the confined launch.
 The result is recorded in
 .Pa $XDG_STATE_HOME/clown/readback/ Ns Ar principal Ns Pa .json .
 .Pp
@@ -285,7 +310,10 @@ Print every merged profile with its source
 and how many servers its selection keeps.
 .It Cm clown profile add
 .It Cm clown profile edit Ar name
-Create or change a profile in a form.
+Create a profile, or change an existing one, in a form.
+.Cm edit
+fails on a name that is not a profile; editing a builtin saves a user
+override.
 The form covers
 .Sy name
 through
@@ -351,3 +379,10 @@ and the
 save prompt drop an existing profile's
 .Sy base
 (clown#303).
+Every save restamps
+.Sy [registry] protocol
+with the lowest protocol its profiles need, so once the last profile with a
+.Sy base
+loses it the registry drops to protocol 1 and nothing refuses: the profile
+no longer declares the builtin it narrows, and spinclass has no base or pin
+left to check.
