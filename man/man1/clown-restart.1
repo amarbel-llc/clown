@@ -172,10 +172,18 @@ second
 .Nm clown restart
 with
 .Dq a restart is already underway .
-Before the exec it checks that the session's worktree (the frontend's
-working directory at launch) still exists; spinclass removes it on close,
-so a session closed during the restart is not relaunched: the frontend says
-so and exits 0.
+Immediately before the exec (after the serve-socket wait) it checks that the
+session's worktree (the frontend's working directory at launch) still
+exists, and if not, says so and exits 0 without relaunching.
+This is best effort: spinclass's close stops the unit and revokes the
+session's credentials first and removes the worktree last, so a close
+still between those steps when the frontend checks is missed, and the
+session is relaunched.
+Each relaunch outcome (relaunching, skipped, or failed, with the reason)
+and a failed
+.Dv SIGKILL
+are also written to
+.Pa close-self-run.log .
 A
 .Ic /exit
 typed in that window is not told apart from the stop and relaunches.

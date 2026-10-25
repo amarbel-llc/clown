@@ -145,8 +145,18 @@ This note records what was built, the decisions taken, and what is unverified.
   session cannot self-close until it exits.
 - A user /exit during the grace window is not told apart from the stop's
   exit and relaunches the session (third review R1c).
-- The worktree check is the only liveness check before the exec; a close
-  that has not yet removed the worktree when the frontend checks is missed.
+- The worktree check is the only liveness check before the exec. It now
+  runs immediately before the exec, but spinclass's close stops the unit
+  and revokes first and removes the worktree last (close.go), so a close
+  still between those steps is missed and the session relaunched. Reading
+  spinclass's tombstone was considered and skipped: its index/records
+  layout is internal, not a contract clown can rely on (fourth review S1b).
+- Under pty-suspend the SIGKILL reaches claude only; its children survive
+  only if they also ignore the SIGTERM, and pluginhost group-kills the
+  serve children (fourth review #7).
+- A FIFO with a stalled reader at a log path can still park the idle
+  goroutine on write (O_NONBLOCK covers only the open) (fourth review #8).
+- The Chmod/Stat cleanup branches in the listeners have no test.
 - Live-socket refusal (control and idle) is best effort: two frontends
   starting at the same instant can both see no live socket (third review
   #6).
