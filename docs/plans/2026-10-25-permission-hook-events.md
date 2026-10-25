@@ -88,10 +88,11 @@ a PermissionRequest at all.
 Consequences for the design (I):
 
 - The counters need per-session state: remember each PermissionRequest
-  (keyed by prompt_id, tool_name and a hash of tool_input, since it carries no
+  (keyed by tool_name and a hash of tool_input, since it carries no
   tool_use_id) and resolve it on the next PostToolUse/PostToolUseFailure
-  (approved) or on the next PreToolUse/Stop without one (rejected or
-  interrupted).
+  (approved) or at the end of the turn without one (rejected or
+  interrupted). As built, the key is session + tool name + canonical input
+  hash, not prompt_id, and a PreToolUse does not resolve (below).
 - "rejected" and "interrupted" may have to be one counter (`declined`) unless
   an interactive run shows a distinguishing event.
 - A PermissionRequest hook must not answer (no output), or it would make the
@@ -111,18 +112,32 @@ SessionEnd it already had:
 
 - `<key>` is `toolcost.ToolKey` (`builtin.<Tool>`, `<server>.<tool>` for MCP,
   the plugin segment dropped), as for `clown.tool_result.*`; no host segment.
-- **declined is rejected-or-interrupted**: hooks show neither (above). The
-  names leave room for `rejected` and `interrupted` if an interactive run finds
-  an event that tells them apart.
+- **declined includes interrupts**: it is rejected-or-interrupted, since hooks
+  show neither (above). An Esc or ^C at the dialog, or an interrupt while the
+  request is pending, counts as declined, not as its own outcome. The names
+  leave room for `rejected` and `interrupted` if an interactive run finds an
+  event that tells them apart.
 - A later PreToolUse does not decline a pending request: parallel tool calls
   interleave (I). So a decline is counted when the turn ends, not when the
   next call starts.
 - State: one file per session under `$XDG_RUNTIME_DIR/clown/permstat`
   (`$TMPDIR/clown-permstat-<uid>` without a runtime dir), 0600 in a 0700 dir,
   flock'd, O_NOFOLLOW, at most 32 pending requests, read bounded at 64 KiB,
-  corruption read as empty, removed when the turn ends. Pairing is by session,
-  tool name and a hash of the tool input (PermissionRequest has no
-  tool_use_id), first in first out; for two identical requests in one turn
+  corruption read as empty, removed when the turn ends. The dir is refused if
+  it is a symlink, not a directory, or not owned by the user, and is chmod'd
+  to 0700 if it is wider. A PostToolUse with nothing pending creates no
+  file. Files left by sessions killed mid-turn are swept once 24h old (at
+  most 16 per PermissionRequest).
+- Locking is best effort: the lock is tried without blocking for 200ms, then
+  the hook skips the bookkeeping (prompted still counts) rather than stall
+  the agent. After locking, the file must still be the one the path names
+  (a turn boundary may have removed it meanwhile); otherwise it is reopened,
+  up to 5 times, so no request is written to an unlinked file.
+- Pairing is by session, tool name and a hash of the tool input, decoded and
+  re-encoded with sorted keys so key order and whitespace do not matter.
+  PermissionRequest has no tool_use_id, and PreToolUse's cannot be borrowed:
+  with parallel calls nothing ties a PreToolUse to the PermissionRequest that
+  follows. It is first in first out; for two identical requests in one turn
   the counts are right even when it cannot say which ran. Past 32 pending,
   the oldest is dropped uncounted.
 - The hook prints nothing on any of these events and always exits 0
@@ -133,3 +148,28 @@ SessionEnd it already had:
   declined are not counted there; prompted still is. Unverified.
 - Cost: the binary now also runs on every PostToolUse (I: one short process
   per tool call).
+
+### Verifying the interactive case (unverified so far)
+
+A person approving, rejecting or interrupting at the dialog has not been
+recorded. To record it in one throwaway interactive session, run the recipe
+once to set up the case dirs (it makes one small model call per case), then
+start an interactive session in the `default` case dir. That dir records
+every event and its PermissionRequest hook makes no decision, so the dialog
+appears:
+
+    just explore-permission-hook-events
+    cd .tmp/permission-hooks/default && rm -f hook.log X && \
+      env -u CLOWN_SESSION_ID -u SPINCLASS_SESSION_ID -u CLAUDE_SESSION_ID \
+      claude --setting-sources project --model haiku \
+      "Run exactly this one Bash command, once, verbatim: touch X"
+
+At the dialog, approve. Then ask for `touch Y` and reject it, then ask for
+`touch Z` and press Esc. Then `/exit`, and read the log:
+
+    jq -c '{e: .recorded_event, tool: .input.tool_name, cmd: .input.tool_input.command, ntype: .input.notification_type}' hook.log
+
+The questions are whether Notification(permission_prompt) fires, whether an
+approval at the dialog gives PostToolUse as a hook allow does, and whether a
+reject or an Esc gives any event at all (Stop or PostToolUseFailure). The
+recipe does not record SessionEnd.

@@ -18,13 +18,22 @@
 // used to decline, since parallel tool calls interleave.
 //
 // Hooks run as separate processes, so pending requests live in a small
-// per-session state file. PermissionRequest carries no tool_use_id, so a
-// request is paired with its PostToolUse by session, tool name and a hash of
-// the tool input; two identical requests in one turn are paired first in,
-// first out, which keeps the counts right even when it cannot say which ran.
+// per-session state file. PermissionRequest carries no tool_use_id (and
+// PreToolUse's cannot be carried over: nothing ties a PreToolUse to the
+// PermissionRequest that follows it once calls run in parallel), so a request
+// is paired with its PostToolUse by session, tool name and a hash of the
+// canonical tool input (decoded and re-encoded, so key order and whitespace do
+// not matter); two identical requests in one turn are paired first in, first
+// out, which keeps the counts right even when it cannot say which ran.
+//
+// The state is best effort: the lock is waited on for lockWait at most, and a
+// hook that cannot get it skips the bookkeeping (a prompt still counts) rather
+// than stall the agent. Files of sessions killed before their turn ended are
+// swept once they are staleAge old.
 package permstat
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -33,9 +42,24 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
+	"time"
 
 	"code.linenisgreat.com/clown/internal/toolcost"
+)
+
+// lockWait bounds the wait for a state file's lock.
+const lockWait = 200 * time.Millisecond
+
+// maxReopen bounds the retries when the state file is replaced between open
+// and lock (a turn boundary removed it).
+const maxReopen = 5
+
+// staleAge and maxSweep bound the sweep of abandoned state files.
+const (
+	staleAge = 24 * time.Hour
+	maxSweep = 16
 )
 
 // maxPending bounds the pending list; past it the oldest request is dropped
@@ -90,19 +114,23 @@ func Handle(payload []byte, dir string) ([]toolcost.Metric, error) {
 		}
 		key := toolcost.ToolKey(in.ToolName, in.ToolInput)
 		ms := []toolcost.Metric{counter(key, "prompted")}
-		err := update(path, func(st *state) bool {
+		err := update(path, true, func(st *state) bool {
 			st.Pending = append(st.Pending, pending{Key: key, Match: match(in)})
 			if n := len(st.Pending); n > maxPending {
 				st.Pending = st.Pending[n-maxPending:]
 			}
 			return true
 		})
+		if err == nil {
+			sweepStale(dir, path)
+		}
 		// The prompt counts even when the state cannot be kept.
 		return ms, err
 	case "PostToolUse", "PostToolUseFailure":
 		var ms []toolcost.Metric
 		m := match(in)
-		err := update(path, func(st *state) bool {
+		// No file: nothing is pending (an auto-allowed call), and none is made.
+		err := update(path, false, func(st *state) bool {
 			for i, p := range st.Pending {
 				if p.Match == m {
 					ms = append(ms, counter(p.Key, "approved"))
@@ -112,6 +140,9 @@ func Handle(payload []byte, dir string) ([]toolcost.Metric, error) {
 			}
 			return false // an auto-allowed call: nothing pending, nothing to write
 		})
+		if errors.Is(err, os.ErrNotExist) {
+			err = nil
+		}
 		return ms, err
 	case "Stop", "UserPromptSubmit", "SessionEnd":
 		st, err := take(path)
@@ -129,8 +160,25 @@ func counter(key, outcome string) toolcost.Metric {
 }
 
 func match(in hookInput) string {
-	sum := sha256.Sum256(append([]byte(in.ToolName+"\x00"), in.ToolInput...))
+	sum := sha256.Sum256(append([]byte(in.ToolName+"\x00"), canonicalJSON(in.ToolInput)...))
 	return hex.EncodeToString(sum[:16])
+}
+
+// canonicalJSON re-encodes raw with sorted keys and no insignificant
+// whitespace (numbers kept as written); raw that does not decode is used as
+// is.
+func canonicalJSON(raw json.RawMessage) []byte {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var v any
+	if dec.Decode(&v) != nil {
+		return raw
+	}
+	out, err := json.Marshal(v)
+	if err != nil {
+		return raw
+	}
+	return out
 }
 
 // statePath is <dir>/<sha256(session)>.json.
@@ -150,15 +198,13 @@ func Dir() string {
 
 // update applies fn to the state at path under an exclusive lock (hooks for
 // parallel tool calls run concurrently) and writes it back when fn says so.
-func update(path string, fn func(*state) bool) error {
-	f, err := openState(path)
+// Without create, a missing file is os.ErrNotExist and nothing is made.
+func update(path string, create bool, fn func(*state) bool) error {
+	f, err := lockState(path, create)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
-		return err
-	}
 	st := readState(f)
 	if !fn(&st) {
 		return nil
@@ -177,7 +223,7 @@ func update(path string, fn func(*state) bool) error {
 
 // take returns the state at path and removes the file (the turn is over).
 func take(path string) (state, error) {
-	f, err := os.OpenFile(path, os.O_RDWR|syscall.O_NOFOLLOW, 0)
+	f, err := lockState(path, false)
 	if errors.Is(err, os.ErrNotExist) {
 		return state{}, nil
 	}
@@ -185,26 +231,115 @@ func take(path string) (state, error) {
 		return state{}, err
 	}
 	defer f.Close()
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
-		return state{}, err
-	}
 	st := readState(f)
+	// Removed under the lock: a hook that opened this file and is waiting on
+	// it sees, once it gets the lock, that the path no longer names it
+	// (lockState) and opens afresh, instead of writing to the unlinked file.
 	return st, os.Remove(path)
 }
 
-// openState opens (creating) the state file 0600 in a 0700 directory,
-// refusing a symlink at its path.
-func openState(path string) (*os.File, error) {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+// lockState opens the state file 0600 in a private directory (creating both
+// when create is set), refusing a symlink at its path, and locks it. It
+// returns only a file that the path still names once locked.
+func lockState(path string, create bool) (*os.File, error) {
+	if err := ensureDir(filepath.Dir(path), create); err != nil {
 		return nil, err
 	}
-	// The directory is this package's own (Dir): keep it private even if it
-	// was created with a wider umask or by an older build.
-	if err := os.Chmod(dir, 0o700); err != nil {
-		return nil, err
+	flags := os.O_RDWR | syscall.O_NOFOLLOW
+	if create {
+		flags |= os.O_CREATE
 	}
-	return os.OpenFile(path, os.O_RDWR|os.O_CREATE|syscall.O_NOFOLLOW, 0o600)
+	for attempt := 0; attempt < maxReopen; attempt++ {
+		f, err := os.OpenFile(path, flags, 0o600)
+		if err != nil {
+			return nil, err
+		}
+		if err := flockWithin(f, lockWait); err != nil {
+			f.Close()
+			return nil, err
+		}
+		fi, ferr := f.Stat()
+		pi, perr := os.Lstat(path)
+		if ferr == nil && perr == nil && os.SameFile(fi, pi) {
+			return f, nil
+		}
+		f.Close()
+	}
+	return nil, fmt.Errorf("state file %s kept being replaced", path)
+}
+
+// flockWithin takes an exclusive lock on f, giving up after wait.
+func flockWithin(f *os.File, wait time.Duration) error {
+	deadline := time.Now().Add(wait)
+	for {
+		err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EINTR) {
+			return err
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("state file locked for over %v; skipping", wait)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// ensureDir makes sure dir is a real directory (not a symlink) owned by this
+// user and closed to others, creating it when create is set. Without create
+// a missing dir is os.ErrNotExist.
+func ensureDir(dir string, create bool) error {
+	if create {
+		if err := os.MkdirAll(filepath.Dir(dir), 0o700); err != nil {
+			return err
+		}
+		if err := os.Mkdir(dir, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+			return err
+		}
+	}
+	fi, err := os.Lstat(dir)
+	if err != nil {
+		return err
+	}
+	if fi.Mode()&os.ModeSymlink != 0 || !fi.IsDir() {
+		return fmt.Errorf("state dir %s is not a plain directory", dir)
+	}
+	if st, ok := fi.Sys().(*syscall.Stat_t); !ok || int(st.Uid) != os.Getuid() {
+		return fmt.Errorf("state dir %s is not owned by this user", dir)
+	}
+	// Keep it private even if it was made with a wider umask or by an older
+	// build. It was just seen as a directory we own, not a symlink.
+	if fi.Mode().Perm()&0o077 != 0 {
+		return os.Chmod(dir, 0o700)
+	}
+	return nil
+}
+
+// sweepStale removes up to maxSweep state files in dir older than staleAge
+// (sessions killed before their turn ended), other than keep. Best effort.
+func sweepStale(dir, keep string) {
+	d, err := os.Open(dir)
+	if err != nil {
+		return
+	}
+	defer d.Close()
+	entries, _ := d.ReadDir(256)
+	removed := 0
+	for _, e := range entries {
+		if removed == maxSweep {
+			return
+		}
+		path := filepath.Join(dir, e.Name())
+		if !e.Type().IsRegular() || !strings.HasSuffix(e.Name(), ".json") || path == keep {
+			continue
+		}
+		if fi, err := e.Info(); err == nil && time.Since(fi.ModTime()) > staleAge {
+			if os.Remove(path) == nil {
+				removed++
+			}
+		}
+	}
 }
 
 // readState reads a bounded state; anything unreadable is the empty state.

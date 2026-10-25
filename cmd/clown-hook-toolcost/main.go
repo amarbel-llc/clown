@@ -73,9 +73,14 @@ type hookInput struct {
 }
 
 func main() {
-	dryRun := flag.String("dry-run", "", "dev loop: process this `transcript` from the start with no saved state, print the statsd lines to stdout, send nothing")
-	flag.Parse()
-	if *dryRun != "" {
+	// ContinueOnError and no output: bad arguments must not exit 2 (which
+	// blocks a Stop) or print (stdout is a PermissionRequest decision). They
+	// fall through to hook mode.
+	flags := flag.NewFlagSet("clown-hook-toolcost", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	dryRun := flags.String("dry-run", "", "dev loop: process this `transcript` from the start with no saved state, print the statsd lines to stdout, send nothing")
+	parseErr := flags.Parse(os.Args[1:])
+	if parseErr == nil && *dryRun != "" {
 		if err := dryRunTranscript(*dryRun, os.Stdout); err != nil {
 			fmt.Fprintln(os.Stderr, "clown-hook-toolcost:", err)
 			os.Exit(1)
@@ -90,6 +95,9 @@ func main() {
 		}
 		os.Exit(0)
 	}()
+	if parseErr != nil {
+		debugLog("arguments", parseErr.Error())
+	}
 	if err := run(os.Stdin); err != nil {
 		debugLog("error", err.Error())
 	}
