@@ -55,7 +55,7 @@ The
 table provides defaults layered beneath explicit command-line flags and
 environment variables.
 The named-profile registry
-.Pq Fl -profile
+.Pq Fl -profile , Xr clown-profiles 5
 is a separate mechanism and wins over these defaults.
 .Bl -tag -width Ds
 .It Sy provider
@@ -572,6 +572,7 @@ spawn-entry = ["clown", "--", "{prompt}"]
 .Xr clown-presence 1 ,
 .Xr ringmaster 1 ,
 .Xr troupe 1 ,
+.Xr clown-profiles 5 ,
 .Xr juggler 7
 .Sh STANDARDS
 RFC-0013 (clownfile, per-instance identity, and clown-owned chat);

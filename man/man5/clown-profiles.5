@@ -1,0 +1,349 @@
+.\" Copyright (c) 2026 amarbel, LLC
+.\" SPDX-License-Identifier: MIT
+.Dd @MDOCDATE@
+.Dt CLOWN-PROFILES 5
+.Os
+.Sh NAME
+.Nm clown-profiles
+.Nd the clown named-profile registry, profiles.toml
+.Sh SYNOPSIS
+.Pa $XDG_CONFIG_HOME/clown/profiles.toml
+.Sh DESCRIPTION
+A named profile bundles a provider, an API backend, a model, credentials,
+environment and an optional saved MCP tool selection under one name.
+.Nm clown
+selects one with
+.Fl -profile Ar name ,
+the
+.Ev CLOWN_PROFILE
+environment variable, a
+.Xr clownfile 5
+.Sy [profile]
+pin, the interactive picker, or the build's default profile, in that
+order; an explicit
+.Fl -provider
+suppresses the pin and the build default but never an explicit
+.Fl -profile .
+A selected profile is an explicit choice: its model and environment win
+over the
+.Xr clownfile 5
+.Sy [profile]
+defaults.
+.Pp
+The registry is the builtin profiles compiled into
+.Nm clown
+merged with the user's
+.Pa profiles.toml .
+A user profile with a builtin's name replaces that builtin; builtins
+cannot be removed.
+Each profile is validated when it is selected.
+.Cm clown profile list
+shows the builtins: one per provider and backend, and worker templates
+.Pq Li reviewer , Li porter , Li canary No and its variants
+that keep only the MCP servers and tools their task uses and set
+.Ev CLOWN_DISABLE_CLAUDEAI_CONNECTORS
+and
+.Ev CLOWN_DISALLOWED_TOOLS
+in their
+.Sy env .
+.Sh FILE FORMAT
+.Pa profiles.toml
+is TOML: one
+.Sy [[profile]]
+table per profile and one
+.Sy [registry]
+table that
+.Nm clown
+writes.
+.Ss [[profile]]
+.Bl -tag -width Ds
+.It Sy name
+The profile's name, as given to
+.Fl -profile .
+.It Sy display
+A human-readable label for the picker and
+.Cm clown profile list .
+.It Sy provider
+One of
+.Cm claude ,
+.Cm opencode ,
+.Cm crush
+or
+.Cm openrouter .
+.It Sy backend
+.Cm anthropic ,
+.Cm gateway
+or
+.Cm local
+for
+.Cm claude ,
+.Cm opencode
+and
+.Cm crush ;
+only
+.Cm gateway
+for
+.Cm openrouter .
+.It Sy model
+The model.
+For the claude-family providers it is passed as
+.Fl -model
+unless the command line already has one.
+A
+.Cm claude
+profile with a
+.Cm gateway
+or
+.Cm local
+backend and no
+.Sy url
+resolves this name through juggler's model registry; see
+.Xr juggler 7 .
+.It Sy url , Sy token
+The gateway endpoint and its credential.
+.Cm claude Ns + Ns Cm gateway
+needs
+.Sy url
+or
+.Sy model ,
+and
+.Sy token
+whenever
+.Sy url
+is set;
+.Cm openrouter
+needs
+.Sy token
+(its URL is fixed);
+.Cm opencode
+and
+.Cm crush
+with
+.Cm gateway
+need both.
+Both values expand
+.Li $NAME
+and
+.Li ${NAME}
+references, so a token can stay in the environment rather than in this
+file.
+.It Sy env
+A table of environment variables for the provider.
+A variable already set in the ambient environment wins; one set only by
+the
+.Xr clownfile 5
+.Sy [profile.env]
+table is overridden.
+.It Sy context_servers
+A saved
+.Fl -cheap-context
+selection: the exact list of MCP servers to keep, each named
+.Ar plugin Ns / Ns Ar server .
+Every other discovered server is stopped.
+It is a keep-list, not a deny-list; there is no way to name servers to
+drop.
+An empty list is rejected, since it would read back as no selection at
+all.
+A saved server that a launch no longer discovers is skipped, but a launch
+under a selection that keeps none of the running servers is refused
+rather than falling back to every plugin un-narrowed.
+.It Sy context_excluded
+A table keyed by a kept server's
+.Ar plugin Ns / Ns Ar server
+name whose values are lists of that server's own tool names to hide from
+the agent.
+It is a deny-list only; there is no per-tool allow-list.
+A name matches a live tool exactly or by the claude-safe form claude
+shows it under (moxy's
+.Li grit.branch
+is
+.Li grit_branch ) .
+.It Sy base
+.Ar builtin
+or
+.Ar builtin Ns Li @sha256: Ns Ar hex :
+the builtin profile this one claims to narrow, optionally pinned to that
+builtin's canonical digest (64 lowercase hex digits).
+Nothing is inherited from the base: it is a declaration a launcher checks.
+.Nm clown
+refuses a launch whose base names no builtin or whose pin no longer
+matches.
+Builtins themselves cannot carry a base.
+.El
+.Ss [registry]
+.Bl -tag -width Ds
+.It Sy clown_version
+The version of the
+.Nm clown
+that last saved the file.
+.It Sy protocol
+The lowest registry protocol that holds the file's profiles:
+.Li 2
+when any profile uses
+.Sy base ,
+else
+.Li 1 .
+.El
+.Pp
+Every save through
+.Nm clown
+writes this stamp.
+A launcher that reads the registry through clown's
+.Li pkg/profilelookup
+library, such as spinclass, refuses a registry with no stamp, one stamped
+with a protocol it does not speak, one with keys it does not know, and one
+that uses
+.Sy base
+under a protocol older than 2.
+A hand-written file therefore needs a
+.Sy [registry]
+table before spinclass will use it; saving any profile through
+.Cm clown profile
+adds one.
+.Sh CHEAP-CONTEXT SELECTIONS
+.Nm clown Fl -cheap-context
+starts every discovered MCP server, shows a picker of servers and tool
+groups, stops each fully deselected server, and hides the deselected tools
+of the rest.
+It needs an interactive terminal.
+After the picker it offers to save the selection into a profile, new or
+existing; the saved fields are
+.Sy context_servers
+and
+.Sy context_excluded .
+Launching with a profile that carries them replays the selection without
+the picker.
+.Pp
+Tools are hidden by a
+.Li POST /clown/exclude-tools
+to the server's own HTTP endpoint.
+.Xr clown-stdio-bridge 1
+answers it for servers a plugin declares as
+.Sy stdioServers ;
+a native HTTP server must implement it itself, as moxy does
+(moxy#399).
+Without a profile a failed push is logged and that server keeps its full
+catalog.
+Under a profile's saved selection the exclusions are pushed, the catalog is
+fetched again, and the launch is refused unless every saved name that
+matches a live tool is gone from it; a saved name that could mean a live
+tool without matching it exactly, or a server whose catalog cannot be
+fetched, also refuses.
+The result is recorded in
+.Pa $XDG_STATE_HOME/clown/readback/ Ns Ar principal Ns Pa .json .
+.Pp
+A worker reports to its driver over the
+.Li clown-builtin-jobs/ringmaster
+and
+.Li clown-builtin-jobs/troupe
+servers.
+A profile whose selection drops either, or excludes tools from either,
+leaves a worker mute; spinclass refuses to spawn with such a profile.
+.Sh SESSION PINS
+When a launch applies a profile,
+.Nm clown
+records the profile's name and canonical digest against the session in
+.Pa $XDG_STATE_HOME/clown/session-names.jsonl .
+Resuming that session must apply the same profile with the same digest:
+resuming under another profile, under none, or after the pinned profile's
+definition changed is refused, with a short field diff that never prints
+tokens, environment values or credentialed URLs.
+A session with no pin takes a defaulted profile on first resume, while an
+explicitly requested one needs the launcher's approval.
+.Pp
+A launcher approves a change by passing
+.Fl -profile
+together with the environment below;
+.Nm clown
+removes all three variables from its own environment so no child inherits
+them.
+This guards against operator mistakes and silent drift, not against an
+agent that can set its own environment or write clown's state directory.
+.Sh ENVIRONMENT
+.Bl -tag -width Ds
+.It Ev CLOWN_PROFILE
+The profile to apply, as
+.Fl -profile ;
+the flag wins when both are given.
+.It Ev CLOWN_PROFILE_DIGEST
+The launcher's approval: the canonical sha256 digest the applied profile
+must resolve to.
+A launch whose profile resolves to another digest, or that applies no
+profile, is refused.
+.It Ev CLOWN_PROFILE_SESSION
+Binds that approval to one session id; any other launch is refused.
+.El
+.Sh COMMANDS
+.Bl -tag -width Ds
+.It Cm clown profile list
+Print every merged profile with its source
+.Pq Li builtin , Li user No or Li user override
+and how many servers its selection keeps.
+.It Cm clown profile add
+.It Cm clown profile edit Ar name
+Create or change a profile in a form.
+The form covers
+.Sy name
+through
+.Sy token ;
+.Sy env ,
+.Sy context_servers
+and
+.Sy context_excluded
+are kept as they are and can be changed only by hand or by the
+.Fl -cheap-context
+save prompt.
+.It Cm clown profile remove Ar name
+Remove a user profile after a confirmation.
+.El
+.Pp
+.Cm add ,
+.Cm edit
+and
+.Cm remove
+need an interactive terminal and write
+.Pa $XDG_CONFIG_HOME/clown/profiles.toml
+atomically, mode 0600, keeping the file's comments and layout.
+.Sh FILES
+.Bl -tag -width Ds
+.It Pa $XDG_CONFIG_HOME/clown/profiles.toml
+The user registry
+.Pq Pa ~/.config/clown/profiles.toml No when Ev XDG_CONFIG_HOME No is unset .
+.It Pa ~/.config/juggler/profiles.toml
+The legacy location, read with a warning when the canonical file does not
+exist; never written.
+.It Pa $XDG_STATE_HOME/clown/session-names.jsonl
+Session records, including profile pins.
+.It Pa $XDG_STATE_HOME/clown/readback/ Ns Ar principal Ns Pa .json
+The exclusion readback of the last launch under a saved selection.
+.El
+.Sh EXAMPLES
+.Bd -literal -offset indent
+[[profile]]
+name = "narrow"
+display = "Claude, moxy without gmail"
+provider = "claude"
+backend = "anthropic"
+model = "claude-sonnet-5-5"
+context_servers = ["moxy/moxy", "clown-builtin-jobs/ringmaster",
+  "clown-builtin-jobs/troupe"]
+
+[profile.context_excluded]
+"moxy/moxy" = ["gmail_read", "gmail_triage"]
+
+[registry]
+clown_version = "0.3.20"
+protocol = "1"
+.Ed
+.Sh SEE ALSO
+.Xr clown 1 ,
+.Xr clown-stdio-bridge 1 ,
+.Xr clownfile 5 ,
+.Xr juggler 7
+.Sh BUGS
+.Cm clown profile edit
+and the
+.Fl -cheap-context
+save prompt drop an existing profile's
+.Sy base
+(clown#303).

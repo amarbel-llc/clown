@@ -75,6 +75,29 @@ and
 Can also be set via the
 .Ev CLOWN_PROVIDER
 environment variable.
+.It Fl -profile Ar name
+Apply the named profile: provider, backend, model, credentials, environment
+and any saved MCP tool selection.
+Also settable via
+.Ev CLOWN_PROFILE .
+Without either, a clownfile pin, the interactive picker or the build's
+default profile chooses one.
+See
+.Xr clown-profiles 5 .
+.It Fl -cheap-context
+Pick which MCP servers and tool groups to keep before the provider starts,
+and optionally save the choice into a profile.
+Needs an interactive terminal; see
+.Xr clown-profiles 5 .
+.It Cm profile Ar verb
+Manage the user profile registry:
+.Cm list ,
+.Cm add ,
+.Cm edit Ar name
+or
+.Cm remove Ar name ;
+see
+.Xr clown-profiles 5 .
 .It Fl -naked
 Bypass all clown wrapping (prompt injection, plugin loading, tool
 restrictions) and exec the provider CLI directly.
@@ -507,6 +530,8 @@ build time and layered between the builtin fragments and the user's
 .Xr claude-code-hooks 5 ,
 .Xr claude-code-settings 5 ,
 .Xr clown-json 5 ,
+.Xr clown-profiles 5 ,
+.Xr clownfile 5 ,
 .Xr clown-plugin-protocol 7
 .Sh AUTHORS
 .An amarbel, LLC
