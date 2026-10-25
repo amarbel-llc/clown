@@ -68,21 +68,36 @@ Each decision is appended to
 .Ss The restart
 On a
 .Li restart
-verdict an attached session first gets a 30 second countdown.
+verdict the frontend first runs, while the provider still runs, the profile
+check the relaunch will run (the
+.Cm clown resume
+check of FDR 0022: the launch's
+.Fl -profile
+against the session's recorded pin, with no launcher approval).
+If it would refuse (the profile changed, no longer resolves, or cannot be
+pinned) the restart is dropped, the reason is logged, and the session keeps
+running.
+.Pp
+An attached session then gets a 30 second countdown.
 Inside a
 .Xr posh 1
 session
 .Pq Ev POSH_SESSION No set
 whose
 .Ic posh modal --probe
-answers, the countdown is posh's app modal: exit 0 (the countdown ran out, or
-.Dq restart now ,
-or nobody is attached) proceeds and exit 10 (a viewer cancelled) keeps the
-session running.
+answers, the countdown is posh's app modal: exit 0 proceeds and exit 10 (a
+viewer cancelled) keeps the session running; exit 11 or 12 (posh showed
+nothing) falls back to the inline countdown, and any other end of a modal
+that was shown proceeds without a second wait.
 Any other attached terminal gets a one-line
 .Dq restart pending
 notice on standard error and the same wait, with no cancel.
 A detached session restarts at once.
+A turn that starts during the countdown (the self-close plugin's
+UserPromptSubmit hook,
+.Cm clown idle-notify --busy )
+cancels the restart; spinclass has already consumed the request, so the
+requester asks again.
 .Pp
 The frontend then stops the provider as an external
 .Dv SIGTERM
@@ -109,17 +124,23 @@ and
 .Ev CLOWN_SESSION_ID Ns = Ns Ar principal ;
 the profile check of
 .Cm clown resume
-applies unchanged, so a session whose profile changed is refused, not
-relaunched under the new one.
+applies unchanged; a profile edited between the dry run and the relaunch is
+still refused there, after the stop.
 The resumed session's system prompt starts with
-.Dq restarted: Ar reason .
-If the serve socket stays live or no
+.Dq restarted: Ar reason ,
+the reason spinclass's verdict gave (one line of printable text, at most 300
+characters; a fixed text when it gave none), never the one passed to
+.Nm clown restart .
+.Pp
+A provider that has not exited 30 seconds after the stop keeps the session:
+the restart is abandoned and a later exit does not relaunch.
+If the serve socket stays live, no
 .Nm clown
 is on
 .Ev PATH ,
-the frontend says so and exits without relaunching; the session can still be
-resumed with
-.Cm clown resume Ar principal .
+or the exec fails, the frontend says so on standard error, names
+.Cm clown resume Ar principal ,
+and exits without relaunching.
 .Pp
 A restart is not a close: nothing on the restart path revokes or releases the
 session's identity.
@@ -137,7 +158,13 @@ not
 .Fl -print-launch-plan ) .
 Only a claude launch with the idle trigger armed queues; the others refuse
 with a message saying why.
-A second frontend for the same key does not take over a live control socket.
+A second frontend for the same key does not take over a live control socket,
+and a frontend that exits removes the socket only while it is still its own.
+The socket is not reachable from an
+.Fl -agent-scope
+unit: the unit's
+.Pa /run/user
+is a tmpfs holding only the sockets bound into it.
 .Sh ENVIRONMENT
 .Bl -tag -width Ds
 .It Ev XDG_RUNTIME_DIR

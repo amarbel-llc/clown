@@ -53,9 +53,26 @@ This note records what was built, the decisions taken, and what is unverified.
   control characters removed, 300 runes max).
 - Countdown: POSH_SESSION set, posh on PATH and `posh modal --probe` answering
   `"modal":"ok"` -> `posh modal <session> --timeout 30 ...` (0 proceed, 10
-  cancel; busy/invalid/other fall back). Otherwise an attached terminal gets
+  cancel; busy/invalid fall back; any other end of a shown modal proceeds). Otherwise an attached terminal gets
   an inline "restart pending (...); restarting in 30s" line on stderr and the
   wait, no cancel. Detached: no countdown.
+- After the independent review (a0276f3..3eafd5b):
+  - the relaunch's profile gate is dry-run before the countdown and the stop
+    (restartProfileCheck); a refusal leaves the session running;
+  - a UserPromptSubmit hook (`clown idle-notify --busy`) marks a turn running;
+    a turn that starts during the countdown cancels the restart (checked every
+    250 ms inline, after a proceeding posh modal, and again before the stop);
+  - the relaunch's reason is the verdict's (spinclass's), sanitized (printable
+    only, 300 runes) and fixed text when empty; the socket's reason is
+    sanitized at queue time and otherwise unused;
+  - preflight and posh stdout go to a file, so a grandchild cannot stall idle;
+  - a provider that has not exited 30 s after the stop keeps the session and
+    the plan is dropped; exec failure names `clown resume <principal>`;
+  - the control socket unlinks only its own inode, and an over-long path is a
+    clear error;
+  - providerRunning is set only once each runProvider path forwards SIGTERM
+    (ptysuspend.OnStart now runs after its handler; agentscope Launch.OnStarted);
+  - posh: a shown modal that ends without an answer proceeds, no second wait.
 - mint-revoke: no frontend exit path runs `troupe mint-revoke` today (grep:
   only juggler's own sessions, `internal/jugglerrun`, and a debug recipe). The
   monitor's clean shutdown removes the presence record (ringmaster
@@ -77,3 +94,20 @@ This note records what was built, the decisions taken, and what is unverified.
   next turn; nothing prompts it to take one.
 - "restart pending (waiting for idle)" at queue time is not shown (it would
   draw over the TUI mid-turn).
+
+## Limits accepted after review
+
+- The inline countdown line is written to stderr, over claude's TUI (L2).
+- L3 and L4 of the review are accepted as documented here, not changed.
+- The no-revoke proof covers the idle -> preflight -> stop -> exec path only,
+  with fakes; the frontend's unwinding between stop and exec (plugin host,
+  monitors, unit) is shown clean of `mint-revoke` by grep, not by a run (L6).
+- There is no bats end-to-end test of a restart; everything is Go unit tests
+  with a fake spinclass, fake posh and stubbed exec.
+- The busy signal is UserPromptSubmit: a turn started by something that does
+  not fire it (an injected wake, if claude does not run the hook for it) is
+  not seen; that is inferred, not checked against claude.
+- Between the last busy check and the SIGTERM there is a window of a few
+  instructions in which a turn can still start.
+- A profile edited after the dry run and before the relaunch is still refused
+  after the stop.
