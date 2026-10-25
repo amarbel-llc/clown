@@ -74,22 +74,55 @@ func TestBareAndUnknownCommandAreUsageErrors(t *testing.T) {
 func TestDaemonAndMCPHelpDoNotStartAnything(t *testing.T) {
 	for _, sub := range []string{"daemon", "mcp"} {
 		for _, flag := range []string{"-h", "--help"} {
-			done := make(chan struct{})
-			var code int
-			var out string
-			go func() {
-				out, _ = captureOutput(t, func() { code = run([]string{sub, flag}) })
-				close(done)
-			}()
-			select {
-			case <-done:
-			case <-time.After(5 * time.Second):
-				t.Fatalf("juggler %s %s did not return", sub, flag)
-			}
-			if code != 0 || !strings.HasPrefix(out, "usage: juggler "+sub) {
-				t.Errorf("juggler %s %s: exit %d, stdout %q; want 0 and its usage", sub, flag, code, out)
+			code, out := runBounded(t, sub, flag)
+			if code != 0 || out != subcommandUsage[sub]+"\n" {
+				t.Errorf("juggler %s %s: exit %d, stdout %q; want 0 and exactly its usage", sub, flag, code, out)
 			}
 		}
+	}
+}
+
+// runBounded runs juggler with args under captureOutput, failing the test
+// (with os.Stdout/os.Stderr restored first, so later tests are not
+// redirected) if it does not return within 5s.
+func runBounded(t *testing.T, args ...string) (int, string) {
+	t.Helper()
+	savedOut, savedErr := os.Stdout, os.Stderr
+	done := make(chan struct{})
+	var code int
+	var out string
+	go func() {
+		out, _ = captureOutput(t, func() { code = run(args) })
+		close(done)
+	}()
+	select {
+	case <-done:
+		return code, out
+	case <-time.After(5 * time.Second):
+		os.Stdout, os.Stderr = savedOut, savedErr
+		t.Fatalf("juggler %v did not return", args)
+		return 0, ""
+	}
+}
+
+// clown#56 review: -h/--help anywhere before a literal -- asks for the
+// subcommand's usage (so `start foo -h` and `run --brief f -h` do too); one
+// after -- is passed through untouched.
+func TestHelpAnywhereBeforeDoubleDash(t *testing.T) {
+	for _, args := range [][]string{
+		{"start", "foo", "-h"},
+		{"run", "--brief", "f", "-h"},
+		{"spawn", "--new-run", "--help"},
+		{"prompt", "m", "--max-tokens", "5", "-h"},
+	} {
+		code, out := runBounded(t, args...)
+		if code != 0 || out != subcommandUsage[args[0]]+"\n" {
+			t.Errorf("juggler %v: exit %d, stdout %q; want 0 and exactly %q", args, code, out, subcommandUsage[args[0]])
+		}
+	}
+	// models is read-only, so this is harmless even where a daemon answers.
+	if _, out := runBounded(t, "models", "--", "-h"); out == subcommandUsage["models"]+"\n" {
+		t.Errorf("juggler models -- -h printed the usage; a -h after -- is not a help request")
 	}
 }
 
@@ -107,8 +140,8 @@ func TestSubcommandHelpPrintsItsUsage(t *testing.T) {
 			if code != 0 {
 				t.Errorf("juggler %s %s: exit %d, want 0", sub, flag, code)
 			}
-			if !strings.HasPrefix(out, "usage: juggler "+sub) {
-				t.Errorf("juggler %s %s: stdout %q, want it to start with %q", sub, flag, out, "usage: juggler "+sub)
+			if out != subcommandUsage[sub]+"\n" {
+				t.Errorf("juggler %s %s: stdout %q, want exactly %q", sub, flag, out, subcommandUsage[sub])
 			}
 		}
 	}
