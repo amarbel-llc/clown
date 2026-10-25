@@ -189,7 +189,11 @@ verdict other than
 .Li none ,
 a missing or other state) is unknown and relaunches; so is a spinclass not on
 .Ev PATH .
-The peek runs with the frontend's launch environment, as the relaunch does.
+The peek runs with the frontend's launch environment minus the keys the
+relaunch drops (other session ids, the launcher's profile approval, a stale
+restart notice) and with
+.Ev CLOWN_SESSION_ID
+set to the principal; unlike the relaunch it gets no restart notice.
 As a fallback it then checks that the session's worktree (the frontend's
 working directory at launch) still exists, and if not, does not relaunch
 either.

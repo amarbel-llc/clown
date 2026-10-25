@@ -149,14 +149,18 @@ func withoutClaudeSessionArgs(args []string) []string {
 // group id): the relaunch derives those again.
 var launchEnviron = os.Environ()
 
+// restartEnvDropped are the launch-environment keys the relaunch (and the
+// peek before it) does not inherit: any other session id, the launcher's
+// one-shot profile approval, and a stale restart notice.
+var restartEnvDropped = []string{"CLOWN_SESSION_ID", "CLAUDE_SESSION_ID", "CLOWN_PROFILE", "CLOWN_PROFILE_DIGEST", "CLOWN_PROFILE_SESSION", restartedReasonEnv}
+
 // restartEnv is the relaunch's environment: the launch environment with the
 // principal in CLOWN_SESSION_ID and the notice in CLOWN_RESTARTED_REASON. The
 // launcher's one-shot profile approval is not replayed (the argv carries
 // --profile, and the session is already pinned), and no other session id
 // survives.
 func restartEnv(environ []string, plan *relaunchPlan) []string {
-	drop := []string{"CLOWN_SESSION_ID", "CLAUDE_SESSION_ID", "CLOWN_PROFILE", "CLOWN_PROFILE_DIGEST", "CLOWN_PROFILE_SESSION", restartedReasonEnv}
-	env := environWithout(environ, drop...)
+	env := environWithout(environ, restartEnvDropped...)
 	return append(env, "CLOWN_SESSION_ID="+plan.principal, restartedReasonEnv+"="+plan.reason)
 }
 
@@ -429,16 +433,29 @@ func peekSessionState(bin, principal string, environ []string, timeout time.Dura
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin, "restart-preflight", "--peek")
-	// The launch environment, as the relaunch gets (restartEnv), not
-	// clown's current one, which runWithFlags has added to.
-	cmd.Env = append(environWithout(environ, "CLOWN_SESSION_ID"), "CLOWN_SESSION_ID="+principal)
-	// Its own process group, killed whole on timeout, so nothing it started
-	// outlives the peek.
+	// The launch environment minus the keys the relaunch drops
+	// (restartEnvDropped), plus the principal; not clown's current
+	// environment, which runWithFlags has added to. Unlike the relaunch, no
+	// restart notice is added.
+	cmd.Env = append(environWithout(environ, restartEnvDropped...), "CLOWN_SESSION_ID="+principal)
+	// Its own process group; on timeout only, the whole group is killed, so
+	// nothing it started outlives the peek. WaitDelay is not for I/O (stdout
+	// is a file, so Wait has no copy goroutines): if the group kill failed,
+	// it makes Go kill the direct child after a second, so Wait still ends.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 	cmd.WaitDelay = time.Second
+	var cancelErr error
+	cmd.Cancel = func() error {
+		if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+			cancelErr = err
+		}
+		return nil
+	}
 	out, err := outputViaFile(cmd)
 	if ctx.Err() != nil {
+		if cancelErr != nil {
+			return "", fmt.Errorf("restart-preflight --peek timed out after %s, and killing its process group failed: %v", timeout, cancelErr)
+		}
 		return "", fmt.Errorf("restart-preflight --peek timed out after %s", timeout)
 	}
 	if err != nil {

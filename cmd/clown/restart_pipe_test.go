@@ -18,9 +18,17 @@ func killGrandchildAfter(t *testing.T, pidFile string) {
 		if err != nil {
 			return
 		}
-		if pid, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil && pid > 0 {
-			_ = syscall.Kill(pid, syscall.SIGKILL)
+		pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
+		if err != nil || pid <= 0 {
+			return
 		}
+		// Only while that pid is still the test's sleep: a process already
+		// gone may have had its pid reused.
+		cmdline, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/cmdline")
+		if err != nil || !strings.HasPrefix(filepath.Base(strings.SplitN(string(cmdline), "\x00", 2)[0]), "sleep") {
+			return
+		}
+		_ = syscall.Kill(pid, syscall.SIGKILL)
 	})
 }
 

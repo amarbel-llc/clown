@@ -4,12 +4,9 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
-
-	"code.linenisgreat.com/clown/internal/buildcfg"
 )
 
 // fakePeekSpinclass is a `spinclass` whose `restart-preflight --peek` runs
@@ -30,18 +27,9 @@ func fakePeekSpinclass(t *testing.T, body string) (bin, calls string) {
 // spinclass#419 --peek: right before the exec, a session spinclass reports
 // closed is not relaunched; live relaunches; anything else is unknown and
 // relaunches (a deployed spinclass without --peek exits non-zero).
+// (No troupe assertion here: nothing on this path calls troupe, so one could
+// not fail. TestRestartNeverRevokesTheIdentity covers idle to exec.)
 func TestRelaunchPeeksAtTheSessionBeforeExec(t *testing.T) {
-	troupeLog := filepath.Join(t.TempDir(), "troupe.calls")
-	troupe := filepath.Join(t.TempDir(), "troupe")
-	if err := os.WriteFile(troupe, []byte("#!/bin/sh\nprintf '%s\\n' \"$*\" >> '"+troupeLog+"'\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	old := buildcfg.TroupePath
-	buildcfg.TroupePath = troupe
-	t.Cleanup(func() { buildcfg.TroupePath = old })
-	// troupe is also first on PATH, for clown and for the peek's child.
-	t.Setenv("PATH", filepath.Dir(troupe)+":"+os.Getenv("PATH"))
-
 	for _, c := range []struct {
 		name, body string
 		exec       bool
@@ -89,9 +77,6 @@ func TestRelaunchPeeksAtTheSessionBeforeExec(t *testing.T) {
 			}
 		})
 	}
-	if b, err := os.ReadFile(troupeLog); err == nil {
-		t.Fatalf("the relaunch ran troupe: %q", b)
-	}
 }
 
 // Without spinclass on PATH the peek is unknown, and the worktree check
@@ -122,7 +107,11 @@ func TestPeekUsesTheLaunchEnvironment(t *testing.T) {
 	t.Setenv("CLOWN_PEEK_TEST_RUNTIME_ONLY", "leaked")
 	envFile := filepath.Join(t.TempDir(), "env")
 	bin, _ := fakePeekSpinclass(t, "env > '"+envFile+"'\necho '{\"verdict\":\"none\",\"state\":\"live\"}'")
-	launch := []string{"PATH=" + os.Getenv("PATH"), "CLOWN_PEEK_TEST_LAUNCH=kept", "CLOWN_SESSION_ID=stale"}
+	launch := []string{
+		"PATH=" + os.Getenv("PATH"), "CLOWN_PEEK_TEST_LAUNCH=kept", "CLOWN_SESSION_ID=stale",
+		// restartEnv drops these; so does the peek.
+		"CLAUDE_SESSION_ID=claude-id", "CLOWN_RESTARTED_REASON=old", "CLOWN_PROFILE=p", "CLOWN_PROFILE_DIGEST=d", "CLOWN_PROFILE_SESSION=s",
+	}
 	if state, err := peekSessionState(bin, restartTestPrincipal, launch, 5*time.Second); err != nil || state != "live" {
 		t.Fatalf("state %q, err %v", state, err)
 	}
@@ -131,8 +120,13 @@ func TestPeekUsesTheLaunchEnvironment(t *testing.T) {
 	if !strings.Contains(env, "CLOWN_PEEK_TEST_LAUNCH=kept") || strings.Contains(env, "CLOWN_PEEK_TEST_RUNTIME_ONLY") {
 		t.Fatalf("peek env = %q; want the launch env only", env)
 	}
-	if !strings.Contains(env, "CLOWN_SESSION_ID="+restartTestPrincipal) || strings.Contains(env, "CLOWN_SESSION_ID=stale") {
-		t.Fatalf("peek env = %q; want CLOWN_SESSION_ID the principal, once", env)
+	for _, gone := range []string{"CLAUDE_SESSION_ID=", "CLOWN_RESTARTED_REASON=", "CLOWN_PROFILE=", "CLOWN_PROFILE_DIGEST=", "CLOWN_PROFILE_SESSION="} {
+		if strings.Contains("\n"+env, "\n"+gone) {
+			t.Errorf("peek env still has %s", gone)
+		}
+	}
+	if n := strings.Count("\n"+env, "\nCLOWN_SESSION_ID="); n != 1 || !strings.Contains(env, "CLOWN_SESSION_ID="+restartTestPrincipal+"\n") {
+		t.Fatalf("CLOWN_SESSION_ID entries = %d in %q; want exactly the principal", n, env)
 	}
 }
 
@@ -142,18 +136,20 @@ func TestPeekTimeoutKillsTheProcessGroup(t *testing.T) {
 	pidFile := filepath.Join(t.TempDir(), "grandchild.pid")
 	killGrandchildAfter(t, pidFile)
 	bin, _ := fakePeekSpinclass(t, "sleep 30 &\necho $! > '"+pidFile+"'\nwait")
+	// A generous timeout so the fake has written its pid file under load.
 	start := time.Now()
-	if _, err := peekSessionState(bin, restartTestPrincipal, os.Environ(), 300*time.Millisecond); err == nil {
+	if _, err := peekSessionState(bin, restartTestPrincipal, os.Environ(), 3*time.Second); err == nil {
 		t.Fatal("want a timeout")
 	}
-	if took := time.Since(start); took > 5*time.Second {
+	if took := time.Since(start); took > 15*time.Second {
 		t.Fatalf("took %v", took)
 	}
-	b, err := os.ReadFile(pidFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pid := strings.TrimSpace(string(b))
+	var pid string
+	waitFor(t, "the pid file", func() bool {
+		b, err := os.ReadFile(pidFile)
+		pid = strings.TrimSpace(string(b))
+		return err == nil && pid != ""
+	})
 	waitFor(t, "the grandchild to be gone", func() bool {
 		stat, err := os.ReadFile("/proc/" + pid + "/stat")
 		if err != nil {
@@ -169,31 +165,26 @@ func TestPeekTimeoutKillsTheProcessGroup(t *testing.T) {
 func TestPeekRunsAfterTheServeSocketWait(t *testing.T) {
 	runtime := shortSocketDir(t)
 	ln := listenTestServeSocket(t, runtime)
-	closedAt := make(chan time.Time, 1)
 	go func() {
 		time.Sleep(300 * time.Millisecond)
-		closedAt <- time.Now()
-		ln.Close()
+		ln.Close() // unlinks the socket file before the fd closes
 	}()
-	// The fake stamps its start with the fine-grained wall clock (a file
-	// mtime is too coarse for this).
-	stamp := filepath.Join(t.TempDir(), "peek.at")
-	bin, _ := fakePeekSpinclass(t, "date +%s%N > '"+stamp+"'\necho '{\"verdict\":\"none\",\"state\":\"live\"}'")
+	// The fake records whether the old serve socket file still exists when
+	// it runs: an event, not a clock.
+	sock := filepath.Join(runtime, "clown", "serve", restartTestPrincipal, "spinclass.sock")
+	seen := filepath.Join(t.TempDir(), "seen")
+	bin, _ := fakePeekSpinclass(t, "if [ -e '"+sock+"' ]; then echo present > '"+seen+"'; else echo gone > '"+seen+"'; fi\necho '{\"verdict\":\"none\",\"state\":\"live\"}'")
 	var execs []execCall
 	r := testRelauncher(t, runtime, &execs)
 	r.stderr = &bytes.Buffer{}
 	r.spinclass = bin
 	r.environ = os.Environ()
 	r.relaunch(&relaunchPlan{principal: restartTestPrincipal, worktree: t.TempDir()})
-	b, err := os.ReadFile(stamp)
+	b, err := os.ReadFile(seen)
 	if err != nil {
 		t.Fatalf("no peek: %v", err)
 	}
-	at, err := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if at < (<-closedAt).UnixNano() {
-		t.Fatal("the peek ran before the serve socket was gone")
+	if got := strings.TrimSpace(string(b)); got != "gone" {
+		t.Fatalf("the peek saw the serve socket %s; it must run after the wait", got)
 	}
 }
