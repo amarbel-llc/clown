@@ -2404,6 +2404,30 @@ explore-permission-hook-events model="haiku":
     run_case reject deny "" "" "Run exactly this one Bash command, once, verbatim: touch X"
     run_case dontask "" dontAsk "" "Run exactly this one Bash command, once, verbatim: touch X"
 
+# Wait (at most `max` seconds) until load1 < `load` and MemAvailable >
+# `mem_gb` GB, for agents gating nix runs on host resources; exits 1 on
+# timeout. Run it async and job_wait on it rather than polling.
+#
+# wait, bounded, for host load and memory to allow a nix run
+[group("debug")]
+debug-wait-for-resources load="20" mem_gb="4" max="1500":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    end=$(( $(date +%s) + {{ max }} ))
+    while :; do
+        l=$(cut -d' ' -f1 /proc/loadavg)
+        m=$(awk '/^MemAvailable:/ {print int($2/1048576)}' /proc/meminfo)
+        if awk -v l="$l" -v lim={{ load }} 'BEGIN{exit !(l<lim)}' && [ "$m" -gt {{ mem_gb }} ]; then
+            echo "ok: load1=$l mem_available_gb=$m"
+            exit 0
+        fi
+        if [ "$(date +%s)" -ge "$end" ]; then
+            echo "timeout: load1=$l mem_available_gb=$m"
+            exit 1
+        fi
+        sleep 10
+    done
+
 # Show the signature status (%G? code, signer) of the last n commits, for
 # agents checking that their commits were signed (the git MCP log shows no
 # signatures).
