@@ -268,7 +268,13 @@ func pickProfile(profiles []profile.Profile) (chosen *profile.Profile, addReques
 }
 
 func main() {
-	os.Exit(run(os.Args[1:]))
+	code := run(os.Args[1:])
+	// A restart (spinclass#419) stopped the provider and let run unwind;
+	// relaunch replaces this process and returns only on failure.
+	if plan := pendingRelaunch.Load(); plan != nil {
+		code = newRelauncher().relaunch(plan)
+	}
+	os.Exit(code)
 }
 
 // sessionIdentity is the resolved job-wakeup channel identity for this clown
@@ -479,6 +485,9 @@ func run(rawArgs []string) int {
 // directly and rejoin the standard flow (profile load, prompt walk,
 // plugin host, provider exec) without re-running parseFlags.
 func runWithFlags(flags parsedFlags) int {
+	// A frontend relaunched by a restart (spinclass#419) reads its notice
+	// before it starts any child, so none inherits it.
+	restartNotice := consumeRestartedNotice()
 	if flags.agentScopeSpec != "" && (flags.tent || flags.naked) {
 		fmt.Fprintln(os.Stderr, "clown: --agent-scope is mutually exclusive with --tent and --naked")
 		return 1
@@ -1000,16 +1009,23 @@ func runWithFlags(flags parsedFlags) int {
 	// Self-close (clown#287): inside a spinclass session, a Stop hook pokes this
 	// frontend, which runs `spinclass close-self-run` outside the agent unit.
 	// Arms only for a claude launch with spinclass on PATH; see selfCloseArmed.
-	idleDir, idleSock, closeIdle := armSelfClose(flags, root)
+	// spinclass#419: `clown restart` reaches this frontend over its control
+	// socket and queues a restart; the idle poke runs the preflight and, on a
+	// "restart" verdict, the restarter stops the provider so main relaunches.
+	restarts := &restartQueue{}
+	restartLog, _ := userStateWritePath("close-self-run.log")
+	restarter := frontendRestarter{
+		principal: flags.identity.Key,
+		argv:      restartArgv(flags, attachedID),
+		stop:      stopProviderBySignal,
+		logPath:   restartLog,
+	}
+	idleDir, idleSock, closeIdle := armSelfClose(flags, root, restarts, restarter.restart)
 	defer closeIdle()
 	if idleDir != "" {
 		pluginDirs = append(pluginDirs, idleDir)
 		flags.idleSocket = idleSock
 	}
-	// spinclass#419: `clown restart` reaches this frontend over its control
-	// socket and queues a restart for the next idle transition, which needs
-	// the idle trigger armed above.
-	restarts := &restartQueue{}
 	defer armRestartControl(flags, restartUnarmedReason(flags, idleDir != ""), restarts)()
 
 	// Per FDR 0003, plugin-contributed system-prompt-append.d
@@ -1036,6 +1052,9 @@ func runWithFlags(flags parsedFlags) int {
 		lead += "\n\n" + host
 	}
 	lead += "\n\n" + fqIdentityFragment(flags.groupID, flags.clownName)
+	if restartNotice != "" {
+		lead += "\n\n" + restartNotice
+	}
 	prompts.AppendFragments = lead + "\n\n" + prompts.AppendFragments
 
 	if flags.agentScopeSpec != "" && flags.provider != "claude" {
@@ -1584,7 +1603,8 @@ func runClaude(cliPath string, flags parsedFlags, prompts promptwalk.PromptResul
 	// --print-launch-plan also suppresses it: that flag's contract is that stdout
 	// is the plan and nothing else, and a trailing human hint would have to be
 	// stripped by every consumer.
-	if flags.resumeHintID != "" && attachedID == "" && !flags.printLaunchPlan {
+	// A restart relaunches the session instead of ending it: no hint.
+	if flags.resumeHintID != "" && attachedID == "" && !flags.printLaunchPlan && pendingRelaunch.Load() == nil {
 		printResumeHint(flags.resumeHintID)
 	}
 	return code
@@ -2071,6 +2091,10 @@ func runProvider(executor Executor, bound Command, logger *slog.Logger, flags pa
 		}
 		return 0
 	}
+
+	// A restart may stop the provider only while one runs (spinclass#419).
+	providerRunning.Store(true)
+	defer providerRunning.Store(false)
 
 	if flags.agentScopeSpec != "" {
 		return runInAgentScope(agentScopeRequest{

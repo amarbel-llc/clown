@@ -324,7 +324,7 @@ func TestArmSelfCloseLogsItsDecision(t *testing.T) {
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
 	f := parsedFlags{provider: "claude"}
 	f.identity.Key = "k-1"
-	dir, sock, closeFn := armSelfClose(f, testStagingRoot(t))
+	dir, sock, closeFn := armSelfClose(f, testStagingRoot(t), nil, nil)
 	closeFn()
 	if dir != "" || sock != "" {
 		t.Fatalf("must not arm outside a spinclass session: %q %q", dir, sock)
@@ -340,7 +340,7 @@ func TestArmSelfCloseLogsItsDecision(t *testing.T) {
 	// Another provider is not a self-close candidate and logs nothing new.
 	before := len(b)
 	f.provider = "codex"
-	_, _, closeFn = armSelfClose(f, testStagingRoot(t))
+	_, _, closeFn = armSelfClose(f, testStagingRoot(t), nil, nil)
 	closeFn()
 	after, _ := os.ReadFile(filepath.Join(state, "clown", "close-self-run.log"))
 	if len(after) != before {
@@ -352,7 +352,7 @@ func TestArmSelfCloseLogsItsDecision(t *testing.T) {
 	t.Setenv("SPINCLASS_SESSION_ID", "repo/b")
 	t.Setenv("PATH", filepath.Dir(bin))
 	f.provider = "claude"
-	dir, sock, closeFn = armSelfClose(f, testStagingRoot(t))
+	dir, sock, closeFn = armSelfClose(f, testStagingRoot(t), nil, nil)
 	defer closeFn()
 	if dir == "" || sock == "" {
 		t.Fatalf("expected to arm: %q %q", dir, sock)
@@ -380,7 +380,7 @@ func TestArmSelfCloseHookRunsTheArmingExecutableNotCLOWN_BIN(t *testing.T) {
 	f.identity.Key = "k-1"
 	f.identity.Bin = "/old/stub/clown" // what $CLOWN_BIN resolved to
 
-	dir, sock, closeFn := armSelfClose(f, testStagingRoot(t))
+	dir, sock, closeFn := armSelfClose(f, testStagingRoot(t), nil, nil)
 	defer closeFn()
 	if dir == "" {
 		t.Fatal("expected to arm")

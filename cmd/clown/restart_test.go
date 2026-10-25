@@ -193,8 +193,18 @@ func TestRestartUnarmedReason(t *testing.T) {
 	t.Setenv("PATH", filepath.Dir(bin))
 	t.Setenv("CLOWN_DISABLE_SELF_CLOSE", "")
 	f.provider = "claude"
+	f.resumeHintID = "k"
 	if got := restartUnarmedReason(f, false); !strings.Contains(got, "idle listener") {
 		t.Fatalf("a passing gate with no listener: %q", got)
+	}
+	if got := restartUnarmedReason(f, true); got != "" {
+		t.Fatalf("an armed claude launch resumable under its principal: %q", got)
+	}
+	// claude -p / --continue / a non-UUID key: the conversation is not the
+	// principal's, so the relaunch could not resume it.
+	f.resumeHintID = ""
+	if got := restartUnarmedReason(f, true); !strings.Contains(got, "conversation id") {
+		t.Fatalf("an unresumable claude launch: %q", got)
 	}
 }
 

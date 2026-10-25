@@ -210,6 +210,12 @@ func armRestartControl(flags parsedFlags, unarmedReason string, q *restartQueue)
 // restartUnarmedReason is why this launch's idle trigger is not armed ("" when
 // it is): selfCloseDecision's gate, or a listener that failed to start.
 func restartUnarmedReason(flags parsedFlags, idleArmed bool) string {
+	// The relaunch resumes the principal's conversation: a launch whose
+	// claude conversation id is something else (-p, --continue, a non-UUID
+	// operator key) could not be resumed under the same principal.
+	if flags.provider == "claude" && flags.resumeHintID != flags.identity.Key {
+		return "this launch's claude conversation id is not its principal, so a relaunch could not resume it"
+	}
 	if idleArmed {
 		return ""
 	}

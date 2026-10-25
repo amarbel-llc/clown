@@ -243,8 +243,10 @@ func synthIdlePluginDir(root *staging.Root, clownBin, sock string) (string, erro
 // armSelfClose starts the idle listener and registers the Stop hook for a
 // launch that selfCloseArmed allows, returning the plugin dir to add and the
 // socket to bind into an agent unit ("" when not armed or on any failure: a
-// session that cannot self-close is still a working session).
-func armSelfClose(flags parsedFlags, root *staging.Root) (pluginDir, sock string, closeFn func()) {
+// session that cannot self-close is still a working session). Each idle poke
+// runs close-self-run and then, when restarts holds one, the restart preflight
+// (idleRunner); restart performs an allowed restart. restarts may be nil.
+func armSelfClose(flags parsedFlags, root *staging.Root, restarts *restartQueue, restart func(restartRequest, preflightVerdict)) (pluginDir, sock string, closeFn func()) {
 	bin, reason := selfCloseDecision(flags)
 	logPath, logErr := userStateWritePath("close-self-run.log")
 	notArmed := func(why string) (string, string, func()) {
@@ -266,8 +268,14 @@ func armSelfClose(flags parsedFlags, root *staging.Root) (pluginDir, sock string
 		return notArmed(logErr.Error())
 	}
 	sock = idleSocketPath(os.Getenv("XDG_RUNTIME_DIR"), flags.identity.Key)
-	runner := &selfCloseRunner{bin: bin, principal: flags.identity.Key, logPath: logPath}
-	l, err := startIdleListener(sock, func() { _ = runner.run() })
+	idle := &idleRunner{
+		closer:    &selfCloseRunner{bin: bin, principal: flags.identity.Key, logPath: logPath},
+		preflight: &restartPreflight{bin: bin, principal: flags.identity.Key, logPath: logPath},
+		queue:     restarts,
+		restart:   restart,
+		logPath:   logPath,
+	}
+	l, err := startIdleListener(sock, idle.onIdle)
 	if err != nil {
 		return notArmed(err.Error())
 	}
