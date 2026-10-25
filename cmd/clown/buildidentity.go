@@ -61,9 +61,10 @@ const (
 )
 
 // pluginRowShape is a plugin version-info line after whitespace collapse:
-// "<flake>/<plugin> <version> <rev>", each a plain token. A line of any
-// other shape (prose, markup, extra words) is dropped.
-var pluginRowShape = regexp.MustCompile(`^([A-Za-z0-9._+/-]{1,64}) ([A-Za-z0-9._+~-]{1,32}) ([A-Za-z0-9._+-]{1,64})$`)
+// "<flake>/<plugin> <version> <rev>" (at most one "/" in the name), each a
+// plain token. A line of any other shape (prose, markup, extra words) is
+// dropped.
+var pluginRowShape = regexp.MustCompile(`^([A-Za-z0-9._+-]{1,64}(?:/[A-Za-z0-9._+-]{1,64})?) ([A-Za-z0-9._+~-]{1,32}) ([A-Za-z0-9._+-]{1,64})$`)
 
 // pinnedComponentsSection renders the `clown version` table's rows other
 // than clown's own (claude-code, codex, ringmaster, troupe, then the
@@ -72,8 +73,18 @@ var pluginRowShape = regexp.MustCompile(`^([A-Za-z0-9._+/-]{1,64}) ([A-Za-z0-9._
 // pin (no version) is left out, and with none pinned the section is empty.
 // It follows the sign-off sentence, which stays as it was.
 func pinnedComponentsSection() string {
+	rows := buildVersionRows()
+	// Names a plugin row may not take, so it cannot pose as clown or as a
+	// build-time component (compared case-insensitively). The build-time
+	// rows are the ones that are a bare component name, pinned or not.
+	reserved := map[string]bool{"clown": true, "claude": true}
+	for _, r := range rows {
+		if !strings.ContainsAny(r.component, " \t") {
+			reserved[strings.ToLower(r.component)] = true
+		}
+	}
 	var pinned, plugins []string
-	for _, r := range buildVersionRows() {
+	for _, r := range rows {
 		switch {
 		case r.component == "clown":
 			// The first sentence already states clown's own build.
@@ -85,7 +96,7 @@ func pinnedComponentsSection() string {
 			// A plugin's version-info line, or an unpinned component (one
 			// bare word), which the shape check drops.
 			m := pluginRowShape.FindStringSubmatch(strings.Join(strings.Fields(r.component), " "))
-			if m == nil {
+			if m == nil || reserved[strings.ToLower(m[1])] {
 				continue
 			}
 			version := m[2]
@@ -100,21 +111,29 @@ func pinnedComponentsSection() string {
 	}
 	var b strings.Builder
 	b.WriteString("\n\nComponents pinned into this build at build time (the `clown version` " +
-		"table), as component version (rev); plugin rows are self-reported by " +
-		"each plugin's plugin.json. They describe this build, not the worktree: " +
-		"the source HEAD in a git-status snapshot can differ from them.")
-	for _, l := range pinned {
-		b.WriteString("\n" + l)
-	}
-	// Room for the "N more" note, so it always fits.
+		"table), as component version (rev). They describe this build, not the " +
+		"worktree: the source HEAD in a git-status snapshot can differ from them.")
+	// fits reports whether line still fits, leaving room for the "N more"
+	// note so that always fits too. Build-time rows are bounded as well.
 	const noteRoom = 48
-	shown := 0
-	for _, l := range plugins {
-		if shown == maxPluginRows || b.Len()+1+len(l)+noteRoom > maxPinnedSectionBytes {
+	fits := func(line string) bool { return b.Len()+1+len(line)+noteRoom <= maxPinnedSectionBytes }
+	for _, l := range pinned {
+		if !fits(l) {
 			break
 		}
 		b.WriteString("\n" + l)
-		shown++
+	}
+	const pluginLabel = "Plugins (self-reported by each plugin's plugin.json, not verified):"
+	shown := 0
+	if len(plugins) > 0 && fits(pluginLabel) {
+		b.WriteString("\n" + pluginLabel)
+		for _, l := range plugins {
+			if shown == maxPluginRows || !fits(l) {
+				break
+			}
+			b.WriteString("\n" + l)
+			shown++
+		}
 	}
 	if more := len(plugins) - shown; more > 0 {
 		fmt.Fprintf(&b, "\n- (%d more plugin rows not shown)", more)
