@@ -769,6 +769,58 @@ verify-plugin-agents: build
     done
     exit $failed
 
+# Answers the moxy questions in docs/plans/2026-10-26-confined-moxy-sequencing.md
+# by running the installed moxy against a throwaway fake `issue-filer` moxin
+# (two tools, file and peek) and a throwaway HOME and moxyfile; nothing outside
+# a temp dir is read or written. E1: does `moxy serve-moxin` find a MOXIN_PATH
+# moxin, or only builtin ones? E2: does `moxy serve-mcp` with allow-tools expose
+# only the named moxin, or only one tool of it, and refuse the rest?
+#
+# probe moxy serve-moxin and serve-mcp allow-tools against a fake MOXIN_PATH moxin
+[group("explore")]
+explore-moxy-moxin-allow:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    moxy="$(command -v moxy)" || { echo "no moxy on PATH" >&2; exit 2; }
+    echo "moxy: $moxy ($("$moxy" version 2>&1 | head -n 1))"
+    d="$(mktemp -d)"
+    trap 'rm -rf "$d"' EXIT
+    mkdir -p "$d/moxins/issue-filer" "$d/home/.config/moxy" "$d/work"
+    printf 'schema = 1\nname = "issue-filer"\ndescription = "fake"\n' > "$d/moxins/issue-filer/_moxin.toml"
+    for t in file peek; do
+        printf 'schema = 1\ndescription = "fake %s"\ncommand = "sh"\nargs = ["-c", "echo %s-ran", "_"]\n\n[input]\ntype = "object"\n' "$t" "$t" > "$d/moxins/issue-filer/$t.toml"
+    done
+    # One MCP session over stdio: initialize, tools/list, then the calls given.
+    session() {
+        printf '%s\n' \
+            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"probe","version":"0"}}}' \
+            '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+            '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' "$@"
+        sleep 3
+    }
+    names() { grep -o '"name":"[^"]*"' | grep -v '"name":"probe"' | sort -u | tr '\n' ' '; echo; }
+    moxy_in() { (cd "$d/work" && env HOME="$d/home" XDG_CONFIG_HOME="$d/home/.config" "$@"); }
+    echo "=== E1a control: serve-moxin --name man (a builtin moxin)"
+    session | moxy_in env -u MOXIN_PATH timeout 10 "$moxy" serve-moxin --name man 2>"$d/e1a.err" | names
+    echo "exit=${PIPESTATUS[1]} stderr: $(head -c 300 "$d/e1a.err")"
+    echo "=== E1b: serve-moxin --name issue-filer with MOXIN_PATH naming the fake moxin"
+    session | moxy_in env MOXIN_PATH="$d/moxins" timeout 10 "$moxy" serve-moxin --name issue-filer 2>"$d/e1b.err" | names
+    echo "stderr: $(head -c 300 "$d/e1b.err")"
+    for allow in '["issue-filer"]' '["issue-filer.file"]'; do
+        printf 'allow-tools = %s\n' "$allow" > "$d/home/.config/moxy/moxyfile"
+        echo "=== E2: serve-mcp, MOXIN_PATH=fake, moxyfile allow-tools = $allow"
+        session \
+            '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"issue-filer.file","arguments":{}}}' \
+            '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"issue-filer.peek","arguments":{}}}' \
+            '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"man.toc","arguments":{"page":"ls"}}}' \
+            | moxy_in env MOXIN_PATH="$d/moxins" timeout 15 "$moxy" serve-mcp 2>"$d/e2.err" >"$d/e2.out"
+        echo "tools listed: $(sed -n 's/.*"id":2.*/&/p' "$d/e2.out" | names)"
+        for id in 3 4 5; do
+            echo "call id=$id: $(grep "\"id\":$id" "$d/e2.out" | head -c 260)"
+        done
+        echo "stderr: $(head -c 300 "$d/e2.err")"
+    done
+
 # Probe the plugin.json "agents" field schema by trying different formats
 # and reporting which ones pass validation. Requires a built clown.
 #

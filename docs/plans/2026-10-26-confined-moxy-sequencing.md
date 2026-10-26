@@ -39,12 +39,10 @@ through moxy; the call must not put the Cloudflare tunnel token (a file under
   a profile may keep any other server. The reason it forbids moxy even with
   per-tool exclusions is that exclusions are policy, not a boundary (the unit
   can reach `/clown/exclude-tools` on the serve socket: clown#301, open).
-- **`moxy serve-moxin --name N` (R, man page) serves one moxin standalone, but
-  looks the name up in the *builtin system* moxins.** issue-filer is a
-  workstation moxin on `MOXIN_PATH`, so whether `serve-moxin` finds it is
-  unverified (I: probably not). `moxy serve-mcp` with a moxyfile is the
-  documented way to expose a chosen set of moxins from `MOXIN_PATH`, and
-  `allow-tools` limits it (I: to be confirmed by a run with moxy's session).
+- **`moxy serve-moxin --name N` serves one moxin standalone.** Its man page
+  says "builtin system moxins", but the experiment below (V) shows it also finds
+  a moxin on `MOXIN_PATH`. `moxy serve-mcp` over a moxyfile with `allow-tools`
+  exposes a chosen set or single tools. See "Resolved questions".
 - **Permission under dontAsk (R/V):** a confined worker runs dontAsk, so a tool
   call must be allowed by the sweatfile's `claude.allow`. Plugin MCP tools are
   named `mcp__plugin_<plugin>_<server>__<tool>` (V: e.g.
@@ -79,9 +77,10 @@ path writes a pickup note, as today.
    Prerequisite for anything live.
 2. **clown (about a day, test-first):** a synthesized builtin plugin
    `clown-builtin-issue-filer` with one `scope: "frontend"` stdio server that
-   runs `moxy serve-mcp` over a clown-written frontend moxyfile
-   (`allow-tools = ["issue-filer"]`, everything else disabled, `MOXIN_PATH` from
-   the operator's environment), started only under `--agent-scope`, when the
+   runs `moxy serve-moxin --name issue-filer` (V: finds a `MOXIN_PATH` moxin and
+   serves only it, so no moxyfile is needed; `serve-mcp` with `allow-tools` is
+   the fallback and the way to expose one tool of a moxin), `MOXIN_PATH` from
+   the operator's environment, started only under `--agent-scope`, when the
    moxin is discoverable and the token file exists (a stat, never a read).
    Acceptance, from clown#325: a fake moxin shows the unit lists and calls the
    tool through the forward, and the token path is not readable from inside.
@@ -122,9 +121,56 @@ already on the default unit allowlist for other reasons, R `DefaultEgressAllow`)
 | Step | Owner | Size | Blocked on |
 |---|---|---|---|
 | Token provisioned on the host | operator at the card | minutes | card |
-| Confirm `serve-mcp` + `allow-tools` + `MOXIN_PATH` expose only the moxin; per-tool allow? | moxy's session | an hour | none |
-| Frontend-class `issue-filer` plugin + `worker` keep-list + tests | clown | about 1 day | the moxy answer |
+| Confirm `serve-moxin` / `serve-mcp` + `allow-tools` + `MOXIN_PATH` expose only the moxin; per-tool allow? | done by experiment, see "Resolved questions" | done | none |
+| Frontend-class `issue-filer` plugin + `worker` keep-list + tests | clown | about 1 day | the operator's go |
 | `claude.allow` entry, bind probe, spawn acceptance test | spinclass | a few hours | clown step |
 | Live confined run | operator or PTY session | an hour | all above |
-| Read-only smith frontend instance | clown + moxy | later, 1 day | per-tool allow in moxy |
+| Read-only smith frontend instance | clown | later, 1 day | nothing in moxy: per-tool allow works (V) |
 | In-unit read-only moxy tools via profile (#383, #301, relaxing the moxy rule) | spinclass + clown | days; low value | native Read/Grep/Glob already cover rg/folio_read/jq |
+
+## Resolved questions (2026-10-26, by experiment)
+
+Experiment: `just explore-moxy-moxin-allow` (a clown justfile recipe). It runs
+the installed moxy (0.6.46+bdd3a56) in a temp dir against a fake `issue-filer`
+moxin (tools `file` and `peek`, each just echoing) on a throwaway `MOXIN_PATH`,
+with a throwaway `HOME` and moxyfile. It speaks MCP over stdio. Nothing outside
+the temp dir is touched.
+
+1. **Does `moxy serve-moxin --name issue-filer` find a `MOXIN_PATH` moxin? Yes
+   (V).** With `MOXIN_PATH` naming the fake moxin it answered "serving moxin
+   issue-filer (2 tools)" and listed `file` and `peek` (bare tool names, no
+   `issue-filer.` prefix). The control, `--name man` (a builtin), served 3
+   tools. So the man page's "builtin system moxins" understates it. What was
+   not tested: circus's real nix-packaged moxin (its `_moxin.toml` and wrapper
+   layout were not built here); the fake has the documented layout only.
+2. **Does `serve-mcp` with `allow-tools = ["issue-filer"]` expose only that
+   moxin? Yes (V).** `tools/list` returned only `issue-filer.file` and
+   `issue-filer.peek`; none of moxy's meta tools, none of the builtin moxins.
+   Calls to both worked; a call to `man.toc` returned "is not in this server's
+   allow-tools list" (isError). **Per tool is possible (V):** with
+   `allow-tools = ["issue-filer.file"]` only `issue-filer.file` was listed and
+   called; `issue-filer.peek` and `man.toc` were refused the same way. Tool
+   names here are dotted (`<moxin>.<tool>`), unlike the underscored form claude
+   shows for the moxy plugin (`issue-filer_file`); my first run called the
+   underscored name and was refused, which is the dotted-name rule, not a gate
+   failure. R: the moxyfile(5) grammar says the same ("a bare name grants a
+   whole server or moxin, a dotted pair one tool"; intersection down the
+   hierarchy). Consequence: a read-only smith instance (`smith.issue-list`,
+   `smith.issue-get`) is expressible without any moxy change.
+3. **Does the frontend-forwarded stdio server need a spinclass spec change?
+   No, it is clown's list (R).** `cmd/clown/main.go:2588` sets
+   `flags.agentScopeForwards = frontendServerAddrs(host.Servers)`, which takes
+   every started server with `Scope == "frontend"` and a non-unix handshake;
+   `runInAgentScope` (agentscope.go:53) forwards those addresses (a
+   `PortForward` each) into the unit. The spec carries no per-server list: the
+   unit capability `frontend-mcp-sockets` only says the mechanism exists. So
+   clown#325's phrase "spinclass lists it in the spec" does not match the code
+   (I: spinclass may list it for its own display; nothing reads it for
+   forwarding). What spinclass still owns is the sweatfile `claude.allow` rule
+   and the bind probe, not the forward. Also R: a stdio server reaches the unit
+   through `clown-stdio-bridge` like every other `stdioServers` entry, and
+   `StdioServerDef` already carries `scope`.
+
+Recommendation updated: use `moxy serve-moxin --name issue-filer` (no moxyfile
+to get wrong, the moxin's tools only), keep `serve-mcp` with a dotted
+`allow-tools` for the read-only smith case.
