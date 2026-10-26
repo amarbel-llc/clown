@@ -478,6 +478,8 @@ func run(rawArgs []string) int {
 			return runEgressConnect(rawArgs[1:])
 		case "idle-notify":
 			return runIdleNotify(rawArgs[1:])
+		case "frontend-moxin":
+			return runFrontendMoxinCap(rawArgs[1:])
 		case "restart":
 			return runRestartVerb(rawArgs[1:], os.Stdout, os.Stderr)
 		case "agent-monitor":
@@ -1105,7 +1107,7 @@ func runWithFlags(flags parsedFlags) int {
 		}
 		if writable, err := unitWritablePaths(flags.agentScopeSpec); err != nil {
 			note("frontend moxins not served: reading the agent scope spec: %v", err)
-		} else if moxinDir, err := addFrontendMoxinPlugin(root, true, pluginDirs, writable, frontendMoxins, note); err != nil {
+		} else if moxinDir, err := addFrontendMoxinPlugin(root, true, flags.identity.Key, pluginDirs, writable, frontendMoxins, note); err != nil {
 			fmt.Fprintf(os.Stderr, "clown: serving frontend moxins: %v\n", err)
 		} else if moxinDir != "" {
 			pluginDirs = append(pluginDirs, moxinDir)

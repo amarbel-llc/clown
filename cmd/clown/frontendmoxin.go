@@ -5,6 +5,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 
 	"code.linenisgreat.com/clown/internal/agentscope"
@@ -42,6 +44,18 @@ type frontendMoxin struct {
 	// reads a secret on the moxin's behalf, and a moxin whose file is missing
 	// is not served (the tool would only answer an error).
 	Needs func() []string
+	// MaxCalls caps the session's tool calls to this moxin per hour
+	// (moxincap.go): 0 means defaultMoxinMaxCalls, a negative value no cap.
+	// The moxin takes caller-chosen text and targets, so the default is small.
+	MaxCalls int
+}
+
+// maxCalls is the effective per-hour cap, negative for none.
+func (m frontendMoxin) maxCalls() int {
+	if m.MaxCalls == 0 {
+		return defaultMoxinMaxCalls
+	}
+	return m.MaxCalls
 }
 
 // frontendMoxins is the list of moxins served frontend-side under
@@ -241,7 +255,12 @@ func planFrontendMoxins(moxins []frontendMoxin, moxinPath string, writable []str
 // Nothing secret is written: the moxin reads its own credential file in the
 // frontend. moxyBin must be absolute (the plugin dir holds no binary for the
 // bridge to resolve a relative command against).
-func synthFrontendMoxinPluginDir(root *staging.Root, moxyBin, moxinPath string, names []string) (string, error) {
+//
+// With a cap (moxincap.go) the command is `<clown> frontend-moxin --name N
+// --session S --max-calls K -- <moxy> serve-moxin --name N`: clown's own
+// executable proxies the server's stdio and refuses calls past the cap. capExe
+// and session name the proxy and the session its count belongs to.
+func synthFrontendMoxinPluginDir(root *staging.Root, moxyBin, moxinPath, capExe, session string, serve []frontendMoxin) (string, error) {
 	dir, err := root.Dir("clown-moxins-plugin-*")
 	if err != nil {
 		return "", err
@@ -258,10 +277,15 @@ func synthFrontendMoxinPluginDir(root *staging.Root, moxyBin, moxinPath string, 
 		return "", err
 	}
 	servers := map[string]any{}
-	for _, name := range names {
-		servers[name] = map[string]any{
-			"command": moxyBin,
-			"args":    []string{"serve-moxin", "--name", name},
+	for _, m := range serve {
+		command, args := moxyBin, []string{"serve-moxin", "--name", m.Name}
+		if n := m.maxCalls(); n > 0 {
+			command = capExe
+			args = append([]string{"frontend-moxin", "--name", m.Name, "--session", session, "--max-calls", strconv.Itoa(n), "--", moxyBin}, args...)
+		}
+		servers[m.Name] = map[string]any{
+			"command": command,
+			"args":    args,
 			"env":     map[string]string{"MOXIN_PATH": moxinPath},
 			// Forwarded into the agent unit; see the top of this file.
 			"scope": pluginhost.ScopeFrontend,
@@ -301,7 +325,7 @@ func unitWritablePaths(specPath string) ([]string, error) {
 // read-write binds): the frontend runs moxy and the moxin outside the unit
 // with the operator's authority, so nothing it runs or reads its moxin
 // definition from may lie under them.
-func addFrontendMoxinPlugin(root *staging.Root, confined bool, pluginDirs []string, writable []string, moxins []frontendMoxin, note func(format string, args ...any)) (string, error) {
+func addFrontendMoxinPlugin(root *staging.Root, confined bool, session string, pluginDirs []string, writable []string, moxins []frontendMoxin, note func(format string, args ...any)) (string, error) {
 	if !confined || frontendMoxinsDisabled() {
 		return "", nil
 	}
@@ -335,7 +359,29 @@ func addFrontendMoxinPlugin(root *staging.Root, confined bool, pluginDirs []stri
 	if len(serve) == 0 {
 		return "", nil
 	}
-	dir, err := synthFrontendMoxinPluginDir(root, moxyBin, moxinPath, serve)
+	// A capped moxin runs behind clown's own proxy, which needs this
+	// executable and the session its count belongs to; without them it is not
+	// served rather than served uncapped.
+	capExe := clownExePath()
+	var chosen []frontendMoxin
+	for _, m := range moxins {
+		if !slices.Contains(serve, m.Name) {
+			continue
+		}
+		if m.maxCalls() > 0 && (capExe == "" || session == "") {
+			note("frontend moxin not served: %s has a call cap and clown's executable or the session key is unknown", m.Name)
+			continue
+		}
+		chosen = append(chosen, m)
+	}
+	if len(chosen) == 0 {
+		return "", nil
+	}
+	serve = serve[:0]
+	for _, m := range chosen {
+		serve = append(serve, m.Name)
+	}
+	dir, err := synthFrontendMoxinPluginDir(root, moxyBin, moxinPath, capExe, session, chosen)
 	if err != nil {
 		return "", err
 	}

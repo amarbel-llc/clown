@@ -147,7 +147,8 @@ func TestMoxinPathLayers(t *testing.T) {
 func TestSynthFrontendMoxinPluginDir(t *testing.T) {
 	tok := tokenFile(t)
 	root := testStagingRoot(t)
-	dir, err := synthFrontendMoxinPluginDir(root, "/nix/store/m/bin/moxy", "/moxins", []string{"issue-filer", "other"})
+	dir, err := synthFrontendMoxinPluginDir(root, "/nix/store/m/bin/moxy", "/moxins", "/nix/store/c/bin/clown", "sess-1",
+		[]frontendMoxin{{Name: "issue-filer"}, {Name: "other", MaxCalls: -1}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +165,17 @@ func TestSynthFrontendMoxinPluginDir(t *testing.T) {
 		if !ok {
 			t.Fatalf("no stdio server %q in %v", m, cfg.StdioServers)
 		}
-		if s.Command != "/nix/store/m/bin/moxy" || !slices.Equal(s.Args, []string{"serve-moxin", "--name", m}) {
+		if m == "issue-filer" {
+			// Capped by default: clown's own proxy runs moxy.
+			want := []string{
+				"frontend-moxin", "--name", "issue-filer", "--session", "sess-1", "--max-calls", "10", "--",
+				"/nix/store/m/bin/moxy", "serve-moxin", "--name", "issue-filer",
+			}
+			if s.Command != "/nix/store/c/bin/clown" || !slices.Equal(s.Args, want) {
+				t.Errorf("%s runs %s %v, want the cap proxy %v", m, s.Command, s.Args, want)
+			}
+		} else if s.Command != "/nix/store/m/bin/moxy" || !slices.Equal(s.Args, []string{"serve-moxin", "--name", m}) {
+			// A negative cap means none: moxy runs directly.
 			t.Errorf("%s runs %s %v", m, s.Command, s.Args)
 		}
 		if s.Env["MOXIN_PATH"] != "/moxins" {
@@ -217,35 +228,40 @@ func TestAddFrontendMoxinPlugin(t *testing.T) {
 	root := testStagingRoot(t)
 
 	// Unconfined: nothing, quietly.
-	if dir, err := addFrontendMoxinPlugin(root, false, nil, nil, moxins, note); dir != "" || err != nil || len(notes) != 0 {
+	if dir, err := addFrontendMoxinPlugin(root, false, "sess", nil, nil, moxins, note); dir != "" || err != nil || len(notes) != 0 {
 		t.Fatalf("unconfined: %q %v %v", dir, err, notes)
 	}
 	// Confined: served, and the plugin names moxy by absolute path.
-	dir, err := addFrontendMoxinPlugin(root, true, nil, nil, moxins, note)
+	dir, err := addFrontendMoxinPlugin(root, true, "sess", nil, nil, moxins, note)
 	if err != nil || dir == "" {
 		t.Fatalf("confined: %q %v", dir, err)
 	}
 	cfg, err := pluginhost.LoadClownConfig(dir)
-	if err != nil || !filepath.IsAbs(cfg.StdioServers["issue-filer"].Command) || filepath.Base(cfg.StdioServers["issue-filer"].Command) != "moxy" {
+	if err != nil || !filepath.IsAbs(cfg.StdioServers["issue-filer"].Command) {
 		t.Fatalf("clown.json: %+v %v", cfg, err)
+	}
+	// Capped by default: clown's own proxy runs moxy, named by absolute path.
+	args := cfg.StdioServers["issue-filer"].Args
+	if args[0] != "frontend-moxin" || !slices.Contains(args, "10") || !filepath.IsAbs(args[slices.Index(args, "--")+1]) || filepath.Base(args[slices.Index(args, "--")+1]) != "moxy" {
+		t.Errorf("args %v: want the cap proxy around an absolute moxy with the default cap", args)
 	}
 	// The kill switch.
 	t.Setenv("CLOWN_DISABLE_FRONTEND_MOXINS", "1")
-	if dir, err := addFrontendMoxinPlugin(root, true, nil, nil, moxins, note); dir != "" || err != nil {
+	if dir, err := addFrontendMoxinPlugin(root, true, "sess", nil, nil, moxins, note); dir != "" || err != nil {
 		t.Errorf("disabled: %q %v", dir, err)
 	}
 	t.Setenv("CLOWN_DISABLE_FRONTEND_MOXINS", "")
 	// No moxy on PATH: skipped with a note, no error.
 	t.Setenv("PATH", t.TempDir())
 	notes = nil
-	if dir, err := addFrontendMoxinPlugin(root, true, nil, nil, moxins, note); dir != "" || err != nil || len(notes) != 1 {
+	if dir, err := addFrontendMoxinPlugin(root, true, "sess", nil, nil, moxins, note); dir != "" || err != nil || len(notes) != 1 {
 		t.Errorf("no moxy: %q %v %v", dir, err, notes)
 	}
 	// A build without the bridge cannot declare stdio servers.
 	t.Setenv("PATH", bin)
 	buildcfg.StdioBridgePath = ""
 	notes = nil
-	if dir, err := addFrontendMoxinPlugin(root, true, nil, nil, moxins, note); dir != "" || err != nil || len(notes) != 1 {
+	if dir, err := addFrontendMoxinPlugin(root, true, "sess", nil, nil, moxins, note); dir != "" || err != nil || len(notes) != 1 {
 		t.Errorf("no bridge: %q %v %v", dir, err, notes)
 	}
 }
@@ -388,7 +404,7 @@ func TestAddFrontendMoxinPluginRunsTheResolvedMoxy(t *testing.T) {
 	old := buildcfg.StdioBridgePath
 	buildcfg.StdioBridgePath = "/bridge"
 	t.Cleanup(func() { buildcfg.StdioBridgePath = old })
-	dir, err := addFrontendMoxinPlugin(testStagingRoot(t), true, nil, nil, moxins, func(string, ...any) {})
+	dir, err := addFrontendMoxinPlugin(testStagingRoot(t), true, "sess", nil, nil, moxins, func(string, ...any) {})
 	if err != nil || dir == "" {
 		t.Fatalf("%q %v", dir, err)
 	}
@@ -396,8 +412,9 @@ func TestAddFrontendMoxinPluginRunsTheResolvedMoxy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := cfg.StdioServers["issue-filer"].Command, agentscope.ResolvePath(filepath.Join(real, "moxy-real")); got != want {
-		t.Errorf("command %q, want the resolved binary %q", got, want)
+	args := cfg.StdioServers["issue-filer"].Args
+	if got, want := args[slices.Index(args, "--")+1], agentscope.ResolvePath(filepath.Join(real, "moxy-real")); got != want {
+		t.Errorf("moxy %q, want the resolved binary %q", got, want)
 	}
 }
 
@@ -440,7 +457,7 @@ func TestAddFrontendMoxinPluginKeepsOnlyTrustedPathsAndABinaryTheUnitCannotWrite
 	note := func(format string, args ...any) { notes = append(notes, format) }
 	root := testStagingRoot(t)
 
-	dir, err := addFrontendMoxinPlugin(root, true, nil, writable, moxins, note)
+	dir, err := addFrontendMoxinPlugin(root, true, "sess", nil, writable, moxins, note)
 	if err != nil || dir == "" {
 		t.Fatalf("%q %v", dir, err)
 	}
@@ -465,7 +482,7 @@ func TestAddFrontendMoxinPluginKeepsOnlyTrustedPathsAndABinaryTheUnitCannotWrite
 	}
 	t.Setenv("PATH", wbin)
 	notes = nil
-	if dir, err := addFrontendMoxinPlugin(root, true, nil, writable, moxins, note); dir != "" || err != nil || len(notes) != 1 {
+	if dir, err := addFrontendMoxinPlugin(root, true, "sess", nil, writable, moxins, note); dir != "" || err != nil || len(notes) != 1 {
 		t.Errorf("moxy in the worktree: %q %v %v", dir, err, notes)
 	}
 }
