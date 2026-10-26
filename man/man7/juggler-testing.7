@@ -115,10 +115,15 @@ and useful as a first failure signal when a flake bump moves the
 binary.
 .El
 .Pp
-Both layer-4 tests skip when
-.Sy buildcfg.LlamaServerPath
-is empty
-.Pq dev builds via Cm go build No / Cm go run \(em the nix derivation is the only thing that burns this in .
+Both layer-4 tests run in the nix test lane, which burns the real
+llama-server into cmd/juggler's test binary
+.Pq Sy testLdflagsX No in flake.nix, clown#311 .
+They skip when
+.Sy LlamaServerPath
+is empty outside the lane
+.Pq a plain Cm go test No or Cm go run ,
+fail when it is empty inside it, and skip in the darwin nix sandbox, where
+Metal initialisation hangs (clown#106).
 .Pp
 Wall time: 0.3\(en0.5 s each in the nix sandbox.
 Catches:

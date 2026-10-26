@@ -34,9 +34,9 @@ import (
 // `go run` — the nix derivation is the only thing that injects this).
 func TestLlamaServerHelp(t *testing.T) {
 	if LlamaServerPath == "" {
-		// Not a lane test, as TestLauncher_RealLlamaServerNoModel: the real
-		// smoke is `just verify-juggler`; clown#311 tracks the lane gap.
-		skipAllowed(t, "real-binary smoke, not a lane test: LlamaServerPath is empty (see just verify-juggler, clown#311)")
+		// As TestLauncher_RealLlamaServerNoModel: the nix test lane burns the
+		// real llama-server in (clown#311).
+		skipOrFail(t, "LlamaServerPath is empty: no real llama-server burned into this test binary")
 	}
 	// Metal shader compilation hangs for 20s+ in the nix sandbox on pre-M5
 	// hardware. See https://code.linenisgreat.com/clown/issues/106. Metal is

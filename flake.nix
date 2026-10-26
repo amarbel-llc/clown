@@ -1133,6 +1133,15 @@
                 CLOWN_TEST_FAKESERVER = "${fakeserver-go}/bin/fakeserver";
                 CLOWN_TEST_FAKE_LLAMA_SERVER = "${fake-llama-server-go}/bin/fake-llama-server";
               };
+              # The real llama-server, burned into cmd/juggler's test binary the
+              # way the juggler build burns it, for its two real-binary tests
+              # (clown#311). Unlike a testEnv entry, only the binary that has
+              # the symbol references llama-cpp, so no other package's run
+              # gains it as an input. Every test link sees the flag, but
+              # links are cheap.
+              testLdflagsX = {
+                "code.linenisgreat.com/clown/cmd/juggler.LlamaServerPath" = llamaServerPath;
+              };
               # The prompt sources for the fragment-content tests
               # (cmd/clown/builtinfragments_test.go), placed at their
               # module-relative paths in cmd/clown's run tree only, so an edit
