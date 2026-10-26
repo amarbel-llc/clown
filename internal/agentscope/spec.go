@@ -49,6 +49,12 @@ func LoadSpec(path string) (Spec, error) {
 	if err != nil {
 		return Spec{}, fmt.Errorf("agent scope spec: %w", err)
 	}
+	return ParseSpec(path, raw)
+}
+
+// ParseSpec is LoadSpec over bytes already read from path, so a caller can
+// hash exactly the bytes it validated.
+func ParseSpec(path string, raw []byte) (Spec, error) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	var s Spec
@@ -82,6 +88,14 @@ func (s Spec) Validate() error {
 			if s.ResultPath == rw || strings.HasPrefix(s.ResultPath, rw+"/") {
 				return fmt.Errorf("result_path %q is writable from inside the unit (under %q)", s.ResultPath, rw)
 			}
+		}
+	}
+	// clown's state holds the confinement records (clown#318); a unit that
+	// could write it could rewrite its own session's record.
+	clownState := filepath.Join(OperatorXDG(os.Environ(), s.OperatorHome, "XDG_STATE_HOME"), "clown")
+	for _, p := range append([]string{s.Worktree}, s.BindsRW...) {
+		if exposesWhole(p, clownState) || within(p, clownState) {
+			return fmt.Errorf("worktree or binds_rw entry %q makes clown's state %q writable from inside the unit", p, clownState)
 		}
 	}
 	exposed := map[string][]string{

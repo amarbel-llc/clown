@@ -65,6 +65,36 @@ func TestValidateRefusesUnbindablePathsAndScrubbedEnv(t *testing.T) {
 	}
 }
 
+// The unit must not be able to write clown's state, where the confinement
+// records live (clown#318): a worktree or binds_rw entry covering or inside
+// $XDG_STATE_HOME/clown is refused.
+func TestValidateRefusesWritableClownState(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", "")
+	for _, bad := range []string{"/home/op/.local/state/clown", "/home/op/.local/state", "/home/op/.local/state/clown/session-names.jsonl"} {
+		s := validSpec()
+		s.BindsRW = []string{bad}
+		if err := s.Validate(); err == nil {
+			t.Errorf("binds_rw %q: want refusal", bad)
+		}
+	}
+	s := validSpec()
+	s.Worktree = "/home/op/.local/state/clown/wt"
+	if err := s.Validate(); err == nil {
+		t.Error("worktree inside clown's state: want refusal")
+	}
+	t.Setenv("XDG_STATE_HOME", "/srv/state")
+	s = validSpec()
+	s.BindsRW = []string{"/srv/state/clown"}
+	if err := s.Validate(); err == nil {
+		t.Error("binds_rw over a relocated XDG_STATE_HOME/clown: want refusal")
+	}
+	s = validSpec()
+	s.BindsRW = []string{"/home/op/.local/state/other"}
+	if err := s.Validate(); err != nil {
+		t.Errorf("an unrelated state dir: %v", err)
+	}
+}
+
 func TestLoadSpecRefusesUnknownFields(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "spec.json")
 	raw, _ := json.Marshal(map[string]any{"version": 1, "worktree": "/w", "operator_home": "/home/op", "network": "host"})

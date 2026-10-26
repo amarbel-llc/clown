@@ -1,10 +1,13 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -39,14 +42,19 @@ func runConfinementGate(flags *parsedFlags, w io.Writer) error {
 		}
 		flags.agentScopeSpec = canon
 	}
-	spec, found, err := agentScopeForLaunch(launchScopeIDs(*flags), flags.agentScopeSpec, sessions.AgentScopeOf, func(path string) error {
-		_, err := agentscope.LoadSpec(path)
-		return err
-	})
+	spec, found, err := agentScopeForLaunch(launchScopeIDs(*flags), flags.agentScopeSpec, sessions.AgentScopeRecordOf, loadScopeSpec)
 	if err != nil {
 		return err
 	}
 	flags.agentScopeSpec = spec
+	var digest string
+	if spec != "" {
+		// Recorded or given, the spec this launch runs under: loaded once more
+		// for the digest to record (agentScopeForLaunch loaded a recorded one).
+		if digest, err = loadScopeSpec(spec); err != nil {
+			return err
+		}
+	}
 	confined := found || spec != ""
 	switch {
 	case found && (flags.naked || flags.tent || flags.provider != "claude"):
@@ -70,7 +78,9 @@ func runConfinementGate(flags *parsedFlags, w io.Writer) error {
 		if id := confinedConversationID(*flags); id != "" && !slices.Contains(ids, id) {
 			ids = append(ids, id)
 		}
-		build := func(id string) sessions.NameRecord { return sessions.NameRecord{SessionID: id, AgentScope: spec} }
+		build := func(id string) sessions.NameRecord {
+			return sessions.NameRecord{SessionID: id, AgentScope: spec, AgentScopeDigest: digest}
+		}
 		if err := recordLaunchSessions(ids, true, build, sessions.RecordSession, w); err != nil {
 			return err
 		}
@@ -162,37 +172,72 @@ func launchScopeIDs(flags parsedFlags) []string {
 // found reports that some id carries a confinement record. Refused, never
 // run unconfined: a record that cannot be read, ids recorded under
 // different specs, a recorded path that is not absolute, a recorded spec
-// that no longer loads, and a different spec asked for. A recorded
-// session's spec cannot be changed by a later launch; a new spec means a
-// new session. No record: the spec asked for, which may be empty.
-func agentScopeForLaunch(ids []string, given string, recorded func(string) (string, bool, error), load func(string) error) (spec string, found bool, err error) {
+// that no longer loads, a spec whose bytes changed since the last confined
+// launch recorded their digest, and a different spec asked for. A recorded
+// session's spec cannot be changed by a later launch, in path or in
+// content; a new spec means a new session. No record: the spec asked for,
+// which may be empty. load returns the digest of the spec bytes it
+// validated.
+func agentScopeForLaunch(ids []string, given string, recorded func(string) (sessions.AgentScopeRecord, bool, error), load func(string) (string, error)) (spec string, found bool, err error) {
 	var from string
+	var rec sessions.AgentScopeRecord
 	for _, id := range ids {
-		s, ok, err := recorded(id)
+		r, ok, err := recorded(id)
 		if err != nil {
 			return "", false, fmt.Errorf("reading whether session %s ran confined: %w; refusing to launch", id, err)
 		}
 		if !ok {
 			continue
 		}
-		if found && s != spec {
-			return "", false, fmt.Errorf("sessions %s and %s of this launch ran confined under different agent-scope specs (%s, %s); refusing to launch", from, id, spec, s)
+		if found && r != rec {
+			return "", false, fmt.Errorf("sessions %s and %s of this launch ran confined under different agent-scope specs (%s, %s); refusing to launch", from, id, rec.Spec, r.Spec)
 		}
-		spec, from, found = s, id, true
+		rec, from, found = r, id, true
 	}
 	if !found {
 		return given, false, nil
 	}
+	spec = rec.Spec
 	if !filepath.IsAbs(spec) {
 		return "", false, fmt.Errorf("session %s ran confined under agent-scope spec %q, which is not absolute; refusing to launch", from, spec)
 	}
 	if given != "" && given != spec {
 		return "", false, fmt.Errorf("session %s ran confined under agent-scope spec %s; refusing to run it under %s (a session's spec cannot be changed; start a new session for a new spec)", from, spec, given)
 	}
-	if err := load(spec); err != nil {
+	digest, err := load(spec)
+	if err != nil {
 		return "", false, fmt.Errorf("session %s ran confined under agent-scope spec %s, which no longer loads (%v); refusing to run it unconfined", from, spec, err)
 	}
+	if rec.Digest != "" && digest != rec.Digest {
+		return "", false, fmt.Errorf("session %s ran confined under agent-scope spec %s, which has changed since its last confined launch (sha256 %s, now %s); refusing (a changed spec means a new session)", from, spec, rec.Digest, digest)
+	}
 	return spec, true, nil
+}
+
+// loadScopeSpec loads a session launch's spec and returns the sha256 of the
+// bytes it validated. A spec file the unit itself could rewrite, inside the
+// spec's own worktree or a binds_rw entry, is refused: its next launch would
+// honour whatever the agent wrote (clown#318). `clown agent-scope-run`
+// does not come through here.
+func loadScopeSpec(path string) (string, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("agent scope spec: %w", err)
+	}
+	s, err := agentscope.ParseSpec(path, raw)
+	if err != nil {
+		return "", err
+	}
+	for _, rw := range append([]string{s.Worktree}, s.BindsRW...) {
+		if resolved, err := filepath.EvalSymlinks(rw); err == nil {
+			rw = resolved // path is symlink-resolved (canonicalSpecPath)
+		}
+		if path == rw || strings.HasPrefix(path, rw+"/") {
+			return "", fmt.Errorf("agent scope spec %s is writable from inside its unit (under %s); refusing", path, rw)
+		}
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 // canonicalSpecPath is the form a spec path is recorded and compared in:

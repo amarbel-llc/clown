@@ -13,30 +13,36 @@ import (
 	"code.linenisgreat.com/clown/internal/sessions"
 )
 
-// recordsOf is a fake AgentScopeOf over a fixed id -> spec map.
-func recordsOf(m map[string]string) func(string) (string, bool, error) {
-	return func(id string) (string, bool, error) {
+// recordsOf is a fake AgentScopeRecordOf over a fixed id -> spec map, with
+// no digests recorded.
+func recordsOf(m map[string]string) func(string) (sessions.AgentScopeRecord, bool, error) {
+	return func(id string) (sessions.AgentScopeRecord, bool, error) {
 		s, ok := m[id]
-		return s, ok, nil
+		return sessions.AgentScopeRecord{Spec: s}, ok, nil
 	}
 }
 
-func loadsAll(string) error { return nil }
+func loadsAll(string) (string, error) { return "d0", nil }
 
 // The agent-scope spec any launch of a session runs under (clown#318): a
 // session recorded as confined runs confined under its recorded spec, or
 // not at all.
 func TestAgentScopeForLaunch(t *testing.T) {
 	const id = "11111111-2222-3333-4444-555555555555"
-	gone := func(path string) error {
-		return errors.New("agent scope spec: open " + path + ": no such file or directory")
+	gone := func(path string) (string, error) {
+		return "", errors.New("agent scope spec: open " + path + ": no such file or directory")
+	}
+	withDigest := func(spec, digest string) func(string) (sessions.AgentScopeRecord, bool, error) {
+		return func(string) (sessions.AgentScopeRecord, bool, error) {
+			return sessions.AgentScopeRecord{Spec: spec, Digest: digest}, true, nil
+		}
 	}
 	cases := []struct {
 		name      string
 		ids       []string
 		given     string
-		recorded  func(string) (string, bool, error)
-		load      func(string) error
+		recorded  func(string) (sessions.AgentScopeRecord, bool, error)
+		load      func(string) (string, error)
 		want      string
 		wantFound bool
 		wantErr   string
@@ -51,7 +57,11 @@ func TestAgentScopeForLaunch(t *testing.T) {
 		{name: "two ids recorded under different specs: refused", ids: []string{"a", "b"}, recorded: recordsOf(map[string]string{"a": "/s/1.json", "b": "/s/2.json"}), load: loadsAll, wantErr: "/s/2.json"},
 		{name: "recorded, spec gone: refused", ids: []string{id}, recorded: recordsOf(map[string]string{id: "/s/spec.json"}), load: gone, wantErr: "refusing to run it unconfined"},
 		{name: "recorded relative path: refused", ids: []string{id}, recorded: recordsOf(map[string]string{id: "spec.json"}), load: loadsAll, wantErr: "not absolute"},
-		{name: "record unreadable: refused", ids: []string{id}, recorded: func(string) (string, bool, error) { return "", false, errors.New("torn record") }, load: loadsAll, wantErr: "torn record"},
+		{name: "record unreadable: refused", ids: []string{id}, recorded: func(string) (sessions.AgentScopeRecord, bool, error) {
+			return sessions.AgentScopeRecord{}, false, errors.New("torn record")
+		}, load: loadsAll, wantErr: "torn record"},
+		{name: "same digest: re-applied", ids: []string{id}, recorded: withDigest("/s/spec.json", "d0"), load: loadsAll, want: "/s/spec.json", wantFound: true},
+		{name: "digest changed: refused", ids: []string{id}, recorded: withDigest("/s/spec.json", "d1"), load: loadsAll, wantErr: "changed"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -313,6 +323,53 @@ func TestConfinementGateRecordsAConfinedLaunch(t *testing.T) {
 	later := parsedFlags{provider: "claude", forwarded: []string{"--resume", otherID}, resumeHintID: otherID}
 	if err := runConfinementGate(&later, io.Discard); err != nil || later.agentScopeSpec != flags.agentScopeSpec {
 		t.Errorf("later launch: err %v, spec %q; want the recorded spec", err, later.agentScopeSpec)
+	}
+}
+
+// The record carries the spec's digest, and a later launch whose spec bytes
+// differ from the last launch's is refused: a changed spec means a new
+// session (clown#318).
+func TestConfinementGateRefusesAChangedSpec(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	spec := validSpec(t)
+	first := parsedFlags{provider: "claude", forwarded: []string{"--session-id", otherID}, resumeHintID: otherID, agentScopeSpec: spec}
+	if err := runConfinementGate(&first, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	rec, ok, err := sessions.AgentScopeRecordOf(otherID)
+	if err != nil || !ok || rec.Digest == "" {
+		t.Fatalf("record %+v, %v, %v; want one carrying a digest", rec, ok, err)
+	}
+	raw, err := os.ReadFile(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := strings.Replace(string(raw), `{"version":1`, `{"version":1,"binds_ro":["/nix/store"]`, 1)
+	if err := os.WriteFile(spec, []byte(changed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	later := parsedFlags{provider: "claude", forwarded: []string{"--resume", otherID}, resumeHintID: otherID}
+	if err := runConfinementGate(&later, io.Discard); err == nil || !strings.Contains(err.Error(), "changed") {
+		t.Fatalf("later launch with a changed spec: err %v; want a refusal", err)
+	}
+}
+
+// A spec the unit itself could rewrite (inside its worktree or a binds_rw
+// entry) is refused for a session launch.
+func TestConfinementGateRefusesAWritableSpec(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	dir := t.TempDir()
+	spec := filepath.Join(dir, "wt", "spec.json")
+	if err := os.MkdirAll(filepath.Dir(spec), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"version":1,"worktree":"` + filepath.Join(dir, "wt") + `","operator_home":"` + filepath.Join(dir, "home") + `"}`
+	if err := os.WriteFile(spec, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	flags := parsedFlags{provider: "claude", forwarded: []string{"--session-id", otherID}, resumeHintID: otherID, agentScopeSpec: spec}
+	if err := runConfinementGate(&flags, io.Discard); err == nil || !strings.Contains(err.Error(), "writable") {
+		t.Fatalf("spec inside its own worktree: err %v; want a refusal", err)
 	}
 }
 

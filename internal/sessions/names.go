@@ -56,7 +56,35 @@ type NameRecord struct {
 	ProfileForm        json.RawMessage `json:"profile_form,omitempty"`
 	ProfileFormOmitted string          `json:"profile_form_omitted,omitempty"`
 	AgentScope         string          `json:"agent_scope,omitempty"`
+	AgentScopeDigest   string          `json:"agent_scope_digest,omitempty"`
 	TS                 time.Time       `json:"ts"`
+}
+
+// AgentScopeRecord is a session's confinement record: the spec path and the
+// sha256 of the spec bytes its last confined launch ran under.
+type AgentScopeRecord struct {
+	Spec, Digest string
+}
+
+// AgentScopeRecordOf is AgentScopeOf with the digest recorded beside the
+// spec: both from the LAST record for id that carries a spec.
+func AgentScopeRecordOf(id string) (rec AgentScopeRecord, ok bool, err error) {
+	err = scanRecords(func(line string, r *NameRecord) error {
+		if r == nil {
+			if strings.Contains(line, `"agent_scope`) && strings.Contains(line, id) {
+				return fmt.Errorf("session-names sidecar holds an unparseable agent-scope record for session %s: %.200s", id, line)
+			}
+			return nil
+		}
+		if r.SessionID == id && r.AgentScope != "" {
+			rec, ok = AgentScopeRecord{Spec: r.AgentScope, Digest: r.AgentScopeDigest}, true
+		}
+		return nil
+	})
+	if err != nil {
+		return AgentScopeRecord{}, false, err
+	}
+	return rec, ok, nil
 }
 
 // AnyAgentScope reports whether any session at all is recorded as confined.
@@ -97,22 +125,8 @@ func AnyAgentScope() (bool, error) {
 // not see (only hook-toolcost and hook-tee below it are bound in), so a
 // confined agent cannot rewrite its own record.
 func AgentScopeOf(id string) (spec string, ok bool, err error) {
-	err = scanRecords(func(line string, rec *NameRecord) error {
-		if rec == nil {
-			if strings.Contains(line, `"agent_scope`) && strings.Contains(line, id) {
-				return fmt.Errorf("session-names sidecar holds an unparseable agent-scope record for session %s: %.200s", id, line)
-			}
-			return nil
-		}
-		if rec.SessionID == id && rec.AgentScope != "" {
-			spec, ok = rec.AgentScope, true
-		}
-		return nil
-	})
-	if err != nil {
-		return "", false, err
-	}
-	return spec, ok, nil
+	rec, ok, err := AgentScopeRecordOf(id)
+	return rec.Spec, ok, err
 }
 
 // MaxProfileFormBytes caps a stored ProfileForm. A larger form is not

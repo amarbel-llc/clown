@@ -156,8 +156,14 @@ even without
 .Fl -agent-scope ,
 or is refused: when the
 .Ar spec
-is gone or no longer loads, when a different one is given (a session's
-spec cannot be changed; a new spec means a new session), and under
+is gone or no longer loads, when its bytes differ from those its last
+confined launch recorded (by sha256), when a different one is given (a
+session's spec cannot be changed, in path or content; a new spec means a
+new session), when the
+.Ar spec
+file lies inside its own worktree or a
+.Sy binds_rw
+entry (the unit could rewrite it), and under
 .Fl -naked
 or
 .Fl -tent .

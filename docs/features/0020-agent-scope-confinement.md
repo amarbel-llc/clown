@@ -576,7 +576,11 @@ Built (`internal/agentscope`, `cmd/clown/agentscope.go`):
   same launcher. It is a raw runner, not a session launcher: it neither checks
   nor writes the confinement record (clown#318), so a claude conversation it
   starts is unrecorded and a later `clown resume` of it runs unconfined.
-  Confined sessions it starts are outside #318. `just verify-agent-scope` (bats tag `agent_scope`, host-only)
+  Confined sessions it starts are outside #318. A session launch records the
+  spec's sha256 and refuses a later launch whose spec bytes differ, refuses a
+  spec file inside the spec's own worktree or `binds_rw`, and `Validate`
+  refuses a worktree or `binds_rw` entry covering or inside
+  `$XDG_STATE_HOME/clown`, where the records live. `just verify-agent-scope` (bats tag `agent_scope`, host-only)
   uses it to check, against real units: home, bus, display, posh, ptys and
   other pids unreachable from inside; the result's unit and cgroup; the
   frontend and piggy-agent outside the cgroup; the unit gone after exit; the
