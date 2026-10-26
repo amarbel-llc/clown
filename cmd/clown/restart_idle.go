@@ -269,6 +269,12 @@ func (r *idleRunner) onIdle() {
 	if restartUnderway() {
 		return
 	}
+	// A turn that started while this transition waited for the close or for
+	// mu is not idle: leave the request queued for that turn's Stop, which
+	// clears the flag before it wakes onIdle.
+	if r.busy != nil && r.busy() {
+		return
+	}
 	// A `now` accepted while this poke waited for mu runs its own
 	// preflight once this poke is done; leave the queue to it.
 	if !r.inFlight.CompareAndSwap(false, true) {
