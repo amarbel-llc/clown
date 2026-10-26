@@ -150,6 +150,9 @@ func prepareAgentScope(specPath, specDigest, unit string, argv, extraEnv []strin
 		PlumbingRO:     plumbing.ro,
 		Shim:           []string{clownExePath(), "agent-exec"},
 		Argv:           argv,
+		// Read here, in the frontend that launches the unit: the marker
+		// (or its [attach] carrier) never enters the unit (clown#320).
+		Unattended: unattendedValue() == "1",
 	}
 	return launch, nil
 }

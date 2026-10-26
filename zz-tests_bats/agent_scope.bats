@@ -371,6 +371,48 @@ run_probe() {
   [ "$zombies" -eq 0 ]
 }
 
+# unit_props <marker> starts a 4s unit (with CLOWN_UNATTENDED=<marker> in the
+# launcher's environment) and prints its cgroup limits and unit properties as
+# the manager reports them while it runs (clown#320).
+unit_props() {
+  # A result left by an earlier unit would name its (gone) cgroup.
+  rm -f "$RESULT"
+  CLOWN_UNATTENDED="$1" run_in_unit 'exec sleep 4' >/dev/null 2>&1 &
+  local launcher=$! cg="" unit=""
+  for _ in $(seq 100); do
+    cg="$(jq -r '.cgroup // empty' "$RESULT" 2>/dev/null || true)"
+    [[ -n $cg ]] && break
+    sleep 0.1
+  done
+  [[ -n $cg ]] || return 1
+  unit="$(jq -r .unit "$RESULT")"
+  for f in memory.high memory.max memory.swap.max pids.max cpu.max io.weight; do
+    echo "$f=$(cat "/sys/fs/cgroup$cg/$f" 2>/dev/null | head -n1)"
+  done
+  systemctl --user show -p RuntimeMaxUSec -p OOMPolicy -p Restart -p TasksMax -p CPUQuotaPerSecUSec "$unit"
+  wait "$launcher"
+}
+
+@test "agent_scope: every unit carries the resource limits; only an unattended one the wall clock" {
+  run unit_props ""
+  echo "$output"
+  [ "$status" -eq 0 ]
+  grep -qx 'memory.high=6442450944' <<<"$output"
+  grep -qx 'memory.max=8589934592' <<<"$output"
+  grep -qx 'memory.swap.max=2147483648' <<<"$output"
+  grep -qx 'pids.max=4096' <<<"$output"
+  grep -qx 'cpu.max=400000 100000' <<<"$output"
+  grep -qx 'OOMPolicy=stop' <<<"$output"
+  grep -qx 'Restart=no' <<<"$output"
+  grep -qx 'CPUQuotaPerSecUSec=4s' <<<"$output"
+  grep -qx 'RuntimeMaxUSec=infinity' <<<"$output"
+  run unit_props 1
+  echo "$output"
+  [ "$status" -eq 0 ]
+  grep -qx 'memory.max=8589934592' <<<"$output"
+  grep -qx 'RuntimeMaxUSec=1w' <<<"$output"
+}
+
 @test "agent_scope: a provider that exits records its exit code, with no error" {
   run run_in_unit 'sleep 1; exit 3'
   [ "$status" -eq 3 ]
