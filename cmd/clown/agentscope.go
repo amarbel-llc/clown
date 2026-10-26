@@ -626,22 +626,37 @@ func runAsInit(path string, args []string, frontendGone <-chan struct{}) int {
 	return superviseProvider(proc, sigs, term.IsTerminal(0), frontendGone, agentscope.DeadManGrace, signalAll)
 }
 
+// reapExited reaps one exited child without blocking: its pid and status,
+// ok false when none is waiting. A variable so a test can model a provider
+// that is never reaped.
+var reapExited = func() (int, syscall.WaitStatus, bool) {
+	var ws syscall.WaitStatus
+	pid, err := syscall.Wait4(-1, &ws, syscall.WNOHANG, nil)
+	return pid, ws, err == nil && pid > 0
+}
+
+// deadManKillWait bounds how long the shim waits after its SIGKILL for the
+// provider to be reaped. A process in uninterruptible sleep can outlive a
+// SIGKILL for a while; the shim then returns anyway, and its exit as the
+// namespace's init kills whatever is left (clown#319).
+var deadManKillWait = 5 * time.Second
+
 // superviseProvider is the init loop: it reaps every exited process, passes
 // signals on to the provider, and returns the provider's exit status. When
 // gone closes (the frontend died, clown#319) it sends SIGTERM to everything
 // via signalAll and, if the provider has not exited after grace, SIGKILL;
 // once the provider is reaped it SIGKILLs whatever is left and returns, so
-// the unit ends and --collect removes it. A nil gone never fires: no change
-// while the frontend lives.
+// the unit ends and --collect removes it. If the provider is still not
+// reaped deadManKillWait after the SIGKILL, it returns anyway (137). A nil
+// gone never fires: no change while the frontend lives.
 func superviseProvider(proc *os.Process, sigs <-chan os.Signal, onTerminal bool, gone <-chan struct{}, grace time.Duration, signalAll func(syscall.Signal)) int {
-	var deadline <-chan time.Time
+	var deadline, giveUp <-chan time.Time
 	stopping := false
 	for {
 		// Reap everything that has exited; only the provider's status counts.
 		for {
-			var ws syscall.WaitStatus
-			pid, err := syscall.Wait4(-1, &ws, syscall.WNOHANG, nil)
-			if err != nil || pid <= 0 {
+			pid, ws, ok := reapExited()
+			if !ok {
 				break
 			}
 			if pid == proc.Pid {
@@ -672,6 +687,10 @@ func superviseProvider(proc *os.Process, sigs <-chan os.Signal, onTerminal bool,
 		case <-deadline:
 			deadline = nil
 			signalAll(syscall.SIGKILL)
+			giveUp = time.After(deadManKillWait)
+		case <-giveUp:
+			fmt.Fprintf(os.Stderr, "clown agent-exec: the provider was not reaped %v after SIGKILL; exiting, which ends the unit\n", deadManKillWait)
+			return 128 + int(syscall.SIGKILL)
 		}
 	}
 }

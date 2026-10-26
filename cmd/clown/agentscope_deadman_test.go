@@ -59,6 +59,40 @@ func TestFrontendDeathKillsAProviderThatIgnoresSIGTERM(t *testing.T) {
 	}
 }
 
+// A provider that cannot be reaped even after SIGKILL (uninterruptible sleep)
+// does not keep the unit: the shim returns a bounded time after the SIGKILL,
+// and its exit as init tears the namespace down.
+func TestFrontendDeathEndsTheShimEvenIfTheProviderIsNeverReaped(t *testing.T) {
+	proc, sigs := startFake(t, "sleep", "30")
+	origReap, origWait := reapExited, deadManKillWait
+	reapExited = func() (int, syscall.WaitStatus, bool) { return 0, 0, false }
+	deadManKillWait = 300 * time.Millisecond
+	t.Cleanup(func() { reapExited, deadManKillWait = origReap, origWait })
+	var sent []syscall.Signal
+	gone := make(chan struct{})
+	close(gone)
+	start := time.Now()
+	code := superviseProvider(proc, sigs, false, gone, 200*time.Millisecond, func(s syscall.Signal) { sent = append(sent, s) })
+	took := time.Since(start)
+	if code != 128+int(syscall.SIGKILL) || took > 3*time.Second {
+		t.Fatalf("code %d after %v; want 137 shortly after grace + kill wait", code, took)
+	}
+	if len(sent) < 2 || sent[0] != syscall.SIGTERM || sent[1] != syscall.SIGKILL {
+		t.Fatalf("signals %v; want SIGTERM then SIGKILL", sent)
+	}
+}
+
+// The shim refuses --deadman when it is not the unit's init: it could not
+// stop the unit.
+func TestAgentExecRefusesTheDeadManOutsideInit(t *testing.T) {
+	if os.Getpid() == 1 {
+		t.Skip("running as pid 1")
+	}
+	if code := runAgentExec([]string{"--deadman", "/nonexistent.sock", "--", "true"}); code != 126 {
+		t.Fatalf("runAgentExec = %d; want the refusal 126", code)
+	}
+}
+
 // While the frontend lives nothing changes: the provider runs to its own end.
 func TestALivingFrontendLeavesTheProviderAlone(t *testing.T) {
 	proc, sigs := startFake(t, "sleep", "1")
