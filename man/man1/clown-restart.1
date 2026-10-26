@@ -344,6 +344,20 @@ line on standard error, records it in
 (the durable record), and exits 0; nothing is revoked.
 Anything else, including an unknown or timed-out peek, starts the session.
 .Pp
+Once the relaunched provider has started, the frontend tells the session itself
+that it was restarted (clown#329), once: a ringmaster job on the session's own
+channel, started and finished at once, that its wake monitor reports as one
+notification line.
+It says when, the reason (which carries who asked), the previous and the new
+provider pid, and how long the restart took.
+The previous pid and the start time travel in the relaunch's environment; a
+launch that was not a restart's relaunch sends nothing.
+A failure to write it is logged in
+.Pa close-self-run.log
+and counted as
+.Li clown.restart.wake.failed ;
+it never stops the launch.
+.Pp
 A restart is not a close: nothing on the restart path revokes or releases the
 session's identity.
 The frontend never runs
@@ -385,7 +399,12 @@ Root of the control and serve sockets.
 Set by a restarting frontend for the relaunched one, which reads and unsets it
 before starting anything, so no child inherits it.
 Not for manual use: its presence, whatever its value, marks the launch as a
-restart's relaunch, so setting it by hand makes
+restart's relaunch (with
+.Ev CLOWN_RESTARTED_PREV_PID
+and
+.Ev CLOWN_RESTARTED_AT ,
+the stopped provider's pid and when the restart began, read and unset the same
+way), so setting it by hand makes
 .Nm clown
 run the peek above before registering and minting, and adds the
 .Dq restarted: Ar reason

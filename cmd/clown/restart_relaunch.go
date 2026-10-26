@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -41,6 +42,11 @@ type relaunchPlan struct {
 	// worktree is the session's working directory at launch; "" skips the
 	// check.
 	worktree string
+	// prevPID is the pid of the provider this restart stops (0: unknown) and
+	// at when the restart began; the relaunched frontend reports both to its
+	// own session (restartwake.go).
+	prevPID int
+	at      time.Time
 }
 
 // killProcess SIGKILLs p through its handle: once the frontend has reaped it
@@ -176,7 +182,7 @@ var launchEnviron = os.Environ()
 // restartEnvDropped are the launch-environment keys the relaunch (and the
 // peek before it) does not inherit: any other session id, the launcher's
 // one-shot profile approval, and a stale restart notice.
-var restartEnvDropped = []string{"CLOWN_SESSION_ID", "CLAUDE_SESSION_ID", "CLOWN_PROFILE", "CLOWN_PROFILE_DIGEST", "CLOWN_PROFILE_SESSION", restartedReasonEnv}
+var restartEnvDropped = []string{"CLOWN_SESSION_ID", "CLAUDE_SESSION_ID", "CLOWN_PROFILE", "CLOWN_PROFILE_DIGEST", "CLOWN_PROFILE_SESSION", restartedReasonEnv, restartedPrevPIDEnv, restartedAtEnv}
 
 // restartEnv is the relaunch's environment: the launch environment with the
 // principal in CLOWN_SESSION_ID and the notice in CLOWN_RESTARTED_REASON. The
@@ -185,7 +191,14 @@ var restartEnvDropped = []string{"CLOWN_SESSION_ID", "CLAUDE_SESSION_ID", "CLOWN
 // survives.
 func restartEnv(environ []string, plan *relaunchPlan) []string {
 	env := environWithout(environ, restartEnvDropped...)
-	return append(env, "CLOWN_SESSION_ID="+plan.principal, restartedReasonEnv+"="+plan.reason)
+	env = append(env, "CLOWN_SESSION_ID="+plan.principal, restartedReasonEnv+"="+plan.reason)
+	if plan.prevPID > 0 {
+		env = append(env, restartedPrevPIDEnv+"="+strconv.Itoa(plan.prevPID))
+	}
+	if !plan.at.IsZero() {
+		env = append(env, restartedAtEnv+"="+plan.at.UTC().Format(time.RFC3339Nano))
+	}
+	return env
 }
 
 // restartedReasonEnv carries the restart's reason to the relaunched frontend,
@@ -205,6 +218,7 @@ func consumeRestartedNotice() (notice string, relaunched bool) {
 	if reason == "" {
 		reason = "no reason given"
 	}
+	restartFactsOfThisLaunch = consumeRestartFacts(reason)
 	return restartedNotice(reason), true
 }
 
@@ -387,7 +401,7 @@ func (fr frontendRestarter) restart(req restartRequest, v preflightVerdict) {
 	// The plan is stored only while the provider still runs, checked under
 	// the lock its exit takes: a provider that exited (during the countdown or
 	// just now) gets no plan, so main does not relaunch a session that ended.
-	plan := &relaunchPlan{principal: fr.principal, reason: reason, argv: fr.argv, worktree: fr.worktree}
+	plan := &relaunchPlan{principal: fr.principal, reason: reason, argv: fr.argv, worktree: fr.worktree, prevPID: int(providerPID.Load()), at: time.Now()}
 	if !storePlanIfRunning(plan) {
 		logSelfClose(fr.logPath, "restart (%s): the provider exited during the countdown; not restarting", fr.principal)
 		return

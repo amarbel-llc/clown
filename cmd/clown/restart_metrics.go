@@ -16,17 +16,21 @@ import "code.linenisgreat.com/clown/internal/toolcost"
 //	clown.restart.relaunch.exec              the old frontend is exec'ing the new one
 //	clown.restart.relaunch.aborted           the relaunch did not happen (session closed, no clown, exec failed)
 //	clown.restart.relaunched                 a frontend started as a restart's relaunch
+//	clown.restart.wake.delivered             the relaunched session was told it was restarted (clown#329)
+//	clown.restart.wake.failed                that wake could not be written
 //	clown.status.write_failed                the hung-session status file could not be written
 const (
-	metricPreflightAsked   = "clown.restart.preflight.asked"
-	metricPreflightVerdict = "clown.restart.preflight.verdict."
-	metricPreflightError   = "clown.restart.preflight.error"
-	metricRestartCancelled = "clown.restart.cancelled"
-	metricRestartStopping  = "clown.restart.stopping"
-	metricRelaunchExec     = "clown.restart.relaunch.exec"
-	metricRelaunchAborted  = "clown.restart.relaunch.aborted"
-	metricRelaunched       = "clown.restart.relaunched"
-	metricStatusWriteFail  = "clown.status.write_failed"
+	metricPreflightAsked    = "clown.restart.preflight.asked"
+	metricPreflightVerdict  = "clown.restart.preflight.verdict."
+	metricPreflightError    = "clown.restart.preflight.error"
+	metricRestartCancelled  = "clown.restart.cancelled"
+	metricRestartStopping   = "clown.restart.stopping"
+	metricRelaunchExec      = "clown.restart.relaunch.exec"
+	metricRelaunchAborted   = "clown.restart.relaunch.aborted"
+	metricRelaunched        = "clown.restart.relaunched"
+	metricRestartWoke       = "clown.restart.wake.delivered"
+	metricRestartWakeFailed = "clown.restart.wake.failed"
+	metricStatusWriteFail   = "clown.status.write_failed"
 )
 
 // countMetric sends one counter. A var so tests can record instead.
