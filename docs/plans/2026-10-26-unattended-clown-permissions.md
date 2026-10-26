@@ -70,7 +70,11 @@ Claude API auth and every credential's expiry behaviour (not found in-tree).
 - Default interactive: the dialog waits; no timeout found; I: the session
   blocks until a human answers or the process is killed.
 - No path notifies the operator that a session is stuck at a prompt
-  (`Notification` hooks are not wired).
+  (`Notification` hooks are not wired). The armed frontend now writes the
+  hung-session status file (FDR 0023, #322): a turn that stays
+  `turn_running` with an ageing `turn_started_at` is visible to spinclass,
+  but a dialog is not told apart from a long tool call (no
+  `dialog_open_since`; R, unit tests, not run live).
 
 ## 4. Missing for days-long unattended operation
 
@@ -106,7 +110,8 @@ Claude API auth and every credential's expiry behaviour (not found in-tree).
    profile-level spawn permission schemes, #271 headless juggler-only agent
    loop).
 5. Operator notification for a stuck prompt or a refused profile change.
-   #322 (related: #214 monitor exits mid-session).
+   #322 (related: #214 monitor exits mid-session). clown's half, the status
+   file, is on branch pure-teak; spinclass's reader and notification remain.
 6. After step 1: spike an auto-allow decision from the counters: #302.
 7. Posture for the credential fallback and the absent card: no fallback to
    the inherited ssh-agent (ruled, section 6). #324.
@@ -122,7 +127,8 @@ Claude API auth and every credential's expiry behaviour (not found in-tree).
   the mint fails; the session goes without push credentials (#324).
 - Ruled 2026-10-26: a prompt-stuck or hung session is recovered only by the
   operator; the coordinator gets a push notification for hung children
-  (#322, design TBD).
+  (#322: clown writes the status file, FDR 0023; spinclass classifies and
+  notifies).
 - Whether unsigned commits are acceptable for unattended work.
 - Whether the counters may ever drive auto-allow, and at what threshold.
 - Profile-change policy when unattended: stay down until approved (today) or

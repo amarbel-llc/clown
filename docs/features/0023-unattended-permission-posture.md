@@ -172,3 +172,103 @@ must be denied with no dialog and the session must carry on.
   replace it; removing the splice is spinclass's call once B5 has passed.
 - A spinclass spawn of a non-claude provider must not set the marker:
   clown refuses it.
+
+## Hung-session status file (clown#322)
+
+This section is the contract between clown and spinclass for telling a hung
+or dead session from a working one. Both sides cite it; a change to it is
+announced to spinclass first. clown exports facts only: it never kills,
+restarts, notifies or answers a prompt because of the file. Classifying,
+alerting and recovery are spinclass's and the operator's (the 2026-10-26
+ruling: a hung session is recovered only by the operator).
+
+- **Path.** `$XDG_STATE_HOME/clown/status/<hex sha256(principal)>.json`
+  (`~/.local/state` without an absolute `XDG_STATE_HOME`), where the
+  principal is the session's `CLOWN_SESSION_ID` and the hex is lower-case.
+  The file is 0600 in a 0700 dir; clown opens the dir as an `os.Root` after
+  an lstat (a symlinked dir is refused, the dir must be owned by the user,
+  a wider mode is narrowed to 0700), as `internal/permstat` does. The dir
+  is not bound into an agent unit.
+- **Who writes it.** Only the frontend whose idle trigger is armed (a
+  claude launch inside a spinclass session, the conditions of
+  `selfCloseDecision`; `close-self-run.log` says why a launch did not arm).
+  No file means: not armed, not started yet, or exited cleanly.
+- **When.** Once when the trigger arms (no hook yet), on every hook
+  datagram the idle listener receives, when systemd-run runs the agent unit
+  (`unit`), when the unit is active with its provider started (`main_pid`),
+  or when the unconfined provider starts (`main_pid`). Nothing is written
+  periodically: an old `written_at` is not a sign of death. The file is
+  removed when the frontend exits cleanly; a frontend killed by SIGKILL (or
+  any death that skips its deferred cleanup) leaves it, and the pid pair
+  then names a dead process or a reused pid.
+- **Atomicity.** Each write is a temp file in the same dir (`<name>.tmp`)
+  renamed over the file, so a reader sees a whole file. Read only
+  `<hash>.json`. There is one writer per principal: a second frontend of
+  the same key is refused at the idle socket and leaves the file alone.
+- **Failure.** A failed write is logged once to `close-self-run.log` and
+  otherwise ignored; the session never depends on the file. A file that
+  stopped updating may be a write failure: check that log.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `version` | int | `1`. |
+| `principal` | string | `CLOWN_SESSION_ID`. |
+| `spinclass_session_key` | string | `SPINCLASS_SESSION_ID` in the frontend's env. |
+| `claude_session_id` | string | `session_id` from the last turn-start hook's stdin; empty until one reported it. |
+| `turn_running` | bool | Set by the UserPromptSubmit hook, cleared by the Stop hook. |
+| `turn_started_at` | time | The last turn start; kept, with `turn_running` false, after the turn ends. Empty before the first. |
+| `last_hook_at` | time | The last hook datagram of either kind; empty before the first. |
+| `frontend_pid` | int | The frontend clown's pid. |
+| `frontend_start_ticks` | uint | Field 22 (`starttime`, clock ticks since boot) of `/proc/<frontend_pid>/stat`. With the pid it tells a live frontend from a reused pid. 0 off Linux or if unreadable. |
+| `unit` | string | The agent-scope unit, when confined; empty unconfined or before systemd-run ran. |
+| `main_pid` | int | Unconfined: the provider's pid. Confined: the unit's `MainPID`, the in-unit init (the provider, or the exec shim running it as a child), as the agent-scope result file records it. 0 until known. |
+| `transcript_path` | string | `transcript_path` from the last turn-start hook's stdin (absolute, or the payload is dropped); empty until one reported it. |
+| `written_at` | time | This write. |
+
+Times are RFC 3339 in UTC with nine fraction digits
+(`2006-01-02T15:04:05.000000000Z`), so they also sort as strings. A
+turn-start hook without a payload keeps the last reported
+`claude_session_id` and `transcript_path`.
+
+- **Absent is unknown.** An empty string, a 0, an empty time or a missing
+  file is "not known", never "healthy". `turn_running` false with an empty
+  `last_hook_at` is a session that has not had a prompt yet.
+- **What it does not give.** No `tool_open` (whether a tool call is in
+  flight) and no `dialog_open_since` (whether a permission or question
+  dialog is waiting, and since when): clown sees neither. A turn that hangs
+  in a tool, at a dialog, or in claude itself looks the same here: a
+  `turn_running` true whose `turn_started_at` keeps ageing, and a
+  `transcript_path` whose mtime spinclass may read. No exit code (the
+  agent-scope result file has it for a confined launch).
+- **Trust.** The hooks reach the frontend over the idle socket, which is
+  bound into the agent unit and is not authenticated: anything running in
+  the unit as the session's user can send a turn start or a Stop, and so
+  set `turn_running`, the hook times, `claude_session_id` and
+  `transcript_path`. Those fields are what the agent's side said.
+  `principal`, `spinclass_session_key`, `frontend_pid`,
+  `frontend_start_ticks`, `unit`, `main_pid` and `written_at` come from the
+  frontend itself. spinclass must not open `transcript_path` with more
+  privilege than the agent has.
+- **The busy datagram's payload.** The UserPromptSubmit hook command the
+  frontend writes into its hooks.json carries `CLOWN_IDLE_NOTIFY_PAYLOAD=1`.
+  Only with it does `clown idle-notify --busy` read its stdin (at most 1 MiB
+  and 200 ms, never a terminal), take `transcript_path` and `session_id` and
+  nothing else (the prompt never leaves the hook), and send `'B'` followed by
+  `{"transcript_path":...,"session_id":...}` (at most 4096 bytes). Without
+  the flag it sends the single byte `'B'`, as before. The flag keeps both
+  directions compatible: a frontend from before #322 reads only a one-byte
+  `'B'` as a turn start and would take a longer datagram for an idle poke
+  (running close-self-run), and it never writes the flag; an older
+  idle-notify ignores the flag and sends one byte, which the new frontend
+  still reads as a turn start with no payload. A payload that is not JSON,
+  is too long, names a relative transcript path or an over-long session id
+  is dropped, and the datagram still counts as a turn start. The Stop hook
+  sends one non-`'B'` byte and reads no stdin.
+- **Status.** R: unit tests (the listener with a fake sender, the pid and
+  start ticks against `/proc/self/stat`, a reader loop during writes, the
+  old one-byte datagram, payloads from stdin and from absent, garbage or
+  never-closing stdin, removal by the clean-exit closer, a failing write
+  logged once, the dir checks, the unit and main pid writes, the hash
+  path). Not run live: a real claude's hook stdin, and a confined launch's
+  `unit` and `main_pid` writes (I). The owner check has no test (it needs a
+  dir owned by another user).

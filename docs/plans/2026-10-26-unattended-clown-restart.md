@@ -41,7 +41,12 @@ self-restart is untested (spinclass runbook: "untested (I)").
    `--when now` (clown 011db3c) and spinclass `force` cover it only if
    something calls them; force is operator-gated (always-ask), agents cannot
    use it, and an unforced request on a hung session is cancelled by the busy
-   rule every time (I). Nothing triggers a restart unattended.
+   rule every time (I). Nothing triggers a restart unattended. Detection
+   input now exists on clown's side: the armed frontend writes the
+   hung-session status file (turn running and since when, last hook,
+   frontend pid and start ticks, unit, main pid, transcript path; FDR 0023
+   "Hung-session status file", #322; R, unit tests, not run live).
+   Classifying and notifying are spinclass's; clown never acts on it.
 2. **Provider crash.** The frontend relaunches only when a restart plan is
    stored; otherwise the session exits and prints a resume hint. Someone
    runs `clown resume` (R).
@@ -82,7 +87,9 @@ self-restart is untested (spinclass runbook: "untested (I)").
    (runbook step 5). spinclass#419.
 4. Decide the hung-session and provider-crash policy (section 4). Hung
    sessions ruled 2026-10-26 (recovery stays operator-gated; a push
-   notification for hung children, #322); provider crash still open.
+   notification for hung children, #322); provider crash still open. #322's
+   clown half (the status file) is on branch pure-teak; spinclass reads it
+   and notifies.
 5. Confined-session restart: spinclass#382 with clown#280. No issue for the
    test.
 6. `close-self-run.log` retention. #321.
@@ -97,8 +104,8 @@ self-restart is untested (spinclass runbook: "untested (I)").
 
 - Ruled 2026-10-26: recovery of a hung session stays operator-gated (force
   remains always-ask); in addition, the coordinator gets a push notification
-  for hung children (#322; design TBD: coordinator/spinclass or a clown
-  hook).
+  for hung children (#322). Design agreed with spinclass: clown writes the
+  status file (facts only, FDR 0023), spinclass classifies and notifies.
 - Whether a hung session with an unforced request should ever be restarted
   (today the busy cancel blocks it).
 - Whether the countdown runs with no viewer (today: a 30 s delay).
