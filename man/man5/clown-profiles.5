@@ -230,10 +230,16 @@ existing; the saved fields are
 .Sy context_servers
 and
 .Sy context_excluded .
-Saving into an existing profile replaces both with this launch's picker
-result: exclusions for a server the picker could not show tool by tool (one
-inside an agent unit, one not started this launch, one whose catalog could
-not be fetched) are dropped (clown#305).
+Saving into an existing profile replaces
+.Sy context_servers
+with this launch's kept servers, and the exclusions of each server the
+picker showed tool by tool with what was picked for it.
+A server the picker could not show tool by tool (one inside an agent unit,
+one whose catalog could not be fetched, one with a single tool group, one
+not started this launch) keeps its saved exclusions as they were.
+A server dropped from
+.Sy context_servers
+is not started on replay, so exclusions saved for it then have no effect.
 Launching with a profile that carries them replays the selection without
 the picker.
 When a selection stops a server or hides tools, a claude session's system

@@ -126,6 +126,9 @@ type serverCatalog struct {
 type selectionResult struct {
 	kept          []pluginhost.DiscoveredServer
 	excludedTools map[string][]string // keyed by DiscoveredServer.Name()
+	// toolsShown names the servers the picker showed tool by tool, kept or
+	// not: the only ones whose exclusions this selection decides.
+	toolsShown map[string]bool
 }
 
 // rowKey builds a globally-unique option value for one picker row: server
@@ -372,9 +375,27 @@ func selectServers(catalogs []serverCatalog, logger *slog.Logger, saved *profile
 		return result, nil
 	}
 
-	result := selectionResult{excludedTools: map[string][]string{}}
+	result := selectionFromPicker(catalogs, chosen)
+	if err := promptSaveSelection(result, saveCtx); err != nil {
+		// A save failure (bad name, write error, user aborts the save
+		// sub-prompt) never fails the launch — the selection still applies
+		// for this session, it just isn't persisted.
+		logger.Warn("cheap-context: selection not saved", "err", err)
+	}
+	return result, nil
+}
+
+// selectionFromPicker turns the picker's chosen rows into a selection: the
+// servers whose whole-server row stayed checked, the unchecked tools of each
+// server shown tool by tool, and which servers were shown that way (a
+// multi-group catalog; a bare row has no per-tool choice).
+func selectionFromPicker(catalogs []serverCatalog, chosen map[string]bool) selectionResult {
+	result := selectionResult{excludedTools: map[string][]string{}, toolsShown: map[string]bool{}}
 	for _, c := range catalogs {
 		name := c.server.Name()
+		if isMultiGroup(c.groups) {
+			result.toolsShown[name] = true
+		}
 		if !chosen[rowKey(name, allRowSuffix)] {
 			continue // whole-server row deselected: drop it entirely
 		}
@@ -394,14 +415,7 @@ func selectServers(catalogs []serverCatalog, logger *slog.Logger, saved *profile
 			result.excludedTools[name] = excluded
 		}
 	}
-
-	if err := promptSaveSelection(result, saveCtx); err != nil {
-		// A save failure (bad name, write error, user aborts the save
-		// sub-prompt) never fails the launch — the selection still applies
-		// for this session, it just isn't persisted.
-		logger.Warn("cheap-context: selection not saved", "err", err)
-	}
-	return result, nil
+	return result
 }
 
 // excludeToolsPushBudget bounds how long a single POST
@@ -717,13 +731,35 @@ func promptSaveSelection(result selectionResult, saveCtx cheapContextSaveContext
 	for i, d := range result.kept {
 		servers[i] = d.Name()
 	}
-	return saveSelectionToProfile(name, servers, result.excludedTools, saveCtx)
+	return saveSelectionToProfile(name, servers, result.excludedTools, result.toolsShown, saveCtx)
+}
+
+// mergeExclusions is what a save records as a profile's exclusions
+// (clown#305): this selection's for every server the picker showed tool by
+// tool, and the profile's saved ones, as they were, for every server it did
+// not — in-unit, catalog fetch failed, single group, or not started this
+// launch — since the operator had no chance to keep or change those.
+func mergeExclusions(saved, picked map[string][]string, toolsShown map[string]bool) map[string][]string {
+	merged := map[string][]string{}
+	for server, tools := range saved {
+		if !toolsShown[server] {
+			merged[server] = tools
+		}
+	}
+	for server, tools := range picked {
+		merged[server] = tools
+	}
+	if len(merged) == 0 {
+		return nil
+	}
+	return merged
 }
 
 // saveSelectionToProfile records a --cheap-context selection on the named
-// profile: an existing one (user or builtin) keeps every other field, a new
-// name gets a minimal profile.
-func saveSelectionToProfile(name string, servers []string, excludedTools map[string][]string, saveCtx cheapContextSaveContext) error {
+// profile: an existing one (user or builtin) keeps every other field, and
+// the exclusions of servers this selection did not show (mergeExclusions);
+// a new name gets a minimal profile.
+func saveSelectionToProfile(name string, servers []string, excludedTools map[string][]string, toolsShown map[string]bool, saveCtx cheapContextSaveContext) error {
 	merged, user, destPath := saveCtx.merged, saveCtx.user, saveCtx.path
 	existingNames := userNameSet(user)
 
@@ -744,7 +780,7 @@ func saveSelectionToProfile(name string, servers []string, excludedTools map[str
 		target = profile.Profile{Name: name, Provider: "claude", Backend: "anthropic"}
 	}
 	target.ContextServers = servers
-	target.ContextExcluded = excludedTools
+	target.ContextExcluded = mergeExclusions(target.ContextExcluded, excludedTools, toolsShown)
 
 	// Reuse saveProfileForm's Validate -> Upsert -> Save -> print sequence
 	// (cmd/clown/profileform.go) rather than re-deriving it here — v.Confirm
