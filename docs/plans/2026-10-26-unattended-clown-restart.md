@@ -109,8 +109,10 @@ self-restart is untested (spinclass runbook: "untested (I)").
 
 ## 4. Decisions only the operator can make
 
-- Ruled 2026-10-26: recovery of a hung session stays operator-gated (force
-  remains always-ask); in addition, the coordinator gets a push notification
+- Ruled 2026-10-26, amended later that day: recovery of a hung session is the
+  operator's (force remains always-ask), except spinclass's
+  `restart-hung-child` may force-restart a busy-too-long child under the
+  bounds in FDR 0023; in addition, the coordinator gets a push notification
   for hung children (#322). Design agreed with spinclass: clown writes the
   status file (facts only, FDR 0023), spinclass classifies and notifies.
 - Whether a hung session with an unforced request should ever be restarted

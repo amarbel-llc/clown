@@ -142,6 +142,16 @@ R for the code, V where stated; live forwarding not yet run (runbook A8).
   logged to `close-self-run.log`, never fatal. `CLOWN_DISABLE_FRONTEND_MOXINS=1`
   turns it off. The plugin holds no secret (a test greps it for the fake
   token's content and path).
+- Review finding, fixed: the frontend runs moxy and the moxin with the
+  operator's authority, so nothing it runs or reads a moxin definition from may
+  be writable by the unit. `addFrontendMoxinPlugin` takes the unit's writable
+  set (the spec's worktree and `binds_rw`, symlinks resolved) and: drops
+  relative and unit-writable `MOXIN_PATH` entries (so a planted entry cannot
+  shadow the real moxin, and a relative one cannot resolve against the
+  worktree), refuses a moxin directory that links into a writable path, ignores
+  a plugin dir under a writable path as a `MOXIN_PATH` source, and refuses a
+  `moxy` found under a writable path (a direnv/devshell PATH that holds a
+  worktree directory). Each is logged to `close-self-run.log`.
 - `worker` keeps `clown-builtin-moxins/issue-filer`; a launch that does not
   serve it skips the saved server (profile replay skips what is not
   discovered), so the same profile works on a host without the moxin.

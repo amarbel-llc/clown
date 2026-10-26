@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 
+	"code.linenisgreat.com/clown/internal/agentscope"
 	"code.linenisgreat.com/clown/internal/buildcfg"
 	"code.linenisgreat.com/clown/internal/pluginhost"
 )
@@ -59,18 +60,18 @@ func TestPlanServesAMoxinOnlyWhenFoundAndItsFilesExist(t *testing.T) {
 	moxins := []frontendMoxin{{Name: "issue-filer", Needs: func() []string { return []string{tok} }}}
 	onPath := fakeMoxinDir(t, "issue-filer")
 
-	serve, skipped := planFrontendMoxins(moxins, onPath)
+	serve, skipped := planFrontendMoxins(moxins, onPath, nil)
 	if !slices.Equal(serve, []string{"issue-filer"}) || len(skipped) != 0 {
 		t.Fatalf("found + token: serve %v skipped %v", serve, skipped)
 	}
 
 	// A path list: the moxin may be on a later entry.
-	serve, _ = planFrontendMoxins(moxins, t.TempDir()+string(os.PathListSeparator)+onPath)
+	serve, _ = planFrontendMoxins(moxins, t.TempDir()+string(os.PathListSeparator)+onPath, nil)
 	if !slices.Equal(serve, []string{"issue-filer"}) {
 		t.Errorf("later path entry: serve %v", serve)
 	}
 
-	serve, skipped = planFrontendMoxins(moxins, t.TempDir())
+	serve, skipped = planFrontendMoxins(moxins, t.TempDir(), nil)
 	if len(serve) != 0 || len(skipped) != 1 || !strings.Contains(skipped[0], "not on the moxin path") {
 		t.Errorf("not on the path: serve %v skipped %v", serve, skipped)
 	}
@@ -78,7 +79,7 @@ func TestPlanServesAMoxinOnlyWhenFoundAndItsFilesExist(t *testing.T) {
 	if err := os.Remove(tok); err != nil {
 		t.Fatal(err)
 	}
-	serve, skipped = planFrontendMoxins(moxins, onPath)
+	serve, skipped = planFrontendMoxins(moxins, onPath, nil)
 	if len(serve) != 0 || len(skipped) != 1 || !strings.Contains(skipped[0], "needs") {
 		t.Errorf("token missing: serve %v skipped %v", serve, skipped)
 	}
@@ -87,7 +88,7 @@ func TestPlanServesAMoxinOnlyWhenFoundAndItsFilesExist(t *testing.T) {
 	if err := os.MkdirAll(tok, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if serve, _ = planFrontendMoxins(moxins, onPath); len(serve) != 0 {
+	if serve, _ = planFrontendMoxins(moxins, onPath, nil); len(serve) != 0 {
 		t.Errorf("a directory in place of the token file: serve %v", serve)
 	}
 
@@ -98,7 +99,7 @@ func TestPlanServesAMoxinOnlyWhenFoundAndItsFilesExist(t *testing.T) {
 	if err := os.WriteFile(tok, []byte("x"), 0); err != nil {
 		t.Fatal(err)
 	}
-	if serve, _ = planFrontendMoxins(moxins, onPath); !slices.Equal(serve, []string{"issue-filer"}) {
+	if serve, _ = planFrontendMoxins(moxins, onPath, nil); !slices.Equal(serve, []string{"issue-filer"}) {
 		t.Errorf("an unreadable token file: serve %v (stat only, never read)", serve)
 	}
 }
@@ -108,7 +109,7 @@ func TestPlanServesAMoxinOnlyWhenFoundAndItsFilesExist(t *testing.T) {
 func TestPlanIsAListOfMoxins(t *testing.T) {
 	root := fakeMoxinDir(t, "alpha")
 	moxins := []frontendMoxin{{Name: "alpha"}, {Name: "beta"}}
-	serve, skipped := planFrontendMoxins(moxins, root)
+	serve, skipped := planFrontendMoxins(moxins, root, nil)
 	if !slices.Equal(serve, []string{"alpha"}) || len(skipped) != 1 || !strings.Contains(skipped[0], "beta") {
 		t.Fatalf("serve %v skipped %v", serve, skipped)
 	}
@@ -117,7 +118,7 @@ func TestPlanIsAListOfMoxins(t *testing.T) {
 func TestMoxinPathLayers(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "/cfg")
 	t.Setenv("MOXIN_PATH", "/env/moxins")
-	if got := moxinPathFor(nil); got != "/env/moxins" {
+	if got := moxinPathFor(nil, nil); got != "/env/moxins" {
 		t.Errorf("env: %s", got)
 	}
 	t.Setenv("MOXIN_PATH", "")
@@ -125,17 +126,17 @@ func TestMoxinPathLayers(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(plug, "clown.json"), []byte(`{"version":1,"stdioServers":{"moxy":{"command":"moxy","env":{"MOXIN_PATH":"/plugin/moxins"}}}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if got := moxinPathFor([]string{t.TempDir(), plug}); got != "/plugin/moxins" {
+	if got := moxinPathFor([]string{t.TempDir(), plug}, nil); got != "/plugin/moxins" {
 		t.Errorf("plugin's moxy server env: %s", got)
 	}
 	httpPlug := t.TempDir()
 	if err := os.WriteFile(filepath.Join(httpPlug, "clown.json"), []byte(`{"version":1,"httpServers":{"moxy":{"command":"moxy","env":{"MOXIN_PATH":"/http/moxins"}}}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if got := moxinPathFor([]string{httpPlug}); got != "/http/moxins" {
+	if got := moxinPathFor([]string{httpPlug}, nil); got != "/http/moxins" {
 		t.Errorf("http server env: %s", got)
 	}
-	if got := moxinPathFor([]string{t.TempDir()}); got != "/cfg/moxy/moxins" {
+	if got := moxinPathFor([]string{t.TempDir()}, nil); got != "/cfg/moxy/moxins" {
 		t.Errorf("per-user dir: %s", got)
 	}
 }
@@ -216,11 +217,11 @@ func TestAddFrontendMoxinPlugin(t *testing.T) {
 	root := testStagingRoot(t)
 
 	// Unconfined: nothing, quietly.
-	if dir, err := addFrontendMoxinPlugin(root, false, nil, moxins, note); dir != "" || err != nil || len(notes) != 0 {
+	if dir, err := addFrontendMoxinPlugin(root, false, nil, nil, moxins, note); dir != "" || err != nil || len(notes) != 0 {
 		t.Fatalf("unconfined: %q %v %v", dir, err, notes)
 	}
 	// Confined: served, and the plugin names moxy by absolute path.
-	dir, err := addFrontendMoxinPlugin(root, true, nil, moxins, note)
+	dir, err := addFrontendMoxinPlugin(root, true, nil, nil, moxins, note)
 	if err != nil || dir == "" {
 		t.Fatalf("confined: %q %v", dir, err)
 	}
@@ -230,22 +231,157 @@ func TestAddFrontendMoxinPlugin(t *testing.T) {
 	}
 	// The kill switch.
 	t.Setenv("CLOWN_DISABLE_FRONTEND_MOXINS", "1")
-	if dir, err := addFrontendMoxinPlugin(root, true, nil, moxins, note); dir != "" || err != nil {
+	if dir, err := addFrontendMoxinPlugin(root, true, nil, nil, moxins, note); dir != "" || err != nil {
 		t.Errorf("disabled: %q %v", dir, err)
 	}
 	t.Setenv("CLOWN_DISABLE_FRONTEND_MOXINS", "")
 	// No moxy on PATH: skipped with a note, no error.
 	t.Setenv("PATH", t.TempDir())
 	notes = nil
-	if dir, err := addFrontendMoxinPlugin(root, true, nil, moxins, note); dir != "" || err != nil || len(notes) != 1 {
+	if dir, err := addFrontendMoxinPlugin(root, true, nil, nil, moxins, note); dir != "" || err != nil || len(notes) != 1 {
 		t.Errorf("no moxy: %q %v %v", dir, err, notes)
 	}
 	// A build without the bridge cannot declare stdio servers.
 	t.Setenv("PATH", bin)
 	buildcfg.StdioBridgePath = ""
 	notes = nil
-	if dir, err := addFrontendMoxinPlugin(root, true, nil, moxins, note); dir != "" || err != nil || len(notes) != 1 {
+	if dir, err := addFrontendMoxinPlugin(root, true, nil, nil, moxins, note); dir != "" || err != nil || len(notes) != 1 {
 		t.Errorf("no bridge: %q %v %v", dir, err, notes)
+	}
+}
+
+// Review finding: the frontend runs moxy and the moxin outside the unit with
+// the operator's authority, so nothing it runs or reads its moxin definition
+// from may be writable by the unit (its worktree and read-write binds).
+
+func agentscopeResolve(p string) string { return agentscope.ResolvePath(p) }
+
+func writableWorktree(t *testing.T) (worktree string, writable []string) {
+	t.Helper()
+	wt := t.TempDir()
+	return wt, []string{agentscopeResolve(wt)}
+}
+
+func TestTrustedMoxinPathDropsWritableAndRelativeEntries(t *testing.T) {
+	wt, writable := writableWorktree(t)
+	good := t.TempDir()
+	inWT := filepath.Join(wt, "moxins")
+	if err := os.MkdirAll(inWT, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(inWT, link); err != nil {
+		t.Fatal(err)
+	}
+	list := strings.Join([]string{"./moxins", ".moxy/moxins", inWT, link, "", good}, string(os.PathListSeparator))
+	kept, dropped := trustedMoxinPath(list, writable)
+	if kept != good {
+		t.Errorf("kept %q, want only %q", kept, good)
+	}
+	if len(dropped) != 4 {
+		t.Errorf("dropped %v, want the two relative entries, the worktree entry and the link into it", dropped)
+	}
+}
+
+func TestAMoxinUnderAWritablePathIsNotServed(t *testing.T) {
+	tok := tokenFile(t)
+	moxins := []frontendMoxin{{Name: "issue-filer", Needs: func() []string { return []string{tok} }}}
+	wt, writable := writableWorktree(t)
+
+	planted := fakeMoxinDir(t, "issue-filer") // somewhere else, then reached through the worktree
+	inWT := filepath.Join(wt, "moxins")
+	if err := os.Symlink(planted, inWT); err != nil {
+		t.Fatal(err)
+	}
+	// The path is not under the worktree by name but its moxin dir is a link
+	// into it: a safe entry holding a link to a writable moxin.
+	entry := t.TempDir()
+	real := filepath.Join(wt, "issue-filer")
+	if err := os.MkdirAll(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(real, "_moxin.toml"), []byte("schema = 1\nname = \"issue-filer\"\ndescription = \"x\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, filepath.Join(entry, "issue-filer")); err != nil {
+		t.Fatal(err)
+	}
+	serve, skipped := planFrontendMoxins(moxins, entry, writable)
+	if len(serve) != 0 || len(skipped) != 1 {
+		t.Errorf("moxin dir linked into the worktree: serve %v skipped %v", serve, skipped)
+	}
+	// The same moxin on a path the unit cannot write is served.
+	if serve, _ = planFrontendMoxins(moxins, planted, writable); !slices.Equal(serve, []string{"issue-filer"}) {
+		t.Errorf("a trusted entry: serve %v", serve)
+	}
+}
+
+func TestMoxinPathIgnoresAPluginDirTheUnitCanWrite(t *testing.T) {
+	t.Setenv("MOXIN_PATH", "")
+	t.Setenv("XDG_CONFIG_HOME", "/cfg")
+	wt, writable := writableWorktree(t)
+	if err := os.WriteFile(filepath.Join(wt, "clown.json"), []byte(`{"version":1,"stdioServers":{"moxy":{"command":"moxy","env":{"MOXIN_PATH":"/planted"}}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := moxinPathFor([]string{wt}, writable); got != "/cfg/moxy/moxins" {
+		t.Errorf("a plugin dir inside the worktree set MOXIN_PATH: %s", got)
+	}
+}
+
+func TestAddFrontendMoxinPluginKeepsOnlyTrustedPathsAndABinaryTheUnitCannotWrite(t *testing.T) {
+	tok := tokenFile(t)
+	moxins := []frontendMoxin{{Name: "issue-filer", Needs: func() []string { return []string{tok} }}}
+	wt, writable := writableWorktree(t)
+	good := fakeMoxinDir(t, "issue-filer")
+	planted := filepath.Join(wt, "moxins")
+	if err := os.MkdirAll(filepath.Join(planted, "issue-filer"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(planted, "issue-filer", "_moxin.toml"), []byte("schema = 1\nname = \"issue-filer\"\ndescription = \"x\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// The unit-writable entry comes first and would shadow the real moxin.
+	t.Setenv("MOXIN_PATH", planted+string(os.PathListSeparator)+good)
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "moxy"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	old := buildcfg.StdioBridgePath
+	buildcfg.StdioBridgePath = "/bridge"
+	t.Cleanup(func() { buildcfg.StdioBridgePath = old })
+	t.Setenv("CLOWN_DISABLE_FRONTEND_MOXINS", "")
+	var notes []string
+	note := func(format string, args ...any) { notes = append(notes, format) }
+	root := testStagingRoot(t)
+
+	dir, err := addFrontendMoxinPlugin(root, true, nil, writable, moxins, note)
+	if err != nil || dir == "" {
+		t.Fatalf("%q %v", dir, err)
+	}
+	cfg, err := pluginhost.LoadClownConfig(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.StdioServers["issue-filer"].Env["MOXIN_PATH"]; got != good {
+		t.Errorf("MOXIN_PATH = %q, want only the trusted entry %q (the planted one must not shadow it)", got, good)
+	}
+	if len(notes) < 2 {
+		t.Errorf("the dropped entry was not noted: %v", notes)
+	}
+
+	// A moxy found in a directory the unit can write is never run.
+	wbin := filepath.Join(wt, "bin")
+	if err := os.MkdirAll(wbin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wbin, "moxy"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", wbin)
+	notes = nil
+	if dir, err := addFrontendMoxinPlugin(root, true, nil, writable, moxins, note); dir != "" || err != nil || len(notes) != 1 {
+		t.Errorf("moxy in the worktree: %q %v %v", dir, err, notes)
 	}
 }
 

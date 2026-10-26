@@ -125,10 +125,13 @@ Claude API auth and every credential's expiry behaviour (not found in-tree).
   `CLOWN_UNATTENDED=1` marker, FDR 0023; the live checks are still to run).
 - Ruled 2026-10-26: no fallback to the inherited ssh-agent when the card or
   the mint fails; the session goes without push credentials (#324).
-- Ruled 2026-10-26: a prompt-stuck or hung session is recovered only by the
-  operator; the coordinator gets a push notification for hung children
-  (#322: clown writes the status file, FDR 0023; spinclass classifies and
-  notifies).
+- Ruled 2026-10-26: a prompt-stuck or hung session is recovered by the
+  operator, except that spinclass's `restart-hung-child` may force-restart a
+  child that has been busy too long (bounded: the `restart` right, once per
+  child per 24 h, logged and woken to holders, confined callers and
+  self-restart refused; FDR 0023). The coordinator gets a push notification
+  for hung children (#322: clown writes the status file, FDR 0023; spinclass
+  classifies and notifies).
 - Whether unsigned commits are acceptable for unattended work.
 - Whether the counters may ever drive auto-allow, and at what threshold.
 - Profile-change policy when unattended: stay down until approved (today) or

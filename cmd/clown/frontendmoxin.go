@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"code.linenisgreat.com/clown/internal/agentscope"
 	"code.linenisgreat.com/clown/internal/buildcfg"
 	"code.linenisgreat.com/clown/internal/pluginhost"
 	"code.linenisgreat.com/clown/internal/staging"
@@ -69,15 +70,57 @@ func frontendMoxinsDisabled() bool {
 	return os.Getenv("CLOWN_DISABLE_FRONTEND_MOXINS") == "1"
 }
 
+// pathWithin reports whether p is dir or lies under it (both cleaned and
+// symlink-resolved by the caller).
+func pathWithin(p, dir string) bool {
+	return p == dir || strings.HasPrefix(p, dir+"/")
+}
+
+// inWritable reports whether p, symlinks resolved, is one of writable (already
+// resolved) or under one.
+func inWritable(p string, writable []string) bool {
+	real := agentscope.ResolvePath(p)
+	for _, w := range writable {
+		if pathWithin(real, w) {
+			return true
+		}
+	}
+	return false
+}
+
+// trustedMoxinPath keeps the absolute MOXIN_PATH entries that the unit cannot
+// write, and names the rest. The frontend runs the moxin it finds there with
+// the operator's authority, so an entry the unit can write (the worktree, a
+// read-write bind), or a relative one, which would resolve against the
+// worktree, would let the unit plant the code that runs outside it and shadow
+// the real moxin.
+func trustedMoxinPath(moxinPath string, writable []string) (kept string, dropped []string) {
+	var ok []string
+	for _, entry := range filepath.SplitList(moxinPath) {
+		switch {
+		case entry == "":
+		case !filepath.IsAbs(entry):
+			dropped = append(dropped, entry+" (not absolute)")
+		case inWritable(entry, writable):
+			dropped = append(dropped, entry+" (writable from inside the unit)")
+		default:
+			ok = append(ok, entry)
+		}
+	}
+	return strings.Join(ok, string(os.PathListSeparator)), dropped
+}
+
 // moxinOnPath reports whether some entry of the MOXIN_PATH-style list holds a
-// moxin directory name (a subdirectory with a _moxin.toml).
-func moxinOnPath(name, moxinPath string) bool {
+// moxin directory name (a subdirectory with a _moxin.toml), the first entry
+// that does being the one moxy serves. A moxin directory that is itself a link
+// into a path the unit can write does not count.
+func moxinOnPath(name, moxinPath string, writable []string) bool {
 	for _, entry := range filepath.SplitList(moxinPath) {
 		if entry == "" {
 			continue
 		}
 		if fi, err := os.Stat(filepath.Join(entry, name, "_moxin.toml")); err == nil && fi.Mode().IsRegular() {
-			return true
+			return !inWritable(filepath.Join(entry, name), writable) && !inWritable(filepath.Join(entry, name, "_moxin.toml"), writable)
 		}
 	}
 	return false
@@ -87,11 +130,15 @@ func moxinOnPath(name, moxinPath string) bool {
 // the way a moxy the operator runs would see it: clown's own MOXIN_PATH, else
 // the MOXIN_PATH one of the plugin dirs gives its "moxy" server (the
 // operator's moxy plugin sets it there), else moxy's per-user directory.
-func moxinPathFor(pluginDirs []string) string {
+func moxinPathFor(pluginDirs []string, writable []string) string {
 	if p := os.Getenv("MOXIN_PATH"); p != "" {
 		return p
 	}
 	for _, dir := range pluginDirs {
+		// A plugin dir the unit can write could name any MOXIN_PATH.
+		if inWritable(dir, writable) {
+			continue
+		}
 		if p := moxinPathOfPlugin(dir); p != "" {
 			return p
 		}
@@ -133,9 +180,9 @@ func moxinPathOfPlugin(dir string) string {
 // planFrontendMoxins picks the moxins to serve and says why it skipped the
 // rest. A moxin is served when moxy can find it on moxinPath and every file it
 // needs is a regular file (stat follows a link to one).
-func planFrontendMoxins(moxins []frontendMoxin, moxinPath string) (serve []string, skipped []string) {
+func planFrontendMoxins(moxins []frontendMoxin, moxinPath string, writable []string) (serve []string, skipped []string) {
 	for _, m := range moxins {
-		if !moxinOnPath(m.Name, moxinPath) {
+		if !moxinOnPath(m.Name, moxinPath, writable) {
 			skipped = append(skipped, "moxin "+m.Name+" is not on the moxin path ("+moxinPath+")")
 			continue
 		}
@@ -200,13 +247,31 @@ func synthFrontendMoxinPluginDir(root *staging.Root, moxyBin, moxinPath string, 
 	return dir, nil
 }
 
+// unitWritablePaths are the paths the unit of the spec at specPath can write,
+// symlinks resolved: its worktree and its read-write binds.
+func unitWritablePaths(specPath string) ([]string, error) {
+	spec, err := agentscope.LoadSpec(specPath)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, p := range append([]string{spec.Worktree}, spec.BindsRW...) {
+		out = append(out, agentscope.ResolvePath(p))
+	}
+	return out, nil
+}
+
 // addFrontendMoxinPlugin is the launch-time step: under --agent-scope only
 // (an unconfined session reaches moxy directly), with the stdio bridge and a
 // moxy on PATH, it plans the moxins, synthesizes the plugin and returns its
 // dir ("" when nothing is served). Skips are reported to note (the
 // close-self-run log), never fatal: a confined worker without the moxin still
 // works. pluginDirs are the dirs already gathered, for the MOXIN_PATH lookup.
-func addFrontendMoxinPlugin(root *staging.Root, confined bool, pluginDirs []string, moxins []frontendMoxin, note func(format string, args ...any)) (string, error) {
+// writable are the resolved paths the unit can write (its worktree and
+// read-write binds): the frontend runs moxy and the moxin outside the unit
+// with the operator's authority, so nothing it runs or reads its moxin
+// definition from may lie under them.
+func addFrontendMoxinPlugin(root *staging.Root, confined bool, pluginDirs []string, writable []string, moxins []frontendMoxin, note func(format string, args ...any)) (string, error) {
 	if !confined || frontendMoxinsDisabled() {
 		return "", nil
 	}
@@ -222,8 +287,15 @@ func addFrontendMoxinPlugin(root *staging.Root, confined bool, pluginDirs []stri
 		note("frontend moxins not served: moxy is not on PATH")
 		return "", nil
 	}
-	moxinPath := moxinPathFor(pluginDirs)
-	serve, skipped := planFrontendMoxins(moxins, moxinPath)
+	if inWritable(moxyBin, writable) {
+		note("frontend moxins not served: moxy (%s) is under a path the unit can write", moxyBin)
+		return "", nil
+	}
+	moxinPath, dropped := trustedMoxinPath(moxinPathFor(pluginDirs, writable), writable)
+	for _, d := range dropped {
+		note("frontend moxins: ignoring moxin path entry %s", d)
+	}
+	serve, skipped := planFrontendMoxins(moxins, moxinPath, writable)
 	for _, s := range skipped {
 		note("frontend moxin not served: %s", s)
 	}

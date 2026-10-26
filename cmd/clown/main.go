@@ -1103,7 +1103,9 @@ func runWithFlags(flags parsedFlags) int {
 				logSelfClose(logPath, "(%s) "+format, append([]any{flags.identity.Key}, args...)...)
 			}
 		}
-		if moxinDir, err := addFrontendMoxinPlugin(root, true, pluginDirs, frontendMoxins, note); err != nil {
+		if writable, err := unitWritablePaths(flags.agentScopeSpec); err != nil {
+			note("frontend moxins not served: reading the agent scope spec: %v", err)
+		} else if moxinDir, err := addFrontendMoxinPlugin(root, true, pluginDirs, writable, frontendMoxins, note); err != nil {
 			fmt.Fprintf(os.Stderr, "clown: serving frontend moxins: %v\n", err)
 		} else if moxinDir != "" {
 			pluginDirs = append(pluginDirs, moxinDir)

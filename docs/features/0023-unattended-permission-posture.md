@@ -179,8 +179,19 @@ This section is the contract between clown and spinclass for telling a hung
 or dead session from a working one. Both sides cite it; a change to it is
 announced to spinclass first. clown exports facts only: it never kills,
 restarts, notifies or answers a prompt because of the file. Classifying,
-alerting and recovery are spinclass's and the operator's (the 2026-10-26
-ruling: a hung session is recovered only by the operator).
+alerting and recovery are spinclass's and the operator's. The operator's
+ruling of 2026-10-26, as amended later that day: recovery is the operator's,
+except that spinclass's `restart-hung-child` (spinclass f3b3d21, f88433f) may
+force-restart a child that has been busy too long. The bounds are spinclass's:
+the caller needs the `restart` right on the child, it re-checks the verdict,
+at most one forced restart per child per 24 hours, each logged and woken to
+the holders, and confined callers and self-restart are refused. The busy bound
+is spinclass's `[health] busy-bound` (default 60 minutes; a running merge or
+check job excuses it), read only from global and parent-directory sweatfiles.
+Honest limit, from spinclass's own review: the file's agent-side fields are
+forgeable by an unconfined holder (see Trust below), so the real bounds are the
+restart right and the confined-caller refusal, not the file. Detection is by
+pull (`session-health`); spinclass has no periodic or push detector yet.
 
 - **Path.** `$XDG_STATE_HOME/clown/status/<hex sha256(principal)>.json`
   (`~/.local/state` without an absolute `XDG_STATE_HOME`), where the

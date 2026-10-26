@@ -144,8 +144,9 @@ Unverified (I / not found):
   Ruled 2026-10-26, in part: with the card absent there is no fallback to the
   inherited ssh-agent (#324).
 - Resource limit values, wall clock, and restart-on-failure policy: ruled
-  2026-10-26 and implemented (#320); hung-session recovery stays
-  operator-gated (see the restart page). No per-session override exists.
+  2026-10-26 and implemented (#320); hung-session recovery is the
+  operator's, plus spinclass's bounded `restart-hung-child` (see the restart
+  page and FDR 0023). No per-session override exists.
 - Linger / reboot policy on flic.
 - Whether `clown resume` of a confined session must re-confine: ruled yes
   (operator go, 2026-10-26); clown side done (#318).
