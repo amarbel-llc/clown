@@ -8,7 +8,6 @@ import (
 	"time"
 
 	rm "code.linenisgreat.com/clown/internal/juggler"
-	"code.linenisgreat.com/clown/internal/testlane"
 )
 
 // TestLauncher_RealLlamaServerNoModel exercises the full launcher
@@ -44,13 +43,13 @@ func TestLauncher_RealLlamaServerNoModel(t *testing.T) {
 		// never on the test binary, so the lane cannot run it. The real
 		// smoke is `just verify-juggler`; clown#311 tracks making it a lane
 		// test.
-		testlane.SkipAllowed(t, "real-binary smoke, not a lane test: LlamaServerPath is empty (see just verify-juggler, clown#311)")
+		skipAllowed(t, "real-binary smoke, not a lane test: LlamaServerPath is empty (see just verify-juggler, clown#311)")
 	}
 	// Metal shader compilation hangs for 20s+ in the nix sandbox on pre-M5
 	// hardware. See https://code.linenisgreat.com/clown/issues/106. Metal is
 	// darwin-only, so this is the one skip the lane allows (clown#235).
 	if runtime.GOOS == "darwin" && os.Getenv("NIX_BUILD_TOP") != "" {
-		testlane.SkipAllowed(t, "real llama-server in the darwin nix sandbox: Metal init hangs on pre-M5 hardware (clown#106)")
+		skipAllowed(t, "real llama-server in the darwin nix sandbox: Metal init hangs on pre-M5 hardware (clown#106)")
 	}
 
 	reg := rm.NewRegistry()

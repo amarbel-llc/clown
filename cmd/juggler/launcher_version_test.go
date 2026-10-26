@@ -7,8 +7,6 @@ import (
 	"runtime"
 	"testing"
 	"time"
-
-	"code.linenisgreat.com/clown/internal/testlane"
 )
 
 // TestLlamaServerHelp is a path-shaped smoke against the burned-in
@@ -38,13 +36,13 @@ func TestLlamaServerHelp(t *testing.T) {
 	if LlamaServerPath == "" {
 		// Not a lane test, as TestLauncher_RealLlamaServerNoModel: the real
 		// smoke is `just verify-juggler`; clown#311 tracks the lane gap.
-		testlane.SkipAllowed(t, "real-binary smoke, not a lane test: LlamaServerPath is empty (see just verify-juggler, clown#311)")
+		skipAllowed(t, "real-binary smoke, not a lane test: LlamaServerPath is empty (see just verify-juggler, clown#311)")
 	}
 	// Metal shader compilation hangs for 20s+ in the nix sandbox on pre-M5
 	// hardware. See https://code.linenisgreat.com/clown/issues/106. Metal is
 	// darwin-only, so this is the one skip the lane allows (clown#235).
 	if runtime.GOOS == "darwin" && os.Getenv("NIX_BUILD_TOP") != "" {
-		testlane.SkipAllowed(t, "llama-server --help in the darwin nix sandbox: Metal init hangs on pre-M5 hardware (clown#106)")
+		skipAllowed(t, "llama-server --help in the darwin nix sandbox: Metal init hangs on pre-M5 hardware (clown#106)")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
