@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -220,11 +222,112 @@ func TestProxyRefusesCallsPastTheCapAndForwardsTheRest(t *testing.T) {
 	if answers["null"] != "error" {
 		t.Errorf("the batch: %q, want a JSON-RPC error", answers["null"])
 	}
-	if len(gotIDs) != 7 {
-		t.Errorf("answers for %v: want 1,2,3,4 from the child, 5 and \"str-6\" refused, the batch error, and none for the notification or the non-JSON line the child skipped", gotIDs)
+	if len(gotIDs) != 8 {
+		t.Errorf("answers for %v: want 1,2,3,4 from the child, 5 and \"str-6\" refused, two parse errors (the batch and the non-JSON line, neither forwarded), and none for the notification", gotIDs)
 	}
 	if calls.Load() != 2 || refusals.Load() != 3 {
 		t.Errorf("counted %d calls and %d refusals, want 2 and 3 (the notification counts as refused)", calls.Load(), refusals.Load())
+	}
+}
+
+// Review finding: a line is forwarded only when it is exactly one JSON object
+// the proxy understood. Each of these could carry a tools/call to a server that
+// reads with a streaming decoder, so none may reach the server uncounted.
+func TestProxyForwardsOnlyExactlyOneUnderstoodObject(t *testing.T) {
+	now := time.Now()
+	for name, line := range map[string]string{
+		"two objects on a line":  `{"jsonrpc":"2.0","id":1,"method":"ping"} {"jsonrpc":"2.0","id":2,"method":"tools/call"}`,
+		"half an object":         `{"jsonrpc":"2.0","id":2,"meth`,
+		"the other half":         `od":"tools/call"}`,
+		"trailing text":          `{"jsonrpc":"2.0","id":2,"method":"ping"} trailing`,
+		"duplicate method":       `{"jsonrpc":"2.0","id":2,"method":"ping","method":"tools/call"}`,
+		"duplicate id":           `{"jsonrpc":"2.0","id":1,"id":2,"method":"ping"}`,
+		"a batch":                `[{"jsonrpc":"2.0","id":2,"method":"tools/call"}]`,
+		"a bare string":          `"tools/call"`,
+		"method is not a string": `{"jsonrpc":"2.0","id":2,"method":["tools/call"]}`,
+		"not json":               `hello`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			ledger := newTestLedger(t, 5, &now)
+			var out, toServer bytes.Buffer
+			p := &capProxy{name: "m", ledger: ledger, out: &out}
+			if err := p.handle([]byte(line+"\n"), &toServer); err != nil {
+				t.Fatal(err)
+			}
+			if toServer.Len() != 0 {
+				t.Errorf("forwarded to the server: %q", toServer.String())
+			}
+			if !strings.Contains(out.String(), `"code":-32700`) {
+				t.Errorf("answer %q, want a parse error", out.String())
+			}
+		})
+	}
+	// A differently cased key is read the way Go's decoder reads it: as the
+	// method, so it is counted and capped like the real thing.
+	ledger := newTestLedger(t, 1, &now)
+	var out, toServer bytes.Buffer
+	p := &capProxy{name: "m", ledger: ledger, out: &out}
+	for i := 1; i <= 2; i++ {
+		line := `{"jsonrpc":"2.0","id":` + string(rune('0'+i)) + `,"Method":"tools/call"}` + "\n"
+		if err := p.handle([]byte(line), &toServer); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if strings.Count(toServer.String(), "\n") != 1 || !strings.Contains(out.String(), "call limit reached") {
+		t.Errorf(`"Method" key: forwarded %q, answered %q; want one call through and one refused`, toServer.String(), out.String())
+	}
+	// A blank line is dropped, not forwarded.
+	toServer.Reset()
+	if err := p.handle([]byte("  \n"), &toServer); err != nil || toServer.Len() != 0 {
+		t.Errorf("blank line: %v %q", err, toServer.String())
+	}
+	// A line over the bound ends the session with an error answer.
+	big := strings.Repeat("x", maxMCPLine+10) + "\n"
+	var out2 bytes.Buffer
+	p2 := &capProxy{name: "m", ledger: ledger, out: &out2}
+	pr, pw := io.Pipe() // a server that stays silent and open
+	defer pw.Close()
+	if err := p2.serve(strings.NewReader(big), io.Discard, pr); !errors.Is(err, errLineTooLong) {
+		t.Errorf("over-long line: err %v", err)
+	}
+	if !strings.Contains(out2.String(), "over 4 MiB") {
+		t.Errorf("over-long line answer %q", out2.String())
+	}
+}
+
+// Review finding: the state is replaced whole, so a crash between steps never
+// leaves an empty file that reads as "no calls"; an empty or unreadable file
+// fails closed; no temp files are left behind.
+func TestLedgerWritesAtomicallyAndTreatsAnEmptyFileAsCorrupt(t *testing.T) {
+	now := time.Now()
+	l := newTestLedger(t, 5, &now)
+	for i := 0; i < 3; i++ {
+		if ok, _, err := l.take(); err != nil || !ok {
+			t.Fatalf("take %d: %v %v", i, ok, err)
+		}
+	}
+	entries, err := os.ReadDir(filepath.Dir(l.path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.Contains(e.Name(), ".tmp-") {
+			t.Errorf("a temp file was left behind: %s", e.Name())
+		}
+	}
+	// A stale temp file from a crashed writer does not matter.
+	if err := os.WriteFile(l.path+".tmp-stale", []byte("[1,2,3,4,5,6,7,8]"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _, err := l.take(); err != nil || !ok {
+		t.Errorf("with a stale temp file: %v %v", ok, err)
+	}
+	// An empty state file is not "no calls".
+	if err := os.WriteFile(l.path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _, err := l.take(); ok || err == nil {
+		t.Errorf("an empty counter file: ok=%v err=%v, want an error and no grant", ok, err)
 	}
 }
 

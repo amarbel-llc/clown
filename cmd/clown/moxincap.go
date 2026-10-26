@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -67,18 +68,27 @@ func (l *callLedger) take() (ok bool, retryAt time.Time, err error) {
 	if err := os.MkdirAll(filepath.Dir(l.path), 0o700); err != nil {
 		return false, time.Time{}, err
 	}
-	f, err := os.OpenFile(l.path, os.O_RDWR|os.O_CREATE|syscall.O_NOFOLLOW, 0o600)
+	// The lock is on a file of its own: the state file is replaced by rename,
+	// which would swap out the inode a lock on it was held on.
+	lock, err := os.OpenFile(l.path+".lock", os.O_RDWR|os.O_CREATE|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
 		return false, time.Time{}, err
 	}
-	defer f.Close()
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
 		return false, time.Time{}, err
 	}
 	var stamps []int64
-	if b, err := io.ReadAll(io.LimitReader(f, 1<<20)); err != nil {
+	// A missing file is no calls yet. The file is only ever replaced whole
+	// (below), so an empty or unreadable one is not a crash's leftover but
+	// something else's doing: fail closed, naming it.
+	switch b, err := os.ReadFile(l.path); {
+	case errors.Is(err, os.ErrNotExist):
+	case err != nil:
 		return false, time.Time{}, err
-	} else if len(strings.TrimSpace(string(b))) > 0 {
+	case len(b) > 1<<20:
+		return false, time.Time{}, fmt.Errorf("call counter %s is over 1 MiB", l.path)
+	default:
 		if err := json.Unmarshal(b, &stamps); err != nil {
 			return false, time.Time{}, fmt.Errorf("call counter %s is not a list of times: %w", l.path, err)
 		}
@@ -103,10 +113,21 @@ func (l *callLedger) take() (ok bool, retryAt time.Time, err error) {
 	if err != nil {
 		return false, time.Time{}, err
 	}
-	if err := f.Truncate(0); err != nil {
+	// Replaced whole: a temp file in the same directory, synced, then renamed
+	// over the state, so a crash leaves the old count or the new one.
+	tmp, err := os.CreateTemp(filepath.Dir(l.path), filepath.Base(l.path)+".tmp-*")
+	if err != nil {
 		return false, time.Time{}, err
 	}
-	if _, err := f.WriteAt(out, 0); err != nil {
+	_, werr := tmp.Write(out)
+	serr := tmp.Sync()
+	cerr := tmp.Close()
+	if err := errors.Join(werr, serr, cerr); err != nil {
+		_ = os.Remove(tmp.Name())
+		return false, time.Time{}, err
+	}
+	if err := os.Rename(tmp.Name(), l.path); err != nil {
+		_ = os.Remove(tmp.Name())
 		return false, time.Time{}, err
 	}
 	return true, time.Time{}, nil
@@ -181,7 +202,12 @@ func (p *capProxy) serve(in io.Reader, toServer io.Writer, fromServer io.Reader)
 	go func() {
 		r := bufio.NewReader(in)
 		for {
-			line, err := r.ReadBytes('\n')
+			line, err := readBoundedLine(r)
+			if errors.Is(err, errLineTooLong) {
+				_ = p.write(jsonRPCError(nil, -32600, errLineTooLong.Error()))
+				clientDone <- err
+				return
+			}
 			if len(line) > 0 {
 				if ferr := p.handle(line, toServer); ferr != nil {
 					clientDone <- ferr
@@ -216,17 +242,20 @@ func (p *capProxy) serve(in io.Reader, toServer io.Writer, fromServer io.Reader)
 
 // handle forwards one client line or answers it.
 func (p *capProxy) handle(line []byte, toServer io.Writer) error {
-	trimmed := strings.TrimSpace(string(line))
-	if strings.HasPrefix(trimmed, "[") {
-		// MCP forbids batches (2025-06-18); one could carry a tools/call past
-		// the count, so it is refused outright.
-		return p.write(jsonRPCError(nil, -32600, "batch requests are not supported"))
+	if len(bytes.TrimSpace(line)) == 0 {
+		return nil
 	}
-	var m struct {
-		ID     json.RawMessage `json:"id"`
-		Method string          `json:"method"`
+	// Fail closed: a line is forwarded only when it is exactly one JSON object
+	// this proxy understood. Anything else (a batch, several objects on a line,
+	// half an object, trailing text, a repeated or differently cased key) is
+	// refused rather than forwarded, because a server that reads with a
+	// streaming decoder could otherwise run a tools/call this proxy never saw.
+	id, method, perr := parseClientLine(line)
+	if perr != nil {
+		return p.write(jsonRPCError(nil, -32700, "refused: each message must be exactly one JSON object on one line ("+perr.Error()+")"))
 	}
-	if json.Unmarshal([]byte(trimmed), &m) != nil || m.Method != "tools/call" {
+	m := struct{ ID json.RawMessage }{ID: id}
+	if method != "tools/call" {
 		_, err := toServer.Write(line)
 		return err
 	}
@@ -246,6 +275,75 @@ func (p *capProxy) handle(line []byte, toServer io.Writer) error {
 		return nil
 	}
 	return p.write(jsonRPCResult(m.ID, text, true))
+}
+
+// parseClientLine decodes line as exactly one JSON object and returns its id
+// (nil when absent) and method. Keys match case-insensitively, the way Go's
+// decoder reads them, a key present twice is refused, and so is anything but
+// whitespace after the object.
+func parseClientLine(line []byte) (id json.RawMessage, method string, err error) {
+	dec := json.NewDecoder(bytes.NewReader(line))
+	if t, err := dec.Token(); err != nil || t != json.Delim('{') {
+		return nil, "", errors.New("not a JSON object")
+	}
+	seenMethod, seenID := false, false
+	for dec.More() {
+		kt, err := dec.Token()
+		if err != nil {
+			return nil, "", err
+		}
+		key, _ := kt.(string)
+		var raw json.RawMessage
+		if err := dec.Decode(&raw); err != nil {
+			return nil, "", err
+		}
+		switch {
+		case strings.EqualFold(key, "method"):
+			if seenMethod {
+				return nil, "", errors.New("method appears twice")
+			}
+			seenMethod = true
+			if err := json.Unmarshal(raw, &method); err != nil {
+				return nil, "", errors.New("method is not a string")
+			}
+		case strings.EqualFold(key, "id"):
+			if seenID {
+				return nil, "", errors.New("id appears twice")
+			}
+			seenID = true
+			id = raw
+		}
+	}
+	if _, err := dec.Token(); err != nil { // the closing brace
+		return nil, "", err
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return nil, "", errors.New("text after the object")
+	}
+	return id, method, nil
+}
+
+// maxMCPLine bounds one client line: the unit chooses what it sends and the
+// frontend buffers a line whole.
+const maxMCPLine = 4 << 20
+
+var errLineTooLong = errors.New("message line is over 4 MiB")
+
+// readBoundedLine reads one line (the newline included) of at most
+// maxMCPLine bytes.
+func readBoundedLine(r *bufio.Reader) ([]byte, error) {
+	var line []byte
+	for {
+		chunk, err := r.ReadSlice('\n')
+		line = append(line, chunk...)
+		if len(line) > maxMCPLine {
+			return nil, errLineTooLong
+		}
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		return line, err
+	}
 }
 
 func jsonRPCError(id json.RawMessage, code int, msg string) []byte {

@@ -105,8 +105,9 @@ already on the default unit allowlist for other reasons, R `DefaultEgressAllow`)
 
 - The tool takes caller-chosen text, `repo_hint` and `notify` (a JID): a worker
   can file into any repo the filer graph accepts and aim the wake DM at any
-  JID. The graph's reviewer is the control; there is no per-session rate limit
-  (I). A per-session call cap in the frontend wrapper is a cheap addition.
+  JID. The graph's reviewer is the control; a per-session call cap (10 per
+  hour by default) is built (see "Implemented"). The target repo and JID are
+  still caller-chosen.
 - The shared `agents` token grants the whole `mcp` app, not only this tool
   (circus note). Holding it frontend-side keeps it out of the unit but the
   frontend moxy, run as the operator, can read it: the frontend moxyfile must
@@ -165,6 +166,25 @@ R for the code, V where stated; live forwarding not yet run (runbook A8).
   unit add or disable a moxin. Not tested: other cwd-read files moxy might
   have, and what cwd the plugin host gives a frontend stdio server (R: not
   found).
+- Per-session call cap (the risk list's "no rate limit"): a capped moxin runs
+  behind `clown frontend-moxin` (`cmd/clown/moxincap.go`), a stdio proxy
+  between the bridge and `moxy serve-moxin`. Default 10 `tools/call` per hour
+  per session, set by `MaxCalls` on the `frontendMoxins` entry (negative: none);
+  a call past the cap is answered by the proxy with an isError result ("call
+  limit reached ... Nothing was sent. Try again after HH:MM UTC, or ask your
+  coordinator to do it") and never reaches the server. Counts and refusals:
+  statsd `clown.moxin.<name>.calls` and `.refused`; one `close-self-run.log`
+  line per refusal. The count is a per-session, per-moxin state file
+  (`$XDG_STATE_HOME/clown/moxin-calls/<sha256(session)>-<moxin>.json`, replaced
+  whole by rename, flock on a separate lock file), so a frontend restart keeps
+  it; the principal is stable across restarts. It fails closed: an unreadable
+  or empty counter refuses the call. The proxy forwards a line only if it is
+  exactly one JSON object it understood (one object, no trailing text, no
+  repeated or differently cased `method`/`id`, no batch, at most 4 MiB), because
+  a streaming-decoder server could otherwise run a call it never counted (an
+  independent review's finding, fixed). Unit-tested with a real child process
+  and a real state file; the unit cannot write the ledger (clown's state dir is
+  refused as a writable bind). Not live-tested through the bridge.
 - `worker` keeps `clown-builtin-moxins/issue-filer`; a launch that does not
   serve it skips the saved server (profile replay skips what is not
   discovered), so the same profile works on a host without the moxin.
