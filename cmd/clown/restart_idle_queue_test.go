@@ -40,7 +40,7 @@ func newIdleQueueRig(t *testing.T) *idleQueueRig {
 		t.Fatal(err)
 	}
 	sock := idleSocketPath(runtime, restartTestPrincipal)
-	il, err := startIdleListenerTracking(sock, busy, r.onIdle)
+	il, err := startIdleListenerTracking(sock, busy, nil, r.onIdle)
 	if err != nil {
 		cl.Close()
 		t.Fatal(err)

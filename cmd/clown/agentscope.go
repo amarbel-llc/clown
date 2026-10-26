@@ -24,6 +24,7 @@ import (
 
 	"code.linenisgreat.com/clown/internal/agentscope"
 	"code.linenisgreat.com/clown/internal/pluginhost"
+	"code.linenisgreat.com/clown/internal/sessionstatus"
 	"code.linenisgreat.com/clown/internal/toolcost"
 )
 
@@ -44,7 +45,14 @@ func runInAgentScope(req agentScopeRequest, logger *slog.Logger) int {
 	launch.Principal = req.principal
 	launch.IdleSocket = req.idleSocket
 	launch.Serve = req.serve
-	launch.OnStarted = req.onStarted
+	unit := launch.Unit
+	launch.OnStarted = func(kill func() error) {
+		req.status.SetUnit(unit)
+		if req.onStarted != nil {
+			req.onStarted(kill)
+		}
+	}
+	launch.OnActive = req.status.SetMainPID
 	if req.stagingRoot != "" && !strings.HasPrefix(req.stagingRoot, launch.Spec.Worktree+"/") {
 		launch.PlumbingRO = append(launch.PlumbingRO, req.stagingRoot)
 	}
@@ -97,6 +105,10 @@ type agentScopeRequest struct {
 	// onStarted is called once a SIGTERM to clown reaches systemd-run, with
 	// a kill of the unit.
 	onStarted func(kill func() error)
+	// status is the session's status file (clown#322), told the unit name
+	// when systemd-run runs and the unit's MainPID once it is active; nil:
+	// none.
+	status *sessionstatus.Writer
 }
 
 // agentScopeTools resolves systemd-run and systemctl from PATH (overridable

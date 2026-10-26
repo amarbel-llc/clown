@@ -15,7 +15,7 @@ func TestIdleListenerTracksTurnStarts(t *testing.T) {
 	sock := filepath.Join(shortSocketDir(t), "k.sock")
 	var busy atomic.Bool
 	var runs atomic.Int32
-	l, err := startIdleListenerTracking(sock, &busy, func() { runs.Add(1) })
+	l, err := startIdleListenerTracking(sock, &busy, nil, func() { runs.Add(1) })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +45,7 @@ func TestATurnStartAloneRunsNothing(t *testing.T) {
 	sock := filepath.Join(shortSocketDir(t), "k.sock")
 	var busy atomic.Bool
 	var runs atomic.Int32
-	l, err := startIdleListenerTracking(sock, &busy, func() { runs.Add(1) })
+	l, err := startIdleListenerTracking(sock, &busy, nil, func() { runs.Add(1) })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestSynthIdlePluginDirRegistersATurnStartHook(t *testing.T) {
 		t.Fatal(err)
 	}
 	ups := cfg.Hooks["UserPromptSubmit"]
-	if len(ups) != 1 || len(ups[0].Hooks) != 1 || ups[0].Hooks[0].Command != "/nix/store/c/bin/clown idle-notify --busy /run/user/1001/clown/idle/k.sock" {
+	if len(ups) != 1 || len(ups[0].Hooks) != 1 || ups[0].Hooks[0].Command != idleNotifyPayloadEnv+"=1 /nix/store/c/bin/clown idle-notify --busy /run/user/1001/clown/idle/k.sock" {
 		t.Fatalf("UserPromptSubmit hook = %+v\n%s", ups, hb)
 	}
 }

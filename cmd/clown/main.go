@@ -35,6 +35,7 @@ import (
 	"code.linenisgreat.com/clown/internal/provider"
 	"code.linenisgreat.com/clown/internal/ptysuspend"
 	"code.linenisgreat.com/clown/internal/sessions"
+	"code.linenisgreat.com/clown/internal/sessionstatus"
 	"code.linenisgreat.com/clown/internal/staging"
 	"code.linenisgreat.com/clown/internal/tent"
 	"code.linenisgreat.com/clown/pkg/profilelookup"
@@ -1112,11 +1113,12 @@ func runWithFlags(flags parsedFlags) int {
 		worktree:     cwd,
 		logPath:      restartLog,
 	}
-	idleDir, idleSock, restartTrig, closeIdle := armSelfClose(flags, root, restarts, restarter.restart, turnRunning)
+	idleDir, idleSock, restartTrig, sessionStatus, closeIdle := armSelfClose(flags, root, restarts, restarter.restart, turnRunning)
 	defer closeIdle()
 	if idleDir != "" {
 		pluginDirs = append(pluginDirs, idleDir)
 		flags.idleSocket = idleSock
+		flags.sessionStatus = sessionStatus
 	}
 	defer armRestartControl(flags, restartUnarmedReason(flags, idleDir != ""), restarts, restartTrig)()
 
@@ -2216,6 +2218,7 @@ func runProvider(executor Executor, bound Command, logger *slog.Logger, flags pa
 			extraEnv:     extraEnv,
 			principal:    flags.identity.Key,
 			idleSocket:   flags.idleSocket,
+			status:       flags.sessionStatus,
 			// The kill SIGKILLs the unit (systemctl kill), not systemd-run.
 			onStarted: markProviderRunning,
 		}, logger)
@@ -2238,6 +2241,7 @@ func runProvider(executor Executor, bound Command, logger *slog.Logger, flags pa
 			}
 			// Through the process handle, never a pid that may be reused.
 			markProviderRunning(func() error { return killProcess(proc) })
+			flags.sessionStatus.SetMainPID(proc.Pid)
 		}
 		code, err := ptysuspend.Run(append([]string{binary}, argv...), os.Stdin, ptyOpts)
 		if err != nil {
@@ -2293,6 +2297,7 @@ func runProvider(executor Executor, bound Command, logger *slog.Logger, flags pa
 	}
 	startElapsed := time.Since(preStart)
 	markProviderRunning(func() error { return killProcess(cmd.Process) })
+	flags.sessionStatus.SetMainPID(cmd.Process.Pid)
 	if logger != nil {
 		logger.Info("downstream process started", "pid", cmd.Process.Pid, "start_elapsed", startElapsed.String())
 	}
@@ -3377,6 +3382,10 @@ type parsedFlags struct {
 	// idleSocket is the frontend's idle-listener socket when self-close is
 	// armed (clown#287); an agent unit binds it in so the Stop hook can reach it.
 	idleSocket string
+	// sessionStatus is the hung-session status file (clown#322), armed with
+	// the idle listener; nil otherwise. runProvider records the provider pid
+	// or the agent unit in it.
+	sessionStatus *sessionstatus.Writer
 	// clownfileEnvSet names the env keys applyClownfileProfile set because they
 	// were unset in the ambient environment, so a named profile's Env can
 	// override those defaults without overriding the ambient env (clown#285).
