@@ -16,6 +16,8 @@ package sessions
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -57,7 +59,34 @@ type NameRecord struct {
 	ProfileFormOmitted string          `json:"profile_form_omitted,omitempty"`
 	AgentScope         string          `json:"agent_scope,omitempty"`
 	AgentScopeDigest   string          `json:"agent_scope_digest,omitempty"`
+	SpawnBriefSHA256   string          `json:"spawn_brief_sha256,omitempty"`
 	TS                 time.Time       `json:"ts"`
+}
+
+// BriefDigest is the sha256 hex of a brief, as NameRecord.SpawnBriefSHA256
+// records it: the brief a spawn launch (spinclass's {prompt}, claude's
+// positional prompt) delivered, so a restart's relaunch can leave exactly that
+// operand out instead of sending it into the resumed conversation again. Only
+// the digest is stored; older readers ignore the field.
+func BriefDigest(brief string) string {
+	sum := sha256.Sum256([]byte(brief))
+	return hex.EncodeToString(sum[:])
+}
+
+// SpawnBriefDigestOf returns the brief digest session id was spawned with:
+// the LAST record for id that carries one. An enrichment, not a gate: an
+// unreadable sidecar returns the error and the caller keeps every operand.
+func SpawnBriefDigestOf(id string) (digest string, ok bool, err error) {
+	err = scanRecords(func(_ string, rec *NameRecord) error {
+		if rec != nil && rec.SessionID == id && rec.SpawnBriefSHA256 != "" {
+			digest, ok = rec.SpawnBriefSHA256, true
+		}
+		return nil
+	})
+	if err != nil {
+		return "", false, err
+	}
+	return digest, ok, nil
 }
 
 // AgentScopeRecord is a session's confinement record: the spec path and the
@@ -185,7 +214,7 @@ func RecordSessionName(id, name, group string) error {
 // or this write failing) is not caught until the next record's check.
 // TruncatedTail reports a fragment at the end.
 func RecordSession(rec NameRecord) error {
-	if rec.SessionID == "" || (rec.Name == "" && rec.Profile == "" && rec.AgentScope == "") {
+	if rec.SessionID == "" || (rec.Name == "" && rec.Profile == "" && rec.AgentScope == "" && rec.SpawnBriefSHA256 == "") {
 		return nil
 	}
 	path, err := namesPath()

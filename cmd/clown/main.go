@@ -903,6 +903,17 @@ func runWithFlags(flags parsedFlags) int {
 		_ = os.Setenv("CLOWN_GROUP_ID", flags.groupID)
 	}
 
+	// A spawned worker's brief is claude's positional prompt; record its digest
+	// before any [attach] re-exec (the inner clown, which runs the restart, no
+	// longer knows it is a spawn) so a restart's relaunch leaves it out rather
+	// than sending it into the resumed conversation again. Best-effort: without
+	// the record the relaunch keeps the brief and restartedNotice names it.
+	if flags.provider == "claude" && !flags.naked && !flags.printLaunchPlan {
+		if err := recordSpawnBrief(flags, attachSpawn); err != nil {
+			fmt.Fprintf(os.Stderr, "clown: recording the spawn brief: %v\n", err)
+		}
+	}
+
 	// clownfile [attach] (RFC-0013 §1.3): wrap clown in the configured
 	// multiplexer on boot, after the per-instance id is resolved so {id} is
 	// available. No-op when already attached, disabled, or non-interactive; on a

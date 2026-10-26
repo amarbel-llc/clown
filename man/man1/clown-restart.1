@@ -247,6 +247,14 @@ replaced by
 .Fl -resume Ar principal ,
 and
 .Ev CLOWN_SESSION_ID Ns = Ns Ar principal ;
+the one operand that was the spawn brief is left out, so the resumed
+conversation is not sent its brief again: a
+.Li --clown-attach=spawn
+launch records the sha256 of its last operand in the session-names sidecar
+.Pq Li spawn_brief_sha256 ,
+and the relaunch drops the operand with that digest, and no other.
+A session without such a record keeps every operand, and the restart notice
+below tells it a replayed brief is a replay;
 the profile check of
 .Cm clown resume
 applies unchanged; a profile edited between the dry run and the relaunch is

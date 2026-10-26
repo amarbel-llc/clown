@@ -17,6 +17,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"code.linenisgreat.com/clown/internal/sessions"
 )
 
 // The restart itself (spinclass#419). On a "restart" verdict the idle runner
@@ -124,7 +126,7 @@ func storePlanIfRunning(plan *relaunchPlan) bool {
 func restartArgv(flags parsedFlags, attachedID string) []string {
 	f := flags
 	// The --resume goes before any `--`, after which claude reads operands.
-	kept := withoutClaudeSessionArgs(flags.forwarded)
+	kept := withoutSpawnBrief(withoutClaudeSessionArgs(flags.forwarded), flags.identity.Key)
 	end := len(kept)
 	if i := slices.Index(kept, "--"); i >= 0 {
 		end = i
@@ -137,6 +139,45 @@ func restartArgv(flags parsedFlags, attachedID string) []string {
 		argv = append(append(argv, attachIDFlag, attachedID), unattendedCarrierArgs()...)
 	}
 	return append(argv, f.reexecArgv()...)
+}
+
+// spawnBriefDigestOf reads the brief digest a spawn launch recorded for a
+// session (a variable so tests need no sidecar).
+var spawnBriefDigestOf = sessions.SpawnBriefDigestOf
+
+// withoutSpawnBrief drops the one operand of args that is the brief the
+// session was spawned with, found by the digest recorded at that launch
+// (recordSpawnBrief): claude would otherwise send it into the resumed
+// conversation as a new message, and a worker mid-task redoes its task. It
+// removes exactly that recorded operand, the last one if several match, and
+// needs no knowledge of claude's flag grammar. Nothing recorded, an
+// unreadable sidecar, or no matching operand (an already-stripped relaunch, a
+// session launched before the record existed) keeps every operand, as
+// clown#318 requires for literal operands.
+func withoutSpawnBrief(args []string, principal string) []string {
+	digest, ok, err := spawnBriefDigestOf(principal)
+	if err != nil || !ok {
+		return args
+	}
+	for i := len(args) - 1; i >= 0; i-- {
+		if sessions.BriefDigest(args[i]) == digest {
+			return slices.Concat(args[:i], args[i+1:])
+		}
+	}
+	return args
+}
+
+// recordSpawnBrief records the digest of the brief a spawn launch delivers:
+// the last operand, which spinclass's spawn-entry places after the
+// provider-args. Any other launch, and a spawn with no operands, records
+// nothing. The caller treats a failure as non-fatal: the relaunch then keeps
+// the brief, as it did before the record existed.
+func recordSpawnBrief(flags parsedFlags, spawn bool) error {
+	if !spawn || len(flags.forwarded) == 0 {
+		return nil
+	}
+	brief := flags.forwarded[len(flags.forwarded)-1]
+	return sessions.RecordSession(sessions.NameRecord{SessionID: flags.identity.Key, SpawnBriefSHA256: sessions.BriefDigest(brief)})
 }
 
 // withoutClaudeSessionArgs drops claude's --session-id (with its value, in
