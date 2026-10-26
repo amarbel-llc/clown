@@ -83,6 +83,14 @@ func TestRestartedNoticeIsOneBoundedLine(t *testing.T) {
 	if !strings.Contains(n, "restarted: pick up new tools") {
 		t.Fatalf("notice = %q", n)
 	}
+	// The replayed-brief sentence (a relaunch re-sends the spawn brief as a new
+	// message; one worker redid its whole task on seeing it): a replay is named
+	// as such, finishing is allowed to be the answer, and redoing is not.
+	for _, want := range []string{"original brief", "replay caused by this restart", "if you finished the task it describes, say so and stop", "do not redo it"} {
+		if !strings.Contains(n, want) {
+			t.Errorf("notice %q lacks %q", n, want)
+		}
+	}
 	if long := restartedNotice(strings.Repeat("x", 5000)); len(long) > 1000 {
 		t.Fatalf("notice not bounded: %d bytes", len(long))
 	}

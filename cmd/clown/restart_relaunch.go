@@ -313,7 +313,7 @@ func restartedNotice(reason string) string {
 	if clean == "" {
 		return ""
 	}
-	return "restarted: " + clean + "\n\nThis session was stopped and relaunched by its clown frontend at spinclass's request (spinclass#419). The conversation is the same session under the same principal; its tools and configuration were loaded afresh and may have changed."
+	return "restarted: " + clean + "\n\nThis session was stopped and relaunched by its clown frontend at spinclass's request (spinclass#419). The conversation is the same session under the same principal; its tools and configuration were loaded afresh and may have changed.\n\nIf the message that started this session (your original brief) arrives again as a new message, it is a replay caused by this restart, not a new request: if you finished the task it describes, say so and stop; do not redo it; if you were part-way through, continue from where your earlier turns left off."
 }
 
 // restartFallbackReason is the relaunch's reason when spinclass's verdict
