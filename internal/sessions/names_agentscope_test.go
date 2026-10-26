@@ -59,6 +59,14 @@ func TestAgentScopeRecordOfKeepsTheDigest(t *testing.T) {
 	if rec, _, _ := AgentScopeRecordOf("id-1"); rec != (AgentScopeRecord{Spec: "/s/b.json"}) {
 		t.Fatalf("record %+v; want the new spec with no digest", rec)
 	}
+	// Back to the first spec, digestless: its digest is still the one
+	// recorded for it.
+	if err := RecordSession(NameRecord{SessionID: "id-1", AgentScope: "/s/a.json"}); err != nil {
+		t.Fatal(err)
+	}
+	if rec, _, _ := AgentScopeRecordOf("id-1"); rec != (AgentScopeRecord{Spec: "/s/a.json", Digest: "d1"}) {
+		t.Fatalf("record %+v; want /s/a.json with its digest d1", rec)
+	}
 }
 
 // AnyAgentScope reports whether any session at all is recorded as confined:

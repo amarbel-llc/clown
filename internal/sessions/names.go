@@ -67,10 +67,12 @@ type AgentScopeRecord struct {
 }
 
 // AgentScopeRecordOf is AgentScopeOf with the digest recorded beside the
-// spec: both from the LAST record for id that carries a spec, except that a
-// later record of the same spec with no digest (a writer that does not
-// record one) keeps the digest already recorded rather than erasing it.
+// spec: the spec from the LAST record for id that carries one, and the last
+// digest recorded for id under that spec, so a record without a digest (a
+// writer that records none) never erases one, even after a record for
+// another spec came in between.
 func AgentScopeRecordOf(id string) (rec AgentScopeRecord, ok bool, err error) {
+	digests := map[string]string{} // spec -> the last digest recorded for it
 	err = scanRecords(func(line string, r *NameRecord) error {
 		if r == nil {
 			if strings.Contains(line, `"agent_scope`) && strings.Contains(line, id) {
@@ -79,11 +81,10 @@ func AgentScopeRecordOf(id string) (rec AgentScopeRecord, ok bool, err error) {
 			return nil
 		}
 		if r.SessionID == id && r.AgentScope != "" {
-			next := AgentScopeRecord{Spec: r.AgentScope, Digest: r.AgentScopeDigest}
-			if ok && next.Digest == "" && next.Spec == rec.Spec {
-				next.Digest = rec.Digest
+			if r.AgentScopeDigest != "" {
+				digests[r.AgentScope] = r.AgentScopeDigest
 			}
-			rec, ok = next, true
+			rec, ok = AgentScopeRecord{Spec: r.AgentScope, Digest: digests[r.AgentScope]}, true
 		}
 		return nil
 	})
