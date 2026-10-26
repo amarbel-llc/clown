@@ -20,7 +20,7 @@
 .Nm
 .Cm restart
 .Fl -session Ar key
-.Op Fl -when Cm idle
+.Op Fl -when Cm idle | now
 .Op Fl -reason Ar text
 .Sh DESCRIPTION
 .Nm
@@ -56,7 +56,9 @@ and loaded plugins) and exit.
 .It Cm restart Fl -session Ar key
 Queue a restart of the live session
 .Ar key
-for its next idle transition: spinclass's restart hand-off.
+for its next idle transition, or with
+.Fl -when Cm now
+ask spinclass at once: spinclass's restart hand-off.
 See
 .Xr clown-restart 1 .
 .It Fl -provider Ar name

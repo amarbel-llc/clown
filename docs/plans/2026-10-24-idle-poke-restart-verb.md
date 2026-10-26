@@ -9,8 +9,8 @@ first written against spinclass c942d87; the contract has moved since
 that has started) and clown uses it before the exec (20 s bound) and again
 in the relaunched frontend before its presence registration and `troupe
 mint` (5 s bound, "clown: checking session state" on stderr; closed exits 0
-with one stderr line, close-self-run.log being the durable record); a force restart is refused until `--when now` exists (see
-the design note below); a queued `cancel-restart` is dropped when the
+with one stderr line, close-self-run.log being the durable record); `--when now` is
+implemented (see the note at the end); a queued `cancel-restart` is dropped when the
 preflight answers `none`; and spinclass stamps `RestartingAt` when it
 consumes a restart, so a close is refused for 2 minutes after that. The
 verdict's reason reads "restart of KEY requested by REQUESTER: REASON",
@@ -31,7 +31,7 @@ This note records what was built, the decisions taken, and what is unverified.
 
 ## What clown does
 
-- `clown restart --session K [--when idle] [--reason R]` dials
+- `clown restart --session K [--when idle|now] [--reason R]` dials
   `$XDG_RUNTIME_DIR/clown/control/K.sock` (unix stream, 0600 in a 0700 dir,
   same-uid peers only, a live socket of the same key is never taken over),
   sends `{op,when,reason}` and reads `{ok,error}`. Exit 1 with
@@ -39,7 +39,7 @@ This note records what was built, the decisions taken, and what is unverified.
   refusal ("restart needs an idle trigger; <provider> has none"; claude with
   the trigger off names the gate, and so does a claude launch whose
   conversation id is not its principal, which a relaunch could not resume).
-  Only `--when idle`; anything else, and every usage error, exits 2
+  `--when idle` or `now`; anything else, and every usage error, exits 2
   (pinned by `TestRestartVerbArgvContract`).
 - The inline countdown (no posh modal) has no viewer cancel, but a turn
   start during it still cancels the restart, as with the modal.
@@ -226,10 +226,39 @@ This note records what was built, the decisions taken, and what is unverified.
 - A profile edited after the dry run and before the relaunch is still refused
   after the stop.
 
-## Design note: `--when now` (not built)
+## Design note: `--when now` (implemented)
 
-Status: design only, nothing implemented. The semantics below are as agreed
-with spinclass (bozo) in conversation; open choices are marked **Q**.
+Status: implemented on pure-teak (the commit "restart: accept `clown restart
+--when now`"); Go unit tests with a fake spinclass, not run against a live
+session or a spinclass that sends `now`. The **Q**s below were answered by
+spinclass and the coordinator:
+
+- Keep the 30 s countdown (posh modal or inline notice); a turn start is not
+  a cancel for `now`. A detached session restarts at once, as for `idle`.
+- Early reply: the verb exits 0 once the frontend accepted the request; the
+  preflight runs after the reply, and a refusal there is spinclass's to
+  report.
+- A `now` replaces a queued `idle` (newest wins).
+
+As built, beyond the original note:
+
+- `idleRunner.triggerNow` queues the request and runs take-preflight-restart
+  in a goroutine under the mutex `onIdle` now holds for its whole run; no
+  close-self-run on the `now` path.
+- `inFlight` (a CAS) is held from a `now` being accepted, or the idle
+  runner taking a request, until its preflight and restart (countdown
+  included) end; a `now` meanwhile is refused as "already underway", like
+  one after the plan is stored. An `idle` meanwhile is still queued.
+- Whether a turn start cancels follows the verdict's `when`, not the
+  socket's: only a verdict with `when:"now"` stops a busy session. A forged
+  `now` (from a same-uid process outside an agent unit; the unit cannot
+  reach the control socket) therefore cannot skip the busy cancel of an `idle` restart
+  spinclass authorized; it can make the frontend preflight early, which
+  consumes that `idle` request mid-turn, and the busy cancel then drops it
+  (the requester asks again). Same harm class as the forged idle poke in
+  "Limits accepted after review".
+- An idle poke waits for a running `now` (its close-self-run is delayed by
+  up to the preflight plus the countdown).
 
 ### Semantics
 

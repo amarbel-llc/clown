@@ -9,7 +9,7 @@
 .Sh SYNOPSIS
 .Nm clown restart
 .Fl -session Ar key
-.Op Fl -when Cm idle
+.Op Fl -when Cm idle | now
 .Op Fl -reason Ar text
 .Sh DESCRIPTION
 .Nm clown restart
@@ -34,10 +34,15 @@ which is the next Stop of the agent, not a time.
 The command authorizes nothing: a queued request only makes the frontend ask
 spinclass again at that transition.
 .Pp
-Only
-.Fl -when Cm idle ,
-the default, is accepted.
-A newer request replaces a queued one.
+.Fl -when Cm idle
+is the default.
+.Fl -when Cm now
+asks spinclass at once instead of at the next idle transition; see
+.Sx Restart now .
+A newer request replaces a queued one, so a
+.Cm now
+replaces a queued
+.Cm idle .
 .Ss The idle transition
 The frontend's idle trigger is the self-close Stop hook (clown#287): after
 each turn the agent's
@@ -81,6 +86,53 @@ The verdict still gates the restart, so a forged poke cannot start one spinclass
 did not authorize; but the agent can choose when an authorized restart
 happens, including mid-turn (a poke clears the turn-running mark), or cancel
 one with a forged turn start.
+.Ss Restart now
+With
+.Fl -when Cm now
+the frontend queues the request and, without waiting for an idle poke or
+running
+.Ic spinclass close-self-run ,
+runs
+.Ic spinclass restart-preflight
+itself, in the background: the command returns as soon as the frontend has
+accepted the request, before the preflight answers, and a refusal by the
+preflight after that is spinclass's to report.
+The verdict decides exactly as at an idle transition: only
+.Li restart
+proceeds, and anything else drops the request and leaves the session
+running, so a control message on its own can never start a restart.
+.Pp
+The preflight and restart of a
+.Cm now
+and those of an idle transition run one at a time: an idle poke arriving
+during a
+.Cm now
+waits for it and never asks spinclass about the same request twice.
+A
+.Cm now
+arriving while a preflight or restart is in flight (an idle transition's,
+countdown included, or that of another
+.Cm now )
+is refused with
+.Dq a restart is already underway ,
+as is one while a restart has stopped the provider.
+.Pp
+Everything after the verdict is the restart below, with one difference:
+under a verdict whose
+.Li when
+is
+.Li now ,
+a running turn is expected and is stopped, so a turn start cancels neither
+the countdown nor the restart.
+The countdown itself is kept (a viewer can still cancel the posh modal) and
+the profile check still runs before anything is stopped.
+Under a verdict with any other
+.Li when ,
+a turn start cancels the restart as for
+.Cm idle ;
+the request's own
+.Cm now
+only made the frontend ask sooner.
 .Ss The restart
 On a
 .Li restart
@@ -113,7 +165,9 @@ A detached session restarts at once.
 A turn that starts during the countdown (the self-close plugin's
 UserPromptSubmit hook,
 .Cm clown idle-notify --busy )
-cancels the restart.
+cancels the restart, except under a
+.Li now
+verdict.
 So does a cancelled countdown or a profile refusal.
 spinclass has already consumed the request, so a cancel is reported on the
 frontend's standard error and in the log, and the requester must ask again.
@@ -291,7 +345,10 @@ notice to the session's system prompt.
 .Nm clown restart
 exits
 .Sy 0
-once the request is queued,
+once the request is queued
+.Pq Cm idle
+or accepted and the preflight started
+.Pq Cm now ,
 .Sy 1
 when it is not, with the reason on standard error:
 .Bl -tag -width Ds
@@ -305,7 +362,9 @@ The trigger is off for this claude launch;
 names the gate, or says the launch's claude conversation id is not its
 principal.
 .It Li a restart is already underway for this session ...
-A restart has stopped, or is stopping, the provider.
+A restart has stopped, or is stopping, the provider; or, for
+.Cm now ,
+a preflight or restart is in flight.
 .El
 .Pp
 A usage error exits
@@ -317,9 +376,9 @@ one path segment, or a
 .Fl -when
 other than
 .Cm idle
-(so
-.Fl -when Cm now
-exits 2 for now); these are checked before any frontend is contacted.
+or
+.Cm now ;
+these are checked before any frontend is contacted.
 spinclass reads only 0 against non-zero.
 .Sh SEE ALSO
 .Xr clown 1 ,
