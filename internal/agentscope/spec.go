@@ -230,6 +230,7 @@ var Capabilities = []string{
 	"statsd-relay",          // in-unit UDP 127.0.0.1:8125 relayed over a peer-checked unixgram socket to the frontend's statsd
 	"frontend-monitors",     // job-platform monitors run in the frontend; no ringmaster or troupe state is bound into the unit
 	"frontend-serve-socket", // spinclass serve's bridge listens on a per-session unix socket admitting only the unit (Result.ServeSocket); no TCP listener
+	"frontend-deadman",      // the unit stops when its frontend dies, by any signal (clown#319)
 }
 
 // Result is what clown reports back once the unit is active (FDR 0020

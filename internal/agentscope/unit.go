@@ -83,6 +83,10 @@ type Launch struct {
 	// clown#320). The frontend sets it from clown's unattended marker
 	// (CLOWN_UNATTENDED, or its [attach] carrier); it is not a spec field.
 	Unattended bool
+	// DeadManSocket is the frontend's dead-man socket (DeadMan, clown#319),
+	// bound in as a single inode; the shim (--deadman) stops the unit when
+	// its connection to it ends. Empty: none.
+	DeadManSocket string
 }
 
 // resourceLimits are every agent unit's limits (clown#320, the operator's
@@ -181,6 +185,9 @@ func (l Launch) SystemdRunArgs() ([]string, error) {
 	}
 	args = append(args, "--")
 	args = append(args, l.Shim...)
+	if l.DeadManSocket != "" {
+		args = append(args, "--deadman", l.DeadManSocket)
+	}
 	if l.ServeFile != "" {
 		args = append(args, "--serve", l.ServeFile)
 	}
@@ -224,6 +231,9 @@ func (l Launch) properties() []string {
 	}
 	if l.IdleSocket != "" {
 		props = append(props, "BindPaths="+l.IdleSocket)
+	}
+	if l.DeadManSocket != "" {
+		props = append(props, "BindPaths="+l.DeadManSocket)
 	}
 	for _, s := range l.MonitorSockets {
 		props = append(props, "BindPaths="+s)
