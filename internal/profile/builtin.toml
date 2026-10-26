@@ -220,6 +220,32 @@ CLOWN_DISALLOWED_TOOLS = "Artifact,ArtifactData,ArtifactComments,DesignSync,Work
 ]
 "just-us/just-us" = ["dump_justfile", "list_variables"]
 
+# worker is the confined unattended worker (clown 2026-10-26 ruling): the
+# canary-spinclass surface with the landing tools kept, so a worker that is
+# spawned confined can commit through spinclass's grit, run recipes, attest and
+# merge its own session. Moxy is dropped whole and just-us kept, so it passes
+# spinclass's confined-spawn rule; connectors are off (operator ruling: no
+# worker profile turns claude.ai connectors on). It has no way to file issues
+# or reach a forge yet; docs/plans/2026-10-26-confined-moxy-sequencing.md.
+[[profile]]
+name = "worker"
+display = "Worker (confined unattended: edit, commit, run recipes, merge)"
+provider = "claude"
+backend = "anthropic"
+model = "claude-sonnet-5-5"
+context_servers = ["clown-builtin-jobs/ringmaster", "clown-builtin-jobs/troupe", "spinclass/spinclass", "just-us/just-us"]
+
+[profile.env]
+CLOWN_DISABLE_CLAUDEAI_CONNECTORS = "1"
+CLOWN_DISALLOWED_TOOLS = "Artifact,ArtifactData,ArtifactComments,DesignSync,Workflow,SendFeedback,EnterPlanMode,ExitPlanMode,ScheduleWakeup,CronCreate,CronDelete,CronList,RemoteTrigger,EndConversation,ReportFindings,PushNotification,ListMcpResourcesTool,ReadMcpResourceTool,ReadMcpResourceDirTool,WaitForMcpServers"
+
+[profile.context_excluded]
+"spinclass/spinclass" = [
+  "close-child-session", "grant-session-handle", "list", "perms-list", "release-session-handle",
+  "resurrect", "session-job-cancel", "spawn-session", "validate",
+]
+"just-us/just-us" = ["dump_justfile", "list_variables"]
+
 # canary-grit is canary for runs that test spinclass's own grit tools under
 # confinement: moxy keeps only read-only folio read/ls, rg and jq (none of its
 # grit, chix or smith tools), just-us keeps run_recipe because canaries run

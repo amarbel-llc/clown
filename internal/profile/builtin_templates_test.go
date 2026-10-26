@@ -123,7 +123,7 @@ func TestBuiltinTaskTemplates(t *testing.T) {
 // strips that server's tools, so every template must keep both whole.
 func TestBuiltinTemplatesKeepTheServersAWorkerNeedsToReportBack(t *testing.T) {
 	required := []string{"clown-builtin-jobs/ringmaster", "clown-builtin-jobs/troupe"}
-	for _, name := range []string{"reviewer", "porter", "canary", "canary-grit", "canary-spinclass"} {
+	for _, name := range []string{"reviewer", "porter", "canary", "canary-grit", "canary-spinclass", "worker"} {
 		p := builtinByName(t, name)
 		for _, srv := range required {
 			if !slices.Contains(p.ContextServers, srv) {
@@ -195,6 +195,79 @@ func TestBuiltinCanarySpinclassDropsMoxyWhole(t *testing.T) {
 		if p.Env[k] != v {
 			t.Errorf("env %s = %q, want canary-grit's %q", k, p.Env[k], v)
 		}
+	}
+}
+
+// worker is the confined unattended worker: canary-spinclass's surface with the
+// landing tools kept. It must keep passing spinclass's confined-spawn rule
+// (moxy dropped whole, just-us kept, job control and chat whole), which is
+// pinned here from clown's side: a change that breaks the rule would make every
+// confined spawn on this profile refuse.
+func TestBuiltinWorkerIsCanarySpinclassPlusTheLandingTools(t *testing.T) {
+	w := builtinByName(t, "worker")
+	if err := Validate(w); err != nil {
+		t.Fatal(err)
+	}
+	got := slices.Clone(w.ContextServers)
+	slices.Sort(got)
+	want := []string{"clown-builtin-jobs/ringmaster", "clown-builtin-jobs/troupe", "just-us/just-us", "spinclass/spinclass"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("context_servers = %v, want %v", got, want)
+	}
+	if slices.Contains(w.ContextServers, "moxy/moxy") {
+		t.Error("worker must drop moxy whole: a confined spawn refuses a profile that keeps it")
+	}
+	if _, ok := w.ContextExcluded["moxy/moxy"]; ok {
+		t.Error("worker carries moxy exclusions for a server it does not keep")
+	}
+	if slices.Contains(w.ContextExcluded["just-us/just-us"], "run_recipe") {
+		t.Error("just-us run_recipe must stay available")
+	}
+	excluded := w.ContextExcluded["spinclass/spinclass"]
+	for _, kept := range []string{
+		"merge-this-session", "merge-this-session-async", "nothing-but-the-truth", "update-this-session-description",
+		"whoami", "version", "list-handles", "close-this-session", "host-load",
+		"restart-this-session", "cancel-restart",
+		"grit_branch", "grit_clone", "grit_commit", "grit_merge", "grit_remote", "grit_stage", "grit_stash", "grit_tag", "grit_worktree",
+	} {
+		if slices.Contains(excluded, kept) {
+			t.Errorf("spinclass %s must stay available to worker", kept)
+		}
+	}
+	for _, dropped := range []string{"spawn-session", "close-child-session", "grant-session-handle", "release-session-handle", "session-job-cancel"} {
+		if !slices.Contains(excluded, dropped) {
+			t.Errorf("spinclass %s must be excluded for worker", dropped)
+		}
+	}
+	// Against canary-spinclass: the only difference in the spinclass
+	// exclusions is the four landing tools coming off the list.
+	cs := builtinByName(t, "canary-spinclass")
+	landing := []string{"merge-this-session", "merge-this-session-async", "nothing-but-the-truth", "update-this-session-description"}
+	var wantExcluded []string
+	for _, tool := range cs.ContextExcluded["spinclass/spinclass"] {
+		if !slices.Contains(landing, tool) {
+			wantExcluded = append(wantExcluded, tool)
+		}
+	}
+	gotExcluded := slices.Clone(excluded)
+	slices.Sort(wantExcluded)
+	slices.Sort(gotExcluded)
+	if !slices.Equal(gotExcluded, wantExcluded) {
+		t.Errorf("spinclass exclusions = %v, want canary-spinclass's minus the landing tools = %v", gotExcluded, wantExcluded)
+	}
+	if !slices.Equal(w.ContextExcluded["just-us/just-us"], cs.ContextExcluded["just-us/just-us"]) {
+		t.Error("just-us exclusions differ from canary-spinclass's")
+	}
+	if w.Provider != cs.Provider || w.Backend != cs.Backend || w.Model != cs.Model {
+		t.Errorf("shape = %s/%s/%s, want canary-spinclass's", w.Provider, w.Backend, w.Model)
+	}
+	for k, v := range cs.Env {
+		if w.Env[k] != v {
+			t.Errorf("env %s = %q, want canary-spinclass's %q", k, w.Env[k], v)
+		}
+	}
+	if w.Env["CLOWN_DISABLE_CLAUDEAI_CONNECTORS"] != "1" {
+		t.Error("no worker profile turns the claude.ai connectors on")
 	}
 }
 
