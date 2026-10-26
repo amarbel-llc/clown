@@ -466,10 +466,6 @@ func run(rawArgs []string) int {
 		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
 		return 1
 	}
-	if err := attachFlagConflict(attachSpawn, flags.noAttach); err != nil {
-		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
-		return 2
-	}
 
 	if flags.version {
 		printVersion()
@@ -480,9 +476,18 @@ func run(rawArgs []string) int {
 		printHelp()
 		return 0
 	}
+	// After --help/--version, so they always answer.
+	if err := attachFlagConflict(attachSpawn, flags.noAttach); err != nil {
+		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
+		return 2
+	}
 
-	return runWithFlags(flags)
+	return launchWithFlags(flags)
 }
+
+// launchWithFlags is run's launch step, a variable so tests of run's
+// refusals can stub it and a regression cannot start a provider.
+var launchWithFlags = runWithFlags
 
 // runWithFlags executes the main provider-dispatch pipeline. Split out
 // from run() so subcommands like `resume` can construct a parsedFlags

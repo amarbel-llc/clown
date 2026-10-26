@@ -29,6 +29,7 @@ type resumeArgs struct {
 	key              string // positional repo/worktree session key (clown#192); empty otherwise
 	keyName          string // optional third key segment: a clown-name filter
 	mcpCollapse      bool   // --mcp-collapse: opt into MCP-collapse mode on the resumed launch
+	noAttach         bool   // --no-attach: resume inline, without the [attach] wrap (clown#159)
 	profile          string // --profile: a requested profile, checked against the session's pin (FDR 0022)
 	forwarded        []string
 }
@@ -221,6 +222,7 @@ func resumeLaunchFlags(id string, args resumeArgs, requested, recorded string) p
 		provider:         "claude",
 		providerExplicit: true,
 		mcpCollapse:      args.mcpCollapse,
+		noAttach:         args.noAttach,
 		forwarded:        append(slices.Clone(args.forwarded), "--resume", id),
 	}
 	switch {
@@ -435,6 +437,8 @@ func parseResumeArgs(args []string) (resumeArgs, error) {
 			out.yes = true
 		case arg == "--mcp-collapse":
 			out.mcpCollapse = true
+		case arg == "--no-attach":
+			out.noAttach = true
 		case arg == "--profile":
 			if i+1 >= len(args) {
 				return resumeArgs{}, fmt.Errorf("--profile requires an argument")
@@ -523,6 +527,10 @@ Key mode (positional repo/worktree):
   session-names sidecar).
   --provider is not accepted — a key implies claude. -y/--yes skips
   the confirmation as in picker mode.
+
+--no-attach (all modes):
+  Resume inline, without the clownfile [attach] multiplexer wrap, as for
+  a direct launch (clown(1)).
 
 Profiles (all modes):
   A launch records the named profile it applied and that profile's

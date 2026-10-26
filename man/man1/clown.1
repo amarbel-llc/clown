@@ -127,7 +127,9 @@ Together with
 .Fl -clown-attach Ns = Ns Cm spawn
 (an orchestrator's detached-worker launch) it is refused with exit status 2
 and nothing is started, since the two contradict each other.
-A restart relaunch of a session launched with it keeps it.
+A restart relaunch of a session launched with it keeps it, and
+.Cm clown resume
+accepts it too.
 .It Fl -skip-failed
 When any discovered HTTP MCP plugin server fails to start,
 .Nm

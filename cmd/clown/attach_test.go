@@ -136,15 +136,22 @@ func TestMaybeReexecSkipsUnderNoAttach(t *testing.T) {
 // --no-attach with --clown-attach=spawn is refused (exit 2) before anything
 // starts: both flags are explicit and contradict each other.
 func TestNoAttachWithSpawnIsRefused(t *testing.T) {
-	prevID, prevSpawn := attachedID, attachSpawn
-	t.Cleanup(func() { attachedID, attachSpawn = prevID, prevSpawn })
+	prevID, prevSpawn, prevLaunch := attachedID, attachSpawn, launchWithFlags
+	t.Cleanup(func() { attachedID, attachSpawn, launchWithFlags = prevID, prevSpawn, prevLaunch })
+	// Should the refusal regress, run() reaches this stub, never a provider.
+	launched := 0
+	launchWithFlags = func(parsedFlags) int { launched++; return 0 }
 	for _, args := range [][]string{
 		{"--clown-attach=spawn", "--no-attach"},
 		{"--no-attach", "--clown-attach", "spawn", "--", "-p", "x"},
 	} {
-		if code := run(args); code != 2 {
-			t.Fatalf("run(%q) = %d, want 2", args, code)
+		if code := run(args); code != 2 || launched != 0 {
+			t.Fatalf("run(%q) = %d with %d launches, want 2 and none", args, code, launched)
 		}
+	}
+	// The seam is the real launch path: without the conflict run() reaches it.
+	if code := run([]string{"--no-attach"}); code != 0 || launched != 1 {
+		t.Fatalf("run(--no-attach) = %d with %d launches, want the stubbed launch", code, launched)
 	}
 	err := attachFlagConflict(true, true)
 	if err == nil || !strings.Contains(err.Error(), "--no-attach") || !strings.Contains(err.Error(), "--clown-attach=spawn") {

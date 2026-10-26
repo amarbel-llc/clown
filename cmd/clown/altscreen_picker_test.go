@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"io"
 	"strings"
 	"testing"
@@ -39,6 +40,27 @@ func TestRunAltScreenPickerReturnsTheFinalModel(t *testing.T) {
 	}
 	if got.marker != "final" {
 		t.Fatalf("model = %+v, want the final quitAtOnce", got)
+	}
+}
+
+// neverQuits waits for input it never gets.
+type neverQuits struct{ marker string }
+
+func (neverQuits) Init() tea.Cmd                         { return nil }
+func (m neverQuits) Update(tea.Msg) (tea.Model, tea.Cmd) { return m, nil }
+func (neverQuits) View() string                          { return "" }
+
+// A program that fails to run (here: its context is already cancelled)
+// returns the error and the zero model, never a half-run one.
+func TestRunAltScreenPickerReturnsRunErrors(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	got, err := runAltScreenPicker(neverQuits{marker: "started"}, append(headlessPicker, tea.WithContext(ctx))...)
+	if err == nil {
+		t.Fatal("want the run error of a cancelled program, got nil")
+	}
+	if got.marker != "" {
+		t.Fatalf("model = %+v, want the zero model with the error", got)
 	}
 }
 
