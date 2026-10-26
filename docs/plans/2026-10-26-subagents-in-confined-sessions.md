@@ -77,6 +77,29 @@ subagent registry; make confined/unattended sessions safe now.
   `worker` was added today and nothing is deployed from this branch as far as I
   know.
 
+## Before the bump deploys: is any live session pinned to the old digests?
+
+Run on each host (nikulin, flic). Every launch with a profile appends a record
+with `profile` and `profile_digest` to `$XDG_STATE_HOME/clown/session-names.jsonl`
+(default `~/.local/state/clown/session-names.jsonl`; **R** `internal/sessions/names.go`,
+the path ladder in `internal/userpath`). The last record per session id wins.
+
+1. List the records for the two profiles:
+   `rg '"profile":"(worker|canary-spinclass)"' ~/.local/state/clown/session-names.jsonl`
+   Each line shows `session_id`, `profile`, `profile_digest` and `ts`. No lines
+   means nothing was ever pinned to them on that host, and the bump is safe there.
+2. Keep only sessions that are still live: `sc list` (tracked sessions; add
+   `--closed` for the dead ones, which do not matter). A live session whose
+   `session_id` is in step 1 is pinned to the old digest.
+3. For any such session, expect `clown resume` and a restart's dry-run gate to
+   refuse after the deploy (the refusal prints the field diff and, since
+   66e0642, lands in the status file as `restart_refusal` kind `profile-gate`).
+   Either close it before deploying, or re-pin it with the launcher approval
+   (`CLOWN_PROFILE_DIGEST` + `CLOWN_PROFILE_SESSION`, as in `explore-profile-pin-e2e` step 6).
+
+**I** I have not run this on nikulin or flic (no access from this session), and
+a custom `XDG_STATE_HOME` moves the file.
+
 ## Sketch: a profile `capabilities` list (not implemented; operator rules first)
 
 A closed set (`subagents`, `monitor` [clown#330], later others) that confined
