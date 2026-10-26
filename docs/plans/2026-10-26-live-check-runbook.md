@@ -16,6 +16,13 @@ coordinator. Contract and detail: FDR 0023 "Live checks" (B5) and the D0 plan
 | A3 | Start a session, type one prompt. In fish (your shell) read the hook: `jq .hooks.UserPromptSubmit $(ls -d <staging>/clown-selfclose-plugin-*/hooks/hooks.json)`. | Command is `'<exe>' idle-notify --busy --payload '<sock>'`, no env prefix. |
 | A4 | During a turn, `cat $XDG_STATE_HOME/clown/status/$(printf %s <principal> \| sha256sum \| cut -d' ' -f1).json` (principal = `CLOWN_SESSION_ID`). | `turn_running` true, `transcript_path` and `claude_session_id` set. After the turn: `turn_running` false, `turn_started_at` kept. Confined launch: `unit` and `main_pid` set. Quit clown cleanly: the file is gone. |
 | A5 | If A3 shows the right command but A4 never shows `turn_running`, claude's hook shell failed to run it: check `clown-idle-notify.log` in the worktree `.tmp`. | A failure here means hooks are not run through a shell that accepts quoted paths; report the log line. |
+| A6 | After A1 and a real restart (spinclass's verdict `restart`): query stats-me, e.g. `series` pattern `clown\.restart\..*`. | Counters `clown.restart.preflight.asked`, `.preflight.verdict.restart`, `.stopping`, `.relaunch.exec`, then `clown.restart.relaunched` (from the new frontend). A refused or none verdict shows `.verdict.refused` / `.verdict.none`; a cancelled restart shows `.cancelled`. |
+| A7 | Retention (#321), after a few days of an unattended session: `ls -l $XDG_STATE_HOME/clown/close-self-run.log*`, `$XDG_STATE_HOME/clown/hook-toolcost/`, and `<worktree>/.cache/clown/agent-relay.log*` (the in-unit `$HOME/.cache/clown/`). | No log above about 1 MiB plus one `.1`; no toolcost state older than 30 days. If a log is much larger, report which and its size. Growth over days was never measured live. |
+
+Not covered by any live check yet (add if you want them): a real claude hook
+run under fish (A3/A4 cover it), the in-unit read-write madder store's
+growth (madder's to bound, open), and that statsd actually reaches stats-me
+from inside a confined unit (the relay is `statsd-relay`; A6 shows it).
 
 ## B. dontAsk (B5)
 
