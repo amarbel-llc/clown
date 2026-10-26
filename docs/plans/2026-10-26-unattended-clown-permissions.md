@@ -42,10 +42,12 @@ Claude API auth and every credential's expiry behaviour (not found in-tree).
   `CLOWN_UNATTENDED`, claude runs in its default mode, where an unallowed
   call prompts. With `CLOWN_UNATTENDED=1` (exactly `1`), clown adds
   `permissions.defaultMode = "dontAsk"` to its `--settings` JSON, claude
-  only (#323, FDR 0023; any other value, another provider, `--naked`, or a
-  conflicting `--permission-mode` refuses the launch).
-- **Counters under `dontAsk`:** `PermissionRequest` never fires (V, `-p`),
-  and all three `clown.permission.<key>.{prompted,approved,declined}`
+  only (#323, FDR 0023; any other value, another provider, `--naked`, a
+  conflicting `--permission-mode` or `--inherit-permission-mode`, the bypass
+  flags, a forwarded `--settings` or `--setting-sources`, or a clownfile or
+  profile env table naming the marker refuses the launch).
+- **Counters under `dontAsk`:** `PermissionRequest` does not fire (V(-p):
+  recorded under `claude -p` only; I interactively), and all three `clown.permission.<key>.{prompted,approved,declined}`
   counters start there, so an unattended session counts nothing: its
   denials are invisible to them and cannot feed an allow list.
 - `clown-hook-allow` (PreToolUse): allows reads under `/nix/store`, every
@@ -62,7 +64,8 @@ Claude API auth and every credential's expiry behaviour (not found in-tree).
 
 - `-p`: an unallowed call is denied after `PermissionRequest`; the session
   continues with the denial (V).
-- `dontAsk`: denied with no dialog (V). Force operations are denied, never
+- `dontAsk`: denied with no dialog (V(-p): under `claude -p` only; I
+  interactively). Force operations are denied, never
   waited on, so the destructive operation does not run (I).
 - Default interactive: the dialog waits; no timeout found; I: the session
   blocks until a human answers or the process is killed.

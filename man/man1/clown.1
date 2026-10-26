@@ -560,8 +560,9 @@ When set to exactly
 .Li 1 ,
 the launch runs claude in its
 .Cm dontAsk
-permission mode: a tool call that is not allowed is denied with no dialog,
-and the session carries on (clown#323).
+permission mode (clown#323), where a tool call that is not allowed is
+denied with no dialog and the session carries on (verified only under
+.Fl p ) .
 .Nm
 adds
 .Cm permissions.defaultMode : Cm dontAsk
@@ -575,14 +576,36 @@ Any other value is refused, and so is the marker with a provider other than
 claude, with
 .Fl -naked ,
 or with provider args that pass another
-.Fl -permission-mode ,
+.Fl -permission-mode
+or
+.Fl -inherit-permission-mode ,
 .Fl -dangerously-skip-permissions ,
+.Fl -allow-dangerously-skip-permissions ,
 .Fl -settings
 or
 .Fl -setting-sources .
+Only the environment may set it: a clownfile
+.Cm [profile]
+.Cm env
+table or a named profile's env that names it is refused.
+Across the
+.Cm [attach]
+wrap the outer clown passes the internal flag
+.Fl -clown-unattended
+to the inner beside
+.Fl -clown-attach-id ,
+since the multiplexer may start the inner with another environment; it is
+refused without
+.Fl -clown-attach-id
+and is not for use by hand.
+.Cm clown agent-scope-run
+reads no marker and applies no
+.Cm dontAsk .
 Under
 .Cm dontAsk
-claude fires no PermissionRequest hook, so the
+claude fires no PermissionRequest hook (observed under
+.Fl p ) ,
+so the
 .Li clown.permission.*
 counters count nothing.
 .It Ev CLOWN_SKIP_FAILED_PLUGINS
