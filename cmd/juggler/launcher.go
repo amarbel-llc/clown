@@ -45,6 +45,9 @@ type llauncher struct {
 
 	mu       sync.Mutex
 	children map[string]*child // alias → process handle
+	// starting holds the aliases reserved by a Start in progress
+	// (clown#312), so a second Start of one alias fails before spawning.
+	starting map[string]struct{}
 
 	// afterHealthy, when set, is called once a child has turned healthy,
 	// before it is registered (tests).
@@ -57,7 +60,29 @@ func newLauncher(binary string, reg *rm.Registry, modelsDir string) *llauncher {
 		reg:             reg,
 		modelsDir:       modelsDir,
 		children:        make(map[string]*child),
+		starting:        make(map[string]struct{}),
 	}
+}
+
+// reserveAlias claims alias for one Start. It fails if another Start holds
+// it or a child already runs under it.
+func (l *llauncher) reserveAlias(alias string) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if _, ok := l.starting[alias]; ok {
+		return fmt.Errorf("alias %q is already starting", alias)
+	}
+	if _, ok := l.children[alias]; ok {
+		return fmt.Errorf("alias %q is already running", alias)
+	}
+	l.starting[alias] = struct{}{}
+	return nil
+}
+
+func (l *llauncher) releaseAlias(alias string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.starting, alias)
 }
 
 // Start spawns a llama-server child, waits for it to become healthy,
@@ -65,7 +90,16 @@ func newLauncher(binary string, reg *rm.Registry, modelsDir string) *llauncher {
 // resolved relative to modelsDir if not absolute; we do NOT stat the
 // resolved path here because the real llama-server validates it and
 // the test fake ignores it.
+//
+// The alias is reserved for the whole Start, so a concurrent Start of the
+// same alias fails at once without spawning, and only this Start touches
+// children[alias] until it returns.
 func (l *llauncher) Start(ctx context.Context, p rm.StartInstanceParams) (rm.Instance, error) {
+	if err := l.reserveAlias(p.Alias); err != nil {
+		return rm.Instance{}, err
+	}
+	defer l.releaseAlias(p.Alias)
+
 	bind := p.Bind
 	if bind == "" {
 		bind = "127.0.0.1"
@@ -151,7 +185,9 @@ func (l *llauncher) Start(ctx context.Context, p rm.StartInstanceParams) (rm.Ins
 
 	if err := l.reg.Add(in); err != nil {
 		l.mu.Lock()
-		delete(l.children, p.Alias)
+		if l.children[p.Alias] == ch {
+			delete(l.children, p.Alias)
+		}
 		l.mu.Unlock()
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		<-ch.exited
