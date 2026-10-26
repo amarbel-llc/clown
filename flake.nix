@@ -1126,6 +1126,10 @@
               tests = true;
               nativeCheckInputs = [ pkgs.git ];
               testEnv = {
+                # Turns prerequisite guards (internal/testlane.SkipOrFail)
+                # from skips into failures: in this lane every prerequisite
+                # is provided, so a skip would hide untested code (clown#235).
+                CLOWN_NIX_TEST_LANE = "1";
                 CLOWN_TEST_FAKESERVER = "${fakeserver-go}/bin/fakeserver";
                 CLOWN_TEST_FAKE_LLAMA_SERVER = "${fake-llama-server-go}/bin/fake-llama-server";
               };
