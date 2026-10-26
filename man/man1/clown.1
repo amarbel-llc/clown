@@ -726,6 +726,21 @@ Picked up at
 .Cm mkJuggler
 build time and layered between the builtin fragments and the user's
 .Pa .clown/system-prompt.d/ .
+.It Pa $XDG_STATE_HOME/clown/status/<hex sha256(principal)>.json
+Hung-session status file, written by a frontend whose idle trigger is
+armed (a claude launch inside a spinclass session) for spinclass to
+classify hung or dead sessions: the principal, the spinclass session key,
+whether a turn is running and when it started, the last hook, the
+frontend's pid and start time (field 22 of
+.Pa /proc/<pid>/stat ,
+0 off Linux), the agent unit, the provider's or unit's main pid, and the
+transcript path and claude session id the last prompt's hook reported.
+Mode 0600 in a 0700 directory, replaced atomically; removed when the
+frontend exits cleanly and left behind when it is killed.
+An empty or 0 field is unknown.
+clown only writes it and never acts on it.
+The contract is in
+.Pa docs/features/0023-unattended-permission-posture.md .
 .El
 .Sh SEE ALSO
 .Xr claude-code 1 ,
