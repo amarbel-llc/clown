@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"slices"
 	"sync"
 	"time"
 
@@ -51,6 +52,28 @@ type server struct {
 type Launcher interface {
 	Start(ctx context.Context, p rm.StartInstanceParams) (rm.Instance, error)
 	Stop(ctx context.Context, alias string) error
+}
+
+// pendingStarter is a Launcher that can list its starts in progress, which
+// StopAll stops as well (clown#313).
+type pendingStarter interface {
+	PendingStarts() []string
+}
+
+// stopAllAliases is what StopAll stops: the launcher's pending starts, then
+// every registered alias not already listed. Pending starts are read first,
+// so a start that registers between the two reads is still in the list.
+func stopAllAliases(l Launcher, reg *rm.Registry) []string {
+	var aliases []string
+	if ps, ok := l.(pendingStarter); ok {
+		aliases = ps.PendingStarts()
+	}
+	for _, in := range reg.List() {
+		if !slices.Contains(aliases, in.Alias) {
+			aliases = append(aliases, in.Alias)
+		}
+	}
+	return aliases
 }
 
 func newServer(reg *rm.Registry, l Launcher) *server {
@@ -229,23 +252,24 @@ func (s *server) dispatch(ctx context.Context, req rm.Envelope) rm.Envelope {
 			return rpcError(req.ID, -32000, "launcher not configured")
 		}
 		// Snapshot the alias list before iterating; Stop mutates the registry.
-		snapshot := s.registry.List()
-		stopped := make([]string, 0, len(snapshot))
-		for _, in := range snapshot {
+		aliases := stopAllAliases(s.launcher, s.registry)
+		stopped := make([]string, 0, len(aliases))
+		for _, alias := range aliases {
 			// Not client-scoped, as StopInstance.
-			if err := s.launcher.Stop(context.WithoutCancel(ctx), in.Alias); err != nil {
+			if err := s.launcher.Stop(context.WithoutCancel(ctx), alias); err != nil {
 				// A concurrent StopInstance on another connection may have
 				// drained the launcher's children map between our snapshot and
-				// this call. If the alias is no longer in the registry, it
-				// was stopped — count it. Otherwise the failure is real.
-				if _, stillRunning := s.registry.Get(in.Alias); !stillRunning {
-					stopped = append(stopped, in.Alias)
+				// this call, or a pending start may have failed meanwhile. If
+				// the alias is no longer in the registry, it was stopped —
+				// count it. Otherwise the failure is real.
+				if _, stillRunning := s.registry.Get(alias); !stillRunning {
+					stopped = append(stopped, alias)
 					continue
 				}
-				s.log.Error("stopAll", "alias", in.Alias, "err", err)
+				s.log.Error("stopAll", "alias", alias, "err", err)
 				continue
 			}
-			stopped = append(stopped, in.Alias)
+			stopped = append(stopped, alias)
 		}
 		return rpcResult(req.ID, rm.StopAllResult{Stopped: stopped})
 

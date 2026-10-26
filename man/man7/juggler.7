@@ -580,8 +580,19 @@ no local or remote match.
 .El
 .Sh INSTANCE LIFECYCLE
 On
-.Cm StartInstance :
+.Cm StartInstance
+.Pq and ResolveModel's start :
 .Bl -enum -compact -offset indent
+.It
+Under l.mu, reserve the alias in
+.Sq l.starting ,
+with a cancel func and a done channel.
+A second start of an alias that is starting, tracked in
+.Sq l.children ,
+or still registered fails at once, spawning nothing:
+.Ql alias \(dqX\(dq is already starting
+or
+.Ql ... is already running .
 .It
 Pick a free TCP port via
 .Fn net.Listen :0
@@ -602,25 +613,7 @@ with
 plus any pass-through args.
 SysProcAttr.Setpgid=true so the daemon can signal the entire
 process group on Stop.
-.It
-Insert
-.Pq under l.mu
-the
-.Sy child
-record into
-.Sq l.children Ns Bq alias .
-.It
-Call
-.Fn reg.Add ;
-on failure, roll back the children entry, SIGKILL the child, drain
-its
-.Sq exited
-channel, return the error.
-.It
-Poll
-.Pa /health
-every 250 ms for up to 60 s.
-On failure, SIGKILL + drain + error.
+A start whose client left, or that Stop stopped, spawns nothing.
 .It
 Launch the single Wait-owner goroutine that calls
 .Xr exec.Cmd.Wait 3 ,
@@ -636,18 +629,45 @@ and, under l.mu, removes the alias from both
 and the registry if and only if
 .Sq l.children Ns Bq alias == ch
 .Pq the identity guard ensures Stop is the single owner of the cleanup when both fire concurrently .
+.It
+Poll
+.Pa /health
+every 250 ms for up to 60 s.
+On failure, or when the start is cancelled, SIGKILL + drain + error.
+.It
+Under one l.mu hold: refuse a start that was cancelled or whose child
+already exited; call
+.Fn reg.Add ;
+insert the
+.Sy child
+record into
+.Sq l.children Ns Bq alias ;
+and drop the reservation.
+On refusal, SIGKILL the child, drain its
+.Sq exited
+channel, return the error.
+.It
+Drop the reservation of a start that failed, then close its done
+channel.
 .El
 .Pp
 On
 .Cm StopInstance :
 .Bl -enum -compact -offset indent
 .It
-Under l.mu, look up and delete the
+If the alias is still starting, cancel that start under l.mu and wait,
+for up to 10 s, on its done channel: its child is killed, nothing is
+registered, and the stop succeeds.
+.It
+Otherwise, under l.mu, look up and delete the
 .Sq l.children
 entry.
 .It
 .Xr kill 2
 .Sy -pid Pq the process group No with Sy SIGTERM .
+If the process group is already gone
+.Pq Er ESRCH ,
+remove the alias from the registry and succeed.
 .It
 Wait on
 .Sq ch.exited
@@ -659,6 +679,10 @@ On timeout, SIGKILL and wait again
 .Fn reg.Remove
 the alias.
 .El
+.Pp
+.Cm StopAll
+stops, as above, every start in progress and then every registered
+alias, and lists both as stopped.
 .Sh SEE ALSO
 .Xr clown 1 ,
 .Xr juggler 1 ,

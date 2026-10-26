@@ -81,7 +81,7 @@ func newHealthBarrier(n int) *healthBarrier {
 	return b
 }
 
-func (b *healthBarrier) afterHealthy(*child) {
+func (b *healthBarrier) afterHealthy(context.Context, *child) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.arrived++
@@ -291,7 +291,7 @@ func assertNothingTracked(t *testing.T, l *llauncher) {
 func TestLauncherChildDeadBeforeRegisteringIsNotRegistered(t *testing.T) {
 	bin := buildFakeLlamaServer(t)
 	l := newLauncher(bin, rm.NewRegistry(), shortTempDir(t))
-	l.afterHealthy = func(ch *child) {
+	l.afterHealthy = func(_ context.Context, ch *child) {
 		_ = syscall.Kill(-ch.cmd.Process.Pid, syscall.SIGKILL)
 		<-ch.exited
 	}

@@ -46,13 +46,14 @@ type llauncher struct {
 
 	mu       sync.Mutex
 	children map[string]*child // alias → process handle
-	// starting holds the aliases reserved by a Start in progress
-	// (clown#312), so a second Start of one alias fails before spawning.
-	starting map[string]struct{}
+	// starting holds the Starts in progress by alias: a second Start of
+	// one alias fails before spawning (clown#312), and Stop stops a
+	// pending start (clown#313).
+	starting map[string]*pendingStart
 
-	// afterHealthy, when set, is called once a child has turned healthy,
-	// before it is registered (tests).
-	afterHealthy func(*child)
+	// afterHealthy, when set, is called with the start's ctx once a child
+	// has turned healthy, before it is registered (tests).
+	afterHealthy func(context.Context, *child)
 }
 
 func newLauncher(binary string, reg *rm.Registry, modelsDir string) *llauncher {
@@ -61,34 +62,72 @@ func newLauncher(binary string, reg *rm.Registry, modelsDir string) *llauncher {
 		reg:             reg,
 		modelsDir:       modelsDir,
 		children:        make(map[string]*child),
-		starting:        make(map[string]struct{}),
+		starting:        make(map[string]*pendingStart),
 	}
 }
 
+// pendingStart is a Start in progress: Stop cancels it through cancel and
+// waits on done, closed once that Start has returned.
+type pendingStart struct {
+	cancel context.CancelCauseFunc
+	done   chan struct{}
+}
+
+var errStoppedWhileStarting = errors.New("stopped while starting")
+
+// pendingStopWait bounds how long Stop waits for a cancelled start to end.
+// A cancelled start ends at once (its health wait returns, its child is
+// SIGKILLed), so this only guards against a wedged one.
+const pendingStopWait = 2 * stopGrace
+
 // reserveAlias claims alias for one Start. It fails if another Start holds
 // it or a child already runs under it.
-func (l *llauncher) reserveAlias(alias string) error {
+func (l *llauncher) reserveAlias(alias string, cancel context.CancelCauseFunc) (*pendingStart, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if _, ok := l.starting[alias]; ok {
-		return fmt.Errorf("alias %q is already starting", alias)
+		return nil, fmt.Errorf("alias %q is already starting", alias)
 	}
 	// The registry outlives children during Stop's grace window (children
 	// cleared first, the registry after the exit): still running there.
 	if _, ok := l.children[alias]; ok {
-		return fmt.Errorf("alias %q is already running", alias)
+		return nil, fmt.Errorf("alias %q is already running", alias)
 	}
 	if _, ok := l.reg.Get(alias); ok {
-		return fmt.Errorf("alias %q is already running", alias)
+		return nil, fmt.Errorf("alias %q is already running", alias)
 	}
-	l.starting[alias] = struct{}{}
-	return nil
+	ps := &pendingStart{cancel: cancel, done: make(chan struct{})}
+	l.starting[alias] = ps
+	return ps, nil
 }
 
-func (l *llauncher) releaseAlias(alias string) {
+// endStart drops a Start's reservation, unless register already handed it
+// to children, and then marks the Start done.
+func (l *llauncher) endStart(alias string, ps *pendingStart) {
+	l.mu.Lock()
+	if l.starting[alias] == ps {
+		delete(l.starting, alias)
+	}
+	l.mu.Unlock()
+	close(ps.done)
+}
+
+// PendingStarts lists the aliases with a Start in progress, which StopAll
+// stops along with the registered instances.
+func (l *llauncher) PendingStarts() []string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	delete(l.starting, alias)
+	aliases := make([]string, 0, len(l.starting))
+	for alias := range l.starting {
+		aliases = append(aliases, alias)
+	}
+	return aliases
+}
+
+// startCancelled is the error for a start whose ctx is done: the client
+// left, or Stop stopped it.
+func startCancelled(ctx context.Context, alias, when string) error {
+	return fmt.Errorf("start %s cancelled %s: %w", alias, when, context.Cause(ctx))
 }
 
 // Start spawns a llama-server child, waits for it to become healthy,
@@ -99,19 +138,16 @@ func (l *llauncher) releaseAlias(alias string) {
 //
 // The alias is reserved for the whole Start, so a concurrent Start of the
 // same alias fails at once without spawning, and only this Start touches
-// children[alias] until it returns.
+// children[alias] until it returns. A Stop of the alias meanwhile cancels
+// this Start: it kills its child and registers nothing.
 func (l *llauncher) Start(ctx context.Context, p rm.StartInstanceParams) (rm.Instance, error) {
-	if err := l.reserveAlias(p.Alias); err != nil {
+	ctx, cancelStart := context.WithCancelCause(ctx)
+	defer cancelStart(nil)
+	ps, err := l.reserveAlias(p.Alias, cancelStart)
+	if err != nil {
 		return rm.Instance{}, err
 	}
-	// A registered start hands the reservation to children itself; only a
-	// failed one releases it here (a later Start may hold it by then).
-	registered := false
-	defer func() {
-		if !registered {
-			l.releaseAlias(p.Alias)
-		}
-	}()
+	defer l.endStart(p.Alias, ps)
 
 	bind := p.Bind
 	if bind == "" {
@@ -141,9 +177,10 @@ func (l *llauncher) Start(ctx context.Context, p rm.StartInstanceParams) (rm.Ins
 	}
 	args = append(args, p.Args...)
 
-	// A start whose client already left (clown#82) spawns nothing.
-	if err := ctx.Err(); err != nil {
-		return rm.Instance{}, fmt.Errorf("start %s cancelled before spawning: %w", p.Alias, err)
+	// A start whose client already left (clown#82), or that Stop stopped,
+	// spawns nothing.
+	if ctx.Err() != nil {
+		return rm.Instance{}, startCancelled(ctx, p.Alias, "before spawning")
 	}
 	cmd := exec.Command(l.llamaServerPath, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -166,17 +203,21 @@ func (l *llauncher) Start(ctx context.Context, p rm.StartInstanceParams) (rm.Ins
 	if err := waitHealthy(hctx, addr); err != nil {
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		<-ch.exited
+		if ctx.Err() != nil {
+			return rm.Instance{}, startCancelled(ctx, p.Alias, "during the health wait")
+		}
 		return rm.Instance{}, fmt.Errorf("waitHealthy: %w", err)
 	}
 	if l.afterHealthy != nil {
-		l.afterHealthy(ch)
+		l.afterHealthy(ctx, ch)
 	}
-	// The client may have left just as the child turned healthy: its start
-	// is killed and not registered, as for any departed client's start.
-	if err := ctx.Err(); err != nil {
+	// The client may have left, or Stop stopped the start, just as the
+	// child turned healthy: it is killed and not registered. register
+	// checks again under l.mu, which Stop cancels under.
+	if ctx.Err() != nil {
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		<-ch.exited
-		return rm.Instance{}, fmt.Errorf("start %s cancelled after it turned healthy: %w", p.Alias, err)
+		return rm.Instance{}, startCancelled(ctx, p.Alias, "after it turned healthy")
 	}
 
 	in := rm.Instance{
@@ -188,12 +229,11 @@ func (l *llauncher) Start(ctx context.Context, p rm.StartInstanceParams) (rm.Ins
 		StartedAt: time.Now().UTC(),
 	}
 
-	if err := l.register(in, ch); err != nil {
+	if err := l.register(ctx, in, ch); err != nil {
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		<-ch.exited
 		return rm.Instance{}, err
 	}
-	registered = true
 	return in, nil
 }
 
@@ -202,10 +242,14 @@ func (l *llauncher) Start(ctx context.Context, p rm.StartInstanceParams) (rm.Ins
 // from starting to children, so no reader sees the alias half-registered.
 // reapOnExit takes l.mu too (lock order l.mu, then the registry's), so a
 // child that exits after register is reaped, and one that already exited
-// is refused here instead of registered dead.
-func (l *llauncher) register(in rm.Instance, ch *child) error {
+// is refused here instead of registered dead. Stop cancels a pending start
+// under l.mu, so a start Stop reached first is refused here too.
+func (l *llauncher) register(ctx context.Context, in rm.Instance, ch *child) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if ctx.Err() != nil {
+		return startCancelled(ctx, in.Alias, "before registering")
+	}
 	select {
 	case <-ch.exited:
 		return fmt.Errorf("start %s: llama-server exited after turning healthy: %v", in.Alias, ch.waitErr)
@@ -224,8 +268,22 @@ func (l *llauncher) register(in rm.Instance, ch *child) error {
 // registry on success. Wait() is owned by the goroutine launched in
 // Start; Stop observes process exit via ch.exited rather than calling
 // Wait directly.
+//
+// Stop of an alias that is still starting (clown#313) cancels that Start
+// and waits, bounded, for it to end: its child is killed and nothing is
+// registered, and Stop then succeeds, as for a running alias.
 func (l *llauncher) Stop(ctx context.Context, alias string) error {
 	l.mu.Lock()
+	if ps, ok := l.starting[alias]; ok {
+		ps.cancel(errStoppedWhileStarting)
+		l.mu.Unlock()
+		select {
+		case <-ps.done:
+			return nil
+		case <-time.After(pendingStopWait):
+			return fmt.Errorf("alias %q: its start did not end within %s of Stop", alias, pendingStopWait)
+		}
+	}
 	ch, ok := l.children[alias]
 	delete(l.children, alias)
 	l.mu.Unlock()
