@@ -87,8 +87,13 @@ Unverified (I / not found):
    show`). No `WatchdogSec`; a hung claude sends no Stop hook so idle
    self-close never fires (I); nothing restarts a hung unit (ruled).
 4. **Frontend death.** Handled (#319): the frontend's death, by any
-   signal, ends the unit within a 10 s grace through the dead-man socket;
-   the unattended wall clock is the backstop. Residual: a hung frontend
+   signal (V for SIGKILL), ends the unit within a 10 s grace (plus at most
+   5 s for an unreapable provider) through the dead-man socket; the
+   unattended wall clock is the backstop. The result file then has no
+   `exit_code` (its writer, the frontend, is dead): read that, with a dead
+   frontend, as a dead-man stop. An [attach] session whose outer clown or
+   multiplexer client goes away keeps running (the inner frontend lives).
+   spinclass should require the `frontend-deadman` capability. Residual: a hung frontend
    that stays alive is not frontend death (hung-session detection is
    separate, spinclass's design); a host reboot or logout ends the
    transient unit and nothing relaunches it; linger state on flic: not
