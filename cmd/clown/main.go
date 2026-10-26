@@ -345,7 +345,12 @@ func lineageRecordIDs(provider string, identity sessionIdentity, resumeHintID st
 	if isClaude && resumeHintID != "" && resumeHintID != identity.Key {
 		ids = append(ids, resumeHintID)
 	}
-	return ids
+	// A session UUID is written lower-cased, as the confinement gate looks
+	// it up (clown#318).
+	for i, id := range ids {
+		ids[i] = normalizeSessionID(id)
+	}
+	return slices.Compact(ids)
 }
 
 // resolveClownName decides this process's clown#169 human-ergonomic name.

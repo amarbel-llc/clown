@@ -164,6 +164,11 @@ What spinclass rewrites on every spawn is not part of it:
 .Sy unit_name_hint
 and
 .Sy result_path .
+A boundary change between two spawns of one worktree, such as an edited
+sweatfile egress-allow or a spawn without
+.Ev SSH_AUTH_SOCK
+(no piggy-agent socket), refuses the resume: a new boundary means a new
+session.
 Any later launch of that session, by
 .Cm clown resume ,
 a direct

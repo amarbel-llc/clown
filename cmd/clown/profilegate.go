@@ -305,6 +305,10 @@ func unseenResumeForm(args []string) string {
 type resumeOccurrence struct {
 	flag, value string
 	ambiguous   bool
+	// index is the occurrence's position in args; takesNext reports that its
+	// value is the following argument (`--resume v`, `-r v`).
+	index     int
+	takesNext bool
 }
 
 // resumeOccurrences reads every --resume/-r the way claude's parser does.
@@ -314,23 +318,27 @@ type resumeOccurrence struct {
 // `--resume=v` takes v; `-rv` takes the attached rest, so `-r=v` is the
 // value "=v" and `-rc` the value "c". A cluster with r after its first
 // letter (`-cr`, `-pr v`) is ambiguous: whether r takes the next argument
-// depends on its neighbours, so it carries no value and is marked.
+// depends on its neighbours, so it carries no value and is marked. It reads
+// past a bare `--` too: the confinement check is stricter for it, and a
+// resume claude does not honour there is at worst a refusal.
 func resumeOccurrences(args []string) []resumeOccurrence {
 	var out []resumeOccurrence
-	for i, a := range args {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
 		switch {
 		case a == "--resume" || a == "-r":
-			v := ""
+			o := resumeOccurrence{flag: a, index: i}
 			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
-				v = args[i+1]
+				o.value, o.takesNext = args[i+1], true
+				i++
 			}
-			out = append(out, resumeOccurrence{flag: a, value: v})
+			out = append(out, o)
 		case strings.HasPrefix(a, "--resume="):
-			out = append(out, resumeOccurrence{flag: "--resume", value: strings.TrimPrefix(a, "--resume=")})
+			out = append(out, resumeOccurrence{flag: "--resume", value: strings.TrimPrefix(a, "--resume="), index: i})
 		case len(a) > 2 && a[0] == '-' && a[1] == 'r':
-			out = append(out, resumeOccurrence{flag: "-r", value: a[2:]})
+			out = append(out, resumeOccurrence{flag: "-r", value: a[2:], index: i})
 		case len(a) > 2 && a[0] == '-' && a[1] != '-' && isShortCluster(a[1:]) && strings.ContainsRune(a[2:], 'r'):
-			out = append(out, resumeOccurrence{flag: "-r", ambiguous: true})
+			out = append(out, resumeOccurrence{flag: "-r", ambiguous: true, index: i})
 		}
 	}
 	return out

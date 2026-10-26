@@ -39,6 +39,15 @@ func TestRestartArgvResumesThePrincipal(t *testing.T) {
 		}
 	}
 
+	// Only the resume occurrences claude's parser reads are dropped; operands
+	// after `--` stay, and the new --resume goes before them (clown#318).
+	f.forwarded = []string{"-rabc", "-r=x", "--model", "m", "--", "-rf", "--resume", "y"}
+	got = restartArgv(f, "")
+	want = []string{"--provider", "claude", "--profile", "worker", "--", "--model", "m", "--resume", restartTestPrincipal, "--", "-rf", "--resume", "y"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("argv = %q, want %q", got, want)
+	}
+
 	// The inner clown of an [attach] wrap keeps its id, so it does not wrap again.
 	f.forwarded = nil
 	if got := restartArgv(f, restartTestPrincipal); got[0] != attachIDFlag || got[1] != restartTestPrincipal {

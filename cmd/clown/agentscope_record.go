@@ -43,7 +43,11 @@ var confinementGate = runConfinementGate
 // confinement record. A non-nil error refuses the launch; notices go to w.
 func runConfinementGate(flags *parsedFlags, w io.Writer) error {
 	resume, sessionIDs, unknown := claudeConversationRefs(flags.forwarded)
-	if err := conversationRefsError(resume, sessionIDs, unknown, flags.identity.LaunchKey, sessions.AnyAgentScope); err != nil {
+	ownKey, err := recordedLaunchKey(flags.identity.LaunchKey, resume, sessions.AgentScopeRecordOf)
+	if err != nil {
+		return err
+	}
+	if err := conversationRefsError(resume, sessionIDs, unknown, ownKey, sessions.AnyAgentScope); err != nil {
 		return err
 	}
 	if flags.agentScopeSpec != "" {
@@ -166,6 +170,12 @@ func loadLaunchSpec(path, digest string) (agentscope.Spec, error) {
 // env (identity, description), socket paths, unit_name_hint, result_path,
 // and the wayland-* deny entries (which follow the display server). The
 // spec is not agent-writable in production, so this is defence in depth.
+// What is covered can still change between two spinclass spawns of one
+// worktree, and then refuses the resume (a changed boundary means a new
+// session): egress_allow follows the trusted sweatfiles' egress-allow (absent
+// unless one sets it; an explicit empty list stays empty), and the
+// piggy-agent socket is present only when the spawning shell had
+// SSH_AUTH_SOCK set.
 func boundaryDigest(s agentscope.Spec) string {
 	norm := func(ps []string, keep func(string) bool) []string {
 		var out []string
@@ -212,13 +222,33 @@ func distinct(vs []string) []string {
 	return out
 }
 
+// recordedLaunchKey is launchKey when the launch resumes by it (a restart's
+// --resume <key>) and a confinement record exists under it, so the gate
+// looks that record up instead of treating the key as a search term;
+// otherwise "". Without a record under the key, claude would resolve the
+// non-UUID value by conversation name, which no record can be tied to.
+func recordedLaunchKey(launchKey string, resume []string, recorded func(string) (sessions.AgentScopeRecord, bool, error)) (string, error) {
+	if launchKey == "" || len(resume) == 0 || resume[0] != launchKey || isUUID(launchKey) {
+		return "", nil
+	}
+	_, ok, err := recorded(launchKey)
+	if err != nil {
+		return "", fmt.Errorf("reading whether session %s ran confined: %w; refusing to launch", launchKey, err)
+	}
+	if !ok {
+		return "", nil
+	}
+	return launchKey, nil
+}
+
 // conversationRefsError refuses provider args the confinement check cannot
 // read unambiguously: repeated --resume or --session-id values that
 // disagree, and, while any session is recorded as confined, a --resume
 // search term (not a UUID) or a short-option cluster carrying -r (unknown),
-// since neither can be tied to one record. A term equal to launchKey, the
-// session key this launch was given (a restart's --resume <key>), is that
-// session's own id and is looked up as such, so it is not refused. The
+// since neither can be tied to one record. A term equal to launchKey (from
+// recordedLaunchKey: the session key this launch was given, with a
+// confinement record under it) is looked up as that id, so it is not
+// refused. The
 // refusal lasts as long as any confinement record does: the sidecar is
 // append-only and never pruned.
 func conversationRefsError(resume, sessionIDs []string, unknown bool, launchKey string, anyConfined func() (bool, error)) error {
@@ -285,8 +315,18 @@ func agentScopeForLaunch(ids []string, given string, recorded func(string) (sess
 		if !ok {
 			continue
 		}
-		if found && r != rec {
-			return "", false, fmt.Errorf("sessions %s and %s of this launch ran confined under different agent-scope specs (%s, %s); refusing to launch", from, id, rec.Spec, r.Spec)
+		if found {
+			// Same spec path, and the same digest where both carry one: a
+			// digestless record (an older clown's) does not contradict one.
+			if r.Spec != rec.Spec {
+				return "", false, fmt.Errorf("sessions %s and %s of this launch ran confined under different agent-scope specs (%s, %s); refusing to launch", from, id, rec.Spec, r.Spec)
+			}
+			if r.Digest != "" && rec.Digest != "" && r.Digest != rec.Digest {
+				return "", false, fmt.Errorf("sessions %s and %s of this launch recorded different boundaries for agent-scope spec %s (%s, %s); refusing to launch", from, id, rec.Spec, rec.Digest, r.Digest)
+			}
+			if r.Digest == "" {
+				r.Digest = rec.Digest
+			}
 		}
 		rec, from, found = r, id, true
 	}

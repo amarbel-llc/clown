@@ -117,7 +117,13 @@ func storePlanIfRunning(plan *relaunchPlan) bool {
 // clown of a multiplexer so it does not wrap again.
 func restartArgv(flags parsedFlags, attachedID string) []string {
 	f := flags
-	f.forwarded = append(withoutClaudeSessionArgs(flags.forwarded), "--resume", flags.identity.Key)
+	// The --resume goes before any `--`, after which claude reads operands.
+	kept := withoutClaudeSessionArgs(flags.forwarded)
+	end := len(kept)
+	if i := slices.Index(kept, "--"); i >= 0 {
+		end = i
+	}
+	f.forwarded = slices.Concat(kept[:end], []string{"--resume", flags.identity.Key}, kept[end:])
 	var argv []string
 	if attachedID != "" {
 		argv = append(argv, attachIDFlag, attachedID)
@@ -125,21 +131,34 @@ func restartArgv(flags parsedFlags, attachedID string) []string {
 	return append(argv, f.reexecArgv()...)
 }
 
-// withoutClaudeSessionArgs drops claude's --session-id and --resume/-r (each
-// with its value, in either form).
+// withoutClaudeSessionArgs drops claude's --session-id (with its value, in
+// either form) and exactly the --resume/-r occurrences resumeOccurrences
+// reads (with a separate value token). Everything else is kept, including
+// operands after `--` and a short cluster carrying r (-cr), which the
+// confinement gate refuses while any session is confined.
 func withoutClaudeSessionArgs(args []string) []string {
+	drop := map[int]bool{}
+	for _, o := range resumeOccurrences(args) {
+		if o.ambiguous {
+			continue
+		}
+		drop[o.index] = true
+		if o.takesNext {
+			drop[o.index+1] = true
+		}
+	}
 	var out []string
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
-		case a == "--session-id" || a == "--resume" || a == "-r":
+		case a == "--":
+			return append(out, args[i:]...)
+		case drop[i]:
+		case a == "--session-id":
 			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
 				i++
 			}
-		case strings.HasPrefix(a, "--session-id=") || strings.HasPrefix(a, "--resume=") || strings.HasPrefix(a, "-r"):
-			// -r<id> and -r=<id> (resumeOccurrences). A cluster carrying r
-			// (-cr) is kept; the confinement gate refuses it while any session
-			// is confined.
+		case strings.HasPrefix(a, "--session-id="):
 		default:
 			out = append(out, a)
 		}

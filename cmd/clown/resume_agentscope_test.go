@@ -23,6 +23,14 @@ func recordsOf(m map[string]string) func(string) (sessions.AgentScopeRecord, boo
 	}
 }
 
+// recordsWith is a fake AgentScopeRecordOf over full records.
+func recordsWith(m map[string]sessions.AgentScopeRecord) func(string) (sessions.AgentScopeRecord, bool, error) {
+	return func(id string) (sessions.AgentScopeRecord, bool, error) {
+		r, ok := m[id]
+		return r, ok, nil
+	}
+}
+
 func loadsAll(string) (string, error) { return "d0", nil }
 
 // The agent-scope spec any launch of a session runs under (clown#318): a
@@ -63,6 +71,9 @@ func TestAgentScopeForLaunch(t *testing.T) {
 		}, load: loadsAll, wantErr: "torn record"},
 		{name: "same digest: re-applied", ids: []string{id}, recorded: withDigest("/s/spec.json", "d0"), load: loadsAll, want: "/s/spec.json", wantFound: true},
 		{name: "digest changed: refused", ids: []string{id}, recorded: withDigest("/s/spec.json", "d1"), load: loadsAll, wantErr: "changed"},
+		{name: "one id digestless, one digested, same spec: re-applied", ids: []string{"a", "b"}, recorded: recordsWith(map[string]sessions.AgentScopeRecord{"a": {Spec: "/s/spec.json"}, "b": {Spec: "/s/spec.json", Digest: "d0"}}), load: loadsAll, want: "/s/spec.json", wantFound: true},
+		{name: "digested then digestless keeps the digest", ids: []string{"a", "b"}, recorded: recordsWith(map[string]sessions.AgentScopeRecord{"a": {Spec: "/s/spec.json", Digest: "d1"}, "b": {Spec: "/s/spec.json"}}), load: loadsAll, wantErr: "changed"},
+		{name: "same spec, different digests: refused", ids: []string{"a", "b"}, recorded: recordsWith(map[string]sessions.AgentScopeRecord{"a": {Spec: "/s/spec.json", Digest: "d0"}, "b": {Spec: "/s/spec.json", Digest: "d1"}}), load: loadsAll, wantErr: "different boundaries"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -268,28 +279,29 @@ func writeSpec(t *testing.T, path string, fields map[string]any) {
 func TestConfinementGateRefuses(t *testing.T) {
 	gone := confinementFixture(t)
 	refused := map[string]parsedFlags{
-		"direct --resume":                   {provider: "claude", forwarded: []string{"--resume", recordedID}, resumeHintID: recordedID},
-		"direct --session-id":               {provider: "claude", forwarded: []string{"--session-id", recordedID}, resumeHintID: recordedID},
-		"provided identity":                 {provider: "claude", identity: sessionIdentity{Key: recordedID, Provided: true}, forwarded: []string{"--session-id", recordedID}, resumeHintID: recordedID},
-		"--naked --resume":                  {provider: "claude", naked: true, forwarded: []string{"--resume", recordedID}},
-		"recorded id in a second --resume":  {provider: "claude", forwarded: []string{"--resume", otherID, "-r", recordedID}, resumeHintID: otherID},
-		"recorded id in --resume=":          {provider: "claude", forwarded: []string{"--resume=" + recordedID}, resumeHintID: recordedID},
-		"disagreeing --resume values":       {provider: "claude", forwarded: []string{"--resume", otherID, "--resume", "77777777-7777-7777-7777-777777777777"}, resumeHintID: otherID},
-		"user --resume before resume's":     {provider: "claude", forwarded: resumeLaunchFlags(recordedID, resumeArgs{forwarded: []string{"--resume", otherID}}, "", "", "").forwarded, resumeHintID: otherID},
-		"disagreeing --session-id values":   {provider: "claude", forwarded: []string{"--session-id", otherID, "--session-id=" + recordedID}, resumeHintID: otherID},
-		"search term while any is confined": {provider: "claude", forwarded: []string{"--resume", "my old chat"}, resumeHintID: "my old chat"},
-		"fork of a confined session":        {provider: "claude", forwarded: []string{"--resume", recordedID, "--fork-session"}, resumeHintID: recordedID},
-		"confined fork":                     {provider: "claude", forwarded: []string{"--resume", otherID, "--fork-session"}, resumeHintID: otherID, agentScopeSpec: gone},
-		"confined --from-pr":                {provider: "claude", forwarded: []string{"--from-pr", "12"}, agentScopeSpec: gone},
-		"--from-pr on a recorded identity":  {provider: "claude", identity: sessionIdentity{Key: recordedID, Provided: true}, forwarded: []string{"--from-pr=12"}},
-		"confined -c":                       {provider: "claude", forwarded: []string{"-c"}, agentScopeSpec: gone},
-		"confined -p, no id":                {provider: "claude", forwarded: []string{"-p", "hi"}, agentScopeSpec: gone},
-		"confined picker":                   {provider: "claude", forwarded: []string{"--resume"}, agentScopeSpec: gone},
-		"recorded id attached to -r":        {provider: "claude", forwarded: []string{"-r" + recordedID}, resumeHintID: recordedID},
-		"recorded id in uppercase":          {provider: "claude", forwarded: []string{"--resume", strings.ToUpper(recordedID)}, resumeHintID: strings.ToUpper(recordedID)},
-		"uppercase provided identity":       {provider: "claude", identity: sessionIdentity{Key: strings.ToUpper(recordedID), Provided: true}, forwarded: []string{"--session-id", strings.ToUpper(recordedID)}, resumeHintID: strings.ToUpper(recordedID)},
-		"-r cluster while any is confined":  {provider: "claude", forwarded: []string{"-cr", otherID}},
-		"search term beside a launch key":   {provider: "claude", identity: sessionIdentity{Key: "my old chat", Provided: true, LaunchKey: "clown/x"}, forwarded: []string{"--resume", "my old chat"}, resumeHintID: "my old chat"},
+		"direct --resume":                    {provider: "claude", forwarded: []string{"--resume", recordedID}, resumeHintID: recordedID},
+		"direct --session-id":                {provider: "claude", forwarded: []string{"--session-id", recordedID}, resumeHintID: recordedID},
+		"provided identity":                  {provider: "claude", identity: sessionIdentity{Key: recordedID, Provided: true}, forwarded: []string{"--session-id", recordedID}, resumeHintID: recordedID},
+		"--naked --resume":                   {provider: "claude", naked: true, forwarded: []string{"--resume", recordedID}},
+		"recorded id in a second --resume":   {provider: "claude", forwarded: []string{"--resume", otherID, "-r", recordedID}, resumeHintID: otherID},
+		"recorded id in --resume=":           {provider: "claude", forwarded: []string{"--resume=" + recordedID}, resumeHintID: recordedID},
+		"disagreeing --resume values":        {provider: "claude", forwarded: []string{"--resume", otherID, "--resume", "77777777-7777-7777-7777-777777777777"}, resumeHintID: otherID},
+		"user --resume before resume's":      {provider: "claude", forwarded: resumeLaunchFlags(recordedID, resumeArgs{forwarded: []string{"--resume", otherID}}, "", "", "").forwarded, resumeHintID: otherID},
+		"disagreeing --session-id values":    {provider: "claude", forwarded: []string{"--session-id", otherID, "--session-id=" + recordedID}, resumeHintID: otherID},
+		"search term while any is confined":  {provider: "claude", forwarded: []string{"--resume", "my old chat"}, resumeHintID: "my old chat"},
+		"fork of a confined session":         {provider: "claude", forwarded: []string{"--resume", recordedID, "--fork-session"}, resumeHintID: recordedID},
+		"confined fork":                      {provider: "claude", forwarded: []string{"--resume", otherID, "--fork-session"}, resumeHintID: otherID, agentScopeSpec: gone},
+		"confined --from-pr":                 {provider: "claude", forwarded: []string{"--from-pr", "12"}, agentScopeSpec: gone},
+		"--from-pr on a recorded identity":   {provider: "claude", identity: sessionIdentity{Key: recordedID, Provided: true}, forwarded: []string{"--from-pr=12"}},
+		"confined -c":                        {provider: "claude", forwarded: []string{"-c"}, agentScopeSpec: gone},
+		"confined -p, no id":                 {provider: "claude", forwarded: []string{"-p", "hi"}, agentScopeSpec: gone},
+		"confined picker":                    {provider: "claude", forwarded: []string{"--resume"}, agentScopeSpec: gone},
+		"recorded id attached to -r":         {provider: "claude", forwarded: []string{"-r" + recordedID}, resumeHintID: recordedID},
+		"recorded id in uppercase":           {provider: "claude", forwarded: []string{"--resume", strings.ToUpper(recordedID)}, resumeHintID: strings.ToUpper(recordedID)},
+		"uppercase provided identity":        {provider: "claude", identity: sessionIdentity{Key: strings.ToUpper(recordedID), Provided: true}, forwarded: []string{"--session-id", strings.ToUpper(recordedID)}, resumeHintID: strings.ToUpper(recordedID)},
+		"-r cluster while any is confined":   {provider: "claude", forwarded: []string{"-cr", otherID}},
+		"launch key with no record under it": {provider: "claude", identity: sessionIdentity{Key: "clown/x", Provided: true, LaunchKey: "clown/x"}, forwarded: []string{"--resume", "clown/x"}, resumeHintID: "clown/x"},
+		"search term beside a launch key":    {provider: "claude", identity: sessionIdentity{Key: "my old chat", Provided: true, LaunchKey: "clown/x"}, forwarded: []string{"--resume", "my old chat"}, resumeHintID: "my old chat"},
 	}
 	for name, flags := range refused {
 		t.Run(name, func(t *testing.T) {
@@ -428,13 +440,18 @@ func TestConfinementGateRefusesAWritableSpecThroughASymlink(t *testing.T) {
 	if err := os.Symlink(real, filepath.Join(dir, "link")); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Symlink(filepath.Join(dir, "link"), filepath.Join(dir, "chain")); err != nil {
+		t.Fatal(err)
+	}
 	spec := filepath.Join(real, "spec.json")
-	fields := specFields(dir)
-	fields["worktree"] = filepath.Join(dir, "link")
-	writeSpec(t, spec, fields)
-	flags := parsedFlags{provider: "claude", forwarded: []string{"--session-id", otherID}, resumeHintID: otherID, agentScopeSpec: spec}
-	if err := runConfinementGate(&flags, io.Discard); err == nil || !strings.Contains(err.Error(), "writable") {
-		t.Fatalf("spec inside its symlinked worktree: err %v; want a refusal", err)
+	for _, wt := range []string{"link", "chain"} {
+		fields := specFields(dir)
+		fields["worktree"] = filepath.Join(dir, wt)
+		writeSpec(t, spec, fields)
+		flags := parsedFlags{provider: "claude", forwarded: []string{"--session-id", otherID}, resumeHintID: otherID, agentScopeSpec: spec}
+		if err := runConfinementGate(&flags, io.Discard); err == nil || !strings.Contains(err.Error(), "writable") {
+			t.Fatalf("spec inside its worktree reached through %s: err %v; want a refusal", wt, err)
+		}
 	}
 }
 
@@ -516,6 +533,10 @@ func TestLoadLaunchSpecRefusesAChangedSecondRead(t *testing.T) {
 	writeSpec(t, spec, fields)
 	if _, err := loadLaunchSpec(spec, digest); err == nil {
 		t.Fatal("spec widened between the gate and the unit launch: want a refusal")
+	}
+	// And the unit launch itself goes through it with the gate's digest.
+	if _, err := prepareAgentScope(spec, digest, "", []string{"claude"}, nil); err == nil || !strings.Contains(err.Error(), "changed between") {
+		t.Fatalf("prepareAgentScope with a widened spec: err %v; want the second-read refusal", err)
 	}
 }
 

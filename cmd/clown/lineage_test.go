@@ -2,6 +2,7 @@ package main
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -48,6 +49,10 @@ func TestLineageRecordIDs(t *testing.T) {
 		// The operator-key edge: the channel key is the operator's, claude
 		// gets its own id; both are recorded.
 		{"claude, operator key plus minted claude id", "claude", sessionIdentity{Key: "operator-key", Provided: true}, claudeID, []string{"operator-key", claudeID}},
+		// A session UUID is written lower-cased, as the confinement gate
+		// looks it up (clown#318); other keys keep their case.
+		{"claude, uppercase resumed id", "claude", sessionIdentity{Key: "Operator-Key", Provided: true}, strings.ToUpper(claudeID), []string{"Operator-Key", claudeID}},
+		{"claude, uppercase key adopted", "claude", sessionIdentity{Key: strings.ToUpper(claudeID)}, strings.ToUpper(claudeID), []string{claudeID}},
 	}
 	for _, c := range cases {
 		if got := lineageRecordIDs(c.provider, c.identity, c.hint); !slices.Equal(got, c.want) {
