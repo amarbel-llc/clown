@@ -82,6 +82,18 @@ test-go-race:
             ;;
     esac
 
+# The native race lane with --keep-going, printing only which packages fail:
+# test-go-race stops at the first failing package, which hides the rest
+# (clown#306 triage). Exits 0; read the FAIL lines.
+#
+# list every package failing the native race lane
+[group("debug")]
+debug-test-go-race-failures:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    nix build .#clown-godyn-race-tests --no-link --print-build-logs --keep-going 2>&1 \
+        | grep -E 'godyn-test FAIL|--- FAIL|Cannot build .*godyn-test-' || true
+
 # Run the Go unit suite as godyn's per-package test lane (igloo FDR 0007): each
 # package's test binary is built and run in its own CA derivation, so only
 # changed cones re-run. godyn is the only unit-suite lane: on a host where

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -54,9 +55,12 @@ func sendDatagram(t *testing.T, sock, payload string) {
 
 func TestStatsdRelaySendsTheUnitsDatagramsUnchanged(t *testing.T) {
 	target, next := statsdSink(t)
-	var sawPid int
+	// Written by the relay's serve goroutine, read here: the datagram's trip
+	// through the kernel to the sink is no happens-before edge for the race
+	// detector (clown#306), so the pid crosses goroutines atomically.
+	var sawPid atomic.Int64
 	sock := statsdRelayFor(t, target, func(pid int) (string, error) {
-		sawPid = pid
+		sawPid.Store(int64(pid))
 		return unitCgroup, nil
 	})
 	payload := "clown.toolcost.calls.Read:1|c\nclown.toolcost.bytes.Read:42|ms"
@@ -66,8 +70,8 @@ func TestStatsdRelaySendsTheUnitsDatagramsUnchanged(t *testing.T) {
 	}
 	// The cgroup check ran on the kernel-attached sender pid, not on
 	// anything the sender wrote.
-	if sawPid != os.Getpid() {
-		t.Fatalf("cgroup looked up for pid %d, want the sender's %d", sawPid, os.Getpid())
+	if got := sawPid.Load(); got != int64(os.Getpid()) {
+		t.Fatalf("cgroup looked up for pid %d, want the sender's %d", got, os.Getpid())
 	}
 }
 
