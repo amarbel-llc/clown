@@ -38,6 +38,29 @@ func TestAgentScopeOf(t *testing.T) {
 	}
 }
 
+// A later record of the same spec without a digest keeps the recorded
+// digest; a record of another spec replaces both.
+func TestAgentScopeRecordOfKeepsTheDigest(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	for _, r := range []NameRecord{
+		{SessionID: "id-1", AgentScope: "/s/a.json", AgentScopeDigest: "d1"},
+		{SessionID: "id-1", Name: "bozo", AgentScope: "/s/a.json"},
+	} {
+		if err := RecordSession(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if rec, ok, err := AgentScopeRecordOf("id-1"); err != nil || !ok || rec != (AgentScopeRecord{Spec: "/s/a.json", Digest: "d1"}) {
+		t.Fatalf("record %+v, %v, %v; want the digest kept", rec, ok, err)
+	}
+	if err := RecordSession(NameRecord{SessionID: "id-1", AgentScope: "/s/b.json"}); err != nil {
+		t.Fatal(err)
+	}
+	if rec, _, _ := AgentScopeRecordOf("id-1"); rec != (AgentScopeRecord{Spec: "/s/b.json"}) {
+		t.Fatalf("record %+v; want the new spec with no digest", rec)
+	}
+}
+
 // AnyAgentScope reports whether any session at all is recorded as confined:
 // a resume by search term cannot be checked against one id.
 func TestAnyAgentScope(t *testing.T) {

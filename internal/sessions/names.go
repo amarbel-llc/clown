@@ -67,7 +67,9 @@ type AgentScopeRecord struct {
 }
 
 // AgentScopeRecordOf is AgentScopeOf with the digest recorded beside the
-// spec: both from the LAST record for id that carries a spec.
+// spec: both from the LAST record for id that carries a spec, except that a
+// later record of the same spec with no digest (a writer that does not
+// record one) keeps the digest already recorded rather than erasing it.
 func AgentScopeRecordOf(id string) (rec AgentScopeRecord, ok bool, err error) {
 	err = scanRecords(func(line string, r *NameRecord) error {
 		if r == nil {
@@ -77,7 +79,11 @@ func AgentScopeRecordOf(id string) (rec AgentScopeRecord, ok bool, err error) {
 			return nil
 		}
 		if r.SessionID == id && r.AgentScope != "" {
-			rec, ok = AgentScopeRecord{Spec: r.AgentScope, Digest: r.AgentScopeDigest}, true
+			next := AgentScopeRecord{Spec: r.AgentScope, Digest: r.AgentScopeDigest}
+			if ok && next.Digest == "" && next.Spec == rec.Spec {
+				next.Digest = rec.Digest
+			}
+			rec, ok = next, true
 		}
 		return nil
 	})
