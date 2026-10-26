@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -295,6 +296,15 @@ func TestHungCloseSelfRunDoesNotWedgeNowOrDropAClose(t *testing.T) {
 		<-done1
 		r.waitNow()
 	})
+	// Set before any poke starts (no write while a poke may read it): the
+	// second call, from the second poke, signals.
+	waiting := make(chan struct{})
+	var closeMuCalls atomic.Int32
+	r.waitingForCloseMu = func() {
+		if closeMuCalls.Add(1) == 2 {
+			close(waiting)
+		}
+	}
 	go func() { r.onIdle(); close(done1) }()
 	waitForFile(t, filepath.Join(dir, "started-1"))
 
@@ -312,8 +322,6 @@ func TestHungCloseSelfRunDoesNotWedgeNowOrDropAClose(t *testing.T) {
 		t.Fatalf("calls = %q, want the hung close-self-run and the now's preflight", got)
 	}
 
-	waiting := make(chan struct{})
-	r.waitingForCloseMu = func() { close(waiting) }
 	go func() { r.onIdle(); close(done2) }()
 	<-waiting
 	// The second poke is at the close-self-run lock the first one holds

@@ -257,8 +257,10 @@ As built, beyond the original note:
   consumes that `idle` request mid-turn, and the busy cancel then drops it
   (the requester asks again). Same harm class as the forged idle poke in
   "Limits accepted after review".
-- An idle poke waits for a running `now` (its close-self-run is delayed by
-  up to the preflight plus the countdown).
+- An idle poke during a running `now` runs its close-self-run immediately
+  (it does not wait for the `now`); only its preflight waits on `mu` until
+  the `now` has finished. (Superseded: before d122ade the whole poke waited
+  for the `now`.)
 
 After review of 6183583/1a1157a:
 
@@ -301,6 +303,13 @@ After review of 6183583/1a1157a:
   progress is spinclass's and is not checked here. On the idle path the
   preflight still runs only after that poke's close-self-run finished, and
   the `--peek` before the exec catches a close that has started.
+- An idle poke's close-self-run is not gated by a running `now`: it runs
+  immediately, also during a `now`'s countdown; only the poke's preflight
+  waits on `mu`. A close that tears the session down during that countdown
+  ends the restart (the close wins): the restarter logs "the provider
+  exited during the countdown; not restarting", and the pre-exec `--peek`
+  would report the session closed anyway. Accepted: a closing session
+  should not relaunch.
 
 ### Semantics
 

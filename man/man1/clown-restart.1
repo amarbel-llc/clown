@@ -109,10 +109,23 @@ running, so a control message on its own can never start a restart.
 .Pp
 The preflight and restart of a
 .Cm now
-and those of an idle transition run one at a time: an idle poke arriving
-during a
+and those of an idle transition run one at a time.
+An idle poke arriving during a
 .Cm now
-waits for it and never asks spinclass about the same request twice.
+runs its
+.Ic spinclass close-self-run
+immediately (it does not wait for the
+.Cm now ) ;
+only its preflight waits until the
+.Cm now
+has finished, and the same request is never asked about twice.
+A close that tears the session down during the countdown of a
+.Cm now
+ends that restart: the close wins, the restart is logged as
+.Dq the provider exited during the countdown; not restarting ,
+and the
+.Fl -peek
+before an exec would report the session closed anyway.
 A
 .Cm now
 arriving while a preflight or restart is in flight (an idle transition's,
