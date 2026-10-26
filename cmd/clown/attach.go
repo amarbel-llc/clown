@@ -22,6 +22,14 @@ import (
 // provider subtree would inherit (reuses the clown#136 threading).
 const attachIDFlag = "--clown-attach-id"
 
+// attachEntry is the inner clown's argv for the [attach] wrap: the binary,
+// the attach id, the unattended carrier when this launch is unattended
+// (unattendedCarrierArgs), and the resolved flags.
+func attachEntry(bin, id string, flags parsedFlags) []string {
+	entry := append([]string{bin, attachIDFlag, id}, unattendedCarrierArgs()...)
+	return append(entry, flags.reexecArgv()...)
+}
+
 // attachModeFlag selects the [attach] mode for a fresh launch (RFC-0014 §5).
 // Only "spawn" (a detached-worker launch) is acted on today — start/resume are
 // auto-detected from the forwarded args — but any value is stripped so it never
@@ -236,7 +244,7 @@ func maybeReexecMultiplexer(cf clownfile.Clownfile, flags parsedFlags, mode clow
 	if bin == "" {
 		bin = os.Args[0]
 	}
-	entry := append([]string{bin, attachIDFlag, id}, flags.reexecArgv()...)
+	entry := attachEntry(bin, id, flags)
 
 	argv, err := cf.Attach.Resolve(mode, id, entry)
 	if err != nil {

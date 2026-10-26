@@ -126,7 +126,9 @@ func restartArgv(flags parsedFlags, attachedID string) []string {
 	f.forwarded = slices.Concat(kept[:end], []string{"--resume", flags.identity.Key}, kept[end:])
 	var argv []string
 	if attachedID != "" {
-		argv = append(argv, attachIDFlag, attachedID)
+		// The inner of an [attach] wrap may not have the marker in its
+		// environment (unattendedCarrierFlag), so its restart carries it too.
+		argv = append(append(argv, attachIDFlag, attachedID), unattendedCarrierArgs()...)
 	}
 	return append(argv, f.reexecArgv()...)
 }

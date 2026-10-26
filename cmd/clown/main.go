@@ -439,6 +439,13 @@ func run(rawArgs []string) int {
 	// its presence gates off the multiplexer re-wrap (loop guard) and its value
 	// pins identity (resolveSessionIdentity / runWithFlags).
 	attachedID, rawArgs = extractAttachID(rawArgs)
+	// The unattended posture carried across the [attach] wrap (clown#323);
+	// refused outside it.
+	unattendedCarried, rawArgs = extractUnattendedCarrier(rawArgs)
+	if err := unattendedCarrierError(unattendedCarried, attachedID); err != nil {
+		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
+		return 1
+	}
 	// --clown-attach=spawn (RFC-0014 §5): a detached-worker launch. Strip it here
 	// too so no downstream parser sees it; the mode decision in runWithFlags reads
 	// attachSpawn.
@@ -556,6 +563,10 @@ func runWithFlags(flags parsedFlags) int {
 	// effect and suppresses the interactive picker.
 	cf, err := clownfile.Discover(cwd, homeDir, buildcfg.DefaultClownfilePath, clownfile.XDGPath(homeDir))
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
+		return 1
+	}
+	if err := unattendedEnvTableError("clownfile [profile].env", cf.Profile.Env); err != nil {
 		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
 		return 1
 	}
@@ -1247,6 +1258,9 @@ func profileIsBuildDefault(resolved, flagProfile, pin string) bool {
 // model-registry-design.md's rollback story), then juggler resolution via
 // profile.Model when there's no inline URL/Token.
 func applyNamedProfile(flags *parsedFlags, p profile.Profile) error {
+	if err := unattendedEnvTableError(fmt.Sprintf("profile %q env", p.Name), p.Env); err != nil {
+		return err
+	}
 	if flags.clownfileModelInjected && !providerTakesModelFlag(flags.provider) {
 		// The clownfile injected --model for a claude-family provider, but the
 		// profile switched to one that takes no passthrough --model.
@@ -1598,6 +1612,23 @@ func resolveClaudeForRun(defaultCliPath string, tent bool) (cliPath, disallowedT
 	return buildcfg.ClaudeTentCliPath, "", nil
 }
 
+// claudeLaunchArgs is the provider.ClaudeArgs both claude launch paths
+// (runClaude, runClownbox) build claude's argv from, so clown's --settings
+// (claudeSafetySettingsJSON, with the unattended posture) cannot differ
+// between them.
+func claudeLaunchArgs(cliPath, disallowedToolsFile string, flags parsedFlags, forwarded []string, prompts promptwalk.PromptResult, root *staging.Root) provider.ClaudeArgs {
+	return provider.ClaudeArgs{
+		CLIPath:             cliPath,
+		AgentsFile:          buildcfg.AgentsFile,
+		DisallowedToolsFile: disallowedToolsFile,
+		ExtraDisallowed:     profileDisallowedTools(),
+		SystemPromptFile:    prompts.SystemPromptFile,
+		AppendFragments:     prompts.AppendFragments,
+		SettingsJSON:        claudeSafetySettingsJSON(flags.identity.Key, claudeFlagValue(forwarded, "--model")),
+		Staging:             root,
+	}
+}
+
 func runClaude(cliPath string, flags parsedFlags, prompts promptwalk.PromptResult, pluginDirs []string, root *staging.Root) int {
 	innerCliPath, disallowedToolsFile, err := resolveClaudeForRun(cliPath, flags.tent)
 	if err != nil {
@@ -1610,16 +1641,7 @@ func runClaude(cliPath string, flags parsedFlags, prompts promptwalk.PromptResul
 	// carries the injected --session-id and flags.resumeHintID holds the id to
 	// print. This local closure just runs claude; the hint prints after it exits.
 	run := func(forwarded []string) int {
-		args, appendFile, err := provider.BuildClaudeArgs(provider.ClaudeArgs{
-			CLIPath:             innerCliPath,
-			AgentsFile:          buildcfg.AgentsFile,
-			DisallowedToolsFile: disallowedToolsFile,
-			ExtraDisallowed:     profileDisallowedTools(),
-			SystemPromptFile:    prompts.SystemPromptFile,
-			AppendFragments:     prompts.AppendFragments,
-			SettingsJSON:        claudeSafetySettingsJSON(flags.identity.Key, claudeFlagValue(forwarded, "--model")),
-			Staging:             root,
-		}, forwarded)
+		args, appendFile, err := provider.BuildClaudeArgs(claudeLaunchArgs(innerCliPath, disallowedToolsFile, flags, forwarded, prompts, root), forwarded)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "clown: building claude args: %v\n", err)
 			return 1
@@ -2862,16 +2884,7 @@ func stagingBaseFor(flags parsedFlags, cwd string, warn io.Writer) string {
 // HTTP MCP servers spawned on the host's localhost are reachable from
 // inside the sandbox without further plumbing.
 func runClownbox(cliPath string, flags parsedFlags, prompts promptwalk.PromptResult, pluginDirs []string, root *staging.Root) int {
-	args, appendFile, err := provider.BuildClaudeArgs(provider.ClaudeArgs{
-		CLIPath:             cliPath,
-		AgentsFile:          buildcfg.AgentsFile,
-		DisallowedToolsFile: buildcfg.DisallowedToolsFile,
-		ExtraDisallowed:     profileDisallowedTools(),
-		SystemPromptFile:    prompts.SystemPromptFile,
-		AppendFragments:     prompts.AppendFragments,
-		SettingsJSON:        claudeSafetySettingsJSON(flags.identity.Key, claudeFlagValue(flags.forwarded, "--model")),
-		Staging:             root,
-	}, flags.forwarded)
+	args, appendFile, err := provider.BuildClaudeArgs(claudeLaunchArgs(cliPath, buildcfg.DisallowedToolsFile, flags, flags.forwarded, prompts, root), flags.forwarded)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown: building clownbox args: %v\n", err)
 		return 1

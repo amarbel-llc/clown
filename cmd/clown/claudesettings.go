@@ -137,7 +137,7 @@ func claudeSafetySettingsJSON(principal, model string) string {
 	// The unattended posture (clown#323, FDR 0023): CLOWN_UNATTENDED=1 puts
 	// claude in dontAsk. Any other value was refused by unattendedGate
 	// before the args were built.
-	if os.Getenv(unattendedEnv) == "1" {
+	if unattendedValue() == "1" {
 		settings["permissions"] = map[string]any{"defaultMode": unattendedMode}
 	}
 

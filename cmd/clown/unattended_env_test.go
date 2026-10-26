@@ -11,7 +11,9 @@ import (
 
 // The marker travels in the environment only (clown#323, FDR 0023). A
 // restart keeps the launch environment, so a restarted unattended session
-// stays unattended; the relaunch argv carries nothing of it.
+// stays unattended; an unwrapped relaunch's argv carries nothing of it (the
+// [attach] inner's restart carries unattendedCarrierFlag; see
+// TestAttachCarriesTheUnattendedPosture).
 func TestRestartKeepsTheUnattendedMarker(t *testing.T) {
 	if slices.Contains(restartEnvDropped, unattendedEnv) {
 		t.Fatalf("restartEnvDropped drops %s; a restart would come back attended", unattendedEnv)
@@ -23,15 +25,16 @@ func TestRestartKeepsTheUnattendedMarker(t *testing.T) {
 	t.Setenv(unattendedEnv, "1")
 	f := parsedFlags{provider: "claude", identity: sessionIdentity{Key: "p"}, forwarded: []string{"--model", "opus"}}
 	argv := strings.Join(restartArgv(f, ""), " ")
-	if strings.Contains(argv, "dontAsk") || strings.Contains(argv, "permission-mode") || strings.Contains(argv, unattendedEnv) {
+	if strings.Contains(argv, "dontAsk") || strings.Contains(argv, "permission-mode") || strings.Contains(argv, unattendedEnv) || strings.Contains(argv, unattendedCarrierFlag) {
 		t.Fatalf("restartArgv = %q; the posture belongs to the environment, not the argv", argv)
 	}
 }
 
-// Nothing of the posture is recorded: a later launch of the same session
-// (a resume, a relaunch) without the marker runs attended, in claude's
-// default mode.
-func TestADroppedMarkerLaunchesAttended(t *testing.T) {
+// Nothing of the posture is recorded: the session record and the resume
+// argv carry no mode, and the settings follow the environment of the launch
+// that builds them, so without the marker they carry no permissions key.
+// (What claude then does is live-checked, FDR 0023 B5.)
+func TestThePostureIsNotRecordedAndFollowsTheEnvironment(t *testing.T) {
 	t.Setenv(unattendedEnv, "1")
 	raw, err := json.Marshal(sessionRecordBase(otherID, parsedFlags{provider: "claude"}))
 	if err != nil {
