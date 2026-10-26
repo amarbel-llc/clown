@@ -237,6 +237,29 @@ run_plan() {
   assert_matches_golden claude
 }
 
+@test "CLOWN_UNATTENDED=1 adds only permissions.defaultMode dontAsk to claude's plan" {
+  # clown#323. The attended claude golden above pins the settings bytes
+  # without the marker. With it, the plan must be that same golden plus
+  # exactly one key in the --settings document: dropping the key again must
+  # give back the golden byte for byte.
+  cd "$project" || return 1
+  run timeout 120 env CLOWN_UNATTENDED=1 "$CLOWN_BIN" --provider claude --print-launch-plan -- --version
+  assert_success
+  local settings
+  settings="$(jq -r '.args as $a | [range(0; $a | length) | select($a[.] == "--settings") | $a[. + 1]][0]' <<<"$output")"
+  run jq -r '.permissions.defaultMode' <<<"$settings"
+  assert_output "dontAsk"
+  output="$(jq -c '.args |= map(if (try (fromjson | type == "object" and has("permissions")) catch false) then (fromjson | del(.permissions) | tojson) else . end)' <<<"$(env CLOWN_UNATTENDED=1 timeout 120 "$CLOWN_BIN" --provider claude --print-launch-plan -- --version)")"
+  assert_matches_golden claude
+}
+
+@test "a CLOWN_UNATTENDED value other than 1 refuses the plan" {
+  cd "$project" || return 1
+  run timeout 120 env CLOWN_UNATTENDED=yes "$CLOWN_BIN" --provider claude --print-launch-plan -- --version
+  assert_failure
+  assert_output --partial "CLOWN_UNATTENDED"
+}
+
 @test "opencode launch plan matches its golden" {
   run_plan opencode
   assert_success
