@@ -31,6 +31,9 @@ It returns as soon as the frontend has queued it:
 means
 .Dq at the next idle transition ,
 which is the next Stop of the agent, not a time.
+A session that is already idle, with no turn running, sends no further Stop
+until someone prompts it, so the frontend runs that transition at once, in the
+background; a session with a turn running waits for its Stop.
 The command authorizes nothing: a queued request only makes the frontend ask
 spinclass again at that transition.
 .Pp
