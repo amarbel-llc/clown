@@ -181,6 +181,10 @@ func run(stdin io.Reader) error {
 		return err
 	}
 	defer lock.Close()
+	// Housekeeping (clown#321): drop state of transcripts untouched for
+	// toolcost.StateMaxAge, so a long-lived unattended host does not
+	// accumulate one file per transcript forever.
+	toolcost.PruneState(filepath.Dir(statePath), toolcost.StateMaxAge, time.Now(), statePath)
 	for {
 		err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
 		if err == nil {

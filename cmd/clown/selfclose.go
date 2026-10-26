@@ -16,6 +16,7 @@ import (
 
 	"golang.org/x/term"
 
+	"code.linenisgreat.com/clown/internal/logcap"
 	"code.linenisgreat.com/clown/internal/sessionstatus"
 	"code.linenisgreat.com/clown/internal/staging"
 )
@@ -114,6 +115,9 @@ func openLogForAppend(path string) (*os.File, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
+	// Bounded (clown#321): every log opened here keeps one rotated
+	// generation, "<name>.1".
+	logcap.RotateIfLarge(path, logcap.MaxBytes)
 	return os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0o600)
 }
 

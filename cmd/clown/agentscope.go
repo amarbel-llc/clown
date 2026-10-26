@@ -23,6 +23,7 @@ import (
 	"golang.org/x/term"
 
 	"code.linenisgreat.com/clown/internal/agentscope"
+	"code.linenisgreat.com/clown/internal/logcap"
 	"code.linenisgreat.com/clown/internal/pluginhost"
 	"code.linenisgreat.com/clown/internal/sessionstatus"
 	"code.linenisgreat.com/clown/internal/toolcost"
@@ -825,7 +826,9 @@ func startInUnitServers(servers []agentscope.InUnitServer) ([]agentscope.Relay, 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	logPath := filepath.Join(os.Getenv("HOME"), ".cache", "clown", "agent-relay.log")
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o700); err == nil {
-		if f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
+		// Held open for the unit's whole life (up to its RuntimeMaxSec), so
+		// the file itself rotates (clown#321).
+		if f, err := logcap.Open(logPath, logcap.MaxBytes); err == nil {
 			logger = slog.New(slog.NewTextHandler(f, nil))
 		}
 	}
