@@ -316,6 +316,91 @@ func TestAMoxinUnderAWritablePathIsNotServed(t *testing.T) {
 	}
 }
 
+// Second review (spinclass/light-cedar): a writable bind INSIDE the vetted
+// object, and a link inside the moxin directory, leave its contents
+// unit-writable although the directory itself resolves outside every
+// writable path.
+func TestAMoxinWithAWritableChildOrAnInnerLinkIsNotServed(t *testing.T) {
+	tok := tokenFile(t)
+	moxins := []frontendMoxin{{Name: "issue-filer", Needs: func() []string { return []string{tok} }}}
+	_, writable := writableWorktree(t)
+
+	entry := fakeMoxinDir(t, "issue-filer")
+	if serve, _ := planFrontendMoxins(moxins, entry, writable); !slices.Equal(serve, []string{"issue-filer"}) {
+		t.Fatalf("control: serve %v", serve)
+	}
+	// A read-write bind of a child of the moxin directory.
+	child := filepath.Join(entry, "issue-filer", "scripts")
+	if err := os.MkdirAll(child, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	withChild := append(slices.Clone(writable), agentscope.ResolvePath(child))
+	if serve, skipped := planFrontendMoxins(moxins, entry, withChild); len(serve) != 0 || len(skipped) != 1 {
+		t.Errorf("rw child of the moxin dir: serve %v skipped %v", serve, skipped)
+	}
+	// ... and of the MOXIN_PATH entry (trustedMoxinPath drops the entry).
+	if kept, dropped := trustedMoxinPath(entry, withChild); kept != "" || len(dropped) != 1 {
+		t.Errorf("rw child of a path entry: kept %q dropped %v", kept, dropped)
+	}
+	// A link inside the moxin directory that resolves into the worktree.
+	wt := writable[0]
+	other := fakeMoxinDir(t, "issue-filer")
+	if err := os.Symlink(wt, filepath.Join(other, "issue-filer", "lib")); err != nil {
+		t.Fatal(err)
+	}
+	if serve, skipped := planFrontendMoxins(moxins, other, writable); len(serve) != 0 || len(skipped) != 1 {
+		t.Errorf("inner link into the worktree: serve %v skipped %v", serve, skipped)
+	}
+	// A link inside that stays outside every writable path is fine.
+	fine := fakeMoxinDir(t, "issue-filer")
+	if err := os.Symlink(t.TempDir(), filepath.Join(fine, "issue-filer", "lib")); err != nil {
+		t.Fatal(err)
+	}
+	if serve, _ := planFrontendMoxins(moxins, fine, writable); !slices.Equal(serve, []string{"issue-filer"}) {
+		t.Errorf("inner link elsewhere: serve %v", serve)
+	}
+}
+
+func TestPathWithinRoot(t *testing.T) {
+	if !pathWithin("/anything/at/all", "/") {
+		t.Error(`nothing is within "/"`)
+	}
+	if pathWithin("/a/bc", "/a/b") || !pathWithin("/a/b/c", "/a/b") || !pathWithin("/a/b", "/a/b") {
+		t.Error("pathWithin is not the component-wise prefix test")
+	}
+}
+
+// The plugin runs the resolved moxy, not a link that could be swapped later.
+func TestAddFrontendMoxinPluginRunsTheResolvedMoxy(t *testing.T) {
+	tok := tokenFile(t)
+	moxins := []frontendMoxin{{Name: "issue-filer", Needs: func() []string { return []string{tok} }}}
+	real := t.TempDir()
+	if err := os.WriteFile(filepath.Join(real, "moxy-real"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	if err := os.Symlink(filepath.Join(real, "moxy-real"), filepath.Join(bin, "moxy")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	t.Setenv("MOXIN_PATH", fakeMoxinDir(t, "issue-filer"))
+	t.Setenv("CLOWN_DISABLE_FRONTEND_MOXINS", "")
+	old := buildcfg.StdioBridgePath
+	buildcfg.StdioBridgePath = "/bridge"
+	t.Cleanup(func() { buildcfg.StdioBridgePath = old })
+	dir, err := addFrontendMoxinPlugin(testStagingRoot(t), true, nil, nil, moxins, func(string, ...any) {})
+	if err != nil || dir == "" {
+		t.Fatalf("%q %v", dir, err)
+	}
+	cfg, err := pluginhost.LoadClownConfig(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := cfg.StdioServers["issue-filer"].Command, agentscope.ResolvePath(filepath.Join(real, "moxy-real")); got != want {
+		t.Errorf("command %q, want the resolved binary %q", got, want)
+	}
+}
+
 func TestMoxinPathIgnoresAPluginDirTheUnitCanWrite(t *testing.T) {
 	t.Setenv("MOXIN_PATH", "")
 	t.Setenv("XDG_CONFIG_HOME", "/cfg")

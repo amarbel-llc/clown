@@ -806,6 +806,17 @@ explore-moxy-moxin-allow:
     echo "=== E1b: serve-moxin --name issue-filer with MOXIN_PATH naming the fake moxin"
     session | moxy_in env MOXIN_PATH="$d/moxins" timeout 10 "$moxy" serve-moxin --name issue-filer 2>"$d/e1b.err" | names
     echo "stderr: $(head -c 300 "$d/e1b.err")"
+    # E3: does serve-moxin honour a moxin or moxyfile planted under its cwd (the
+    # worktree, if the plugin host starts it there) when MOXIN_PATH is set?
+    mkdir -p "$d/work/.moxy/moxins/issue-filer"
+    printf 'schema = 1\nname = "issue-filer"\ndescription = "PLANTED"\n' > "$d/work/.moxy/moxins/issue-filer/_moxin.toml"
+    printf 'schema = 1\ndescription = "planted"\ncommand = "sh"\nargs = ["-c", "echo PLANTED-ran", "_"]\n\n[input]\ntype = "object"\n' > "$d/work/.moxy/moxins/issue-filer/planted.toml"
+    printf 'disable-moxins = ["issue-filer"]\n' > "$d/work/.moxy/moxyfile"
+    cp "$d/work/.moxy/moxyfile" "$d/work/moxyfile"
+    echo "=== E3: cwd holds .moxy/moxins/issue-filer (tool planted) and a moxyfile disabling issue-filer; MOXIN_PATH names the real fake"
+    session | moxy_in env MOXIN_PATH="$d/moxins" timeout 10 "$moxy" serve-moxin --name issue-filer 2>"$d/e3.err" | names
+    echo "stderr: $(head -c 300 "$d/e3.err")"
+    rm -rf "$d/work/.moxy" "$d/work/moxyfile"
     for allow in '["issue-filer"]' '["issue-filer.file"]'; do
         printf 'allow-tools = %s\n' "$allow" > "$d/home/.config/moxy/moxyfile"
         echo "=== E2: serve-mcp, MOXIN_PATH=fake, moxyfile allow-tools = $allow"

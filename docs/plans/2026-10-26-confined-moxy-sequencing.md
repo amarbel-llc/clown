@@ -152,6 +152,19 @@ R for the code, V where stated; live forwarding not yet run (runbook A8).
   a plugin dir under a writable path as a `MOXIN_PATH` source, and refuses a
   `moxy` found under a writable path (a direnv/devshell PATH that holds a
   worktree directory). Each is logged to `close-self-run.log`.
+- Second review (spinclass/light-cedar, R from code), fixed: a writable path
+  *inside* a vetted object counts too (a read-write bind of a child of the
+  moxin directory or of a `MOXIN_PATH` entry leaves its contents
+  unit-writable), so the check is two-way; the moxin directory is walked and a
+  link inside it that resolves into a writable path refuses the moxin; the
+  plugin runs the resolved `moxy` path, not a link swappable after the check;
+  `pathWithin(_, "/")` now matches. Its question about cwd, answered by
+  experiment (V, `just explore-moxy-moxin-allow`, E3): with `MOXIN_PATH` set,
+  `moxy serve-moxin` ignored a moxin planted at `./.moxy/moxins/` and a
+  `moxyfile` / `.moxy/moxyfile` in its cwd, so a worktree cwd does not let the
+  unit add or disable a moxin. Not tested: other cwd-read files moxy might
+  have, and what cwd the plugin host gives a frontend stdio server (R: not
+  found).
 - `worker` keeps `clown-builtin-moxins/issue-filer`; a launch that does not
   serve it skips the saved server (profile replay skips what is not
   discovered), so the same profile works on a host without the moxin.

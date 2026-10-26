@@ -73,19 +73,48 @@ func frontendMoxinsDisabled() bool {
 // pathWithin reports whether p is dir or lies under it (both cleaned and
 // symlink-resolved by the caller).
 func pathWithin(p, dir string) bool {
-	return p == dir || strings.HasPrefix(p, dir+"/")
+	return dir == "/" || p == dir || strings.HasPrefix(p, dir+"/")
 }
 
-// inWritable reports whether p, symlinks resolved, is one of writable (already
-// resolved) or under one.
+// inWritable reports whether the unit can write p, or anything under it: p,
+// symlinks resolved, is one of writable (already resolved) or under one, or a
+// writable path lies inside p (a read-write bind of a child of a moxin
+// directory leaves that directory's contents unit-writable).
 func inWritable(p string, writable []string) bool {
 	real := agentscope.ResolvePath(p)
 	for _, w := range writable {
-		if pathWithin(real, w) {
+		if pathWithin(real, w) || pathWithin(w, real) {
 			return true
 		}
 	}
 	return false
+}
+
+// maxMoxinTree bounds the entries examined in one moxin directory.
+const maxMoxinTree = 4096
+
+// moxinTreeWritable reports whether anything the frontend would read from the
+// moxin directory dir can be written by the unit: a link anywhere inside it
+// that resolves into a writable path, or a directory too large to vet.
+func moxinTreeWritable(dir string, writable []string) bool {
+	n := 0
+	bad := false
+	_ = filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			bad = true
+			return filepath.SkipAll
+		}
+		if n++; n > maxMoxinTree {
+			bad = true
+			return filepath.SkipAll
+		}
+		if d.Type()&os.ModeSymlink != 0 && inWritable(p, writable) {
+			bad = true
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	return bad
 }
 
 // trustedMoxinPath keeps the absolute MOXIN_PATH entries that the unit cannot
@@ -120,7 +149,8 @@ func moxinOnPath(name, moxinPath string, writable []string) bool {
 			continue
 		}
 		if fi, err := os.Stat(filepath.Join(entry, name, "_moxin.toml")); err == nil && fi.Mode().IsRegular() {
-			return !inWritable(filepath.Join(entry, name), writable) && !inWritable(filepath.Join(entry, name, "_moxin.toml"), writable)
+			dir := filepath.Join(entry, name)
+			return !inWritable(dir, writable) && !inWritable(filepath.Join(dir, "_moxin.toml"), writable) && !moxinTreeWritable(dir, writable)
 		}
 	}
 	return false
@@ -287,7 +317,10 @@ func addFrontendMoxinPlugin(root *staging.Root, confined bool, pluginDirs []stri
 		note("frontend moxins not served: moxy is not on PATH")
 		return "", nil
 	}
-	if inWritable(moxyBin, writable) {
+	// Run the resolved binary, not a link that could be swapped after this
+	// check.
+	moxyBin = agentscope.ResolvePath(moxyBin)
+	if inWritable(moxyBin, writable) || inWritable(filepath.Dir(moxyBin), writable) {
 		note("frontend moxins not served: moxy (%s) is under a path the unit can write", moxyBin)
 		return "", nil
 	}
