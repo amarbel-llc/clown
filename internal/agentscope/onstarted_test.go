@@ -95,6 +95,35 @@ func TestAHangingUnitKillIsBounded(t *testing.T) {
 	}
 }
 
+// clown#322: OnActive gets the unit's MainPID once the provider started.
+func TestOnActiveGetsTheMainPID(t *testing.T) {
+	l := testLaunch()
+	l.Spec.ResultPath = filepath.Join(t.TempDir(), "result.json")
+	cg := "/user.slice/user-1001.slice/user@1001.service/clown.slice/" + Slice + "/" + l.Unit
+	root := t.TempDir()
+	fakeProc(t, root, 100, cg, "100 1")
+	setCmdline(t, root, 100, "claude")
+	got := make(chan int, 1)
+	l.OnActive = func(pid int) { got <- pid }
+	sdrun := filepath.Join(t.TempDir(), "systemd-run")
+	if err := os.WriteFile(sdrun, []byte("#!/bin/sh\nsleep 1\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	systemctl, _ := fakeSystemctl(t)
+	tools := Tools{SystemdRun: sdrun, Systemctl: systemctl, procRoot: root, show: func(string) (Status, error) {
+		return Status{ActiveState: "active", ControlGroup: cg, MainPID: 100}, nil
+	}}
+	_, _ = Run(l, tools, nil)
+	select {
+	case pid := <-got:
+		if pid != 100 {
+			t.Fatalf("OnActive(%d), want 100", pid)
+		}
+	default:
+		t.Fatal("OnActive was not called")
+	}
+}
+
 func TestOnStartedDoesNotFireOnAFailedLaunch(t *testing.T) {
 	calls := 0
 	refused := testLaunch()
