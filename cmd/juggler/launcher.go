@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -51,7 +52,7 @@ type llauncher struct {
 
 	// afterHealthy, when set, is called once a child has turned healthy,
 	// before it is registered (tests).
-	afterHealthy func()
+	afterHealthy func(*child)
 }
 
 func newLauncher(binary string, reg *rm.Registry, modelsDir string) *llauncher {
@@ -72,7 +73,12 @@ func (l *llauncher) reserveAlias(alias string) error {
 	if _, ok := l.starting[alias]; ok {
 		return fmt.Errorf("alias %q is already starting", alias)
 	}
+	// The registry outlives children during Stop's grace window (children
+	// cleared first, the registry after the exit): still running there.
 	if _, ok := l.children[alias]; ok {
+		return fmt.Errorf("alias %q is already running", alias)
+	}
+	if _, ok := l.reg.Get(alias); ok {
 		return fmt.Errorf("alias %q is already running", alias)
 	}
 	l.starting[alias] = struct{}{}
@@ -98,7 +104,14 @@ func (l *llauncher) Start(ctx context.Context, p rm.StartInstanceParams) (rm.Ins
 	if err := l.reserveAlias(p.Alias); err != nil {
 		return rm.Instance{}, err
 	}
-	defer l.releaseAlias(p.Alias)
+	// A registered start hands the reservation to children itself; only a
+	// failed one releases it here (a later Start may hold it by then).
+	registered := false
+	defer func() {
+		if !registered {
+			l.releaseAlias(p.Alias)
+		}
+	}()
 
 	bind := p.Bind
 	if bind == "" {
@@ -156,7 +169,7 @@ func (l *llauncher) Start(ctx context.Context, p rm.StartInstanceParams) (rm.Ins
 		return rm.Instance{}, fmt.Errorf("waitHealthy: %w", err)
 	}
 	if l.afterHealthy != nil {
-		l.afterHealthy()
+		l.afterHealthy(ch)
 	}
 	// The client may have left just as the child turned healthy: its start
 	// is killed and not registered, as for any departed client's start.
@@ -175,26 +188,35 @@ func (l *llauncher) Start(ctx context.Context, p rm.StartInstanceParams) (rm.Ins
 		StartedAt: time.Now().UTC(),
 	}
 
-	// Insert into children BEFORE reg.Add so reapOnExit's identity
-	// guard (l.children[alias] == ch) sees the entry if the child
-	// dies between reg.Add and us finishing Start. Otherwise the
-	// reaper would no-op while the registry holds an orphaned entry.
-	l.mu.Lock()
-	l.children[p.Alias] = ch
-	l.mu.Unlock()
-
-	if err := l.reg.Add(in); err != nil {
-		l.mu.Lock()
-		if l.children[p.Alias] == ch {
-			delete(l.children, p.Alias)
-		}
-		l.mu.Unlock()
+	if err := l.register(in, ch); err != nil {
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		<-ch.exited
-		return rm.Instance{}, fmt.Errorf("register: %w", err)
+		return rm.Instance{}, err
 	}
-
+	registered = true
 	return in, nil
+}
+
+// register records a healthy child under one l.mu hold: the registry
+// entry, the children entry, and the hand-off of the alias's reservation
+// from starting to children, so no reader sees the alias half-registered.
+// reapOnExit takes l.mu too (lock order l.mu, then the registry's), so a
+// child that exits after register is reaped, and one that already exited
+// is refused here instead of registered dead.
+func (l *llauncher) register(in rm.Instance, ch *child) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	select {
+	case <-ch.exited:
+		return fmt.Errorf("start %s: llama-server exited after turning healthy: %v", in.Alias, ch.waitErr)
+	default:
+	}
+	if err := l.reg.Add(in); err != nil {
+		return fmt.Errorf("register: %w", err)
+	}
+	l.children[in.Alias] = ch
+	delete(l.starting, in.Alias)
+	return nil
 }
 
 // Stop signals the child for alias to terminate. SIGTERM first, then
@@ -213,6 +235,11 @@ func (l *llauncher) Stop(ctx context.Context, alias string) error {
 
 	pgid := -ch.cmd.Process.Pid // process group
 	if err := syscall.Kill(pgid, syscall.SIGTERM); err != nil {
+		if errors.Is(err, syscall.ESRCH) {
+			// Already gone: nothing to signal, but the alias is still cleared.
+			l.reg.Remove(alias)
+			return nil
+		}
 		return fmt.Errorf("SIGTERM %d: %w", pgid, err)
 	}
 

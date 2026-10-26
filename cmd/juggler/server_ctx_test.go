@@ -326,7 +326,7 @@ func TestLauncherStartCancelledAfterHealthIsNotRegistered(t *testing.T) {
 	l := newLauncher(bin, reg, shortTempDir(t))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	l.afterHealthy = cancel
+	l.afterHealthy = func(*child) { cancel() }
 	if _, err := l.Start(ctx, rm.StartInstanceParams{Alias: "a", Model: "a"}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Start cancelled after health: err = %v, want context.Canceled", err)
 	}
