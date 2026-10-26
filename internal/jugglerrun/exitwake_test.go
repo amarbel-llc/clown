@@ -169,8 +169,10 @@ func TestExitWake_UnknownJobIsAnError(t *testing.T) {
 // TestExitWake_RetriesATransientDoneFailure covers clown#257: a `done`
 // failure that is NOT jobwake.ErrAlreadyTerminal (ringmaster transiently
 // unreachable, say) must be retried, not refused on the first bad call —
-// the hook is the terminal writer of last resort. A generous ctx deadline
-// and a tiny backoff keep this deterministic (not racing wall-clock load).
+// the hook is the terminal writer of last resort. The assertions are call
+// counts, not times; the ctx deadline is only a safety bound, generous
+// because each fake ringmaster call re-runs the test binary, which is slow
+// in the race lane (clown#308).
 func TestExitWake_RetriesATransientDoneFailure(t *testing.T) {
 	h := newHarness(t)
 	job := startAgentJob(t, h)
@@ -179,7 +181,7 @@ func TestExitWake_RetriesATransientDoneFailure(t *testing.T) {
 	deps.Ringmaster = transient
 	deps.DoneRetryBackoff = time.Millisecond
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	out, err := ExitWake(ctx, deps, ExitWakeRequest{Job: job, Target: testRoot, Service: ServiceResult{Result: "exit-code"}})
 	if err != nil {
@@ -245,20 +247,22 @@ func TestExitWake_GivesUpWhenDoneNeverSucceeds(t *testing.T) {
 // clown#257 review finding 2 (scenario B): a `done` call that actually
 // wrote the terminal record before reporting a failure (e.g. a connection
 // reset right after the server-side write landed) must relay that
-// terminal instead of retrying into a duplicate attempt. A short ctx
-// deadline well below DoneRetryBackoff makes this deterministic: if the
-// fix regresses and the code retries anyway, the call fails fast on the
-// deadline instead of hanging, and the call-count/terminal-count
-// assertions below still catch it.
+// terminal instead of retrying into a duplicate attempt. No wall clock
+// (clown#308): the retry wait is a hook that fails the test and refuses,
+// so a regression that retries anyway fails at once instead of hanging,
+// and the call-count/terminal-count assertions below still catch it.
 func TestExitWake_RelaysATerminalItsOwnDoneWroteBeforeReportingFailure(t *testing.T) {
 	h := newHarness(t)
 	job := startAgentJob(t, h)
 	wroteButErrored := &wroteButErroredRingmaster{Ringmaster: h.deps.Ringmaster, err: errors.New("ringmaster: connection reset")}
 	deps := h.deps
 	deps.Ringmaster = wroteButErrored
-	deps.DoneRetryBackoff = 10 * time.Second
+	deps.WaitBeforeDoneRetry = func(context.Context, time.Duration) error {
+		t.Error("ExitWake waited to retry done: the re-read should have found the terminal its own done wrote")
+		return errors.New("no retry expected")
+	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	out, err := ExitWake(ctx, deps, ExitWakeRequest{Job: job, Target: testRoot, Service: ServiceResult{Result: "exit-code"}})
 	if err != nil {

@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -198,11 +199,45 @@ func blockingModel(t *testing.T) *httptest.Server {
 	return srv
 }
 
+// blockingModelAt is blockingModel plus a channel that closes when the first
+// model request arrives: the run is then past its setup and in the loop.
+func blockingModelAt(t *testing.T) (*httptest.Server, <-chan struct{}) {
+	t.Helper()
+	arrived := make(chan struct{})
+	var once sync.Once
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		once.Do(func() { close(arrived) })
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(release) })
+	return srv, arrived
+}
+
+// cancelOnArrival calls cancel once the model request arrives (or ctx ends).
+func cancelOnArrival(ctx context.Context, arrived <-chan struct{}, cancel func()) {
+	go func() {
+		select {
+		case <-arrived:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+}
+
 func TestRunAgent_ParentCancelAborts(t *testing.T) {
 	h := newHarness(t)
 	ctx, cancel := context.WithCancel(context.Background())
-	time.AfterFunc(100*time.Millisecond, cancel)
-	out, err := RunAgent(ctx, h.agentDeps(openAIResolved(blockingModel(t))), AgentRequest{
+	defer cancel()
+	model, arrived := blockingModelAt(t)
+	// Cancel once the loop is waiting on the model, not on a timer: a cancel
+	// during Start is a separate window (clown#317).
+	cancelOnArrival(ctx, arrived, cancel)
+	out, err := RunAgent(ctx, h.agentDeps(openAIResolved(model)), AgentRequest{
 		Brief: parsedBrief(t, "agent-1"), MoxyURL: fakeMoxy(t).URL,
 	})
 	if err != nil {
@@ -339,7 +374,8 @@ func TestRunAgent_SIGTERMPastTheDeadlineIsFailed(t *testing.T) {
 	h := newHarness(t)
 	var late atomic.Bool
 	t0 := time.Now()
-	deps := h.agentDeps(openAIResolved(blockingModel(t)))
+	model, arrived := blockingModelAt(t)
+	deps := h.agentDeps(openAIResolved(model))
 	deps.Now = func() time.Time {
 		if late.Load() {
 			return t0.Add(time.Hour)
@@ -347,7 +383,10 @@ func TestRunAgent_SIGTERMPastTheDeadlineIsFailed(t *testing.T) {
 		return t0
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	time.AfterFunc(100*time.Millisecond, func() { late.Store(true); cancel() })
+	defer cancel()
+	// The SIGTERM lands once the loop is waiting on the model, not on a
+	// timer: a cancel during Start is a separate window (clown#317).
+	cancelOnArrival(ctx, arrived, func() { late.Store(true); cancel() })
 	out, err := RunAgent(ctx, deps, AgentRequest{Brief: parsedBrief(t, "agent-1"), MoxyURL: fakeMoxy(t).URL})
 	if err != nil {
 		t.Fatal(err)
