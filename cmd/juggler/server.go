@@ -97,15 +97,40 @@ func (s *server) Serve(ctx context.Context, ln net.Listener) error {
 	}
 }
 
+// handle serves one connection. Frames are read on their own goroutine, so
+// the connection's read side is watched while a request is dispatched: when
+// it ends (the client closed or went away), ctx is cancelled, which aborts
+// the client-scoped work still in flight (clown#82). Requests are dispatched
+// one at a time, in order, as before.
 func (s *server) handle(conn net.Conn) {
 	defer conn.Close()
-	br := bufio.NewReader(conn)
-	for {
-		env, err := rm.ReadFrame(br)
-		if err != nil {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	frames := make(chan rm.Envelope)
+	go func() {
+		defer cancel()
+		br := bufio.NewReader(conn)
+		for {
+			env, err := rm.ReadFrame(br)
+			if err != nil {
+				close(frames)
+				return
+			}
+			select {
+			case frames <- env:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	for env := range frames {
+		resp := s.dispatch(ctx, env)
+		if ctx.Err() != nil {
+			// The client is gone: nobody reads the answer.
 			return
 		}
-		resp := s.dispatch(env)
 		if err := rm.WriteFrame(conn, resp); err != nil {
 			s.log.Error("write frame", "err", err)
 			return
@@ -113,7 +138,13 @@ func (s *server) handle(conn net.Conn) {
 	}
 }
 
-func (s *server) dispatch(req rm.Envelope) rm.Envelope {
+// dispatch answers one request. ctx is the connection's, cancelled when the
+// client disconnects. Client-scoped work takes it: a start's wait for health
+// (StartInstance, and ResolveModel's start) and a download, which a client
+// that left no longer wants. A stop does not: StopInstance and StopAll run
+// under context.WithoutCancel, so a stop the client asked for always
+// completes, whoever disconnects.
+func (s *server) dispatch(ctx context.Context, req rm.Envelope) rm.Envelope {
 	switch req.Method {
 	case rm.MethodListInstances:
 		return rpcResult(req.ID, rm.ListInstancesResult{Instances: s.registry.List()})
@@ -126,10 +157,9 @@ func (s *server) dispatch(req rm.Envelope) rm.Envelope {
 		if s.launcher == nil {
 			return rpcError(req.ID, -32000, "launcher not configured")
 		}
-		// TODO: thread a per-connection context through dispatch so a
-		// client disconnect cancels an in-flight Start (currently a
-		// canceled start holds a child up to launcher.healthTimeout).
-		in, err := s.launcher.Start(context.Background(), p)
+		// A client disconnect cancels the start's wait for health, and the
+		// launcher kills the half-started child.
+		in, err := s.launcher.Start(ctx, p)
 		if err != nil {
 			return rpcError(req.ID, -32000, err.Error())
 		}
@@ -143,8 +173,8 @@ func (s *server) dispatch(req rm.Envelope) rm.Envelope {
 		if s.launcher == nil {
 			return rpcError(req.ID, -32000, "launcher not configured")
 		}
-		// TODO: see StartInstance — same context-propagation gap.
-		if err := s.launcher.Stop(context.Background(), p.Alias); err != nil {
+		// Not client-scoped: the stop completes even if the client leaves.
+		if err := s.launcher.Stop(context.WithoutCancel(ctx), p.Alias); err != nil {
 			return rpcError(req.ID, -32000, err.Error())
 		}
 		// StopInstance returns no result type; use null.
@@ -169,8 +199,8 @@ func (s *server) dispatch(req rm.Envelope) rm.Envelope {
 		snapshot := s.registry.List()
 		stopped := make([]string, 0, len(snapshot))
 		for _, in := range snapshot {
-			// TODO: thread a per-connection context through dispatch (see StartInstance).
-			if err := s.launcher.Stop(context.Background(), in.Alias); err != nil {
+			// Not client-scoped, as StopInstance.
+			if err := s.launcher.Stop(context.WithoutCancel(ctx), in.Alias); err != nil {
 				// A concurrent StopInstance on another connection may have
 				// drained the launcher's children map between our snapshot and
 				// this call. If the alias is no longer in the registry, it
@@ -210,8 +240,9 @@ func (s *server) dispatch(req rm.Envelope) rm.Envelope {
 		if !ok {
 			return rpcError(req.ID, -32000, fmt.Sprintf("unknown model %q", p.Name))
 		}
-		// TODO: thread a per-connection context through dispatch (see StartInstance).
-		dest, err := jugglermodels.Download(context.Background(), entry, s.modelsDir, nil)
+		// A client disconnect cancels the download; Download removes its
+		// temporary file.
+		dest, err := jugglermodels.Download(ctx, entry, s.modelsDir, nil)
 		if err != nil {
 			return rpcError(req.ID, -32000, fmt.Sprintf("download: %v", err))
 		}
@@ -321,8 +352,8 @@ func (s *server) dispatch(req rm.Envelope) rm.Envelope {
 		if s.launcher == nil {
 			return rpcError(req.ID, -32000, "launcher not configured")
 		}
-		// TODO: thread a per-connection context through dispatch (see StartInstance).
-		in, err := s.launcher.Start(context.Background(), rm.StartInstanceParams{Alias: p.Name, Model: p.Name})
+		// As StartInstance: a client disconnect cancels the start.
+		in, err := s.launcher.Start(ctx, rm.StartInstanceParams{Alias: p.Name, Model: p.Name})
 		if err != nil {
 			return rpcError(req.ID, -32000, err.Error())
 		}

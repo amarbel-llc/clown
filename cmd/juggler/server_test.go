@@ -326,7 +326,7 @@ func TestDispatchListModels_MergesLocalAndRemote(t *testing.T) {
 	s.modelsDir = modelsDir
 	s.remoteModelsPath = remotePath
 
-	resp := s.dispatch(rm.Envelope{JSONRPC: "2.0", ID: "1", Method: rm.MethodListModels})
+	resp := s.dispatch(context.Background(), rm.Envelope{JSONRPC: "2.0", ID: "1", Method: rm.MethodListModels})
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
@@ -362,7 +362,7 @@ func TestDispatchAddRemoteModel_ThenListModels(t *testing.T) {
 	s.modelsDir = shortTempDir(t)
 	s.remoteModelsPath = filepath.Join(shortTempDir(t), "models.toml")
 
-	addResp := s.dispatch(rm.Envelope{
+	addResp := s.dispatch(context.Background(), rm.Envelope{
 		JSONRPC: "2.0", ID: "1", Method: rm.MethodAddRemoteModel,
 		Params: mustJSON(t, rm.AddRemoteModelParams{
 			Name: "gw", Style: "openai-compat", URL: "https://gw.example.com", Token: "${GW_TOKEN}",
@@ -372,7 +372,7 @@ func TestDispatchAddRemoteModel_ThenListModels(t *testing.T) {
 		t.Fatalf("AddRemoteModel error: %+v", addResp.Error)
 	}
 
-	listResp := s.dispatch(rm.Envelope{JSONRPC: "2.0", ID: "2", Method: rm.MethodListModels})
+	listResp := s.dispatch(context.Background(), rm.Envelope{JSONRPC: "2.0", ID: "2", Method: rm.MethodListModels})
 	if listResp.Error != nil {
 		t.Fatalf("ListModels error: %+v", listResp.Error)
 	}
@@ -414,7 +414,7 @@ func TestDispatchAddRemoteModel_ConcurrentWritesDontLoseUpdates(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			name := fmt.Sprintf("gw-%02d", i)
-			resp := s.dispatch(rm.Envelope{
+			resp := s.dispatch(context.Background(), rm.Envelope{
 				JSONRPC: "2.0",
 				ID:      json.Number(fmt.Sprintf("%d", i)),
 				Method:  rm.MethodAddRemoteModel,
@@ -463,7 +463,7 @@ func TestDispatchRemoveRemoteModel_ThenListModels(t *testing.T) {
 	s.modelsDir = shortTempDir(t)
 	s.remoteModelsPath = remotePath
 
-	removeResp := s.dispatch(rm.Envelope{
+	removeResp := s.dispatch(context.Background(), rm.Envelope{
 		JSONRPC: "2.0", ID: "1", Method: rm.MethodRemoveRemoteModel,
 		Params: mustJSON(t, rm.RemoveRemoteModelParams{Name: "gw"}),
 	})
@@ -471,7 +471,7 @@ func TestDispatchRemoveRemoteModel_ThenListModels(t *testing.T) {
 		t.Fatalf("RemoveRemoteModel error: %+v", removeResp.Error)
 	}
 
-	listResp := s.dispatch(rm.Envelope{JSONRPC: "2.0", ID: "2", Method: rm.MethodListModels})
+	listResp := s.dispatch(context.Background(), rm.Envelope{JSONRPC: "2.0", ID: "2", Method: rm.MethodListModels})
 	if listResp.Error != nil {
 		t.Fatalf("ListModels error: %+v", listResp.Error)
 	}
@@ -489,7 +489,7 @@ func TestDispatchRemoveRemoteModel_NotFound(t *testing.T) {
 	s.modelsDir = shortTempDir(t)
 	s.remoteModelsPath = filepath.Join(shortTempDir(t), "models.toml")
 
-	resp := s.dispatch(rm.Envelope{
+	resp := s.dispatch(context.Background(), rm.Envelope{
 		JSONRPC: "2.0", ID: "1", Method: rm.MethodRemoveRemoteModel,
 		Params: mustJSON(t, rm.RemoveRemoteModelParams{Name: "nope"}),
 	})
@@ -510,7 +510,7 @@ func TestDispatchResolveModel_Remote(t *testing.T) {
 	s.modelsDir = shortTempDir(t)
 	s.remoteModelsPath = remotePath
 
-	resp := s.dispatch(rm.Envelope{
+	resp := s.dispatch(context.Background(), rm.Envelope{
 		JSONRPC: "2.0", ID: "1", Method: rm.MethodResolveModel,
 		Params: mustJSON(t, rm.ResolveModelParams{Name: "gw"}),
 	})
@@ -543,7 +543,7 @@ func TestDispatchResolveModel_TokenFileAndModelID(t *testing.T) {
 	s.modelsDir = shortTempDir(t)
 	s.remoteModelsPath = remotePath
 
-	resp := s.dispatch(rm.Envelope{
+	resp := s.dispatch(context.Background(), rm.Envelope{
 		JSONRPC: "2.0", ID: "1", Method: rm.MethodResolveModel,
 		Params: mustJSON(t, rm.ResolveModelParams{Name: "jev"}),
 	})
@@ -558,7 +558,7 @@ func TestDispatchResolveModel_TokenFileAndModelID(t *testing.T) {
 		t.Fatalf("res = %+v", res)
 	}
 
-	resp = s.dispatch(rm.Envelope{
+	resp = s.dispatch(context.Background(), rm.Envelope{
 		JSONRPC: "2.0", ID: "2", Method: rm.MethodResolveModel,
 		Params: mustJSON(t, rm.ResolveModelParams{Name: "bad"}),
 	})
@@ -579,7 +579,7 @@ func TestDispatchResolveModel_AlreadyRunningLocal(t *testing.T) {
 	s.modelsDir = shortTempDir(t)
 	s.remoteModelsPath = filepath.Join(shortTempDir(t), "models.toml")
 
-	resp := s.dispatch(rm.Envelope{
+	resp := s.dispatch(context.Background(), rm.Envelope{
 		JSONRPC: "2.0", ID: "1", Method: rm.MethodResolveModel,
 		Params: mustJSON(t, rm.ResolveModelParams{Name: "running-model"}),
 	})
@@ -607,7 +607,7 @@ func TestDispatchResolveModel_LocalGGUFStartsInstance(t *testing.T) {
 	s.modelsDir = modelsDir
 	s.remoteModelsPath = filepath.Join(shortTempDir(t), "models.toml")
 
-	resp := s.dispatch(rm.Envelope{
+	resp := s.dispatch(context.Background(), rm.Envelope{
 		JSONRPC: "2.0", ID: "1", Method: rm.MethodResolveModel,
 		Params: mustJSON(t, rm.ResolveModelParams{Name: "local-model"}),
 	})
@@ -651,7 +651,7 @@ func TestDispatchResolveModel_RemoteWinsOnCollision(t *testing.T) {
 	s.modelsDir = modelsDir
 	s.remoteModelsPath = remotePath
 
-	resp := s.dispatch(rm.Envelope{
+	resp := s.dispatch(context.Background(), rm.Envelope{
 		JSONRPC: "2.0", ID: "1", Method: rm.MethodResolveModel,
 		Params: mustJSON(t, rm.ResolveModelParams{Name: "shared-name"}),
 	})
@@ -672,7 +672,7 @@ func TestDispatchResolveModelUnknown(t *testing.T) {
 	s.modelsDir = shortTempDir(t)
 	s.remoteModelsPath = filepath.Join(shortTempDir(t), "models.toml")
 
-	resp := s.dispatch(rm.Envelope{
+	resp := s.dispatch(context.Background(), rm.Envelope{
 		JSONRPC: "2.0", ID: "1", Method: rm.MethodResolveModel,
 		Params: mustJSON(t, rm.ResolveModelParams{Name: "nope"}),
 	})
