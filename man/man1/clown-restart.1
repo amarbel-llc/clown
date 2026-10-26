@@ -121,12 +121,21 @@ countdown included, or that of another
 is refused with
 .Dq a restart or restart check is already underway ,
 as is one while a restart has stopped the provider.
-The idle transition's
-.Ic spinclass close-self-run
-is waited for at most 60 seconds (it is left running, not killed, since it
-may be a close's teardown), so a hung one delays a
+A
 .Cm now
-by at most that, and no second one starts while it runs.
+never waits for the idle transition's
+.Ic spinclass close-self-run :
+the two take separate locks, so a long or hung close-self-run delays only
+the next idle poke (which waits for it and then runs its own, never
+dropped), not a
+.Cm now .
+In turn the preflight and restart of a
+.Cm now
+can run while a close-self-run is still running;
+whether spinclass's
+.Ic restart-preflight
+refuses during a close is spinclass's and is not checked here (on the idle
+path the preflight still runs after the close-self-run has finished).
 .Pp
 Everything after the verdict is the restart below, with one difference:
 under a verdict whose

@@ -262,11 +262,14 @@ As built, beyond the original note:
 
 After review of 6183583/1a1157a:
 
-- close-self-run is waited for at most 60 s (`closeSelfRunWaitBound`). It is
-  left running at the bound, not killed: it may be a close's teardown,
-  which has its own session so it outlives the frontend. While it runs no
-  second one starts. A hung close-self-run therefore delays a `now` by at
-  most 60 s instead of wedging it ("already underway" forever).
+- close-self-run and preflight/restart take separate locks
+  (`idleRunner.closeMu`, `idleRunner.mu`). `onIdle` takes closeMu for the
+  close-self-run step, releases it, then takes mu; the `now` goroutine
+  takes only mu; the two are never held together, so there is no lock
+  order to invert. A hung close-self-run therefore never wedges a `now`,
+  and a poke during a long close-self-run waits for it and then runs its
+  own (an interim 60 s wait bound, which dropped such a poke, was reverted
+  in the third review).
 - `inFlight` is cleared by a deferred store on every exit of the `now`
   goroutine, before `mu` is released. `sync.Mutex` hands the lock to a
   waiter that has waited over 1 ms, and the idle listener runs one poke at
@@ -292,6 +295,12 @@ After review of 6183583/1a1157a:
   mid-turn. Same class as the forged idle poke.
 - The 30 s countdown, posh modal included, is shown even for a restart that
   is then cancelled.
+- (I) A `now`'s preflight and restart can run while an idle poke's
+  close-self-run is still running, since `now` never waits for it. Whether
+  `spinclass restart-preflight` refuses (or answers none) during a close in
+  progress is spinclass's and is not checked here. On the idle path the
+  preflight still runs only after that poke's close-self-run finished, and
+  the `--peek` before the exec catches a close that has started.
 
 ### Semantics
 

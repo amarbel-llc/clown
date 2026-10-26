@@ -242,10 +242,12 @@ func TestIdlePokeDuringANowWaitsAndPreflightsEachRequestOnce(t *testing.T) {
 	idleDone := make(chan struct{})
 	go func() { r.onIdle(); close(idleDone) }()
 	<-waiting
-	// The poke is now at (or blocked on) the mutex the now's run holds.
-	time.Sleep(100 * time.Millisecond)
-	if strings.Contains(strings.Join(readCalls(t, calls), ","), "close-self-run") {
-		t.Fatal("the idle poke ran close-self-run while the now's preflight held the runner")
+	// The poke has done its close-self-run step and is about to take mu,
+	// which the now's run holds until release, so it cannot get past it
+	// before the release below.
+	if r.mu.TryLock() {
+		r.mu.Unlock()
+		t.Fatal("the now's run does not hold the runner's mutex during its preflight")
 	}
 	_ = os.WriteFile(release, nil, 0o600)
 	r.waitNow()
@@ -267,44 +269,68 @@ func TestIdlePokeDuringANowWaitsAndPreflightsEachRequestOnce(t *testing.T) {
 	}
 }
 
-// A hung close-self-run does not wedge `now`: the idle runner stops waiting
-// for it after the bound, and a later `now` is accepted and preflighted.
-func TestHungCloseSelfRunDoesNotWedgeNow(t *testing.T) {
+// A hung close-self-run does not wedge `now`, and does not drop a close: a
+// `now` while it hangs is accepted and preflighted at once (it never waits on
+// close-self-run), and a second idle poke waits for the hung run and then
+// runs its own close-self-run.
+func TestHungCloseSelfRunDoesNotWedgeNowOrDropAClose(t *testing.T) {
 	dir := t.TempDir()
-	calls := filepath.Join(dir, "calls")
+	calls, release, count := filepath.Join(dir, "calls"), filepath.Join(dir, "release"), filepath.Join(dir, "count")
 	bin := filepath.Join(dir, "spinclass")
-	script := "#!/bin/sh\nprintf '%s\\n' \"$1\" >> '" + calls + "'\ncase \"$1\" in\n" +
-		"close-self-run) sleep 30 ;;\n" +
-		"restart-preflight) echo '{\"verdict\":\"none\",\"reason\":\"\",\"when\":\"\"}' ;;\nesac\n"
+	script := "#!/bin/sh\ncase \"$1\" in\n" +
+		"close-self-run) n=$(cat '" + count + "' 2>/dev/null || echo 0); n=$((n+1)); echo $n > '" + count + "'; " +
+		"echo csr-start-$n >> '" + calls + "'; : > '" + dir + "'/started-$n; " +
+		"while [ ! -e '" + release + "' ]; do sleep 0.05; done; echo csr-end-$n >> '" + calls + "' ;;\n" +
+		"restart-preflight) echo preflight >> '" + calls + "'; echo '{\"verdict\":\"none\",\"reason\":\"\",\"when\":\"\"}' ;;\nesac\n"
 	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	q := &restartQueue{}
 	var rec recordedRestarts
 	r := newTestIdleRunner(t, bin, q, &rec)
-	r.closer.waitBound = 200 * time.Millisecond
-	idleDone := make(chan struct{})
-	go func() { r.onIdle(); close(idleDone) }()
-	select {
-	case <-idleDone:
-	case <-time.After(10 * time.Second):
-		t.Fatal("the idle runner waited for a hung close-self-run past its bound")
-	}
+	done1, done2 := make(chan struct{}), make(chan struct{})
+	t.Cleanup(func() {
+		// Ends the fake's wait loop, so no child outlives the test.
+		_ = os.WriteFile(release, nil, 0o600)
+		<-done1
+		r.waitNow()
+	})
+	go func() { r.onIdle(); close(done1) }()
+	waitForFile(t, filepath.Join(dir, "started-1"))
+
 	if !r.triggerNow(restartRequest{When: "now"}) {
-		t.Fatal("a now after the bound was refused")
+		t.Fatal("a now during a hung close-self-run was refused")
 	}
-	r.waitNow()
-	if got := readCalls(t, calls); len(got) != 2 || got[1] != "restart-preflight" {
-		t.Fatalf("calls = %q, want the hung close-self-run, then the now's preflight", got)
+	nowDone := make(chan struct{})
+	go func() { r.waitNow(); close(nowDone) }()
+	select {
+	case <-nowDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the now waited on the hung close-self-run")
 	}
-	// A poke while the hung run is still going does not start a second one.
-	r.onIdle()
-	if got := readCalls(t, calls); len(got) != 2 {
-		t.Fatalf("calls = %q: a second close-self-run overlapped the hung one", got)
+	if got := strings.Join(readCalls(t, calls), ","); got != "csr-start-1,preflight" {
+		t.Fatalf("calls = %q, want the hung close-self-run and the now's preflight", got)
 	}
-	log, _ := os.ReadFile(r.logPath)
-	if !strings.Contains(string(log), "still running") {
-		t.Errorf("the log does not say close-self-run was left running:\n%s", log)
+
+	waiting := make(chan struct{})
+	r.waitingForCloseMu = func() { close(waiting) }
+	go func() { r.onIdle(); close(done2) }()
+	<-waiting
+	// The second poke is at the close-self-run lock the first one holds
+	// until release: its own run cannot have started.
+	if _, err := os.Stat(filepath.Join(dir, "started-2")); err == nil {
+		t.Fatal("a second close-self-run started while the first was still running")
+	}
+	_ = os.WriteFile(release, nil, 0o600)
+	for _, d := range []chan struct{}{done1, done2} {
+		select {
+		case <-d:
+		case <-time.After(10 * time.Second):
+			t.Fatal("an idle poke did not finish after the release")
+		}
+	}
+	if got := strings.Join(readCalls(t, calls), ","); got != "csr-start-1,preflight,csr-end-1,csr-start-2,csr-end-2" {
+		t.Fatalf("calls = %q, want the second poke's close-self-run after the first ended, not dropped", got)
 	}
 }
 

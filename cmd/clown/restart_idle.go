@@ -107,8 +107,9 @@ func outputViaFile(cmd *exec.Cmd) ([]byte, error) {
 // gives none) it is never asked again.
 //
 // `clown restart --when now` takes the same path without the idle poke
-// (triggerNow). mu serializes the two, so no request is preflighted twice and
-// an idle poke during a `now` waits for it; inFlight is held from a `now`
+// (triggerNow), without close-self-run. mu serializes the two preflight and
+// restart steps, so no request is preflighted twice and an idle poke's
+// preflight during a `now` waits for it; inFlight is held from a `now`
 // being accepted, or the idle runner taking a request, until its preflight
 // and restart (countdown included) are done, and a `now` arriving meanwhile
 // is refused.
@@ -119,13 +120,18 @@ type idleRunner struct {
 	restart   func(restartRequest, preflightVerdict)
 	logPath   string
 
+	// closeMu serializes close-self-run runs; mu serializes preflight and
+	// restart. onIdle takes closeMu, releases it, then takes mu; the `now`
+	// goroutine takes only mu. They are never held together.
+	closeMu  sync.Mutex
 	mu       sync.Mutex
 	inFlight atomic.Bool
 	// nows tracks running `now` goroutines (waitNow, for tests).
 	nows sync.WaitGroup
-	// waitingForMu, when set, is called by onIdle just before it takes mu
-	// (tests).
-	waitingForMu func()
+	// waitingForMu and waitingForCloseMu, when set, are called by onIdle
+	// just before it takes mu and closeMu (tests).
+	waitingForMu      func()
+	waitingForCloseMu func()
 }
 
 // triggerNow queues req (replacing a queued `idle`: newest wins) and asks
@@ -177,10 +183,45 @@ func (r *idleRunner) noteExit() {
 	}
 }
 
+// runCloseSelfRun runs close-self-run under closeMu, waiting for one still
+// running from an earlier poke, and reports false when a restart became
+// underway meanwhile (no close is started then).
+func (r *idleRunner) runCloseSelfRun() bool {
+	if r.waitingForCloseMu != nil {
+		r.waitingForCloseMu()
+	}
+	r.closeMu.Lock()
+	defer r.closeMu.Unlock()
+	if restartUnderway() {
+		logSelfClose(r.logPath, "idle poke ignored: a restart is underway")
+		return false
+	}
+	_ = r.closer.run()
+	return true
+}
+
 // waitNow waits for the `now` runs started so far.
 func (r *idleRunner) waitNow() { r.nows.Wait() }
 
+// onIdle runs one idle transition. The close-self-run step holds closeMu,
+// the preflight/restart step holds mu; the two are taken one after the
+// other, never together (so there is no lock order to invert), and the `now`
+// goroutine takes only mu: a long or hung close-self-run delays the next
+// poke, which waits for it rather than being dropped, but never a `now`.
 func (r *idleRunner) onIdle() {
+	// Once a restart has stopped (or is stopping) the provider, an idle poke
+	// must not start a close or another restart: the session is between two
+	// frontends.
+	if restartUnderway() {
+		logSelfClose(r.logPath, "idle poke ignored: a restart is underway")
+		return
+	}
+	if !r.runCloseSelfRun() {
+		return
+	}
+	if r.queue == nil {
+		return
+	}
 	if r.waitingForMu != nil {
 		r.waitingForMu()
 	}
@@ -189,15 +230,7 @@ func (r *idleRunner) onIdle() {
 	// `now` waiting here is not starved by a stream of pokes.
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	// Once a restart has stopped (or is stopping) the provider, an idle poke
-	// must not start a close or another restart: the session is between two
-	// frontends.
 	if restartUnderway() {
-		logSelfClose(r.logPath, "idle poke ignored: a restart is underway")
-		return
-	}
-	_ = r.closer.run()
-	if r.queue == nil {
 		return
 	}
 	// A `now` accepted while this poke waited for mu runs its own
