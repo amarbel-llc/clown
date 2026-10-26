@@ -90,18 +90,6 @@ func (s Spec) Validate() error {
 			}
 		}
 	}
-	// clown's state holds the confinement records (clown#318); a unit that
-	// could write it could rewrite its own session's record.
-	// Compared lexically and with symlinks resolved, so neither a bind nor
-	// the state dir reached through a symlink slips past.
-	clownState := filepath.Join(OperatorXDG(os.Environ(), s.OperatorHome, "XDG_STATE_HOME"), "clown")
-	realState := ResolvePath(clownState)
-	for _, p := range append([]string{s.Worktree}, s.BindsRW...) {
-		real := ResolvePath(p)
-		if exposesWhole(p, clownState) || within(p, clownState) || exposesWhole(real, realState) || within(real, realState) {
-			return fmt.Errorf("worktree or binds_rw entry %q makes clown's state %q writable from inside the unit", p, clownState)
-		}
-	}
 	exposed := map[string][]string{
 		"worktree": {s.Worktree},
 		"binds_rw": s.BindsRW,
@@ -127,6 +115,19 @@ func (s Spec) Validate() error {
 			if creds := filepath.Join(s.OperatorHome, ".claude", ".credentials.json"); field != "binds_ro" && field != "sockets" && exposesWhole(p, creds) {
 				return fmt.Errorf("%s entry %q makes the operator's claude credential %q writable", field, p, creds)
 			}
+		}
+	}
+	// clown's state holds the confinement records (clown#318); a unit that
+	// could write it could rewrite its own session's record. Checked after
+	// the operator-home refusals above, which name the broader exposure.
+	// Compared lexically and with symlinks resolved, so neither a bind nor
+	// the state dir reached through a symlink slips past.
+	clownState := filepath.Join(OperatorXDG(os.Environ(), s.OperatorHome, "XDG_STATE_HOME"), "clown")
+	realState := ResolvePath(clownState)
+	for _, p := range append([]string{s.Worktree}, s.BindsRW...) {
+		real := ResolvePath(p)
+		if exposesWhole(p, clownState) || within(p, clownState) || exposesWhole(real, realState) || within(real, realState) {
+			return fmt.Errorf("worktree or binds_rw entry %q makes clown's state %q writable from inside the unit", p, clownState)
 		}
 	}
 	for _, p := range s.DenyPaths {

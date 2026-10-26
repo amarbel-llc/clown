@@ -79,7 +79,34 @@ type Launch struct {
 	// bridge's peer-checked unix socket, bound in as a single inode and
 	// relayed from the in-unit port claude's manifest names. Zero: none.
 	Serve Relay
+	// Unattended gives the unit its wall clock (unattendedRuntimeMax,
+	// clown#320). The frontend sets it from clown's unattended marker
+	// (CLOWN_UNATTENDED, or its [attach] carrier); it is not a spec field.
+	Unattended bool
 }
+
+// resourceLimits are every agent unit's limits (clown#320, the operator's
+// 2026-10-26 ruling), rendered clown-side: the spec has no field for them,
+// and there is no override. MemoryHigh throttles and reclaims before
+// MemoryMax OOM-kills; OOMPolicy=stop then stops the whole unit rather than
+// leave a partial session; Restart=no, so a stopped or killed unit stays
+// down (a hung session is the operator's to recover).
+var resourceLimits = []string{
+	"MemoryHigh=6G",
+	"MemoryMax=8G",
+	"MemorySwapMax=2G",
+	"TasksMax=4096",
+	"CPUQuota=400%",
+	"IOWeight=50",
+	"OOMPolicy=stop",
+	"Restart=no",
+}
+
+// unattendedRuntimeMax is an unattended unit's wall clock, 7 days in
+// seconds (RuntimeMaxSec= takes a plain number as seconds). An interactive
+// unit has none. It is the backstop for a session nobody watches, behind the
+// frontend dead-man (#319).
+const unattendedRuntimeMax = "RuntimeMaxSec=604800"
 
 // relays is every in-unit relay the shim starts: the egress proxy's, then the
 // forwards, then the serve socket's, then the statsd relay.
@@ -215,6 +242,10 @@ func (l Launch) properties() []string {
 	}
 	for _, p := range l.Spec.DenyPaths {
 		props = append(props, "InaccessiblePaths=-"+p)
+	}
+	props = append(props, resourceLimits...)
+	if l.Unattended {
+		props = append(props, unattendedRuntimeMax)
 	}
 	return props
 }

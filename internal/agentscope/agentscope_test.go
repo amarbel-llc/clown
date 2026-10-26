@@ -29,8 +29,11 @@ func TestValidateRefusesExposingTheOperatorHome(t *testing.T) {
 	for _, bad := range []string{"/home/op", "/home", "/"} {
 		s := validSpec()
 		s.BindsRW = []string{bad}
-		if err := s.Validate(); err == nil {
-			t.Errorf("binds_rw %q: want refusal", bad)
+		// The operator-home refusal names the real problem; clown's state
+		// lies under that home too, but that check comes second (the host
+		// agent_scope.bats asserts this message).
+		if err := s.Validate(); err == nil || !strings.Contains(err.Error(), "exposes the whole operator home") {
+			t.Errorf("binds_rw %q: err %v; want the operator-home refusal", bad, err)
 		}
 	}
 	s := validSpec()
@@ -269,6 +272,45 @@ func TestSystemdRunArgsCarryTheRequiredSandbox(t *testing.T) {
 		"/nix/store/cl/bin/claude", "--session-id", "$x",
 	}) {
 		t.Fatalf("tail after -- = %v", args[sep+1:])
+	}
+}
+
+// Every agent unit carries the operator's resource limits (clown#320,
+// 2026-10-26 ruling), rendered clown-side with no spec field; only an
+// unattended launch gets the wall clock.
+func TestSystemdRunArgsCarryTheResourceLimits(t *testing.T) {
+	limits := []string{
+		"--property=MemoryHigh=6G", "--property=MemoryMax=8G", "--property=MemorySwapMax=2G",
+		"--property=TasksMax=4096", "--property=CPUQuota=400%", "--property=IOWeight=50",
+		"--property=OOMPolicy=stop", "--property=Restart=no",
+	}
+	wallClock := "--property=RuntimeMaxSec=604800"
+	for _, unattended := range []bool{false, true} {
+		l := testLaunch()
+		l.Unattended = unattended
+		args, err := l.SystemdRunArgs()
+		if err != nil {
+			t.Fatal(err)
+		}
+		sep := slices.Index(args, "--")
+		for _, want := range limits {
+			if i := slices.Index(args, want); i < 0 || i > sep {
+				t.Errorf("unattended %v: %q missing before -- in %v", unattended, want, args)
+			}
+		}
+		var runtime []string
+		for _, a := range args[:sep] {
+			if strings.HasPrefix(a, "--property=RuntimeMaxSec=") {
+				runtime = append(runtime, a)
+			}
+		}
+		want := []string(nil)
+		if unattended {
+			want = []string{wallClock}
+		}
+		if !slices.Equal(runtime, want) {
+			t.Errorf("unattended %v: RuntimeMaxSec %q, want %q", unattended, runtime, want)
+		}
 	}
 }
 
