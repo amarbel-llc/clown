@@ -83,7 +83,7 @@ func TestRestartRechecksTheProviderAfterTheCountdown(t *testing.T) {
 	stops := 0
 	fr := frontendRestarter{
 		principal: restartTestPrincipal, stop: func() { stops++ }, logPath: filepath.Join(t.TempDir(), "l.log"),
-		countdown: func(string) (bool, string) { providerRunning.Store(false); return true, "elapsed" },
+		countdown: func(string, bool) (bool, string) { providerRunning.Store(false); return true, "elapsed" },
 	}
 	fr.restart(restartRequest{When: "idle"}, preflightVerdict{Verdict: "restart", Reason: "r"})
 	if stops != 0 || pendingRelaunch.Load() != nil {

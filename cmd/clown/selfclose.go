@@ -344,15 +344,17 @@ func synthIdlePluginDir(root *staging.Root, clownBin, sock string) (string, erro
 // session that cannot self-close is still a working session). Each idle poke
 // runs close-self-run and then, when restarts holds one, the restart preflight
 // (idleRunner); restart performs an allowed restart. restarts may be nil.
-func armSelfClose(flags parsedFlags, root *staging.Root, restarts *restartQueue, restart func(restartRequest, preflightVerdict), busy *atomic.Bool) (pluginDir, sock string, closeFn func()) {
+// now is the runner's immediate trigger for `clown restart --when now`
+// (idleRunner.triggerNow), nil when not armed or restarts is nil.
+func armSelfClose(flags parsedFlags, root *staging.Root, restarts *restartQueue, restart func(restartRequest, preflightVerdict), busy *atomic.Bool) (pluginDir, sock string, now func(restartRequest) bool, closeFn func()) {
 	bin, reason := selfCloseDecision(flags)
 	logPath, logErr := userStateWritePath("close-self-run.log")
-	notArmed := func(why string) (string, string, func()) {
+	notArmed := func(why string) (string, string, func(restartRequest) bool, func()) {
 		fmt.Fprintf(os.Stderr, "clown: self-close not armed: %s\n", why)
 		if logErr == nil {
 			logSelfClose(logPath, "self-close not armed (%s): %s", flags.identity.Key, why)
 		}
-		return "", "", func() {}
+		return "", "", nil, func() {}
 	}
 	if reason != "" {
 		// Only a claude launch is a candidate; --naked, --print-launch-plan and
@@ -360,7 +362,7 @@ func armSelfClose(flags parsedFlags, root *staging.Root, restarts *restartQueue,
 		if flags.provider == "claude" && !flags.naked && !flags.printLaunchPlan && logErr == nil {
 			logSelfClose(logPath, "self-close not armed (%s): %s", flags.identity.Key, reason)
 		}
-		return "", "", func() {}
+		return "", "", nil, func() {}
 	}
 	if logErr != nil {
 		return notArmed(logErr.Error())
@@ -391,5 +393,8 @@ func armSelfClose(flags parsedFlags, root *staging.Root, restarts *restartQueue,
 		return notArmed(err.Error())
 	}
 	logSelfClose(logPath, "self-close armed (%s): socket %s, spinclass %s, hook plugin %s, clown %s", flags.identity.Key, sock, bin, dir, exe)
-	return dir, sock, l.Close
+	if restarts != nil {
+		now = idle.triggerNow
+	}
+	return dir, sock, now, l.Close
 }

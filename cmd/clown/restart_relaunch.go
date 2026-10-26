@@ -290,7 +290,7 @@ type frontendRestarter struct {
 	stop func()
 	// countdown runs before the stop and may cancel the restart; nil
 	// restarts at once.
-	countdown func(reason string) (proceed bool, how string)
+	countdown func(reason string, cancelOnTurn bool) (proceed bool, how string)
 	logPath   string
 	// profileCheck dry-runs the relaunch's profile gate before anything is
 	// stopped (restartProfileCheck); nil skips it.
@@ -339,8 +339,13 @@ func (fr frontendRestarter) restart(req restartRequest, v preflightVerdict) {
 	// control socket, which any same-uid process can write, so it is not
 	// used.
 	reason := cmpOr(sanitizeRestartReason(v.Reason), restartFallbackReason)
+	// Under spinclass's `now` verdict a running turn is expected (the stop
+	// kills it, which is the point), so a turn start cancels nothing; under
+	// any other the busy cancel applies. The verdict decides, not the
+	// request: the control socket's `when` only made the frontend ask sooner.
+	cancelOnTurn := v.When != "now"
 	if fr.countdown != nil {
-		proceed, how := fr.countdown(reason)
+		proceed, how := fr.countdown(reason, cancelOnTurn)
 		logSelfClose(fr.logPath, "restart (%s): countdown: %s", fr.principal, how)
 		if !proceed {
 			fr.cancelled(how)
@@ -350,7 +355,7 @@ func (fr frontendRestarter) restart(req restartRequest, v preflightVerdict) {
 	// Re-checked after the countdown: a turn that started during it is not
 	// stopped mid-turn. The request was consumed by the preflight, so the
 	// restart is dropped; the requester asks again.
-	if fr.busy != nil && fr.busy() {
+	if cancelOnTurn && fr.busy != nil && fr.busy() {
 		fr.cancelled("a turn started during the countdown")
 		return
 	}

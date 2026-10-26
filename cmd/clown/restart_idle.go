@@ -9,6 +9,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -103,15 +105,58 @@ func outputViaFile(cmd *exec.Cmd) ([]byte, error) {
 // spinclass, restarting only on a "restart" verdict. The queued request is
 // taken before the preflight, so whatever the answer (a close that landed
 // gives none) it is never asked again.
+//
+// `clown restart --when now` takes the same path without the idle poke
+// (triggerNow). mu serializes the two, so no request is preflighted twice and
+// an idle poke during a `now` waits for it; inFlight is held from a `now`
+// being accepted, or the idle runner taking a request, until its preflight
+// and restart (countdown included) are done, and a `now` arriving meanwhile
+// is refused.
 type idleRunner struct {
 	closer    *selfCloseRunner
 	preflight *restartPreflight
 	queue     *restartQueue
 	restart   func(restartRequest, preflightVerdict)
 	logPath   string
+
+	mu       sync.Mutex
+	inFlight atomic.Bool
+	// nows tracks running `now` goroutines (waitNow, for tests).
+	nows sync.WaitGroup
 }
 
+// triggerNow queues req (replacing a queued `idle`: newest wins) and asks
+// spinclass at once, in the background, so the control reply need not wait
+// for the preflight. It reports false, queuing nothing, while a preflight or
+// restart is already in flight.
+func (r *idleRunner) triggerNow(req restartRequest) bool {
+	if r.queue == nil || !r.inFlight.CompareAndSwap(false, true) {
+		return false
+	}
+	r.queue.put(req)
+	r.nows.Add(1)
+	go func() {
+		defer r.nows.Done()
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		// Cleared before mu is released, so an idle poke waiting for mu
+		// sees it free and handles anything queued meanwhile.
+		defer r.inFlight.Store(false)
+		if restartUnderway() {
+			logSelfClose(r.logPath, "restart now ignored: a restart is underway")
+			return
+		}
+		r.preflightQueued()
+	}()
+	return true
+}
+
+// waitNow waits for the `now` runs started so far.
+func (r *idleRunner) waitNow() { r.nows.Wait() }
+
 func (r *idleRunner) onIdle() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	// Once a restart has stopped (or is stopping) the provider, an idle poke
 	// must not start a close or another restart: the session is between two
 	// frontends.
@@ -123,6 +168,18 @@ func (r *idleRunner) onIdle() {
 	if r.queue == nil {
 		return
 	}
+	// A `now` accepted while this poke waited for mu runs its own
+	// preflight once this poke is done; leave the queue to it.
+	if !r.inFlight.CompareAndSwap(false, true) {
+		return
+	}
+	defer r.inFlight.Store(false)
+	r.preflightQueued()
+}
+
+// preflightQueued takes the queued request, if any, asks spinclass, and
+// restarts only on a "restart" verdict. Called with mu held.
+func (r *idleRunner) preflightQueued() {
 	req, ok := r.queue.take()
 	if !ok {
 		return

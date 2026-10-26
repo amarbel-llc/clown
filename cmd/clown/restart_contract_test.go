@@ -35,7 +35,10 @@ func TestRestartVerbArgvContract(t *testing.T) {
 		{"unknown flag --key", []string{"--key", key, "--when", "idle"}, 2, "", "", true, `unknown argument "--key"`},
 		{"bad session key", []string{"--session", "a/b", "--when", "idle"}, 2, "", "", true, "is not a session key"},
 		{"dot-dot session key", []string{"--session", "..", "--when", "idle"}, 2, "", "", true, "is not a session key"},
-		{"--when now", []string{"--session", key, "--when", "now", "--reason", "r"}, 2, "", "", true, "only idle"},
+		{"--when now", []string{"--session", key, "--when", "now", "--reason", "r"}, 0, "r", "r", true, ""},
+		{"--when now, no reason", []string{"--session", key, "--when", "now"}, 0, "", "", true, ""},
+		{"--when soon", []string{"--session", key, "--when", "soon", "--reason", "r"}, 2, "", "", true, "idle or now"},
+		{"--when empty", []string{"--session", key, "--when", "", "--reason", "r"}, 2, "", "", true, "idle or now"},
 		{"flag last without a value", []string{"--session", key, "--reason"}, 2, "", "", true, "--reason needs a value"},
 		{"no frontend", []string{"--session", key, "--when", "idle", "--reason", "r"}, 1, "", "", false, "no live clown frontend"},
 	} {
@@ -45,8 +48,17 @@ func TestRestartVerbArgvContract(t *testing.T) {
 			q := &restartQueue{}
 			var mu sync.Mutex
 			var got []controlMessage
+			wantWhen := "idle"
+			for i, a := range c.args {
+				if a == "--when" && i+1 < len(c.args) {
+					wantWhen = c.args[i+1]
+				}
+			}
+			// The frontend's immediate trigger queues the request like the
+			// real one (idleRunner.triggerNow) but runs no preflight here.
+			now := func(r restartRequest) bool { q.put(r); return true }
 			if c.frontend {
-				handler := restartControlHandler("claude", "", q)
+				handler := restartControlHandlerNow("claude", "", q, now)
 				l, err := startControlListener(controlSocketPath(runtime, key), func(m controlMessage) controlReply {
 					mu.Lock()
 					got = append(got, m)
@@ -76,14 +88,14 @@ func TestRestartVerbArgvContract(t *testing.T) {
 				}
 				return
 			}
-			if len(got) != 1 || got[0].Op != "restart" || got[0].When != "idle" || got[0].Reason != c.reason {
-				t.Fatalf("frontend received %+v, want one restart, when idle, reason %q", got, c.reason)
+			if len(got) != 1 || got[0].Op != "restart" || got[0].When != wantWhen || got[0].Reason != c.reason {
+				t.Fatalf("frontend received %+v, want one restart, when %s, reason %q", got, wantWhen, c.reason)
 			}
 			r, ok := q.take()
-			if !ok || r.When != "idle" || r.Reason != c.queued {
-				t.Fatalf("queued %+v (%v), want when idle, reason %q", r, ok, c.queued)
+			if !ok || r.When != wantWhen || r.Reason != c.queued {
+				t.Fatalf("queued %+v (%v), want when %s, reason %q", r, ok, wantWhen, c.queued)
 			}
-			if !strings.Contains(stdout.String(), "restart queued for "+key+" (when idle)") {
+			if !strings.Contains(stdout.String(), "restart queued for "+key+" (when "+wantWhen+")") {
 				t.Errorf("stdout %q", stdout.String())
 			}
 		})

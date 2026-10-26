@@ -68,7 +68,7 @@ func TestRestartRefusedByTheProfileGateLeavesTheProviderRunning(t *testing.T) {
 	fr := frontendRestarter{
 		principal:    restartTestPrincipal,
 		stop:         func() { stops++ },
-		countdown:    func(string) (bool, string) { countdowns++; return true, "" },
+		countdown:    func(string, bool) (bool, string) { countdowns++; return true, "" },
 		profileCheck: check.check,
 		logPath:      logPath,
 	}

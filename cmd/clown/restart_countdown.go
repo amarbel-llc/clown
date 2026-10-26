@@ -64,11 +64,13 @@ func runForCountdown(argv []string) ([]byte, int, error) {
 
 // proceed reports whether to restart, and how the countdown went (for the log).
 //
-// A turn that starts during the countdown (busy, from the UserPromptSubmit
-// hook) cancels the restart: it is not stopped mid-turn.
-func (c restartCountdown) proceed(reason string) (bool, string) {
+// With cancelOnTurn, a turn that starts during the countdown (busy, from the
+// UserPromptSubmit hook) cancels the restart: it is not stopped mid-turn.
+// Without it (a `now` verdict) the countdown runs its full course and only a
+// viewer's cancel stops it.
+func (c restartCountdown) proceed(reason string, cancelOnTurn bool) (bool, string) {
 	busy := c.busy
-	if busy == nil {
+	if busy == nil || !cancelOnTurn {
 		busy = func() bool { return false }
 	}
 	how := ""

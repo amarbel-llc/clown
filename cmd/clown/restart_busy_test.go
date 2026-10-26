@@ -94,7 +94,7 @@ func TestCountdownInlineAbortsWhenATurnStarts(t *testing.T) {
 		sleep:       func(d time.Duration) { slept += d },
 		busy:        func() bool { calls++; return calls > 4 },
 	}
-	proceed, _ := cd.proceed("r")
+	proceed, _ := cd.proceed("r", true)
 	if proceed || slept >= 30*time.Second {
 		t.Fatalf("proceed %v after %v; want a cancel as soon as the turn started", proceed, slept)
 	}
@@ -112,7 +112,7 @@ func TestCountdownModalProceedDuringATurnCancels(t *testing.T) {
 		sleep:       func(time.Duration) {},
 		busy:        func() bool { return true },
 	}
-	if proceed, _ := cd.proceed("r"); proceed {
+	if proceed, _ := cd.proceed("r", true); proceed {
 		t.Fatal("must not restart into a running turn")
 	}
 }
@@ -131,7 +131,7 @@ func TestCountdownModalWithoutAnAnswerProceedsWithoutASecondWait(t *testing.T) {
 			notify:      &discardWriter{},
 			sleep:       func(d time.Duration) { slept += d },
 		}
-		if proceed, _ := cd.proceed("r"); !proceed || slept != 0 {
+		if proceed, _ := cd.proceed("r", true); !proceed || slept != 0 {
 			t.Errorf("modal exit %d: proceed %v, slept %v; want proceed, no inline wait", code, proceed, slept)
 		}
 	}
@@ -147,7 +147,7 @@ func TestRestarterSkipsTheStopWhenATurnStartedDuringTheCountdown(t *testing.T) {
 	fr := frontendRestarter{
 		principal: restartTestPrincipal,
 		stop:      func() { stops++ },
-		countdown: func(string) (bool, string) { return true, "elapsed" },
+		countdown: func(string, bool) (bool, string) { return true, "elapsed" },
 		busy:      func() bool { return true },
 		logPath:   filepath.Join(t.TempDir(), "l.log"),
 	}

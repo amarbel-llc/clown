@@ -14,7 +14,7 @@ import (
 func TestACancelledRestartIsReported(t *testing.T) {
 	t.Cleanup(func() { pendingRelaunch.Store(nil); providerRunning.Store(false) })
 	for name, fr := range map[string]frontendRestarter{
-		"countdown cancelled": {countdown: func(string) (bool, string) { return false, "posh modal: cancelled by a viewer" }},
+		"countdown cancelled": {countdown: func(string, bool) (bool, string) { return false, "posh modal: cancelled by a viewer" }},
 		"turn started":        {busy: func() bool { return true }},
 		"profile refused":     {profileCheck: func() error { return errors.New("profile changed") }},
 	} {

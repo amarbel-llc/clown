@@ -1050,13 +1050,13 @@ func runWithFlags(flags parsedFlags) int {
 		worktree:     cwd,
 		logPath:      restartLog,
 	}
-	idleDir, idleSock, closeIdle := armSelfClose(flags, root, restarts, restarter.restart, turnRunning)
+	idleDir, idleSock, restartNow, closeIdle := armSelfClose(flags, root, restarts, restarter.restart, turnRunning)
 	defer closeIdle()
 	if idleDir != "" {
 		pluginDirs = append(pluginDirs, idleDir)
 		flags.idleSocket = idleSock
 	}
-	defer armRestartControl(flags, restartUnarmedReason(flags, idleDir != ""), restarts)()
+	defer armRestartControl(flags, restartUnarmedReason(flags, idleDir != ""), restarts, restartNow)()
 
 	// Per FDR 0003, plugin-contributed system-prompt-append.d
 	// fragments are layered between clown's builtin fragments and
@@ -3071,9 +3071,10 @@ Clown flags (must appear before --):
   sessions-complete          Emit fish-completion lines for sessions
   list [--json]              List live clown sessions (spinclass-list-shaped table)
   presence list              List live presence records (clown-presence(1))
-  restart --session KEY [--when idle] [--reason TEXT]
-                             Queue a restart of KEY's live frontend for its next
-                             idle transition (spinclass's [session-entry].restart)
+  restart --session KEY [--when idle|now] [--reason TEXT]
+                             Ask KEY's live frontend to restart at its next idle
+                             transition, or (now) to ask spinclass at once
+                             (spinclass's [session-entry].restart)
 
 The job-wakeup producer/read surface and monitor are ringmaster's
 (ringmaster start|progress|done|read, ringmaster monitor; RFC-0015).

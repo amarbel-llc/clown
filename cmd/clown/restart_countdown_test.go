@@ -51,7 +51,7 @@ func runCountdown(t *testing.T, c countdownCase) (proceed bool, slept time.Durat
 		notify:      &out,
 		sleep:       func(d time.Duration) { slept += d },
 	}
-	proceed, _ = cd.proceed("pick up new tools")
+	proceed, _ = cd.proceed("pick up new tools", true)
 	return proceed, slept, out.String(), c.posh
 }
 
@@ -134,7 +134,7 @@ func TestFrontendRestarterHonoursACancelledCountdown(t *testing.T) {
 	fr := frontendRestarter{
 		principal: restartTestPrincipal,
 		stop:      func() { stops++ },
-		countdown: func(string) (bool, string) { return false, "cancelled" },
+		countdown: func(string, bool) (bool, string) { return false, "cancelled" },
 		logPath:   t.TempDir() + "/l.log",
 	}
 	fr.restart(restartRequest{When: "idle", Reason: "r"}, preflightVerdict{Verdict: "restart"})

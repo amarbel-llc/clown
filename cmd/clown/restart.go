@@ -74,20 +74,38 @@ func (q *restartQueue) take() (restartRequest, bool) {
 	return r, true
 }
 
-// restartControlHandler answers control messages for a frontend running
+// restartControlHandler is restartControlHandlerNow for a frontend with no
+// immediate trigger: it queues `idle` and refuses `now`.
+func restartControlHandler(provider, unarmedReason string, q *restartQueue) func(controlMessage) controlReply {
+	return restartControlHandlerNow(provider, unarmedReason, q, nil)
+}
+
+// restartAlreadyUnderway is the refusal for a request that arrives while a
+// restart is stopping the provider, or while a preflight or restart runs.
+const restartAlreadyUnderway = "a restart is already underway for this session; ask again once it has relaunched"
+
+// restartControlHandlerNow answers control messages for a frontend running
 // provider. unarmedReason is selfCloseDecision's reason ("" when the idle
 // trigger is armed): without the trigger nothing would ever act on a queued
 // restart, so it is refused rather than queued.
-func restartControlHandler(provider, unarmedReason string, q *restartQueue) func(controlMessage) controlReply {
+//
+// `idle` is queued for the next idle poke. `now` is handed to now
+// (idleRunner.triggerNow), which queues it, replacing a queued `idle`, and
+// runs the preflight at once in the background, so the reply comes back
+// before the preflight; it reports false while a preflight or restart is
+// already in flight, which is refused. Either way the request only makes the
+// frontend ask spinclass: nothing restarts without spinclass's "restart"
+// verdict. now is nil when the frontend has no immediate trigger.
+func restartControlHandlerNow(provider, unarmedReason string, q *restartQueue, now func(restartRequest) bool) func(controlMessage) controlReply {
 	return func(m controlMessage) controlReply {
 		if m.Op != "restart" {
 			return controlReply{Error: fmt.Sprintf("unknown control op %q", m.Op)}
 		}
-		if m.When != "idle" {
-			return controlReply{Error: fmt.Sprintf("restart --when %q is not supported; only idle", m.When)}
+		if m.When != "idle" && m.When != "now" {
+			return controlReply{Error: fmt.Sprintf("restart --when %q is not supported; use idle or now", m.When)}
 		}
 		if restartUnderway() {
-			return controlReply{Error: "a restart is already underway for this session; ask again once it has relaunched"}
+			return controlReply{Error: restartAlreadyUnderway}
 		}
 		if unarmedReason != "" {
 			if provider != "claude" {
@@ -95,7 +113,17 @@ func restartControlHandler(provider, unarmedReason string, q *restartQueue) func
 			}
 			return controlReply{Error: fmt.Sprintf("restart needs an idle trigger; %s's is not armed (%s)", provider, unarmedReason)}
 		}
-		q.put(restartRequest{When: m.When, Reason: sanitizeRestartReason(m.Reason)})
+		req := restartRequest{When: m.When, Reason: sanitizeRestartReason(m.Reason)}
+		if m.When == "idle" {
+			q.put(req)
+			return controlReply{OK: true}
+		}
+		if now == nil {
+			return controlReply{Error: "restart --when now is not available in this frontend"}
+		}
+		if !now(req) {
+			return controlReply{Error: restartAlreadyUnderway}
+		}
 		return controlReply{OK: true}
 	}
 }
@@ -259,12 +287,15 @@ func (l *controlListener) Close() {
 // and never --print-launch-plan), whether or not the idle trigger is armed:
 // an unarmed frontend still answers, so `clown restart` can say why it will
 // not restart. A failure to bind only means `clown restart` finds no frontend.
-func armRestartControl(flags parsedFlags, unarmedReason string, q *restartQueue) (closeFn func()) {
+//
+// now is the idle runner's immediate trigger for `--when now` (nil when the
+// idle trigger is not armed, which unarmedReason then refuses anyway).
+func armRestartControl(flags parsedFlags, unarmedReason string, q *restartQueue, now func(restartRequest) bool) (closeFn func()) {
 	runtime := os.Getenv("XDG_RUNTIME_DIR")
 	if flags.naked || flags.printLaunchPlan || flags.provider == "codex" || flags.identity.Key == "" || !filepath.IsAbs(runtime) {
 		return func() {}
 	}
-	l, err := startControlListener(controlSocketPath(runtime, flags.identity.Key), restartControlHandler(flags.provider, unarmedReason, q))
+	l, err := startControlListener(controlSocketPath(runtime, flags.identity.Key), restartControlHandlerNow(flags.provider, unarmedReason, q, now))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown: restart control socket not bound: %v\n", err)
 		return func() {}
@@ -296,10 +327,12 @@ func validSessionKey(key string) bool {
 	return key != "" && key != "." && key != ".." && !strings.ContainsAny(key, "/\x00")
 }
 
-// runRestartVerb is `clown restart --session K [--when idle] [--reason R]`.
-// It exits 0 once the frontend has queued the request, and non-zero, with the
-// reason on stderr, when there is no live frontend for K or the frontend
-// refuses (spinclass clears the request and shows that output).
+// runRestartVerb is `clown restart --session K [--when idle|now] [--reason R]`.
+// It exits 0 once the frontend has accepted the request, and non-zero, with
+// the reason on stderr, when there is no live frontend for K or the frontend
+// refuses (spinclass clears the request and shows that output). For `now`,
+// accepted means the frontend has started asking spinclass; a refusal by the
+// preflight after that is spinclass's to report.
 func runRestartVerb(args []string, stdout, stderr io.Writer) int {
 	var session, reason string
 	when := "idle"
@@ -307,7 +340,7 @@ func runRestartVerb(args []string, stdout, stderr io.Writer) int {
 	for len(args) > 0 {
 		flag := args[0]
 		if flag != "--session" && flag != "--when" && flag != "--reason" {
-			fmt.Fprintf(stderr, "clown restart: unknown argument %q\nusage: clown restart --session KEY [--when idle] [--reason TEXT]\n", flag)
+			fmt.Fprintf(stderr, "clown restart: unknown argument %q\nusage: clown restart --session KEY [--when idle|now] [--reason TEXT]\n", flag)
 			return 2
 		}
 		if len(args) < 2 {
@@ -325,15 +358,15 @@ func runRestartVerb(args []string, stdout, stderr io.Writer) int {
 		args = args[2:]
 	}
 	if !sessionSet {
-		fmt.Fprintln(stderr, "clown restart: --session is required\nusage: clown restart --session KEY [--when idle] [--reason TEXT]")
+		fmt.Fprintln(stderr, "clown restart: --session is required\nusage: clown restart --session KEY [--when idle|now] [--reason TEXT]")
 		return 2
 	}
 	if !validSessionKey(session) {
 		fmt.Fprintf(stderr, "clown restart: --session %q is not a session key\n", session)
 		return 2
 	}
-	if when != "idle" {
-		fmt.Fprintf(stderr, "clown restart: --when %q is not supported; only idle\n", when)
+	if when != "idle" && when != "now" {
+		fmt.Fprintf(stderr, "clown restart: --when %q is not supported; use idle or now\n", when)
 		return 2
 	}
 	runtime := os.Getenv("XDG_RUNTIME_DIR")
