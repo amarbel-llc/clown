@@ -413,6 +413,32 @@ unit_props() {
   grep -qx 'RuntimeMaxUSec=1w' <<<"$output"
 }
 
+@test "agent_scope: a SIGKILLed frontend takes its unit down (dead-man socket)" {
+  # clown#319: no defer runs on SIGKILL, but the kernel closes the frontend's
+  # end of the dead-man socket; the shim reads EOF and stops the unit.
+  rm -f "$RESULT"
+  (cd "$WT" && exec "$CLOWN_BIN" agent-scope-run --spec "$WT/spec.json" -- sleep 120 </dev/null >/dev/null 2>&1) &
+  local frontend=$! unit=""
+  for _ in $(seq 100); do
+    unit="$(jq -r '.cgroup // empty | split("/") | last' "$RESULT" 2>/dev/null || true)"
+    [[ -n $unit ]] && break
+    sleep 0.1
+  done
+  [[ -n $unit ]]
+  # While the frontend lives, the unit runs.
+  sleep 2
+  [ "$(systemctl --user is-active "$unit")" = active ]
+  kill -9 "$frontend"
+  local state=""
+  for _ in $(seq 200); do
+    state="$(systemctl --user is-active "$unit" 2>/dev/null || true)"
+    [[ $state != active && $state != deactivating ]] && break
+    sleep 0.1
+  done
+  echo "unit $unit after the frontend's SIGKILL: $state"
+  [[ $state != active && $state != deactivating ]]
+}
+
 @test "agent_scope: a provider that exits records its exit code, with no error" {
   run run_in_unit 'sleep 1; exit 3'
   [ "$status" -eq 3 ]

@@ -211,6 +211,22 @@ func startFrontendEndpoints(launch *agentscope.Launch, forwardAddrs []string, in
 	closers = append(closers, proxy.Close)
 	launch.EgressSocket = sock
 
+	// The dead-man socket (clown#319): the shim holds a connection to it and
+	// stops the unit when it ends, i.e. when this frontend dies by any means
+	// (a SIGKILL runs no defer, but the kernel closes the fd). Closed here
+	// only once the unit is done.
+	deadman := &agentscope.DeadMan{Unit: launch.Unit, Logger: logger}
+	sock, err = socket("deadman.sock")
+	if err == nil {
+		err = deadman.Listen(sock)
+	}
+	if err != nil {
+		stop()
+		return nil, err
+	}
+	closers = append(closers, deadman.Close)
+	launch.DeadManSocket = sock
+
 	seen := map[string]bool{}
 	for _, addr := range forwardAddrs {
 		_, port, perr := net.SplitHostPort(addr)
@@ -516,8 +532,11 @@ func touch(path string) error {
 // provider. Finally it execs argv.
 func runAgentExec(args []string) int {
 	var relayArgs []string
+	var deadman string
 	for len(args) > 0 && args[0] != "--" {
 		switch {
+		case args[0] == "--deadman" && len(args) > 1:
+			deadman, args = args[1], args[2:]
 		case (args[0] == "--relay" || args[0] == "--serve") && len(args) > 1:
 			relayArgs, args = append(relayArgs, args[0], args[1]), args[2:]
 		default:
@@ -529,8 +548,25 @@ func runAgentExec(args []string) int {
 		args = args[1:]
 	}
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "clown agent-exec: usage: clown agent-exec [--serve FILE] [--relay ADDR=SOCK]... -- <argv>")
+		fmt.Fprintln(os.Stderr, "clown agent-exec: usage: clown agent-exec [--deadman SOCK] [--serve FILE] [--relay ADDR=SOCK]... -- <argv>")
 		return agentscope.ShimExitUsage
+	}
+	// The dead-man connection comes first, before anything else in the unit
+	// runs, so it is the frontend's one held connection (clown#319). A
+	// frontend that cannot be reached, or a shim that is not the unit's init
+	// (it could not stop the unit), refuses: nothing would stop the provider.
+	var frontendGone <-chan struct{}
+	if deadman != "" {
+		if os.Getpid() != 1 {
+			fmt.Fprintln(os.Stderr, "clown agent-exec: --deadman needs the shim to be the unit's init (PrivatePIDs=yes)")
+			return agentscope.ShimExitRefused
+		}
+		gone, err := agentscope.WatchFrontend(deadman)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "clown agent-exec: dead-man socket: %v\n", err)
+			return agentscope.ShimExitRefused
+		}
+		frontendGone = gone
 	}
 	if len(relayArgs) > 0 {
 		if err := startRelays(relayArgs); err != nil {
@@ -554,7 +590,7 @@ func runAgentExec(args []string) int {
 		return agentscope.ShimExitNotFound
 	}
 	if os.Getpid() == 1 {
-		return runAsInit(path, args)
+		return runAsInit(path, args, frontendGone)
 	}
 	err = syscall.Exec(path, args, os.Environ())
 	fmt.Fprintf(os.Stderr, "clown agent-exec: exec %s: %v\n", path, err)
@@ -572,7 +608,7 @@ func runAgentExec(args []string) int {
 // terminal's own signals (^C, ^\, SIGWINCH) reach it directly; with a
 // terminal the shim does not pass SIGINT/SIGQUIT on a second time, without
 // one it does.
-func runAsInit(path string, args []string) int {
+func runAsInit(path string, args []string, frontendGone <-chan struct{}) int {
 	sigs := make(chan os.Signal, 16)
 	signal.Notify(sigs, syscall.SIGCHLD, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGINT, syscall.SIGQUIT, syscall.SIGUSR1, syscall.SIGUSR2)
 	proc, err := os.StartProcess(path, args, &os.ProcAttr{
@@ -584,7 +620,22 @@ func runAsInit(path string, args []string) int {
 		return agentscope.ShimExitRefused
 	}
 	_ = os.WriteFile("/proc/self/comm", []byte(agentscope.InitComm), 0)
-	onTerminal := term.IsTerminal(0)
+	// As the pid namespace's init, kill(-1) reaches every other process in
+	// the unit's namespace and nothing outside it.
+	signalAll := func(s syscall.Signal) { _ = syscall.Kill(-1, s) }
+	return superviseProvider(proc, sigs, term.IsTerminal(0), frontendGone, agentscope.DeadManGrace, signalAll)
+}
+
+// superviseProvider is the init loop: it reaps every exited process, passes
+// signals on to the provider, and returns the provider's exit status. When
+// gone closes (the frontend died, clown#319) it sends SIGTERM to everything
+// via signalAll and, if the provider has not exited after grace, SIGKILL;
+// once the provider is reaped it SIGKILLs whatever is left and returns, so
+// the unit ends and --collect removes it. A nil gone never fires: no change
+// while the frontend lives.
+func superviseProvider(proc *os.Process, sigs <-chan os.Signal, onTerminal bool, gone <-chan struct{}, grace time.Duration, signalAll func(syscall.Signal)) int {
+	var deadline <-chan time.Time
+	stopping := false
 	for {
 		// Reap everything that has exited; only the provider's status counts.
 		for {
@@ -594,19 +645,33 @@ func runAsInit(path string, args []string) int {
 				break
 			}
 			if pid == proc.Pid {
+				if stopping {
+					signalAll(syscall.SIGKILL)
+				}
 				return exitCodeOf(ws)
 			}
 		}
-		switch s := <-sigs; s {
-		case syscall.SIGCHLD:
-		case syscall.SIGINT, syscall.SIGQUIT:
-			// From a terminal these already reached the provider through
-			// the process group; without one they came from outside.
-			if !onTerminal {
+		select {
+		case s := <-sigs:
+			switch s {
+			case syscall.SIGCHLD:
+			case syscall.SIGINT, syscall.SIGQUIT:
+				// From a terminal these already reached the provider through
+				// the process group; without one they came from outside.
+				if !onTerminal {
+					_ = proc.Signal(s)
+				}
+			default:
 				_ = proc.Signal(s)
 			}
-		default:
-			_ = proc.Signal(s)
+		case <-gone:
+			fmt.Fprintf(os.Stderr, "clown agent-exec: the frontend is gone; stopping the unit (SIGTERM, SIGKILL after %v)\n", grace)
+			gone, stopping = nil, true
+			signalAll(syscall.SIGTERM)
+			deadline = time.After(grace)
+		case <-deadline:
+			deadline = nil
+			signalAll(syscall.SIGKILL)
 		}
 	}
 }
