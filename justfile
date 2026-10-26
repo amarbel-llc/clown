@@ -94,6 +94,18 @@ debug-test-go-race-failures:
     nix build .#clown-godyn-race-tests --no-link --print-build-logs --keep-going 2>&1 \
         | grep -E 'godyn-test FAIL|--- FAIL|Cannot build .*godyn-test-' || true
 
+# The godyn unit lane with --keep-going, printing only the failing packages
+# and tests (and each failure's first line): test-go-godyn stops at the first
+# failing package (clown#235 triage of skip guards turned into failures).
+#
+# list every package failing the godyn unit lane
+[group("debug")]
+debug-test-go-godyn-failures:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    nix build .#clown-godyn-tests --no-link --print-build-logs --keep-going 2>&1 \
+        | grep -E -A2 'godyn-test FAIL|--- FAIL' | grep -v '^--$' || true
+
 # Run the Go unit suite as godyn's per-package test lane (igloo FDR 0007): each
 # package's test binary is built and run in its own CA derivation, so only
 # changed cones re-run. godyn is the only unit-suite lane: on a host where

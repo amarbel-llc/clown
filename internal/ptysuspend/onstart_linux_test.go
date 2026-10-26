@@ -7,6 +7,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"code.linenisgreat.com/clown/internal/testlane"
 )
 
 // OnStart is called only once a process-level SIGTERM is forwarded to the
@@ -15,7 +17,7 @@ import (
 // end the child, not this process.
 func TestOnStartRunsAfterSIGTERMIsForwarded(t *testing.T) {
 	if _, err := os.Stat("/dev/ptmx"); err != nil {
-		t.Skip("no /dev/ptmx on this host")
+		testlane.SkipOrFail(t, "no /dev/ptmx on this host")
 	}
 	outerMaster, outer, err := openInnerPTY()
 	if err != nil {

@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"code.linenisgreat.com/clown/internal/clownfile"
+	"code.linenisgreat.com/clown/internal/testlane"
 )
 
 func TestExtractAttachID(t *testing.T) {
@@ -403,7 +404,7 @@ func TestEmitSessionTitleNoGroupShowsClownNameOnce(t *testing.T) {
 // Presence is isolated to an empty state dir so this really is the solo case.
 func TestEmitSessionTitleGitFallbackSoloAlwaysShowsClownName(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
-		t.Skipf("git not on PATH: %v", err)
+		testlane.SkipOrFail(t, "git not on PATH: %v", err)
 	}
 	dir, repoBranch := gitRepoFixture(t)
 	t.Chdir(dir)
@@ -431,7 +432,7 @@ func TestEmitSessionTitleGitFallbackSoloAlwaysShowsClownName(t *testing.T) {
 func TestRunMultiplexer(t *testing.T) {
 	sh, err := exec.LookPath("sh")
 	if err != nil {
-		t.Skipf("sh not on PATH: %v", err)
+		testlane.SkipOrFail(t, "sh not on PATH: %v", err)
 	}
 	dir := t.TempDir()
 	argvFile := filepath.Join(dir, "argv")
@@ -701,7 +702,7 @@ func hostTempDir(t *testing.T) string {
 	t.Helper()
 	dir, err := os.MkdirTemp("/tmp", "clown-test-*")
 	if err != nil {
-		t.Skipf("cannot create a scratch dir under /tmp: %v", err)
+		testlane.SkipOrFail(t, "cannot create a scratch dir under /tmp: %v", err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	return dir
@@ -732,7 +733,7 @@ func gitRepoFixture(t *testing.T) (dir, repoBranch string) {
 		cmd := exec.Command("git", args...)
 		cmd.Dir = dir
 		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Skipf("git %v in fixture repo: %v\n%s", args, err, out)
+			testlane.SkipOrFail(t, "git %v in fixture repo: %v\n%s", args, err, out)
 		}
 	}
 	return dir, filepath.Base(dir) + "/trunk"
@@ -745,7 +746,7 @@ func gitRepoFixture(t *testing.T) (dir, repoBranch string) {
 // means to test.
 func TestGitRepoAndBranch(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
-		t.Skipf("git not on PATH: %v", err)
+		testlane.SkipOrFail(t, "git not on PATH: %v", err)
 	}
 
 	dir, want := gitRepoFixture(t)

@@ -18,6 +18,7 @@ import (
 	"code.linenisgreat.com/clown/internal/promptwalk"
 	"code.linenisgreat.com/clown/internal/sessions"
 	"code.linenisgreat.com/clown/internal/tent"
+	"code.linenisgreat.com/clown/internal/testlane"
 )
 
 func withBuildcfgString(t *testing.T, target *string, value string) {
@@ -1722,7 +1723,7 @@ func fakePodmanBinary(t *testing.T, imageExists bool) (binPath, logPath string) 
 	if err != nil {
 		shPath, err = exec.LookPath("bash")
 		if err != nil {
-			t.Skipf("no sh/bash found on PATH; cannot stage fake podman: %v", err)
+			testlane.SkipOrFail(t, "no sh/bash found on PATH; cannot stage fake podman: %v", err)
 		}
 	}
 	dir := t.TempDir()

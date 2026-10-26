@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 	"testing"
+
+	"code.linenisgreat.com/clown/internal/testlane"
 )
 
 // TestRelayInputInterceptsEscapeKey is the core proof: the escape key (here
@@ -66,7 +68,7 @@ func TestRelayInputCustomKey(t *testing.T) {
 // Skipped where /dev/ptmx is unavailable (some sandboxes).
 func TestOpenInnerPTYPair(t *testing.T) {
 	if _, err := os.Stat("/dev/ptmx"); err != nil {
-		t.Skip("no /dev/ptmx on this host")
+		testlane.SkipOrFail(t, "no /dev/ptmx on this host")
 	}
 	m, s, err := openInnerPTY()
 	if err != nil {
