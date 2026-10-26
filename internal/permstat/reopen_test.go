@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -80,7 +81,11 @@ func TestReopenAttemptsShareOneDeadline(t *testing.T) {
 	dir := t.TempDir()
 	path := statePath(dir, "s-1")
 	var holders []*os.File
+	// The unlockers read their file's fd; each must be done before the
+	// cleanup closes that file (clown#307).
+	var unlockers sync.WaitGroup
 	t.Cleanup(func() {
+		unlockers.Wait()
 		for _, f := range holders {
 			f.Close()
 		}
@@ -96,7 +101,9 @@ func TestReopenAttemptsShareOneDeadline(t *testing.T) {
 			t.Error(err)
 		}
 		holders = append(holders, f)
+		unlockers.Add(1)
 		go func() {
+			defer unlockers.Done()
 			time.Sleep(150 * time.Millisecond)
 			syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 		}()
