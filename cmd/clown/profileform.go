@@ -16,11 +16,13 @@ import (
 
 // profileFormValues holds the huh field bindings for the add/edit form;
 // toProfile trims every field into the stored profile. Env, ContextServers,
-// and ContextExcluded are not editable through this form (no field prompts
-// for them) but are carried through as opaque passthrough values so that
-// editing a profile's name/provider/model/etc. via `clown profile edit`
-// does not silently wipe a --cheap-context selection (or an Env map)
-// someone set another way (--cheap-context's save prompt, or by hand).
+// ContextExcluded and Base are not editable through this form (no field
+// prompts for them) but are carried through as opaque passthrough values so
+// that editing a profile's name/provider/model/etc. via `clown profile edit`
+// does not silently wipe a --cheap-context selection, an Env map, or the
+// builtin a profile declares it narrows (clown#303), set another way
+// (--cheap-context's save prompt, or by hand). A test round-trips every
+// profile.Profile field, so a new field must be carried here too.
 type profileFormValues struct {
 	Name     string
 	Display  string
@@ -34,6 +36,7 @@ type profileFormValues struct {
 	env             map[string]string
 	contextServers  []string
 	contextExcluded map[string][]string
+	base            string
 }
 
 func (v profileFormValues) toProfile() profile.Profile {
@@ -48,6 +51,7 @@ func (v profileFormValues) toProfile() profile.Profile {
 		Env:             v.env,
 		ContextServers:  v.contextServers,
 		ContextExcluded: v.contextExcluded,
+		Base:            v.base,
 	}
 }
 
@@ -63,6 +67,7 @@ func valuesFromProfile(p profile.Profile) profileFormValues {
 		env:             p.Env,
 		contextServers:  p.ContextServers,
 		contextExcluded: p.ContextExcluded,
+		base:            p.Base,
 	}
 }
 

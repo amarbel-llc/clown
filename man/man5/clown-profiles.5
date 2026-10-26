@@ -183,6 +183,11 @@ Nothing is inherited from the base: it is a declaration a launcher checks.
 refuses a launch whose base names no builtin or whose pin no longer
 matches.
 Builtins themselves cannot carry a base.
+.Cm clown profile edit
+and the
+.Fl -cheap-context
+save prompt keep a profile's base as it is; neither offers to change it,
+so set or change it by editing the file.
 .El
 .Ss [registry]
 .Bl -tag -width Ds
@@ -372,17 +377,3 @@ protocol = "1"
 .Xr clown-stdio-bridge 1 ,
 .Xr clownfile 5 ,
 .Xr juggler 7
-.Sh BUGS
-.Cm clown profile edit
-and the
-.Fl -cheap-context
-save prompt drop an existing profile's
-.Sy base
-(clown#303).
-Every save restamps
-.Sy [registry] protocol
-with the lowest protocol its profiles need, so once the last profile with a
-.Sy base
-loses it the registry drops to protocol 1 and nothing refuses: the profile
-no longer declares the builtin it narrows, and spinclass has no base or pin
-left to check.

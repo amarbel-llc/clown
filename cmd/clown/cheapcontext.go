@@ -701,9 +701,6 @@ func promptSaveSelection(result selectionResult, saveCtx cheapContextSaveContext
 		return nil
 	}
 
-	merged, user, destPath := saveCtx.merged, saveCtx.user, saveCtx.path
-	existingNames := userNameSet(user)
-
 	var name string
 	if err := huh.NewForm(huh.NewGroup(
 		huh.NewInput().
@@ -720,6 +717,15 @@ func promptSaveSelection(result selectionResult, saveCtx cheapContextSaveContext
 	for i, d := range result.kept {
 		servers[i] = d.Name()
 	}
+	return saveSelectionToProfile(name, servers, result.excludedTools, saveCtx)
+}
+
+// saveSelectionToProfile records a --cheap-context selection on the named
+// profile: an existing one (user or builtin) keeps every other field, a new
+// name gets a minimal profile.
+func saveSelectionToProfile(name string, servers []string, excludedTools map[string][]string, saveCtx cheapContextSaveContext) error {
+	merged, user, destPath := saveCtx.merged, saveCtx.user, saveCtx.path
+	existingNames := userNameSet(user)
 
 	var target profile.Profile
 	for _, p := range merged {
@@ -738,7 +744,7 @@ func promptSaveSelection(result selectionResult, saveCtx cheapContextSaveContext
 		target = profile.Profile{Name: name, Provider: "claude", Backend: "anthropic"}
 	}
 	target.ContextServers = servers
-	target.ContextExcluded = result.excludedTools
+	target.ContextExcluded = excludedTools
 
 	// Reuse saveProfileForm's Validate -> Upsert -> Save -> print sequence
 	// (cmd/clown/profileform.go) rather than re-deriving it here — v.Confirm
