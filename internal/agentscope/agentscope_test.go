@@ -130,6 +130,64 @@ func TestValidateRefusesClownStateThroughSymlinks(t *testing.T) {
 	}
 }
 
+// ResolvePath follows every link on the path, dangling ones included, and
+// stops on a loop.
+func TestResolvePath(t *testing.T) {
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	link := func(target, name string) {
+		t.Helper()
+		if err := os.Symlink(target, filepath.Join(dir, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "real", "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link(filepath.Join(dir, "real", "notyet"), "dangling")
+	link("real", "rel")
+	link(filepath.Join(dir, "rel"), "chain1")
+	link(filepath.Join(dir, "chain1"), "chain2")
+	link(filepath.Join(dir, "loop2"), "loop1")
+	link(filepath.Join(dir, "loop1"), "loop2")
+	link("../real/sub", filepath.Join("real", "up"))
+	cases := map[string]string{
+		filepath.Join(dir, "dangling"):            filepath.Join(dir, "real", "notyet"),
+		filepath.Join(dir, "dangling", "x"):       filepath.Join(dir, "real", "notyet", "x"),
+		filepath.Join(dir, "rel", "sub"):          filepath.Join(dir, "real", "sub"),
+		filepath.Join(dir, "chain2", "sub"):       filepath.Join(dir, "real", "sub"),
+		filepath.Join(dir, "real", "up", ".."):    filepath.Join(dir, "real"),
+		filepath.Join(dir, "missing", "a"):        filepath.Join(dir, "missing", "a"),
+		filepath.Join(dir, "rel", "..", "chain2"): filepath.Join(dir, "real"),
+	}
+	for in, want := range cases {
+		if got := ResolvePath(in); got != want {
+			t.Errorf("ResolvePath(%q) = %q, want %q", in, got, want)
+		}
+	}
+	// A loop returns (does not hang) with an absolute path.
+	if got := ResolvePath(filepath.Join(dir, "loop1", "x")); !filepath.IsAbs(got) {
+		t.Errorf("ResolvePath(loop) = %q, want an absolute path", got)
+	}
+}
+
+// A dangling link into clown's state is refused like the state dir itself.
+func TestValidateRefusesADanglingLinkIntoClownState(t *testing.T) {
+	dir := t.TempDir()
+	state := filepath.Join(dir, "state")
+	t.Setenv("XDG_STATE_HOME", state)
+	if err := os.Symlink(filepath.Join(state, "clown", "notyet"), filepath.Join(dir, "dangling")); err != nil {
+		t.Fatal(err)
+	}
+	s := validSpec()
+	s.BindsRW = []string{filepath.Join(dir, "dangling")}
+	if err := s.Validate(); err == nil || !strings.Contains(err.Error(), "clown's state") {
+		t.Fatalf("binds_rw through a dangling link into clown's state: err %v, want the state-dir refusal", err)
+	}
+}
+
 func TestLoadSpecRefusesUnknownFields(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "spec.json")
 	raw, _ := json.Marshal(map[string]any{"version": 1, "worktree": "/w", "operator_home": "/home/op", "network": "host"})

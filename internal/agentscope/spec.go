@@ -145,25 +145,47 @@ func (s Spec) Validate() error {
 	return nil
 }
 
-// ResolvePath is p with symlinks resolved: the deepest existing ancestor is
-// resolved and the missing rest appended, so a path that does not exist yet
-// still resolves through a symlinked parent. With nothing resolvable it is
-// the cleaned absolute path.
+// maxSymlinkHops bounds ResolvePath, as the kernel bounds a lookup (40).
+const maxSymlinkHops = 40
+
+// ResolvePath is p with every symlink on it followed, component by
+// component, whether or not the link's target exists: a dangling link
+// resolves to where it points, and a component that does not exist is kept
+// as written. A loop, or more than maxSymlinkHops links, stops the walk; the
+// rest is then appended unresolved (such a path cannot be bound, so the
+// unit cannot reach anything through it). The result is absolute and clean.
 func ResolvePath(p string) string {
-	p = filepath.Clean(p)
 	if abs, err := filepath.Abs(p); err == nil {
 		p = abs
 	}
-	var rest []string
-	for dir := p; ; dir = filepath.Dir(dir) {
-		if resolved, err := filepath.EvalSymlinks(dir); err == nil {
-			return filepath.Join(append([]string{resolved}, rest...)...)
+	rest := strings.Split(filepath.Clean(p), "/")
+	cur := "/"
+	for hops := 0; len(rest) > 0; {
+		comp := rest[0]
+		rest = rest[1:]
+		switch comp {
+		case "", ".":
+			continue
+		case "..":
+			cur = filepath.Dir(cur)
+			continue
 		}
-		if dir == filepath.Dir(dir) {
-			return p
+		next := filepath.Join(cur, comp)
+		fi, err := os.Lstat(next)
+		if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+			cur = next
+			continue
 		}
-		rest = append([]string{filepath.Base(dir)}, rest...)
+		target, err := os.Readlink(next)
+		if hops++; err != nil || hops > maxSymlinkHops {
+			return filepath.Join(append([]string{next}, rest...)...)
+		}
+		if filepath.IsAbs(target) {
+			cur = "/"
+		}
+		rest = append(strings.Split(target, "/"), rest...)
 	}
+	return cur
 }
 
 func requireAbs(field, p string) error {
