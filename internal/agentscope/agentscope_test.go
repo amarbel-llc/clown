@@ -438,6 +438,20 @@ func TestValidateRefusesBindingTheOperatorsNixConfig(t *testing.T) {
 	}
 }
 
+// The unattended marker (clown#323) stays in the frontend: the frontend
+// turns it into claude's --settings, which reach the unit in the argv, so
+// the agent inside never sees it.
+func TestUnattendedMarkerStaysInTheFrontend(t *testing.T) {
+	l := testLaunch()
+	l.FrontendEnv = append(l.FrontendEnv, "CLOWN_UNATTENDED=1")
+	set, _ := l.environment()
+	for _, kv := range set {
+		if strings.HasPrefix(kv, "CLOWN_UNATTENDED=") {
+			t.Fatalf("the marker reached the unit: %s", kv)
+		}
+	}
+}
+
 func TestSSHAuthSockOnlyWhenTheSocketIsBound(t *testing.T) {
 	l := testLaunch()
 	l.Spec.Sockets = nil
