@@ -293,9 +293,10 @@ func (s *server) dispatch(ctx context.Context, req rm.Envelope) rm.Envelope {
 			return rpcError(req.ID, -32000, fmt.Sprintf("unknown model %q", p.Name))
 		}
 		// A client disconnect cancels the download; Download removes its
-		// temporary file.
+		// temporary file. A model already installed, before or during this
+		// download (clown#314), is what the client asked for: answer with it.
 		dest, err := jugglermodels.Download(ctx, entry, s.modelsDir, nil)
-		if err != nil {
+		if err != nil && !errors.Is(err, jugglermodels.ErrAlreadyInstalled) {
 			return rpcError(req.ID, -32000, fmt.Sprintf("download: %v", err))
 		}
 		st, err := os.Stat(dest)

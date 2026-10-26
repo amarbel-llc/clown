@@ -140,6 +140,19 @@ Methods:
 See
 .Xr juggler 1
 for the per-method semantics.
+.Pp
+.Cm DownloadModel
+never replaces an installed model.
+Downloads of one model run one at a time in the daemon; one that finds
+the model installed, before it starts or by the time it publishes,
+answers with the installed model as a success.
+A download publishes with
+.Xr link 2 ,
+which fails if the model exists, so not even another process's install
+is replaced; only on a filesystem without hard links does it fall back
+to a check then
+.Xr rename 2 ,
+which is safe against the daemon's own downloads alone.
 .Sh MODEL REGISTRY
 .Nm
 tracks two kinds of model:

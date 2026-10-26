@@ -438,6 +438,10 @@ right surface for a terminal-attached invocation.
 The downloaded file lands in
 .Pa ~/.local/share/juggler/models
 where every other subcommand can see it.
+An installed model is never replaced: one already there, or one that
+appears while the download runs, is kept, the download's own copy is
+removed, and the command fails with
+.Ql already installed .
 .It Cm mcp
 Run a stdio MCP server exposing a single tool,
 .Sq juggler-prompt ,
