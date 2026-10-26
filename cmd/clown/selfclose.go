@@ -13,6 +13,9 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/term"
+
+	"code.linenisgreat.com/clown/internal/sessionstatus"
 	"code.linenisgreat.com/clown/internal/staging"
 )
 
@@ -170,20 +173,33 @@ type idleListener struct {
 }
 
 // turnStartedDatagram is what `clown idle-notify --busy` sends from the
-// UserPromptSubmit hook: it marks a turn running and wakes nothing. Every
-// other datagram is an idle poke.
+// UserPromptSubmit hook: it marks a turn running and wakes nothing. It may be
+// followed by a payload (sessionstatus.Payload as JSON, at most
+// sessionstatus.MaxPayload bytes) when the hook command carries
+// idleNotifyPayloadEnv. Every datagram not starting with it is an idle poke.
+//
+// An older frontend reads only a one-byte 'B' as a turn start and anything
+// longer as an idle poke, so idle-notify sends a payload only when the hook
+// command, which this frontend wrote, says it understands one.
 const turnStartedDatagram = 'B'
 
+// idleNotifyPayloadEnv, set to 1 in the busy hook's command line, tells
+// idle-notify that the frontend that wrote the hook accepts a payload.
+const idleNotifyPayloadEnv = "CLOWN_IDLE_NOTIFY_PAYLOAD"
+
 func startIdleListener(path string, run func()) (*idleListener, error) {
-	return startIdleListenerTracking(path, nil, run)
+	return startIdleListenerTracking(path, nil, nil, run)
 }
 
 // startIdleListenerTracking is startIdleListener that also records, in busy
 // (nil: not recorded), whether a turn is running: set by a turn-start
 // datagram, cleared by the next idle poke. Anything in the unit can send
 // either (see the top of this file): a forged turn start cancels a restart
-// counting down, a forged poke lets an authorized one proceed mid-turn.
-func startIdleListenerTracking(path string, busy *atomic.Bool, run func()) (*idleListener, error) {
+// counting down, a forged poke lets an authorized one proceed mid-turn. Every
+// datagram is also written to status (nil: no status file), from this
+// listener's reader goroutine; a forged datagram forges the status the same
+// way, which the status file's contract states.
+func startIdleListenerTracking(path string, busy *atomic.Bool, status *sessionstatus.Writer, run func()) (*idleListener, error) {
 	if err := checkUnixSocketPath(path); err != nil {
 		return nil, err
 	}
@@ -215,22 +231,30 @@ func startIdleListenerTracking(path string, busy *atomic.Bool, run func()) (*idl
 	}
 	l := &idleListener{conn: conn, path: path, bound: bound, wake: make(chan struct{}, 1), done: make(chan struct{})}
 	go func() {
-		buf := make([]byte, 64)
+		// One byte more than the largest datagram idle-notify sends: a
+		// datagram that fills it was truncated, and its payload is dropped.
+		buf := make([]byte, 1+sessionstatus.MaxPayload+1)
 		for {
 			n, _, err := conn.ReadFromUnix(buf)
 			if err != nil {
 				close(l.wake)
 				return
 			}
-			if n == 1 && buf[0] == turnStartedDatagram {
+			if n >= 1 && buf[0] == turnStartedDatagram {
 				if busy != nil {
 					busy.Store(true)
 				}
+				var payload sessionstatus.Payload
+				if n > 1 && n < len(buf) {
+					payload, _ = sessionstatus.ParsePayload(buf[1:n])
+				}
+				status.TurnStarted(payload)
 				continue
 			}
 			if busy != nil {
 				busy.Store(false)
 			}
+			status.TurnEnded()
 			select {
 			case l.wake <- struct{}{}:
 			default:
@@ -270,14 +294,25 @@ func (l *idleListener) Close() {
 // clown-idle-notify.log in the temp dir (inside an agent unit that is the
 // worktree's .tmp, which the operator can read).
 func runIdleNotify(args []string) int {
+	return idleNotify(args, os.Stdin, os.Getenv(idleNotifyPayloadEnv) == "1")
+}
+
+// idleNotify is runIdleNotify with its inputs explicit. With payload set (the
+// frontend flagged the busy hook), the busy datagram carries the hook's
+// transcript path and session id, read from stdin by readHookPayload.
+func idleNotify(args []string, stdin io.Reader, payload bool) int {
 	record := filepath.Join(os.TempDir(), "clown-idle-notify.log")
-	datagram := byte(1)
-	if len(args) == 2 && args[0] == "--busy" {
-		datagram, args = turnStartedDatagram, args[1:]
+	datagram := []byte{1}
+	busy := len(args) == 2 && args[0] == "--busy"
+	if busy {
+		datagram, args = []byte{turnStartedDatagram}, args[1:]
 	}
 	if len(args) != 1 {
 		logSelfClose(record, "idle-notify: want one socket argument, got %d", len(args))
 		return 0
+	}
+	if busy && payload {
+		datagram = append(datagram, readHookPayload(stdin, hookStdinDeadline)...)
 	}
 	conn, err := net.DialTimeout("unixgram", args[0], 250*time.Millisecond)
 	if err != nil {
@@ -286,12 +321,90 @@ func runIdleNotify(args []string) int {
 	}
 	defer conn.Close()
 	_ = conn.SetWriteDeadline(time.Now().Add(250 * time.Millisecond))
-	if _, err := conn.Write([]byte{datagram}); err != nil {
+	if _, err := conn.Write(datagram); err != nil {
 		logSelfClose(record, "idle-notify: write failed: %v", err)
 		return 0
 	}
 	logSelfClose(record, "idle-notify: sent to %s", args[0])
 	return 0
+}
+
+// The busy hook reads its stdin for at most hookStdinDeadline and
+// hookStdinLimit bytes: a hook must never stall the turn, and the payload
+// claude sends carries the whole prompt after the fields wanted here.
+const (
+	hookStdinDeadline = 200 * time.Millisecond
+	hookStdinLimit    = 1 << 20
+)
+
+// readHookPayload returns the transcript path and session id from a hook's
+// stdin as a datagram payload, or nil when stdin is a terminal, absent, slow,
+// not JSON, or names neither. Only those two fields are sent: the prompt never
+// leaves the hook.
+func readHookPayload(stdin io.Reader, deadline time.Duration) []byte {
+	if stdin == nil {
+		return nil
+	}
+	if f, ok := stdin.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
+		return nil
+	}
+	found := make(chan sessionstatus.Payload, 1)
+	// On a timeout this reader is abandoned; idle-notify exits right after.
+	go func() { found <- scanHookFields(io.LimitReader(stdin, hookStdinLimit)) }()
+	var p sessionstatus.Payload
+	select {
+	case p = <-found:
+	case <-time.After(deadline):
+		return nil
+	}
+	if p == (sessionstatus.Payload{}) {
+		return nil
+	}
+	b, err := json.Marshal(p)
+	if err != nil {
+		return nil
+	}
+	if _, ok := sessionstatus.ParsePayload(b); !ok {
+		return nil
+	}
+	return b
+}
+
+// scanHookFields walks the top-level object on r and keeps transcript_path and
+// session_id, stopping as soon as it has both, so a large prompt after them is
+// never read. Whatever it found before an error is returned.
+func scanHookFields(r io.Reader) sessionstatus.Payload {
+	var p sessionstatus.Payload
+	dec := json.NewDecoder(r)
+	if t, err := dec.Token(); err != nil || t != json.Delim('{') {
+		return p
+	}
+	var haveTranscript, haveSession bool
+	for dec.More() && !(haveTranscript && haveSession) {
+		t, err := dec.Token()
+		if err != nil {
+			return p
+		}
+		key, _ := t.(string)
+		switch key {
+		case "transcript_path":
+			if dec.Decode(&p.TranscriptPath) != nil {
+				return p
+			}
+			haveTranscript = true
+		case "session_id":
+			if dec.Decode(&p.SessionID) != nil {
+				return p
+			}
+			haveSession = true
+		default:
+			var skip json.RawMessage
+			if dec.Decode(&skip) != nil {
+				return p
+			}
+		}
+	}
+	return p
 }
 
 // synthIdlePluginDir writes a built-in plugin directory whose hooks.json runs
@@ -324,10 +437,12 @@ func synthIdlePluginDir(root *staging.Root, clownBin, sock string) (string, erro
 		}}}}
 	}
 	// Stop pokes the frontend at idle; UserPromptSubmit tells it a turn
-	// started, so a restart counting down does not stop the agent mid-turn.
+	// started, so a restart counting down does not stop the agent mid-turn,
+	// and, flagged by idleNotifyPayloadEnv, which transcript the turn writes
+	// (the status file, clown#322).
 	hooks, err := json.MarshalIndent(map[string]any{"hooks": map[string]any{
 		"Stop":             hook(clownBin + " idle-notify " + sock),
-		"UserPromptSubmit": hook(clownBin + " idle-notify --busy " + sock),
+		"UserPromptSubmit": hook(idleNotifyPayloadEnv + "=1 " + clownBin + " idle-notify --busy " + sock),
 	}}, "", "  ")
 	if err != nil {
 		return "", err
@@ -345,16 +460,19 @@ func synthIdlePluginDir(root *staging.Root, clownBin, sock string) (string, erro
 // runs close-self-run and then, when restarts holds one, the restart preflight
 // (idleRunner); restart performs an allowed restart. restarts may be nil.
 // now is the runner's immediate trigger for `clown restart --when now`
-// (idleRunner.triggerNow), nil when not armed or restarts is nil.
-func armSelfClose(flags parsedFlags, root *staging.Root, restarts *restartQueue, restart func(restartRequest, preflightVerdict), busy *atomic.Bool) (pluginDir, sock string, now func(restartRequest) bool, closeFn func()) {
+// (idleRunner.triggerNow), nil when not armed or restarts is nil. status is
+// the session's status file (clown#322), written at arming and on every
+// datagram; the caller adds the unit and provider pid when they are known.
+// It is nil when not armed; closeFn removes the file.
+func armSelfClose(flags parsedFlags, root *staging.Root, restarts *restartQueue, restart func(restartRequest, preflightVerdict), busy *atomic.Bool) (pluginDir, sock string, now func(restartRequest) bool, status *sessionstatus.Writer, closeFn func()) {
 	bin, reason := selfCloseDecision(flags)
 	logPath, logErr := userStateWritePath("close-self-run.log")
-	notArmed := func(why string) (string, string, func(restartRequest) bool, func()) {
+	notArmed := func(why string) (string, string, func(restartRequest) bool, *sessionstatus.Writer, func()) {
 		fmt.Fprintf(os.Stderr, "clown: self-close not armed: %s\n", why)
 		if logErr == nil {
 			logSelfClose(logPath, "self-close not armed (%s): %s", flags.identity.Key, why)
 		}
-		return "", "", nil, func() {}
+		return "", "", nil, nil, func() {}
 	}
 	if reason != "" {
 		// Only a claude launch is a candidate; --naked, --print-launch-plan and
@@ -362,10 +480,18 @@ func armSelfClose(flags parsedFlags, root *staging.Root, restarts *restartQueue,
 		if flags.provider == "claude" && !flags.naked && !flags.printLaunchPlan && logErr == nil {
 			logSelfClose(logPath, "self-close not armed (%s): %s", flags.identity.Key, reason)
 		}
-		return "", "", nil, func() {}
+		return "", "", nil, nil, func() {}
 	}
 	if logErr != nil {
 		return notArmed(logErr.Error())
+	}
+	// A status file that cannot be written is logged and skipped: the
+	// session works without it (a nil writer writes nothing).
+	status, err := sessionstatus.Open(flags.identity.Key, os.Getenv("SPINCLASS_SESSION_ID"), func(format string, args ...any) {
+		logSelfClose(logPath, format, args...)
+	})
+	if err != nil {
+		logSelfClose(logPath, "status file not written (%s): %v", flags.identity.Key, err)
 	}
 	sock = idleSocketPath(os.Getenv("XDG_RUNTIME_DIR"), flags.identity.Key)
 	idle := &idleRunner{
@@ -375,29 +501,35 @@ func armSelfClose(flags parsedFlags, root *staging.Root, restarts *restartQueue,
 		restart:   restart,
 		logPath:   logPath,
 	}
-	l, err := startIdleListenerTracking(sock, busy, idle.onIdle)
+	l, err := startIdleListenerTracking(sock, busy, status, idle.onIdle)
 	if err != nil {
+		// The file is not touched: a live frontend of this key owns it.
 		return notArmed(err.Error())
+	}
+	status.Start()
+	unarm := func(why string) (string, string, func(restartRequest) bool, *sessionstatus.Writer, func()) {
+		l.Close()
+		status.Remove()
+		return notArmed(why)
 	}
 	// The hook runs THIS executable, never flags.identity.Bin: that honors
 	// $CLOWN_BIN, which a devshell can point at an older clown that rejects
 	// `idle-notify` and errors after every turn.
 	exe := clownExePath()
 	if exe == "" {
-		l.Close()
-		return notArmed("cannot resolve clown's own executable")
+		return unarm("cannot resolve clown's own executable")
 	}
 	dir, err := synthIdlePluginDir(root, exe, sock)
 	if err != nil {
-		l.Close()
-		return notArmed(err.Error())
+		return unarm(err.Error())
 	}
 	logSelfClose(logPath, "self-close armed (%s): socket %s, spinclass %s, hook plugin %s, clown %s", flags.identity.Key, sock, bin, dir, exe)
 	if restarts != nil {
 		now = idle.triggerNow
 	}
-	return dir, sock, now, func() {
+	return dir, sock, now, status, func() {
 		idle.noteExit()
 		l.Close()
+		status.Remove()
 	}
 }
