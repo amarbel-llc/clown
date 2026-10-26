@@ -92,9 +92,13 @@ func (s Spec) Validate() error {
 	}
 	// clown's state holds the confinement records (clown#318); a unit that
 	// could write it could rewrite its own session's record.
+	// Compared lexically and with symlinks resolved, so neither a bind nor
+	// the state dir reached through a symlink slips past.
 	clownState := filepath.Join(OperatorXDG(os.Environ(), s.OperatorHome, "XDG_STATE_HOME"), "clown")
+	realState := ResolvePath(clownState)
 	for _, p := range append([]string{s.Worktree}, s.BindsRW...) {
-		if exposesWhole(p, clownState) || within(p, clownState) {
+		real := ResolvePath(p)
+		if exposesWhole(p, clownState) || within(p, clownState) || exposesWhole(real, realState) || within(real, realState) {
 			return fmt.Errorf("worktree or binds_rw entry %q makes clown's state %q writable from inside the unit", p, clownState)
 		}
 	}
@@ -139,6 +143,27 @@ func (s Spec) Validate() error {
 		}
 	}
 	return nil
+}
+
+// ResolvePath is p with symlinks resolved: the deepest existing ancestor is
+// resolved and the missing rest appended, so a path that does not exist yet
+// still resolves through a symlinked parent. With nothing resolvable it is
+// the cleaned absolute path.
+func ResolvePath(p string) string {
+	p = filepath.Clean(p)
+	if abs, err := filepath.Abs(p); err == nil {
+		p = abs
+	}
+	var rest []string
+	for dir := p; ; dir = filepath.Dir(dir) {
+		if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+			return filepath.Join(append([]string{resolved}, rest...)...)
+		}
+		if dir == filepath.Dir(dir) {
+			return p
+		}
+		rest = append([]string{filepath.Base(dir)}, rest...)
+	}
 }
 
 func requireAbs(field, p string) error {

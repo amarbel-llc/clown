@@ -95,6 +95,41 @@ func TestValidateRefusesWritableClownState(t *testing.T) {
 	}
 }
 
+// The state-dir guard compares resolved paths: a bind reaching clown's state
+// through a symlink, or through a symlinked parent, is refused too.
+func TestValidateRefusesClownStateThroughSymlinks(t *testing.T) {
+	dir := t.TempDir()
+	state := filepath.Join(dir, "state")
+	if err := os.MkdirAll(filepath.Join(state, "clown"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_STATE_HOME", state)
+	if err := os.Symlink(state, filepath.Join(dir, "statelink")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(dir, filepath.Join(dir, "parentlink")); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{
+		filepath.Join(dir, "statelink", "clown"),
+		filepath.Join(dir, "statelink"),
+		filepath.Join(dir, "parentlink", "state", "clown"),
+	} {
+		s := validSpec()
+		s.BindsRW = []string{bad}
+		if err := s.Validate(); err == nil || !strings.Contains(err.Error(), "clown's state") {
+			t.Errorf("binds_rw %q (a symlink into clown's state): err %v, want the state-dir refusal", bad, err)
+		}
+	}
+	// And a state dir that is itself reached through a symlink.
+	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "statelink"))
+	s := validSpec()
+	s.BindsRW = []string{filepath.Join(state, "clown")}
+	if err := s.Validate(); err == nil || !strings.Contains(err.Error(), "clown's state") {
+		t.Errorf("binds_rw on the real path of a symlinked XDG_STATE_HOME: err %v, want the state-dir refusal", err)
+	}
+}
+
 func TestLoadSpecRefusesUnknownFields(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "spec.json")
 	raw, _ := json.Marshal(map[string]any{"version": 1, "worktree": "/w", "operator_home": "/home/op", "network": "host"})
