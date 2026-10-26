@@ -123,6 +123,9 @@ type idleRunner struct {
 	inFlight atomic.Bool
 	// nows tracks running `now` goroutines (waitNow, for tests).
 	nows sync.WaitGroup
+	// waitingForMu, when set, is called by onIdle just before it takes mu
+	// (tests).
+	waitingForMu func()
 }
 
 // triggerNow queues req (replacing a queued `idle`: newest wins) and asks
@@ -131,6 +134,13 @@ type idleRunner struct {
 // restart is already in flight.
 func (r *idleRunner) triggerNow(req restartRequest) bool {
 	if r.queue == nil || !r.inFlight.CompareAndSwap(false, true) {
+		return false
+	}
+	// Re-checked under inFlight: only its holder stores a plan, so a plan
+	// that is not stored now cannot appear before the run below, and the
+	// reply the caller gives matches what the run will do.
+	if restartUnderway() {
+		r.inFlight.Store(false)
 		return false
 	}
 	r.queue.put(req)
@@ -151,10 +161,32 @@ func (r *idleRunner) triggerNow(req restartRequest) bool {
 	return true
 }
 
+// noteExit logs, when the frontend exits, a restart it leaves behind: one in
+// flight (spinclass may already have consumed it and holds its restart
+// stamp, which refuses a close for a while) or one still queued. A frontend
+// exiting for its own restart (the plan is stored) has nothing to say.
+func (r *idleRunner) noteExit() {
+	if restartUnderway() {
+		return
+	}
+	switch {
+	case r.inFlight.Load():
+		logSelfClose(r.logPath, "frontend (%s) exiting with a restart check in flight: spinclass may have consumed the request; the requester must ask again", r.preflight.principal)
+	case r.queue != nil && r.queue.hasPending():
+		logSelfClose(r.logPath, "frontend (%s) exiting with a restart queued and never asked about", r.preflight.principal)
+	}
+}
+
 // waitNow waits for the `now` runs started so far.
 func (r *idleRunner) waitNow() { r.nows.Wait() }
 
 func (r *idleRunner) onIdle() {
+	if r.waitingForMu != nil {
+		r.waitingForMu()
+	}
+	// sync.Mutex hands the lock to a waiter that has waited over 1 ms
+	// (starvation mode), and the idle listener runs one poke at a time, so a
+	// `now` waiting here is not starved by a stream of pokes.
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	// Once a restart has stopped (or is stopping) the provider, an idle poke

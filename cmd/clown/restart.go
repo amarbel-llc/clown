@@ -63,6 +63,12 @@ func (q *restartQueue) put(r restartRequest) {
 	q.pending = &r
 }
 
+func (q *restartQueue) hasPending() bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.pending != nil
+}
+
 func (q *restartQueue) take() (restartRequest, bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -81,8 +87,9 @@ func restartControlHandler(provider, unarmedReason string, q *restartQueue) func
 }
 
 // restartAlreadyUnderway is the refusal for a request that arrives while a
-// restart is stopping the provider, or while a preflight or restart runs.
-const restartAlreadyUnderway = "a restart is already underway for this session; ask again once it has relaunched"
+// restart is stopping the provider, or while a preflight or restart runs
+// (which may still end without a restart).
+const restartAlreadyUnderway = "a restart or restart check is already underway for this session; ask again if the session does not relaunch"
 
 // restartControlHandlerNow answers control messages for a frontend running
 // provider. unarmedReason is selfCloseDecision's reason ("" when the idle

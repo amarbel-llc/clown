@@ -118,7 +118,20 @@ type selfCloseRunner struct {
 	bin       string
 	principal string
 	logPath   string
+	// waitBound is how long run waits for close-self-run; zero:
+	// closeSelfRunWaitBound.
+	waitBound time.Duration
+	// running is set while a close-self-run that run stopped waiting for
+	// is still going; run starts no second one meanwhile.
+	running atomic.Bool
 }
+
+// closeSelfRunWaitBound bounds how long an idle poke waits for
+// close-self-run. The run is not killed at the bound: it may be a close's
+// teardown, which must finish (it gets its own session for that). The idle
+// runner, and the `clown restart --when now` run serialized with it, stop
+// waiting and go on.
+const closeSelfRunWaitBound = 60 * time.Second
 
 // run starts close-self-run with the principal in CLOWN_SESSION_ID and waits for
 // it. A non-zero exit is spinclass refusing (it has already told the holders),
@@ -129,6 +142,10 @@ type selfCloseRunner struct {
 // never the terminal claude owns, and never a pipe the exiting frontend would
 // break under it.
 func (r *selfCloseRunner) run() error {
+	if r.running.Load() {
+		logSelfClose(r.logPath, "close-self-run (%s) not started: the previous one is still running", r.principal)
+		return nil
+	}
 	log, err := openLogForAppend(r.logPath)
 	if err != nil {
 		logWarnOnce.Do(func() {
@@ -149,8 +166,25 @@ func (r *selfCloseRunner) run() error {
 		fmt.Fprintf(log, "start: %v\n", err)
 		return err
 	}
-	if err := cmd.Wait(); err != nil {
-		fmt.Fprintf(log, "%v\n", err)
+	r.running.Store(true)
+	done := make(chan error, 1)
+	go func() {
+		err := cmd.Wait()
+		r.running.Store(false)
+		done <- err
+	}()
+	bound := r.waitBound
+	if bound == 0 {
+		bound = closeSelfRunWaitBound
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			fmt.Fprintf(log, "%v\n", err)
+		}
+	case <-time.After(bound):
+		// log is closed on return; the late exit status is not recorded.
+		fmt.Fprintf(log, "%s close-self-run %s still running after %s; not waiting for it\n", time.Now().UTC().Format(time.RFC3339), r.principal, bound)
 	}
 	return nil
 }
@@ -396,5 +430,8 @@ func armSelfClose(flags parsedFlags, root *staging.Root, restarts *restartQueue,
 	if restarts != nil {
 		now = idle.triggerNow
 	}
-	return dir, sock, now, l.Close
+	return dir, sock, now, func() {
+		idle.noteExit()
+		l.Close()
+	}
 }

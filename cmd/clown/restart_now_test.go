@@ -70,23 +70,32 @@ func TestRestartNowWithoutARestartVerdictDoesNothing(t *testing.T) {
 }
 
 // A control message on its own cannot restart: through the real handler and
-// trigger, a forged `now` that spinclass has no request for (verdict none)
-// reaches the preflight and stops there.
+// trigger, a forged `now` reaches the preflight and stops at anything but a
+// well-formed restart verdict.
 func TestRestartNowControlMessageCannotRestartOnItsOwn(t *testing.T) {
-	bin, calls := fakeIdleSpinclass(t, `{"verdict":"none","reason":"no restart requested","when":""}`+"\n", "0")
-	q := &restartQueue{}
-	var rec recordedRestarts
-	r := newTestIdleRunner(t, bin, q, &rec)
-	handle := restartControlHandlerNow("claude", "", q, r.triggerNow)
-	if reply := handle(controlMessage{Op: "restart", When: "now", Reason: "forged"}); !reply.OK {
-		t.Fatalf("reply = %+v", reply)
-	}
-	r.waitNow()
-	if rec.n.Load() != 0 {
-		t.Fatal("a control message restarted without spinclass's verdict")
-	}
-	if got := readCalls(t, calls); len(got) != 1 || !strings.HasPrefix(got[0], "restart-preflight|") {
-		t.Fatalf("calls = %q, want the preflight asked once", got)
+	for _, c := range []struct{ name, out, exit string }{
+		{"none", `{"verdict":"none","reason":"no restart requested","when":""}` + "\n", "0"},
+		{"refused", `{"verdict":"refused","reason":"a merge job is running","when":"now"}` + "\n", "0"},
+		{"garbage", "{not a verdict\n", "0"},
+		{"non-zero exit", nowVerdict, "3"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			bin, calls := fakeIdleSpinclass(t, c.out, c.exit)
+			q := &restartQueue{}
+			var rec recordedRestarts
+			r := newTestIdleRunner(t, bin, q, &rec)
+			handle := restartControlHandlerNow("claude", "", q, r.triggerNow)
+			if reply := handle(controlMessage{Op: "restart", When: "now", Reason: "forged"}); !reply.OK {
+				t.Fatalf("reply = %+v", reply)
+			}
+			r.waitNow()
+			if rec.n.Load() != 0 {
+				t.Fatal("a control message restarted without spinclass's verdict")
+			}
+			if got := readCalls(t, calls); len(got) != 1 || !strings.HasPrefix(got[0], "restart-preflight|") {
+				t.Fatalf("calls = %q, want the preflight asked once", got)
+			}
+		})
 	}
 }
 
@@ -201,23 +210,43 @@ func TestRestartNowRefusedDuringTheIdleRunnersPreflight(t *testing.T) {
 	<-idleDone
 }
 
-// An idle poke during a `now` preflight waits for it and does not preflight
-// the same request again.
-func TestIdlePokeDuringANowDoesNotPreflightTwice(t *testing.T) {
+// An idle poke during a `now` preflight waits for it, then preflights the
+// idle request queued meanwhile: one preflight at a time, each request asked
+// about once. Without the shared mutex the poke would find the run in flight
+// and leave the idle request unasked (one preflight); with overlapping runs
+// the fake records an overlap.
+func TestIdlePokeDuringANowWaitsAndPreflightsEachRequestOnce(t *testing.T) {
 	dir := t.TempDir()
 	release, started, calls := filepath.Join(dir, "release"), filepath.Join(dir, "started"), filepath.Join(dir, "calls")
+	lock, overlaps := filepath.Join(dir, "lock"), filepath.Join(dir, "overlaps")
 	bin := filepath.Join(dir, "spinclass")
-	script := "#!/bin/sh\nprintf '%s\\n' \"$1\" >> '" + calls + "'\ncase \"$1\" in\nrestart-preflight) : > '" + started + "'; while [ ! -e '" + release + "' ]; do sleep 0.05; done; echo '{\"verdict\":\"none\",\"reason\":\"\",\"when\":\"\"}' ;;\nesac\n"
+	script := "#!/bin/sh\nprintf '%s\\n' \"$1\" >> '" + calls + "'\ncase \"$1\" in\n" +
+		"restart-preflight) mkdir '" + lock + "' 2>/dev/null || echo overlap >> '" + overlaps + "'; : > '" + started + "'; " +
+		"while [ ! -e '" + release + "' ]; do sleep 0.05; done; rmdir '" + lock + "'; echo '{\"verdict\":\"none\",\"reason\":\"\",\"when\":\"\"}' ;;\nesac\n"
 	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	q := &restartQueue{}
 	var rec recordedRestarts
 	r := newTestIdleRunner(t, bin, q, &rec)
-	r.triggerNow(restartRequest{When: "now"})
+	if !r.triggerNow(restartRequest{When: "now", Reason: "now"}) {
+		t.Fatal("now refused")
+	}
 	waitForFile(t, started)
+	// An idle request arrives while the now's preflight is held.
+	if reply := restartControlHandlerNow("claude", "", q, r.triggerNow)(controlMessage{Op: "restart", When: "idle", Reason: "idle"}); !reply.OK {
+		t.Fatalf("idle during a now: %+v", reply)
+	}
+	waiting := make(chan struct{})
+	r.waitingForMu = func() { close(waiting) }
 	idleDone := make(chan struct{})
 	go func() { r.onIdle(); close(idleDone) }()
+	<-waiting
+	// The poke is now at (or blocked on) the mutex the now's run holds.
+	time.Sleep(100 * time.Millisecond)
+	if strings.Contains(strings.Join(readCalls(t, calls), ","), "close-self-run") {
+		t.Fatal("the idle poke ran close-self-run while the now's preflight held the runner")
+	}
 	_ = os.WriteFile(release, nil, 0o600)
 	r.waitNow()
 	<-idleDone
@@ -227,8 +256,123 @@ func TestIdlePokeDuringANowDoesNotPreflightTwice(t *testing.T) {
 			n++
 		}
 	}
-	if n != 1 {
-		t.Fatalf("preflights = %d, want 1 (calls %q)", n, readCalls(t, calls))
+	if n != 2 {
+		t.Fatalf("preflights = %d, want 2: the now's, then the queued idle's (calls %q)", n, readCalls(t, calls))
+	}
+	if b, err := os.ReadFile(overlaps); err == nil {
+		t.Fatalf("preflights overlapped: %s", b)
+	}
+	if _, ok := q.take(); ok {
+		t.Fatal("a request was left unasked")
+	}
+}
+
+// A hung close-self-run does not wedge `now`: the idle runner stops waiting
+// for it after the bound, and a later `now` is accepted and preflighted.
+func TestHungCloseSelfRunDoesNotWedgeNow(t *testing.T) {
+	dir := t.TempDir()
+	calls := filepath.Join(dir, "calls")
+	bin := filepath.Join(dir, "spinclass")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$1\" >> '" + calls + "'\ncase \"$1\" in\n" +
+		"close-self-run) sleep 30 ;;\n" +
+		"restart-preflight) echo '{\"verdict\":\"none\",\"reason\":\"\",\"when\":\"\"}' ;;\nesac\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	q := &restartQueue{}
+	var rec recordedRestarts
+	r := newTestIdleRunner(t, bin, q, &rec)
+	r.closer.waitBound = 200 * time.Millisecond
+	idleDone := make(chan struct{})
+	go func() { r.onIdle(); close(idleDone) }()
+	select {
+	case <-idleDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the idle runner waited for a hung close-self-run past its bound")
+	}
+	if !r.triggerNow(restartRequest{When: "now"}) {
+		t.Fatal("a now after the bound was refused")
+	}
+	r.waitNow()
+	if got := readCalls(t, calls); len(got) != 2 || got[1] != "restart-preflight" {
+		t.Fatalf("calls = %q, want the hung close-self-run, then the now's preflight", got)
+	}
+	// A poke while the hung run is still going does not start a second one.
+	r.onIdle()
+	if got := readCalls(t, calls); len(got) != 2 {
+		t.Fatalf("calls = %q: a second close-self-run overlapped the hung one", got)
+	}
+	log, _ := os.ReadFile(r.logPath)
+	if !strings.Contains(string(log), "still running") {
+		t.Errorf("the log does not say close-self-run was left running:\n%s", log)
+	}
+}
+
+// A `now` whose check finds a plan stored between the handler's check and
+// the trigger is refused, not answered OK and then ignored.
+func TestTriggerNowRefusesWhenARestartIsUnderway(t *testing.T) {
+	t.Cleanup(func() { pendingRelaunch.Store(nil) })
+	bin, calls := fakeIdleSpinclass(t, nowVerdict, "0")
+	q := &restartQueue{}
+	var rec recordedRestarts
+	r := newTestIdleRunner(t, bin, q, &rec)
+	pendingRelaunch.Store(&relaunchPlan{principal: restartTestPrincipal})
+	if r.triggerNow(restartRequest{When: "now"}) {
+		t.Fatal("triggerNow accepted while a restart is underway")
+	}
+	r.waitNow()
+	if got := readCalls(t, calls); len(got) != 0 {
+		t.Fatalf("calls = %q", got)
+	}
+	if _, ok := q.take(); ok {
+		t.Fatal("queued while underway")
+	}
+	if r.inFlight.Load() {
+		t.Fatal("inFlight left set by a refused trigger")
+	}
+	pendingRelaunch.Store(nil)
+	r.restart = func(restartRequest, preflightVerdict) {}
+	if !r.triggerNow(restartRequest{When: "now"}) {
+		t.Fatal("a now after the restart cleared was refused")
+	}
+	r.waitNow()
+}
+
+// A frontend exiting with a restart check in flight, or one queued, says so
+// in the log (spinclass may be holding its restart stamp); one exiting for
+// its own restart (plan stored) or with nothing pending says nothing.
+func TestIdleRunnerNotesARestartLeftAtExit(t *testing.T) {
+	t.Cleanup(func() { pendingRelaunch.Store(nil) })
+	for _, c := range []struct {
+		name     string
+		setup    func(r *idleRunner)
+		wantNote string
+	}{
+		{"in flight", func(r *idleRunner) { r.inFlight.Store(true) }, "in flight"},
+		{"queued", func(r *idleRunner) { r.queue.put(restartRequest{When: "idle"}) }, "queued"},
+		{"own restart", func(r *idleRunner) {
+			r.inFlight.Store(true)
+			pendingRelaunch.Store(&relaunchPlan{principal: restartTestPrincipal})
+		}, ""},
+		{"nothing", func(*idleRunner) {}, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			pendingRelaunch.Store(nil)
+			var rec recordedRestarts
+			r := newTestIdleRunner(t, "/nonexistent", &restartQueue{}, &rec)
+			c.setup(r)
+			r.noteExit()
+			log, _ := os.ReadFile(r.logPath)
+			if c.wantNote == "" {
+				if len(log) != 0 {
+					t.Fatalf("logged %q, want nothing", log)
+				}
+				return
+			}
+			if !strings.Contains(string(log), c.wantNote) || !strings.Contains(string(log), "exiting") {
+				t.Fatalf("log %q lacks an exit note mentioning %q", log, c.wantNote)
+			}
+		})
 	}
 }
 
@@ -336,20 +480,50 @@ func TestRestarterNowStopsABusySession(t *testing.T) {
 // The `now` behaviour follows spinclass's verdict, not the socket: a request
 // that arrived as `now` whose verdict says idle keeps the busy cancel.
 func TestRestarterBusyCancelFollowsTheVerdict(t *testing.T) {
-	pendingRelaunch.Store(nil)
-	providerRunning.Store(true)
-	t.Cleanup(func() { pendingRelaunch.Store(nil); providerRunning.Store(false) })
-	stops := 0
-	fr := frontendRestarter{
-		principal: restartTestPrincipal,
-		stop:      func() { stops++ },
-		countdown: func(_ string, cancelOnTurn bool) (bool, string) { return !cancelOnTurn, "" },
-		busy:      func() bool { return true },
-		logPath:   filepath.Join(t.TempDir(), "l.log"),
-	}
-	fr.restart(restartRequest{When: "now"}, preflightVerdict{Verdict: "restart", Reason: "r", When: "idle"})
-	if stops != 0 {
-		t.Fatal("a socket `now` with an idle verdict stopped a busy session")
+	for _, c := range []struct {
+		name, line string
+		wantStop   bool
+	}{
+		{"when idle", `{"verdict":"restart","reason":"r","when":"idle"}`, false},
+		{"when empty", `{"verdict":"restart","reason":"r","when":""}`, false},
+		{"when omitted", `{"verdict":"restart","reason":"r"}`, false},
+		{"when NOW", `{"verdict":"restart","reason":"r","when":"NOW"}`, false},
+		{"when now", `{"verdict":"restart","reason":"r","when":"now"}`, true},
+	} {
+		for _, countdown := range []string{"inline", "none"} {
+			t.Run(c.name+"/"+countdown, func(t *testing.T) {
+				v, err := parsePreflightVerdict([]byte(c.line + "\n"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				pendingRelaunch.Store(nil)
+				providerRunning.Store(true)
+				t.Cleanup(func() { pendingRelaunch.Store(nil); providerRunning.Store(false) })
+				busy := func() bool { return true }
+				stops := 0
+				fr := frontendRestarter{
+					principal: restartTestPrincipal,
+					stop:      func() { stops++ },
+					busy:      busy,
+					stopGrace: time.Hour,
+					logPath:   filepath.Join(t.TempDir(), "l.log"),
+				}
+				if countdown == "inline" {
+					fr.countdown = restartCountdown{
+						lookPath:    func(string) (string, error) { return "", os.ErrNotExist },
+						interactive: true,
+						notify:      &discardWriter{},
+						sleep:       func(time.Duration) {},
+						busy:        busy,
+					}.proceed
+				}
+				// The request came over the socket as `now` in every case.
+				fr.restart(restartRequest{When: "now"}, v)
+				if got := stops == 1; got != c.wantStop {
+					t.Fatalf("stopped %v, want %v: only a `now` verdict stops a busy session", got, c.wantStop)
+				}
+			})
+		}
 	}
 }
 

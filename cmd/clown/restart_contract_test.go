@@ -38,6 +38,8 @@ func TestRestartVerbArgvContract(t *testing.T) {
 		{"--when now", []string{"--session", key, "--when", "now", "--reason", "r"}, 0, "r", "r", true, ""},
 		{"--when now, no reason", []string{"--session", key, "--when", "now"}, 0, "", "", true, ""},
 		{"--when soon", []string{"--session", key, "--when", "soon", "--reason", "r"}, 2, "", "", true, "idle or now"},
+		{"--when NOW", []string{"--session", key, "--when", "NOW", "--reason", "r"}, 2, "", "", true, "idle or now"},
+		{"--when now with a space", []string{"--session", key, "--when", "now ", "--reason", "r"}, 2, "", "", true, "idle or now"},
 		{"--when empty", []string{"--session", key, "--when", "", "--reason", "r"}, 2, "", "", true, "idle or now"},
 		{"flag last without a value", []string{"--session", key, "--reason"}, 2, "", "", true, "--reason needs a value"},
 		{"no frontend", []string{"--session", key, "--when", "idle", "--reason", "r"}, 1, "", "", false, "no live clown frontend"},
