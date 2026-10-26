@@ -310,6 +310,13 @@ and
 only when an interactive terminal is present;
 .Ev CLOWN_ATTACH_FORCE Ns = Ns Ql 1
 overrides that check for unusual terminals.
+.Nm clown Fl -no-attach
+skips the wrap for one invocation, over this table and
+.Ev CLOWN_ATTACH_FORCE ;
+combined with
+.Fl -clown-attach Ns = Ns Cm spawn
+it is refused (exit status 2), see
+.Xr clown 1 .
 Remote (ssh) attach is out of scope and remains spinclass's.
 .Pp
 clown ships these

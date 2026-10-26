@@ -466,6 +466,10 @@ func run(rawArgs []string) int {
 		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
 		return 1
 	}
+	if err := attachFlagConflict(attachSpawn, flags.noAttach); err != nil {
+		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
+		return 2
+	}
 
 	if flags.version {
 		printVersion()
@@ -3043,6 +3047,10 @@ Clown flags (must appear before --):
                              the profile's backend/model/env (clownfile
                              [profile].profile pins one)%s
   --naked                    Pass through to provider without clown wrapping
+  --no-attach                Run inline, without the clownfile [attach]
+                             multiplexer wrap, for this invocation; wins over
+                             [attach] and CLOWN_ATTACH_FORCE, refused with
+                             --clown-attach=spawn
   --skip-failed              Continue if plugin servers fail to start
   --cheap-context            Interactively pick which plugin MCP servers to load
                              (huh multi-select, defaults to all); requires a TTY
@@ -3233,6 +3241,9 @@ type parsedFlags struct {
 	// (buildcfg.McpCollapsePath). No env mirror by design — it is an explicit
 	// per-launch opt-in.
 	mcpCollapse bool
+	// noAttach is --no-attach (clown#159): run inline, skipping the clownfile
+	// [attach] multiplexer wrap for this invocation only.
+	noAttach bool
 	// ptyOpts is the resolved escape-to-shell pty proxy config from the clownfile
 	// [attach] table (pty-suspend / escape-key / escape-command). Sourced in
 	// runWithFlags; no flag/env source yet.
@@ -3392,6 +3403,8 @@ parse:
 			p.cheapContext = true
 		case args[i] == "--mcp-collapse":
 			p.mcpCollapse = true
+		case args[i] == "--no-attach":
+			p.noAttach = true
 		case args[i] == "--disable-clown-protocol":
 			p.disableClownProtocol = true
 		case args[i] == "--tent":

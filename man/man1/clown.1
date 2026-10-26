@@ -113,6 +113,21 @@ nor with
 .Fl -mcp-collapse
 or
 .Fl -print-launch-plan .
+.It Fl -no-attach
+Run inline, without the multiplexer wrap the
+.Xr clownfile 5
+.Sy [attach]
+table configures, for this invocation only.
+It wins over
+.Sy [attach]
+and
+.Ev CLOWN_ATTACH_FORCE ,
+which are ambient defaults.
+Together with
+.Fl -clown-attach Ns = Ns Cm spawn
+(an orchestrator's detached-worker launch) it is refused with exit status 2
+and nothing is started, since the two contradict each other.
+A restart relaunch of a session launched with it keeps it.
 .It Fl -skip-failed
 When any discovered HTTP MCP plugin server fails to start,
 .Nm

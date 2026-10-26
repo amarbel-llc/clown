@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -108,6 +109,67 @@ func TestMaybeReexecSkipsWhenDisabled(t *testing.T) {
 	none := clownfile.Clownfile{Attach: clownfile.Attach{Multiplexer: "none"}}
 	if err := maybeReexecMultiplexer(none, parsedFlags{}, clownfile.ModeStart); err != nil {
 		t.Fatalf(`multiplexer "none": want nil (skip), got %v`, err)
+	}
+}
+
+// --no-attach (clown#159) runs inline for this invocation whatever the
+// clownfile [attach] says, over CLOWN_ATTACH_FORCE and in every mode. The
+// template carries a placeholder Resolve rejects, so getting past the skip
+// would surface an error: the control case without the flag shows it does.
+func TestMaybeReexecSkipsUnderNoAttach(t *testing.T) {
+	prev := attachedID
+	attachedID = ""
+	t.Cleanup(func() { attachedID = prev })
+	t.Setenv("CLOWN_ATTACH_FORCE", "1")
+	tmpl := []string{"zmx", "attach", "{bogus}", "{entry}"}
+	cf := clownfile.Clownfile{Attach: clownfile.Attach{Multiplexer: "zmx", Start: tmpl, Resume: tmpl, Spawn: tmpl}}
+	for _, mode := range []clownfile.AttachMode{clownfile.ModeStart, clownfile.ModeResume, clownfile.ModeSpawn} {
+		if err := maybeReexecMultiplexer(cf, parsedFlags{}, mode); err == nil {
+			t.Fatalf("mode %v without --no-attach: want the Resolve error (wrap attempted), got nil", mode)
+		}
+		if err := maybeReexecMultiplexer(cf, parsedFlags{noAttach: true}, mode); err != nil {
+			t.Fatalf("mode %v with --no-attach: want nil (inline), got %v", mode, err)
+		}
+	}
+}
+
+// --no-attach with --clown-attach=spawn is refused (exit 2) before anything
+// starts: both flags are explicit and contradict each other.
+func TestNoAttachWithSpawnIsRefused(t *testing.T) {
+	prevID, prevSpawn := attachedID, attachSpawn
+	t.Cleanup(func() { attachedID, attachSpawn = prevID, prevSpawn })
+	for _, args := range [][]string{
+		{"--clown-attach=spawn", "--no-attach"},
+		{"--no-attach", "--clown-attach", "spawn", "--", "-p", "x"},
+	} {
+		if code := run(args); code != 2 {
+			t.Fatalf("run(%q) = %d, want 2", args, code)
+		}
+	}
+	err := attachFlagConflict(true, true)
+	if err == nil || !strings.Contains(err.Error(), "--no-attach") || !strings.Contains(err.Error(), "--clown-attach=spawn") {
+		t.Fatalf("err = %v, want one naming both flags", err)
+	}
+	for _, c := range [][2]bool{{true, false}, {false, true}, {false, false}} {
+		if err := attachFlagConflict(c[0], c[1]); err != nil {
+			t.Fatalf("attachFlagConflict(%v, %v) = %v, want nil", c[0], c[1], err)
+		}
+	}
+}
+
+func TestParseFlagsNoAttach(t *testing.T) {
+	p, err := parseFlags([]string{"--no-attach", "--", "-p", "hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.noAttach {
+		t.Fatal("--no-attach not parsed")
+	}
+	if slices.Contains(p.forwarded, "--no-attach") {
+		t.Fatalf("--no-attach forwarded to the provider: %q", p.forwarded)
+	}
+	if bare, _ := parseFlags(nil); bare.noAttach {
+		t.Fatal("noAttach set without the flag")
 	}
 }
 
@@ -573,6 +635,7 @@ func TestReexecArgvBoolFlagsRoundTrip(t *testing.T) {
 		disableClownProtocol: true,
 		tent:                 true,
 		verbose:              true,
+		noAttach:             true,
 	}
 
 	out, err := parseFlags(in.reexecArgv())
@@ -591,6 +654,9 @@ func TestReexecArgvBoolFlagsRoundTrip(t *testing.T) {
 		{"disableClownProtocol", out.disableClownProtocol},
 		{"tent", out.tent},
 		{"verbose", out.verbose},
+		// A restart relaunch replays reexecArgv without an attach id; a
+		// session launched --no-attach must not come back wrapped.
+		{"noAttach", out.noAttach},
 	}
 	for _, c := range checks {
 		if !c.got {

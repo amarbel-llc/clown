@@ -91,6 +91,16 @@ func extractAttachSpawn(args []string) (spawn bool, rest []string) {
 	return spawn, rest
 }
 
+// attachFlagConflict refuses --no-attach together with --clown-attach=spawn:
+// both are explicit, and a detached-worker launch that must not detach has no
+// meaning, so neither silently wins (clown#159).
+func attachFlagConflict(spawn, noAttach bool) error {
+	if spawn && noAttach {
+		return fmt.Errorf("--no-attach and %s=spawn contradict each other: a spawn is the [attach] detach; pass one or the other", attachModeFlag)
+	}
+	return nil
+}
+
 // stringsCutPrefix is strings.CutPrefix (Go 1.20+) inlined to avoid widening
 // imports here; returns the remainder and whether the prefix matched.
 func stringsCutPrefix(s, prefix string) (string, bool) {
@@ -165,7 +175,11 @@ func gitRepoAndBranch() string {
 // it from the ORIGINAL forwarded args, before decideClaudeSession injects
 // --session-id (which would otherwise misdetect a fresh launch as a resume).
 func maybeReexecMultiplexer(cf clownfile.Clownfile, flags parsedFlags, mode clownfile.AttachMode) error {
-	if attachedID != "" || !cf.Attach.Enabled() {
+	// --no-attach (clown#159) is an explicit per-invocation choice, so it wins
+	// over the clownfile [attach] and CLOWN_ATTACH_FORCE, which are ambient
+	// defaults. Its clash with --clown-attach=spawn is refused earlier
+	// (attachFlagConflict), so a spawn never reaches here with it set.
+	if attachedID != "" || flags.noAttach || !cf.Attach.Enabled() {
 		return nil
 	}
 	// --print-launch-plan runs inline, always. Two reasons, either sufficient:
@@ -459,6 +473,12 @@ func (p parsedFlags) reexecArgv() []string {
 	}
 	if p.mcpCollapse {
 		argv = append(argv, "--mcp-collapse")
+	}
+	// Harmless on the [attach] inner (already attached); needed on a restart
+	// relaunch, which replays this argv without an attach id, so a session
+	// launched --no-attach does not come back wrapped.
+	if p.noAttach {
+		argv = append(argv, "--no-attach")
 	}
 	if p.disableClownProtocol {
 		argv = append(argv, "--disable-clown-protocol")
