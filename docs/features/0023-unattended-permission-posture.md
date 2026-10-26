@@ -197,8 +197,11 @@ ruling: a hung session is recovered only by the operator).
   datagram the idle listener receives, when systemd-run runs the agent unit
   (`unit`), when the unit is active with its provider started (`main_pid`),
   or when the unconfined provider starts (`main_pid`). Nothing is written
-  periodically: an old `written_at` is not a sign of death. The file is
-  removed when the frontend exits cleanly; a frontend killed by SIGKILL (or
+  periodically: an old `written_at` is not a sign of death. Hook writes are
+  coalesced to at most one per 100 ms (a flood on the unauthenticated socket
+  must not slow the reader), so a hook's effect can show up to 100 ms late.
+  The file is removed when the frontend exits cleanly, before its sockets
+  close, so a successor's file is never deleted; a frontend killed by SIGKILL (or
   any death that skips its deferred cleanup) leaves it, and the pid pair
   then names a dead process or a reused pid.
 - **Atomicity.** Each write is a temp file in the same dir (`<name>.tmp`)
@@ -247,10 +250,17 @@ turn-start hook without a payload keeps the last reported
   `transcript_path`. Those fields are what the agent's side said.
   `principal`, `spinclass_session_key`, `frontend_pid`,
   `frontend_start_ticks`, `unit`, `main_pid` and `written_at` come from the
-  frontend itself. spinclass must not open `transcript_path` with more
-  privilege than the agent has.
+  frontend itself. `transcript_path` is UNTRUSTED input: clown checks only
+  that it is absolute and holds no NUL, so it may contain `..`, name a
+  symlink, a FIFO or device that blocks a reader, or something under `/proc`
+  or another user's tree. spinclass must not open it with more privilege than
+  the agent has, and should `stat` it without following symlinks, accept only
+  a regular file, and never block on it.
 - **The busy datagram's payload.** The UserPromptSubmit hook command the
-  frontend writes into its hooks.json carries `CLOWN_IDLE_NOTIFY_PAYLOAD=1`.
+  frontend writes into its hooks.json carries the `--payload` argument
+  (`'<clown>' idle-notify --busy --payload '<socket>'`, paths single-quoted;
+  an argument, not an environment prefix, so it parses in any shell,
+  including fish).
   Only with it does `clown idle-notify --busy` read its stdin (at most 1 MiB
   and 200 ms, never a terminal), take `transcript_path` and `session_id` and
   nothing else (the prompt never leaves the hook), and send `'B'` followed by

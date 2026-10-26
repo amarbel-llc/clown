@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -176,16 +177,19 @@ type idleListener struct {
 // UserPromptSubmit hook: it marks a turn running and wakes nothing. It may be
 // followed by a payload (sessionstatus.Payload as JSON, at most
 // sessionstatus.MaxPayload bytes) when the hook command carries
-// idleNotifyPayloadEnv. Every datagram not starting with it is an idle poke.
+// idleNotifyPayloadFlag. Every datagram not starting with it is an idle poke.
 //
 // An older frontend reads only a one-byte 'B' as a turn start and anything
 // longer as an idle poke, so idle-notify sends a payload only when the hook
 // command, which this frontend wrote, says it understands one.
 const turnStartedDatagram = 'B'
 
-// idleNotifyPayloadEnv, set to 1 in the busy hook's command line, tells
-// idle-notify that the frontend that wrote the hook accepts a payload.
-const idleNotifyPayloadEnv = "CLOWN_IDLE_NOTIFY_PAYLOAD"
+// idleNotifyPayloadFlag, an argument of the busy hook's command line
+// (`idle-notify --busy --payload SOCK`), tells idle-notify that the frontend
+// that wrote the hook accepts a payload. It is an argument, not an
+// environment prefix, so the command does not depend on which shell claude
+// runs hooks through (the operator's is fish).
+const idleNotifyPayloadFlag = "--payload"
 
 func startIdleListener(path string, run func()) (*idleListener, error) {
 	return startIdleListenerTracking(path, nil, nil, run)
@@ -294,7 +298,17 @@ func (l *idleListener) Close() {
 // clown-idle-notify.log in the temp dir (inside an agent unit that is the
 // worktree's .tmp, which the operator can read).
 func runIdleNotify(args []string) int {
-	return idleNotify(args, os.Stdin, os.Getenv(idleNotifyPayloadEnv) == "1")
+	if len(args) == 3 && args[0] == "--busy" && args[1] == idleNotifyPayloadFlag {
+		return idleNotify([]string{args[0], args[2]}, os.Stdin, true)
+	}
+	return idleNotify(args, os.Stdin, false)
+}
+
+// shellSingleQuote quotes s for a POSIX shell or fish: single quotes, with an
+// embedded quote written as '\” (close, escaped quote, reopen), which both
+// shells read the same way.
+func shellSingleQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // idleNotify is runIdleNotify with its inputs explicit. With payload set (the
@@ -438,11 +452,13 @@ func synthIdlePluginDir(root *staging.Root, clownBin, sock string) (string, erro
 	}
 	// Stop pokes the frontend at idle; UserPromptSubmit tells it a turn
 	// started, so a restart counting down does not stop the agent mid-turn,
-	// and, flagged by idleNotifyPayloadEnv, which transcript the turn writes
-	// (the status file, clown#322).
+	// and, flagged by idleNotifyPayloadFlag, which transcript the turn writes
+	// (the status file, clown#322). Paths are quoted: the command is a shell
+	// command line of unknown shell.
+	exe, qsock := shellSingleQuote(clownBin), shellSingleQuote(sock)
 	hooks, err := json.MarshalIndent(map[string]any{"hooks": map[string]any{
-		"Stop":             hook(clownBin + " idle-notify " + sock),
-		"UserPromptSubmit": hook(idleNotifyPayloadEnv + "=1 " + clownBin + " idle-notify --busy " + sock),
+		"Stop":             hook(exe + " idle-notify " + qsock),
+		"UserPromptSubmit": hook(exe + " idle-notify --busy " + idleNotifyPayloadFlag + " " + qsock),
 	}}, "", "  ")
 	if err != nil {
 		return "", err

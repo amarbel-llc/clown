@@ -44,6 +44,10 @@ func TestPathIsTheHashOfThePrincipal(t *testing.T) {
 func newTestWriter(t *testing.T) (*Writer, string, *[]string) {
 	t.Helper()
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	// Tests read the file after each call: no coalescing unless one asks.
+	old := flushInterval
+	flushInterval = 0
+	t.Cleanup(func() { flushInterval = old })
 	var mu sync.Mutex
 	logs := &[]string{}
 	w, err := Open("p-1", "repo/branch", func(format string, args ...any) {
@@ -213,6 +217,76 @@ func TestReaderNeverSeesAPartialFile(t *testing.T) {
 	wg.Wait()
 	if bad.Load() != 0 || reads.Load() == 0 {
 		t.Fatalf("reads %d, missing or partial %d", reads.Load(), bad.Load())
+	}
+}
+
+// A flood of turn hooks is coalesced: a few writes, not one per call, and the
+// last state still lands.
+func TestFloodOfTurnHooksIsCoalesced(t *testing.T) {
+	w, path, _ := newTestWriter(t)
+	flushInterval = 50 * time.Millisecond
+	w.Start()
+	var writes atomic.Int32
+	stop := make(chan struct{})
+	go func() {
+		var last time.Time
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if fi, err := os.Stat(path); err == nil && fi.ModTime() != last {
+				last = fi.ModTime()
+				writes.Add(1)
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+	start := time.Now()
+	n := 0
+	for time.Since(start) < 300*time.Millisecond {
+		w.TurnStarted(Payload{SessionID: "s"})
+		w.TurnEnded()
+		n++
+	}
+	w.TurnStarted(Payload{SessionID: "final"})
+	deadline := time.Now().Add(5 * time.Second)
+	for readStatus(t, path).ClaudeSessionID != "final" {
+		if time.Now().After(deadline) {
+			t.Fatal("the last change never landed")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	close(stop)
+	if got := writes.Load(); got > 20 || n < 100 {
+		t.Fatalf("observed %d file replacements for %d hook pairs; want a handful", got, n)
+	}
+}
+
+// Remove cancels a pending coalesced write: the file stays gone.
+func TestRemoveCancelsAPendingWrite(t *testing.T) {
+	w, path, _ := newTestWriter(t)
+	flushInterval = 50 * time.Millisecond
+	w.Start()
+	w.TurnStarted(Payload{})
+	w.Remove()
+	time.Sleep(150 * time.Millisecond)
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a pending write recreated the file: %v", err)
+	}
+}
+
+// Field 22 is found after a comm holding spaces and ')'.
+func TestParseStartTicks(t *testing.T) {
+	line := "123 (a b) c)) S 1 123 123 0 -1 4194560 1 0 0 0 0 0 0 0 20 0 1 0 987654 1000 1 18446744073709551615 0 0 0 0 0 0 0 0 0 0 0 0 17 0 0 0 0 0 0"
+	if got := parseStartTicks(line); got != 987654 {
+		t.Fatalf("parseStartTicks = %d, want 987654", got)
+	}
+	for _, bad := range []string{"", "no parens", "1 (x) S 1 2"} {
+		if parseStartTicks(bad) != 0 {
+			t.Errorf("parseStartTicks(%q) != 0", bad)
+		}
 	}
 }
 

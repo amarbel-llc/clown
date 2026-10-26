@@ -396,7 +396,7 @@ func TestArmSelfCloseHookRunsTheArmingExecutableNotCLOWN_BIN(t *testing.T) {
 	if strings.Contains(string(hb), "/old/stub/clown") {
 		t.Fatalf("hook uses $CLOWN_BIN's binary: %s", hb)
 	}
-	if !strings.Contains(string(hb), exe+" idle-notify "+sock) {
+	if !strings.Contains(string(hb), shellSingleQuote(exe)+" idle-notify "+shellSingleQuote(sock)) {
 		t.Fatalf("hook should run %q idle-notify %q:\n%s", exe, sock, hb)
 	}
 }
@@ -483,7 +483,7 @@ func TestSynthIdlePluginDirRegistersAStopHook(t *testing.T) {
 		t.Fatalf("want exactly one Stop handler, got %s", hb)
 	}
 	h := cfg.Hooks["Stop"][0].Hooks[0]
-	if h.Type != "command" || h.Command != "/nix/store/c/bin/clown idle-notify /run/user/1001/clown/idle/k.sock" || h.Timeout <= 0 {
+	if h.Type != "command" || h.Command != "'/nix/store/c/bin/clown' idle-notify '/run/user/1001/clown/idle/k.sock'" || h.Timeout <= 0 {
 		t.Fatalf("handler = %+v", h)
 	}
 }

@@ -111,8 +111,12 @@ func StartTicks(pid int) uint64 {
 	if err != nil {
 		return 0
 	}
+	return parseStartTicks(string(b))
+}
+
+// parseStartTicks is field 22 of one /proc/<pid>/stat line, 0 when malformed.
+func parseStartTicks(s string) uint64 {
 	// comm (field 2) may hold spaces and parens: count from the last ')'.
-	s := string(b)
 	i := strings.LastIndexByte(s, ')')
 	if i < 0 {
 		return 0
@@ -139,8 +143,11 @@ type Writer struct {
 	name    string
 	st      Status
 	removed bool
-	logf    func(format string, args ...any)
-	logOnce sync.Once
+	// lastWrite and timer coalesce turn-hook writes (update).
+	lastWrite time.Time
+	timer     *time.Timer
+	logf      func(format string, args ...any)
+	logOnce   sync.Once
 }
 
 // Open returns the writer for principal's status file. It writes nothing; Start
@@ -172,7 +179,7 @@ const timeFormat = "2006-01-02T15:04:05.000000000Z07:00"
 func now() string { return time.Now().UTC().Format(timeFormat) }
 
 // Start writes the status as it stands: at the frontend's start, no hook yet.
-func (w *Writer) Start() { w.update(func(*Status) {}) }
+func (w *Writer) Start() { w.update(func(*Status) {}, false) }
 
 // TurnStarted records a turn start and the payload's fields that are set; an
 // unset field keeps the last value reported.
@@ -186,19 +193,19 @@ func (w *Writer) TurnStarted(p Payload) {
 		if p.SessionID != "" {
 			st.ClaudeSessionID = p.SessionID
 		}
-	})
+	}, true)
 }
 
 // TurnEnded records the Stop hook: no turn running, turn_started_at kept.
 func (w *Writer) TurnEnded() {
-	w.update(func(st *Status) { st.TurnRunning, st.LastHookAt = false, now() })
+	w.update(func(st *Status) { st.TurnRunning, st.LastHookAt = false, now() }, true)
 }
 
 // SetUnit records the agent-scope unit name.
-func (w *Writer) SetUnit(unit string) { w.update(func(st *Status) { st.Unit = unit }) }
+func (w *Writer) SetUnit(unit string) { w.update(func(st *Status) { st.Unit = unit }, false) }
 
 // SetMainPID records the provider's pid (unconfined) or the unit's MainPID.
-func (w *Writer) SetMainPID(pid int) { w.update(func(st *Status) { st.MainPID = pid }) }
+func (w *Writer) SetMainPID(pid int) { w.update(func(st *Status) { st.MainPID = pid }, false) }
 
 // Remove deletes the file at a clean exit; nothing is written after it.
 func (w *Writer) Remove() {
@@ -208,6 +215,10 @@ func (w *Writer) Remove() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.removed = true
+	if w.timer != nil {
+		w.timer.Stop()
+		w.timer = nil
+	}
 	root, err := openStateDir(w.dir, false)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
@@ -221,7 +232,13 @@ func (w *Writer) Remove() {
 	}
 }
 
-func (w *Writer) update(change func(*Status)) {
+// update applies change and writes the file. A turn hook's datagram is
+// coalesced (coalesce): the idle socket is unauthenticated, so a flood of
+// datagrams must cost the single reader goroutine at most one file write per
+// flushInterval, not one per datagram (a slow reader drops legitimate Stop
+// datagrams). A change inside the interval of the last write is only
+// recorded, and one trailing write follows when the interval is over.
+func (w *Writer) update(change func(*Status), coalesce bool) {
 	if w == nil {
 		return
 	}
@@ -231,7 +248,40 @@ func (w *Writer) update(change func(*Status)) {
 		return
 	}
 	change(&w.st)
+	if coalesce {
+		if wait := flushInterval - time.Since(w.lastWrite); wait > 0 {
+			if w.timer == nil {
+				w.timer = time.AfterFunc(wait, w.flushPending)
+			}
+			return
+		}
+	}
+	w.flush()
+}
+
+// flushInterval is the shortest time between two coalesced writes (a var so
+// tests can pick it).
+var flushInterval = 100 * time.Millisecond
+
+// flushPending is the trailing write of coalesced changes.
+func (w *Writer) flushPending() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.timer = nil
+	if w.removed {
+		return
+	}
+	w.flush()
+}
+
+// flush writes the current status. Called with mu held.
+func (w *Writer) flush() {
+	if w.timer != nil {
+		w.timer.Stop()
+		w.timer = nil
+	}
 	w.st.WrittenAt = now()
+	w.lastWrite = time.Now()
 	if err := w.write(); err != nil {
 		w.fail(err)
 	}

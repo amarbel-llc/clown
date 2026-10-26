@@ -45,14 +45,7 @@ func runInAgentScope(req agentScopeRequest, logger *slog.Logger) int {
 	launch.Principal = req.principal
 	launch.IdleSocket = req.idleSocket
 	launch.Serve = req.serve
-	unit := launch.Unit
-	launch.OnStarted = func(kill func() error) {
-		req.status.SetUnit(unit)
-		if req.onStarted != nil {
-			req.onStarted(kill)
-		}
-	}
-	launch.OnActive = req.status.SetMainPID
+	wireAgentScopeStatus(&launch, req.status, req.onStarted)
 	if req.stagingRoot != "" && !strings.HasPrefix(req.stagingRoot, launch.Spec.Worktree+"/") {
 		launch.PlumbingRO = append(launch.PlumbingRO, req.stagingRoot)
 	}
@@ -72,6 +65,20 @@ func runInAgentScope(req agentScopeRequest, logger *slog.Logger) int {
 	}
 	resetTerminal()
 	return code
+}
+
+// wireAgentScopeStatus has the launch report its unit name (once started) and
+// the unit's MainPID (once the provider is active) to the status file
+// (clown#322), then run onStarted when set. status may be nil.
+func wireAgentScopeStatus(launch *agentscope.Launch, status *sessionstatus.Writer, onStarted func(kill func() error)) {
+	unit := launch.Unit
+	launch.OnStarted = func(kill func() error) {
+		status.SetUnit(unit)
+		if onStarted != nil {
+			onStarted(kill)
+		}
+	}
+	launch.OnActive = status.SetMainPID
 }
 
 // agentScopeRequest is one agent-scope launch.

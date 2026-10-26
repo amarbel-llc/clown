@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"code.linenisgreat.com/clown/internal/agentscope"
 	"code.linenisgreat.com/clown/internal/sessionstatus"
 )
 
@@ -206,6 +207,59 @@ func TestIdleNotifyReadsTheFieldsBeforeAHugePrompt(t *testing.T) {
 	}
 }
 
+// The 1 MiB cap on what the busy hook reads is enforced: fields that only
+// come after more than the cap are not found, and the bare busy byte goes out.
+func TestIdleNotifyStopsReadingAtTheCap(t *testing.T) {
+	stdin := `{"prompt":"` + strings.Repeat("p", hookStdinLimit+1024) + `","session_id":"s","transcript_path":"/t.jsonl"}`
+	got := receiveOne(t, func(sock string) {
+		idleNotify([]string{"--busy", sock}, strings.NewReader(stdin), true)
+	})
+	if string(got) != "B" {
+		t.Fatalf("datagram of %d bytes, want the bare busy byte: fields past the cap must not be read", len(got))
+	}
+}
+
+// A flood of busy datagrams on the unauthenticated socket does not make the
+// reader miss the Stop poke that follows it.
+func TestBusyFloodDoesNotLoseTheStopPoke(t *testing.T) {
+	sock, busy, runs, _ := startStatusListener(t)
+	payload := append([]byte{turnStartedDatagram}, []byte(`{"transcript_path":"/t.jsonl","session_id":"s"}`)...)
+	for i := 0; i < 500; i++ {
+		sendDatagram(t, sock, payload)
+	}
+	waitFor(t, "the busy mark", busy.Load)
+	pokeIdle(t, sock)
+	waitFor(t, "the idle run", func() bool { return runs.Load() == 1 })
+	waitFor(t, "an idle status", func() bool { st, _ := readStatusFile(t, "p-1"); return !st.TurnRunning })
+}
+
+// The agent-scope launch reports its unit once started, its MainPID once
+// active, and still runs the caller's onStarted.
+func TestWireAgentScopeStatusReportsUnitAndMainPID(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	w, err := sessionstatus.Open("p-wire", "repo/b", func(string, ...any) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Start()
+	launch := agentscope.Launch{Unit: "clown-agent-7.service"}
+	var started bool
+	wireAgentScopeStatus(&launch, w, func(func() error) { started = true })
+	launch.OnStarted(func() error { return nil })
+	if st, _ := readStatusFile(t, "p-wire"); st.Unit != "clown-agent-7.service" || !started {
+		t.Fatalf("after OnStarted: %+v, caller ran %v", st, started)
+	}
+	launch.OnActive(4321)
+	if st, _ := readStatusFile(t, "p-wire"); st.MainPID != 4321 {
+		t.Fatalf("after OnActive: %+v", st)
+	}
+	// A nil writer (status file not armed) must not break the callbacks.
+	var l2 agentscope.Launch
+	wireAgentScopeStatus(&l2, nil, nil)
+	l2.OnStarted(func() error { return nil })
+	l2.OnActive(1)
+}
+
 // Absent, garbage, or never-closing stdin: the busy byte still goes out, and
 // promptly.
 func TestIdleNotifyToleratesABadStdin(t *testing.T) {
@@ -251,11 +305,50 @@ func TestSynthIdlePluginDirFlagsThePayloadOnTheBusyHook(t *testing.T) {
 	if err := json.Unmarshal(hb, &cfg); err != nil {
 		t.Fatal(err)
 	}
-	if got := cfg.Hooks["UserPromptSubmit"][0].Hooks[0].Command; got != idleNotifyPayloadEnv+"=1 /nix/store/c/bin/clown idle-notify --busy /run/user/1001/clown/idle/k.sock" {
+	if got := cfg.Hooks["UserPromptSubmit"][0].Hooks[0].Command; got != "'/nix/store/c/bin/clown' idle-notify --busy --payload '/run/user/1001/clown/idle/k.sock'" {
 		t.Fatalf("busy hook %q", got)
 	}
-	if got := cfg.Hooks["Stop"][0].Hooks[0].Command; strings.Contains(got, idleNotifyPayloadEnv) {
+	if got := cfg.Hooks["Stop"][0].Hooks[0].Command; strings.Contains(got, idleNotifyPayloadFlag) || strings.Contains(got, "CLOWN_IDLE_NOTIFY_PAYLOAD") {
 		t.Fatalf("the Stop hook reads no stdin: %q", got)
+	}
+	// No environment prefix: it would not parse in every shell.
+	if got := cfg.Hooks["UserPromptSubmit"][0].Hooks[0].Command; strings.HasPrefix(got, "CLOWN_") {
+		t.Fatalf("busy hook starts with an env assignment: %q", got)
+	}
+}
+
+func TestShellSingleQuote(t *testing.T) {
+	for in, want := range map[string]string{
+		"/a/b":       "'/a/b'",
+		"/a b/c":     "'/a b/c'",
+		"/it's/here": `'/it'\''s/here'`,
+		"$(x);`y`":   "'$(x);`y`'",
+	} {
+		if got := shellSingleQuote(in); got != want {
+			t.Errorf("shellSingleQuote(%q) = %s, want %s", in, got, want)
+		}
+	}
+}
+
+// runIdleNotify takes the payload flag as an argument and sends the busy
+// datagram on the socket that follows it.
+func TestRunIdleNotifyAcceptsThePayloadFlag(t *testing.T) {
+	sock := filepath.Join(shortSocketDir(t), "i.sock")
+	var busy atomic.Bool
+	l, err := startIdleListenerTracking(sock, &busy, nil, func() {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	if code := runIdleNotify([]string{"--busy", idleNotifyPayloadFlag, sock}); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for !busy.Load() {
+		if time.Now().After(deadline) {
+			t.Fatal("the busy datagram never arrived")
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 

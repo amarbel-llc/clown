@@ -78,7 +78,7 @@ func TestSynthIdlePluginDirRegistersATurnStartHook(t *testing.T) {
 		t.Fatal(err)
 	}
 	ups := cfg.Hooks["UserPromptSubmit"]
-	if len(ups) != 1 || len(ups[0].Hooks) != 1 || ups[0].Hooks[0].Command != idleNotifyPayloadEnv+"=1 /nix/store/c/bin/clown idle-notify --busy /run/user/1001/clown/idle/k.sock" {
+	if len(ups) != 1 || len(ups[0].Hooks) != 1 || ups[0].Hooks[0].Command != "'/nix/store/c/bin/clown' idle-notify --busy --payload '/run/user/1001/clown/idle/k.sock'" {
 		t.Fatalf("UserPromptSubmit hook = %+v\n%s", ups, hb)
 	}
 }
