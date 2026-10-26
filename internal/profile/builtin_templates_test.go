@@ -210,9 +210,14 @@ func TestBuiltinWorkerIsCanarySpinclassPlusTheLandingTools(t *testing.T) {
 	}
 	got := slices.Clone(w.ContextServers)
 	slices.Sort(got)
-	want := []string{"clown-builtin-jobs/ringmaster", "clown-builtin-jobs/troupe", "just-us/just-us", "spinclass/spinclass"}
+	// canary-spinclass's servers plus the frontend-served issue-filer moxin
+	// (cmd/clown/frontendmoxin.go names it "<plugin>/<moxin>").
+	want := []string{"clown-builtin-jobs/ringmaster", "clown-builtin-jobs/troupe", "clown-builtin-moxins/issue-filer", "just-us/just-us", "spinclass/spinclass"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("context_servers = %v, want %v", got, want)
+	}
+	if len(w.ContextExcluded["clown-builtin-moxins/issue-filer"]) > 0 {
+		t.Error("worker strips tools from the issue-filer moxin it keeps for filing")
 	}
 	if slices.Contains(w.ContextServers, "moxy/moxy") {
 		t.Error("worker must drop moxy whole: a confined spawn refuses a profile that keeps it")

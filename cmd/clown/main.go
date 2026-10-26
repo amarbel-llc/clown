@@ -1094,6 +1094,22 @@ func runWithFlags(flags parsedFlags) int {
 		}
 	}
 
+	// Moxins served in the frontend and forwarded into a confined unit
+	// (clown#325): under --agent-scope only. A failure here only costs the
+	// worker those tools, so it is logged, not fatal.
+	if providerUsesPluginDirs(flags.provider) && !flags.naked && flags.agentScopeSpec != "" {
+		note := func(format string, args ...any) {
+			if logPath, err := userStateWritePath("close-self-run.log"); err == nil {
+				logSelfClose(logPath, "(%s) "+format, append([]any{flags.identity.Key}, args...)...)
+			}
+		}
+		if moxinDir, err := addFrontendMoxinPlugin(root, true, pluginDirs, frontendMoxins, note); err != nil {
+			fmt.Fprintf(os.Stderr, "clown: serving frontend moxins: %v\n", err)
+		} else if moxinDir != "" {
+			pluginDirs = append(pluginDirs, moxinDir)
+		}
+	}
+
 	// Self-close (clown#287): inside a spinclass session, a Stop hook pokes this
 	// frontend, which runs `spinclass close-self-run` outside the agent unit.
 	// Arms only for a claude launch with spinclass on PATH; see selfCloseArmed.

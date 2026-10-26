@@ -130,6 +130,20 @@ func (s Spec) Validate() error {
 			return fmt.Errorf("worktree or binds_rw entry %q makes clown's state %q writable from inside the unit", p, clownState)
 		}
 	}
+	// The issue-filer service token lives in $XDG_STATE_HOME/circus and is read
+	// only by the frontend-side moxin; the unit keeps the operator's uid, so
+	// only the mount namespace keeps it out. No bind of any kind (read-only
+	// too) may cover it or sit inside it.
+	circusState := filepath.Join(OperatorXDG(os.Environ(), s.OperatorHome, "XDG_STATE_HOME"), "circus")
+	realCircus := ResolvePath(circusState)
+	for field, paths := range exposed {
+		for _, p := range paths {
+			real := ResolvePath(p)
+			if exposesWhole(p, circusState) || within(p, circusState) || exposesWhole(real, realCircus) || within(real, realCircus) {
+				return fmt.Errorf("%s entry %q exposes %q, which holds the issue-filer service token the frontend uses for the unit", field, p, circusState)
+			}
+		}
+	}
 	for _, p := range s.DenyPaths {
 		if err := requireBindable("deny_paths", p); err != nil {
 			return err

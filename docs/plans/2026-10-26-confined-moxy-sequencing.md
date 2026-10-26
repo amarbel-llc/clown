@@ -128,6 +128,59 @@ already on the default unit allowlist for other reasons, R `DefaultEgressAllow`)
 | Read-only smith frontend instance | clown | later, 1 day | nothing in moxy: per-tool allow works (V) |
 | In-unit read-only moxy tools via profile (#383, #301, relaxing the moxy rule) | spinclass + clown | days; low value | native Read/Grep/Glob already cover rg/folio_read/jq |
 
+## Implemented (clown steps 2 and 3, 2026-10-26)
+
+R for the code, V where stated; live forwarding not yet run (runbook A8).
+
+- `cmd/clown/frontendmoxin.go`: `frontendMoxins` is a list; each entry names a
+  moxin and the files it needs (stat only). Under `--agent-scope`, with the
+  stdio bridge built in, a `moxy` on PATH, the moxin on the moxin path
+  (clown's `MOXIN_PATH`, else the `MOXIN_PATH` of a plugin's `moxy` server,
+  else `~/.config/moxy/moxins`) and its files present, clown writes the plugin
+  `clown-builtin-moxins` with one `scope:"frontend"` stdio server per moxin
+  (`moxy serve-moxin --name <moxin>`, `MOXIN_PATH` in its env). Skips are
+  logged to `close-self-run.log`, never fatal. `CLOWN_DISABLE_FRONTEND_MOXINS=1`
+  turns it off. The plugin holds no secret (a test greps it for the fake
+  token's content and path).
+- `worker` keeps `clown-builtin-moxins/issue-filer`; a launch that does not
+  serve it skips the saved server (profile replay skips what is not
+  discovered), so the same profile works on a host without the moxin.
+- `internal/agentscope` `Validate` refuses a bind of any kind (read-only too)
+  over `$XDG_STATE_HOME/circus`, its parents, or a link into it: the unit keeps
+  the operator's uid, so only the mount namespace keeps the token out.
+- V: circus's real nix-packaged moxin (built from its `default.nix`) served
+  through `moxy serve-moxin --name issue-filer`, listed `file`, and answered a
+  call in its dry mode with no network and no token read (`just
+  explore-real-issue-filer-moxin`). Not run: a non-dry call (it files for real
+  and needs the token), the plugin host plus bridge forwarding it into a live
+  unit, and `claude`'s permission step.
+- What the operator's sweatfile must carry: `[claude] allow` naming
+  `mcp__plugin_clown-builtin-moxins_issue-filer__file` (the name follows the
+  `mcp__plugin_<plugin>_<server>__<tool>` form seen for ringmaster, I for this
+  plugin until the live check). clown does not auto-allow it: it posts text to
+  an external service.
+
+### The general form: any moxin, in any confined session
+
+The operator wants moxy-served moxins supported generally in confined
+sessions. What the mechanism gives today: a moxin that is safe to run with the
+operator's authority outside the unit is **one line** in `frontendMoxins`
+(name, needed files) plus one `context_servers` entry in the profile. "Safe"
+is the whole condition: the moxin has no filesystem or exec effect for its
+caller, and its tool inputs cannot name a target the operator did not mean (the
+issue-filer's `repo_hint` and `notify` are the example to scrutinize).
+
+What a general form still needs, and who owns it:
+
+| Need | Why | Owner |
+|---|---|---|
+| Per-tool selection inside a served moxin | A frontend moxin could expose only `issue-list`/`issue-get` of smith; `serve-moxin` serves a whole moxin, `serve-mcp` with dotted `allow-tools` serves single tools (V) | clown (a per-entry allow list switching to `serve-mcp`); no moxy change |
+| A review gate for every added moxin | Frontend-side means the operator's authority and credentials; nothing today checks a moxin for exec/fs effect | operator policy; clown can enforce an allow-list of reviewed names |
+| In-unit moxy read tools alongside | Needs the unit's moxy to keep `folio_read`-class tools without `grit_*` reachable: exclusions must become a boundary (clown#301: the unit can clear its own exclusions through the serve socket) and spinclass's "drop moxy whole" rule (R3) relaxed | clown (#301), spinclass (rule) |
+| Per-tool add-back in a profile (spinclass#383) | A profile can only keep or drop whole servers; add-back is how a profile would name one tool of a server | spinclass design, clown profile field |
+| Credentials per moxin | Each served moxin reads its own file in the frontend; the bind refusal in `Validate` is per path | circus (credential layout), clown (extend the refusal list) |
+| A live forwarded-call test in CI | Today only unit tests and a dry call | clown (a `verify-agent-scope` extension on a host with systemd) |
+
 ## Resolved questions (2026-10-26, by experiment)
 
 Experiment: `just explore-moxy-moxin-allow` (a clown justfile recipe). It runs

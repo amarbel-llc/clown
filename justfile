@@ -821,6 +821,47 @@ explore-moxy-moxin-allow:
         echo "stderr: $(head -c 300 "$d/e2.err")"
     done
 
+# Builds circus's real nix-packaged issue-filer moxin from a circus checkout
+# (CIRCUS, default the sibling repo; only its default.nix is read, nothing in it
+# is changed) and serves it the way the frontend-side server does: `moxy
+# serve-moxin --name issue-filer` with MOXIN_PATH naming the build. Lists the
+# tools and makes one call in the moxin's dry mode, which posts nothing and
+# never reads the token file (ISSUE_FILER_CLIENT_DRY=1). Needs the nix store to
+# have, or fetch, curl, jq, grep and sed.
+#
+# serve circus's real issue-filer moxin through moxy serve-moxin, dry call only
+[group("explore")]
+explore-real-issue-filer-moxin CIRCUS="../../../circus":
+    #!/usr/bin/env bash
+    set -uo pipefail
+    moxy="$(command -v moxy)" || { echo "no moxy on PATH" >&2; exit 2; }
+    pkg="$(cd "{{CIRCUS}}" && pwd)/infra/hosts/pkgs/issue-filer-moxin"
+    [[ -f "$pkg/default.nix" ]] || { echo "no $pkg/default.nix" >&2; exit 2; }
+    flake="$(pwd)"
+    log="$(mktemp)"
+    out="$(nix build --impure --no-link --print-out-paths --expr "
+      let f = builtins.getFlake \"path:$flake\";
+          pkgs = import f.inputs.nixpkgs-master { system = builtins.currentSystem; };
+      in pkgs.callPackage $pkg { }" 2>"$log" | tail -n 1)" || true
+    if [[ ! -d "$out/issue-filer" ]]; then
+        echo "build did not produce a moxin dir (got: $out); nix said:" >&2
+        head -c 3000 "$log" >&2
+        exit 1
+    fi
+    echo "moxin: $out"; ls "$out/issue-filer"
+    d="$(mktemp -d)"; trap 'rm -rf "$d"' EXIT
+    mkdir -p "$d/home" "$d/work"
+    call='{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"file","arguments":{"text":"probe: dry run only","repo_hint":"o/r","request_id":"probe-1","notify":"me@example.test"}}}'
+    { printf '%s\n' \
+        '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"probe","version":"0"}}}' \
+        '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+        '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' "$call"; sleep 4; } \
+      | (cd "$d/work" && env HOME="$d/home" XDG_CONFIG_HOME="$d/home/.config" XDG_STATE_HOME="$d/state" \
+          MOXIN_PATH="$out" ISSUE_FILER_CLIENT_DRY=1 timeout 20 "$moxy" serve-moxin --name issue-filer 2>"$d/err") >"$d/out"
+    echo "--- tools/list"; grep '"id":2' "$d/out" | head -c 700; echo
+    echo "--- tools/call (dry)"; grep '"id":3' "$d/out" | head -c 900; echo
+    echo "--- stderr"; head -c 400 "$d/err"
+
 # Probe the plugin.json "agents" field schema by trying different formats
 # and reporting which ones pass validation. Requires a built clown.
 #

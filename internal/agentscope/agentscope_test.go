@@ -68,6 +68,65 @@ func TestValidateRefusesUnbindablePathsAndScrubbedEnv(t *testing.T) {
 	}
 }
 
+// The issue-filer service token's directory is kept out of the unit by the
+// mount namespace alone (the unit keeps the operator's uid), so a bind of any
+// kind over it, its parent, or a link into it is refused, read-only too.
+func TestValidateRefusesBindsOverTheIssueFilerTokenDir(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", "")
+	for _, field := range []string{"binds_rw", "binds_ro"} {
+		for _, bad := range []string{
+			"/home/op/.local/state/circus",
+			"/home/op/.local/state/circus/issue-filer",
+			"/home/op/.local/state/circus/issue-filer/cf-access.headers",
+			"/home/op/.local/state",
+		} {
+			s := validSpec()
+			if field == "binds_rw" {
+				s.BindsRW = []string{bad}
+			} else {
+				s.BindsRO = []string{bad}
+			}
+			if err := s.Validate(); err == nil || (field == "binds_ro" && !strings.Contains(err.Error(), "issue-filer service token")) {
+				t.Errorf("%s %q: err %v, want a refusal (binds_ro: the token refusal)", field, bad, err)
+			}
+		}
+	}
+	s := validSpec()
+	s.Worktree = "/home/op/.local/state/circus/wt"
+	if err := s.Validate(); err == nil {
+		t.Error("worktree inside the token dir: want refusal")
+	}
+	t.Setenv("XDG_STATE_HOME", "/srv/state")
+	s = validSpec()
+	s.BindsRO = []string{"/srv/state/circus"}
+	if err := s.Validate(); err == nil || !strings.Contains(err.Error(), "issue-filer service token") {
+		t.Errorf("a relocated XDG_STATE_HOME/circus: err %v, want the token refusal", err)
+	}
+	// A symlink into the token dir is refused like the dir itself.
+	dir := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", filepath.Join(dir, "state"))
+	if err := os.MkdirAll(filepath.Join(dir, "state", "circus", "issue-filer"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "elsewhere")
+	if err := os.Symlink(filepath.Join(dir, "state", "circus", "issue-filer"), link); err != nil {
+		t.Fatal(err)
+	}
+	s = validSpec()
+	s.OperatorHome = dir
+	s.Worktree = filepath.Join(dir, "wt")
+	s.Sockets = nil
+	s.BindsRO = []string{link}
+	if err := s.Validate(); err == nil || !strings.Contains(err.Error(), "issue-filer service token") {
+		t.Errorf("a symlink into the token dir: err %v, want the token refusal", err)
+	}
+	s = validSpec()
+	s.BindsRO = []string{"/srv/state/other"}
+	if err := s.Validate(); err != nil {
+		t.Errorf("an unrelated read-only bind: %v", err)
+	}
+}
+
 // The unit must not be able to write clown's state, where the confinement
 // records live (clown#318): a worktree or binds_rw entry covering or inside
 // $XDG_STATE_HOME/clown is refused.

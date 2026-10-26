@@ -785,7 +785,8 @@ By tool, for a brief to state plainly:
 | Tool | Status inside the agent unit | Why |
 |---|---|---|
 | moxy: folio, grit, rg, jq, man, chix, env, batch/async, status, restart | **available** | They act on what the unit sees. git push/fetch go through the egress proxy; nix builds go through the daemon. |
-| moxy: smith | absent | It writes to forges. A confined worker files issues through the issue-filer connector only. |
+| moxy: smith | absent | It writes to forges. A confined worker files issues through the issue-filer moxin that clown serves in the frontend (next row), not through smith or a connector. |
+| frontend-served moxins (issue-filer) | **available** when the moxin and its token file exist on the host | `moxy serve-moxin --name issue-filer` runs as a `"scope":"frontend"` server of the synthesized `clown-builtin-moxins` plugin (`cmd/clown/frontendmoxin.go`), forwarded into the unit like ringmaster. The call, and the token it reads, stay in the frontend; the unit sees only the tool (`mcp__plugin_clown-builtin-moxins_issue-filer__file`). `Validate` refuses any bind (read-only too) over `$XDG_STATE_HOME/circus`. Kept by the `worker` builtin profile. Tested at unit level and against circus's real moxin in dry mode; the forwarded call in a live unit is not yet run (runbook A8). |
 | moxy: chrest | absent | It drives the operator's browser, which is the prompt surface. |
 | moxy: calendar, car, gmail, gws, piers, prison | absent | Credentials live under the hidden home. |
 | moxy: freud | absent | It reads operator transcripts. |
@@ -794,7 +795,7 @@ By tool, for a brief to state plainly:
 | ringmaster, troupe MCP (jobs, chat) | available | Forwarded from the frontend. |
 | `ringmaster`/`troupe` CLI from Bash, and in-unit job producers (e.g. moxy's async jobs) | **not supported in confinement** | Decision (a), coordinator, 2026-10-22: confined workers use the frontend MCP job tools (ringmaster, troupe). In-unit moxy async jobs and `ringmaster`/`troupe` CLI use from Bash are not supported: no ringmaster or troupe directory is bound, so a journal write from inside the unit is expected to fail (inferred from the binds; not observed). An in-unit moxy also gets no `CLOWN_SESSION_ID` (pre-existing), so before this it journaled to a channel no monitor watched. Revisit (bind the session's own channel dir, pass the key to in-unit servers) only if a worker needs moxy async in confinement and the operator asks. |
 | spinclass serve | available (`"scope":"frontend"`), over the session's serve socket (F12) | Its bridge admits only the unit and the frontend; it has no TCP listener in confined mode. |
-| claude.ai connectors (e.g. Krone's issue-filer) | available | Through the egress proxy (`mcp-proxy.anthropic.com`, `mcp.starbrandshoes.com` on the default allowlist). |
+| claude.ai connectors (e.g. Krone's issue-filer) | available only when a profile leaves them on; no builtin worker profile does (operator ruling 2026-10-26) | Through the egress proxy (`mcp-proxy.anthropic.com`, `mcp.starbrandshoes.com` on the default allowlist). |
 | Bash network tools | only allowlisted `host:port` over the proxy | `HTTPS_PROXY`/`HTTP_PROXY` are set. Tools that ignore proxy env get no network. |
 | local juggler model (loopback `ANTHROPIC_BASE_URL`) | unavailable | The unit's loopback is its own. |
 | statsd metrics (clown-hook-toolcost, in-unit clown-stdio-bridge) | relayed | UDP `127.0.0.1:8125` inside goes over the statsd relay to the frontend's statsd. Dropped only when the frontend sets `CLOWN_DISABLE_STATSD=1` or the relay failed to start. |

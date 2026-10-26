@@ -225,15 +225,19 @@ CLOWN_DISALLOWED_TOOLS = "Artifact,ArtifactData,ArtifactComments,DesignSync,Work
 # spawned confined can commit through spinclass's grit, run recipes, attest and
 # merge its own session. Moxy is dropped whole and just-us kept, so it passes
 # spinclass's confined-spawn rule; connectors are off (operator ruling: no
-# worker profile turns claude.ai connectors on). It has no way to file issues
-# or reach a forge yet; docs/plans/2026-10-26-confined-moxy-sequencing.md.
+# worker profile turns claude.ai connectors on). It also keeps the issue-filer
+# moxin, which clown serves in the frontend and forwards into the unit
+# (cmd/clown/frontendmoxin.go); a launch that does not serve it (the moxin or
+# its token file is missing, or the launch is unconfined) skips the saved
+# server and the worker just lacks that tool. See
+# docs/plans/2026-10-26-confined-moxy-sequencing.md.
 [[profile]]
 name = "worker"
-display = "Worker (confined unattended: edit, commit, run recipes, merge)"
+display = "Worker (confined unattended: edit, commit, run recipes, merge, file issues)"
 provider = "claude"
 backend = "anthropic"
 model = "claude-sonnet-5-5"
-context_servers = ["clown-builtin-jobs/ringmaster", "clown-builtin-jobs/troupe", "spinclass/spinclass", "just-us/just-us"]
+context_servers = ["clown-builtin-jobs/ringmaster", "clown-builtin-jobs/troupe", "spinclass/spinclass", "just-us/just-us", "clown-builtin-moxins/issue-filer"]
 
 [profile.env]
 CLOWN_DISABLE_CLAUDEAI_CONNECTORS = "1"
