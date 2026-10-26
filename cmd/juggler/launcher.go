@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"sync"
 	"syscall"
@@ -112,16 +114,12 @@ func (l *llauncher) endStart(alias string, ps *pendingStart) {
 	close(ps.done)
 }
 
-// PendingStarts lists the aliases with a Start in progress, which StopAll
-// stops along with the registered instances.
+// PendingStarts lists, sorted, the aliases with a Start in progress, which
+// StopAll stops along with the registered instances.
 func (l *llauncher) PendingStarts() []string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	aliases := make([]string, 0, len(l.starting))
-	for alias := range l.starting {
-		aliases = append(aliases, alias)
-	}
-	return aliases
+	return slices.Sorted(maps.Keys(l.starting))
 }
 
 // startCancelled is the error for a start whose ctx is done: the client

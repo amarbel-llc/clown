@@ -658,6 +658,9 @@ On
 If the alias is still starting, cancel that start under l.mu and wait,
 for up to 10 s, on its done channel: its child is killed, nothing is
 registered, and the stop succeeds.
+A start that has not ended by then makes the stop fail with
+.Ql alias \(dqX\(dq: its start did not end within 10s of Stop ;
+the start stays cancelled, so it still cannot register.
 .It
 Otherwise, under l.mu, look up and delete the
 .Sq l.children
@@ -681,8 +684,14 @@ the alias.
 .El
 .Pp
 .Cm StopAll
-stops, as above, every start in progress and then every registered
-alias, and lists both as stopped.
+stops, as above, every start in progress (sorted by alias) and then
+every registered alias.
+Its
+.Sy stopped
+list holds only the aliases whose stop it made succeed.
+An alias it could not stop is logged and left out: one another stop got
+to first, a pending start that failed on its own, or a start that did
+not end within 10 s.
 .Sh SEE ALSO
 .Xr clown 1 ,
 .Xr juggler 1 ,

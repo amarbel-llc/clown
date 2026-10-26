@@ -256,16 +256,11 @@ func (s *server) dispatch(ctx context.Context, req rm.Envelope) rm.Envelope {
 		stopped := make([]string, 0, len(aliases))
 		for _, alias := range aliases {
 			// Not client-scoped, as StopInstance.
+			// Stopped lists only what this call stopped. An alias that
+			// another Stop got to first, a pending start that failed on its
+			// own, and a start that did not end in time are left out:
+			// StopAllResult has no field for an error, so it is logged.
 			if err := s.launcher.Stop(context.WithoutCancel(ctx), alias); err != nil {
-				// A concurrent StopInstance on another connection may have
-				// drained the launcher's children map between our snapshot and
-				// this call, or a pending start may have failed meanwhile. If
-				// the alias is no longer in the registry, it was stopped —
-				// count it. Otherwise the failure is real.
-				if _, stillRunning := s.registry.Get(alias); !stillRunning {
-					stopped = append(stopped, alias)
-					continue
-				}
 				s.log.Error("stopAll", "alias", alias, "err", err)
 				continue
 			}

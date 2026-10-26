@@ -3,11 +3,14 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -76,22 +79,30 @@ func TestLauncherStopDuringTheHealthWaitStopsTheStart(t *testing.T) {
 	if err := l.Stop(context.Background(), "a"); err != nil {
 		t.Fatalf("Stop of a starting alias: %v", err)
 	}
-	// Stop returns after the start has ended: its error is already there.
-	select {
-	case err := <-errc:
-		if err == nil {
-			t.Fatal("the stopped start succeeded")
-		}
-	default:
-		t.Fatal("Stop returned before the start it stopped had ended")
-	}
+	// Stop returns once the start has killed its child and dropped its
+	// reservation; Start's own return follows.
 	assertPIDsDead(t, []int{pid})
 	assertNothingTracked(t, l)
+	assertStoppedWhileStarting(t, errc, "during the health wait")
 }
 
-// Stop after a child turned healthy but before it is registered stops
-// that start too: it is not registered after Stop returned.
-func TestLauncherStopBeforeRegisteringStopsTheStart(t *testing.T) {
+// assertStoppedWhileStarting waits, bounded, for a background start's error
+// and checks Stop stopped it at the given point.
+func assertStoppedWhileStarting(t *testing.T, errc <-chan error, when string) {
+	t.Helper()
+	select {
+	case err := <-errc:
+		if !errors.Is(err, errStoppedWhileStarting) || !strings.Contains(err.Error(), when) {
+			t.Fatalf("stopped start: err = %v, want %q stopped while starting", err, when)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the stopped start never returned")
+	}
+}
+
+// Stop after a child turned healthy stops that start: Start's re-check of
+// ctx after health sees the cancel, and nothing is registered.
+func TestLauncherStopAfterHealthyStopsTheStart(t *testing.T) {
 	bin, spawnLog := spawnRecordingLlamaServer(t)
 	l := newLauncher(bin, rm.NewRegistry(), shortTempDir(t))
 	inHook := make(chan struct{})
@@ -114,11 +125,106 @@ func TestLauncherStopBeforeRegisteringStopsTheStart(t *testing.T) {
 	if stopErr != nil {
 		t.Fatalf("Stop of an alias turning healthy: %v", stopErr)
 	}
-	if err := <-errc; err == nil {
-		t.Fatal("the stopped start succeeded")
-	}
 	assertPIDsDead(t, spawnedPIDs(t, spawnLog))
 	assertNothingTracked(t, l)
+	assertStoppedWhileStarting(t, errc, "after it turned healthy")
+}
+
+// register refuses a start cancelled after Start's own checks: Stop
+// cancels under l.mu, which register holds while it checks.
+func TestLauncherRegisterRefusesACancelledStart(t *testing.T) {
+	reg := rm.NewRegistry()
+	l := newLauncher(buildFakeLlamaServer(t), reg, shortTempDir(t))
+	ctx, cancel := context.WithCancelCause(context.Background())
+	ps, err := l.reserveAlias("a", cancel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancel(errStoppedWhileStarting)
+	ch := &child{exited: make(chan struct{})} // live: not exited
+	err = l.register(ctx, rm.Instance{Alias: "a"}, ch)
+	if !errors.Is(err, errStoppedWhileStarting) || !strings.Contains(err.Error(), "before registering") {
+		t.Fatalf("register of a cancelled start: err = %v, want stopped while starting, before registering", err)
+	}
+	if _, ok := reg.Get("a"); ok {
+		t.Error("a cancelled start was registered")
+	}
+	l.mu.Lock()
+	_, tracked := l.children["a"]
+	reserved := l.starting["a"] == ps
+	l.mu.Unlock()
+	if tracked || !reserved {
+		t.Errorf("tracked %v, still reserved %v; want untracked and reserved until endStart", tracked, reserved)
+	}
+	l.endStart("a", ps)
+	assertNothingTracked(t, l)
+}
+
+// PendingStarts lists the pending aliases sorted, so StopAll's Stopped
+// list is stable.
+func TestLauncherPendingStartsAreSorted(t *testing.T) {
+	l := newLauncher(buildFakeLlamaServer(t), rm.NewRegistry(), shortTempDir(t))
+	want := []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"}
+	for i := len(want) - 1; i >= 0; i-- {
+		alias := want[i]
+		_, cancel := context.WithCancelCause(context.Background())
+		defer cancel(nil)
+		if _, err := l.reserveAlias(alias, cancel); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for range 5 {
+		if got := l.PendingStarts(); !slices.Equal(got, want) {
+			t.Fatalf("PendingStarts = %v, want %v", got, want)
+		}
+	}
+}
+
+// stubLauncher answers Stop per alias, and reports pending starts.
+type stubLauncher struct {
+	pending []string
+	stopErr map[string]error
+}
+
+func (s *stubLauncher) Start(context.Context, rm.StartInstanceParams) (rm.Instance, error) {
+	return rm.Instance{}, errors.New("stub")
+}
+
+func (s *stubLauncher) Stop(_ context.Context, alias string) error {
+	return s.stopErr[alias]
+}
+
+func (s *stubLauncher) PendingStarts() []string {
+	return s.pending
+}
+
+// StopAll lists only the aliases its own Stops stopped: not a pending
+// start that failed on its own first ("not running"), nor one whose start
+// did not end in time.
+func TestStopAllListsOnlyWhatItStopped(t *testing.T) {
+	reg := rm.NewRegistry()
+	if err := reg.Add(rm.Instance{Alias: "running"}); err != nil {
+		t.Fatal(err)
+	}
+	l := &stubLauncher{
+		pending: []string{"gone", "ok", "wedged"},
+		stopErr: map[string]error{
+			"gone":   errors.New(`alias "gone" not running`),
+			"wedged": errors.New(`alias "wedged": its start did not end within 10s of Stop`),
+		},
+	}
+	s := newServer(reg, l)
+	resp := s.dispatch(context.Background(), rm.Envelope{JSONRPC: "2.0", ID: "1", Method: rm.MethodStopAll})
+	if resp.Error != nil {
+		t.Fatalf("StopAll: %+v", resp.Error)
+	}
+	var res rm.StopAllResult
+	if err := json.Unmarshal(resp.Result, &res); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"ok", "running"}; !slices.Equal(res.Stopped, want) {
+		t.Errorf("StopAll stopped %v, want %v", res.Stopped, want)
+	}
 }
 
 // StopAll stops pending starts as well as registered instances.
@@ -153,27 +259,54 @@ func TestStopAllStopsPendingStarts(t *testing.T) {
 func TestLauncherStartStopStorm(t *testing.T) {
 	bin, spawnLog := spawnRecordingLlamaServer(t)
 	l := newLauncher(bin, rm.NewRegistry(), shortTempDir(t))
+	// Hold each healthy start briefly, so stops land on pending starts.
+	l.afterHealthy = func(ctx context.Context, _ *child) {
+		select {
+		case <-ctx.Done():
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
 	baseline := quiescedGoroutines()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	var wg sync.WaitGroup
-	for g := range 4 {
-		wg.Add(1)
+	var stoppedWhileStarting, started atomic.Int64
+	startersDone := make(chan struct{})
+	var starters, stoppers sync.WaitGroup
+	for range 2 {
+		starters.Add(1)
 		go func() {
-			defer wg.Done()
+			defer starters.Done()
 			for range 8 {
-				if g%2 == 0 {
-					_, _ = l.Start(ctx, rm.StartInstanceParams{Alias: "a", Model: "a"})
-				} else {
-					_ = l.Stop(ctx, "a")
-					time.Sleep(50 * time.Millisecond)
+				_, err := l.Start(ctx, rm.StartInstanceParams{Alias: "a", Model: "a"})
+				switch {
+				case err == nil:
+					started.Add(1)
+				case errors.Is(err, errStoppedWhileStarting):
+					stoppedWhileStarting.Add(1)
+				}
+			}
+		}()
+		stoppers.Add(1)
+		go func() {
+			defer stoppers.Done()
+			for {
+				_ = l.Stop(ctx, "a")
+				select {
+				case <-startersDone:
+					return
+				case <-time.After(30 * time.Millisecond):
 				}
 			}
 		}()
 	}
-	wg.Wait()
+	starters.Wait()
+	close(startersDone)
+	stoppers.Wait()
 	_ = l.Stop(ctx, "a")
+	if stoppedWhileStarting.Load() == 0 {
+		t.Errorf("no start was stopped while starting (%d started): the storm never interleaved", started.Load())
+	}
 
 	assertNothingTracked(t, l)
 	assertPIDsDead(t, spawnedPIDs(t, spawnLog))
