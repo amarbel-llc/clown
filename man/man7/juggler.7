@@ -111,6 +111,16 @@ The Go client SDK in
 .Pa internal/juggler
 mints sequential numeric IDs.
 .Pp
+A client keeps its side of the connection open until its reply arrives.
+The daemon treats the end of the client's stream, whether a close or a
+half-close (shutting down only the client's write side), as the client
+leaving: a start or download still running for it is cancelled (a
+starting llama-server is killed, a partial download removed), requests it
+queued behind that one are not run, and no reply is written.
+A stop is not cancelled: it completes whoever disconnects.
+One connection may queue at most 16 requests behind the one being run; a
+client that sends more is dropped.
+.Pp
 Methods:
 .Pp
 .Bl -tag -width "MethodListAvailableModels" -compact

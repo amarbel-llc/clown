@@ -40,6 +40,10 @@ type server struct {
 	// clobbering the other's change (a lost update). Zero-value sync.Mutex
 	// is ready to use — newServer doesn't need to initialize it.
 	remoteModelsMu sync.Mutex
+
+	// onReadEnd and onHandleDone, when set, are called when a connection's
+	// read side ends and when its handler returns (tests).
+	onReadEnd, onHandleDone func()
 }
 
 // Launcher abstracts how new llama-server instances are spawned. The
@@ -97,35 +101,64 @@ func (s *server) Serve(ctx context.Context, ln net.Listener) error {
 	}
 }
 
-// handle serves one connection. Frames are read on their own goroutine, so
-// the connection's read side is watched while a request is dispatched: when
-// it ends (the client closed or went away), ctx is cancelled, which aborts
-// the client-scoped work still in flight (clown#82). Requests are dispatched
-// one at a time, in order, as before.
+// maxQueuedRequests bounds the requests one connection may pipeline ahead
+// of the one being dispatched; a client that sends more is dropped.
+const maxQueuedRequests = 16
+
+// handle serves one connection (clown#82).
+//
+// The protocol rule: a client keeps its write side open until its reply
+// arrives. The read side ending, whether by a close or a half-close
+// (shutdown of the client's write side; it cannot be told apart from a
+// close here), means the client is gone: the connection's ctx is
+// cancelled, which aborts the client-scoped work in flight, requests still
+// queued are not dispatched, and no reply is written. internal/juggler's
+// Client never half-closes.
+//
+// Frames are read on their own goroutine, which keeps reading while a
+// request is dispatched, so a disconnect is seen at once. Requests are
+// dispatched one at a time, in order.
 func (s *server) handle(conn net.Conn) {
+	defer func() {
+		if s.onHandleDone != nil {
+			s.onHandleDone()
+		}
+	}()
 	defer conn.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	frames := make(chan rm.Envelope)
+	frames := make(chan rm.Envelope, maxQueuedRequests)
 	go func() {
+		// Run in reverse: cancel, then the hook (so a test that sees it
+		// knows ctx is already cancelled), then close the queue.
+		defer close(frames)
+		defer func() {
+			if s.onReadEnd != nil {
+				s.onReadEnd()
+			}
+		}()
 		defer cancel()
 		br := bufio.NewReader(conn)
 		for {
 			env, err := rm.ReadFrame(br)
 			if err != nil {
-				close(frames)
 				return
 			}
 			select {
 			case frames <- env:
-			case <-ctx.Done():
+			default:
+				s.log.Error("dropping a client that pipelined too many requests", "max", maxQueuedRequests)
 				return
 			}
 		}
 	}()
 
 	for env := range frames {
+		if ctx.Err() != nil {
+			// The client is gone: queued requests are not dispatched.
+			return
+		}
 		resp := s.dispatch(ctx, env)
 		if ctx.Err() != nil {
 			// The client is gone: nobody reads the answer.

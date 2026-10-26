@@ -45,6 +45,10 @@ type llauncher struct {
 
 	mu       sync.Mutex
 	children map[string]*child // alias → process handle
+
+	// afterHealthy, when set, is called once a child has turned healthy,
+	// before it is registered (tests).
+	afterHealthy func()
 }
 
 func newLauncher(binary string, reg *rm.Registry, modelsDir string) *llauncher {
@@ -90,6 +94,10 @@ func (l *llauncher) Start(ctx context.Context, p rm.StartInstanceParams) (rm.Ins
 	}
 	args = append(args, p.Args...)
 
+	// A start whose client already left (clown#82) spawns nothing.
+	if err := ctx.Err(); err != nil {
+		return rm.Instance{}, fmt.Errorf("start %s cancelled before spawning: %w", p.Alias, err)
+	}
 	cmd := exec.Command(l.llamaServerPath, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Stdout = os.Stderr
@@ -112,6 +120,16 @@ func (l *llauncher) Start(ctx context.Context, p rm.StartInstanceParams) (rm.Ins
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		<-ch.exited
 		return rm.Instance{}, fmt.Errorf("waitHealthy: %w", err)
+	}
+	if l.afterHealthy != nil {
+		l.afterHealthy()
+	}
+	// The client may have left just as the child turned healthy: its start
+	// is killed and not registered, as for any departed client's start.
+	if err := ctx.Err(); err != nil {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		<-ch.exited
+		return rm.Instance{}, fmt.Errorf("start %s cancelled after it turned healthy: %w", p.Alias, err)
 	}
 
 	in := rm.Instance{
