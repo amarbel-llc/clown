@@ -129,6 +129,9 @@ type selectionResult struct {
 	// toolsShown names the servers the picker showed tool by tool, kept or
 	// not: the only ones whose exclusions this selection decides.
 	toolsShown map[string]bool
+	// offered names every server the picker offered a row for, kept or not:
+	// the only ones whose place in context_servers this selection decides.
+	offered map[string]bool
 }
 
 // rowKey builds a globally-unique option value for one picker row: server
@@ -392,9 +395,10 @@ func selectServers(catalogs []serverCatalog, logger *slog.Logger, saved *profile
 // server shown tool by tool, and which servers were shown that way (a
 // multi-group catalog; a bare row has no per-tool choice).
 func selectionFromPicker(catalogs []serverCatalog, chosen map[string]bool) selectionResult {
-	result := selectionResult{excludedTools: map[string][]string{}, toolsShown: map[string]bool{}}
+	result := selectionResult{excludedTools: map[string][]string{}, toolsShown: map[string]bool{}, offered: map[string]bool{}}
 	for _, c := range catalogs {
 		name := c.server.Name()
+		result.offered[name] = true
 		if isMultiGroup(c.groups) {
 			result.toolsShown[name] = true
 		}
@@ -733,7 +737,22 @@ func promptSaveSelection(result selectionResult, saveCtx cheapContextSaveContext
 	for i, d := range result.kept {
 		servers[i] = d.Name()
 	}
-	return saveSelectionToProfile(name, servers, result.excludedTools, result.toolsShown, saveCtx)
+	return saveSelectionToProfile(name, servers, result.excludedTools, result.toolsShown, result.offered, saveCtx)
+}
+
+// mergeContextServers is what a save records as a profile's keep-list
+// (clown#316): this launch's kept servers, then each saved one the picker
+// did not offer at all (not discovered this launch), as it was. A server the
+// picker offered and the operator unchecked is gone. Replay skips a kept
+// name that is not discovered, so keeping one is harmless.
+func mergeContextServers(saved, kept []string, offered map[string]bool) []string {
+	merged := slices.Clone(kept)
+	for _, server := range saved {
+		if !offered[server] && !slices.Contains(merged, server) {
+			merged = append(merged, server)
+		}
+	}
+	return merged
 }
 
 // mergeExclusions is what a save records as a profile's exclusions
@@ -761,7 +780,7 @@ func mergeExclusions(saved, picked map[string][]string, toolsShown map[string]bo
 // profile: an existing one (user or builtin) keeps every other field, and
 // the exclusions of servers this selection did not show (mergeExclusions);
 // a new name gets a minimal profile.
-func saveSelectionToProfile(name string, servers []string, excludedTools map[string][]string, toolsShown map[string]bool, saveCtx cheapContextSaveContext) error {
+func saveSelectionToProfile(name string, servers []string, excludedTools map[string][]string, toolsShown, offered map[string]bool, saveCtx cheapContextSaveContext) error {
 	merged, user, destPath := saveCtx.merged, saveCtx.user, saveCtx.path
 	existingNames := userNameSet(user)
 
@@ -781,7 +800,7 @@ func saveSelectionToProfile(name string, servers []string, excludedTools map[str
 		// profile can adjust it afterward via `clown profile edit`.
 		target = profile.Profile{Name: name, Provider: "claude", Backend: "anthropic"}
 	}
-	target.ContextServers = servers
+	target.ContextServers = mergeContextServers(target.ContextServers, servers, offered)
 	target.ContextExcluded = mergeExclusions(target.ContextExcluded, excludedTools, toolsShown)
 
 	// Reuse saveProfileForm's Validate -> Upsert -> Save -> print sequence

@@ -41,7 +41,30 @@ func TestSelectionFromPickerRecordsWhichServersItShowedToolByTool(t *testing.T) 
 	if len(result.kept) != len(catalogs) {
 		t.Errorf("kept %d servers, want %d", len(result.kept), len(catalogs))
 	}
+	wantOffered := map[string]bool{}
+	for _, c := range catalogs {
+		wantOffered[c.server.Name()] = true
+	}
+	if !reflect.DeepEqual(result.offered, wantOffered) {
+		t.Errorf("offered %v, want every catalog server %v", result.offered, wantOffered)
+	}
 }
+
+// An offered server the operator unchecks is not kept, and is still
+// offered: its removal from context_servers is the operator's choice.
+func TestSelectionFromPickerOffersAnUncheckedServer(t *testing.T) {
+	moxy := pluginhost.DiscoveredServer{PluginName: "moxy", ServerName: "moxy"}
+	caldav := pluginhost.DiscoveredServer{PluginName: "bob", ServerName: "caldav"}
+	result := selectionFromPicker([]serverCatalog{{server: moxy}, {server: caldav}},
+		map[string]bool{rowKey(moxy.Name(), allRowSuffix): true})
+	if len(result.kept) != 1 || result.kept[0].Name() != moxy.Name() || !result.offered[caldav.Name()] {
+		t.Errorf("kept %v, offered %v; want only moxy kept and caldav offered", result.kept, result.offered)
+	}
+}
+
+// thisLaunchOffered is what the picker offered in the save tests: every
+// saved server but absent/server, which was not discovered this launch.
+var thisLaunchOffered = map[string]bool{"moxy/moxy": true, "unit/confined": true, "bob/caldav": true}
 
 // savedNarrowing has exclusions for a server the picker shows tool by tool
 // (moxy), an in-unit one, one whose catalog fetch fails, and one not
@@ -61,7 +84,7 @@ func saveSelectionInto(t *testing.T, existing profile.Profile, name string, serv
 	t.Helper()
 	path := saveRegistry(t, existing)
 	user := loadRegistry(t, path).Profiles
-	if err := saveSelectionToProfile(name, servers, excluded, shown, cheapContextSaveContext{merged: user, user: user, path: path}); err != nil {
+	if err := saveSelectionToProfile(name, servers, excluded, shown, thisLaunchOffered, cheapContextSaveContext{merged: user, user: user, path: path}); err != nil {
 		t.Fatal(err)
 	}
 	return loadRegistry(t, path)
@@ -86,8 +109,26 @@ func TestCheapContextSaveKeepsExclusionsThePickerDidNotShow(t *testing.T) {
 	if !reflect.DeepEqual(got.ContextExcluded, want) {
 		t.Errorf("saved exclusions %v, want %v", got.ContextExcluded, want)
 	}
-	if want := []string{"moxy/moxy", "unit/confined", "bob/caldav"}; !reflect.DeepEqual(got.ContextServers, want) {
-		t.Errorf("saved servers %v, want this launch's kept set %v", got.ContextServers, want)
+	if want := []string{"moxy/moxy", "unit/confined", "bob/caldav", "absent/server"}; !reflect.DeepEqual(got.ContextServers, want) {
+		t.Errorf("saved servers %v, want this launch's kept set plus the undiscovered saved one %v", got.ContextServers, want)
+	}
+	if got.Base != "claude" || r.Stamp.Protocol != 2 {
+		t.Errorf("base %q, protocol %d; want claude and 2", got.Base, r.Stamp.Protocol)
+	}
+}
+
+// A server the picker offered and the operator unchecked leaves
+// context_servers; a saved server not discovered this launch stays
+// (clown#316).
+func TestCheapContextSaveKeepsUndiscoveredServersOnly(t *testing.T) {
+	r := saveSelectionInto(t, savedNarrowing, "narrow",
+		[]string{"moxy/moxy", "unit/confined"},
+		map[string][]string{"moxy/moxy": {"folio.glob"}},
+		map[string]bool{"moxy/moxy": true})
+
+	got := findProfile(t, r, "narrow")
+	if want := []string{"moxy/moxy", "unit/confined", "absent/server"}; !reflect.DeepEqual(got.ContextServers, want) {
+		t.Errorf("saved servers %v, want %v (bob/caldav unchecked, absent/server undiscovered)", got.ContextServers, want)
 	}
 	if got.Base != "claude" || r.Stamp.Protocol != 2 {
 		t.Errorf("base %q, protocol %d; want claude and 2", got.Base, r.Stamp.Protocol)
@@ -117,8 +158,8 @@ func TestCheapContextSaveIntoANewProfile(t *testing.T) {
 	r := saveSelectionInto(t, savedNarrowing, "fresh", []string{"moxy/moxy"}, excluded, map[string]bool{"moxy/moxy": true})
 
 	got := findProfile(t, r, "fresh")
-	if !reflect.DeepEqual(got.ContextExcluded, excluded) || got.Base != "" {
-		t.Errorf("new profile %+v, want only this launch's exclusions and no base", got)
+	if !reflect.DeepEqual(got.ContextExcluded, excluded) || got.Base != "" || !reflect.DeepEqual(got.ContextServers, []string{"moxy/moxy"}) {
+		t.Errorf("new profile %+v, want only this launch's selection and no base", got)
 	}
 	if old := findProfile(t, r, "narrow"); !reflect.DeepEqual(old, savedNarrowing) {
 		t.Errorf("saving a new profile changed %q: %+v", old.Name, old)

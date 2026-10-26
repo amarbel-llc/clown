@@ -106,7 +106,7 @@ func TestCheapContextSaveKeepsBase(t *testing.T) {
 	saveCtx := cheapContextSaveContext{merged: user, user: user, path: path}
 
 	excluded := map[string][]string{"moxy/moxy": {"grit.status"}}
-	if err := saveSelectionToProfile("narrow", []string{"moxy/moxy"}, excluded, map[string]bool{"moxy/moxy": true}, saveCtx); err != nil {
+	if err := saveSelectionToProfile("narrow", []string{"moxy/moxy"}, excluded, map[string]bool{"moxy/moxy": true}, map[string]bool{"moxy/moxy": true}, saveCtx); err != nil {
 		t.Fatal(err)
 	}
 
