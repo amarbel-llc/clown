@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 
 	"code.linenisgreat.com/clown/internal/agentscope"
 	"code.linenisgreat.com/clown/internal/sessions"
@@ -21,18 +21,21 @@ import (
 // that same spec or is refused: runWithFlags calls agentScopeForLaunch
 // after decideClaudeSession, before anything is written or started.
 
-// applyAgentScopeRecord settles flags.agentScopeSpec against the session's
-// confinement record and returns a non-zero exit code when the launch is
-// refused (the reason already on stderr).
-func applyAgentScopeRecord(flags *parsedFlags) int {
-	refuse := func(err error) int {
-		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
-		return 1
+// confinementGate is the call runWithFlags makes once the session ids are
+// final; a variable so a test can prove runWithFlags still calls it.
+var confinementGate = runConfinementGate
+
+// runConfinementGate settles flags.agentScopeSpec against the session's
+// confinement record. A non-nil error refuses the launch; notices go to w.
+func runConfinementGate(flags *parsedFlags, w io.Writer) error {
+	resume, sessionIDs := claudeConversationRefs(flags.forwarded)
+	if err := conversationRefsError(resume, sessionIDs, sessions.AnyAgentScope); err != nil {
+		return err
 	}
 	if flags.agentScopeSpec != "" {
 		canon, err := canonicalSpecPath(flags.agentScopeSpec)
 		if err != nil {
-			return refuse(err)
+			return err
 		}
 		flags.agentScopeSpec = canon
 	}
@@ -41,18 +44,102 @@ func applyAgentScopeRecord(flags *parsedFlags) int {
 		return err
 	})
 	if err != nil {
-		return refuse(err)
+		return err
 	}
 	flags.agentScopeSpec = spec
+	confined := found || spec != ""
 	switch {
 	case found && (flags.naked || flags.tent || flags.provider != "claude"):
-		return refuse(fmt.Errorf("this session ran confined under agent-scope spec %s, which --naked, --tent and a provider other than claude cannot honour; refusing to launch", spec))
+		return fmt.Errorf("this session ran confined under agent-scope spec %s, which --naked, --tent and a provider other than claude cannot honour; refusing to launch", spec)
+	case confined && claudeFlagPresent(flags.forwarded, "--fork-session"):
+		// The fork gets a new id claude mints, which a confined lineage cannot
+		// follow: refused whether the source or this launch is confined.
+		return errors.New("--fork-session of a confined session, or under --agent-scope, is refused: the fork's new session would carry no confinement record")
+	case confined && claudeFlagPresent(flags.forwarded, "--from-pr"):
+		return errors.New("--from-pr is refused for a confined session or under --agent-scope: claude picks the session, so it cannot be checked or recorded")
 	case spec != "" && flags.provider == "claude" && !flags.naked && confinedConversationID(*flags) == "":
-		return refuse(errors.New("a confined launch must know the claude session it runs under, so it can record it: -c, the bare --resume picker and -p without --session-id or --resume <id> are refused under --agent-scope"))
-	case flags.resumeCommand && !found && spec == "":
-		fmt.Fprintf(os.Stderr, "clown: %s\n", unconfinedResumeNotice(claudeResumeValue(flags.forwarded)))
+		return errors.New("a confined launch must know the claude session it runs under, so it can record it: -c, the bare --resume picker and -p without --session-id or --resume <id> are refused under --agent-scope")
+	case !found && spec == "" && len(resume) > 0:
+		// `clown resume` and a direct --resume <id> alike.
+		fmt.Fprintf(w, "clown: %s\n", unconfinedResumeNotice(resume[0]))
 	}
-	return 0
+	if spec != "" && !flags.printLaunchPlan {
+		// Recorded now, before anything starts, so a launch that dies early
+		// still leaves the record; the later session-names records repeat it.
+		ids := launchScopeIDs(*flags)
+		if id := confinedConversationID(*flags); id != "" && !slices.Contains(ids, id) {
+			ids = append(ids, id)
+		}
+		build := func(id string) sessions.NameRecord { return sessions.NameRecord{SessionID: id, AgentScope: spec} }
+		if err := recordLaunchSessions(ids, true, build, sessions.RecordSession, w); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// claudeConversationRefs returns every conversation id the provider args
+// name, in order: each --resume/-r value (--resume v, -r v, --resume=v,
+// -r=v; a --resume followed by a flag or nothing is claude's picker and has
+// no value, as in resumeArgRaw) and each --session-id value. resumeArgRaw
+// and claudeFlagValue read only the first; claude's parser (commander)
+// keeps the last of a repeated option (assumed, not verified against
+// claude itself), so the confinement check reads them all and refuses when
+// they disagree.
+func claudeConversationRefs(args []string) (resume, sessionIDs []string) {
+	for i, a := range args {
+		switch {
+		case a == "--resume" || a == "-r":
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				resume = append(resume, args[i+1])
+			}
+		case strings.HasPrefix(a, "--resume="):
+			resume = append(resume, strings.TrimPrefix(a, "--resume="))
+		case strings.HasPrefix(a, "-r="):
+			resume = append(resume, strings.TrimPrefix(a, "-r="))
+		case a == "--session-id":
+			if i+1 < len(args) {
+				sessionIDs = append(sessionIDs, args[i+1])
+			}
+		case strings.HasPrefix(a, "--session-id="):
+			sessionIDs = append(sessionIDs, strings.TrimPrefix(a, "--session-id="))
+		}
+	}
+	return resume, sessionIDs
+}
+
+// distinct returns vs without repeats, in first-seen order.
+func distinct(vs []string) []string {
+	var out []string
+	for _, v := range vs {
+		if !slices.Contains(out, v) {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// conversationRefsError refuses provider args the confinement check cannot
+// read unambiguously: repeated --resume or --session-id values that
+// disagree, and a --resume search term (not a UUID) while any session is
+// recorded as confined, since the term cannot be tied to one record.
+func conversationRefsError(resume, sessionIDs []string, anyConfined func() (bool, error)) error {
+	if d := distinct(resume); len(d) > 1 {
+		return fmt.Errorf("--resume names more than one session (%s); refusing, since only one can be checked against its confinement record", strings.Join(d, ", "))
+	}
+	if d := distinct(sessionIDs); len(d) > 1 {
+		return fmt.Errorf("--session-id names more than one session (%s); refusing, since only one can be checked against its confinement record", strings.Join(d, ", "))
+	}
+	if len(resume) > 0 && !isUUID(resume[0]) {
+		confined, err := anyConfined()
+		if err != nil {
+			return fmt.Errorf("reading the confinement records: %w; refusing to resume by the search term %q", err, resume[0])
+		}
+		if confined {
+			return fmt.Errorf("--resume %q is a search term, which cannot be checked against the confinement records some sessions carry; resume by the session's UUID or with `clown resume`", resume[0])
+		}
+	}
+	return nil
 }
 
 // launchScopeIDs are the ids whose confinement record a launch must honour:
@@ -61,7 +148,8 @@ func applyAgentScopeRecord(flags *parsedFlags) int {
 // -p launch resumes without decideClaudeSession adopting it.
 func launchScopeIDs(flags parsedFlags) []string {
 	ids := lineageRecordIDs(flags.provider, flags.identity, flags.resumeHintID)
-	for _, id := range []string{claudeResumeValue(flags.forwarded), claudeSessionIDArg(flags.forwarded)} {
+	resume, sessionIDs := claudeConversationRefs(flags.forwarded)
+	for _, id := range append(resume, sessionIDs...) {
 		if id != "" && !slices.Contains(ids, id) {
 			ids = append(ids, id)
 		}

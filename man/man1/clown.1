@@ -173,12 +173,36 @@ or
 .Fl -resume Ar id
 are refused with
 .Fl -agent-scope .
-A session never recorded as confined (one launched unconfined, or
-confined by a clown older than this record) runs under the
+Every
+.Fl -resume
+and
+.Fl -session-id
+value is checked; repeated values that disagree are refused, and so is a
+.Fl -resume
+search term (not a session UUID) while any session is recorded as
+confined.
+.Fl -fork-session
+and
+.Fl -from-pr
+are refused for a confined session and under
+.Fl -agent-scope :
+the new session would carry no record.
+A session never recorded as confined runs under the
 .Ar spec
-given, if any;
-.Cm clown resume
-says when it resumes such a session unconfined.
+given, if any; a resume of one says it runs UNCONFINED.
+.Pp
+Not covered: a session started by
+.Cm clown agent-scope-run
+(a raw runner that neither checks nor records) or confined by a clown
+older than this record; an unconfined
+.Fl c
+or bare
+.Fl -resume
+picker launch, where claude picks a conversation clown cannot check and
+may continue a confined one (known gap); and any launch run with a
+different
+.Ev XDG_STATE_HOME ,
+which hides every record.
 .It Fl -skip-failed
 When any discovered HTTP MCP plugin server fails to start,
 .Nm

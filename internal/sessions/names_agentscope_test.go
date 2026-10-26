@@ -38,6 +38,37 @@ func TestAgentScopeOf(t *testing.T) {
 	}
 }
 
+// AnyAgentScope reports whether any session at all is recorded as confined:
+// a resume by search term cannot be checked against one id.
+func TestAnyAgentScope(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	if got, err := AnyAgentScope(); got || err != nil {
+		t.Fatalf("empty sidecar: %v, %v; want false", got, err)
+	}
+	if err := RecordSession(NameRecord{SessionID: "id-1", Name: "bozo"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := AnyAgentScope(); got || err != nil {
+		t.Fatalf("no confined record: %v, %v; want false", got, err)
+	}
+	if err := RecordSession(NameRecord{SessionID: "id-2", AgentScope: "/s/spec.json"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := AnyAgentScope(); !got || err != nil {
+		t.Fatalf("confined record: %v, %v; want true", got, err)
+	}
+}
+
+// A torn line that may carry a spec counts as confined: fail closed.
+func TestAnyAgentScopeFailsClosed(t *testing.T) {
+	state := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", state)
+	writeSidecar(t, filepath.Join(state, "clown", "session-names.jsonl"), `{"session_id":"id-1","agent_scope":"/s/sp`)
+	if got, err := AnyAgentScope(); !got && err == nil {
+		t.Fatal("a torn spec line read as nothing confined; want true or an error")
+	}
+}
+
 // AgentScopeOf gates confinement on resume, so it fails closed: a torn
 // line for the session that carries the spec key is an error, not "never
 // confined".

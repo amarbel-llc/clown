@@ -59,6 +59,30 @@ type NameRecord struct {
 	TS                 time.Time       `json:"ts"`
 }
 
+// AnyAgentScope reports whether any session at all is recorded as confined.
+// A launch that names its conversation only by a search term cannot be
+// checked against one id, so it is refused while this holds. It fails
+// closed: an unparseable line that carries the spec key is an error.
+func AnyAgentScope() (bool, error) {
+	var found bool
+	err := scanRecords(func(line string, rec *NameRecord) error {
+		if rec == nil {
+			if strings.Contains(line, `"agent_scope`) {
+				return fmt.Errorf("session-names sidecar holds an unparseable agent-scope record: %.200s", line)
+			}
+			return nil
+		}
+		if rec.AgentScope != "" {
+			found = true
+		}
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return found, nil
+}
+
 // AgentScopeOf returns the agent-scope spec path session id was last
 // launched confined under (clown#318): the LAST record for id that carries
 // one. A later record without one does not clear it, so a confined session

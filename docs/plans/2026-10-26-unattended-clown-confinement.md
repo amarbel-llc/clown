@@ -56,6 +56,10 @@ Unverified (I / not found):
   unit tests). spinclass side still to do: `sc resume` sets no
   `CLOWN_AGENT_SCOPE` and splices no `dontAsk` (R); the clown-side record
   now confines it anyway, but the dontAsk splice is spinclass's.
+  Outside #318: sessions started by the raw `clown agent-scope-run` (no
+  check, no record), sessions confined by an older clown, an unconfined
+  `-c` or bare `--resume` picker continuing a confined conversation (known
+  gap), and a changed `XDG_STATE_HOME` (hides every record).
 
 ## 2. Missing for a confined session to run for days unattended
 

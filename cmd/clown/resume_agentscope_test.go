@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -188,8 +189,8 @@ func TestRecordLaunchSessions(t *testing.T) {
 func TestResumeLaunchFlagsCarryTheAgentScope(t *testing.T) {
 	const id = "11111111-2222-3333-4444-555555555555"
 	f := resumeLaunchFlags(id, resumeArgs{}, "", "", "/s/spec.json")
-	if f.agentScopeSpec != "/s/spec.json" || !f.resumeCommand {
-		t.Fatalf("agentScopeSpec %q, resumeCommand %v; want the spec and a resume", f.agentScopeSpec, f.resumeCommand)
+	if f.agentScopeSpec != "/s/spec.json" {
+		t.Fatalf("agentScopeSpec %q; want the spec", f.agentScopeSpec)
 	}
 	argv := f.reexecArgv()
 	if n := strings.Count(strings.Join(argv, "\x00"), "--agent-scope"); n != 1 {
@@ -200,37 +201,139 @@ func TestResumeLaunchFlagsCarryTheAgentScope(t *testing.T) {
 	}
 }
 
-// The shared check reads the record whatever the entrypoint: a direct
-// --resume <id>, --session-id <id> or --naked launch of a confined session
-// is checked (here the recorded spec is gone, so each is refused rather
-// than run unconfined), and a confined launch that cannot know its claude
-// session is refused (clown#318).
-func TestApplyAgentScopeRecord(t *testing.T) {
-	const id = "11111111-2222-3333-4444-555555555555"
+const (
+	recordedID = "11111111-2222-3333-4444-555555555555"
+	otherID    = "66666666-7777-8888-9999-000000000000"
+)
+
+// confinementFixture records recordedID as confined under a spec that is
+// gone, so any launch the gate checks against it is refused rather than run
+// unconfined, and returns that spec path.
+func confinementFixture(t *testing.T) string {
+	t.Helper()
 	gone := filepath.Join(t.TempDir(), "gone.json")
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	if err := sessions.RecordSession(sessions.NameRecord{SessionID: id, AgentScope: gone}); err != nil {
+	if err := sessions.RecordSession(sessions.NameRecord{SessionID: recordedID, AgentScope: gone}); err != nil {
 		t.Fatal(err)
 	}
+	return gone
+}
+
+// validSpec writes a spec agentscope.LoadSpec accepts and returns its path.
+func validSpec(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "spec.json")
+	body := `{"version":1,"worktree":"` + filepath.Join(dir, "wt") + `","operator_home":"` + filepath.Join(dir, "home") + `"}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// The gate reads the record whatever the entrypoint and however the ids are
+// spelled, and fails closed where it cannot know the conversation
+// (clown#318).
+func TestConfinementGateRefuses(t *testing.T) {
+	gone := confinementFixture(t)
 	refused := map[string]parsedFlags{
-		"direct --resume":     {provider: "claude", forwarded: []string{"--resume", id}, resumeHintID: id},
-		"direct --session-id": {provider: "claude", forwarded: []string{"--session-id", id}, resumeHintID: id},
-		"provided identity":   {provider: "claude", identity: sessionIdentity{Key: id, Provided: true}, forwarded: []string{"--session-id", id}, resumeHintID: id},
-		"--naked --resume":    {provider: "claude", naked: true, forwarded: []string{"--resume", id}},
-		"confined -c":         {provider: "claude", forwarded: []string{"-c"}, agentScopeSpec: gone},
-		"confined -p, no id":  {provider: "claude", forwarded: []string{"-p", "hi"}, agentScopeSpec: gone},
-		"confined picker":     {provider: "claude", forwarded: []string{"--resume"}, agentScopeSpec: gone},
+		"direct --resume":                   {provider: "claude", forwarded: []string{"--resume", recordedID}, resumeHintID: recordedID},
+		"direct --session-id":               {provider: "claude", forwarded: []string{"--session-id", recordedID}, resumeHintID: recordedID},
+		"provided identity":                 {provider: "claude", identity: sessionIdentity{Key: recordedID, Provided: true}, forwarded: []string{"--session-id", recordedID}, resumeHintID: recordedID},
+		"--naked --resume":                  {provider: "claude", naked: true, forwarded: []string{"--resume", recordedID}},
+		"recorded id in a second --resume":  {provider: "claude", forwarded: []string{"--resume", otherID, "-r", recordedID}, resumeHintID: otherID},
+		"recorded id in --resume=":          {provider: "claude", forwarded: []string{"--resume=" + recordedID}, resumeHintID: recordedID},
+		"disagreeing --resume values":       {provider: "claude", forwarded: []string{"--resume", otherID, "--resume", "77777777-7777-7777-7777-777777777777"}, resumeHintID: otherID},
+		"user --resume before resume's":     {provider: "claude", forwarded: resumeLaunchFlags(recordedID, resumeArgs{forwarded: []string{"--resume", otherID}}, "", "", "").forwarded, resumeHintID: otherID},
+		"disagreeing --session-id values":   {provider: "claude", forwarded: []string{"--session-id", otherID, "--session-id=" + recordedID}, resumeHintID: otherID},
+		"search term while any is confined": {provider: "claude", forwarded: []string{"--resume", "my old chat"}, resumeHintID: "my old chat"},
+		"fork of a confined session":        {provider: "claude", forwarded: []string{"--resume", recordedID, "--fork-session"}, resumeHintID: recordedID},
+		"confined fork":                     {provider: "claude", forwarded: []string{"--resume", otherID, "--fork-session"}, resumeHintID: otherID, agentScopeSpec: gone},
+		"confined --from-pr":                {provider: "claude", forwarded: []string{"--from-pr", "12"}, agentScopeSpec: gone},
+		"--from-pr on a recorded identity":  {provider: "claude", identity: sessionIdentity{Key: recordedID, Provided: true}, forwarded: []string{"--from-pr=12"}},
+		"confined -c":                       {provider: "claude", forwarded: []string{"-c"}, agentScopeSpec: gone},
+		"confined -p, no id":                {provider: "claude", forwarded: []string{"-p", "hi"}, agentScopeSpec: gone},
+		"confined picker":                   {provider: "claude", forwarded: []string{"--resume"}, agentScopeSpec: gone},
 	}
 	for name, flags := range refused {
 		t.Run(name, func(t *testing.T) {
-			if code := applyAgentScopeRecord(&flags); code == 0 {
+			if err := runConfinementGate(&flags, io.Discard); err == nil {
 				t.Errorf("launch allowed with agentScopeSpec %q; want it refused", flags.agentScopeSpec)
 			}
 		})
 	}
-	other := parsedFlags{provider: "claude", forwarded: []string{"--session-id", "66666666-7777-8888-9999-000000000000"}, resumeHintID: "66666666-7777-8888-9999-000000000000"}
-	if code := applyAgentScopeRecord(&other); code != 0 || other.agentScopeSpec != "" {
-		t.Errorf("unrecorded session: code %d spec %q; want it to run unconfined", code, other.agentScopeSpec)
+}
+
+func TestConfinementGateAllows(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	allowed := map[string]parsedFlags{
+		"unrecorded session":            {provider: "claude", forwarded: []string{"--session-id", otherID}, resumeHintID: otherID},
+		"repeated, agreeing --resume":   {provider: "claude", forwarded: []string{"--resume", otherID, "--resume", otherID}, resumeHintID: otherID},
+		"search term, nothing confined": {provider: "claude", forwarded: []string{"--resume", "my old chat"}, resumeHintID: "my old chat"},
+		"fork, nothing confined":        {provider: "claude", forwarded: []string{"--resume", otherID, "--fork-session"}, resumeHintID: otherID},
+	}
+	for name, flags := range allowed {
+		t.Run(name, func(t *testing.T) {
+			if err := runConfinementGate(&flags, io.Discard); err != nil || flags.agentScopeSpec != "" {
+				t.Errorf("err %v, spec %q; want an unconfined launch", err, flags.agentScopeSpec)
+			}
+		})
+	}
+}
+
+// A direct --resume of a session with no record says it runs UNCONFINED,
+// as `clown resume` does.
+func TestConfinementGateUnconfinedNotice(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	for name, flags := range map[string]parsedFlags{
+		"clown resume":    {provider: "claude", forwarded: resumeLaunchFlags(otherID, resumeArgs{}, "", "", "").forwarded, resumeHintID: otherID},
+		"direct --resume": {provider: "claude", forwarded: []string{"--resume", otherID}, resumeHintID: otherID},
+	} {
+		var w bytes.Buffer
+		if err := runConfinementGate(&flags, &w); err != nil || !strings.Contains(w.String(), "UNCONFINED") {
+			t.Errorf("%s: err %v, notice %q; want the UNCONFINED notice", name, err, w.String())
+		}
+	}
+}
+
+// The gate records a confined launch before it starts, under its
+// conversation id, so a later launch finds it even if this one dies early.
+func TestConfinementGateRecordsAConfinedLaunch(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	spec := validSpec(t)
+	flags := parsedFlags{provider: "claude", forwarded: []string{"--session-id", otherID}, resumeHintID: otherID, agentScopeSpec: spec}
+	if err := runConfinementGate(&flags, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := sessions.AgentScopeOf(otherID)
+	if err != nil || !ok || got != flags.agentScopeSpec {
+		t.Fatalf("record %q, %v, %v; want %q", got, ok, err, flags.agentScopeSpec)
+	}
+	// And a later plain launch of that session is confined again.
+	later := parsedFlags{provider: "claude", forwarded: []string{"--resume", otherID}, resumeHintID: otherID}
+	if err := runConfinementGate(&later, io.Discard); err != nil || later.agentScopeSpec != flags.agentScopeSpec {
+		t.Errorf("later launch: err %v, spec %q; want the recorded spec", err, later.agentScopeSpec)
+	}
+}
+
+// runWithFlags runs the gate: a recorded confined session whose spec is gone
+// is refused by the real launch path. Deleting the call makes this launch
+// (a --print-launch-plan, so nothing starts) succeed instead.
+func TestRunWithFlagsRunsTheConfinementGate(t *testing.T) {
+	confinementFixture(t)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Chdir(t.TempDir())
+	called := false
+	orig := confinementGate
+	confinementGate = func(f *parsedFlags, w io.Writer) error {
+		called = true
+		return orig(f, w)
+	}
+	t.Cleanup(func() { confinementGate = orig })
+	flags := parsedFlags{provider: "claude", providerExplicit: true, printLaunchPlan: true, noAttach: true, forwarded: []string{"--resume", recordedID}}
+	if code := runWithFlags(flags); code != 1 || !called {
+		t.Fatalf("runWithFlags = %d, gate called %v; want the gate to refuse (1)", code, called)
 	}
 }
 

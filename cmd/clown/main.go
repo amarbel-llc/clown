@@ -771,8 +771,9 @@ func runWithFlags(flags parsedFlags) int {
 	// clown#318: a session that ran confined runs confined again, whatever the
 	// entrypoint, or the launch is refused; checked here, once the session ids
 	// are final and before anything is written or started.
-	if code := applyAgentScopeRecord(&flags); code != 0 {
-		return code
+	if err := confinementGate(&flags, os.Stderr); err != nil {
+		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
+		return 1
 	}
 
 	// FDR 0022 slice 2 (clown#295): refuse a launch that would change a
@@ -970,7 +971,7 @@ func runWithFlags(flags parsedFlags) int {
 		ids := lineageRecordIDs(flags.provider, flags.identity, flags.resumeHintID)
 		if flags.agentScopeSpec != "" {
 			// A confined launch also records the conversation id it runs
-			// under (applyAgentScopeRecord made sure there is one).
+			// under (runConfinementGate made sure there is one).
 			if id := confinedConversationID(flags); !slices.Contains(ids, id) {
 				ids = append(ids, id)
 			}
@@ -3239,9 +3240,6 @@ type parsedFlags struct {
 	// (clown#244, FDR 0020): when set, claude runs in a transient systemd
 	// user service (the agent scope) and clown stays in the frontend scope.
 	agentScopeSpec string
-	// resumeCommand marks a launch built by `clown resume` (resumeLaunchFlags),
-	// which says when it resumes a session with no confinement record.
-	resumeCommand bool
 	// stagingRootPath is the per-launch staging root (set in runWithFlags),
 	// bound read-only into the agent scope so claude can read clown's
 	// generated plugin dirs and prompt files.

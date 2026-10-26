@@ -573,7 +573,10 @@ Built (`internal/agentscope`, `cmd/clown/agentscope.go`):
   `CLOWN_SYSTEMD_RUN`/`CLOWN_SYSTEMCTL`): systemd-run serializes properties
   client-side, so it must match the running manager.
 - `clown agent-scope-run --spec <path> -- argv` runs any command through the
-  same launcher; `just verify-agent-scope` (bats tag `agent_scope`, host-only)
+  same launcher. It is a raw runner, not a session launcher: it neither checks
+  nor writes the confinement record (clown#318), so a claude conversation it
+  starts is unrecorded and a later `clown resume` of it runs unconfined.
+  Confined sessions it starts are outside #318. `just verify-agent-scope` (bats tag `agent_scope`, host-only)
   uses it to check, against real units: home, bus, display, posh, ptys and
   other pids unreachable from inside; the result's unit and cgroup; the
   frontend and piggy-agent outside the cgroup; the unit gone after exit; the

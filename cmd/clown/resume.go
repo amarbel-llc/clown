@@ -229,7 +229,6 @@ func resumeLaunchFlags(id string, args resumeArgs, requested, recorded, agentSco
 		mcpCollapse:      args.mcpCollapse,
 		noAttach:         args.noAttach,
 		agentScopeSpec:   agentScope,
-		resumeCommand:    true,
 		forwarded:        append(slices.Clone(args.forwarded), "--resume", id),
 	}
 	switch {
@@ -552,9 +551,11 @@ Confinement (all modes):
   path for the session. Resuming that session relaunches it confined
   under the same spec. A spec that is gone or no longer loads, or an
   --agent-scope naming a different spec, refuses the resume; it is never
-  resumed unconfined. A session with no confinement record (never
-  confined, or confined by an older clown) resumes unconfined, with a
-  notice, unless --agent-scope <spec> confines it.
+  resumed unconfined. A session with no confinement record resumes
+  unconfined, with a notice, unless --agent-scope <spec> confines it.
+  Without a record: sessions started by "clown agent-scope-run" or
+  confined by an older clown, and every session when XDG_STATE_HOME
+  points elsewhere. --fork-session of a confined session is refused.
 
 Profiles (all modes):
   A launch records the named profile it applied and that profile's
