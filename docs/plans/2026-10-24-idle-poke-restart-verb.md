@@ -260,6 +260,39 @@ As built, beyond the original note:
 - An idle poke waits for a running `now` (its close-self-run is delayed by
   up to the preflight plus the countdown).
 
+After review of 6183583/1a1157a:
+
+- close-self-run is waited for at most 60 s (`closeSelfRunWaitBound`). It is
+  left running at the bound, not killed: it may be a close's teardown,
+  which has its own session so it outlives the frontend. While it runs no
+  second one starts. A hung close-self-run therefore delays a `now` by at
+  most 60 s instead of wedging it ("already underway" forever).
+- `inFlight` is cleared by a deferred store on every exit of the `now`
+  goroutine, before `mu` is released. `sync.Mutex` hands the lock to a
+  waiter that has waited over 1 ms, and the idle listener runs one poke at
+  a time, so pokes cannot starve a waiting `now`.
+- `triggerNow` re-checks `restartUnderway` after taking `inFlight` (only its
+  holder stores a plan), so an accepted `now` is never answered OK and then
+  ignored.
+- The refusal reads "a restart or restart check is already underway ...;
+  ask again if the session does not relaunch", since an in-flight check may
+  end in none or a cancel.
+- A frontend exiting with a check in flight or a request queued logs it in
+  close-self-run.log (`idleRunner.noteExit`).
+
+## Limits accepted for `--when now`
+
+- `clown restart --when now` exiting 0 means accepted. A preflight failure
+  or a cancel after that is only in close-self-run.log; spinclass reports
+  its own refusals.
+- A cancel (busy re-check, viewer, profile refusal) does not clear
+  spinclass's RestartingAt stamp, so a consumed-then-cancelled restart
+  refuses a close for about 2 minutes. A forged `now` (same uid, outside an
+  agent unit) can cause this by consuming an authorized `idle` request
+  mid-turn. Same class as the forged idle poke.
+- The 30 s countdown, posh modal included, is shown even for a restart that
+  is then cancelled.
+
 ### Semantics
 
 - `clown restart --session K --when now --reason R` still only asks: it

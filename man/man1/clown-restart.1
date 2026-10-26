@@ -95,8 +95,13 @@ running
 runs
 .Ic spinclass restart-preflight
 itself, in the background: the command returns as soon as the frontend has
-accepted the request, before the preflight answers, and a refusal by the
-preflight after that is spinclass's to report.
+accepted the request, before the preflight answers.
+Exit 0 means accepted, not restarted: a refusal by the preflight after that
+is spinclass's to report, and whatever the frontend decides afterwards (a
+failed or timed-out preflight, a cancel) is only in
+.Pa close-self-run.log .
+A frontend that exits with such a check still in flight, or with a request
+still queued, logs a line saying so there.
 The verdict decides exactly as at an idle transition: only
 .Li restart
 proceeds, and anything else drops the request and leaves the session
@@ -114,8 +119,14 @@ arriving while a preflight or restart is in flight (an idle transition's,
 countdown included, or that of another
 .Cm now )
 is refused with
-.Dq a restart is already underway ,
+.Dq a restart or restart check is already underway ,
 as is one while a restart has stopped the provider.
+The idle transition's
+.Ic spinclass close-self-run
+is waited for at most 60 seconds (it is left running, not killed, since it
+may be a close's teardown), so a hung one delays a
+.Cm now
+by at most that, and no second one starts while it runs.
 .Pp
 Everything after the verdict is the restart below, with one difference:
 under a verdict whose
@@ -133,6 +144,20 @@ a turn start cancels the restart as for
 the request's own
 .Cm now
 only made the frontend ask sooner.
+.Pp
+The 30 second countdown, posh modal included, is shown for every
+.Li restart
+verdict, also for one the countdown or the busy re-check then cancels.
+A cancel does not clear spinclass's record that it consumed the restart:
+spinclass refuses a close for about two minutes after it consumed one.
+A forged
+.Cm now
+from a process running as the session's user outside an agent unit can
+therefore make the frontend consume an authorized
+.Cm idle
+request mid-turn (the busy cancel then drops it, and its requester must ask
+again) and so block a close for that time; this is the same class of harm
+as the forged idle poke above.
 .Ss The restart
 On a
 .Li restart
@@ -228,7 +253,7 @@ runs nothing on an idle poke (no close, no second preflight) and refuses a
 second
 .Nm clown restart
 with
-.Dq a restart is already underway .
+.Dq a restart or restart check is already underway .
 Immediately before the exec (after the serve-socket wait) it asks
 .Ic spinclass restart-preflight --peek
 (read-only, with
@@ -361,7 +386,7 @@ The trigger is off for this claude launch;
 .Ar reason
 names the gate, or says the launch's claude conversation id is not its
 principal.
-.It Li a restart is already underway for this session ...
+.It Li a restart or restart check is already underway for this session ...
 A restart has stopped, or is stopping, the provider; or, for
 .Cm now ,
 a preflight or restart is in flight.
