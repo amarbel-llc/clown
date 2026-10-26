@@ -192,8 +192,36 @@ func TestBuiltinCanarySpinclassDropsMoxyWhole(t *testing.T) {
 		t.Errorf("shape = %s/%s/%s, want canary-grit's", p.Provider, p.Backend, p.Model)
 	}
 	for k, v := range grit.Env {
+		if k == "CLOWN_DISALLOWED_TOOLS" {
+			v += ",Agent" // no moxy, so no search tool for a subagent (clown#331)
+		}
 		if p.Env[k] != v {
 			t.Errorf("env %s = %q, want canary-grit's %q", k, p.Env[k], v)
+		}
+	}
+}
+
+// clown#331: a template with no moxy gives a subagent no search tool (the
+// Explore->Discover redirect names moxy's folio and rg), and claude refuses a
+// subagent whose tools resolve to nothing, so the Agent tool is disallowed
+// there; a template that keeps moxy keeps Agent. Changing this changes those
+// profiles' digests, so a session pinned to the old digest is refused on resume
+// and restart until it is re-pinned.
+func TestBuiltinTemplatesWithoutMoxyDisallowTheAgentTool(t *testing.T) {
+	ps, err := Builtin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range ps {
+		switch p.Name {
+		case "reviewer", "porter", "canary", "canary-grit", "canary-spinclass", "worker":
+		default:
+			continue
+		}
+		keepsMoxy := slices.Contains(p.ContextServers, "moxy/moxy")
+		disallowed := slices.Contains(strings.Split(p.Env["CLOWN_DISALLOWED_TOOLS"], ","), "Agent")
+		if disallowed == keepsMoxy {
+			t.Errorf("%s: keeps moxy %v but disallows Agent %v; want Agent disallowed exactly when moxy is dropped", p.Name, keepsMoxy, disallowed)
 		}
 	}
 }
