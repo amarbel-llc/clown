@@ -76,9 +76,13 @@ Unverified (I / not found):
 2. **Credentials.** Read-only OAuth refresh unproven; no expiry path; the
    frontend credential-injection proxy is a design only; push/sign needs the
    operator's card (every act prompts), so an unattended session cannot push.
-3. **Hang and resource limits.** No `WatchdogSec`, `RuntimeMaxSec`,
-   `MemoryMax`, `TasksMax`, `CPUQuota` in `unit.go`; a hung claude sends no
-   Stop hook so idle self-close never fires (I); nothing restarts a hung unit.
+3. **Hang and resource limits.** Every agent unit now carries
+   `MemoryHigh=6G`, `MemoryMax=8G`, `MemorySwapMax=2G`, `TasksMax=4096`,
+   `CPUQuota=400%`, `IOWeight=50`, `OOMPolicy=stop`, `Restart=no`, and an
+   unattended one (`CLOWN_UNATTENDED=1`) `RuntimeMaxSec=604800` (#320, FDR
+   0020; V: host agent_scope.bats read the cgroup files and `systemctl
+   show`). No `WatchdogSec`; a hung claude sends no Stop hook so idle
+   self-close never fires (I); nothing restarts a hung unit (ruled).
 4. **Frontend death.** A SIGKILLed frontend likely leaves the unit running
    (I). A host reboot or logout ends the transient unit and nothing relaunches
    it; linger state on flic: not found.
@@ -100,8 +104,8 @@ Unverified (I / not found):
    test); fix if not. #318: clown side done; spinclass side open.
 3. Test and fix the frontend-SIGKILL case (`BindsTo`/`RuntimeMaxSec` or a
    reaper). #319.
-4. Add unit resource limits and a wall clock to `properties()`. #320
-   (juggler has a `RuntimeMaxSec` precedent).
+4. Add unit resource limits and a wall clock to `properties()`. #320:
+   done (values per the 2026-10-26 ruling; wall clock unattended only).
 5. Log/state retention caps (listed in section 2.5). #321.
 6. Live check, in one confined session, of idle self-close, monitors, serve
    socket, statsd relay and the permission counters (#287, #269 cited as built
@@ -119,9 +123,9 @@ Unverified (I / not found):
 - Whether unattended sessions may push/sign at all (piggy prompts every act).
   Ruled 2026-10-26, in part: with the card absent there is no fallback to the
   inherited ssh-agent (#324).
-- Resource limit values, wall clock, and restart-on-failure policy (#320;
-  restart-on-failure: hung-session recovery stays operator-gated, ruled
-  2026-10-26, see the restart page).
+- Resource limit values, wall clock, and restart-on-failure policy: ruled
+  2026-10-26 and implemented (#320); hung-session recovery stays
+  operator-gated (see the restart page). No per-session override exists.
 - Linger / reboot policy on flic.
 - Whether `clown resume` of a confined session must re-confine: ruled yes
   (operator go, 2026-10-26); clown side done (#318).

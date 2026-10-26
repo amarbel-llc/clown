@@ -599,8 +599,13 @@ refused without
 .Fl -clown-attach-id
 and is not for use by hand.
 .Cm clown agent-scope-run
-reads no marker and applies no
-.Cm dontAsk .
+applies no
+.Cm dontAsk ;
+it reads the marker only for the agent unit's wall clock.
+Under an agent scope the marker also gives the unit a 7-day
+.Cm RuntimeMaxSec ;
+every agent unit carries the resource limits listed in FDR 0020
+(clown#320).
 Under
 .Cm dontAsk
 claude fires no PermissionRequest hook (observed under

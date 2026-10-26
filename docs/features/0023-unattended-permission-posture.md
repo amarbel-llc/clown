@@ -94,8 +94,9 @@ launch has no way to ask for it.
     inner's own restart (which keeps the attach id) carries it again (R,
     tests with the marker stripped from the inner). B5 item 8 checks it
     live.
-  - `clown agent-scope-run` is a raw runner: it runs its argv as given,
-    reads no marker and applies no `dontAsk`. A confined unattended session
+  - `clown agent-scope-run` is a raw runner: it runs its argv as given and
+    applies no `dontAsk`; it reads the marker only for the unit's wall
+    clock (FDR 0020, clown#320). A confined unattended session
     must be launched through clown's normal launch with
     `CLOWN_AGENT_SCOPE`/`--agent-scope`; spinclass does that (R: its spawn
     code sets `CLOWN_AGENT_SCOPE` and never calls `agent-scope-run`, read

@@ -63,6 +63,13 @@ unconfined fallback.
 | `BindPaths=` | the worktree; spec `binds_rw[]`; each spec `sockets[].path` as a single inode | What the unit must see (spinclass's list). | works for the worktree and the ssh-agent socket |
 | `BindReadOnlyPaths=` | spec `binds_ro[]` (e.g. the madder store) | | |
 | `InaccessiblePaths=` | spec `deny_paths[]` | Belt and braces: ProtectHome already hides `/run/user`. | |
+| `MemoryHigh=`, `MemoryMax=`, `MemorySwapMax=` | `6G`, `8G`, `2G` | Resource limits (clown#320, operator ruling 2026-10-26), on every agent unit, rendered clown-side (`resourceLimits` in `internal/agentscope/unit.go`): no spec field (a new one would break older clowns, whose spec decoder refuses unknown fields), and no override. High throttles and reclaims before Max OOM-kills. | works: cgroup `memory.high` 6442450944, `memory.max` 8589934592, `memory.swap.max` 2147483648 (host agent_scope.bats, 2026-10-26) |
+| `TasksMax=` | `4096` | Fork-bomb and runaway-subagent ceiling. | works: `pids.max` 4096 |
+| `CPUQuota=` | `400%` | At most four CPUs' worth. | works: `cpu.max` 400000 100000 |
+| `IOWeight=` | `50` | Half the default share under IO contention. | works: `io.weight` default 50 |
+| `OOMPolicy=` | `stop` | An OOM kill inside stops the whole unit rather than leaving a partial session. | works (shown by systemctl) |
+| `Restart=` | `no` | A stopped or killed unit stays down; recovering a hung session is the operator's (ruled 2026-10-26). Pinned explicitly although it is the transient default. | works |
+| `RuntimeMaxSec=` | `604800` (7 days), **unattended launches only**; none for interactive ones | Wall clock for a session nobody watches. "Unattended" is clown's `CLOWN_UNATTENDED=1` marker (FDR 0023), read by the frontend that launches the unit (`unattendedValue()`, so its [attach] carrier counts too); the marker itself never enters the unit. It is the backstop behind the frontend dead-man (#319). `clown agent-scope-run` reads the same marker, so its units get the wall clock under it too, although it applies no `dontAsk`. | works: `RuntimeMaxUSec` `1w` with the marker, `infinity` without |
 | `UnsetEnvironment=` | every key of `systemctl --user show-environment` not on the allowlist below | The user manager injects its own environment into every unit, including `DBUS_SESSION_BUS_ADDRESS` and `XDG_RUNTIME_DIR` (observed). | works |
 | `--slice=` | `clown-agent.slice` | Stable cgroup prefix for the piggy, posh and spinclass checks. | works |
 | `--expand-environment=no` | | systemd otherwise expands `$` and `$$` in argv (observed: `$$` became `$`). | works |
