@@ -653,16 +653,20 @@ func (m sessionPickerModel) Init() tea.Cmd { return nil }
 func (m sessionPickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		switch msg.String() {
-		case "enter":
-			if i, ok := m.list.SelectedItem().(sessionItem); ok {
-				s := i.s
-				m.chosen = &s
+		// As pickerModel: the filter gets q, enter and esc while it is in
+		// use (clown#309).
+		if k := msg.String(); k == "ctrl+c" || pickerKeyIsOurs(m.list.FilterState(), k) {
+			switch k {
+			case "enter":
+				if i, ok := m.list.SelectedItem().(sessionItem); ok {
+					s := i.s
+					m.chosen = &s
+				}
+				return m, tea.Quit
+			case "q", "ctrl+c", "esc":
+				m.quit = true
+				return m, tea.Quit
 			}
-			return m, tea.Quit
-		case "q", "ctrl+c", "esc":
-			m.quit = true
-			return m, tea.Quit
 		}
 	case tea.WindowSizeMsg:
 		m.list.SetWidth(msg.Width)

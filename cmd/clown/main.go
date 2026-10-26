@@ -222,20 +222,24 @@ func (m pickerModel) Init() tea.Cmd { return nil }
 func (m pickerModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		switch msg.String() {
-		case "enter":
-			if i, ok := m.list.SelectedItem().(profileItem); ok {
-				if i.add {
-					m.addRequested = true
-				} else {
-					p := i.p
-					m.chosen = &p
+		// While a filter is typed, q is text, enter applies it and esc
+		// clears it, so those reach the list (clown#309); ctrl+c always quits.
+		if k := msg.String(); k == "ctrl+c" || pickerKeyIsOurs(m.list.FilterState(), k) {
+			switch k {
+			case "enter":
+				if i, ok := m.list.SelectedItem().(profileItem); ok {
+					if i.add {
+						m.addRequested = true
+					} else {
+						p := i.p
+						m.chosen = &p
+					}
 				}
+				return m, tea.Quit
+			case "q", "ctrl+c", "esc":
+				m.quit = true
+				return m, tea.Quit
 			}
-			return m, tea.Quit
-		case "q", "ctrl+c", "esc":
-			m.quit = true
-			return m, tea.Quit
 		}
 	case tea.WindowSizeMsg:
 		m.list.SetWidth(msg.Width)

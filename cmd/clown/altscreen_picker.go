@@ -3,8 +3,23 @@ package main
 import (
 	"fmt"
 
+	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+// pickerKeyIsOurs reports whether a filterable picker acts on key itself
+// rather than leaving it to the list: never while a filter is being typed
+// (q is text, enter applies the filter), and esc only with no filter applied
+// (otherwise it clears the filter), as openRouterPickerModel does (clown#309).
+func pickerKeyIsOurs(state list.FilterState, key string) bool {
+	switch {
+	case state == list.Filtering:
+		return false
+	case key == "esc":
+		return state == list.Unfiltered
+	}
+	return true
+}
 
 // runAltScreenPicker runs a bubbletea picker model on the alternate screen
 // and returns the model it ended with (clown#200). opts are added after
