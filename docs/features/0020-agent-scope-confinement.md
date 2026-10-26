@@ -227,8 +227,13 @@ nix versions; a missed one leaks. Dropping is enough because the unit's builds
 and substitution go through the host's nix-daemon (socket bound in), which
 reads its own configuration. For the same reason the spec may not set these
 keys in `env{}`, and may not bind the operator's `~/.config/nix` (or an
-ancestor of it). The agent home under the worktree has no `nix.conf` unless
-the agent writes one itself. `/etc/nix/nix.conf` stays visible read-only (it
+ancestor of it). The agent home under the worktree gets one `nix.conf`, seeded
+by `stageAgentHome` if missing (`<agent-home>/.config/nix/nix.conf`, where nix
+looks because `HOME` is the agent home and `XDG_CONFIG_HOME` is unset): exactly
+`flake-registry =`, `download-attempts = 1`, `connect-timeout = 5`, no secrets.
+The global flake registry is not on the egress allowlist, and fetching it
+stalled every `nix develop` in a unit. An existing file is kept, so a restart
+relaunches into whatever is there. `/etc/nix/nix.conf` stays visible read-only (it
 is outside `/home` and readable by any local user anyway); a token placed
 there is not protected by this boundary.
 
@@ -523,7 +528,12 @@ Built (`internal/agentscope`, `cmd/clown/agentscope.go`):
   hook state, moxy's hook log dir, the session's own troupe password file
   read-only (for clown-hook-tee's `troupe muc send`, with the forwarded XMPP
   port), the frontend monitor sockets, and the staging root read-only when it
-  is outside the worktree.
+  is outside the worktree. The agent home also gets the seeded `nix.conf`
+  above (no flake registry fetch, one download attempt, a 5 s connect
+  timeout). Not built, only noted: the operator is considering a
+  frontend-side prefetch of a flake's locked inputs at spawn time (host
+  network, daemon store) so the unit evaluates offline; the unit's nix
+  settings would meet it here, in this file.
 - No ringmaster or troupe directory is bound (2026-10-22). The runtime
   `troupe/` dir (every session's `accounts/<uuid>.pass` and socket), the
   state `troupe/` dir (every account's cursors), and the ringmaster runtime

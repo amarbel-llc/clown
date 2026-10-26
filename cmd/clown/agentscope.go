@@ -440,6 +440,10 @@ func stageAgentHome(spec agentscope.Spec, agentHome, cwd string) (plumbingBinds,
 		}
 	}
 
+	if err := seedNixConf(agentHome); err != nil {
+		return p, err
+	}
+
 	creds := filepath.Join(opHome, ".claude", ".credentials.json")
 	if _, err := os.Stat(creds); err == nil {
 		dst := filepath.Join(cfg, ".credentials.json")
@@ -501,6 +505,36 @@ func stageAgentHome(spec agentscope.Spec, agentHome, cwd string) (plumbingBinds,
 		filepath.Join(state, "nix", "profiles"),
 	)
 	return p, nil
+}
+
+// agentHomeNixConf is the unit's user nix.conf. HOME is the agent-home and
+// XDG_CONFIG_HOME is unset, so nix reads <agent-home>/.config/nix/nix.conf;
+// NIX_CONFIG and the other nix config variables are scrubbed and refused
+// (clown#272), so a file is the only route. The global flake registry is not on
+// the egress allowlist, and fetching it stalled every `nix develop` in a unit:
+// no registry, one download attempt, a short connect timeout.
+const agentHomeNixConf = "flake-registry =\ndownload-attempts = 1\nconnect-timeout = 5\n"
+
+// seedNixConf writes agentHomeNixConf unless the file exists, so an existing
+// agent-home gets it on its next launch (a restart included) and anything put
+// there since is kept.
+func seedNixConf(agentHome string) error {
+	dir := filepath.Join(agentHome, ".config", "nix")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(filepath.Join(dir, "nix.conf"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if errors.Is(err, os.ErrExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if _, err := f.WriteString(agentHomeNixConf); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 // claudeProjectSlug is claude's per-project directory name under
