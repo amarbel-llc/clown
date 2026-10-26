@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -236,6 +237,45 @@ func TestRestartRecordsThePreviousProviderPIDAndTime(t *testing.T) {
 	plan := pendingRelaunch.Load()
 	if plan == nil || plan.prevPID != 4242 || plan.at.Before(before) {
 		t.Fatalf("plan %+v", plan)
+	}
+}
+
+// Review findings: an agent-scope launch reports its pid through the chained
+// hook (status file first, then the announcement), and a wake still being
+// written is given a bounded moment before the frontend exits.
+func TestChainProviderStartedRunsThePreviousHookThenRecordsThePID(t *testing.T) {
+	resetRestartWake(t)
+	providerPID.Store(0)
+	t.Cleanup(func() { providerPID.Store(0) })
+	var order []string
+	hook := chainProviderStarted(func(pid int) { order = append(order, "status:"+strconv.Itoa(pid)) }, "p")
+	hook(321)
+	if len(order) != 1 || order[0] != "status:321" || providerPID.Load() != 321 {
+		t.Errorf("order %v, provider pid %d", order, providerPID.Load())
+	}
+	chainProviderStarted(nil, "p")(322) // no previous hook: still records
+	if providerPID.Load() != 322 {
+		t.Error("a nil previous hook must not stop the pid being recorded")
+	}
+}
+
+func TestWaitForRestartWakeIsBoundedAndWaitsForASend(t *testing.T) {
+	resetRestartWake(t)
+	restartFactsOfThisLaunch = restartFacts{relaunched: true, reason: "r"}
+	release := make(chan struct{})
+	finished := make(chan struct{})
+	announceRestarted("p", 5, func(string, string) error { <-release; close(finished); return nil }, func(string, ...any) {}, time.Now)
+	start := time.Now()
+	waitForRestartWake(100 * time.Millisecond)
+	if d := time.Since(start); d < 90*time.Millisecond || d > 3*time.Second {
+		t.Errorf("a stuck send: waited %v, want about the bound", d)
+	}
+	close(release)
+	<-finished
+	start = time.Now()
+	waitForRestartWake(5 * time.Second)
+	if time.Since(start) > 2*time.Second {
+		t.Error("with nothing in flight the wait must return at once")
 	}
 }
 

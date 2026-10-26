@@ -83,8 +83,35 @@ func restartWakeMessage(f restartFacts, newPID int, now time.Time) string {
 	if !f.at.IsZero() && now.After(f.at) {
 		fmt.Fprintf(&b, "; the restart took %s", now.Sub(f.at).Round(time.Second))
 	}
-	b.WriteString(". Your conversation, principal and tools carry on; your background tasks and monitors were started afresh.")
+	b.WriteString(" (sent when the new provider process started). Your conversation and principal are the same; your background tasks and monitors were started afresh.")
 	return b.String()
+}
+
+// wakeWG tracks sends in flight, so the frontend can give one a moment to
+// finish before it exits or execs (waitForRestartWake): otherwise a provider
+// that dies at once could leave the wake's ringmaster job started and never
+// finished.
+var wakeWG sync.WaitGroup
+
+// waitForRestartWake waits up to d for a wake being sent.
+func waitForRestartWake(d time.Duration) {
+	done := make(chan struct{})
+	go func() { wakeWG.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(d):
+	}
+}
+
+// chainProviderStarted runs the pid-reporting hooks of an agent-scope launch
+// (the status file's) and then the restart announcement.
+func chainProviderStarted(prev func(int), principal string) func(int) {
+	return func(pid int) {
+		if prev != nil {
+			prev(pid)
+		}
+		noteProviderStarted(principal, pid)
+	}
 }
 
 // wakeSender delivers one wake message to the session whose key is
@@ -135,7 +162,9 @@ func announceRestarted(principal string, newPID int, send wakeSender, logf func(
 	}
 	announceOnce.Do(func() {
 		msg := restartWakeMessage(f, newPID, now())
+		wakeWG.Add(1)
 		go func() {
+			defer wakeWG.Done()
 			if err := send(principal, msg); err != nil {
 				logf("restart wake to %s not delivered: %v", principal, err)
 				countMetric(metricRestartWakeFailed)

@@ -404,7 +404,9 @@ restart's relaunch (with
 and
 .Ev CLOWN_RESTARTED_AT ,
 the stopped provider's pid and when the restart began, read and unset the same
-way), so setting it by hand makes
+way), so setting it by hand also writes that wake to the session named by
+.Ev CLOWN_SESSION_ID
+and makes
 .Nm clown
 run the peek above before registering and minting, and adds the
 .Dq restarted: Ar reason

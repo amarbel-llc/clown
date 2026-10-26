@@ -525,6 +525,9 @@ func runWithFlags(flags parsedFlags) int {
 	// A frontend relaunched by a restart (spinclass#419) reads its notice
 	// before it starts any child, so none inherits it.
 	restartNotice, restartRelaunched := consumeRestartedNotice()
+	// A restart's wake still being written when this frontend exits (a
+	// provider that died at once) gets a few seconds to finish.
+	defer waitForRestartWake(3 * time.Second)
 	if restartRelaunched && !flags.printLaunchPlan {
 		countMetric(metricRelaunched)
 	}

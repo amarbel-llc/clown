@@ -49,11 +49,7 @@ func runInAgentScope(req agentScopeRequest, logger *slog.Logger) int {
 	wireAgentScopeStatus(&launch, req.status, req.onStarted)
 	// The unit's MainPID is this session's provider pid; a restart's
 	// relaunch tells its session so (clown#329).
-	statusActive := launch.OnActive
-	launch.OnActive = func(pid int) {
-		statusActive(pid)
-		noteProviderStarted(req.principal, pid)
-	}
+	launch.OnActive = chainProviderStarted(launch.OnActive, req.principal)
 	if req.stagingRoot != "" && !strings.HasPrefix(req.stagingRoot, launch.Spec.Worktree+"/") {
 		launch.PlumbingRO = append(launch.PlumbingRO, req.stagingRoot)
 	}
