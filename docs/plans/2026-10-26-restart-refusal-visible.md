@@ -66,6 +66,13 @@ An optional, additive field in the hung-session status file (FDR 0023,
   `resume` record. Other early exits of a relaunched frontend (a flag error, a
   refused agent-scope resume, the closed-session peek) are not recorded; they
   still print to stderr only.
+- Two other consumed-and-dropped paths record nothing (review finding): "no
+  provider is running" and "the provider exited during the countdown". They
+  still log to `close-self-run.log`.
+- `WriteRestartRefusal` does not check for a live second frontend of the same
+  principal (the ordinary relaunch overwrites nothing live: the old frontend
+  removed its file before the exec). Text over 300 bytes is cut without a
+  marker. Both are known and left.
 - `restart_refusal` does not change `turn_running` or liveness semantics.
 
 ## Tests first

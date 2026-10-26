@@ -2471,6 +2471,49 @@ explore-profile-pin-e2e: build-nix
         echo "(skipped: step 3 printed no new digest)"
     fi
 
+# A throwaway profile registry for a restart-refusal drill, in a scratch
+# XDG_CONFIG_HOME under .tmp/restart-drill, never the operator's profiles.toml.
+# `up` writes a stamped registry with one profile (drill-throwaway) and prints
+# the env prefix a throwaway frontend needs to read it; `edit` changes the
+# profile's model, so a session pinned to the old digest is refused by the
+# restart's dry-run profile gate (restart_gate.go) and by `clown resume`;
+# `down` removes the scratch dir. The file shape is the one explore-profile-pin-e2e
+# uses. Limit: only a frontend (and a spinclass resolving --profile) run with
+# that XDG_CONFIG_HOME see it, so a live spawn needs spinclass started with it too.
+#
+# create, edit or remove the throwaway restart-drill profile registry (ACTION: up|edit|down)
+[group("explore")]
+explore-restart-drill-profile ACTION:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    root="$(pwd)/.tmp/restart-drill"
+    cfg="$root/config"
+    write_profile() {
+        mkdir -p "$cfg/clown"
+        printf '[[profile]]\nname = "drill-throwaway"\ndisplay = "restart drill"\nprovider = "claude"\nbackend = "anthropic"\nmodel = "%s"\n\n[registry]\nclown_version = "drill"\nprotocol = "1"\n' "$1" > "$cfg/clown/profiles.toml"
+        chmod 600 "$cfg/clown/profiles.toml"
+    }
+    case "{{ACTION}}" in
+        up)
+            write_profile drill-model-a
+            echo "registry: $cfg/clown/profiles.toml"
+            echo "launch the throwaway with: XDG_CONFIG_HOME=$cfg clown --profile drill-throwaway ..."
+            ;;
+        edit)
+            [[ -f "$cfg/clown/profiles.toml" ]] || { echo "no drill registry; run 'up' first" >&2; exit 1; }
+            write_profile drill-model-b
+            echo "profile drill-throwaway now has model drill-model-b (digest changed)"
+            ;;
+        down)
+            rm -rf "$root"
+            echo "removed $root"
+            ;;
+        *)
+            echo "ACTION must be up, edit or down" >&2
+            exit 2
+            ;;
+    esac
+
 # Print the distinct strings in the claude binary on PATH that match REGEX (up
 # to 40 chars of context each side), so a setting or env var name can be taken
 # from the binary instead of memory (clown context-floor work).
