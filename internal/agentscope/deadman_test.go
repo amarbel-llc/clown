@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sync/atomic"
 	"testing"
@@ -65,6 +66,63 @@ func TestDeadManHoldsOnlyTheFirstUnitConnection(t *testing.T) {
 	}
 	if !readsEOF(held, 2*time.Second) {
 		t.Fatal("closing the frontend's end did not reach the unit as EOF")
+	}
+}
+
+// The held connection stays referenced while the frontend lives: a garbage
+// collection does not close it (an unreferenced *net.UnixConn would be
+// finalized and the shim would see EOF).
+func TestDeadManHeldConnSurvivesGC(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "deadman.sock")
+	d := &DeadMan{Unit: "u-1.service", PeerCgroup: func(int) (string, error) { return unitCgroup, nil }}
+	if err := d.Listen(sock); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { d.Close() })
+	held, err := net.Dial("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	time.Sleep(100 * time.Millisecond)
+	for range 3 {
+		runtime.GC()
+	}
+	if readsEOF(held, 500*time.Millisecond) {
+		t.Fatal("the held connection ended after a GC while the frontend lives")
+	}
+}
+
+// A Close that races the first accept still closes the accepted connection.
+func TestDeadManCloseBeforeAcceptClosesTheLateConnection(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "deadman.sock")
+	release := make(chan struct{})
+	d := &DeadMan{Unit: "u-1.service", PeerCgroup: func(int) (string, error) {
+		<-release // hold the accept between Accept and storing the conn
+		return unitCgroup, nil
+	}}
+	if err := d.Listen(sock); err != nil {
+		t.Fatal(err)
+	}
+	c, err := net.Dial("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	time.Sleep(100 * time.Millisecond)
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	if !readsEOF(c, 2*time.Second) {
+		t.Fatal("a connection accepted after Close was held open")
+	}
+}
+
+// The capability is advertised, so spinclass can require it.
+func TestDeadManCapabilityIsAdvertised(t *testing.T) {
+	if !slices.Contains(Capabilities, "frontend-deadman") {
+		t.Error("capability frontend-deadman is not advertised")
 	}
 }
 

@@ -1,9 +1,11 @@
 package agentscope
 
 import (
+	"errors"
 	"io"
 	"log/slog"
 	"net"
+	"os"
 	"sync"
 	"time"
 )
@@ -26,9 +28,10 @@ type DeadMan struct {
 	Logger     *slog.Logger
 	PeerCgroup func(pid int) (string, error)
 
-	mu   sync.Mutex
-	ln   net.Listener
-	held net.Conn
+	mu     sync.Mutex
+	ln     net.Listener
+	held   net.Conn
+	closed bool
 }
 
 // Listen creates the socket at path (0600) and waits for the shim.
@@ -45,19 +48,29 @@ func (d *DeadMan) Listen(path string) error {
 }
 
 func (d *DeadMan) accept(ln net.Listener) {
+	// The listener is closed whichever way this ends: after the shim's
+	// connection is held, on Close, or on an accept error.
+	defer ln.Close()
 	for {
 		c, err := ln.Accept()
 		if err != nil {
+			if !errors.Is(err, net.ErrClosed) {
+				d.warn("dead-man: accept failed; the unit's shim will refuse or see EOF", "err", err)
+			}
 			return
 		}
 		if err := authorizeUnitPeer(c, d.Unit, d.PeerCgroup); err != nil {
-			if d.Logger != nil {
-				d.Logger.Warn("dead-man: refused caller", "err", err)
-			}
+			d.warn("dead-man: refused caller", "err", err)
 			c.Close()
 			continue
 		}
 		d.mu.Lock()
+		if d.closed {
+			// Close raced this accept: nothing will close a stored conn.
+			d.mu.Unlock()
+			c.Close()
+			return
+		}
 		d.held = c
 		d.mu.Unlock()
 		_ = ln.Close()
@@ -67,11 +80,21 @@ func (d *DeadMan) accept(ln net.Listener) {
 	}
 }
 
+// warn logs to the frontend's run log, or its stderr without one.
+func (d *DeadMan) warn(msg string, args ...any) {
+	if d.Logger != nil {
+		d.Logger.Warn(msg, args...)
+		return
+	}
+	slog.New(slog.NewTextHandler(os.Stderr, nil)).Warn(msg, args...)
+}
+
 // Close closes the listener and the held connection: the shim then stops the
 // unit. The frontend calls it only when the unit is done or being stopped.
 func (d *DeadMan) Close() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	d.closed = true
 	if d.ln != nil {
 		_ = d.ln.Close()
 	}
