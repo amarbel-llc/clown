@@ -299,25 +299,63 @@ func unseenResumeForm(args []string) string {
 	return ""
 }
 
-// resumeArgRaw reads the first claude --resume/-r in args: flag is the
-// spelling found ("" when there is none) and value what follows it ("" for
-// no value, an empty value, or a following flag, which is taken as no
-// value). It is the one parser behind both readings below.
-func resumeArgRaw(args []string) (flag, value string) {
+// resumeOccurrence is one claude --resume/-r in the provider args: the flag
+// spelling, its value ("" for none), and whether the occurrence is a
+// short-option cluster whose value cannot be read with certainty.
+type resumeOccurrence struct {
+	flag, value string
+	ambiguous   bool
+}
+
+// resumeOccurrences reads every --resume/-r the way claude's parser does.
+// claude uses commander with _combineFlagAndOptionalValue (both verified in
+// the claude binary's strings) and declares `-r, --resume [value]`, so:
+// `--resume v` and `-r v` take a following argument that is not a flag;
+// `--resume=v` takes v; `-rv` takes the attached rest, so `-r=v` is the
+// value "=v" and `-rc` the value "c". A cluster with r after its first
+// letter (`-cr`, `-pr v`) is ambiguous: whether r takes the next argument
+// depends on its neighbours, so it carries no value and is marked.
+func resumeOccurrences(args []string) []resumeOccurrence {
+	var out []resumeOccurrence
 	for i, a := range args {
 		switch {
 		case a == "--resume" || a == "-r":
+			v := ""
 			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
-				return a, args[i+1]
+				v = args[i+1]
 			}
-			return a, ""
+			out = append(out, resumeOccurrence{flag: a, value: v})
 		case strings.HasPrefix(a, "--resume="):
-			return "--resume", strings.TrimPrefix(a, "--resume=")
-		case strings.HasPrefix(a, "-r="):
-			return "-r", strings.TrimPrefix(a, "-r=")
+			out = append(out, resumeOccurrence{flag: "--resume", value: strings.TrimPrefix(a, "--resume=")})
+		case len(a) > 2 && a[0] == '-' && a[1] == 'r':
+			out = append(out, resumeOccurrence{flag: "-r", value: a[2:]})
+		case len(a) > 2 && a[0] == '-' && a[1] != '-' && isShortCluster(a[1:]) && strings.ContainsRune(a[2:], 'r'):
+			out = append(out, resumeOccurrence{flag: "-r", ambiguous: true})
 		}
 	}
-	return "", ""
+	return out
+}
+
+// isShortCluster reports whether s is a run of short-option letters.
+func isShortCluster(s string) bool {
+	for _, c := range s {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z') {
+			return false
+		}
+	}
+	return s != ""
+}
+
+// resumeArgRaw reads the first claude --resume/-r in args (resumeOccurrences):
+// flag is the spelling found ("" when there is none) and value what it takes
+// ("" for no value, which includes an ambiguous cluster: read as claude's
+// picker). It is the one parser behind both readings below.
+func resumeArgRaw(args []string) (flag, value string) {
+	occ := resumeOccurrences(args)
+	if len(occ) == 0 {
+		return "", ""
+	}
+	return occ[0].flag, occ[0].value
 }
 
 // resumeArg is the strict reading the profile check uses: id is set only for

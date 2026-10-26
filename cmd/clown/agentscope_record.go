@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -17,12 +18,22 @@ import (
 )
 
 // A confined session stays confined (clown#318). A confined launch records
-// its --agent-scope spec in the session-names sidecar under every id it
-// records (sessions.NameRecord.AgentScope). Every later launch that could
-// resume one of those ids, whatever the entrypoint (`clown resume`, a
-// direct --resume or --session-id, CLOWN_SESSION_ID, --naked), runs under
-// that same spec or is refused: runWithFlags calls agentScopeForLaunch
-// after decideClaudeSession, before anything is written or started.
+// its --agent-scope spec, and the digest of the spec's boundary, in the
+// session-names sidecar under every id it records
+// (sessions.NameRecord.AgentScope). A later launch that names one of those
+// ids (`clown resume`, --resume/-r <id> in any spelling, --session-id,
+// CLOWN_SESSION_ID, --naked, a restart) runs under that same spec, with the
+// same boundary, or is refused: runWithFlags calls runConfinementGate after
+// decideClaudeSession, before anything is written or started.
+//
+// Not covered, and documented as such (clown.1, FDR 0020):
+//   - an unconfined -c/--continue or bare --resume picker launch: claude
+//     picks the conversation, so it cannot be checked (clown#326);
+//   - `clown agent-scope-run`, which takes its spec directly and records
+//     nothing;
+//   - sessions confined before clown recorded confinement (no record);
+//   - a launch whose XDG_STATE_HOME differs from the one the record was
+//     written under, since the sidecar lives there.
 
 // confinementGate is the call runWithFlags makes once the session ids are
 // final; a variable so a test can prove runWithFlags still calls it.
@@ -31,8 +42,8 @@ var confinementGate = runConfinementGate
 // runConfinementGate settles flags.agentScopeSpec against the session's
 // confinement record. A non-nil error refuses the launch; notices go to w.
 func runConfinementGate(flags *parsedFlags, w io.Writer) error {
-	resume, sessionIDs := claudeConversationRefs(flags.forwarded)
-	if err := conversationRefsError(resume, sessionIDs, sessions.AnyAgentScope); err != nil {
+	resume, sessionIDs, unknown := claudeConversationRefs(flags.forwarded)
+	if err := conversationRefsError(resume, sessionIDs, unknown, flags.identity.LaunchKey, sessions.AnyAgentScope); err != nil {
 		return err
 	}
 	if flags.agentScopeSpec != "" {
@@ -50,11 +61,13 @@ func runConfinementGate(flags *parsedFlags, w io.Writer) error {
 	var digest string
 	if spec != "" {
 		// Recorded or given, the spec this launch runs under: loaded once more
-		// for the digest to record (agentScopeForLaunch loaded a recorded one).
+		// for the digest to record (agentScopeForLaunch loaded a recorded one),
+		// which the unit launch's own read must match.
 		if digest, err = loadScopeSpec(spec); err != nil {
 			return err
 		}
 	}
+	flags.agentScopeDigest = digest
 	confined := found || spec != ""
 	switch {
 	case found && (flags.naked || flags.tent || flags.provider != "claude"):
@@ -96,26 +109,96 @@ func runConfinementGate(flags *parsedFlags, w io.Writer) error {
 // keeps the last of a repeated option (assumed, not verified against
 // claude itself), so the confinement check reads them all and refuses when
 // they disagree.
-func claudeConversationRefs(args []string) (resume, sessionIDs []string) {
-	for i, a := range args {
+func claudeConversationRefs(args []string) (resume, sessionIDs []string, unknown bool) {
+	for _, o := range resumeOccurrences(args) {
 		switch {
-		case a == "--resume" || a == "-r":
-			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
-				resume = append(resume, args[i+1])
-			}
-		case strings.HasPrefix(a, "--resume="):
-			resume = append(resume, strings.TrimPrefix(a, "--resume="))
-		case strings.HasPrefix(a, "-r="):
-			resume = append(resume, strings.TrimPrefix(a, "-r="))
-		case a == "--session-id":
-			if i+1 < len(args) {
-				sessionIDs = append(sessionIDs, args[i+1])
-			}
-		case strings.HasPrefix(a, "--session-id="):
-			sessionIDs = append(sessionIDs, strings.TrimPrefix(a, "--session-id="))
+		case o.ambiguous:
+			unknown = true
+		case o.value != "":
+			resume = append(resume, normalizeSessionID(o.value))
 		}
 	}
-	return resume, sessionIDs
+	for i, a := range args {
+		switch {
+		case a == "--session-id":
+			if i+1 < len(args) {
+				sessionIDs = append(sessionIDs, normalizeSessionID(args[i+1]))
+			}
+		case strings.HasPrefix(a, "--session-id="):
+			sessionIDs = append(sessionIDs, normalizeSessionID(strings.TrimPrefix(a, "--session-id=")))
+		}
+	}
+	return resume, sessionIDs, unknown
+}
+
+// normalizeSessionID lower-cases a UUID, so a record and a lookup of the same
+// session meet whatever case either was spelled in; anything else is kept.
+func normalizeSessionID(id string) string {
+	if isUUID(id) {
+		return strings.ToLower(id)
+	}
+	return id
+}
+
+// loadLaunchSpec is the unit launch's read of the spec: it must still have
+// the boundary the gate checked and recorded (digest, from loadScopeSpec),
+// or the launch is refused. An empty digest (no gate ran: agent-scope-run)
+// checks nothing.
+func loadLaunchSpec(path, digest string) (agentscope.Spec, error) {
+	s, err := agentscope.LoadSpec(path)
+	if err != nil {
+		return agentscope.Spec{}, err
+	}
+	if digest != "" {
+		if got := boundaryDigest(s); got != digest {
+			return agentscope.Spec{}, fmt.Errorf("agent scope spec %s changed between the confinement check and the unit launch (boundary sha256 %s, now %s); refusing", path, digest, got)
+		}
+	}
+	return s, nil
+}
+
+// boundaryDigest is the sha256 of what a spec lets the unit reach, the part
+// a session must keep across its launches (clown#318): the worktree, the
+// operator home, binds_rw and binds_ro, deny_paths except wayland sockets,
+// egress_allow (unset, meaning clown's default list, differs from empty),
+// and the sockets' purposes. Lists are cleaned, sorted and de-duplicated.
+// Not covered, because spinclass rewrites them legitimately on every spawn:
+// env (identity, description), socket paths, unit_name_hint, result_path,
+// and the wayland-* deny entries (which follow the display server). The
+// spec is not agent-writable in production, so this is defence in depth.
+func boundaryDigest(s agentscope.Spec) string {
+	norm := func(ps []string, keep func(string) bool) []string {
+		var out []string
+		for _, p := range ps {
+			if keep == nil || keep(p) {
+				out = append(out, filepath.Clean(p))
+			}
+		}
+		slices.Sort(out)
+		return slices.Compact(out)
+	}
+	purposes := make([]string, 0, len(s.Sockets))
+	for _, sock := range s.Sockets {
+		purposes = append(purposes, sock.Purpose)
+	}
+	slices.Sort(purposes)
+	b := struct {
+		Worktree, OperatorHome      string
+		BindsRW, BindsRO, DenyPaths []string
+		EgressDefault               bool
+		EgressAllow                 []string
+		SocketPurposes              []string
+	}{
+		Worktree: filepath.Clean(s.Worktree), OperatorHome: filepath.Clean(s.OperatorHome),
+		BindsRW: norm(s.BindsRW, nil), BindsRO: norm(s.BindsRO, nil),
+		DenyPaths:      norm(s.DenyPaths, func(p string) bool { return !strings.HasPrefix(filepath.Base(p), "wayland-") }),
+		EgressDefault:  s.EgressAllow == nil,
+		EgressAllow:    slices.Compact(slices.Sorted(slices.Values(s.EgressAllow))),
+		SocketPurposes: purposes,
+	}
+	raw, _ := json.Marshal(b) // a struct of strings and bools always marshals
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
 }
 
 // distinct returns vs without repeats, in first-seen order.
@@ -131,23 +214,35 @@ func distinct(vs []string) []string {
 
 // conversationRefsError refuses provider args the confinement check cannot
 // read unambiguously: repeated --resume or --session-id values that
-// disagree, and a --resume search term (not a UUID) while any session is
-// recorded as confined, since the term cannot be tied to one record.
-func conversationRefsError(resume, sessionIDs []string, anyConfined func() (bool, error)) error {
+// disagree, and, while any session is recorded as confined, a --resume
+// search term (not a UUID) or a short-option cluster carrying -r (unknown),
+// since neither can be tied to one record. A term equal to launchKey, the
+// session key this launch was given (a restart's --resume <key>), is that
+// session's own id and is looked up as such, so it is not refused. The
+// refusal lasts as long as any confinement record does: the sidecar is
+// append-only and never pruned.
+func conversationRefsError(resume, sessionIDs []string, unknown bool, launchKey string, anyConfined func() (bool, error)) error {
 	if d := distinct(resume); len(d) > 1 {
 		return fmt.Errorf("--resume names more than one session (%s); refusing, since only one can be checked against its confinement record", strings.Join(d, ", "))
 	}
 	if d := distinct(sessionIDs); len(d) > 1 {
 		return fmt.Errorf("--session-id names more than one session (%s); refusing, since only one can be checked against its confinement record", strings.Join(d, ", "))
 	}
-	if len(resume) > 0 && !isUUID(resume[0]) {
-		confined, err := anyConfined()
-		if err != nil {
-			return fmt.Errorf("reading the confinement records: %w; refusing to resume by the search term %q", err, resume[0])
-		}
-		if confined {
-			return fmt.Errorf("--resume %q is a search term, which cannot be checked against the confinement records some sessions carry; resume by the session's UUID or with `clown resume`", resume[0])
-		}
+	var what string
+	switch {
+	case unknown:
+		what = "a short-option cluster carrying -r"
+	case len(resume) > 0 && !isUUID(resume[0]) && (launchKey == "" || resume[0] != launchKey):
+		what = fmt.Sprintf("--resume %q, a search term,", resume[0])
+	default:
+		return nil
+	}
+	confined, err := anyConfined()
+	if err != nil {
+		return fmt.Errorf("reading the confinement records: %w; refusing %s", err, what)
+	}
+	if confined {
+		return fmt.Errorf("%s cannot be checked against the confinement records some sessions carry; resume by the session's UUID (--resume <uuid>) or with `clown resume`", what)
 	}
 	return nil
 }
@@ -157,9 +252,10 @@ func conversationRefsError(resume, sessionIDs []string, anyConfined func() (bool
 // provider args name (--resume <id>, --session-id <id>), which a --naked or
 // -p launch resumes without decideClaudeSession adopting it.
 func launchScopeIDs(flags parsedFlags) []string {
-	ids := lineageRecordIDs(flags.provider, flags.identity, flags.resumeHintID)
-	resume, sessionIDs := claudeConversationRefs(flags.forwarded)
-	for _, id := range append(resume, sessionIDs...) {
+	var ids []string
+	resume, sessionIDs, _ := claudeConversationRefs(flags.forwarded)
+	for _, id := range slices.Concat(lineageRecordIDs(flags.provider, flags.identity, flags.resumeHintID), resume, sessionIDs) {
+		id = normalizeSessionID(id)
 		if id != "" && !slices.Contains(ids, id) {
 			ids = append(ids, id)
 		}
@@ -228,16 +324,13 @@ func loadScopeSpec(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	resolved := agentscope.ResolvePath(path)
 	for _, rw := range append([]string{s.Worktree}, s.BindsRW...) {
-		if resolved, err := filepath.EvalSymlinks(rw); err == nil {
-			rw = resolved // path is symlink-resolved (canonicalSpecPath)
-		}
-		if path == rw || strings.HasPrefix(path, rw+"/") {
+		if r := agentscope.ResolvePath(rw); resolved == r || strings.HasPrefix(resolved, r+"/") {
 			return "", fmt.Errorf("agent scope spec %s is writable from inside its unit (under %s); refusing", path, rw)
 		}
 	}
-	sum := sha256.Sum256(raw)
-	return hex.EncodeToString(sum[:]), nil
+	return boundaryDigest(s), nil
 }
 
 // canonicalSpecPath is the form a spec path is recorded and compared in:
@@ -268,7 +361,7 @@ func canonicalSpecPath(p string) (string, error) {
 func confinedConversationID(flags parsedFlags) string {
 	for _, id := range []string{claudeSessionIDArg(flags.forwarded), claudeResumeValue(flags.forwarded), flags.resumeHintID} {
 		if id != "" {
-			return id
+			return normalizeSessionID(id)
 		}
 	}
 	return ""

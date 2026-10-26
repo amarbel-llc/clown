@@ -548,14 +548,17 @@ Key mode (positional repo/worktree):
 
 Confinement (all modes):
   A confined launch (--agent-scope / CLOWN_AGENT_SCOPE) records its spec
-  path for the session. Resuming that session relaunches it confined
-  under the same spec. A spec that is gone or no longer loads, or an
-  --agent-scope naming a different spec, refuses the resume; it is never
-  resumed unconfined. A session with no confinement record resumes
-  unconfined, with a notice, unless --agent-scope <spec> confines it.
-  Without a record: sessions started by "clown agent-scope-run" or
-  confined by an older clown, and every session when XDG_STATE_HOME
-  points elsewhere. --fork-session of a confined session is refused.
+  path, and a digest of the boundary it sets, for the session. Resuming
+  that session relaunches it confined under the same spec. A spec that
+  is gone, no longer loads or whose boundary changed, or an --agent-scope
+  naming a different spec, refuses the resume; it is never resumed
+  unconfined. A session with no confinement record resumes unconfined,
+  with a notice, unless --agent-scope <spec> confines it. Without a
+  record: sessions started by "clown agent-scope-run" or confined by an
+  older clown, and every session when XDG_STATE_HOME points elsewhere.
+  --fork-session of a confined session is refused. Outside clown resume,
+  an unconfined claude -c or bare --resume picker is not checked
+  (clown#326); see clown(1).
 
 Profiles (all modes):
   A launch records the named profile it applied and that profile's

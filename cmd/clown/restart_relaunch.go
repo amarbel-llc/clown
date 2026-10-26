@@ -136,7 +136,10 @@ func withoutClaudeSessionArgs(args []string) []string {
 			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
 				i++
 			}
-		case strings.HasPrefix(a, "--session-id=") || strings.HasPrefix(a, "--resume="):
+		case strings.HasPrefix(a, "--session-id=") || strings.HasPrefix(a, "--resume=") || strings.HasPrefix(a, "-r"):
+			// -r<id> and -r=<id> (resumeOccurrences). A cluster carrying r
+			// (-cr) is kept; the confinement gate refuses it while any session
+			// is confined.
 		default:
 			out = append(out, a)
 		}

@@ -33,7 +33,7 @@ import (
 // file once the unit is active. Any failure refuses the launch: there is no
 // unconfined fallback.
 func runInAgentScope(req agentScopeRequest, logger *slog.Logger) int {
-	launch, err := prepareAgentScope(req.specPath, req.unit, req.argv, req.extraEnv)
+	launch, err := prepareAgentScope(req.specPath, req.specDigest, req.unit, req.argv, req.extraEnv)
 	if err != nil {
 		// A spec that loaded names a trusted result_path; record the refusal
 		// there (launch.Spec is empty when the spec itself was refused).
@@ -68,7 +68,10 @@ func runInAgentScope(req agentScopeRequest, logger *slog.Logger) int {
 
 // agentScopeRequest is one agent-scope launch.
 type agentScopeRequest struct {
-	specPath    string
+	specPath string
+	// specDigest is the boundary digest the confinement gate checked; the
+	// spec read here must still match it ("" for agent-scope-run: no gate).
+	specDigest  string
 	stagingRoot string
 	// forwardAddrs are the loopback addresses of this session's
 	// frontend-class plugin servers; each is forwarded into the unit, and
@@ -110,8 +113,8 @@ func agentScopeTools() agentscope.Tools {
 // prepareAgentScope loads the spec and assembles the Launch: unit name, agent
 // home, the in-unit exec shim, and clown's own plumbing binds (claude's config
 // and transcripts, the job platform's state and runtime dirs, hook state).
-func prepareAgentScope(specPath, unit string, argv, extraEnv []string) (agentscope.Launch, error) {
-	spec, err := agentscope.LoadSpec(specPath)
+func prepareAgentScope(specPath, specDigest, unit string, argv, extraEnv []string) (agentscope.Launch, error) {
+	spec, err := loadLaunchSpec(specPath, specDigest)
 	if err != nil {
 		return agentscope.Launch{}, err
 	}

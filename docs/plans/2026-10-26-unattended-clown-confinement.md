@@ -50,16 +50,21 @@ Unverified (I / not found):
 - Whether a SIGKILLed frontend leaves the unit running (the stop is a
   `defer`; no `BindsTo`/`PartOf`/`RuntimeMaxSec` in `unit.go`) (I, untested).
 - Does `clown resume` of a confined session stay confined? Fixed on the
-  clown side (#318): a confined launch records its spec in the
-  session-names sidecar (outside the unit), and `clown resume` re-applies
-  it, refusing when the spec is gone or a different one is asked for (R,
-  unit tests). spinclass side still to do: `sc resume` sets no
+  clown side (#318): a confined launch records its spec and a digest of
+  the spec's boundary in the session-names sidecar (outside the unit).
+  Every launch naming that session (`clown resume`, `--resume`/`-r` in any
+  spelling, `--session-id`, `CLOWN_SESSION_ID`, a restart) re-applies it,
+  refusing when the spec is gone, a different one is asked for, or its
+  boundary changed, including between the check and the unit launch (R,
+  unit tests). Once any session is confined, a `--resume` search term or
+  an `-r` cluster is refused for good (the sidecar is never pruned).
+  spinclass side still to do: `sc resume` sets no
   `CLOWN_AGENT_SCOPE` and splices no `dontAsk` (R); the clown-side record
   now confines it anyway, but the dontAsk splice is spinclass's.
   Outside #318: sessions started by the raw `clown agent-scope-run` (no
   check, no record), sessions confined by an older clown, an unconfined
   `-c` or bare `--resume` picker continuing a confined conversation (known
-  gap), and a changed `XDG_STATE_HOME` (hides every record).
+  gap, #326), and a changed `XDG_STATE_HOME` (hides every record).
 
 ## 2. Missing for a confined session to run for days unattended
 

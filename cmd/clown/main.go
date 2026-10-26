@@ -296,6 +296,11 @@ type sessionIdentity struct {
 	// launcher's stable id, e.g. spinclass), not minted for this launch
 	// (clown#219).
 	Provided bool
+	// LaunchKey is Key as provided, kept when decideClaudeSession replaces
+	// Key with the conversation id; "" when Key was minted. The confinement
+	// gate takes a --resume equal to it as this session's own id (a restart's
+	// --resume <key>), not a search term (clown#318).
+	LaunchKey string
 }
 
 // resolveSessionIdentity resolves the channel key and clown binary path WITHOUT
@@ -315,7 +320,11 @@ func resolveSessionIdentity() sessionIdentity {
 		key = jobwake.SessionKey()
 	}
 	provided := os.Getenv("CLOWN_SESSION_ID") != "" || os.Getenv("CLAUDE_SESSION_ID") != ""
-	return sessionIdentity{Key: key, Bin: bin, Provided: provided}
+	id := sessionIdentity{Key: key, Bin: bin, Provided: provided}
+	if provided {
+		id.LaunchKey = key
+	}
+	return id
 }
 
 // lineageRecordIDs are the ids a launch records its clown-name (and profile
@@ -768,9 +777,10 @@ func runWithFlags(flags parsedFlags) int {
 		flags.forwarded, flags.identity.Key, flags.resumeHintID = decideClaudeSession(flags.forwarded, flags.identity.Key)
 	}
 
-	// clown#318: a session that ran confined runs confined again, whatever the
-	// entrypoint, or the launch is refused; checked here, once the session ids
-	// are final and before anything is written or started.
+	// clown#318: a launch naming a session that ran confined runs under the
+	// same spec and boundary, or is refused (runConfinementGate lists what
+	// is not covered); checked here, once the session ids are final and
+	// before anything is written or started.
 	if err := confinementGate(&flags, os.Stderr); err != nil {
 		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
 		return 1
@@ -2059,7 +2069,7 @@ func runWithPluginHost(executor Executor, pluginDirs []string, flags parsedFlags
 		// serve bridge can admit exactly that unit from its first connection.
 		// A spec that does not load is refused, and recorded in its result,
 		// by runInAgentScope as before; nothing is routed then.
-		if spec, err := agentscope.LoadSpec(flags.agentScopeSpec); err == nil {
+		if spec, err := loadLaunchSpec(flags.agentScopeSpec, flags.agentScopeDigest); err == nil {
 			flags.agentScopeUnit = agentscope.UnitName(spec.UnitNameHint)
 			discovered, flags.agentScopeServeRoutes, err = routeServeSockets(discovered, host.BridgePath, os.Getenv("XDG_RUNTIME_DIR"), flags.identity.Key, flags.agentScopeUnit)
 			if err != nil {
@@ -2161,6 +2171,7 @@ func runProvider(executor Executor, bound Command, logger *slog.Logger, flags pa
 	if flags.agentScopeSpec != "" {
 		return runInAgentScope(agentScopeRequest{
 			specPath:     flags.agentScopeSpec,
+			specDigest:   flags.agentScopeDigest,
 			stagingRoot:  flags.stagingRootPath,
 			forwardAddrs: flags.agentScopeForwards,
 			inUnit:       flags.agentScopeInUnit,
@@ -2667,10 +2678,11 @@ func runUnbound(binding pluginBinding, executor Executor, logger *slog.Logger, f
 }
 
 // sessionRecordBase is the session-names record a launch writes for id,
-// before the profile pin is added. A confined launch records its spec, so a
-// later `clown resume` relaunches it confined (clown#318).
+// before the profile pin is added. A confined launch records its spec and
+// the spec's boundary digest, so a later launch of the session runs under
+// the same boundary (clown#318).
 func sessionRecordBase(id string, flags parsedFlags) sessions.NameRecord {
-	return sessions.NameRecord{SessionID: id, Name: flags.clownName, Group: flags.groupID, AgentScope: flags.agentScopeSpec}
+	return sessions.NameRecord{SessionID: id, Name: flags.clownName, Group: flags.groupID, AgentScope: flags.agentScopeSpec, AgentScopeDigest: flags.agentScopeDigest}
 }
 
 // savedSelectionFallbackRefusal is the error runUnbound refuses with when p
@@ -3240,6 +3252,10 @@ type parsedFlags struct {
 	// (clown#244, FDR 0020): when set, claude runs in a transient systemd
 	// user service (the agent scope) and clown stays in the frontend scope.
 	agentScopeSpec string
+	// agentScopeDigest is the spec's boundary digest the confinement gate
+	// checked and recorded (boundaryDigest); the unit launch's own read of
+	// the spec must still match it (clown#318).
+	agentScopeDigest string
 	// stagingRootPath is the per-launch staging root (set in runWithFlags),
 	// bound read-only into the agent scope so claude can read clown's
 	// generated plugin dirs and prompt files.

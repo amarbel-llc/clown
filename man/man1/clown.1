@@ -142,28 +142,55 @@ path for its claude session (in
 .Pa $XDG_STATE_HOME/clown/session-names.jsonl ,
 which the unit cannot reach); if the record cannot be written, the
 confined launch is refused.
+It also records a sha256 of the boundary the
+.Ar spec
+sets: its
+.Sy worktree ,
+.Sy operator_home ,
+.Sy binds_rw ,
+.Sy binds_ro ,
+.Sy deny_paths
+(except
+.Pa wayland-*
+entries),
+.Sy egress_allow
+(where an absent list, meaning clown's default, differs from an empty one)
+and the
+.Sy sockets
+purposes, each list cleaned, sorted and de-duplicated.
+What spinclass rewrites on every spawn is not part of it:
+.Sy env
+(the description and identity), socket paths,
+.Sy unit_name_hint
+and
+.Sy result_path .
 Any later launch of that session, by
 .Cm clown resume ,
 a direct
 .Fl -resume Ar id
-or
+(also spelled
+.Fl r Ar id ,
+.Fl r Ns Ar id ,
+.Fl -resume= Ns Ar id ;
+a session UUID matches in any letter case), a
 .Fl -session-id Ar id ,
-or
 .Ev CLOWN_SESSION_ID ,
-runs confined under the same
+or a restart (which passes
+.Fl -resume
+with the session's key), runs confined under the same
 .Ar spec
 even without
 .Fl -agent-scope ,
 or is refused: when the
 .Ar spec
-is gone or no longer loads, when its bytes differ from those its last
-confined launch recorded (by sha256), when a different one is given (a
-session's spec cannot be changed, in path or content; a new spec means a
-new session), when the
+is gone or no longer loads, when its boundary differs from the one its
+last confined launch recorded, or differs again by the time the unit is
+launched, when a different one is given (a session's spec cannot be
+changed, in path or boundary; a new spec means a new session), when the
 .Ar spec
 file lies inside its own worktree or a
 .Sy binds_rw
-entry (the unit could rewrite it), and under
+entry, symlinks resolved (the unit could rewrite it), and under
 .Fl -naked
 or
 .Fl -tent .
@@ -183,10 +210,21 @@ Every
 .Fl -resume
 and
 .Fl -session-id
-value is checked; repeated values that disagree are refused, and so is a
+value is checked; repeated values that disagree are refused.
+While any session is recorded as confined, a
 .Fl -resume
-search term (not a session UUID) while any session is recorded as
-confined.
+search term (neither a session UUID nor the launch's own session key) is
+refused, and so is a short-option cluster carrying
+.Fl r
+after its first letter (such as
+.Fl cr ) ,
+whose value cannot be read with certainty.
+The records are never pruned, so once any session has run confined this
+refusal holds for every later launch that uses the same
+.Ev XDG_STATE_HOME ;
+resume by UUID or with
+.Cm clown resume
+instead.
 .Fl -fork-session
 and
 .Fl -from-pr
@@ -205,7 +243,7 @@ older than this record; an unconfined
 or bare
 .Fl -resume
 picker launch, where claude picks a conversation clown cannot check and
-may continue a confined one (known gap); and any launch run with a
+may continue a confined one (known gap, clown#326); and any launch run with a
 different
 .Ev XDG_STATE_HOME ,
 which hides every record.

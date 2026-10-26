@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -212,7 +213,7 @@ func TestResumeLaunchFlagsCarryTheAgentScope(t *testing.T) {
 }
 
 const (
-	recordedID = "11111111-2222-3333-4444-555555555555"
+	recordedID = "abcdef01-2222-3333-4444-555555555555"
 	otherID    = "66666666-7777-8888-9999-000000000000"
 )
 
@@ -232,18 +233,38 @@ func confinementFixture(t *testing.T) string {
 // validSpec writes a spec agentscope.LoadSpec accepts and returns its path.
 func validSpec(t *testing.T) string {
 	t.Helper()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "spec.json")
-	body := `{"version":1,"worktree":"` + filepath.Join(dir, "wt") + `","operator_home":"` + filepath.Join(dir, "home") + `"}`
-	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	path := filepath.Join(t.TempDir(), "spec.json")
+	writeSpec(t, path, specFields(filepath.Dir(path)))
 	return path
 }
 
-// The gate reads the record whatever the entrypoint and however the ids are
-// spelled, and fails closed where it cannot know the conversation
-// (clown#318).
+// specFields is a valid spec rooted at dir, as spinclass writes one.
+func specFields(dir string) map[string]any {
+	return map[string]any{
+		"version": 1, "worktree": filepath.Join(dir, "wt"), "operator_home": filepath.Join(dir, "home"),
+		"unit_name_hint": "spinclass-agent-x", "binds_rw": []string{filepath.Join(dir, "objects")},
+		"binds_ro":     []string{"/nix/store"},
+		"deny_paths":   []string{"/run/user/1001/bus", "/run/user/1001/wayland-0"},
+		"egress_allow": []string{"api.anthropic.com:443"},
+		"sockets":      []map[string]string{{"path": "/run/user/1001/ssh-a.sock", "purpose": "piggy-agent"}},
+		"env":          map[string]string{"SPINCLASS_DESCRIPTION": "first"},
+	}
+}
+
+func writeSpec(t *testing.T, path string, fields map[string]any) {
+	t.Helper()
+	raw, err := json.Marshal(fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The gate reads the record for every entrypoint that names an id, however
+// the id is spelled, and fails closed where it cannot know the conversation
+// (clown#318). TestConfinementGateDocumentedGap covers what it does not.
 func TestConfinementGateRefuses(t *testing.T) {
 	gone := confinementFixture(t)
 	refused := map[string]parsedFlags{
@@ -264,6 +285,11 @@ func TestConfinementGateRefuses(t *testing.T) {
 		"confined -c":                       {provider: "claude", forwarded: []string{"-c"}, agentScopeSpec: gone},
 		"confined -p, no id":                {provider: "claude", forwarded: []string{"-p", "hi"}, agentScopeSpec: gone},
 		"confined picker":                   {provider: "claude", forwarded: []string{"--resume"}, agentScopeSpec: gone},
+		"recorded id attached to -r":        {provider: "claude", forwarded: []string{"-r" + recordedID}, resumeHintID: recordedID},
+		"recorded id in uppercase":          {provider: "claude", forwarded: []string{"--resume", strings.ToUpper(recordedID)}, resumeHintID: strings.ToUpper(recordedID)},
+		"uppercase provided identity":       {provider: "claude", identity: sessionIdentity{Key: strings.ToUpper(recordedID), Provided: true}, forwarded: []string{"--session-id", strings.ToUpper(recordedID)}, resumeHintID: strings.ToUpper(recordedID)},
+		"-r cluster while any is confined":  {provider: "claude", forwarded: []string{"-cr", otherID}},
+		"search term beside a launch key":   {provider: "claude", identity: sessionIdentity{Key: "my old chat", Provided: true, LaunchKey: "clown/x"}, forwarded: []string{"--resume", "my old chat"}, resumeHintID: "my old chat"},
 	}
 	for name, flags := range refused {
 		t.Run(name, func(t *testing.T) {
@@ -326,31 +352,170 @@ func TestConfinementGateRecordsAConfinedLaunch(t *testing.T) {
 	}
 }
 
-// The record carries the spec's digest, and a later launch whose spec bytes
-// differ from the last launch's is refused: a changed spec means a new
-// session (clown#318).
-func TestConfinementGateRefusesAChangedSpec(t *testing.T) {
+// The record carries a digest of the spec's boundary, and a later launch is
+// refused when the boundary changed: what the unit can reach (worktree,
+// binds, deny_paths other than wayland sockets, egress, socket purposes).
+// What spinclass rewrites legitimately on every spawn (env such as the
+// description, socket paths, the unit name hint, the wayland deny entries)
+// does not count (clown#318).
+func TestConfinementGateSpecBoundary(t *testing.T) {
+	cases := map[string]struct {
+		edit    func(dir string, f map[string]any)
+		refused bool
+	}{
+		"description changes": {edit: func(_ string, f map[string]any) { f["env"] = map[string]string{"SPINCLASS_DESCRIPTION": "second"} }},
+		"ssh socket path changes": {edit: func(_ string, f map[string]any) {
+			f["sockets"] = []map[string]string{{"path": "/run/user/1001/ssh-b.sock", "purpose": "piggy-agent"}}
+		}},
+		"unit name hint changes":  {edit: func(_ string, f map[string]any) { f["unit_name_hint"] = "spinclass-agent-y" }},
+		"wayland deny entry gone": {edit: func(_ string, f map[string]any) { f["deny_paths"] = []string{"/run/user/1001/bus"} }},
+		"binds reordered":         {edit: func(dir string, f map[string]any) { f["binds_ro"] = []string{"/nix/store", "/nix/store"} }},
+		"binds_rw widened": {edit: func(dir string, f map[string]any) {
+			f["binds_rw"] = []string{filepath.Join(dir, "objects"), filepath.Join(dir, "more")}
+		}, refused: true},
+		"egress widened": {edit: func(_ string, f map[string]any) {
+			f["egress_allow"] = []string{"api.anthropic.com:443", "evil.example:443"}
+		}, refused: true},
+		"egress default instead": {edit: func(_ string, f map[string]any) { delete(f, "egress_allow") }, refused: true},
+		"deny entry removed":     {edit: func(_ string, f map[string]any) { f["deny_paths"] = []string{"/run/user/1001/wayland-0"} }, refused: true},
+		"socket purpose added": {edit: func(_ string, f map[string]any) {
+			f["sockets"] = []map[string]string{{"path": "/run/user/1001/ssh-a.sock", "purpose": "piggy-agent"}, {"path": "/run/x.sock", "purpose": "other"}}
+		}, refused: true},
+		"binds_ro added": {edit: func(_ string, f map[string]any) { f["binds_ro"] = []string{"/nix/store", "/etc"} }, refused: true},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("XDG_STATE_HOME", t.TempDir())
+			dir := t.TempDir()
+			spec := filepath.Join(dir, "spec.json")
+			fields := specFields(dir)
+			writeSpec(t, spec, fields)
+			first := parsedFlags{provider: "claude", forwarded: []string{"--session-id", otherID}, resumeHintID: otherID, agentScopeSpec: spec}
+			if err := runConfinementGate(&first, io.Discard); err != nil {
+				t.Fatal(err)
+			}
+			if rec, ok, err := sessions.AgentScopeRecordOf(otherID); err != nil || !ok || rec.Digest == "" {
+				t.Fatalf("record %+v, %v, %v; want one carrying a digest", rec, ok, err)
+			}
+			tc.edit(dir, fields)
+			writeSpec(t, spec, fields)
+			later := parsedFlags{provider: "claude", forwarded: []string{"--resume", otherID}, resumeHintID: otherID}
+			err := runConfinementGate(&later, io.Discard)
+			if tc.refused != (err != nil) {
+				t.Fatalf("err %v; want refused %v", err, tc.refused)
+			}
+		})
+	}
+}
+
+// The launch's own session-names record repeats the gate's digest, so it
+// does not leave a digestless last record behind.
+func TestSessionRecordBaseCarriesTheDigest(t *testing.T) {
+	r := sessionRecordBase(otherID, parsedFlags{agentScopeSpec: "/s/spec.json", agentScopeDigest: "d1"})
+	if r.AgentScope != "/s/spec.json" || r.AgentScopeDigest != "d1" {
+		t.Fatalf("record %+v; want the spec and its digest", r)
+	}
+}
+
+// A spec reached through a symlinked worktree is still inside it.
+func TestConfinementGateRefusesAWritableSpecThroughASymlink(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	dir := t.TempDir()
+	real := filepath.Join(dir, "real")
+	if err := os.MkdirAll(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, filepath.Join(dir, "link")); err != nil {
+		t.Fatal(err)
+	}
+	spec := filepath.Join(real, "spec.json")
+	fields := specFields(dir)
+	fields["worktree"] = filepath.Join(dir, "link")
+	writeSpec(t, spec, fields)
+	flags := parsedFlags{provider: "claude", forwarded: []string{"--session-id", otherID}, resumeHintID: otherID, agentScopeSpec: spec}
+	if err := runConfinementGate(&flags, io.Discard); err == nil || !strings.Contains(err.Error(), "writable") {
+		t.Fatalf("spec inside its symlinked worktree: err %v; want a refusal", err)
+	}
+}
+
+// A restart relaunches with --resume <the session's key>, which for a
+// spinclass worker is not a UUID; it is the launch's own id, looked up as
+// such, not refused as a search term (clown#318).
+func TestRestartArgvThroughTheConfinementGate(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	const key = "clown/pure-teak"
 	spec := validSpec(t)
-	first := parsedFlags{provider: "claude", forwarded: []string{"--session-id", otherID}, resumeHintID: otherID, agentScopeSpec: spec}
+	if err := sessions.RecordSession(sessions.NameRecord{SessionID: "unrelated", AgentScope: "/s/other.json"}); err != nil {
+		t.Fatal(err)
+	}
+	first := parsedFlags{provider: "claude", identity: sessionIdentity{Key: key, Provided: true, LaunchKey: key}, forwarded: []string{"--session-id", otherID}, resumeHintID: otherID, agentScopeSpec: spec}
 	if err := runConfinementGate(&first, io.Discard); err != nil {
 		t.Fatal(err)
 	}
-	rec, ok, err := sessions.AgentScopeRecordOf(otherID)
-	if err != nil || !ok || rec.Digest == "" {
-		t.Fatalf("record %+v, %v, %v; want one carrying a digest", rec, ok, err)
+	relaunch := func(t *testing.T, mutate func([]string) []string) error {
+		argv := mutate(restartArgv(first, ""))
+		f, err := parseFlags(argv)
+		if err != nil {
+			t.Fatalf("parseFlags(%q): %v", argv, err)
+		}
+		f.identity = sessionIdentity{Key: key, Provided: true, LaunchKey: key}
+		f.forwarded, f.identity.Key, f.resumeHintID = decideClaudeSession(f.forwarded, f.identity.Key)
+		err = runConfinementGate(&f, io.Discard)
+		if err == nil && f.agentScopeSpec != first.agentScopeSpec {
+			t.Fatalf("relaunch spec %q, want %q", f.agentScopeSpec, first.agentScopeSpec)
+		}
+		return err
 	}
-	raw, err := os.ReadFile(spec)
+	if err := relaunch(t, func(a []string) []string { return a }); err != nil {
+		t.Fatalf("restart of a confined worker: %v; want it accepted", err)
+	}
+	other := validSpec(t)
+	err := relaunch(t, func(a []string) []string {
+		out := slices.Clone(a)
+		if i := slices.Index(out, "--agent-scope"); i >= 0 {
+			out[i+1] = other
+		}
+		return out
+	})
+	if err == nil {
+		t.Fatal("restart under a different spec: want a refusal")
+	}
+}
+
+// The documented gap (#326): an unconfined -c or bare picker launch is not
+// checked, since claude picks the conversation; it runs even while a
+// confined record exists.
+func TestConfinementGateDocumentedGap(t *testing.T) {
+	confinementFixture(t)
+	for name, flags := range map[string]parsedFlags{
+		"-c":     {provider: "claude", forwarded: []string{"-c"}},
+		"picker": {provider: "claude", forwarded: []string{"--resume"}},
+	} {
+		if err := runConfinementGate(&flags, io.Discard); err != nil || flags.agentScopeSpec != "" {
+			t.Errorf("%s: err %v, spec %q; want the documented unchecked launch", name, err, flags.agentScopeSpec)
+		}
+	}
+}
+
+// The unit launch reads the spec again; it must be the content the gate
+// checked and recorded, or the launch is refused.
+func TestLoadLaunchSpecRefusesAChangedSecondRead(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	dir := t.TempDir()
+	spec := filepath.Join(dir, "spec.json")
+	fields := specFields(dir)
+	writeSpec(t, spec, fields)
+	digest, err := loadScopeSpec(spec)
 	if err != nil {
 		t.Fatal(err)
 	}
-	changed := strings.Replace(string(raw), `{"version":1`, `{"version":1,"binds_ro":["/nix/store"]`, 1)
-	if err := os.WriteFile(spec, []byte(changed), 0o600); err != nil {
-		t.Fatal(err)
+	if _, err := loadLaunchSpec(spec, digest); err != nil {
+		t.Fatalf("unchanged spec: %v", err)
 	}
-	later := parsedFlags{provider: "claude", forwarded: []string{"--resume", otherID}, resumeHintID: otherID}
-	if err := runConfinementGate(&later, io.Discard); err == nil || !strings.Contains(err.Error(), "changed") {
-		t.Fatalf("later launch with a changed spec: err %v; want a refusal", err)
+	fields["binds_ro"] = []string{"/nix/store", "/etc"}
+	writeSpec(t, spec, fields)
+	if _, err := loadLaunchSpec(spec, digest); err == nil {
+		t.Fatal("spec widened between the gate and the unit launch: want a refusal")
 	}
 }
 
