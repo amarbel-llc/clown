@@ -66,6 +66,10 @@ type Launch struct {
 	// provider by signalling itself, spinclass#419), with a kill that sends
 	// SIGKILL to the unit's processes; after Run returns it does nothing.
 	OnStarted func(kill func() error)
+	// OnActive, when set, is called once the unit is active with its provider
+	// started, with the unit's MainPID (the in-unit init), as the result file
+	// records it. It is not called when the provider never starts.
+	OnActive func(mainPID int)
 	// ServeFile lists the agent-side servers the relay starts inside the
 	// unit (WriteInUnitServers); bound in read-only. Empty: none.
 	ServeFile string

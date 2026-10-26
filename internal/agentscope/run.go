@@ -295,6 +295,9 @@ func Run(l Launch, tools Tools, logger *slog.Logger) (int, error) {
 			}
 			if err == nil {
 				l.writeResult(res, logger)
+				if l.OnActive != nil {
+					l.OnActive(st.MainPID)
+				}
 				if logger != nil {
 					logger.Info("agent scope: provider started", "unit", l.Unit, "cgroup", st.ControlGroup, "main_pid", st.MainPID, "pty", pty)
 				}
