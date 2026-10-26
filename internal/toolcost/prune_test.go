@@ -30,18 +30,26 @@ func TestPruneStateRemovesOnlyOldStateAndLocks(t *testing.T) {
 	touch(t, fresh+".lock", StateMaxAge-time.Hour, now)
 	touch(t, kept, 2*StateMaxAge, now)
 	touch(t, kept+".lock", 2*StateMaxAge, now)
+	// A live transcript's lock is old (never rewritten) while its state is
+	// fresh: it must survive, or a second run could take a fresh lock inode.
+	live := filepath.Join(dir, "live.json")
+	touch(t, live, time.Hour, now)
+	touch(t, live+".lock", 2*StateMaxAge, now)
+	// An orphan old lock (no state file) goes.
+	orphan := filepath.Join(dir, "orphan.json.lock")
+	touch(t, orphan, 2*StateMaxAge, now)
 	other := filepath.Join(dir, "notes.txt")
 	touch(t, other, 2*StateMaxAge, now)
 
-	if got := PruneState(dir, StateMaxAge, now, kept); got != 2 {
-		t.Fatalf("removed %d, want 2 (old.json and its lock)", got)
+	if got := PruneState(dir, StateMaxAge, now, kept); got != 3 {
+		t.Fatalf("removed %d, want 3 (old.json, its lock, the orphan lock)", got)
 	}
-	for _, p := range []string{old, old + ".lock"} {
+	for _, p := range []string{old, old + ".lock", orphan} {
 		if exists(p) {
 			t.Errorf("%s survived", p)
 		}
 	}
-	for _, p := range []string{fresh, fresh + ".lock", kept, kept + ".lock", other} {
+	for _, p := range []string{fresh, fresh + ".lock", kept, kept + ".lock", live, live + ".lock", other} {
 		if !exists(p) {
 			t.Errorf("%s was removed", p)
 		}

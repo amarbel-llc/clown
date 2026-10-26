@@ -105,7 +105,7 @@ Unverified (I / not found):
    |------|-------|
    | `close-self-run.log` and every log opened through `openLogForAppend` (restart preflight lines, the in-worktree `clown-idle-notify.log`) | 1 MiB; over it, renamed to `<name>.1` (one generation, replaced) at the next open: about 2 MiB per log |
    | `agent-relay.log` (agent home, held open for the unit's life) | same 1 MiB / one `.1` generation, rotated by the writer itself (`internal/logcap`) |
-   | toolcost hook state `$XDG_STATE_HOME/clown/hook-toolcost/<sha>.json` and `.lock` | files untouched for 30 days (`toolcost.StateMaxAge`) are removed by the next hook run; a live transcript rewrites its file every Stop. A pruned transcript that resumes is counted again from its start |
+   | toolcost hook state `$XDG_STATE_HOME/clown/hook-toolcost/<sha>.json` and `.lock` | state files untouched for 30 days (`toolcost.StateMaxAge`) are removed by the next hook run, and a lock only once it has no state file and is as old (a live transcript rewrites its state every Stop; its lock is never rewritten and stays). A pruned transcript that resumes is counted again from its start |
    | hung-session status file | one ~1 KB file per principal, removed on clean exit; a killed frontend leaves it (replaced by the next frontend of that principal) |
    | `$CLOWN_HOOK_DEBUG_LOG` | opt-in, unbounded; unset in unattended runs |
    | the read-write madder store | NOT bounded by clown: it is madder's blob store (outputs of moxy tool calls), and a cap or purge policy is madder's decision. Open: ask madder's session |
