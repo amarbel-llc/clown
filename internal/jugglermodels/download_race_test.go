@@ -43,8 +43,10 @@ func TestDownloadConcurrentDownloadsOfOneModel(t *testing.T) {
 	mux.HandleFunc("/m.gguf", func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
 		arrived <- struct{}{}
-		// Hold every request until all n are in flight (or a while has
-		// passed), so downloads that can overlap do.
+		// Hold each request until all n have arrived or 500 ms have passed.
+		// Downloads that do not take turns would all overlap here; with
+		// per-model turns only one request ever arrives, and the deadline
+		// lets it finish.
 		deadline := time.After(500 * time.Millisecond)
 		for len(arrived) < n {
 			select {

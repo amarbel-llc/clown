@@ -146,6 +146,11 @@ never replaces an installed model.
 Downloads of one model run one at a time in the daemon; one that finds
 the model installed, before it starts or by the time it publishes,
 answers with the installed model as a success.
+A model is a regular file or a symlink to one; anything else at its
+path (a directory, a dangling symlink) fails the download and is left
+alone.
+The download is synced to disk before it is published and its
+directory after, so a crash cannot leave a truncated model in place.
 A download publishes with
 .Xr link 2 ,
 which fails if the model exists, so not even another process's install
