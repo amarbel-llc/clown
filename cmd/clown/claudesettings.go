@@ -66,6 +66,8 @@ func profileDisallowedTools() []string {
 //     variable the env block is omitted.
 //   - The top-level remoteControlAtStartup key, injected unconditionally
 //     (it has no paired env var to gate on; see below).
+//   - permissions.defaultMode = "dontAsk", only under CLOWN_UNATTENDED=1
+//     (clown#323, unattendedEnv).
 //
 // Because remoteControlAtStartup is always present, this never returns "".
 //
@@ -130,6 +132,13 @@ func claudeSafetySettingsJSON(principal, model string) string {
 	}
 	if len(env) > 0 {
 		settings["env"] = env
+	}
+
+	// The unattended posture (clown#323, FDR 0023): CLOWN_UNATTENDED=1 puts
+	// claude in dontAsk. Any other value was refused by unattendedGate
+	// before the args were built.
+	if os.Getenv(unattendedEnv) == "1" {
+		settings["permissions"] = map[string]any{"defaultMode": unattendedMode}
 	}
 
 	// Injected unconditionally — see the doc comment.

@@ -38,9 +38,16 @@ Claude API auth and every credential's expiry behaviour (not found in-tree).
 - `--settings` env: `CLAUDE_AFK_TIMEOUT_MS=2147483647` (AskUserQuestion
   auto-continue off, clown#163: still to verify on the current build),
   `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`.
-- **No `--permission-mode`, `--allowedTools` or `defaultMode`** anywhere in
-  clown's Go code: claude runs in its default mode, where an unallowed call
-  prompts.
+- **No `--permission-mode` or `--allowedTools`** in clown's Go code. Without
+  `CLOWN_UNATTENDED`, claude runs in its default mode, where an unallowed
+  call prompts. With `CLOWN_UNATTENDED=1` (exactly `1`), clown adds
+  `permissions.defaultMode = "dontAsk"` to its `--settings` JSON, claude
+  only (#323, FDR 0023; any other value, another provider, `--naked`, or a
+  conflicting `--permission-mode` refuses the launch).
+- **Counters under `dontAsk`:** `PermissionRequest` never fires (V, `-p`),
+  and all three `clown.permission.<key>.{prompted,approved,declined}`
+  counters start there, so an unattended session counts nothing: its
+  denials are invisible to them and cannot feed an allow list.
 - `clown-hook-allow` (PreToolUse): allows reads under `/nix/store`, every
   `mcp__plugin_clown-builtin-jobs_*` tool, rewrites the Explore agent to the
   read-only Discover subagent; the juggler paid-API tool is deliberately left
@@ -64,8 +71,8 @@ Claude API auth and every credential's expiry behaviour (not found in-tree).
 
 ## 4. Missing for days-long unattended operation
 
-1. No defined unattended permission mode for a plain clown launch (spinclass
-   sets `dontAsk` only for its confined spawns).
+1. The unattended permission mode for a plain clown launch is
+   `CLOWN_UNATTENDED=1` (#323); not yet checked live (FDR 0023 D0 and B5).
 2. No notification for a prompt-stuck session or a refused profile change.
 3. No consumer of the permission counters and no live proof of interactive
    outcomes; nothing reads the counters to change an allow list.
@@ -106,8 +113,8 @@ Claude API auth and every credential's expiry behaviour (not found in-tree).
 ## 6. Decisions only the operator can make
 
 - Ruled 2026-10-26: unattended plain launches use `dontAsk` (silent denial),
-  not the default mode that blocks at the dialog (#323; not implemented
-  yet).
+  not the default mode that blocks at the dialog (#323: the
+  `CLOWN_UNATTENDED=1` marker, FDR 0023; the live checks are still to run).
 - Ruled 2026-10-26: no fallback to the inherited ssh-agent when the card or
   the mint fails; the session goes without push credentials (#324).
 - Ruled 2026-10-26: a prompt-stuck or hung session is recovered only by the

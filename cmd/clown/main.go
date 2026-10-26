@@ -782,6 +782,13 @@ func runWithFlags(flags parsedFlags) int {
 		flags.forwarded, flags.identity.Key, flags.resumeHintID = decideClaudeSession(flags.forwarded, flags.identity.Key)
 	}
 
+	// clown#323: CLOWN_UNATTENDED=1 must end up as claude's dontAsk, or the
+	// launch is refused, before anything is written or started.
+	if err := unattendedGate(&flags); err != nil {
+		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
+		return 1
+	}
+
 	// clown#318: a launch naming a session that ran confined runs under the
 	// same spec and boundary, or is refused (runConfinementGate lists what
 	// is not covered); checked here, once the session ids are final and

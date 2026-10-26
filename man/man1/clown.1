@@ -529,7 +529,13 @@ to its maximum, so an AskUserQuestion decision is never auto-continued;
 (always set);
 .It
 .Ev CLOWN_SESSION_ID ,
-so hooks see the session identity.
+so hooks see the session identity;
+.It
+.Cm permissions.defaultMode : Cm dontAsk ,
+only under
+.Ev CLOWN_UNATTENDED Ns = Ns Li 1
+(see
+.Sx ENVIRONMENT ) .
 .El
 .Pp
 Auto-mode and bypass-permissions mode are
@@ -549,6 +555,36 @@ Overridden by
 .Fl -provider .
 Valid values: as for
 .Fl -provider .
+.It Ev CLOWN_UNATTENDED
+When set to exactly
+.Li 1 ,
+the launch runs claude in its
+.Cm dontAsk
+permission mode: a tool call that is not allowed is denied with no dialog,
+and the session carries on (clown#323).
+.Nm
+adds
+.Cm permissions.defaultMode : Cm dontAsk
+to its
+.Fl -settings
+document; nothing is recorded, so every launch, restart and
+.Cm clown resume
+reads its own environment.
+Unset or empty: claude's default mode.
+Any other value is refused, and so is the marker with a provider other than
+claude, with
+.Fl -naked ,
+or with provider args that pass another
+.Fl -permission-mode ,
+.Fl -dangerously-skip-permissions ,
+.Fl -settings
+or
+.Fl -setting-sources .
+Under
+.Cm dontAsk
+claude fires no PermissionRequest hook, so the
+.Li clown.permission.*
+counters count nothing.
 .It Ev CLOWN_SKIP_FAILED_PLUGINS
 When set to
 .Li 1 ,
