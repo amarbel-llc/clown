@@ -174,11 +174,10 @@ func runChecklistPicker(title string, rows []checklistRow) (checked map[string]b
 	l.KeyMap.PrevPage.SetKeys(append(l.KeyMap.PrevPage.Keys(), "ctrl+b")...)
 	l.KeyMap.NextPage.SetKeys(append(l.KeyMap.NextPage.Keys(), "ctrl+f")...)
 
-	m, err := tea.NewProgram(checklistModel{list: l}, tea.WithAltScreen()).Run()
+	cm, err := runAltScreenPicker(checklistModel{list: l})
 	if err != nil {
 		return nil, false, err
 	}
-	cm := m.(checklistModel)
 	if cm.quit {
 		return nil, false, nil
 	}

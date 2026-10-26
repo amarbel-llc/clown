@@ -676,11 +676,10 @@ func pickSession(ss []sessions.Session) (*sessions.Session, error) {
 	l.Title = "Select a session to resume"
 	l.SetShowStatusBar(false)
 	l.SetFilteringEnabled(true)
-	m, err := tea.NewProgram(sessionPickerModel{list: l}, tea.WithAltScreen()).Run()
+	pm, err := runAltScreenPicker(sessionPickerModel{list: l})
 	if err != nil {
 		return nil, err
 	}
-	pm := m.(sessionPickerModel)
 	if pm.quit {
 		return nil, nil
 	}

@@ -1,0 +1,50 @@
+package main
+
+import (
+	"io"
+	"strings"
+	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
+)
+
+// clown#200: the four bubbletea pickers share one run-and-unwrap tail.
+
+// quitAtOnce is a picker that ends as soon as it starts, carrying a marker so
+// the test can tell the returned model is the final one.
+type quitAtOnce struct{ marker string }
+
+func (m quitAtOnce) Init() tea.Cmd { return tea.Quit }
+func (m quitAtOnce) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	return m, nil
+}
+func (m quitAtOnce) View() string { return "" }
+
+// becomesOther hands bubbletea a model of another type, which a hand-written
+// `res.(T)` would panic on.
+type becomesOther struct{}
+
+func (becomesOther) Init() tea.Cmd { return func() tea.Msg { return struct{}{} } }
+func (becomesOther) Update(tea.Msg) (tea.Model, tea.Cmd) {
+	return quitAtOnce{marker: "other"}, tea.Quit
+}
+func (becomesOther) View() string { return "" }
+
+var headlessPicker = []tea.ProgramOption{tea.WithInput(nil), tea.WithOutput(io.Discard)}
+
+func TestRunAltScreenPickerReturnsTheFinalModel(t *testing.T) {
+	got, err := runAltScreenPicker(quitAtOnce{marker: "final"}, headlessPicker...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.marker != "final" {
+		t.Fatalf("model = %+v, want the final quitAtOnce", got)
+	}
+}
+
+func TestRunAltScreenPickerRefusesAModelOfAnotherType(t *testing.T) {
+	_, err := runAltScreenPicker(becomesOther{}, headlessPicker...)
+	if err == nil || !strings.Contains(err.Error(), "quitAtOnce") {
+		t.Fatalf("err = %v, want an error naming the unexpected model type", err)
+	}
+}

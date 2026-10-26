@@ -257,11 +257,10 @@ func pickProfile(profiles []profile.Profile) (chosen *profile.Profile, addReques
 	l.Title = "Select a profile"
 	l.SetShowStatusBar(false)
 	l.SetFilteringEnabled(true)
-	m, err := tea.NewProgram(pickerModel{list: l}, tea.WithAltScreen()).Run()
+	pm, err := runAltScreenPicker(pickerModel{list: l})
 	if err != nil {
 		return nil, false, err
 	}
-	pm := m.(pickerModel)
 	if pm.quit {
 		return nil, false, nil
 	}

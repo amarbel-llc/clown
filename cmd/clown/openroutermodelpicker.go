@@ -242,11 +242,10 @@ func runOpenRouterModelPicker(models []openRouterModel, current string) (id stri
 		detailBox:  lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1).Width(96),
 		detailWrap: lipgloss.NewStyle().Width(92),
 	}
-	res, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
+	final, err := runAltScreenPicker(m)
 	if err != nil {
 		return "", false, err
 	}
-	final := res.(openRouterPickerModel)
 	if final.chosen == "" {
 		return "", false, nil
 	}
