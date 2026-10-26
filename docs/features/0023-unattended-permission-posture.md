@@ -237,6 +237,7 @@ pull (`session-health`); spinclass has no periodic or push detector yet.
 | `unit` | string | The agent-scope unit, when confined; empty unconfined or before systemd-run ran. |
 | `main_pid` | int | Unconfined: the provider's pid. Confined: the unit's `MainPID`, the in-unit init (the provider, or the exec shim running it as a child), as the agent-scope result file records it. 0 until known. |
 | `transcript_path` | string | `transcript_path` from the last turn-start hook's stdin (absolute, or the payload is dropped); empty until one reported it. |
+| `restart_refusal` | object, optional | Present only after a restart that spinclass's preflight consumed was dropped, so the requester must ask again (see `docs/plans/2026-10-26-restart-refusal-visible.md`). `{at, kind, profile, pinned_digest, current_digest, text}`: `at` a time (spinclass dedups on it), `kind` one of `profile-gate`, `resume`, `countdown`, `turn-started` (an unknown kind means "a consumed restart was dropped"), `profile` the launch's profile, the digests empty unless known, `text` one printable line of at most 300 bytes. Written only by the frontend; a successful launch of the principal opens a new file without it. Additive: the file's `version` stays 1. |
 | `written_at` | time | This write. |
 
 Times are RFC 3339 in UTC with nine fraction digits

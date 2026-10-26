@@ -95,11 +95,48 @@ func TestRecordSpawnBrief(t *testing.T) {
 	if _, ok, _ := sessions.SpawnBriefDigestOf(restartTestPrincipal); ok {
 		t.Fatal("a spawn with no operands recorded a brief")
 	}
+	// A spawn that carried no brief ends in a flag or an empty operand: nothing
+	// is recorded, or a restart would drop a real flag.
+	for _, tail := range []string{"--dangerously-skip-permissions", "-p", ""} {
+		bare := f
+		bare.forwarded = []string{"--model", "opus", tail}
+		if err := recordSpawnBrief(bare, true); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok, _ := sessions.SpawnBriefDigestOf(restartTestPrincipal); ok {
+			t.Fatalf("a spawn ending in %q recorded a brief", tail)
+		}
+	}
 	if err := recordSpawnBrief(f, true); err != nil {
 		t.Fatal(err)
 	}
 	got, ok, err := sessions.SpawnBriefDigestOf(restartTestPrincipal)
 	if err != nil || !ok || got != sessions.BriefDigest(spawnBriefTestBrief) {
 		t.Fatalf("recorded = %q, %v, %v; want the digest of the brief", got, ok, err)
+	}
+}
+
+// A markdown brief that starts with a dash is still a brief; a bare dash
+// token is a flag. Neither a recorded flag digest (a stale or planted record)
+// nor an empty operand makes the relaunch drop a flag.
+func TestBriefLookingTokens(t *testing.T) {
+	for tok, want := range map[string]bool{
+		"- fix the thing\n- and the other": true,
+		spawnBriefTestBrief:                true,
+		"--model":                          false,
+		"-p":                               false,
+		"--dangerously-skip-permissions":   false,
+		"":                                 false,
+	} {
+		if got := looksLikeBrief(tok); got != want {
+			t.Errorf("looksLikeBrief(%q) = %v, want %v", tok, got, want)
+		}
+	}
+	withSpawnBriefLookup(t, func(string) (string, bool, error) { return sessions.BriefDigest("--verbose"), true, nil })
+	f := parsedFlags{provider: "claude", forwarded: []string{"--verbose", "--model", "opus"}}
+	f.identity.Key = restartTestPrincipal
+	want := []string{"--provider", "claude", "--", "--verbose", "--model", "opus", "--resume", restartTestPrincipal}
+	if got := restartArgv(f, ""); !slices.Equal(got, want) {
+		t.Fatalf("argv = %q, want a flag kept even when its digest was recorded: %q", got, want)
 	}
 }

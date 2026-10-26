@@ -12,7 +12,8 @@ import "code.linenisgreat.com/clown/internal/toolcost"
 //	clown.restart.preflight.verdict.<v>      its verdict: restart, none or refused
 //	clown.restart.preflight.error            it failed, timed out or was unparsable
 //	clown.restart.cancelled                  a consumed request was dropped (profile gate, countdown, busy)
-//	clown.restart.stopping                   the provider was told to stop for a relaunch
+//	clown.restart.refused                    the relaunch's own resume gate refused, after the stop
+//	clown.restart.stopping                 the provider was told to stop for a relaunch
 //	clown.restart.relaunch.exec              the old frontend is exec'ing the new one
 //	clown.restart.relaunch.aborted           the relaunch did not happen (session closed, no clown, exec failed)
 //	clown.restart.relaunched                 a frontend started as a restart's relaunch
@@ -24,6 +25,7 @@ const (
 	metricPreflightVerdict  = "clown.restart.preflight.verdict."
 	metricPreflightError    = "clown.restart.preflight.error"
 	metricRestartCancelled  = "clown.restart.cancelled"
+	metricRestartRefused    = "clown.restart.refused"
 	metricRestartStopping   = "clown.restart.stopping"
 	metricRelaunchExec      = "clown.restart.relaunch.exec"
 	metricRelaunchAborted   = "clown.restart.relaunch.aborted"

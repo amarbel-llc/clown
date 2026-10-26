@@ -7,6 +7,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"code.linenisgreat.com/clown/internal/sessionstatus"
 )
 
 // R9: a FIFO at a log path does not block the (serial) caller.
@@ -28,7 +30,7 @@ func TestLogSelfCloseDoesNotBlockOnAFIFO(t *testing.T) {
 func TestCancelLineHasNoControlCharacters(t *testing.T) {
 	var notice bytes.Buffer
 	fr := frontendRestarter{principal: restartTestPrincipal, notify: &notice, logPath: filepath.Join(t.TempDir(), "l.log")}
-	fr.cancelled("bad\x1b[2J\x07 profile")
+	fr.cancelled(sessionstatus.RefusalProfileGate, "bad\x1b[2J\x07 profile")
 	body := strings.Trim(notice.String(), "\r\n")
 	if strings.ContainsAny(body, "\x1b\x07\r\n") {
 		t.Fatalf("cancel line = %q", notice.String())

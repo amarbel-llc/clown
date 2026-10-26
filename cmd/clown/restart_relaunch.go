@@ -19,7 +19,23 @@ import (
 	"time"
 
 	"code.linenisgreat.com/clown/internal/sessions"
+	"code.linenisgreat.com/clown/internal/sessionstatus"
 )
+
+// noteRelaunchRefused records that this restart's relaunch was refused by the
+// resume gate, before the frontend exits: it is counted, and written to the
+// principal's status file once (no Writer exists yet) so a holder can see why
+// the session did not come back. Any other launch records nothing.
+func noteRelaunchRefused(relaunched bool, flags parsedFlags, refusal error) {
+	if !relaunched {
+		return
+	}
+	countMetric(metricRestartRefused)
+	r := sessionstatus.RestartRefusal{Kind: sessionstatus.RefusalResume, Profile: flags.profile, Text: refusal.Error()}
+	if err := sessionstatus.WriteRestartRefusal(flags.identity.Key, os.Getenv("SPINCLASS_SESSION_ID"), r); err != nil {
+		fmt.Fprintf(os.Stderr, "clown: recording the refused restart in the status file: %v\n", err)
+	}
+}
 
 // The restart itself (spinclass#419). On a "restart" verdict the idle runner
 // records a relaunchPlan and stops the provider; runWithFlags then unwinds as
@@ -160,11 +176,22 @@ func withoutSpawnBrief(args []string, principal string) []string {
 		return args
 	}
 	for i := len(args) - 1; i >= 0; i-- {
-		if sessions.BriefDigest(args[i]) == digest {
+		if looksLikeBrief(args[i]) && sessions.BriefDigest(args[i]) == digest {
 			return slices.Concat(args[:i], args[i+1:])
 		}
 	}
 	return args
+}
+
+// looksLikeBrief is false for an empty token and for one shaped like a flag (a
+// dash first and no whitespace), which is never recorded or dropped as a
+// brief. It cannot tell a value-taking flag's value from a brief: a spawn-entry
+// that carries no {prompt} at all, ending in such a value, is the residual case.
+func looksLikeBrief(tok string) bool {
+	if tok == "" {
+		return false
+	}
+	return !strings.HasPrefix(tok, "-") || strings.ContainsAny(tok, " \t\n")
 }
 
 // recordSpawnBrief records the digest of the brief a spawn launch delivers:
@@ -177,6 +204,9 @@ func recordSpawnBrief(flags parsedFlags, spawn bool) error {
 		return nil
 	}
 	brief := flags.forwarded[len(flags.forwarded)-1]
+	if !looksLikeBrief(brief) {
+		return nil // a spawn that carried no brief ends in a flag, or in an empty operand
+	}
 	return sessions.RecordSession(sessions.NameRecord{SessionID: flags.identity.Key, SpawnBriefSHA256: sessions.BriefDigest(brief)})
 }
 
@@ -390,14 +420,28 @@ type frontendRestarter struct {
 	// notify gets one line when a restart the preflight consumed is
 	// cancelled (the frontend's stderr); nil: the log only.
 	notify io.Writer
+	// profile is the launch's profile name, for the refusal record.
+	profile string
+	// refusal records a dropped restart in the status file (the late-bound
+	// status writer, which does not exist when the restarter is built); nil:
+	// nothing is recorded.
+	refusal func(sessionstatus.RestartRefusal)
 }
 
 // cancelled records a restart dropped after spinclass consumed the request:
 // nothing will retry it, so the operator and the log are told the requester
-// must ask again.
-func (fr frontendRestarter) cancelled(why string) {
+// must ask again, and the status file carries a record a holder can read
+// (kind is a sessionstatus.Refusal* value).
+func (fr frontendRestarter) cancelled(kind, why string) {
 	countMetric(metricRestartCancelled)
 	why = printableOneLine(why)
+	if fr.refusal != nil {
+		r := sessionstatus.RestartRefusal{Kind: kind, Text: why}
+		if kind == sessionstatus.RefusalProfileGate {
+			r.Profile = fr.profile
+		}
+		fr.refusal(r)
+	}
 	logSelfClose(fr.logPath, "restart (%s) cancelled after spinclass consumed the request: %s; the requester must ask again", fr.principal, why)
 	if fr.notify != nil {
 		fmt.Fprintf(fr.notify, "\r\nclown: restart cancelled (%s); its requester must ask again\r\n", why)
@@ -411,7 +455,7 @@ func (fr frontendRestarter) restart(req restartRequest, v preflightVerdict) {
 	}
 	if fr.profileCheck != nil {
 		if err := fr.profileCheck(); err != nil {
-			fr.cancelled(fmt.Sprintf("the relaunch's profile gate would refuse, so the session keeps running: %v", err))
+			fr.cancelled(sessionstatus.RefusalProfileGate, fmt.Sprintf("the relaunch's profile gate would refuse, so the session keeps running: %v", err))
 			return
 		}
 	}
@@ -428,7 +472,7 @@ func (fr frontendRestarter) restart(req restartRequest, v preflightVerdict) {
 		proceed, how := fr.countdown(reason, cancelOnTurn)
 		logSelfClose(fr.logPath, "restart (%s): countdown: %s", fr.principal, how)
 		if !proceed {
-			fr.cancelled(how)
+			fr.cancelled(sessionstatus.RefusalCountdown, how)
 			return
 		}
 	}
@@ -436,7 +480,7 @@ func (fr frontendRestarter) restart(req restartRequest, v preflightVerdict) {
 	// stopped mid-turn. The request was consumed by the preflight, so the
 	// restart is dropped; the requester asks again.
 	if cancelOnTurn && fr.busy != nil && fr.busy() {
-		fr.cancelled("a turn started during the countdown")
+		fr.cancelled(sessionstatus.RefusalTurnStarted, "a turn started during the countdown")
 		return
 	}
 	// The plan is stored only while the provider still runs, checked under

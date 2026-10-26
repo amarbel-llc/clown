@@ -844,6 +844,7 @@ func runWithFlags(flags parsedFlags) int {
 	decision, err := checkLaunchProfile(gate, sessions.ProfileOf)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
+		noteRelaunchRefused(restartRelaunched, flags, err)
 		return 1
 	}
 	// An approved or trust-on-first-use pin is recorded now, before any
@@ -1139,7 +1140,12 @@ func runWithFlags(flags parsedFlags) int {
 	turnRunning := &atomic.Bool{}
 	countdown := newRestartCountdown()
 	countdown.busy = turnRunning.Load
+	// The status writer is built by armSelfClose below, after the restarter;
+	// the refusal hook reads it when a restart is dropped.
+	var statusWriter atomic.Pointer[sessionstatus.Writer]
 	restarter := frontendRestarter{
+		profile:      flags.profile,
+		refusal:      func(r sessionstatus.RestartRefusal) { statusWriter.Load().SetRestartRefusal(r) },
 		principal:    flags.identity.Key,
 		argv:         restartArgv(flags, attachedID),
 		stop:         stopProviderBySignal,
@@ -1152,6 +1158,7 @@ func runWithFlags(flags parsedFlags) int {
 	}
 	idleDir, idleSock, restartTrig, sessionStatus, closeIdle := armSelfClose(flags, root, restarts, restarter.restart, turnRunning)
 	defer closeIdle()
+	statusWriter.Store(sessionStatus)
 	if idleDir != "" {
 		pluginDirs = append(pluginDirs, idleDir)
 		flags.idleSocket = idleSock

@@ -63,7 +63,10 @@ type Status struct {
 	MainPID int `json:"main_pid"`
 	// TranscriptPath is what the last turn-start hook reported.
 	TranscriptPath string `json:"transcript_path"`
-	WrittenAt      string `json:"written_at"`
+	// RestartRefusal is set when a restart spinclass consumed was dropped
+	// (refusal.go); absent otherwise. Additive: the version stays 1.
+	RestartRefusal *RestartRefusal `json:"restart_refusal,omitempty"`
+	WrittenAt      string          `json:"written_at"`
 }
 
 // Payload is what a turn-start hook reports, from its stdin.
