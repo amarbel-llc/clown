@@ -59,7 +59,8 @@ Unverified (I / not found):
 1. **No unattended permission posture.** clown never sets `--permission-mode`
    (default mode: an unallowed call prompts; nothing times the prompt out).
    spinclass splices `dontAsk` into *its* confined spawns; a plain
-   `clown --agent-scope` launch has none. See the permissions page.
+   `clown --agent-scope` launch has none. Ruled 2026-10-26: unattended plain
+   launches use `dontAsk` (#323, not implemented). See the permissions page.
 2. **Credentials.** Read-only OAuth refresh unproven; no expiry path; the
    frontend credential-injection proxy is a design only; push/sign needs the
    operator's card (every act prompts), so an unattended session cannot push.
@@ -83,12 +84,12 @@ Unverified (I / not found):
    across an OAuth access-token expiry with the read-only bind. No issue.
 2. Establish whether `clown resume` of a confined session re-applies
    `--agent-scope` (read the spinclass launch path and `resumeLaunchFlags`;
-   test); fix if not. No issue: file one.
+   test); fix if not. #318.
 3. Test and fix the frontend-SIGKILL case (`BindsTo`/`RuntimeMaxSec` or a
-   reaper). No issue.
-4. Add unit resource limits and a wall clock to `properties()`. No issue
+   reaper). #319.
+4. Add unit resource limits and a wall clock to `properties()`. #320
    (juggler has a `RuntimeMaxSec` precedent).
-5. Log/state retention caps (listed in section 2.5). No issue.
+5. Log/state retention caps (listed in section 2.5). #321.
 6. Live check, in one confined session, of idle self-close, monitors, serve
    socket, statsd relay and the permission counters (#287, #269 cited as built
    not verified; #302).
@@ -103,9 +104,13 @@ Unverified (I / not found):
   frontend injection proxy.
 - Egress defaults: add the krone cache, and which login hosts stay default.
 - Whether unattended sessions may push/sign at all (piggy prompts every act).
-- Resource limit values, wall clock, and restart-on-failure policy.
+  Ruled 2026-10-26, in part: with the card absent there is no fallback to the
+  inherited ssh-agent (#324).
+- Resource limit values, wall clock, and restart-on-failure policy (#320;
+  restart-on-failure: hung-session recovery stays operator-gated, ruled
+  2026-10-26, see the restart page).
 - Linger / reboot policy on flic.
 - Whether `clown resume` of a confined session must re-confine (this page
-  suspects it does not).
-- Log and state retention.
+  suspects it does not; #318).
+- Log and state retention (#321).
 - Acceptance of in-unit exclusions/recipe scoping as policy only.

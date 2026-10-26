@@ -74,7 +74,8 @@ Claude API auth and every credential's expiry behaviour (not found in-tree).
    stays down (R/I).
 5. Credentials: forge push credentials are minted per session from the
    operator's card; with the card absent a session either refuses or, with
-   `--allow-no-credential`, falls back to the inherited ssh-agent; no expiry
+   `--allow-no-credential`, falls back to the inherited ssh-agent (ruled
+   against for unattended use, #324); no expiry
    or refresh path found; commit signing is unavailable (unsigned commits are
    operator-accepted); XMPP/claude API credential behaviour is outside this
    repo.
@@ -90,23 +91,28 @@ Claude API auth and every credential's expiry behaviour (not found in-tree).
    approve/reject/Esc: #302; this fixes the real `declined` semantics.
 2. Live-check #243 (MEMORY.md still loaded) and #163 (AFK auto-continue).
 3. Run the #40 `clown-hook-allow` deny control with live credentials: #40.
-4. Decide the unattended permission posture (`dontAsk` vs default), then
-   implement it as a settings or `--permission-mode` injection. No issue:
-   file one (related: #276 profile-level spawn permission schemes, #271
-   headless juggler-only agent loop).
-5. Operator notification for a stuck prompt or a refused profile change. No
-   issue: file one (related: #214 monitor exits mid-session).
+4. Implement the unattended permission posture, ruled `dontAsk` (section 6),
+   as a settings or `--permission-mode` injection. #323 (related: #276
+   profile-level spawn permission schemes, #271 headless juggler-only agent
+   loop).
+5. Operator notification for a stuck prompt or a refused profile change.
+   #322 (related: #214 monitor exits mid-session).
 6. After step 1: spike an auto-allow decision from the counters: #302.
-7. Posture for the credential fallback and the absent card. No issue: file.
+7. Posture for the credential fallback and the absent card: no fallback to
+   the inherited ssh-agent (ruled, section 6). #324.
 8. Security calls: #292, #288, #279, #300.
 9. Profile approval from another surface: spinclass#407.
 
 ## 6. Decisions only the operator can make
 
-- Default permission mode for unattended lanes: `dontAsk` (silent denial) or
-  default (blocks at the dialog).
-- Whether unattended sessions may use the inherited ssh-agent when the card
-  or mint fails, or must stop.
+- Ruled 2026-10-26: unattended plain launches use `dontAsk` (silent denial),
+  not the default mode that blocks at the dialog (#323; not implemented
+  yet).
+- Ruled 2026-10-26: no fallback to the inherited ssh-agent when the card or
+  the mint fails; the session goes without push credentials (#324).
+- Ruled 2026-10-26: a prompt-stuck or hung session is recovered only by the
+  operator; the coordinator gets a push notification for hung children
+  (#322, design TBD).
 - Whether unsigned commits are acceptable for unattended work.
 - Whether the counters may ever drive auto-allow, and at what threshold.
 - Profile-change policy when unattended: stay down until approved (today) or

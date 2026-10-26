@@ -80,10 +80,12 @@ self-restart is untested (spinclass runbook: "untested (I)").
    runbook prerequisite). spinclass#419.
 3. Detached throwaway live run per the spinclass runbook; then the race check
    (runbook step 5). spinclass#419.
-4. Decide the hung-session and provider-crash policy (section 4). No issue.
+4. Decide the hung-session and provider-crash policy (section 4). Hung
+   sessions ruled 2026-10-26 (recovery stays operator-gated; a push
+   notification for hung children, #322); provider crash still open.
 5. Confined-session restart: spinclass#382 with clown#280. No issue for the
    test.
-6. `close-self-run.log` retention. No issue.
+6. `close-self-run.log` retention. #321.
 7. Frontend return after reboot (user unit plus linger). No issue.
 8. First live posh modal (posh runbook). No issue.
 9. Adjacent: clown#241 (plugin host does not restart or surface a dead
@@ -93,15 +95,17 @@ self-restart is untested (spinclass runbook: "untested (I)").
 
 ## 4. Decisions only the operator can make
 
-- Whether unattended recovery of a hung session is wanted, and who may
-  trigger it (force stays operator-gated today).
+- Ruled 2026-10-26: recovery of a hung session stays operator-gated (force
+  remains always-ask); in addition, the coordinator gets a push notification
+  for hung children (#322; design TBD: coordinator/spinclass or a clown
+  hook).
 - Whether a hung session with an unforced request should ever be restarted
   (today the busy cancel blocks it).
 - Whether the countdown runs with no viewer (today: a 30 s delay).
 - Who is told when a profile drift refusal happens (today: nobody).
 - Whether a restart-storm cap belongs in spinclass or clown (none exists).
 - Whether frontends should return after a reboot.
-- `close-self-run.log` retention.
+- `close-self-run.log` retention (#321).
 - Whether to set `[session-entry].restart` on flic, and whether the first
   live test runs on flic's current versions or after an upgrade.
 - Whether the forged-poke limit is acceptable for unattended use.
