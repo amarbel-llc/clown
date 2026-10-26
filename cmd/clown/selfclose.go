@@ -304,9 +304,11 @@ func runIdleNotify(args []string) int {
 	return idleNotify(args, os.Stdin, false)
 }
 
-// shellSingleQuote quotes s for a POSIX shell or fish: single quotes, with an
-// embedded quote written as '\” (close, escaped quote, reopen), which both
-// shells read the same way.
+// shellSingleQuote quotes s for a POSIX shell: single quotes, an embedded
+// single quote written as close-quote, backslash-quote, reopen. Fish reads
+// the same for a path without a backslash (fish also treats two backslashes
+// and backslash-quote as escapes inside single quotes); the paths here are a
+// nix store path and a runtime-dir socket, which hold none.
 func shellSingleQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
