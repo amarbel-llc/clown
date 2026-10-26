@@ -28,13 +28,21 @@ type filterPicker interface {
 	done() (quit, chose bool)
 }
 
-func (m pickerModel) filterState() list.FilterState { return m.list.FilterState() }
-func (m pickerModel) done() (bool, bool) { return m.quit, m.chosen != nil || m.addRequested }
+func (m pickerModel) filterState() list.FilterState {
+	return m.list.FilterState()
+}
+
+func (m pickerModel) done() (bool, bool) {
+	return m.quit, m.chosen != nil || m.addRequested
+}
 
 func (m sessionPickerModel) filterState() list.FilterState {
 	return m.list.FilterState()
 }
-func (m sessionPickerModel) done() (bool, bool) { return m.quit, m.chosen != nil }
+
+func (m sessionPickerModel) done() (bool, bool) {
+	return m.quit, m.chosen != nil
+}
 
 func press(t *testing.T, m filterPicker, k tea.KeyMsg) (filterPicker, bool) {
 	t.Helper()
