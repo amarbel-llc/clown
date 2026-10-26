@@ -130,6 +130,55 @@ and nothing is started, since the two contradict each other.
 A restart relaunch of a session launched with it keeps it, and
 .Cm clown resume
 accepts it too.
+.It Fl -agent-scope Ar spec
+Run the provider confined in a transient systemd user unit described by
+the spinclass-written
+.Ar spec
+(FDR 0020); also settable via
+.Ev CLOWN_AGENT_SCOPE .
+The launch records the absolute, symlink-resolved
+.Ar spec
+path for its claude session (in
+.Pa $XDG_STATE_HOME/clown/session-names.jsonl ,
+which the unit cannot reach); if the record cannot be written, the
+confined launch is refused.
+Any later launch of that session, by
+.Cm clown resume ,
+a direct
+.Fl -resume Ar id
+or
+.Fl -session-id Ar id ,
+or
+.Ev CLOWN_SESSION_ID ,
+runs confined under the same
+.Ar spec
+even without
+.Fl -agent-scope ,
+or is refused: when the
+.Ar spec
+is gone or no longer loads, when a different one is given (a session's
+spec cannot be changed; a new spec means a new session), and under
+.Fl -naked
+or
+.Fl -tent .
+A confined launch must know the claude session it runs under:
+.Fl c ,
+the bare
+.Fl -resume
+picker, and
+.Fl p
+without
+.Fl -session-id
+or
+.Fl -resume Ar id
+are refused with
+.Fl -agent-scope .
+A session never recorded as confined (one launched unconfined, or
+confined by a clown older than this record) runs under the
+.Ar spec
+given, if any;
+.Cm clown resume
+says when it resumes such a session unconfined.
 .It Fl -skip-failed
 When any discovered HTTP MCP plugin server fails to start,
 .Nm

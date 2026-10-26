@@ -31,6 +31,7 @@ type resumeArgs struct {
 	mcpCollapse      bool   // --mcp-collapse: opt into MCP-collapse mode on the resumed launch
 	noAttach         bool   // --no-attach: resume inline, without the [attach] wrap (clown#159)
 	profile          string // --profile: a requested profile, checked against the session's pin (FDR 0022)
+	agentScope       string // --agent-scope: a requested spec, checked against the session's record (clown#318)
 	forwarded        []string
 }
 
@@ -205,7 +206,10 @@ func launchResume(s sessions.Session, args resumeArgs) int {
 			return 1
 		}
 	}
-	return runWithFlags(resumeLaunchFlags(s.ID, args, requested, recorded))
+	// The spec asked for (--agent-scope, else CLOWN_AGENT_SCOPE, the same order
+	// as a plain launch). runWithFlags checks it against the session's
+	// confinement record like any launch's (agentScopeForLaunch, clown#318).
+	return runWithFlags(resumeLaunchFlags(s.ID, args, requested, recorded, cmpOr(args.agentScope, os.Getenv("CLOWN_AGENT_SCOPE"))))
 }
 
 // resumeLaunchFlags builds the launch for resuming session id. The provider
@@ -216,13 +220,16 @@ func launchResume(s sessions.Session, args resumeArgs) int {
 // --cheap-context replay); else, for a session with no pin (FDR 0022
 // decision 13), resumeDefaultProfile lets the clownfile pin or build default
 // apply exactly as on a direct launch, which checkLaunchProfile then pins
-// on first use.
-func resumeLaunchFlags(id string, args resumeArgs, requested, recorded string) parsedFlags {
+// on first use. agentScope is the spec asked for, which runWithFlags checks
+// against the session's confinement record (agentScopeForLaunch).
+func resumeLaunchFlags(id string, args resumeArgs, requested, recorded, agentScope string) parsedFlags {
 	flags := parsedFlags{
 		provider:         "claude",
 		providerExplicit: true,
 		mcpCollapse:      args.mcpCollapse,
 		noAttach:         args.noAttach,
+		agentScopeSpec:   agentScope,
+		resumeCommand:    true,
 		forwarded:        append(slices.Clone(args.forwarded), "--resume", id),
 	}
 	switch {
@@ -447,6 +454,14 @@ func parseResumeArgs(args []string) (resumeArgs, error) {
 			i++
 		case strings.HasPrefix(arg, "--profile="):
 			out.profile = strings.TrimPrefix(arg, "--profile=")
+		case arg == "--agent-scope":
+			if i+1 >= len(args) {
+				return resumeArgs{}, fmt.Errorf("--agent-scope requires an argument")
+			}
+			out.agentScope = args[i+1]
+			i++
+		case strings.HasPrefix(arg, "--agent-scope="):
+			out.agentScope = strings.TrimPrefix(arg, "--agent-scope=")
 		case arg == "--help" || arg == "-h":
 			printResumeHelp()
 			os.Exit(0)
@@ -531,6 +546,15 @@ Key mode (positional repo/worktree):
 --no-attach (all modes):
   Resume inline, without the clownfile [attach] multiplexer wrap, as for
   a direct launch (clown(1)).
+
+Confinement (all modes):
+  A confined launch (--agent-scope / CLOWN_AGENT_SCOPE) records its spec
+  path for the session. Resuming that session relaunches it confined
+  under the same spec. A spec that is gone or no longer loads, or an
+  --agent-scope naming a different spec, refuses the resume; it is never
+  resumed unconfined. A session with no confinement record (never
+  confined, or confined by an older clown) resumes unconfined, with a
+  notice, unless --agent-scope <spec> confines it.
 
 Profiles (all modes):
   A launch records the named profile it applied and that profile's

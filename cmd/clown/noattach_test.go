@@ -20,7 +20,7 @@ func TestResumeAcceptsNoAttach(t *testing.T) {
 	if !args.noAttach {
 		t.Fatal("resume --no-attach not parsed")
 	}
-	f := resumeLaunchFlags(id, args, "", "")
+	f := resumeLaunchFlags(id, args, "", "", "")
 	if !f.noAttach {
 		t.Fatal("resumeLaunchFlags dropped --no-attach")
 	}
@@ -39,7 +39,7 @@ func TestResumeAcceptsNoAttach(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := maybeReexecMultiplexer(cf, resumeLaunchFlags(id, plain, "", ""), clownfile.ModeResume); err == nil {
+	if err := maybeReexecMultiplexer(cf, resumeLaunchFlags(id, plain, "", "", ""), clownfile.ModeResume); err == nil {
 		t.Fatal("resume without --no-attach: want the wrap attempted (Resolve error), got nil")
 	}
 }

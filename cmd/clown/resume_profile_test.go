@@ -197,7 +197,7 @@ func TestResumeLaunchFlags(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			f := resumeLaunchFlags(id, tc.args, tc.requested, tc.recorded)
+			f := resumeLaunchFlags(id, tc.args, tc.requested, tc.recorded, "")
 			if f.provider != "claude" || !f.providerExplicit {
 				t.Errorf("provider %q explicit %v; want claude, explicit (no picker, no clownfile provider)", f.provider, f.providerExplicit)
 			}
@@ -218,7 +218,7 @@ func TestUnpinnedResumeThroughGate(t *testing.T) {
 	const id = "11111111-2222-3333-4444-555555555555"
 	none := fakeProfileLookup(nil, nil)
 
-	f := resumeLaunchFlags(id, resumeArgs{}, "", "")
+	f := resumeLaunchFlags(id, resumeArgs{}, "", "", "")
 	flagProfile := f.profile // what runWithFlags captures before defaulting
 	f.profile = launchProfileName(f, "cf-profile", "")
 	launch := &sessions.ProfilePin{Name: "cf-profile", Digest: "aaaa"}
@@ -228,7 +228,7 @@ func TestUnpinnedResumeThroughGate(t *testing.T) {
 		t.Errorf("defaulted unpinned resume: resumeID %q pinEarly %+v err %v; want a TOFU pin under %s", g.resumeID, d.pinEarly, err, id)
 	}
 
-	f2 := resumeLaunchFlags(id, resumeArgs{profile: "p2"}, "p2", "")
+	f2 := resumeLaunchFlags(id, resumeArgs{profile: "p2"}, "p2", "", "")
 	g2 := newProfileGate(f2, f2.profile, launcherProfileEnv{}, &sessions.ProfilePin{Name: "p2", Digest: "bbbb"}, false, none)
 	if _, err := checkLaunchProfile(g2, none); err == nil || !strings.Contains(err.Error(), "needs approval") {
 		t.Errorf("explicit --profile on an unpinned session: err = %v, want approval needed", err)

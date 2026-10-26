@@ -44,6 +44,9 @@ import (
 // profile, only when it is valid JSON of at most MaxProfileFormBytes; when
 // one was given but not stored, ProfileFormOmitted says why. Both are
 // omitted otherwise, and readers that predate them ignore them.
+//
+// AgentScope (clown#318) is the --agent-scope spec path of a confined
+// launch, so `clown resume` relaunches the session confined (AgentScopeOf).
 type NameRecord struct {
 	SessionID          string          `json:"session_id"`
 	Name               string          `json:"name"`
@@ -52,7 +55,40 @@ type NameRecord struct {
 	ProfileDigest      string          `json:"profile_digest,omitempty"`
 	ProfileForm        json.RawMessage `json:"profile_form,omitempty"`
 	ProfileFormOmitted string          `json:"profile_form_omitted,omitempty"`
+	AgentScope         string          `json:"agent_scope,omitempty"`
 	TS                 time.Time       `json:"ts"`
+}
+
+// AgentScopeOf returns the agent-scope spec path session id was last
+// launched confined under (clown#318): the LAST record for id that carries
+// one. A later record without one does not clear it, so a confined session
+// never silently becomes unconfined. ok is false when no record for id ever
+// carried one.
+//
+// Like ProfileOf it gates `clown resume`, so it fails closed: any failure
+// to read the sidecar (other than its absence) is returned, and so is an
+// unparseable line that mentions id and carries the spec key.
+//
+// The sidecar lives under $XDG_STATE_HOME/clown, which an agent unit does
+// not see (only hook-toolcost and hook-tee below it are bound in), so a
+// confined agent cannot rewrite its own record.
+func AgentScopeOf(id string) (spec string, ok bool, err error) {
+	err = scanRecords(func(line string, rec *NameRecord) error {
+		if rec == nil {
+			if strings.Contains(line, `"agent_scope`) && strings.Contains(line, id) {
+				return fmt.Errorf("session-names sidecar holds an unparseable agent-scope record for session %s: %.200s", id, line)
+			}
+			return nil
+		}
+		if rec.SessionID == id && rec.AgentScope != "" {
+			spec, ok = rec.AgentScope, true
+		}
+		return nil
+	})
+	if err != nil {
+		return "", false, err
+	}
+	return spec, ok, nil
 }
 
 // MaxProfileFormBytes caps a stored ProfileForm. A larger form is not
@@ -90,7 +126,7 @@ func RecordSessionName(id, name, group string) error {
 
 // RecordSession appends rec, stamped with the current time. Same
 // best-effort contract as RecordSessionName. A record with no id, or with
-// neither a name nor a profile, is a silent no-op.
+// none of a name, a profile or an agent scope, is a silent no-op.
 //
 // Write shape (not crash durability): the whole record, newline included,
 // goes out in ONE write(2) on an O_APPEND descriptor, so it is appended as a
@@ -104,7 +140,7 @@ func RecordSessionName(id, name, group string) error {
 // or this write failing) is not caught until the next record's check.
 // TruncatedTail reports a fragment at the end.
 func RecordSession(rec NameRecord) error {
-	if rec.SessionID == "" || (rec.Name == "" && rec.Profile == "") {
+	if rec.SessionID == "" || (rec.Name == "" && rec.Profile == "" && rec.AgentScope == "") {
 		return nil
 	}
 	path, err := namesPath()

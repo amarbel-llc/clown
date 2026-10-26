@@ -49,10 +49,13 @@ Unverified (I / not found):
 - Linger / host reboot behaviour, journald capture of unit stderr (`--pipe`).
 - Whether a SIGKILLed frontend leaves the unit running (the stop is a
   `defer`; no `BindsTo`/`PartOf`/`RuntimeMaxSec` in `unit.go`) (I, untested).
-- Does `clown resume` of a confined session stay confined? `resume*.go` has
-  no `--agent-scope` handling (V by search); the attach re-exec carries it
-  (`attach.go:498`); whether a spinclass-launched resume re-adds it is not
-  established (I).
+- Does `clown resume` of a confined session stay confined? Fixed on the
+  clown side (#318): a confined launch records its spec in the
+  session-names sidecar (outside the unit), and `clown resume` re-applies
+  it, refusing when the spec is gone or a different one is asked for (R,
+  unit tests). spinclass side still to do: `sc resume` sets no
+  `CLOWN_AGENT_SCOPE` and splices no `dontAsk` (R); the clown-side record
+  now confines it anyway, but the dontAsk splice is spinclass's.
 
 ## 2. Missing for a confined session to run for days unattended
 
@@ -73,7 +76,8 @@ Unverified (I / not found):
 5. **Disk and logs.** No rotation/pruning found for `close-self-run.log`, the
    toolcost hook state, `agent-relay.log` (in the agent home under the
    worktree), the read-write madder store.
-6. **Resume keeps confinement?** See section 1 (unverified, probably not).
+6. **Resume keeps confinement?** Fixed on the clown side (#318); the
+   spinclass side (dontAsk on resume) still to do. See section 1.
 7. **Exclusions are policy, not a boundary** in-unit (FDR 705-714); the
    in-unit stdio bridge trusts loopback (#288).
 8. **Egress default** lacks the krone nix cache host (#300).
@@ -84,7 +88,7 @@ Unverified (I / not found):
    across an OAuth access-token expiry with the read-only bind. No issue.
 2. Establish whether `clown resume` of a confined session re-applies
    `--agent-scope` (read the spinclass launch path and `resumeLaunchFlags`;
-   test); fix if not. #318.
+   test); fix if not. #318: clown side done; spinclass side open.
 3. Test and fix the frontend-SIGKILL case (`BindsTo`/`RuntimeMaxSec` or a
    reaper). #319.
 4. Add unit resource limits and a wall clock to `properties()`. #320
@@ -110,7 +114,7 @@ Unverified (I / not found):
   restart-on-failure: hung-session recovery stays operator-gated, ruled
   2026-10-26, see the restart page).
 - Linger / reboot policy on flic.
-- Whether `clown resume` of a confined session must re-confine (this page
-  suspects it does not; #318).
+- Whether `clown resume` of a confined session must re-confine: ruled yes
+  (operator go, 2026-10-26); clown side done (#318).
 - Log and state retention (#321).
 - Acceptance of in-unit exclusions/recipe scoping as policy only.

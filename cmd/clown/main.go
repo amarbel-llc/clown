@@ -768,6 +768,13 @@ func runWithFlags(flags parsedFlags) int {
 		flags.forwarded, flags.identity.Key, flags.resumeHintID = decideClaudeSession(flags.forwarded, flags.identity.Key)
 	}
 
+	// clown#318: a session that ran confined runs confined again, whatever the
+	// entrypoint, or the launch is refused; checked here, once the session ids
+	// are final and before anything is written or started.
+	if code := applyAgentScopeRecord(&flags); code != 0 {
+		return code
+	}
+
 	// FDR 0022 slice 2 (clown#295): refuse a launch that would change a
 	// session's recorded profile without the launcher's approval, before any
 	// session state is written. Placed after decideClaudeSession so the
@@ -960,11 +967,20 @@ func runWithFlags(flags parsedFlags) int {
 		// session's different pin without approval (or whose pin cannot be
 		// read), so this write never re-pins a session the gate did not clear.
 		// Best-effort, but a failure is reported.
-		for _, id := range lineageRecordIDs(flags.provider, flags.identity, flags.resumeHintID) {
-			base := sessions.NameRecord{SessionID: id, Name: flags.clownName, Group: flags.groupID}
-			if err := sessions.RecordSession(withProfileForm(launchRecordFor(base, gate.launch, decision.approvesRecordFor(id), sessions.ProfileOf), launchForm)); err != nil {
-				fmt.Fprintf(os.Stderr, "clown: warning: recording session %s in the session-names sidecar: %v\n", id, err)
+		ids := lineageRecordIDs(flags.provider, flags.identity, flags.resumeHintID)
+		if flags.agentScopeSpec != "" {
+			// A confined launch also records the conversation id it runs
+			// under (applyAgentScopeRecord made sure there is one).
+			if id := confinedConversationID(flags); !slices.Contains(ids, id) {
+				ids = append(ids, id)
 			}
+		}
+		build := func(id string) sessions.NameRecord {
+			return withProfileForm(launchRecordFor(sessionRecordBase(id, flags), gate.launch, decision.approvesRecordFor(id), sessions.ProfileOf), launchForm)
+		}
+		if err := recordLaunchSessions(ids, flags.agentScopeSpec != "", build, sessions.RecordSession, os.Stderr); err != nil {
+			fmt.Fprintf(os.Stderr, "clown: %v\n", err)
+			return 1
 		}
 	}
 
@@ -2649,6 +2665,13 @@ func runUnbound(binding pluginBinding, executor Executor, logger *slog.Logger, f
 	return runProvider(executor, bound, logger, flags)
 }
 
+// sessionRecordBase is the session-names record a launch writes for id,
+// before the profile pin is added. A confined launch records its spec, so a
+// later `clown resume` relaunches it confined (clown#318).
+func sessionRecordBase(id string, flags parsedFlags) sessions.NameRecord {
+	return sessions.NameRecord{SessionID: id, Name: flags.clownName, Group: flags.groupID, AgentScope: flags.agentScopeSpec}
+}
+
 // savedSelectionFallbackRefusal is the error runUnbound refuses with when p
 // carries a saved selection (ContextServers), naming what the profile keeps
 // and what the launch found; nil when there is no saved selection.
@@ -3216,6 +3239,9 @@ type parsedFlags struct {
 	// (clown#244, FDR 0020): when set, claude runs in a transient systemd
 	// user service (the agent scope) and clown stays in the frontend scope.
 	agentScopeSpec string
+	// resumeCommand marks a launch built by `clown resume` (resumeLaunchFlags),
+	// which says when it resumes a session with no confinement record.
+	resumeCommand bool
 	// stagingRootPath is the per-launch staging root (set in runWithFlags),
 	// bound read-only into the agent scope so claude can read clown's
 	// generated plugin dirs and prompt files.
