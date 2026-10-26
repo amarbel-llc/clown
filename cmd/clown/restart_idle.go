@@ -119,6 +119,10 @@ type idleRunner struct {
 	queue     *restartQueue
 	restart   func(restartRequest, preflightVerdict)
 	logPath   string
+	// busy reports a turn running (nil: never). queueIdle uses it to tell a
+	// session already idle, which will send no Stop datagram, from one that
+	// will.
+	busy func() bool
 
 	// closeMu serializes close-self-run runs; mu serializes preflight and
 	// restart. onIdle takes closeMu, releases it, then takes mu; the `now`
@@ -128,6 +132,9 @@ type idleRunner struct {
 	inFlight atomic.Bool
 	// nows tracks running `now` goroutines (waitNow, for tests).
 	nows sync.WaitGroup
+	// idles tracks the idle transitions queueIdle started (waitIdle, for
+	// tests).
+	idles sync.WaitGroup
 	// waitingForMu and waitingForCloseMu, when set, are called by onIdle
 	// just before it takes mu and closeMu (tests).
 	waitingForMu      func()
@@ -165,6 +172,35 @@ func (r *idleRunner) triggerNow(req restartRequest) bool {
 		r.preflightQueued()
 	}()
 	return true
+}
+
+// queueIdle queues req for the next idle transition, and, when no turn is
+// running, starts that transition now, in the background. A session already
+// idle sends no further Stop datagram until someone prompts it, so without
+// this the request would wait for a poke that may never come (clown#327). A
+// busy session still waits for its Stop. A request racing a poke is asked
+// about once: onIdle takes the request under mu, so the second finds none.
+func (r *idleRunner) queueIdle(req restartRequest) {
+	r.queue.put(req)
+	if r.busy != nil && r.busy() {
+		return
+	}
+	r.idles.Add(1)
+	go func() {
+		defer r.idles.Done()
+		r.onIdle()
+	}()
+}
+
+// waitIdle waits for the idle transitions queueIdle started so far.
+func (r *idleRunner) waitIdle() { r.idles.Wait() }
+
+// restartTriggers are the idle runner's entry points for the control socket.
+type restartTriggers struct {
+	// now is idleRunner.triggerNow, for `--when now`.
+	now func(restartRequest) bool
+	// idle is idleRunner.queueIdle, for `--when idle`.
+	idle func(restartRequest)
 }
 
 // noteExit logs, when the frontend exits, a restart it leaves behind: one in

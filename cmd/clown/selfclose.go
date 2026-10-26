@@ -346,10 +346,10 @@ func synthIdlePluginDir(root *staging.Root, clownBin, sock string) (string, erro
 // (idleRunner); restart performs an allowed restart. restarts may be nil.
 // now is the runner's immediate trigger for `clown restart --when now`
 // (idleRunner.triggerNow), nil when not armed or restarts is nil.
-func armSelfClose(flags parsedFlags, root *staging.Root, restarts *restartQueue, restart func(restartRequest, preflightVerdict), busy *atomic.Bool) (pluginDir, sock string, now func(restartRequest) bool, closeFn func()) {
+func armSelfClose(flags parsedFlags, root *staging.Root, restarts *restartQueue, restart func(restartRequest, preflightVerdict), busy *atomic.Bool) (pluginDir, sock string, trig *restartTriggers, closeFn func()) {
 	bin, reason := selfCloseDecision(flags)
 	logPath, logErr := userStateWritePath("close-self-run.log")
-	notArmed := func(why string) (string, string, func(restartRequest) bool, func()) {
+	notArmed := func(why string) (string, string, *restartTriggers, func()) {
 		fmt.Fprintf(os.Stderr, "clown: self-close not armed: %s\n", why)
 		if logErr == nil {
 			logSelfClose(logPath, "self-close not armed (%s): %s", flags.identity.Key, why)
@@ -375,6 +375,9 @@ func armSelfClose(flags parsedFlags, root *staging.Root, restarts *restartQueue,
 		restart:   restart,
 		logPath:   logPath,
 	}
+	if busy != nil {
+		idle.busy = busy.Load
+	}
 	l, err := startIdleListenerTracking(sock, busy, idle.onIdle)
 	if err != nil {
 		return notArmed(err.Error())
@@ -394,9 +397,9 @@ func armSelfClose(flags parsedFlags, root *staging.Root, restarts *restartQueue,
 	}
 	logSelfClose(logPath, "self-close armed (%s): socket %s, spinclass %s, hook plugin %s, clown %s", flags.identity.Key, sock, bin, dir, exe)
 	if restarts != nil {
-		now = idle.triggerNow
+		trig = &restartTriggers{now: idle.triggerNow, idle: idle.queueIdle}
 	}
-	return dir, sock, now, func() {
+	return dir, sock, trig, func() {
 		idle.noteExit()
 		l.Close()
 	}

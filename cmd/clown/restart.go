@@ -104,6 +104,19 @@ const restartAlreadyUnderway = "a restart or restart check is already underway f
 // frontend ask spinclass: nothing restarts without spinclass's "restart"
 // verdict. now is nil when the frontend has no immediate trigger.
 func restartControlHandlerNow(provider, unarmedReason string, q *restartQueue, now func(restartRequest) bool) func(controlMessage) controlReply {
+	return restartControlHandlerTriggers(provider, unarmedReason, q, &restartTriggers{now: now})
+}
+
+// restartControlHandlerTriggers is restartControlHandlerNow with the idle
+// runner's triggers: `idle` goes to trig.idle, which queues it and, when the
+// session is already idle, runs the idle transition at once (clown#327); with
+// no idle trigger it is only queued for the next poke. trig may be nil.
+func restartControlHandlerTriggers(provider, unarmedReason string, q *restartQueue, trig *restartTriggers) func(controlMessage) controlReply {
+	var now func(restartRequest) bool
+	var idle func(restartRequest)
+	if trig != nil {
+		now, idle = trig.now, trig.idle
+	}
 	return func(m controlMessage) controlReply {
 		if m.Op != "restart" {
 			return controlReply{Error: fmt.Sprintf("unknown control op %q", m.Op)}
@@ -122,7 +135,11 @@ func restartControlHandlerNow(provider, unarmedReason string, q *restartQueue, n
 		}
 		req := restartRequest{When: m.When, Reason: sanitizeRestartReason(m.Reason)}
 		if m.When == "idle" {
-			q.put(req)
+			if idle != nil {
+				idle(req)
+			} else {
+				q.put(req)
+			}
 			return controlReply{OK: true}
 		}
 		if now == nil {
@@ -295,14 +312,14 @@ func (l *controlListener) Close() {
 // an unarmed frontend still answers, so `clown restart` can say why it will
 // not restart. A failure to bind only means `clown restart` finds no frontend.
 //
-// now is the idle runner's immediate trigger for `--when now` (nil when the
-// idle trigger is not armed, which unarmedReason then refuses anyway).
-func armRestartControl(flags parsedFlags, unarmedReason string, q *restartQueue, now func(restartRequest) bool) (closeFn func()) {
+// trig is the idle runner's triggers (nil when the idle trigger is not armed,
+// which unarmedReason then refuses anyway).
+func armRestartControl(flags parsedFlags, unarmedReason string, q *restartQueue, trig *restartTriggers) (closeFn func()) {
 	runtime := os.Getenv("XDG_RUNTIME_DIR")
 	if flags.naked || flags.printLaunchPlan || flags.provider == "codex" || flags.identity.Key == "" || !filepath.IsAbs(runtime) {
 		return func() {}
 	}
-	l, err := startControlListener(controlSocketPath(runtime, flags.identity.Key), restartControlHandlerNow(flags.provider, unarmedReason, q, now))
+	l, err := startControlListener(controlSocketPath(runtime, flags.identity.Key), restartControlHandlerTriggers(flags.provider, unarmedReason, q, trig))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown: restart control socket not bound: %v\n", err)
 		return func() {}

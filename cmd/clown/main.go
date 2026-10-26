@@ -1112,13 +1112,13 @@ func runWithFlags(flags parsedFlags) int {
 		worktree:     cwd,
 		logPath:      restartLog,
 	}
-	idleDir, idleSock, restartNow, closeIdle := armSelfClose(flags, root, restarts, restarter.restart, turnRunning)
+	idleDir, idleSock, restartTrig, closeIdle := armSelfClose(flags, root, restarts, restarter.restart, turnRunning)
 	defer closeIdle()
 	if idleDir != "" {
 		pluginDirs = append(pluginDirs, idleDir)
 		flags.idleSocket = idleSock
 	}
-	defer armRestartControl(flags, restartUnarmedReason(flags, idleDir != ""), restarts, restartNow)()
+	defer armRestartControl(flags, restartUnarmedReason(flags, idleDir != ""), restarts, restartTrig)()
 
 	// Per FDR 0003, plugin-contributed system-prompt-append.d
 	// fragments are layered between clown's builtin fragments and
