@@ -92,7 +92,14 @@ self-restart is untested (spinclass runbook: "untested (I)").
    and notifies.
 5. Confined-session restart: spinclass#382 with clown#280. No issue for the
    test.
-6. `close-self-run.log` retention. #321.
+6. `close-self-run.log` retention. #321: done (1 MiB, one `.1` generation).
+   Counters for a long run (cmd/clown/restart_metrics.go, statsd, best
+   effort): `clown.restart.preflight.asked`, `.preflight.verdict.<restart|
+   none|refused>`, `.preflight.error`, `.cancelled`, `.stopping`,
+   `.relaunch.exec`, `.relaunch.aborted`, `.relaunched` (a frontend started
+   as a restart's relaunch), and `clown.status.write_failed`. R: unit tests;
+   nothing observed in stats-me yet. Not counted: a request queued (clown
+   does not know the requester's intent) and a forced restart (spinclass's).
 7. Frontend return after reboot (user unit plus linger). No issue.
 8. First live posh modal (posh runbook). No issue.
 9. Adjacent: clown#241 (plugin host does not restart or surface a dead

@@ -292,13 +292,17 @@ func (r *idleRunner) preflightQueued() {
 		return
 	}
 	principal := r.preflight.principal
+	countMetric(metricPreflightAsked)
 	v, err := r.preflight.run()
 	switch {
 	case err != nil:
+		countMetric(metricPreflightError)
 		logSelfClose(r.logPath, "restart-preflight failed (%s); not restarting: %v", principal, err)
 	case v.Verdict != "restart":
+		countMetric(metricPreflightVerdict + v.Verdict)
 		logSelfClose(r.logPath, "restart-preflight verdict %s (%s): %s; not restarting", v.Verdict, principal, sanitizeRestartReason(v.Reason))
 	default:
+		countMetric(metricPreflightVerdict + v.Verdict)
 		logSelfClose(r.logPath, "restart-preflight verdict restart (%s): %s; restarting", principal, sanitizeRestartReason(v.Reason))
 		r.restart(req, v)
 	}

@@ -513,8 +513,10 @@ func armSelfClose(flags parsedFlags, root *staging.Root, restarts *restartQueue,
 		logSelfClose(logPath, format, args...)
 	})
 	if err != nil {
+		countMetric(metricStatusWriteFail)
 		logSelfClose(logPath, "status file not written (%s): %v", flags.identity.Key, err)
 	}
+	status.OnFail(func() { countMetric(metricStatusWriteFail) })
 	sock = idleSocketPath(os.Getenv("XDG_RUNTIME_DIR"), flags.identity.Key)
 	idle := &idleRunner{
 		closer:    &selfCloseRunner{bin: bin, principal: flags.identity.Key, logPath: logPath},

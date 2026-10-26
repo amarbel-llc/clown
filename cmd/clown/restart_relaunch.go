@@ -341,6 +341,7 @@ type frontendRestarter struct {
 // nothing will retry it, so the operator and the log are told the requester
 // must ask again.
 func (fr frontendRestarter) cancelled(why string) {
+	countMetric(metricRestartCancelled)
 	why = printableOneLine(why)
 	logSelfClose(fr.logPath, "restart (%s) cancelled after spinclass consumed the request: %s; the requester must ask again", fr.principal, why)
 	if fr.notify != nil {
@@ -391,6 +392,7 @@ func (fr frontendRestarter) restart(req restartRequest, v preflightVerdict) {
 		logSelfClose(fr.logPath, "restart (%s): the provider exited during the countdown; not restarting", fr.principal)
 		return
 	}
+	countMetric(metricRestartStopping)
 	logSelfClose(fr.logPath, "restart (%s): stopping the provider to relaunch (%s)", fr.principal, reason)
 	fr.stop()
 	// A provider that ignores the SIGTERM is killed after the grace period.
@@ -490,6 +492,7 @@ func relaunchLogPath() string {
 // apart from the stop's and does relaunch. Every outcome is also logged.
 func (r relauncher) relaunch(plan *relaunchPlan) int {
 	fail := func(code int, format string, args ...any) int {
+		countMetric(metricRelaunchAborted)
 		msg := fmt.Sprintf(format, args...)
 		fmt.Fprintf(r.stderr, "clown: restart: %s\n", msg)
 		logSelfClose(r.logPath, "relaunch (%s): %s", plan.principal, msg)
@@ -528,6 +531,7 @@ func (r relauncher) relaunch(plan *relaunchPlan) int {
 			return fail(0, "the session's worktree %s is gone, so the session was closed during the restart; not relaunching", plan.worktree)
 		}
 	}
+	countMetric(metricRelaunchExec)
 	logSelfClose(r.logPath, "relaunch (%s): relaunching: exec %s", plan.principal, bin)
 	err = r.exec(bin, append([]string{bin}, plan.argv...), restartEnv(r.environ, plan))
 	return fail(1, "exec %s: %v; not relaunched (resume with `clown resume %s`)", bin, err, plan.principal)

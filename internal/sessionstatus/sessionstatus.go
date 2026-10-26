@@ -146,6 +146,7 @@ type Writer struct {
 	// lastWrite and timer coalesce turn-hook writes (update).
 	lastWrite time.Time
 	timer     *time.Timer
+	onFail    func()
 	logf      func(format string, args ...any)
 	logOnce   sync.Once
 }
@@ -287,7 +288,21 @@ func (w *Writer) flush() {
 	}
 }
 
+// OnFail sets a function called on every failed write or removal (the log
+// line is only the first), for a counter. Set it before the first write.
+func (w *Writer) OnFail(f func()) {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.onFail = f
+}
+
 func (w *Writer) fail(err error) {
+	if w.onFail != nil {
+		w.onFail()
+	}
 	w.logOnce.Do(func() {
 		if w.logf != nil {
 			w.logf("status file %s: %v (further status-file failures are not logged)", filepath.Join(w.dir, w.name), err)

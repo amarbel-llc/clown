@@ -309,6 +309,28 @@ func TestWriteFailureIsLoggedOnce(t *testing.T) {
 	}
 }
 
+// OnFail fires on every failed write, not only the first (which is all the log
+// line reports).
+func TestOnFailCountsEveryFailure(t *testing.T) {
+	w, path, logs := newTestWriter(t)
+	if err := os.MkdirAll(filepath.Dir(filepath.Dir(path)), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Dir(path), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var n atomic.Int32
+	w.OnFail(func() { n.Add(1) })
+	w.Start()
+	w.SetMainPID(1)
+	w.SetUnit("u")
+	if n.Load() != 3 || len(*logs) != 1 {
+		t.Fatalf("OnFail ran %d times, %d log lines; want 3 and 1", n.Load(), len(*logs))
+	}
+	var nilw *Writer
+	nilw.OnFail(func() {})
+}
+
 // A wider dir is narrowed to 0700; a symlinked status dir is refused, and a
 // symlink at the file's name is replaced, never written through.
 func TestDirHardening(t *testing.T) {

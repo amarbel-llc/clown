@@ -523,6 +523,9 @@ func runWithFlags(flags parsedFlags) int {
 	// A frontend relaunched by a restart (spinclass#419) reads its notice
 	// before it starts any child, so none inherits it.
 	restartNotice, restartRelaunched := consumeRestartedNotice()
+	if restartRelaunched && !flags.printLaunchPlan {
+		countMetric(metricRelaunched)
+	}
 	if flags.agentScopeSpec != "" && (flags.tent || flags.naked) {
 		fmt.Fprintln(os.Stderr, "clown: --agent-scope is mutually exclusive with --tent and --naked")
 		return 1
