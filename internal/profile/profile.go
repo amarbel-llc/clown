@@ -30,14 +30,14 @@ type Profile struct {
 	// selection (omitempty keeps such profiles free of empty TOML arrays).
 	//
 	// A server or tool name here that no longer exists in a later launch's
-	// discovered/fetched catalog is silently skipped when applying the
-	// selection — the live catalog is the source of truth, this saved data
-	// is best-effort intent, not a hard requirement (matches
-	// applyCheapContextSelection's existing best-effort posture elsewhere,
-	// e.g. a failed exclude-tools push is logged and skipped, not fatal).
-	// The one exception: when none of ContextServers is started or kept,
-	// the launch is refused rather than falling back to the original plugin
-	// dirs, which would run every server un-narrowed (cmd/clown runUnbound).
+	// discovered/fetched catalog is skipped when applying the selection: the
+	// live catalog is the source of truth. Two cases refuse the launch
+	// instead. When none of ContextServers is started or kept, the launch
+	// does not fall back to the original plugin dirs, which would run every
+	// server un-narrowed (cmd/clown runUnbound). When none of a kept
+	// server's ContextExcluded names matches a live tool (an all-stale list,
+	// say after a rename), the tools it meant to hide may now be visible
+	// under new names (cmd/clown exclusionreadback, clown#304).
 	ContextServers  []string            `toml:"context_servers,omitempty"`
 	ContextExcluded map[string][]string `toml:"context_excluded,omitempty"`
 

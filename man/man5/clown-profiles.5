@@ -262,9 +262,10 @@ Under a profile's saved selection each kept server's saved names are
 matched against its live catalog, the matches are pushed, the catalog is
 fetched again, and the launch is refused unless every match is gone from
 it.
-It is also refused when none of a server's saved names matches a live tool
-(an all-stale list; a partly stale one is accepted, the stale names
-skipped, see clown#304), when a saved name could mean a live tool without
+It is also refused when none of a server's saved names matches a live tool:
+the tools that list meant to hide may have been renamed and now be visible.
+A partly stale list is accepted, and its stale names are skipped.
+It is refused, too, when a saved name could mean a live tool without
 matching it exactly or matches more than one, and when the server's catalog
 cannot be fetched.
 Servers inside an agent unit are checked the same way by the unit, which

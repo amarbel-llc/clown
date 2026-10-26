@@ -168,10 +168,11 @@ func cheapContextShouldActivate(cheapContextFlag bool, resolvedProfile *profile.
 // profile's saved --cheap-context selection (profile.ContextServers /
 // profile.ContextExcluded), filtered against catalogs — the CURRENT
 // launch's live, fetched tool data. A saved server or tool name absent from
-// catalogs is silently dropped rather than erroring: the catalog is the
-// source of truth (a plugin set or a server's tool names can differ across
-// directories/launches/versions), the saved selection is best-effort intent
-// to replay, not a hard requirement. ok is false when saved has no
+// catalogs is dropped here: the catalog is the source of truth (a plugin set
+// or a server's tool names can differ across directories/launches/
+// versions). The launch is still refused later when nothing saved is kept,
+// or when none of a kept server's saved exclusions matches a live tool
+// (applyCheapContextSelection's readback, clown#304). ok is false when saved has no
 // ContextServers at all (an empty/legacy profile), signaling the caller to
 // fall back to the interactive picker instead.
 func selectionFromSavedProfile(saved *profile.Profile, catalogs []serverCatalog) (selectionResult, bool) {
@@ -206,8 +207,9 @@ func selectionFromSavedProfile(saved *profile.Profile, catalogs []serverCatalog)
 		for _, g := range c.groups {
 			liveTools = append(liveTools, g.tools...)
 		}
-		// A saved tool name absent from the live catalog is silently dropped:
-		// it no longer exists, so there is nothing to exclude.
+		// A saved tool name absent from the live catalog is dropped: it no
+		// longer exists, so there is nothing to exclude. If every saved name
+		// is gone, the readback refuses the launch (clown#304).
 		if excluded := resolveExcludedTools(savedExcluded, liveTools); len(excluded) > 0 {
 			result.excludedTools[name] = excluded
 		}
