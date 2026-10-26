@@ -44,13 +44,18 @@ var attachedID string
 // extractAttachID removes the attachIDFlag (and its value) from args and returns
 // the captured id plus the cleaned args. Supports both "--clown-attach-id v" and
 // "--clown-attach-id=v". Stripping it before subcommand dispatch / parseFlags
-// keeps every downstream arg parser from choking on the internal flag.
+// keeps every downstream arg parser from choking on the internal flag. It stops
+// at the first `--`: everything after it is the provider's, untouched
+// (clown#310).
 func extractAttachID(args []string) (id string, rest []string) {
 	rest = make([]string, 0, len(args))
 	for i := 0; i < len(args); i++ {
 		a := args[i]
+		if a == "--" {
+			return id, append(rest, args[i:]...)
+		}
 		if a == attachIDFlag {
-			if i+1 < len(args) {
+			if i+1 < len(args) && args[i+1] != "--" {
 				id = args[i+1]
 				i++ // consume the value
 			}
@@ -70,13 +75,17 @@ func extractAttachID(args []string) (id string, rest []string) {
 // "--clown-attach spawn" and "--clown-attach=spawn". It must run AFTER
 // extractAttachID so the longer "--clown-attach-id" is already gone; it matches
 // only the exact "--clown-attach" token or "--clown-attach=" prefix, so it would
-// not swallow "--clown-attach-id" regardless of order.
+// not swallow "--clown-attach-id" regardless of order. Like extractAttachID it
+// stops at the first `--` (clown#310).
 func extractAttachSpawn(args []string) (spawn bool, rest []string) {
 	rest = make([]string, 0, len(args))
 	for i := 0; i < len(args); i++ {
 		a := args[i]
+		if a == "--" {
+			return spawn, append(rest, args[i:]...)
+		}
 		if a == attachModeFlag {
-			if i+1 < len(args) {
+			if i+1 < len(args) && args[i+1] != "--" {
 				spawn = spawn || args[i+1] == "spawn"
 				i++ // consume the value
 			}

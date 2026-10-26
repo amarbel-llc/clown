@@ -26,6 +26,10 @@ func TestExtractAttachID(t *testing.T) {
 		{"space form", []string{"--clown-attach-id", "k1", "resume"}, "k1", []string{"resume"}},
 		{"equals form", []string{"--clown-attach-id=k2", "--", "hi"}, "k2", []string{"--", "hi"}},
 		{"interleaved", []string{"--provider", "claude", "--clown-attach-id", "k3", "--", "x"}, "k3", []string{"--provider", "claude", "--", "x"}},
+		// After `--` everything is the provider's, untouched (clown#310).
+		{"after -- space form", []string{"--", "--clown-attach-id", "k4"}, "", []string{"--", "--clown-attach-id", "k4"}},
+		{"after -- equals form", []string{"-v", "--", "--clown-attach-id=k5"}, "", []string{"-v", "--", "--clown-attach-id=k5"}},
+		{"before and after --", []string{"--clown-attach-id=k6", "--", "--clown-attach-id=k7"}, "k6", []string{"--", "--clown-attach-id=k7"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -52,6 +56,10 @@ func TestExtractAttachSpawn(t *testing.T) {
 		{"space form", []string{"--clown-attach", "spawn", "resume"}, true, []string{"resume"}},
 		{"other mode stripped, not spawn", []string{"--clown-attach=start", "x"}, false, []string{"x"}},
 		{"does not swallow --clown-attach-id", []string{"--clown-attach-id", "k", "y"}, false, []string{"--clown-attach-id", "k", "y"}},
+		// After `--` everything is the provider's, untouched (clown#310).
+		{"after -- equals form", []string{"--", "--clown-attach=spawn"}, false, []string{"--", "--clown-attach=spawn"}},
+		{"after -- space form", []string{"--", "--clown-attach", "spawn"}, false, []string{"--", "--clown-attach", "spawn"}},
+		{"space form value is not a --", []string{"--clown-attach", "--", "spawn"}, false, []string{"--", "spawn"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -61,6 +69,68 @@ func TestExtractAttachSpawn(t *testing.T) {
 			}
 			if !reflect.DeepEqual(rest, tc.wantArg) {
 				t.Errorf("rest = %v, want %v", rest, tc.wantArg)
+			}
+		})
+	}
+}
+
+// run()'s front end on argv: the attach scanners, then parseFlags, then the
+// --no-attach/spawn conflict check. Copies of clown's attach flags after
+// `--` reach the provider untouched and have no effect (clown#310).
+func TestAttachFlagsAfterDoubleDashBelongToTheProvider(t *testing.T) {
+	cases := []struct {
+		name          string
+		args          []string
+		wantID        string
+		wantSpawn     bool
+		wantForwarded []string
+		wantConflict  bool
+	}{
+		{
+			name:          "spawn after --",
+			args:          []string{"--", "--clown-attach=spawn"},
+			wantForwarded: []string{"--clown-attach=spawn"},
+		},
+		{
+			name:          "every attach flag after --",
+			args:          []string{"--", "--clown-attach", "spawn", "--clown-attach-id", "k", "--clown-attach-id=k2", "--no-attach"},
+			wantForwarded: []string{"--clown-attach", "spawn", "--clown-attach-id", "k", "--clown-attach-id=k2", "--no-attach"},
+		},
+		{
+			name:          "--no-attach before, spawn after: no conflict",
+			args:          []string{"--no-attach", "--", "--clown-attach=spawn"},
+			wantForwarded: []string{"--clown-attach=spawn"},
+		},
+		{
+			name:         "--no-attach and spawn both before --: refused",
+			args:         []string{"--no-attach", "--clown-attach=spawn", "--", "x"},
+			wantSpawn:    true,
+			wantConflict: true, wantForwarded: []string{"x"},
+		},
+		{
+			name:          "before -- unchanged",
+			args:          []string{"--clown-attach-id", "k", "--clown-attach=spawn", "--", "x"},
+			wantID:        "k",
+			wantSpawn:     true,
+			wantForwarded: []string{"x"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			id, rest := extractAttachID(tc.args)
+			spawn, rest := extractAttachSpawn(rest)
+			flags, err := parseFlags(rest)
+			if err != nil {
+				t.Fatalf("parseFlags(%q): %v", rest, err)
+			}
+			if id != tc.wantID || spawn != tc.wantSpawn {
+				t.Errorf("attach id %q, spawn %v; want %q, %v", id, spawn, tc.wantID, tc.wantSpawn)
+			}
+			if !reflect.DeepEqual(flags.forwarded, tc.wantForwarded) {
+				t.Errorf("forwarded %q, want %q", flags.forwarded, tc.wantForwarded)
+			}
+			if conflict := attachFlagConflict(spawn, flags.noAttach) != nil; conflict != tc.wantConflict {
+				t.Errorf("conflict %v, want %v", conflict, tc.wantConflict)
 			}
 		})
 	}
