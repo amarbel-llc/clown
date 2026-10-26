@@ -70,6 +70,7 @@ unconfined fallback.
 | `OOMPolicy=` | `stop` | An OOM kill inside stops the whole unit rather than leaving a partial session. | works (shown by systemctl) |
 | `Restart=` | `no` | A stopped or killed unit stays down; recovering a hung session is the operator's (ruled 2026-10-26). Pinned explicitly although it is the transient default. | works |
 | `RuntimeMaxSec=` | `604800` (7 days), **unattended launches only**; none for interactive ones | Wall clock for a session nobody watches. "Unattended" is clown's `CLOWN_UNATTENDED=1` marker (FDR 0023), read by the frontend that launches the unit (`unattendedValue()`, so its [attach] carrier counts too); the marker itself never enters the unit. It is the backstop behind the frontend dead-man (#319). `clown agent-scope-run` reads the same marker, so its units get the wall clock under it too, although it applies no `dontAsk`. | works: `RuntimeMaxUSec` `1w` with the marker, `infinity` without |
+| dead-man socket (`BindPaths=` of `$XDG_RUNTIME_DIR/clown/agent/<unit>/deadman.sock`, shim `--deadman`) | every agent unit | clown#319. The shim, the unit's init, connects to the frontend's socket before it starts anything else; the frontend (`agentscope.DeadMan`) peer-checks that the caller is in the unit, holds that one connection, never writes to it, discards what arrives, and closes its listener, so nothing else in the unit can connect. When the frontend dies by any means (SIGKILL runs no defer, but the kernel closes its fds; SIGTERM and SIGHUP too), the shim reads EOF, sends SIGTERM to every process in the unit's pid namespace (`kill(-1)` from init), SIGKILLs them after a 10 s grace (`DeadManGrace`), and exits, so the unit ends and `--collect` removes it. Only EOF counts: no message from inside can keep the unit alive. A shim that cannot reach the socket, or is not the unit's init, refuses to start the provider. A restart stops its unit before it execs the new frontend, so the EOF from that exec finds no unit; the [attach] wrap runs the inner frontend as a child and never execs over a live unit. The unattended wall clock (`RuntimeMaxSec`) is the backstop. | works: a SIGKILLed `agent-scope-run` frontend took its unit down (host agent_scope.bats, 2026-10-26) |
 | `UnsetEnvironment=` | every key of `systemctl --user show-environment` not on the allowlist below | The user manager injects its own environment into every unit, including `DBUS_SESSION_BUS_ADDRESS` and `XDG_RUNTIME_DIR` (observed). | works |
 | `--slice=` | `clown-agent.slice` | Stable cgroup prefix for the piggy, posh and spinclass checks. | works |
 | `--expand-environment=no` | | systemd otherwise expands `$` and `$$` in argv (observed: `$$` became `$`). | works |
@@ -647,7 +648,8 @@ Since then (2026-10-19, all on flic):
   `egress-proxy` and `frontend-mcp-sockets`. Capabilities are added only
   with their code. The current list is `Capabilities` in
   `internal/agentscope/spec.go`: those four plus `in-unit-moxy`,
-  `statsd-relay`, `frontend-monitors` and `frontend-serve-socket`.
+  `statsd-relay`, `frontend-monitors`, `frontend-serve-socket` and
+  `frontend-deadman` (clown#319).
 - **Evidence (that day).** `just verify-agent-scope` passed 11/11 (18/18 at
   2026-10-24), including a
   forwarded loopback listener being reachable while unforwarded ones and a

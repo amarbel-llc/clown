@@ -47,8 +47,10 @@ Unverified (I / not found):
   that worked was read-write; the FDR calls the refresh-rotation risk "a
   theory". Expiry handling: not found.
 - Linger / host reboot behaviour, journald capture of unit stderr (`--pipe`).
-- Whether a SIGKILLed frontend leaves the unit running (the stop is a
-  `defer`; no `BindsTo`/`PartOf`/`RuntimeMaxSec` in `unit.go`) (I, untested).
+- A SIGKILLed frontend takes its unit down: the shim holds the dead-man
+  socket and stops the unit on EOF (#319; V: host agent_scope.bats,
+  2026-10-26). Not observed: the unit outliving a SIGKILLed frontend
+  before #319 (the host test was not run against the older binary).
 - Does `clown resume` of a confined session stay confined? Fixed on the
   clown side (#318): a confined launch records its spec and a digest of
   the spec's boundary in the session-names sidecar (outside the unit).
@@ -72,7 +74,8 @@ Unverified (I / not found):
    (default mode: an unallowed call prompts; nothing times the prompt out).
    spinclass splices `dontAsk` into *its* confined spawns; a plain
    `clown --agent-scope` launch has none. Ruled 2026-10-26: unattended plain
-   launches use `dontAsk` (#323, not implemented). See the permissions page.
+   launches use `dontAsk`: implemented as `CLOWN_UNATTENDED=1` (#323, FDR
+   0023; live checks pending). See the permissions page.
 2. **Credentials.** Read-only OAuth refresh unproven; no expiry path; the
    frontend credential-injection proxy is a design only; push/sign needs the
    operator's card (every act prompts), so an unattended session cannot push.
@@ -83,9 +86,13 @@ Unverified (I / not found):
    0020; V: host agent_scope.bats read the cgroup files and `systemctl
    show`). No `WatchdogSec`; a hung claude sends no Stop hook so idle
    self-close never fires (I); nothing restarts a hung unit (ruled).
-4. **Frontend death.** A SIGKILLed frontend likely leaves the unit running
-   (I). A host reboot or logout ends the transient unit and nothing relaunches
-   it; linger state on flic: not found.
+4. **Frontend death.** Handled (#319): the frontend's death, by any
+   signal, ends the unit within a 10 s grace through the dead-man socket;
+   the unattended wall clock is the backstop. Residual: a hung frontend
+   that stays alive is not frontend death (hung-session detection is
+   separate, spinclass's design); a host reboot or logout ends the
+   transient unit and nothing relaunches it; linger state on flic: not
+   found.
 5. **Disk and logs.** No rotation/pruning found for `close-self-run.log`, the
    toolcost hook state, `agent-relay.log` (in the agent home under the
    worktree), the read-write madder store.
@@ -102,8 +109,8 @@ Unverified (I / not found):
 2. Establish whether `clown resume` of a confined session re-applies
    `--agent-scope` (read the spinclass launch path and `resumeLaunchFlags`;
    test); fix if not. #318: clown side done; spinclass side open.
-3. Test and fix the frontend-SIGKILL case (`BindsTo`/`RuntimeMaxSec` or a
-   reaper). #319.
+3. Test and fix the frontend-SIGKILL case. #319: done (dead-man socket,
+   wall clock as backstop).
 4. Add unit resource limits and a wall clock to `properties()`. #320:
    done (values per the 2026-10-26 ruling; wall clock unattended only).
 5. Log/state retention caps (listed in section 2.5). #321.
