@@ -332,6 +332,16 @@ func (l Launch) environment() (set, unset []string) {
 			env[k] = v
 		}
 	}
+	// just makes a recipe tempdir under $XDG_RUNTIME_DIR/just, which is a
+	// read-only tmpfs in a unit (ProtectHome=tmpfs), so every recipe failed
+	// with EROFS. XDG_RUNTIME_DIR itself must stay (job-platform tools find
+	// their paths from it); just is pointed at the temp dir the unit already
+	// has. The spec can still override it.
+	if tmp := env["TMPDIR"]; tmp != "" {
+		env["JUST_TEMPDIR"] = tmp
+	} else {
+		env["JUST_TEMPDIR"] = filepath.Join(l.Spec.Worktree, ".tmp")
+	}
 	for _, kv := range l.ExtraEnv {
 		if k, v, ok := strings.Cut(kv, "="); ok && !scrubbedKeys[k] {
 			env[k] = v

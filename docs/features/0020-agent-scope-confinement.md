@@ -630,6 +630,13 @@ temp-dir variables outside the worktree are redirected to `<worktree>/.tmp`
 `XDG_STATE_HOME`/`XDG_LOG_HOME` are always set to the operator paths the
 binds use (hook state otherwise landed in the agent home).
 
+`JUST_TEMPDIR` is set to the unit's `TMPDIR` (`<worktree>/.tmp` when there is
+none), because `just` otherwise makes its recipe tempdir under
+`$XDG_RUNTIME_DIR/just`, and `/run/user` is a read-only tmpfs in a unit
+(`ProtectHome=tmpfs`): every `run_recipe` failed with `EROFS` (confined probe on
+flic, 2026-10-27). `XDG_RUNTIME_DIR` is not redirected; job-platform tools find
+their paths from it. A spec's `env` can override `JUST_TEMPDIR`.
+
 `result_path` inside the worktree or a `binds_rw` entry is refused: the unit
 could forge a result it can write.
 
