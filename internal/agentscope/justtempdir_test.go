@@ -5,6 +5,23 @@ import (
 	"testing"
 )
 
+// The seeded <agent-home>/.config/nix/nix.conf is read only because the unit's
+// HOME is the agent home and no XDG_CONFIG_HOME/XDG_CACHE_HOME reaches it
+// (clown seeds the file in cmd/clown stageAgentHome): pin both halves.
+func TestUnitHomeIsTheAgentHomeWithNoXDGConfigOrCache(t *testing.T) {
+	l := testLaunch()
+	l.FrontendEnv = append(l.FrontendEnv, "XDG_CONFIG_HOME=/home/op/.config", "XDG_CACHE_HOME=/home/op/.cache")
+	env := unitEnv(l)
+	if env["HOME"] != l.AgentHome {
+		t.Errorf("HOME = %q, want the agent home %q", env["HOME"], l.AgentHome)
+	}
+	for _, k := range []string{"XDG_CONFIG_HOME", "XDG_CACHE_HOME"} {
+		if v, ok := env[k]; ok {
+			t.Errorf("%s = %q reaches the unit; nix would not read the seeded nix.conf", k, v)
+		}
+	}
+}
+
 func unitEnv(l Launch) map[string]string {
 	set, _ := l.environment()
 	env := map[string]string{}
@@ -47,6 +64,20 @@ func TestEnvironmentPointsJustAtTheWritableTempDir(t *testing.T) {
 	l.FrontendEnv = append(l.FrontendEnv, "XDG_RUNTIME_DIR=/run/user/1001")
 	if got := unitEnv(l)["XDG_RUNTIME_DIR"]; got != "/run/user/1001" {
 		t.Errorf("XDG_RUNTIME_DIR = %q, want it passed through unchanged", got)
+	}
+
+	// A JUST_TEMPDIR the frontend had (say under the runtime dir) never reaches the unit.
+	l = testLaunch()
+	l.FrontendEnv = append(l.FrontendEnv, "JUST_TEMPDIR=/run/user/1001/just")
+	if got := unitEnv(l)["JUST_TEMPDIR"]; got != tmp {
+		t.Errorf("frontend JUST_TEMPDIR leaked: %q, want %q", got, tmp)
+	}
+
+	// The provider binding's own env can override it, like the spec.
+	l = testLaunch()
+	l.ExtraEnv = []string{"JUST_TEMPDIR=/home/op/repos/x/.worktrees/w/extra"}
+	if got := unitEnv(l)["JUST_TEMPDIR"]; got != "/home/op/repos/x/.worktrees/w/extra" {
+		t.Errorf("ExtraEnv JUST_TEMPDIR = %q, want the binding's", got)
 	}
 
 	// A spec can override it.

@@ -440,8 +440,9 @@ func stageAgentHome(spec agentscope.Spec, agentHome, cwd string) (plumbingBinds,
 		}
 	}
 
+	// Not fatal: without the seed nix is slow in the unit, the session still runs.
 	if err := seedNixConf(agentHome); err != nil {
-		return p, err
+		fmt.Fprintf(os.Stderr, "clown: not seeding the agent home's nix.conf: %v\n", err)
 	}
 
 	creds := filepath.Join(opHome, ".claude", ".credentials.json")
@@ -518,23 +519,44 @@ const agentHomeNixConf = "flake-registry =\ndownload-attempts = 1\nconnect-timeo
 // seedNixConf writes agentHomeNixConf unless the file exists, so an existing
 // agent-home gets it on its next launch (a restart included) and anything put
 // there since is kept.
+//
+// The agent can write its agent home and this runs as the operator on every
+// launch, so a symlink (or a non-directory) at .config or .config/nix is
+// refused instead of followed. The file is written whole to a temp name and
+// linked into place, so a crash leaves no partial nix.conf for later launches
+// to keep; an existing nix.conf (even a dangling symlink) is left alone.
 func seedNixConf(agentHome string) error {
-	dir := filepath.Join(agentHome, ".config", "nix")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
+	dir := agentHome
+	for _, part := range []string{".config", "nix"} {
+		dir = filepath.Join(dir, part)
+		fi, err := os.Lstat(dir)
+		switch {
+		case errors.Is(err, os.ErrNotExist):
+			if err := os.Mkdir(dir, 0o700); err != nil {
+				return err
+			}
+		case err != nil:
+			return err
+		case !fi.IsDir():
+			return fmt.Errorf("%s is not a plain directory; not seeding nix.conf", dir)
+		}
 	}
-	f, err := os.OpenFile(filepath.Join(dir, "nix.conf"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if errors.Is(err, os.ErrExist) {
-		return nil
-	}
+	tmp, err := os.CreateTemp(dir, ".nix.conf-*")
 	if err != nil {
 		return err
 	}
-	if _, err := f.WriteString(agentHomeNixConf); err != nil {
-		f.Close()
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.WriteString(agentHomeNixConf); err != nil {
+		tmp.Close()
 		return err
 	}
-	return f.Close()
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Link(tmp.Name(), filepath.Join(dir, "nix.conf")); err != nil && !errors.Is(err, os.ErrExist) {
+		return err
+	}
+	return nil
 }
 
 // claudeProjectSlug is claude's per-project directory name under

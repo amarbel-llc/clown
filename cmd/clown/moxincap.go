@@ -17,6 +17,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"code.linenisgreat.com/clown/internal/toolcost"
 )
 
 // A per-session call cap for a frontend-served moxin (clown#325 follow-up).
@@ -35,6 +37,19 @@ const defaultMoxinMaxCalls = 10
 
 // moxinCapWindow is the sliding window the cap applies to.
 const moxinCapWindow = time.Hour
+
+// moxinLedgerMaxAge is how long a ledger may go without a call before it is
+// pruned. The cap's window is an hour, so a ledger untouched for a week counts
+// nothing; this is far longer, so a session that restarts or resumes later
+// keeps its count within the window.
+const moxinLedgerMaxAge = 7 * 24 * time.Hour
+
+// pruneMoxinLedgers removes ledgers (and their locks) in keep's directory that
+// no call has touched for moxinLedgerMaxAge, except keep itself, and reports how
+// many files it removed. Housekeeping: errors are ignored.
+func pruneMoxinLedgers(keep string, now time.Time) int {
+	return toolcost.PruneState(filepath.Dir(keep), moxinLedgerMaxAge, now, keep)
+}
 
 // callLedger counts a session's calls to one moxin in a sliding window.
 type callLedger struct {
@@ -400,6 +415,7 @@ func runFrontendMoxinCap(args []string) int {
 		fmt.Fprintf(os.Stderr, "clown frontend-moxin: %v\n", err)
 		return 1
 	}
+	pruneMoxinLedgers(path, time.Now())
 	logPath, _ := userStateWritePath("close-self-run.log")
 	p := &capProxy{
 		name:   name,
