@@ -104,7 +104,10 @@ traffic goes through a frontend-scope proxy:
 3. The unit's environment sets `HTTPS_PROXY`, `HTTP_PROXY`, `https_proxy` and
    `http_proxy` to `http://127.0.0.1:<N>`. `NO_PROXY` is `localhost,127.0.0.1`.
 4. The proxy enforces a `host:port` destination allowlist. The allowlist comes
-   from the sweatfile, via the spec. Its default is: the model API, the forges
+   from the sweatfile, via the spec. A spec that omits `egress_allow` gets the
+   default; an explicit empty list denies everything (the host of a remote
+   `ANTHROPIC_BASE_URL`, clown's own model routing, is still added). The
+   effective list is logged once at proxy start. Its default is: the model API, the forges
    (`code.linenisgreat.com`, `forge.starbrandshoes.com`), `github.com`,
    `cache.nixos.org`, and the krone nix cache. Refusals are logged in the
    frontend. **Open (clown#300):** the krone nix cache is not in

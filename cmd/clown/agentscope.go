@@ -384,10 +384,13 @@ func baseURLHostPort(raw string) string {
 }
 
 // agentEgressAllowlist is the egress proxy's allowlist: the spec's
-// egress_allow, else the default, plus the host of baseURL when clown routes
-// the model API elsewhere. A loopback entry in the spec refuses the launch; a
-// loopback baseURL is not added, since the proxy refuses loopback targets and
-// an agent unit never reaches the host's loopback.
+// egress_allow, plus the host of baseURL when clown routes the model API
+// elsewhere. An unset (nil) egress_allow means clown's default list; an
+// explicit empty one means deny everything, matching boundaryDigest. The
+// base-URL host is clown's own model routing, so it is added even to an empty
+// list. A loopback entry in the spec refuses the launch; a loopback baseURL is
+// not added, since the proxy refuses loopback targets and an agent unit never
+// reaches the host's loopback. The effective list is logged once.
 func agentEgressAllowlist(specAllow []string, baseURL string, logger *slog.Logger) (agentscope.Allowlist, error) {
 	for _, e := range specAllow {
 		host, _, err := net.SplitHostPort(e)
@@ -395,21 +398,23 @@ func agentEgressAllowlist(specAllow []string, baseURL string, logger *slog.Logge
 			return nil, fmt.Errorf("agent scope spec egress_allow entry %q names the host's loopback; an agent unit never reaches it (forward a specific service instead)", e)
 		}
 	}
-	allow := agentscope.Allowlist(specAllow)
-	if len(allow) == 0 {
-		allow = agentscope.DefaultEgressAllow
+	allow, source := agentscope.Allowlist(specAllow), "spec"
+	if specAllow == nil {
+		allow, source = agentscope.DefaultEgressAllow, "default"
 	}
-	hp := baseURLHostPort(baseURL)
-	if hp == "" {
-		return allow, nil
-	}
-	if host, _, err := net.SplitHostPort(hp); err == nil && agentscope.IsLoopbackHost(host) {
-		if logger != nil {
-			logger.Warn("agent scope: ANTHROPIC_BASE_URL is on the loopback; not adding it to the egress allowlist", "host", hp)
+	if hp := baseURLHostPort(baseURL); hp != "" {
+		if host, _, err := net.SplitHostPort(hp); err == nil && agentscope.IsLoopbackHost(host) {
+			if logger != nil {
+				logger.Warn("agent scope: ANTHROPIC_BASE_URL is on the loopback; not adding it to the egress allowlist", "host", hp)
+			}
+		} else {
+			allow = append(append(agentscope.Allowlist{}, allow...), hp)
 		}
-		return allow, nil
 	}
-	return append(append(agentscope.Allowlist{}, allow...), hp), nil
+	if logger != nil {
+		logger.Info("agent scope: egress allowlist", "source", source, "allow", strings.Join(allow, ","))
+	}
+	return allow, nil
 }
 
 type plumbingBinds struct{ rw, ro []string }
