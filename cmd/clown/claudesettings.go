@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -47,6 +48,29 @@ func profileDisallowedTools() []string {
 	for _, p := range strings.Split(os.Getenv("CLOWN_DISALLOWED_TOOLS"), ",") {
 		if p = strings.TrimSpace(p); p != "" {
 			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// unattendedDisallowedTools are denied to every unattended session whatever its
+// profile (operator ruling 2026-10-27, clown#330): the Monitor tool starts an
+// arbitrary shell command whose output comes back as notifications, an escape
+// from the permission profile. clown's own wake monitor and troupe monitor are
+// plugin monitors (jobmonitor.go), a separate path from the tool, so they are
+// not affected. Added at launch, not by a profile, so no profile digest moves.
+var unattendedDisallowedTools = []string{"Monitor"}
+
+// launchDisallowedTools is the profile's CLOWN_DISALLOWED_TOOLS plus, for an
+// unattended launch, unattendedDisallowedTools (no entry twice).
+func launchDisallowedTools() []string {
+	out := profileDisallowedTools()
+	if unattendedValue() != "1" {
+		return out
+	}
+	for _, tool := range unattendedDisallowedTools {
+		if !slices.Contains(out, tool) {
+			out = append(out, tool)
 		}
 	}
 	return out
@@ -129,6 +153,11 @@ func claudeSafetySettingsJSON(principal, model string) string {
 		if os.Getenv("ENABLE_CLAUDEAI_MCP_SERVERS") == "" {
 			env["ENABLE_CLAUDEAI_MCP_SERVERS"] = "false"
 		}
+	}
+	// clown-hook-allow's TaskStop rule applies only to unattended sessions and
+	// learns that from claude's environment, which this block builds.
+	if unattendedValue() == "1" {
+		env[unattendedEnv] = "1"
 	}
 	if len(env) > 0 {
 		settings["env"] = env

@@ -1667,7 +1667,7 @@ func claudeLaunchArgs(cliPath, disallowedToolsFile string, flags parsedFlags, fo
 		CLIPath:             cliPath,
 		AgentsFile:          buildcfg.AgentsFile,
 		DisallowedToolsFile: disallowedToolsFile,
-		ExtraDisallowed:     profileDisallowedTools(),
+		ExtraDisallowed:     launchDisallowedTools(),
 		SystemPromptFile:    prompts.SystemPromptFile,
 		AppendFragments:     prompts.AppendFragments,
 		SettingsJSON:        claudeSafetySettingsJSON(flags.identity.Key, claudeFlagValue(forwarded, "--model")),

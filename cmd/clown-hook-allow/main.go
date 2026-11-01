@@ -86,6 +86,9 @@ var subagentToolNames = map[string]bool{"Agent": true, "Task": true}
 type hookInput struct {
 	ToolName  string          `json:"tool_name"`
 	ToolInput json.RawMessage `json:"tool_input"`
+	// TranscriptPath is the session transcript (JSONL), which the unattended
+	// TaskStop rule reads to learn which tasks the model started.
+	TranscriptPath string `json:"transcript_path"`
 }
 
 // hookSpecificOutput is the PreToolUse permission-decision payload claude-code
@@ -112,6 +115,16 @@ func allow(reason string) *hookOutput {
 	return &hookOutput{HookSpecificOutput: hookSpecificOutput{
 		HookEventName:            "PreToolUse",
 		PermissionDecision:       "allow",
+		PermissionDecisionReason: reason,
+	}}
+}
+
+// deny builds a nested PreToolUse "deny" decision; the reason is what the model
+// is told.
+func deny(reason string) *hookOutput {
+	return &hookOutput{HookSpecificOutput: hookSpecificOutput{
+		HookEventName:            "PreToolUse",
+		PermissionDecision:       "deny",
 		PermissionDecisionReason: reason,
 	}}
 }
@@ -188,6 +201,10 @@ func debugLog(tag, payload string) {
 // allows Read/Glob/Grep when the path argument is under /nix/store, and allows
 // any clown-builtin-jobs MCP tool (jobToolPrefix); every other case defers.
 func evaluate(in hookInput) *hookOutput {
+	if taskStopTools[in.ToolName] && os.Getenv(unattendedEnv) == "1" {
+		return evaluateTaskStop(in)
+	}
+
 	// Explore→Discover subagent rewrite: when the Agent tool is launched with
 	// subagent_type "Explore", swap it for clown's read-only Discover subagent
 	// and replace the whole tool input via updatedInput. All other input fields
