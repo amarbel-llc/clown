@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"code.linenisgreat.com/clown/internal/mcphttp"
+	"code.linenisgreat.com/clown/internal/0/mcphttp"
 )
 
 // httpHandler owns the bridge-specific HTTP surface: the tool-exclusion
@@ -19,7 +19,7 @@ import (
 // feeds into the reusable mcphttp.Server spine. The streamable-HTTP
 // request/response machinery — POST/GET/DELETE routing, SSE framing,
 // heartbeats, origin checks, JSON-RPC error framing — lives in
-// internal/mcphttp; this handler wires the bridge's *translator into it as
+// internal/*/mcphttp; this handler wires the bridge's *translator into it as
 // the RequestHandler and supplies the filter as a ResponseFilter.
 //
 // mcp holds the constructed spine so main.go can route /mcp at it via

@@ -369,7 +369,7 @@
             src = self;
             manifest = ./go.nix;
             inherit inputs;
-            extras = [ "^internal/profile/builtin\\.toml$" ];
+            extras = [ "^internal/0/profile/builtin\\.toml$" ];
           })
           go-pkgs
           go-pkgs-test
@@ -400,7 +400,7 @@
             "-X main.commit=${clownRev}"
           ];
           ldflagsX = {
-            "code.linenisgreat.com/clown/internal/buildcfg.StdioBridgePath" =
+            "code.linenisgreat.com/clown/internal/0/buildcfg.StdioBridgePath" =
               "${clown-stdio-bridge}/bin/clown-stdio-bridge";
           };
         };
@@ -444,7 +444,7 @@
         mock-stdio-mcp-go = buildClownGo {
           pname = "mock-stdio-mcp";
           version = clownVersion;
-          subPackages = [ "internal/pluginhost/testdata/mockstdiomcp" ];
+          subPackages = [ "internal/alfa/pluginhost/testdata/mockstdiomcp" ];
           ldflags = [
             "-s"
             "-w"
@@ -490,7 +490,7 @@
             "cmd/clown-plugin-host"
             "cmd/clown-stdio-bridge"
             "cmd/clown-mcp-collapse"
-            "internal/pluginhost/testdata/mockstdiomcp"
+            "internal/alfa/pluginhost/testdata/mockstdiomcp"
           ];
           ldflags = [
             "-s"
@@ -656,7 +656,7 @@
         mock-mcp-server-go = buildClownGo {
           pname = "mock-mcp-server";
           version = clownVersion;
-          subPackages = [ "internal/pluginhost/testdata/mockserver" ];
+          subPackages = [ "internal/alfa/pluginhost/testdata/mockserver" ];
           ldflags = [
             "-s"
             "-w"
@@ -913,7 +913,7 @@
             # --tent. "podman" is the status quo and the default;
             # "lima" routes everything through `limactl shell
             # <machine> -- sudo nerdctl ...`. See clown#99 (Lima spike)
-            # and internal/tent/backend.go for the runtime side. A
+            # and internal/*/tent/backend.go for the runtime side. A
             # future TOML profile system will own this selection per-
             # profile; today's build-time lever mirrors
             # podmanMachineName's shape so the migration is mechanical.
@@ -949,38 +949,42 @@
               "-w"
             ];
             ldflagsX = {
-              "code.linenisgreat.com/clown/internal/buildcfg.ClaudeCliPath" = claudeCliPath;
-              "code.linenisgreat.com/clown/internal/buildcfg.CodexCliPath" = codexCliPath;
-              "code.linenisgreat.com/clown/internal/buildcfg.JugglerCliPath" = "${jugglerGo}/bin/juggler";
-              "code.linenisgreat.com/clown/internal/buildcfg.AgentsFile" = agents-file;
-              "code.linenisgreat.com/clown/internal/buildcfg.DisallowedToolsFile" = disallowed-tools-file;
-              "code.linenisgreat.com/clown/internal/buildcfg.SystemPromptAppendD" = "${./system-prompt-append.d}";
-              "code.linenisgreat.com/clown/internal/buildcfg.DefaultClownfilePath" = "${./default-clownfile}";
-              "code.linenisgreat.com/clown/internal/buildcfg.Version" = clownVersion;
-              "code.linenisgreat.com/clown/internal/buildcfg.Commit" = clownRev;
-              "code.linenisgreat.com/clown/internal/buildcfg.ShortSha" = clownShortRev;
-              "code.linenisgreat.com/clown/internal/buildcfg.ClaudeCodeVersion" = claudeCodeVersion;
-              "code.linenisgreat.com/clown/internal/buildcfg.ClaudeCodeRev" = claudeCodeRev;
-              "code.linenisgreat.com/clown/internal/buildcfg.CodexVersion" = codexVersion;
-              "code.linenisgreat.com/clown/internal/buildcfg.CodexRev" = codexRev;
-              "code.linenisgreat.com/clown/internal/buildcfg.OpencodeCliPath" = "${pkgs.opencode}/bin/opencode";
-              "code.linenisgreat.com/clown/internal/buildcfg.CrushCliPath" = "${pkgs-llm-agents.crush}/bin/crush";
-              "code.linenisgreat.com/clown/internal/buildcfg.ClownboxCliPath" = clownboxCliPath;
-              "code.linenisgreat.com/clown/internal/buildcfg.StdioBridgePath" =
+              "code.linenisgreat.com/clown/internal/0/buildcfg.ClaudeCliPath" = claudeCliPath;
+              "code.linenisgreat.com/clown/internal/0/buildcfg.CodexCliPath" = codexCliPath;
+              "code.linenisgreat.com/clown/internal/0/buildcfg.JugglerCliPath" = "${jugglerGo}/bin/juggler";
+              "code.linenisgreat.com/clown/internal/0/buildcfg.AgentsFile" = agents-file;
+              "code.linenisgreat.com/clown/internal/0/buildcfg.DisallowedToolsFile" = disallowed-tools-file;
+              "code.linenisgreat.com/clown/internal/0/buildcfg.SystemPromptAppendD" = "${
+                ./system-prompt-append.d
+              }";
+              "code.linenisgreat.com/clown/internal/0/buildcfg.DefaultClownfilePath" = "${./default-clownfile}";
+              "code.linenisgreat.com/clown/internal/0/buildcfg.Version" = clownVersion;
+              "code.linenisgreat.com/clown/internal/0/buildcfg.Commit" = clownRev;
+              "code.linenisgreat.com/clown/internal/0/buildcfg.ShortSha" = clownShortRev;
+              "code.linenisgreat.com/clown/internal/0/buildcfg.ClaudeCodeVersion" = claudeCodeVersion;
+              "code.linenisgreat.com/clown/internal/0/buildcfg.ClaudeCodeRev" = claudeCodeRev;
+              "code.linenisgreat.com/clown/internal/0/buildcfg.CodexVersion" = codexVersion;
+              "code.linenisgreat.com/clown/internal/0/buildcfg.CodexRev" = codexRev;
+              "code.linenisgreat.com/clown/internal/0/buildcfg.OpencodeCliPath" = "${pkgs.opencode}/bin/opencode";
+              "code.linenisgreat.com/clown/internal/0/buildcfg.CrushCliPath" =
+                "${pkgs-llm-agents.crush}/bin/crush";
+              "code.linenisgreat.com/clown/internal/0/buildcfg.ClownboxCliPath" = clownboxCliPath;
+              "code.linenisgreat.com/clown/internal/0/buildcfg.StdioBridgePath" =
                 "${clown-stdio-bridge}/bin/clown-stdio-bridge";
-              "code.linenisgreat.com/clown/internal/buildcfg.McpCollapsePath" =
+              "code.linenisgreat.com/clown/internal/0/buildcfg.McpCollapsePath" =
                 "${clown-mcp-collapse}/bin/clown-mcp-collapse";
-              "code.linenisgreat.com/clown/internal/buildcfg.HookAllowPath" =
+              "code.linenisgreat.com/clown/internal/0/buildcfg.HookAllowPath" =
                 "${clown-hook-allow}/bin/clown-hook-allow";
-              "code.linenisgreat.com/clown/internal/buildcfg.HookTeePath" =
+              "code.linenisgreat.com/clown/internal/0/buildcfg.HookTeePath" =
                 "${clown-hook-tee}/bin/clown-hook-tee";
-              "code.linenisgreat.com/clown/internal/buildcfg.HookToolcostPath" =
+              "code.linenisgreat.com/clown/internal/0/buildcfg.HookToolcostPath" =
                 "${clown-hook-toolcost}/bin/clown-hook-toolcost";
               # Added for mcp-collapse permission-mux POC
-              "code.linenisgreat.com/clown/internal/buildcfg.McpCollapseHookPath" =
+              "code.linenisgreat.com/clown/internal/0/buildcfg.McpCollapseHookPath" =
                 "${clown-hook-collapse}/bin/clown-hook-collapse";
-              "code.linenisgreat.com/clown/internal/buildcfg.RingmasterPath" = "${ringmasterPkg}/bin/ringmaster";
-              "code.linenisgreat.com/clown/internal/buildcfg.TroupePath" = "${troupePkg}/bin/troupe";
+              "code.linenisgreat.com/clown/internal/0/buildcfg.RingmasterPath" =
+                "${ringmasterPkg}/bin/ringmaster";
+              "code.linenisgreat.com/clown/internal/0/buildcfg.TroupePath" = "${troupePkg}/bin/troupe";
               # Version + rev of the embedded job-platform binaries, for the
               # `clown version` ringmaster/troupe rows. Sourced from the SAME
               # resolved packages/inputs as the *Path ldflags above, so under
@@ -988,15 +992,15 @@
               # actually embedded — not clown's standalone flake pin. getVersion
               # parses the version from the package name (ringmaster sets no
               # `version` attr; its name still carries it).
-              "code.linenisgreat.com/clown/internal/buildcfg.RingmasterVersion" = lib.getVersion ringmasterPkg;
-              "code.linenisgreat.com/clown/internal/buildcfg.RingmasterRev" = ringmaster.rev or "dirty";
-              "code.linenisgreat.com/clown/internal/buildcfg.TroupeVersion" = lib.getVersion troupePkg;
-              "code.linenisgreat.com/clown/internal/buildcfg.TroupeRev" = troupe.rev or "dirty";
-              "code.linenisgreat.com/clown/internal/buildcfg.DefaultProvider" = defaultProvider;
-              "code.linenisgreat.com/clown/internal/buildcfg.DefaultProfile" = defaultProfile;
-              "code.linenisgreat.com/clown/internal/buildcfg.PodmanPath" = tentPodmanPath;
-              "code.linenisgreat.com/clown/internal/buildcfg.TentImageRef" = tentImageRef;
-              "code.linenisgreat.com/clown/internal/buildcfg.TentImageTarball" = tentImageTarball;
+              "code.linenisgreat.com/clown/internal/0/buildcfg.RingmasterVersion" = lib.getVersion ringmasterPkg;
+              "code.linenisgreat.com/clown/internal/0/buildcfg.RingmasterRev" = ringmaster.rev or "dirty";
+              "code.linenisgreat.com/clown/internal/0/buildcfg.TroupeVersion" = lib.getVersion troupePkg;
+              "code.linenisgreat.com/clown/internal/0/buildcfg.TroupeRev" = troupe.rev or "dirty";
+              "code.linenisgreat.com/clown/internal/0/buildcfg.DefaultProvider" = defaultProvider;
+              "code.linenisgreat.com/clown/internal/0/buildcfg.DefaultProfile" = defaultProfile;
+              "code.linenisgreat.com/clown/internal/0/buildcfg.PodmanPath" = tentPodmanPath;
+              "code.linenisgreat.com/clown/internal/0/buildcfg.TentImageRef" = tentImageRef;
+              "code.linenisgreat.com/clown/internal/0/buildcfg.TentImageTarball" = tentImageTarball;
               # ${self} interpolates the source-tree store path captured
               # by the flake. Used at runtime as the flake-uri for
               # `nix build <self>#packages.<linux-system>.tent-image`
@@ -1004,11 +1008,11 @@
               # the tag and no tarball was baked in (darwin, or future
               # profiles). The dependency keeps the source tree alive
               # in /nix/store as long as the clown derivation is.
-              "code.linenisgreat.com/clown/internal/buildcfg.TentImageFlakeRef" = "${self}";
-              "code.linenisgreat.com/clown/internal/buildcfg.ClaudeTentCliPath" = tentClaudeCliPath;
-              "code.linenisgreat.com/clown/internal/buildcfg.PodmanMachineName" = podmanMachineName;
-              "code.linenisgreat.com/clown/internal/buildcfg.TentBackend" = tentBackend;
-              "code.linenisgreat.com/clown/internal/buildcfg.LimactlPath" = limactlPath;
+              "code.linenisgreat.com/clown/internal/0/buildcfg.TentImageFlakeRef" = "${self}";
+              "code.linenisgreat.com/clown/internal/0/buildcfg.ClaudeTentCliPath" = tentClaudeCliPath;
+              "code.linenisgreat.com/clown/internal/0/buildcfg.PodmanMachineName" = podmanMachineName;
+              "code.linenisgreat.com/clown/internal/0/buildcfg.TentBackend" = tentBackend;
+              "code.linenisgreat.com/clown/internal/0/buildcfg.LimactlPath" = limactlPath;
             };
           };
 
@@ -1016,7 +1020,7 @@
         # daemon`) and the FDR 0019 agent-substrate verbs. Its build vars —
         # LlamaServerPath and the consumed platform binaries' paths — are
         # juggler-owned (cmd/juggler/buildcfg.go) rather than clown's
-        # internal/buildcfg. Clean perforation line for a future extraction
+        # internal/*/buildcfg. Clean perforation line for a future extraction
         # into its own repo.
         #
         # mkJugglerGo { moxyPath } builds it. The agent-substrate verbs
@@ -1119,7 +1123,7 @@
         # agent substrate's platform binaries (a stateful fake ringmaster,
         # troupe and systemd-run, selected by JUGGLERRUNTEST_FAKE, plus a fake
         # OpenRouter Decisions endpoint). Reuses the Go tests' fakes in
-        # internal/jugglerrun/jugglerruntest.
+        # internal/*/jugglerrun/jugglerruntest.
         fake-platform-go = buildClownGo {
           pname = "fake-platform";
           version = clownVersion;
@@ -1135,7 +1139,7 @@
         fakeserver-go = buildClownGo {
           pname = "fakeserver";
           version = clownVersion;
-          subPackages = [ "internal/pluginhost/testdata/fakeserver" ];
+          subPackages = [ "internal/alfa/pluginhost/testdata/fakeserver" ];
         };
 
         # godyn's per-package go test lane (godyn systems only): each tested
@@ -1158,7 +1162,7 @@
               tests = true;
               nativeCheckInputs = [ pkgs.git ];
               testEnv = {
-                # Turns prerequisite guards (internal/testlane.SkipOrFail)
+                # Turns prerequisite guards (internal/*/testlane.SkipOrFail)
                 # from skips into failures: in this lane every prerequisite
                 # is provided, so a skip would hide untested code (clown#235).
                 CLOWN_NIX_TEST_LANE = "1";
@@ -1286,7 +1290,7 @@
           # ringmaster module (ringmasterPkg's share/man, merged into the
           # default symlinkJoin) — the job-platform CLI pages. But the man7
           # control-plane docs stay clown-side: they describe the
-          # internal/juggler subsystem + the daemon, which re-homed into
+          # internal/*/juggler subsystem + the daemon, which re-homed into
           # `juggler daemon` here (the external module dropped them).
           "man7/juggler.7"
           "man7/juggler-testing.7"
@@ -1882,13 +1886,14 @@
           # juggler's Go packages import only each other from this module, so
           # they can leave for their own repository (clown#258,
           # docs/plans/2026-10-20-juggler-extraction.md). Fails on any
-          # cmd/juggler or internal/juggler* import of another clown package.
+          # cmd/juggler or internal/<level>/juggler* import of another clown
+          # package.
           juggler-boundary = pkgs.runCommand "juggler-boundary" { } ''
             cd ${goSrc}
             # A missing tree would otherwise pass vacuously.
-            test -d cmd/juggler && test -d internal/jugglerrun
-            leaks=$(grep -rnoE --include='*.go' '"code\.linenisgreat\.com/clown/[^"]*"' cmd/juggler internal/juggler* \
-              | grep -vE ':"code\.linenisgreat\.com/clown/(internal/juggler[a-z]*|cmd/juggler)(/[^"]*)?"$' || true)
+            test -d cmd/juggler && test -d internal/charlie/jugglerrun
+            leaks=$(grep -rnoE --include='*.go' '"code\.linenisgreat\.com/clown/[^"]*"' cmd/juggler internal/*/juggler* \
+              | grep -vE ':"code\.linenisgreat\.com/clown/(internal/[a-z0-9]+/juggler[a-z]*|cmd/juggler)(/[^"]*)?"$' || true)
             if [ -n "$leaks" ]; then
               echo "juggler packages import clown packages outside juggler (clown#258):" >&2
               echo "$leaks" >&2

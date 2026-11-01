@@ -5,7 +5,7 @@ import (
 	"os"
 	"os/exec"
 
-	"code.linenisgreat.com/clown/internal/ptysuspend"
+	"code.linenisgreat.com/clown/internal/0/ptysuspend"
 )
 
 // runPtySuspend is the hidden `clown pty-suspend -- <cmd> [args...]` POC entry

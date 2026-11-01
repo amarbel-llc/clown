@@ -1,0 +1,491 @@
+// Package jugglerbrief parses, validates and serialises the juggler agent
+// brief (FDR 0019 §3): the contract a spawner signs and drops into the run's
+// MUC as an agent's only instruction source.
+//
+// The package is schema-only. It does not interpret the inline moxyfile
+// (moxy's lane) beyond reading its allow-tools key to check the tools
+// allowlist against it, does not run evaluators (internal/*/jugglereval) and does not
+// sign anything; Marshal is deterministic so a later signer can sign its bytes.
+package jugglerbrief
+
+import (
+	"bytes"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/BurntSushi/toml"
+
+	"code.linenisgreat.com/clown/internal/0/jugglereval"
+)
+
+const (
+	// SchemaVersion is the only brief schema version this package accepts.
+	SchemaVersion = 1
+
+	// DefaultSteps is the loop step cap applied when limits.steps is unset.
+	DefaultSteps = 12
+
+	// DefaultWallClock is the wall-clock budget applied when limits.wall_clock
+	// is unset.
+	DefaultWallClock = "2m"
+
+	// EvaluatorKindJQ is the only evaluator kind implemented in this slice.
+	EvaluatorKindJQ = jugglereval.KindJQ
+)
+
+// Brief is the FDR 0019 §3 field set.
+type Brief struct {
+	Schema    int    `toml:"schema"`
+	Principal string `toml:"principal"`
+	Parent    string `toml:"parent"`
+	Room      string `toml:"room"`
+	Model     string `toml:"model"`
+	System    string `toml:"system"`
+	Task      string `toml:"task"`
+
+	// Moxyfile is the agent's inline moxyfile, kept as opaque text. Its
+	// semantics (narrowing against the spawner's moxyfile) belong to moxy.
+	Moxyfile string `toml:"moxyfile"`
+
+	// BudgetKeyRef is the FDR 0032 D19 slot: a credential-by-reference path
+	// (for example a password-file path) naming the spend key this agent
+	// uses. It is never a secret itself.
+	BudgetKeyRef string `toml:"budget_key_ref,omitempty"`
+
+	// Tools is the REQUIRED allowlist of exact tool names as moxy advertises
+	// them (e.g. "ring_create_issue"); anything not listed is never offered
+	// to the model.
+	Tools []string `toml:"tools"`
+
+	// Env is passed into the agent's transient unit (and so to moxy and its
+	// moxins, which moxyfile(5) cannot configure). Keys spawn owns —
+	// CLOWN_SESSION_ID, TROUPE_XMPP_*, TROUPE_MINT_*, MOXIN_PATH, MOXY_* and
+	// JUGGLER_* — and the LauncherOwnedEnv table are rejected; `juggler
+	// spawn` also refuses a key the launcher already sets in the unit.
+	Env map[string]string `toml:"env,omitempty"`
+
+	Evaluator Evaluator `toml:"evaluator"`
+	Limits    Limits    `toml:"limits"`
+}
+
+// TemplateFields are the fields a brief template may leave empty: the
+// spawner fills them (principal, parent, room from the run; task from the
+// run's input) before the filled brief is validated with Parse.
+var TemplateFields = []string{"principal", "parent", "room", "task"}
+
+// IsPrincipalEnvKey reports whether an environment key carries a principal's
+// identity: CLOWN_SESSION_ID (the per-instance key, FDR 0019 §2), any
+// TROUPE_XMPP_* variable (the XMPP credential reference and its settings),
+// or any TROUPE_MINT_* variable (the spawner's minter credential, which no
+// agent or tool server may inherit).
+func IsPrincipalEnvKey(key string) bool {
+	return key == "CLOWN_SESSION_ID" || strings.HasPrefix(key, "TROUPE_XMPP_") || strings.HasPrefix(key, "TROUPE_MINT_")
+}
+
+// IsMoxinIdentityEnvKey reports whether an environment key decides which
+// moxins (and so which tools and permission tiers) an agent's moxy
+// discovers: MOXIN_PATH, or any MOXY_* variable (MOXY_PARENT_MOXYFILE among
+// them). The launcher pins these; a brief may not (FDR 0019 §5).
+func IsMoxinIdentityEnvKey(key string) bool {
+	return key == "MOXIN_PATH" || strings.HasPrefix(key, "MOXY_")
+}
+
+// LauncherOwnedEnv is the table of environment keys the launcher owns
+// outright (FDR 0019 §3, §5). moxy's narrowing relation accepts a child
+// server command that is a bare PATH name or a ~/- or $VAR-anchored path
+// because the launcher controls the environment those resolve in; a brief
+// that could set any of these would decide which binary actually runs, or
+// inject code or credentials into it. A Pattern ending in "*" is a prefix.
+var LauncherOwnedEnv = []struct{ Pattern, Why string }{
+	{"PATH", "resolves bare-name server commands"},
+	{"HOME", "anchors ~/ paths and moxy's moxyfile hierarchy"},
+	{"PWD", "anchors relative paths"},
+	{"OLDPWD", "anchors relative paths"},
+	{"SHELL", "selects the interpreter tools shell out to"},
+	{"USER", "names the account tools act as"},
+	{"LOGNAME", "names the account tools act as"},
+	{"TMPDIR", "places temporary files tools create"},
+	{"TMP", "places temporary files tools create"},
+	{"TEMP", "places temporary files tools create"},
+	{"XDG_*", "anchors config, data, state and runtime paths"},
+	{"NIX_*", "reconfigures nix (substituters, paths, profiles)"},
+	{"LD_*", "injects code into every dynamically linked process"},
+	{"DYLD_*", "injects code into every dynamically linked process"},
+	{"SSH_*", "carries SSH credentials (SSH_AUTH_SOCK) and options"},
+	{"GIT_*", "redirects git's repository, config and commands"},
+}
+
+// LauncherOwnedEnvReason returns why key is launcher-owned, and whether it
+// is (see LauncherOwnedEnv).
+func LauncherOwnedEnvReason(key string) (string, bool) {
+	for _, e := range LauncherOwnedEnv {
+		if prefix, isPrefix := strings.CutSuffix(e.Pattern, "*"); isPrefix {
+			if strings.HasPrefix(key, prefix) {
+				return e.Why, true
+			}
+		} else if key == e.Pattern {
+			return e.Why, true
+		}
+	}
+	return "", false
+}
+
+// IsLauncherOwnedEnvKey reports whether key matches LauncherOwnedEnv.
+func IsLauncherOwnedEnvKey(key string) bool {
+	_, owned := LauncherOwnedEnvReason(key)
+	return owned
+}
+
+// ReservedEnvKey reports whether an [env] key is one `juggler spawn` sets
+// itself, or the launcher owns, and a brief therefore may not.
+func ReservedEnvKey(key string) bool {
+	return IsPrincipalEnvKey(key) || IsMoxinIdentityEnvKey(key) || strings.HasPrefix(key, "JUGGLER_") || IsLauncherOwnedEnvKey(key)
+}
+
+// reservedEnvKeyError explains why key may not appear in a brief's [env].
+func reservedEnvKeyError(key string) error {
+	if why, owned := LauncherOwnedEnvReason(key); owned {
+		return fmt.Errorf("jugglerbrief: env: %q is launcher-owned and may not appear in a brief: it %s, so the launcher's value is the one moxy and its tool servers see (FDR 0019 §3)", key, why)
+	}
+	return fmt.Errorf("jugglerbrief: env: %q is set by juggler spawn and may not appear in a brief", key)
+}
+
+// Evaluator names how the run ledger is collapsed into a boolean verdict.
+type Evaluator struct {
+	// Kind is "jq" in this slice. "predicate" and "agent" are reserved.
+	Kind    string `toml:"kind"`
+	Program string `toml:"program"`
+	// StopOnPass ends the run (end reason evaluator_pass) as soon as the
+	// program, run over the in-progress ledger after a successful tool
+	// result, first returns true. Off by default.
+	StopOnPass bool `toml:"stop_on_pass,omitempty"`
+}
+
+// Limits bounds a run.
+type Limits struct {
+	// Steps is the loop step cap; DefaultSteps when unset.
+	Steps int `toml:"steps"`
+
+	// WallClock is a Go duration string; DefaultWallClock when unset.
+	WallClock string `toml:"wall_clock"`
+
+	// Sandbox is RESERVED and UNUSED in this slice (FDR 0019 §9). Any TOML
+	// value is accepted and preserved verbatim so that per-brief unit
+	// properties can land here later without reshaping the brief.
+	Sandbox any `toml:"sandbox,omitempty"`
+}
+
+// WallClockDuration returns the parsed wall-clock budget. It is valid on any
+// Brief returned by Parse.
+func (l Limits) WallClockDuration() (time.Duration, error) {
+	return time.ParseDuration(l.WallClock)
+}
+
+// Parse decodes TOML bytes into a Brief, applies limit defaults and validates.
+// Unknown keys are rejected: the brief is a signed contract, so a typo must
+// not be silently ignored.
+func Parse(data []byte) (*Brief, error) {
+	b, err := decode(data)
+	if err != nil {
+		return nil, err
+	}
+	if err := b.Validate(); err != nil {
+		return nil, err
+	}
+	return b, nil
+}
+
+// ParseTemplate is Parse for a brief template: it applies the same checks
+// except that the TemplateFields may be empty.
+func ParseTemplate(data []byte) (*Brief, error) {
+	b, err := decode(data)
+	if err != nil {
+		return nil, err
+	}
+	if err := b.ValidateTemplate(); err != nil {
+		return nil, err
+	}
+	return b, nil
+}
+
+func decode(data []byte) (*Brief, error) {
+	var b Brief
+	md, err := toml.NewDecoder(bytes.NewReader(data)).Decode(&b)
+	if err != nil {
+		return nil, fmt.Errorf("jugglerbrief: decoding TOML: %w", err)
+	}
+	var unknown []string
+	for _, k := range md.Undecoded() {
+		// The reserved sandbox value is opaque: the decoder reports its
+		// sub-keys as undecoded, but they are accepted by design.
+		if len(k) > 2 && k[0] == "limits" && k[1] == "sandbox" {
+			continue
+		}
+		unknown = append(unknown, k.String())
+	}
+	if len(unknown) > 0 {
+		return nil, fmt.Errorf("jugglerbrief: unknown field(s): %s", strings.Join(unknown, ", "))
+	}
+	b.applyDefaults()
+	return &b, nil
+}
+
+func (b *Brief) applyDefaults() {
+	if b.Limits.Steps == 0 {
+		b.Limits.Steps = DefaultSteps
+	}
+	if b.Limits.WallClock == "" {
+		b.Limits.WallClock = DefaultWallClock
+	}
+}
+
+// Validate checks the brief. Every error names the offending field.
+func (b *Brief) Validate() error { return b.validate(false) }
+
+// ValidateTemplate is Validate with the TemplateFields allowed empty.
+func (b *Brief) ValidateTemplate() error { return b.validate(true) }
+
+func (b *Brief) validate(template bool) error {
+	if b.Schema != SchemaVersion {
+		return fmt.Errorf("jugglerbrief: schema: must be %d, got %d", SchemaVersion, b.Schema)
+	}
+	required := []struct{ field, value string }{
+		{"principal", b.Principal},
+		{"parent", b.Parent},
+		{"room", b.Room},
+		{"model", b.Model},
+		{"system", b.System},
+		{"task", b.Task},
+	}
+	for _, r := range required {
+		if template && isTemplateField(r.field) {
+			continue
+		}
+		if strings.TrimSpace(r.value) == "" {
+			return fmt.Errorf("jugglerbrief: %s: must not be empty", r.field)
+		}
+	}
+	if len(b.Tools) == 0 {
+		return fmt.Errorf("jugglerbrief: tools: must list at least one tool name")
+	}
+	seen := map[string]bool{}
+	for _, t := range b.Tools {
+		if strings.TrimSpace(t) == "" {
+			return fmt.Errorf("jugglerbrief: tools: tool names must not be empty")
+		}
+		if seen[t] {
+			return fmt.Errorf("jugglerbrief: tools: %q is listed twice", t)
+		}
+		seen[t] = true
+	}
+	if err := checkNoReservedMetaTools(b.Tools, b.Moxyfile); err != nil {
+		return err
+	}
+	if err := checkToolsCoveredByAllowTools(b.Tools, b.Moxyfile); err != nil {
+		return err
+	}
+	if err := checkPassToolsDoNotCoverTools(b.Tools, b.Moxyfile); err != nil {
+		return err
+	}
+	for k := range b.Env {
+		if k == "" || strings.Contains(k, "=") {
+			return fmt.Errorf("jugglerbrief: env: invalid key %q", k)
+		}
+		if ReservedEnvKey(k) {
+			return reservedEnvKeyError(k)
+		}
+	}
+	switch b.Evaluator.Kind {
+	case EvaluatorKindJQ:
+	case "predicate", "agent":
+		return fmt.Errorf("jugglerbrief: evaluator.kind: %q is reserved and not yet supported (only %q)", b.Evaluator.Kind, EvaluatorKindJQ)
+	case "":
+		return fmt.Errorf("jugglerbrief: evaluator.kind: must not be empty (only %q is supported)", EvaluatorKindJQ)
+	default:
+		return fmt.Errorf("jugglerbrief: evaluator.kind: unknown kind %q (only %q is supported)", b.Evaluator.Kind, EvaluatorKindJQ)
+	}
+	if strings.TrimSpace(b.Evaluator.Program) == "" {
+		return fmt.Errorf("jugglerbrief: evaluator.program: must not be empty")
+	}
+	if b.Limits.Steps < 1 {
+		return fmt.Errorf("jugglerbrief: limits.steps: must be >= 1, got %d", b.Limits.Steps)
+	}
+	d, err := b.Limits.WallClockDuration()
+	if err != nil {
+		return fmt.Errorf("jugglerbrief: limits.wall_clock: invalid duration %q: %w", b.Limits.WallClock, err)
+	}
+	if d <= 0 {
+		return fmt.Errorf("jugglerbrief: limits.wall_clock: must be positive, got %q", b.Limits.WallClock)
+	}
+	return nil
+}
+
+// reservedMetaTools are moxy's own builtin meta tools: no owning server, so
+// they render under their bare literal name regardless of name template
+// (moxy's cmd/moxy/main.go tool registrations; also verified against
+// moxy's own naming tests, nametemplate_test.go and toolallow_test.go, for
+// restart/batch/async). A brief may not list any of them, in `tools`, in
+// its moxyfile's `allow-tools`, OR in its `pass-tools` (clown#261 point 2):
+// `restart` lets a tool-reachable agent (its own moxyfile is writable,
+// moxy#461) reload a rewritten moxyfile and widen itself up to the
+// spawner's whole set; `batch` and `async` let a single offered call make
+// further, nested sub-calls the loop's own call-time filter (clown#261
+// point 1) never sees, bounded only by moxy's own allow-tools; passing any
+// of the six to a non-juggler grandchild (pass-tools) reopens the same
+// risk one level down. `async-result` reads the clown job journal across
+// sessions and `status` discloses the whole moxyfile hierarchy — both are
+// refused outright too, not only when they'd otherwise slip through
+// render's own underscore-less resolution failure by accident.
+var reservedMetaTools = map[string]bool{
+	"restart":      true,
+	"batch":        true,
+	"async":        true,
+	"async-result": true,
+	"async-cancel": true,
+	"status":       true,
+}
+
+// checkNoReservedMetaTools rejects a reservedMetaTools entry in tools or in
+// the moxyfile's allow-tools or pass-tools, when the moxyfile sets either.
+func checkNoReservedMetaTools(tools []string, moxyfile string) error {
+	for _, t := range tools {
+		if reservedMetaTools[t] {
+			return fmt.Errorf("jugglerbrief: tools: %q is a moxy builtin meta tool and must not be listed (clown#261)", t)
+		}
+	}
+	if strings.TrimSpace(moxyfile) == "" {
+		return nil
+	}
+	var doc struct {
+		AllowTools *[]string `toml:"allow-tools"`
+		PassTools  *[]string `toml:"pass-tools"`
+	}
+	if _, err := toml.Decode(moxyfile, &doc); err != nil {
+		return fmt.Errorf("jugglerbrief: moxyfile: not valid TOML: %w", err)
+	}
+	for _, field := range []struct {
+		key     string
+		entries *[]string
+	}{
+		{"allow-tools", doc.AllowTools},
+		{"pass-tools", doc.PassTools},
+	} {
+		if field.entries == nil {
+			continue
+		}
+		for _, a := range *field.entries {
+			if reservedMetaTools[a] {
+				return fmt.Errorf("jugglerbrief: moxyfile: %s: %q is a moxy builtin meta tool and must not be listed (clown#261)", field.key, a)
+			}
+		}
+	}
+	return nil
+}
+
+// toolCoveredByEntry reports whether entry (moxy's own allow-tools/pass-tools
+// vocabulary: a bare server/moxin/builtin name, or a dotted "server.tool")
+// covers t, an exact juggler tool name under the {server}_{tool} name
+// template ("<server>_<tool>" for a dotted entry, "<name>" or "<name>_*" for
+// a bare one).
+func toolCoveredByEntry(t, entry string) bool {
+	if server, tool, dotted := strings.Cut(entry, "."); dotted {
+		return t == server+"_"+tool
+	}
+	return t == entry || strings.HasPrefix(t, entry+"_")
+}
+
+// checkToolsCoveredByAllowTools requires every entry of tools to be offered by
+// the moxyfile's top-level allow-tools, when the moxyfile sets that key (moxy
+// would otherwise never advertise it). An unset allow-tools leaves tools
+// unchecked.
+func checkToolsCoveredByAllowTools(tools []string, moxyfile string) error {
+	if strings.TrimSpace(moxyfile) == "" {
+		return nil
+	}
+	var doc struct {
+		AllowTools *[]string `toml:"allow-tools"`
+	}
+	if _, err := toml.Decode(moxyfile, &doc); err != nil {
+		return fmt.Errorf("jugglerbrief: moxyfile: not valid TOML: %w", err)
+	}
+	if doc.AllowTools == nil {
+		return nil
+	}
+	for _, t := range tools {
+		covered := false
+		for _, a := range *doc.AllowTools {
+			if covered = toolCoveredByEntry(t, a); covered {
+				break
+			}
+		}
+		if !covered {
+			return fmt.Errorf("jugglerbrief: tools: %q is not covered by the moxyfile's allow-tools %q", t, *doc.AllowTools)
+		}
+	}
+	return nil
+}
+
+// checkPassToolsDoNotCoverTools refuses a brief whose moxyfile's pass-tools
+// holds, at the exact dotted "server.tool" granularity juggler always
+// derives the agent's own moxyfile's allow-tools in, a tool also in tools
+// (clown#261 point 3): such an entry would be held at both pass and use,
+// which contradicts moxy's own "a tool is held at one level, use or pass"
+// rule (moxy#459, validatePassTools's CoveredBy(entry, allowed) check) —
+// better refused here, legibly, than left to fail at moxy's own load time.
+// Only a DOTTED pass-tools entry is checked: a bare entry over a dotted
+// allow entry is fine by moxy's own rule (its own example: the holder calls
+// that one tool and may confer the rest of the server), so
+// `pass-tools = ["smith"]` beside `tools = ["smith_list_repos"]` must
+// parse. An unset pass-tools leaves tools unchecked.
+func checkPassToolsDoNotCoverTools(tools []string, moxyfile string) error {
+	if strings.TrimSpace(moxyfile) == "" {
+		return nil
+	}
+	var doc struct {
+		PassTools *[]string `toml:"pass-tools"`
+	}
+	if _, err := toml.Decode(moxyfile, &doc); err != nil {
+		return fmt.Errorf("jugglerbrief: moxyfile: not valid TOML: %w", err)
+	}
+	if doc.PassTools == nil {
+		return nil
+	}
+	toolSet := map[string]bool{}
+	for _, t := range tools {
+		toolSet[t] = true
+	}
+	for _, p := range *doc.PassTools {
+		server, tool, dotted := strings.Cut(p, ".")
+		if !dotted {
+			continue
+		}
+		if t := server + "_" + tool; toolSet[t] {
+			return fmt.Errorf("jugglerbrief: moxyfile: pass-tools: %q also covers tools entry %q; a tool is held at one level, use or pass", p, t)
+		}
+	}
+	return nil
+}
+
+func isTemplateField(field string) bool {
+	for _, f := range TemplateFields {
+		if f == field {
+			return true
+		}
+	}
+	return false
+}
+
+// Marshal validates the brief and serialises it to TOML. Output is
+// deterministic for a given Brief (struct field order, no maps in the schema
+// beyond the opaque reserved sandbox value, whose keys the encoder sorts).
+func (b *Brief) Marshal() ([]byte, error) {
+	if err := b.Validate(); err != nil {
+		return nil, err
+	}
+	var buf bytes.Buffer
+	if err := toml.NewEncoder(&buf).Encode(b); err != nil {
+		return nil, fmt.Errorf("jugglerbrief: encoding TOML: %w", err)
+	}
+	return buf.Bytes(), nil
+}

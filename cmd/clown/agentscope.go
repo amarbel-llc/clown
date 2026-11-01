@@ -22,11 +22,11 @@ import (
 	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 
-	"code.linenisgreat.com/clown/internal/agentscope"
-	"code.linenisgreat.com/clown/internal/logcap"
-	"code.linenisgreat.com/clown/internal/pluginhost"
-	"code.linenisgreat.com/clown/internal/sessionstatus"
-	"code.linenisgreat.com/clown/internal/toolcost"
+	"code.linenisgreat.com/clown/internal/0/logcap"
+	"code.linenisgreat.com/clown/internal/alfa/agentscope"
+	"code.linenisgreat.com/clown/internal/alfa/pluginhost"
+	"code.linenisgreat.com/clown/internal/alfa/sessionstatus"
+	"code.linenisgreat.com/clown/internal/alfa/toolcost"
 )
 
 // runInAgentScope launches argv (the provider binary first) in the agent

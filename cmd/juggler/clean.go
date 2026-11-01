@@ -8,7 +8,7 @@ import (
 	"os"
 	"time"
 
-	jr "code.linenisgreat.com/clown/internal/jugglerrun"
+	jr "code.linenisgreat.com/clown/internal/charlie/jugglerrun"
 )
 
 const cleanUsage = `usage: juggler clean [--older-than <duration>] [--resolved [--resolved-older-than <duration>]] [--act]`

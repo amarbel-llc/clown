@@ -609,8 +609,8 @@ toolset is not hand-built per agent.
 over streamable HTTP (`moxy serve-http`, or `clown-stdio-bridge` around
 `moxy serve-mcp`). moxy owns child-server lifecycle, the moxyfile
 cascade, permission tiers and large-output blobbing. juggler links only
-the HTTP JSON-RPC client clown already has (`internal/mcphttp`), not
-`internal/pluginhost`.
+the HTTP JSON-RPC client clown already has (`internal/*/mcphttp`), not
+`internal/*/pluginhost`.
 
 The brief's **inline moxyfile is the agent's toolset**. It MUST be a
 subset of the spawner's own effective moxyfile. That is FDR 0032 D13's
@@ -723,8 +723,8 @@ moxyfile and then call moxy's own `restart` tool could widen its own tool
 access, because moxy's reload check validated only against the *parent*
 reference pinned at spawn. The agent's own moxyfile IS writable by
 itself today — it is written to `<AgentStateDir>/moxyfile`
-(`internal/jugglerrun/toolplane.go`), which is moxy's own CWD, and
-`AgentStateDir`'s own doc comment (`internal/jugglerrun/store.go`)
+(`internal/*/jugglerrun/toolplane.go`), which is moxy's own CWD, and
+`AgentStateDir`'s own doc comment (`internal/*/jugglerrun/store.go`)
 says plainly that "folio-style tools auto-allow writes inside CWD" —
 so an agent holding an ordinary file-write tool can rewrite it and
 trigger a moxy reload that widens moxy's own permissions up to the
@@ -734,9 +734,9 @@ call would actually get there:
 - **Model-emitted calls** — the gap this moxy#461 escalation originally
   relied on for juggler specifically: a brief's `tools` was *not* a
   call-time gate, only advertisement (`FilterToolsToAllowlist`,
-  `internal/jugglerrun/agent.go`), while the loop forwarded whatever
+  `internal/*/jugglerrun/agent.go`), while the loop forwarded whatever
   name the model emitted straight to moxy
-  (`internal/jugglerloop/loop.go`) with no re-check. Closed by clown#261:
+  (`internal/*/jugglerloop/loop.go`) with no re-check. Closed by clown#261:
   the loop refuses any call for a name outside `tools`, and
   `Brief.Validate` refuses `restart` from ever appearing in `tools` or
   the brief's own `allow-tools`/`pass-tools` at all — `restart` can
@@ -1216,7 +1216,7 @@ The router, before any subagent exists:
     `detail` only when no state was read), auditable without a child
     record; `spawn --new-run` has no run yet to record one against, so
     its refusal is a plain error. Internally the check shells out through
-    the same `runCommand`/`Command` seam (`internal/jugglerrun/exec.go`)
+    the same `runCommand`/`Command` seam (`internal/*/jugglerrun/exec.go`)
     `moxy narrows` and `systemd-run` use, behind a small `SystemdChecker`
     interface, so it is faked and tested the same way. Two caveats of
     checking systemctl at all: `spawn --new-run` previously needed no
@@ -1458,7 +1458,7 @@ The router, before any subagent exists:
   and the parent's JID is not yet passed into the unit (FDR 0032 D7).
 - **Toolset granularity** (resolved): a brief's `tools` is enforced per tool
   by the loop and by the derived `allow-tools` (clown#261, closed;
-  `internal/jugglerrun/agentmoxyfile.go`).
+  `internal/*/jugglerrun/agentmoxyfile.go`).
 - **Not verified yet:** whether llama-server's Anthropic endpoint
   implements tool use. If not, local falls back to its OpenAI-compatible
   endpoint and the codec becomes a registry field rather than a kind

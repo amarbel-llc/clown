@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"code.linenisgreat.com/clown/internal/sessions"
+	"code.linenisgreat.com/clown/internal/alfa/sessions"
 	"code.linenisgreat.com/clown/pkg/profilelookup"
 )
 

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"code.linenisgreat.com/clown/internal/agentscope"
+	"code.linenisgreat.com/clown/internal/alfa/agentscope"
 )
 
 // An explicit empty egress_allow means deny everything; only an unset

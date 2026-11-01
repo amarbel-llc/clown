@@ -20,7 +20,7 @@ layers 5\(en6 are developer-invoked from the
 .Xr justfile 1 .
 .Sh LAYER 1: UNIT TESTS
 .Bl -tag -width Ds
-.It Pa internal/juggler/*_test.go
+.It Pa internal/*/juggler/*_test.go
 Wire format
 .Pq Sy frame_test.go ,
 registry semantics
@@ -216,7 +216,7 @@ diagnostic tool for that.
 .It Adding a new RPC method
 Layer 1
 .Pq wire-format roundtrip in
-.Pa internal/juggler/rpc_test.go
+.Pa internal/*/juggler/rpc_test.go
 + layer 2
 .Pq server dispatch test in
 .Pa cmd/juggler/server_test.go .

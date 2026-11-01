@@ -39,7 +39,7 @@ setup() {
   export TENT_IMAGE
 
   # C+F default read-only bind list. Mirrors
-  # internal/tent.DefaultReadOnlyBindCandidates; if that list changes,
+  # internal/*/tent.DefaultReadOnlyBindCandidates; if that list changes,
   # update here too. We filter to existing paths so a host without
   # ~/.gitconfig still runs the rest.
   RO_BINDS=()
@@ -78,7 +78,7 @@ tent_run() {
   local script="$1"
   local rewritten
   # The realpath-rewrite filter. Same logic as
-  # internal/tent.RewritePathToNixStore but in bash so we're not
+  # internal/*/tent.RewritePathToNixStore but in bash so we're not
   # dependent on a separate helper binary.
   rewritten="$(printf '%s' "$PATH" | tr ':' '\n' | while read -r p; do
     [[ -z $p ]] && continue

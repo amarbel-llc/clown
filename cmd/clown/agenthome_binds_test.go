@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"code.linenisgreat.com/clown/internal/agentscope"
-	"code.linenisgreat.com/clown/internal/permstat"
+	"code.linenisgreat.com/clown/internal/alfa/agentscope"
+	"code.linenisgreat.com/clown/internal/bravo/permstat"
 )
 
 // clown#302: the permission counters' state dir (permstat.Dir) lies under a

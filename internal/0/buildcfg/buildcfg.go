@@ -1,0 +1,210 @@
+package buildcfg
+
+var (
+	ClaudeCliPath       string
+	CodexCliPath        string
+	JugglerCliPath      string
+	OpencodeCliPath     string
+	CrushCliPath        string
+	ClownboxCliPath     string
+	AgentsFile          string
+	DisallowedToolsFile string
+	SystemPromptAppendD string
+	// DefaultClownfilePath is the burned-in base clownfile (RFC-0013 §1.3): the
+	// lowest-precedence layer of the clownfile cascade, supplying default [attach]
+	// multiplexer self-wrap templates. Empty in dev builds (then skipped).
+	DefaultClownfilePath string
+	Version              string
+	Commit               string
+	// ShortSha is the abbreviated git revision (git's short rev, with a
+	// "-dirty" suffix for dirty trees). Displayed alongside Version as the
+	// `<version>+<shortSha>` build identifier the agent stamps into
+	// sign-offs; Commit (the full rev) backs the commit URL. Empty in dev
+	// builds (go build, go run).
+	ShortSha          string
+	ClaudeCodeVersion string
+	ClaudeCodeRev     string
+	CodexVersion      string
+	CodexRev          string
+	// LlamaServerPath moved to cmd/juggler (a juggler-owned build var) so the
+	// juggler subsystem imports nothing from clown (checks.juggler-boundary,
+	// clown#258). See cmd/juggler/buildcfg.go.
+	// RingmasterPath and TroupePath are the absolute paths to the ringmaster
+	// and troupe binaries in their own Nix store outputs, baked at build time
+	// (RFC-0015 §6). clown synthesizes the wake monitor as `ringmaster monitor`
+	// and the two job-platform MCP servers as `ringmaster mcp` / `troupe mcp`;
+	// because those commands leave clown's own argv, the binary paths must be
+	// resolved from build config rather than os.Executable(). Empty in dev
+	// builds (go build, go run): the monitor command then falls back to the bare
+	// `ringmaster`/`troupe` names (resolved via PATH) and MCP injection is
+	// skipped along with the stdio bridge.
+	RingmasterPath string
+	TroupePath     string
+	// RingmasterVersion/RingmasterRev and TroupeVersion/TroupeRev are the
+	// version and git rev of the ringmaster and troupe binaries embedded at
+	// RingmasterPath/TroupePath, baked at build time from the resolved flake
+	// packages/inputs (eng-versioning(7), mirroring ClaudeCodeVersion/Rev and
+	// CodexVersion/Rev). Because clown's troupe/ringmaster inputs FOLLOW eng's
+	// when clown is built through the eng superflake, these reflect the ACTUAL
+	// embedded binary — the eng-follows latest — not clown's standalone flake
+	// pin, which is the whole point of surfacing them: `clown version` shows
+	// ringmaster/troupe rows so the operator can see which job-platform build
+	// the monitor and MCP servers are actually running. Empty in dev builds
+	// (go build, go run), where the rows render bare (name only), exactly like
+	// claude-code/codex do.
+	RingmasterVersion string
+	RingmasterRev     string
+	TroupeVersion     string
+	TroupeRev         string
+	// StdioBridgePath is the absolute path to the clown-stdio-bridge
+	// binary in its own Nix store output, baked at build time. Used by
+	// pluginhost.Desugar to rewrite stdioServers entries into httpServers
+	// entries pointing at the bridge. Both clown-plugin-host and clown(1)
+	// consume this. clown-stdio-bridge lives in a separate derivation,
+	// so resolving from os.Executable() would land in the wrong
+	// directory; baking the path is the only correct option for the Nix
+	// layout. Empty in dev builds (go build, go run); stdioServers
+	// requires the Nix-built artifact.
+	StdioBridgePath string
+	// McpCollapsePath is the absolute path to the clown-mcp-collapse binary
+	// in its own Nix store output, baked at build time. Used by clown(1)'s
+	// opt-in --mcp-collapse mode: after the discovered upstream MCP servers
+	// are started, clown launches ONE clown-mcp-collapse process fronting
+	// them all (passing each --upstream <name>=<url>) and registers only that
+	// aggregator with the harness, so the agent sees the three collapsed
+	// verbs instead of every upstream tool flat. clown-mcp-collapse lives in a
+	// separate derivation, so resolving from os.Executable() would land in the
+	// wrong directory; baking the path is the only correct option for the Nix
+	// layout, exactly like StdioBridgePath. Empty in dev builds (go build,
+	// go run); --mcp-collapse fails fast with a clear error when empty.
+	McpCollapsePath string
+	// HookAllowPath is the absolute path to the clown-hook-allow binary in
+	// its own Nix store output, baked at build time. The synthesized
+	// clown-builtin-jobs plugin wires it as a PreToolUse hook (hooks/hooks.json,
+	// discovered via --plugin-dir) so the job MCP tools — and /nix/store reads —
+	// auto-allow without a per-call permission prompt (clown#130). The plugin
+	// hook path is the live mechanism: claude loads it in every session, unlike
+	// managed-settings, which is not read outside --tent (clown#133). Empty in
+	// dev builds (go build, go run); the hook is then omitted and the tools
+	// prompt as before. Mirrors how spinclass/moxy auto-allow their own tools.
+	HookAllowPath string
+	// HookTeePath is the absolute path to the clown-hook-tee binary in its own
+	// Nix store output, baked at build time. The synthesized clown-builtin-jobs
+	// plugin wires it as a Stop hook (hooks/hooks.json, discovered via
+	// --plugin-dir) when the session runs the xmpp-native transport with a
+	// minted credential: the session output tee (troupe#21), posting each
+	// turn's user-visible assistant reply text into the session's per-worktree
+	// MUC channel via `troupe muc send`. Empty in dev builds (go build,
+	// go run); the hook is then omitted and no tee is registered.
+	HookTeePath string
+	// HookToolcostPath is the absolute path to the clown-hook-toolcost binary
+	// in its own Nix store output, baked at build time. The synthesized
+	// clown-builtin-jobs plugin wires it as a Stop, SubagentStop and
+	// SessionEnd hook: it turns the transcript into per-tool context-cost
+	// metrics in stats-me. Empty in dev builds (go build, go run); the hook
+	// is then omitted.
+	HookToolcostPath string
+	// McpCollapseHookPath is the absolute path to the clown-hook-collapse binary
+	// in its own Nix store output, baked at build time. Added for the mcp-collapse
+	// permission-mux POC (throwaway; stage 1 mechanics): the synthesized aggregator
+	// plugin dir (collapseBinding.synthAggregatorPluginDir) wires it as a PreToolUse
+	// hook (hooks/hooks.json, discovered via --plugin-dir) so the collapsed mcp_call
+	// tool can be demuxed by tool_id back to a per-upstream-tool allow/ask/deny
+	// decision — restoring the permission granularity mcp-collapse otherwise erases.
+	// Mirrors HookAllowPath's wire-up exactly. Empty in dev builds (go build,
+	// go run); the hook is then omitted and the collapsed tool prompts as before.
+	McpCollapseHookPath string
+	// DefaultProvider is the provider name used when neither
+	// --provider nor CLOWN_PROVIDER is set. Empty falls back to
+	// the historical "claude" default in main.go.
+	DefaultProvider string
+	// DefaultProfile is the profile name used when neither
+	// --profile nor CLOWN_PROFILE is set and no explicit provider
+	// is given. An unknown name produces the same error as an
+	// explicit --profile would. Empty disables the build-time
+	// default and restores the picker / hardcoded-provider flow.
+	DefaultProfile string
+	// PodmanPath is the absolute path to the podman binary, baked
+	// at build time. Consumed by the --tent codepath to wrap the
+	// provider in a container. Wired in on linux and darwin (on
+	// darwin the binary is a thin client that proxies to a
+	// podman-machine VM). Empty in dev builds; --tent fails fast
+	// with a clear error when empty. See FDR-0007.
+	PodmanPath string
+	// PodmanMachineName is the podman connection name (= machine
+	// name) to target via `--connection <name>` on every podman
+	// invocation. Baked at build time by mkJuggler / mkClownGo so a
+	// downstream consumer (notably packages.dev, which targets the
+	// local dev-loop machine) can bypass the user's eng-managed
+	// podman-machine-default. Empty (the default) means no
+	// `--connection` flag is added; podman picks its configured
+	// default connection. The flag must come *before* the
+	// subcommand in argv order.
+	//
+	// When TentBackend is "lima", this same ldflag is reused as the
+	// Lima instance name (`limactl shell <name> -- ...`). The name
+	// is podman-historical; a future TOML profile migration will
+	// rename it to a backend-agnostic TentMachineName.
+	PodmanMachineName string
+
+	// TentBackend selects the container runtime that drives --tent.
+	// Recognized values:
+	//   - ""       — default; treated as "podman"
+	//   - "podman" — talk to podman directly (PodmanPath +
+	//                PodmanMachineName)
+	//   - "lima"   — talk to Lima via `limactl shell <machine> --
+	//                sudo nerdctl ...` (LimactlPath +
+	//                PodmanMachineName)
+	// Baked at build time by mkJuggler / mkClownGo's tentBackend
+	// param.
+	//
+	// A future TOML profile system (clown's planned --profile work,
+	// see docs/plans/2026-04-23-profiles-design.md) will own runtime
+	// backend selection per profile; this build-time ldflag is the
+	// interim mechanism. The Backend interface in internal/*/tent is
+	// intentionally minimal so that migration is a wiring change
+	// rather than a Go-API redesign.
+	TentBackend string
+
+	// LimactlPath is the absolute path to the limactl binary, baked
+	// at build time when TentBackend is "lima". Empty for podman
+	// builds; --tent fails fast with a clear error if "lima" is
+	// selected but this is empty.
+	LimactlPath string
+	// TentImageRef is the podman image reference (e.g.
+	// "clown-tent:1.2.3") that --tent runs the provider inside.
+	// Loaded on demand from TentImageTarball when not already
+	// present in the local podman image store. Baked on every
+	// platform; on darwin where TentImageTarball is empty, an
+	// image-store miss surfaces as "image not present locally and
+	// no tarball is wired in" instead of an opaque earlier failure.
+	TentImageRef string
+	// TentImageTarball is the absolute path to a docker-format
+	// image tarball produced by dockerTools.buildImage. clown runs
+	// `podman load -i <tarball>` on first --tent invocation if the
+	// image is not already in the local store. Linux-only — the
+	// darwin builder produces an unusable image (manifest claims
+	// linux/arm64, content is mach-O). Where empty, --tent falls
+	// back to building the image on demand via TentImageFlakeRef.
+	// Empty in dev builds.
+	TentImageTarball string
+	// TentImageFlakeRef is the nix flake reference whose
+	// `packages.<linux-system>.tent-image` output produces the tent
+	// container image. Baked at build time as a nix store path
+	// captured from `${self}`, so it's available to any clown built
+	// from this flake until that store path is GC'd. Used by --tent
+	// when TentImageTarball is empty (darwin) or when a future
+	// profile selects a non-baked image (planned). Empty in dev
+	// builds (go build, go run) — --tent build-on-miss is
+	// unavailable there, and ensureTentImage surfaces a clear error.
+	TentImageFlakeRef string
+	// ClaudeTentCliPath is the absolute path to the unpatched
+	// claude-code binary used inside tent. Sourced from
+	// numtide/llm-agents.nix (self-contained binary distribution,
+	// latest as of the flake input). Distinct from ClaudeCliPath,
+	// which points at clown's managed-settings-patched claude-code
+	// 2.1.111 used outside tent. Wired in on linux and darwin;
+	// empty in dev builds, where --tent errors out clearly.
+	// See FDR-0007.
+	ClaudeTentCliPath string
+)

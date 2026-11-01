@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	rm "code.linenisgreat.com/clown/internal/juggler"
+	rm "code.linenisgreat.com/clown/internal/0/juggler"
 )
 
 // spawnRecordingLlamaServer wraps the fake llama-server in a script that

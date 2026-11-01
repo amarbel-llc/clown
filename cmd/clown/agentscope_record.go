@@ -13,8 +13,8 @@ import (
 	"slices"
 	"strings"
 
-	"code.linenisgreat.com/clown/internal/agentscope"
-	"code.linenisgreat.com/clown/internal/sessions"
+	"code.linenisgreat.com/clown/internal/alfa/agentscope"
+	"code.linenisgreat.com/clown/internal/alfa/sessions"
 )
 
 // A confined session stays confined (clown#318). A confined launch records

@@ -6,8 +6,8 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"code.linenisgreat.com/clown/internal/profile"
-	"code.linenisgreat.com/clown/internal/sessions"
+	"code.linenisgreat.com/clown/internal/0/profile"
+	"code.linenisgreat.com/clown/internal/alfa/sessions"
 )
 
 // clown#309: while a filter is being typed, q is filter text, enter applies

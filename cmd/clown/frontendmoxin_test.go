@@ -8,9 +8,9 @@ import (
 	"sync"
 	"testing"
 
-	"code.linenisgreat.com/clown/internal/agentscope"
-	"code.linenisgreat.com/clown/internal/buildcfg"
-	"code.linenisgreat.com/clown/internal/pluginhost"
+	"code.linenisgreat.com/clown/internal/0/buildcfg"
+	"code.linenisgreat.com/clown/internal/alfa/agentscope"
+	"code.linenisgreat.com/clown/internal/alfa/pluginhost"
 )
 
 // fakeMoxinDir makes <root>/<name>/_moxin.toml and returns root, a MOXIN_PATH

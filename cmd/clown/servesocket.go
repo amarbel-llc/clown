@@ -4,8 +4,9 @@ import (
 	"fmt"
 	"slices"
 
-	"code.linenisgreat.com/clown/internal/agentscope"
-	"code.linenisgreat.com/clown/internal/pluginhost"
+	"code.linenisgreat.com/clown/internal/0/peercheck"
+	"code.linenisgreat.com/clown/internal/alfa/agentscope"
+	"code.linenisgreat.com/clown/internal/alfa/pluginhost"
 )
 
 // servePlugin is the plugin whose frontend server is moved to a serve socket
@@ -31,7 +32,7 @@ func routeServeSockets(discovered []pluginhost.DiscoveredServer, bridgePath, run
 		if len(relays) > 0 {
 			return nil, nil, fmt.Errorf("plugin %s declares more than one frontend server; one serve socket per session is supported", servePlugin)
 		}
-		sock, err := agentscope.ServeSocketPath(runtimeDir, principal, d.ServerName)
+		sock, err := peercheck.ServeSocketPath(runtimeDir, principal, d.ServerName)
 		if err != nil {
 			return nil, nil, fmt.Errorf("serve socket for %s: %w", d.Name(), err)
 		}

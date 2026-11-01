@@ -24,7 +24,7 @@ Picking how clown talks to a model means picking a *profile*, which
 bundles four conceptually independent things:
 
 1. **Harness** — the local CLI agent clown shells out to: `claude`,
-   `codex`, `circus`, `opencode`, `clownbox`. (`internal/buildcfg`,
+   `codex`, `circus`, `opencode`, `clownbox`. (`internal/*/buildcfg`,
    `cmd/clown/main.go:resolveProvider`.)
 2. **Provider** — the model vendor: Anthropic, OpenAI, a local
    llama.cpp/Ollama, a corp gateway. Currently encoded as the

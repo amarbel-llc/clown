@@ -16,9 +16,9 @@ import (
 
 	"golang.org/x/term"
 
-	"code.linenisgreat.com/clown/internal/logcap"
-	"code.linenisgreat.com/clown/internal/sessionstatus"
-	"code.linenisgreat.com/clown/internal/staging"
+	"code.linenisgreat.com/clown/internal/0/logcap"
+	"code.linenisgreat.com/clown/internal/0/staging"
+	"code.linenisgreat.com/clown/internal/alfa/sessionstatus"
 )
 
 // A session ends itself in two halves (spinclass#389): its close-this-session

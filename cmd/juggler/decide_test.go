@@ -12,8 +12,8 @@ import (
 	"strings"
 	"testing"
 
-	rm "code.linenisgreat.com/clown/internal/juggler"
-	"code.linenisgreat.com/clown/internal/jugglerrun/jugglerruntest"
+	rm "code.linenisgreat.com/clown/internal/0/juggler"
+	"code.linenisgreat.com/clown/internal/charlie/jugglerrun/jugglerruntest"
 )
 
 const decideTestPayload = `{"state":{"t":"x"},"questions":{"filer":{"type":"choice","instructions":"?","criteria":{"issue":"a","note":"b"}}}}`

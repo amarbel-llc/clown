@@ -18,7 +18,7 @@ import (
 	"syscall"
 	"time"
 
-	"code.linenisgreat.com/clown/internal/toolcost"
+	"code.linenisgreat.com/clown/internal/alfa/toolcost"
 )
 
 // A per-session call cap for a frontend-served moxin (clown#325 follow-up).

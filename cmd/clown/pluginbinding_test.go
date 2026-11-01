@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"code.linenisgreat.com/clown/internal/buildcfg"
-	"code.linenisgreat.com/clown/internal/pluginhost"
-	"code.linenisgreat.com/clown/internal/staging"
+	"code.linenisgreat.com/clown/internal/0/buildcfg"
+	"code.linenisgreat.com/clown/internal/0/staging"
+	"code.linenisgreat.com/clown/internal/alfa/pluginhost"
 )
 
 // recordingExecutor captures whatever FormatArgs was handed. The compile-time

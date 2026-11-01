@@ -56,10 +56,10 @@ import (
 
 	"github.com/charmbracelet/huh"
 
-	"code.linenisgreat.com/clown/internal/clownfile"
-	"code.linenisgreat.com/clown/internal/pluginhost"
-	"code.linenisgreat.com/clown/internal/profile"
-	"code.linenisgreat.com/clown/internal/staging"
+	"code.linenisgreat.com/clown/internal/0/profile"
+	"code.linenisgreat.com/clown/internal/0/staging"
+	"code.linenisgreat.com/clown/internal/alfa/clownfile"
+	"code.linenisgreat.com/clown/internal/alfa/pluginhost"
 )
 
 type crushLocalConfig struct {

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	jr "code.linenisgreat.com/clown/internal/jugglerrun"
+	jr "code.linenisgreat.com/clown/internal/charlie/jugglerrun"
 )
 
 const resolveUsage = `usage: juggler resolve <run-job> --state succeeded|failed --reason <text> [--fallback-artifacts '[{"tool","kind","uris"}]'] [--stop-grace <dur>] [--result-line <text> --canary-room <jid>] [--keep-accounts]`

@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"code.linenisgreat.com/clown/internal/clownfile"
+	"code.linenisgreat.com/clown/internal/alfa/clownfile"
 )
 
 // Hold claude's first turn until its MCP servers connect (clown#296).

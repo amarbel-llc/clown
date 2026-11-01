@@ -108,7 +108,7 @@ The title was emitted pre-exec by the OUTER clown, and only for `ModeStart` /
 Emission is consequently no longer coupled to the re-wrap loop guard: the inner
 attached clown declines to re-wrap AND emits the title.
 
-`internal/clownfile.Attach.Title(id, group string, showID bool) string` grew a
+`internal/*/clownfile.Attach.Title(id, group string, showID bool) string` grew a
 third parameter: when `showID` is false, the literal substring `"/{id}"` (not
 just `"{id}"`) is dropped, so no dangling separator survives regardless of
 where `{id}` sits in the template relative to `{group}`.
@@ -191,7 +191,7 @@ shells out to `git` twice (toplevel + branch) whenever `flags.groupID` is
 empty. Best-effort: any failure (not a git repo, `git`
 missing) degrades silently to the true no-group tier, matching the rest of
 this subsystem's "never fail the launch over a cosmetic feature" contract
-(`internal/clownname.Claim`'s doc comment states the same policy).
+(`internal/*/clownname.Claim`'s doc comment states the same policy).
 
 **~~Dedup is presence-based, so it inherits presence's own staleness
 window.~~** RETIRED by clown#234: no tier dedups any more, so computing a title
@@ -215,10 +215,10 @@ does not re-emit the OSC-2 sequence.
 - RFC-0014 §3.1/§3.1.1 — the `{group}`/`{id}` placeholder contract this
   feature amends (the duplicate-`{id}` bug and its fix are documented there
   as an erratum, not a re-spec).
-- `internal/clownname`'s `Claim`/`Allocate` — the clown-name allocator whose
+- `internal/*/clownname`'s `Claim`/`Allocate` — the clown-name allocator whose
   output is `{id}` here; unaffected by this feature.
 - Implementation: `cmd/clown/attach.go` (`emitSessionTitle`, called from
   `runWithFlags` right after `maybeReexecMultiplexer`),
-  `internal/clownfile/clownfile.go` (`Attach.Title`), and
+  `internal/*/clownfile/clownfile.go` (`Attach.Title`), and
   `code.linenisgreat.com/ringmaster/pkgs/jobwake` (`Presence.Cwd`,
   `RegisterPresenceKey`).

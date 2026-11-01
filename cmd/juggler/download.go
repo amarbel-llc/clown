@@ -13,7 +13,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"golang.org/x/term"
 
-	"code.linenisgreat.com/clown/internal/jugglermodels"
+	"code.linenisgreat.com/clown/internal/0/jugglermodels"
 )
 
 type (
@@ -222,7 +222,7 @@ func cmdDownload(args []string) int {
 // progressUIWanted reports whether the interactive bubbletea progress bar
 // can run: both the input and output streams must be terminals (bubbletea
 // falls back to opening /dev/tty when stdin is not one, which fails hard in
-// non-TTY contexts — clown#55). Mirrors internal/pluginhost's interactive
+// non-TTY contexts — clown#55). Mirrors internal/*/pluginhost's interactive
 // gate.
 func progressUIWanted(stdin, stdout *os.File) bool {
 	return term.IsTerminal(int(stdin.Fd())) && term.IsTerminal(int(stdout.Fd()))

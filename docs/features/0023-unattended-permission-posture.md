@@ -62,7 +62,7 @@ launch has no way to ask for it.
   - `--dangerously-skip-permissions` or
     `--allow-dangerously-skip-permissions`;
   - a forwarded `--settings` (it comes after clown's and wins, per
-    `internal/provider/claude.go`) or `--setting-sources`: either could set
+    `internal/*/provider/claude.go`) or `--setting-sources`: either could set
     another mode.
   - a clownfile `[profile].env` or a named profile's env table that names
     `CLOWN_UNATTENDED`: the marker is the launcher's, set in the
@@ -198,7 +198,7 @@ pull (`session-health`); spinclass has no periodic or push detector yet.
   principal is the session's `CLOWN_SESSION_ID` and the hex is lower-case.
   The file is 0600 in a 0700 dir; clown opens the dir as an `os.Root` after
   an lstat (a symlinked dir is refused, the dir must be owned by the user,
-  a wider mode is narrowed to 0700), as `internal/permstat` does. The dir
+  a wider mode is narrowed to 0700), as `internal/*/permstat` does. The dir
   is not bound into an agent unit.
 - **Who writes it.** Only the frontend whose idle trigger is armed (a
   claude launch inside a spinclass session, the conditions of

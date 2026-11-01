@@ -12,8 +12,8 @@ import (
 	"sync"
 	"testing"
 
-	rm "code.linenisgreat.com/clown/internal/juggler"
-	"code.linenisgreat.com/clown/internal/jugglermodels"
+	rm "code.linenisgreat.com/clown/internal/0/juggler"
+	"code.linenisgreat.com/clown/internal/0/jugglermodels"
 )
 
 // downloadModel dispatches a DownloadModel; it reports through its error

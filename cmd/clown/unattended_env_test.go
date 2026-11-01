@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"code.linenisgreat.com/clown/internal/provider"
+	"code.linenisgreat.com/clown/internal/alfa/provider"
 )
 
 // The marker travels in the environment only (clown#323, FDR 0023). A

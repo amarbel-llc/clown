@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"code.linenisgreat.com/clown/internal/buildcfg"
+	"code.linenisgreat.com/clown/internal/0/buildcfg"
 )
 
 // fakeTroupeMint installs a `troupe` that records the TROUPE_XMPP_* env it was

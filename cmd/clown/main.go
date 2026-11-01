@@ -24,20 +24,20 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"golang.org/x/term"
 
-	"code.linenisgreat.com/clown/internal/agentscope"
-	"code.linenisgreat.com/clown/internal/buildcfg"
-	"code.linenisgreat.com/clown/internal/clownfile"
-	"code.linenisgreat.com/clown/internal/clownname"
-	"code.linenisgreat.com/clown/internal/juggler"
-	"code.linenisgreat.com/clown/internal/pluginhost"
-	"code.linenisgreat.com/clown/internal/profile"
-	"code.linenisgreat.com/clown/internal/promptwalk"
-	"code.linenisgreat.com/clown/internal/provider"
-	"code.linenisgreat.com/clown/internal/ptysuspend"
-	"code.linenisgreat.com/clown/internal/sessions"
-	"code.linenisgreat.com/clown/internal/sessionstatus"
-	"code.linenisgreat.com/clown/internal/staging"
-	"code.linenisgreat.com/clown/internal/tent"
+	"code.linenisgreat.com/clown/internal/0/buildcfg"
+	"code.linenisgreat.com/clown/internal/0/juggler"
+	"code.linenisgreat.com/clown/internal/0/profile"
+	"code.linenisgreat.com/clown/internal/0/promptwalk"
+	"code.linenisgreat.com/clown/internal/0/ptysuspend"
+	"code.linenisgreat.com/clown/internal/0/staging"
+	"code.linenisgreat.com/clown/internal/0/tent"
+	"code.linenisgreat.com/clown/internal/alfa/agentscope"
+	"code.linenisgreat.com/clown/internal/alfa/clownfile"
+	"code.linenisgreat.com/clown/internal/alfa/clownname"
+	"code.linenisgreat.com/clown/internal/alfa/pluginhost"
+	"code.linenisgreat.com/clown/internal/alfa/provider"
+	"code.linenisgreat.com/clown/internal/alfa/sessions"
+	"code.linenisgreat.com/clown/internal/alfa/sessionstatus"
 	"code.linenisgreat.com/clown/pkg/profilelookup"
 	"code.linenisgreat.com/ringmaster/pkgs/jobwake"
 )
@@ -596,7 +596,7 @@ func runWithFlags(flags parsedFlags) int {
 
 	// clownfile [providers] hermetic-config (default on): makes clown's generated
 	// opencode/crush config authoritative over a repo-local one. Resolved here so
-	// the runners don't re-read the clownfile. See internal/clownfile Providers.
+	// the runners don't re-read the clownfile. See internal/*/clownfile Providers.
 	flags.hermeticConfig = cf.Providers.HermeticConfigEnabled()
 
 	// RFC-0014 §4: the presence description is env-interpolated and exported as
@@ -875,7 +875,7 @@ func runWithFlags(flags parsedFlags) int {
 	// binds to the FINAL harness session id (identity.Key, unified with the
 	// claude --session-id) — a restart/resume of the same session then reuses
 	// its previously-bound name instead of minting a fresh one (clown#216).
-	// The allocator (internal/clownname) is entirely clown-owned and
+	// The allocator (internal/*/clownname) is entirely clown-owned and
 	// best-effort: a locking or presence-read failure still returns a name
 	// (see Claim's doc comment), so this can never fail the launch. Skipped
 	// for --naked (no name, no monitor to hand off to). See resolveClownName's
@@ -1488,7 +1488,7 @@ func (e *passthroughExecutor) FormatArgs(cmd Command) (Command, error) {
 // Binary() resolves the podman binary; FormatArgs() rewrites the
 // claude argv into a `podman run ... <image> <claude> <args>` argv.
 // FDR-0007 is the design record. backend is the runtime adapter
-// (podman or lima); see internal/tent/backend.go.
+// (podman or lima); see internal/*/tent/backend.go.
 type tentExecutor struct {
 	innerCliPath string
 	opts         tent.Options
@@ -1557,7 +1557,7 @@ func envKeys(env []string) []string {
 // and never reach the process meant to read it. That half is unconditional.
 //
 // The file the variable names is the softer half, and the error is worded
-// accordingly. tent binds opts.TmpDir at the same path (internal/tent/tent.go),
+// accordingly. tent binds opts.TmpDir at the same path (internal/*/tent/tent.go),
 // so a staging root left at its $TMPDIR default happens to be visible inside
 // the container — by blanket coverage, not by design. Nothing guarantees it:
 // stagingBaseFor already places the clownbox root inside the repo rather than
@@ -1957,7 +1957,7 @@ func ensureClaudeJSON() error {
 // claudeBindDirs is the set of $HOME-relative directories that tent's
 // BuildArgs bind-mounts writable into the container. Sibling to
 // ~/.claude.json (which ensureClaudeJSON handles as a regular file).
-// Kept in sync with tent.BuildArgs in internal/tent/tent.go.
+// Kept in sync with tent.BuildArgs in internal/*/tent/tent.go.
 //
 // Mirrored on darwin specifically: a fresh darwin host with claude-code
 // installed has neither directory before its first claude run (claude
@@ -2038,7 +2038,7 @@ func userHasSubuid(name, uid string) (missing bool, err error) {
 // stderr.
 //
 // The backend abstracts which container runtime drives image-exists
-// and image-load (Podman or Lima); see internal/tent/backend.go.
+// and image-load (Podman or Lima); see internal/*/tent/backend.go.
 func ensureTentImage(backend tent.Backend, ref, tarball, flakeRef string) error {
 	cmdPath, checkArgs := backend.ImageExistsArgs(ref)
 	check := exec.Command(cmdPath, checkArgs...)
@@ -3455,7 +3455,7 @@ type parsedFlags struct {
 	// so jobwake + the claude subtree resolve the same group; "" ⇒ ungrouped.
 	groupID string
 	// clownName is this session's allocated human-ergonomic name (clown#169,
-	// internal/clownname), used for the {id}-in-title name-aware resolution
+	// internal/*/clownname), used for the {id}-in-title name-aware resolution
 	// (clownfile.Attach.Title's caller). Exported as CLOWN_NAME so
 	// jobwake.RegisterPresence persists it (clown#179) the same way
 	// groupID/CLOWN_GROUP_ID already work. Never empty — Claim always

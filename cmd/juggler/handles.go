@@ -4,7 +4,7 @@ import (
 	"context"
 	"io"
 
-	jr "code.linenisgreat.com/clown/internal/jugglerrun"
+	jr "code.linenisgreat.com/clown/internal/charlie/jugglerrun"
 )
 
 const handlesUsage = "usage: juggler handles <job> [--target <channel principal>] [--ringmaster <path>]"

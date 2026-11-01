@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"code.linenisgreat.com/clown/internal/userpath"
+	"code.linenisgreat.com/clown/internal/0/userpath"
 )
 
 // userConfigPath resolves the per-user config file `name` (e.g.
@@ -20,7 +20,7 @@ func userConfigPath(name string) (path string, legacy bool, err error) {
 
 // userConfigWritePath is the canonical (always-write) location for name:
 // $XDG_CONFIG_HOME/clown/<name>, ~/.config/clown/<name> when XDG is unset.
-// Thin wrapper over the shared internal/userpath ladder (clown#204); the
+// Thin wrapper over the shared internal/*/userpath ladder (clown#204); the
 // legacy ~/.config/juggler fallback stays here in userConfigPath — it is a
 // cmd/clown config-migration concern, not part of the ladder.
 func userConfigWritePath(name string) (string, error) {
@@ -29,7 +29,7 @@ func userConfigWritePath(name string) (string, error) {
 
 // userStateWritePath is the canonical location for per-user STATE (as opposed
 // to config): $XDG_STATE_HOME/clown/<parts...>. Thin wrapper over the shared
-// internal/userpath ladder (clown#204).
+// internal/*/userpath ladder (clown#204).
 func userStateWritePath(parts ...string) (string, error) {
 	return userpath.StatePath(parts...)
 }

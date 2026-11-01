@@ -4,8 +4,8 @@ import (
 	"reflect"
 	"testing"
 
-	"code.linenisgreat.com/clown/internal/pluginhost"
-	"code.linenisgreat.com/clown/internal/profile"
+	"code.linenisgreat.com/clown/internal/0/profile"
+	"code.linenisgreat.com/clown/internal/alfa/pluginhost"
 )
 
 // Only a server whose catalog the picker showed tool by tool is "shown":

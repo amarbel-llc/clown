@@ -22,9 +22,9 @@ import (
 	"syscall"
 	"time"
 
-	"code.linenisgreat.com/clown/internal/mcpcollapse"
-	"code.linenisgreat.com/clown/internal/mcphttp"
-	"code.linenisgreat.com/clown/internal/pluginhost"
+	"code.linenisgreat.com/clown/internal/0/mcphttp"
+	"code.linenisgreat.com/clown/internal/alfa/mcpcollapse"
+	"code.linenisgreat.com/clown/internal/alfa/pluginhost"
 )
 
 // perUpstreamEnumerateTimeout bounds each upstream's initialize+tools/list
@@ -151,7 +151,7 @@ func run(p parsedArgs) int {
 		return 1
 	}
 
-	// Handshake format must match internal/pluginhost/handshake.go, byte for
+	// Handshake format must match internal/*/pluginhost/handshake.go, byte for
 	// byte with clown-stdio-bridge: 1|1|tcp|<addr>|streamable-http\n.
 	fmt.Printf("1|1|tcp|%s|streamable-http\n", ln.Addr().String())
 	_ = os.Stdout.Sync()

@@ -4,7 +4,7 @@ import (
 	"slices"
 	"testing"
 
-	"code.linenisgreat.com/clown/internal/promptwalk"
+	"code.linenisgreat.com/clown/internal/0/promptwalk"
 )
 
 // Operator ruling 2026-10-27: an unattended session may not start monitors of

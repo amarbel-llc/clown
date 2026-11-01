@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"code.linenisgreat.com/clown/internal/clownfile"
+	"code.linenisgreat.com/clown/internal/alfa/clownfile"
 )
 
 // These tests pin only the env clown hands claude (clown#296). Whether claude

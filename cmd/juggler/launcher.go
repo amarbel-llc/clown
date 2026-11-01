@@ -16,7 +16,7 @@ import (
 	"syscall"
 	"time"
 
-	rm "code.linenisgreat.com/clown/internal/juggler"
+	rm "code.linenisgreat.com/clown/internal/0/juggler"
 )
 
 const (

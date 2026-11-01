@@ -8,14 +8,14 @@ import (
 	"strings"
 	"testing"
 
-	"code.linenisgreat.com/clown/internal/juggler"
+	"code.linenisgreat.com/clown/internal/0/juggler"
 )
 
 // shortTempDir returns a short-path tmpdir. macOS imposes a ~104-char
 // limit on Unix domain socket paths (sun_path), and the project's
 // devshell sets TMPDIR inside the worktree, which can exceed it. Use
 // /tmp explicitly and clean up via t.Cleanup. Mirrors the identical
-// helper in internal/juggler/client_test.go (unexported there, so not
+// helper in internal/*/juggler/client_test.go (unexported there, so not
 // reusable across packages).
 func shortTempDir(t *testing.T) string {
 	t.Helper()

@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// juggler's own copies of clown's internal/testlane.SkipAllowed and
+// juggler's own copies of clown's internal/*/testlane.SkipAllowed and
 // SkipOrFail: juggler imports nothing from clown outside the juggler tree
 // (clown#258, `just lint-juggler-boundary`).
 

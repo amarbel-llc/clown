@@ -40,7 +40,7 @@ clown's per-session identity key (`flags.identity.Key`, `sessionIdentity`):
 2. **Resolution consults the binding before minting.**
    `resolveClownName(attachedID, inheritedName, harnessSessionID)` now, before
    falling back to `clownname.Claim()`, looks the name up in the persistent
-   session-names journal (`internal/sessions.NameOf(harnessSessionID)`). A hit
+   session-names journal (`internal/*/sessions.NameOf(harnessSessionID)`). A hit
    reuses the previously-bound name; a miss mints a fresh one. The existing
    `[attach]`-inner-process reuse of the inherited `CLOWN_NAME` still takes
    precedence (an inner process trusts the outer's already-resolved name). A
@@ -137,11 +137,11 @@ name-based resume for that one session, never the launch.
 ## More Information
 
 - clown#216 — the bug this feature fixes (names cycle across restart).
-- clown#169 / `internal/clownname` — the name pool + `Allocate`/`Claim`
+- clown#169 / `internal/*/clownname` — the name pool + `Allocate`/`Claim`
   allocator whose output is bound here; unchanged except a doc note.
 - clown#217 — the `.`-in-names ban; `clownname.Validate` guards a dotted bound
   record on this path.
-- clown#192 / `internal/sessions` — the append-only session-names journal
+- clown#192 / `internal/*/sessions` — the append-only session-names journal
   (`RecordSessionName`/`NameOf`) reused as the binding store; its
   resume-by-name consumer (`cmd/clown/resume_key.go`) is preserved via the
   claude compat write.

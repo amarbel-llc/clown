@@ -14,7 +14,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"golang.org/x/term"
 
-	"code.linenisgreat.com/clown/internal/tent"
+	"code.linenisgreat.com/clown/internal/0/tent"
 )
 
 // tent_loader.go renders `podman load -i <tarball>` as a bubbletea

@@ -112,7 +112,7 @@ ringmaster: started qwen3-coder on 127.0.0.1:43219
 ## More Information
 
 - Depends on FDR-0010 (Ringmaster Control Plane) for the `StartInstance`/`StopInstance`/`GetInstance`/`ListInstances`/`ListAvailableModels` RPCs.
-- Profile schema is defined in `internal/profile/profile.go`. The `Backend` field continues to exist but becomes one input among several to the effective-backend computation.
+- Profile schema is defined in `internal/*/profile/profile.go`. The `Backend` field continues to exist but becomes one input among several to the effective-backend computation.
 - The existing `runCircus` path in `cmd/clown/main.go` folds into `runClaude` gated on `effective_backend == "circus"`. The clown-protocol handshake from circus to clown goes away; ringmaster replaces it. (Phase 1 already stubbed `runCircus` and deleted `readCircusHandshake` — see "Phase-1 outcomes" below.)
 - The opencode and crush local-backend branches (`cmd/clown/opencode.go`, `cmd/clown/crush.go`) replace `readCircusPortfile` calls with ringmaster RPC calls.
 

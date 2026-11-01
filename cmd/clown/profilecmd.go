@@ -10,9 +10,9 @@ import (
 
 	"github.com/charmbracelet/huh"
 
-	"code.linenisgreat.com/clown/internal/buildcfg"
-	"code.linenisgreat.com/clown/internal/pluginhost"
-	"code.linenisgreat.com/clown/internal/profile"
+	"code.linenisgreat.com/clown/internal/0/buildcfg"
+	"code.linenisgreat.com/clown/internal/0/profile"
+	"code.linenisgreat.com/clown/internal/alfa/pluginhost"
 )
 
 const profileCmdUsage = "usage: clown profile <list|add|edit <name>|remove <name>>"

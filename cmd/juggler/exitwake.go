@@ -7,7 +7,7 @@ import (
 	"io"
 	"time"
 
-	jr "code.linenisgreat.com/clown/internal/jugglerrun"
+	jr "code.linenisgreat.com/clown/internal/charlie/jugglerrun"
 )
 
 const exitWakeUsage = "usage: juggler exit-wake --job <id> --target <principal> [--run-ledger <path>] [--from <principal>] [--ringmaster <path>] [--troupe <path>]  ($SERVICE_RESULT, $EXIT_CODE, $EXIT_STATUS from systemd)"

@@ -15,8 +15,8 @@ import (
 	"github.com/charmbracelet/huh"
 	"golang.org/x/term"
 
-	"code.linenisgreat.com/clown/internal/profile"
-	"code.linenisgreat.com/clown/internal/sessions"
+	"code.linenisgreat.com/clown/internal/0/profile"
+	"code.linenisgreat.com/clown/internal/alfa/sessions"
 	"code.linenisgreat.com/clown/pkg/profilelookup"
 )
 

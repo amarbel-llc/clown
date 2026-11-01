@@ -7,9 +7,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"code.linenisgreat.com/clown/internal/buildcfg"
-	"code.linenisgreat.com/clown/internal/pluginhost"
-	"code.linenisgreat.com/clown/internal/staging"
+	"code.linenisgreat.com/clown/internal/0/buildcfg"
+	"code.linenisgreat.com/clown/internal/0/staging"
+	"code.linenisgreat.com/clown/internal/alfa/pluginhost"
 )
 
 // pluginBinding delivers the started MCP servers to a provider in that

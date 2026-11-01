@@ -6,17 +6,17 @@ import (
 	"net"
 	"net/http"
 
-	"code.linenisgreat.com/clown/internal/agentscope"
+	"code.linenisgreat.com/clown/internal/0/peercheck"
 )
 
 // peerClassKey carries, on a serve-socket request's context, whether the
-// caller is the frontend clown (agentscope.ServeConn.Frontend).
+// caller is the frontend clown (peercheck.ServeConn.Frontend).
 type peerClassKey struct{}
 
 // serveConnContext is the serve-mode http.Server's ConnContext: it records
 // the accepted connection's peer class for frontendOnly.
 func serveConnContext(ctx context.Context, c net.Conn) context.Context {
-	if sc, ok := c.(*agentscope.ServeConn); ok {
+	if sc, ok := c.(*peercheck.ServeConn); ok {
 		return context.WithValue(ctx, peerClassKey{}, sc.Frontend)
 	}
 	return ctx

@@ -9,15 +9,15 @@ import (
 	"slices"
 	"strings"
 
-	"code.linenisgreat.com/clown/internal/buildcfg"
-	"code.linenisgreat.com/clown/internal/pluginhost"
-	"code.linenisgreat.com/clown/internal/staging"
+	"code.linenisgreat.com/clown/internal/0/buildcfg"
+	"code.linenisgreat.com/clown/internal/0/staging"
+	"code.linenisgreat.com/clown/internal/alfa/pluginhost"
 	"code.linenisgreat.com/clown/pkg/profilelookup"
 )
 
 // jobMonitorPlugin is the synthesized built-in plugin manifest that registers
 // the clown job-watch monitor as a Claude Code monitor. The monitors array is
-// TOP-LEVEL in plugin.json (matching internal/pluginhost/compile.go, which
+// TOP-LEVEL in plugin.json (matching internal/*/pluginhost/compile.go, which
 // injects doc["monitors"], and clown-json(5)); Claude Code reads monitors
 // there, not under an "experimental" wrapper. Each stdout line the monitor
 // emits becomes an agent notification (RFC-0009 §9).

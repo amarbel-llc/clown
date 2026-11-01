@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"code.linenisgreat.com/clown/internal/pluginhost"
-	"code.linenisgreat.com/clown/internal/profile"
+	"code.linenisgreat.com/clown/internal/0/profile"
+	"code.linenisgreat.com/clown/internal/alfa/pluginhost"
 )
 
 // clown#265: when a cheap-context selection narrows the catalog, the agent is

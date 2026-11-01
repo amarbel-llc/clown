@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"code.linenisgreat.com/clown/internal/buildcfg"
+	"code.linenisgreat.com/clown/internal/0/buildcfg"
 )
 
 // A restarted session is told it was restarted (clown#329). Spinclass wakes

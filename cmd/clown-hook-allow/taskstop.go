@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"code.linenisgreat.com/clown/internal/taskowner"
+	"code.linenisgreat.com/clown/internal/0/taskowner"
 )
 
 // taskStopTools are the names under which Claude Code stops a background task:

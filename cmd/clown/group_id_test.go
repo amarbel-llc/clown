@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"testing"
 
-	"code.linenisgreat.com/clown/internal/clownfile"
+	"code.linenisgreat.com/clown/internal/alfa/clownfile"
 )
 
 func TestResolveGroupID_InterpolatedGroupIDWinsWithoutRunningCommand(t *testing.T) {

@@ -18,8 +18,8 @@ import (
 	"syscall"
 	"time"
 
-	"code.linenisgreat.com/clown/internal/sessions"
-	"code.linenisgreat.com/clown/internal/sessionstatus"
+	"code.linenisgreat.com/clown/internal/alfa/sessions"
+	"code.linenisgreat.com/clown/internal/alfa/sessionstatus"
 )
 
 // noteRelaunchRefused records that this restart's relaunch was refused by the

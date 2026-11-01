@@ -3,7 +3,7 @@
 //
 //   - JUGGLERRUNTEST_FAKE=<ringmaster|troupe|systemd-run|moxy|systemctl>
 //     JUGGLERRUNTEST_DIR=<dir> fake-platform <verb args...> behaves as that
-//     binary, exactly as the Go tests' fakes do (internal/jugglerrun/
+//     binary, exactly as the Go tests' fakes do (internal/*/jugglerrun/
 //     jugglerruntest): a stateful per-target ringmaster journal, a troupe
 //     that records MUC posts and wakes, a systemd-run that records and
 //     succeeds, and a systemctl that answers is-system-running "running"
@@ -40,7 +40,7 @@ import (
 	"strings"
 	"syscall"
 
-	"code.linenisgreat.com/clown/internal/jugglerrun/jugglerruntest"
+	"code.linenisgreat.com/clown/internal/charlie/jugglerrun/jugglerruntest"
 )
 
 func main() {

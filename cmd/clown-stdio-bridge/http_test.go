@@ -14,7 +14,7 @@ import (
 // and a cleanup func.
 //
 // The streamable-HTTP spine this feeds (POST/GET/SSE/heartbeats/origin) is
-// tested in internal/mcphttp; the bridge's own tests exercise only the
+// tested in internal/*/mcphttp; the bridge's own tests exercise only the
 // bridge-specific tool-exclusion surface, which still needs a live
 // translator as the spine's RequestHandler.
 func runTranslator(t *testing.T) (*translator, func()) {

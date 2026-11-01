@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	rm "code.linenisgreat.com/clown/internal/juggler"
+	rm "code.linenisgreat.com/clown/internal/0/juggler"
 )
 
 // clown#82: a client that disconnects cancels its in-flight, client-scoped
@@ -153,7 +153,7 @@ func TestDisconnectCancelsAResolveModelStart(t *testing.T) {
 
 // The protocol rule, pinned: a client that sends its request and then
 // half-closes (shuts its write side) is gone; its start is cancelled and no
-// reply is written. In-tree clients (internal/juggler Client) never
+// reply is written. In-tree clients (internal/*/juggler Client) never
 // half-close.
 func TestHalfCloseIsADisconnect(t *testing.T) {
 	l := newBlockingLauncher()

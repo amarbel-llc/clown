@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"code.linenisgreat.com/clown/internal/mcphttp"
+	"code.linenisgreat.com/clown/internal/0/mcphttp"
 )
 
 // traceEnvVar gates the full passthrough log of every JSON-RPC line in

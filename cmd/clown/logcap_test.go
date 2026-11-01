@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"code.linenisgreat.com/clown/internal/logcap"
+	"code.linenisgreat.com/clown/internal/0/logcap"
 )
 
 // close-self-run.log (and every log opened through openLogForAppend) rotates

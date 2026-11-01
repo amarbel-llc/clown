@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	rm "code.linenisgreat.com/clown/internal/juggler"
-	"code.linenisgreat.com/clown/internal/jugglermodels"
+	rm "code.linenisgreat.com/clown/internal/0/juggler"
+	"code.linenisgreat.com/clown/internal/0/jugglermodels"
 )
 
 // server is the control-plane daemon's RPC dispatcher (the `juggler
@@ -135,7 +135,7 @@ const maxQueuedRequests = 16
 // (shutdown of the client's write side; it cannot be told apart from a
 // close here), means the client is gone: the connection's ctx is
 // cancelled, which aborts the client-scoped work in flight, requests still
-// queued are not dispatched, and no reply is written. internal/juggler's
+// queued are not dispatched, and no reply is written. internal/*/juggler's
 // Client never half-closes.
 //
 // Frames are read on their own goroutine, which keeps reading while a

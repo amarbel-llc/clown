@@ -87,6 +87,27 @@ codemod-facade:
 # dagnabit(7)) without moving anything. Prints nothing when the layout is
 # already correct. Add --initial for a flat layout.
 #
+# One-shot after the NATO relayout (#328). flake.nix's functional paths (the
+# buildcfg ldflags, the pluginhost testdata subPackages, the profile embed
+# extra) get their real level; every other mention in code comments, man pages,
+# bats files and docs (except the historical docs/plans) becomes
+# internal/*/<leaf>, the dagnabit(7) convention, because levels move. Skips
+# pkgs/ (generated; regenerate it with `just codemod-facade`). Idempotent.
+#
+# rewrite internal/<leaf> mentions after the relayout
+[group('debug')]
+debug-rewrite-leaf-refs:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    sed -i -E \
+      -e 's#clown/internal/buildcfg\.#clown/internal/0/buildcfg.#g' \
+      -e 's#"internal/pluginhost/testdata#"internal/alfa/pluginhost/testdata#g' \
+      -e 's#\^internal/profile/builtin#^internal/0/profile/builtin#' \
+      flake.nix
+    leaves='buildcfg|daemon|juggler|jugglerbrief|jugglerdecide|jugglereval|jugglerloop|jugglermodels|jugglerrun|jugglertools|logcap|mcphttp|profile|promptwalk|ptysuspend|staging|taskowner|tent|testlane|userpath|agentscope|clownfile|clownname|mcpcollapse|pluginhost|provider|sessions|sessionstatus|toolcost|permstat'
+    grep -rlE "internal/($leaves)\b" AGENTS.md README.md flake.nix bats.nix default-clownfile cmd internal man nix tests zz-explore zz-pocs zz-tests_bats docs/adrs docs/rfcs docs/features \
+      | xargs -r sed -i -E "s#internal/($leaves)\b#internal/*/\1#g"
+
 # preview the dagnabit internal/ layout moves
 [group('debug')]
 debug-plan-layout *ARGS:

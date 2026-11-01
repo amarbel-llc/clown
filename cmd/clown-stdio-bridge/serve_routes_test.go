@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"code.linenisgreat.com/clown/internal/agentscope"
+	"code.linenisgreat.com/clown/internal/0/peercheck"
 )
 
 // clown#301: on the serve socket the control routes (/clown/system-prompt,
@@ -52,7 +52,7 @@ func serveFor(t *testing.T, frontend bool) *http.Client {
 	if frontend {
 		frontendPID = os.Getpid
 	}
-	ln, err := agentscope.ListenServeSocket(path, "u-1.service", frontendPID, func(int) (string, error) { return testUnitCgroup, nil }, nil)
+	ln, err := peercheck.ListenServeSocket(path, "u-1.service", frontendPID, func(int) (string, error) { return testUnitCgroup, nil }, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

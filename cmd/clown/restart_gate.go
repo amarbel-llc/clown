@@ -3,8 +3,8 @@ package main
 import (
 	"fmt"
 
-	"code.linenisgreat.com/clown/internal/profile"
-	"code.linenisgreat.com/clown/internal/sessions"
+	"code.linenisgreat.com/clown/internal/0/profile"
+	"code.linenisgreat.com/clown/internal/alfa/sessions"
 )
 
 // restartProfileCheck is the relaunch's profile gate (FDR 0022, clown#296),

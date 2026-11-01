@@ -5,7 +5,7 @@ import (
 	"slices"
 	"testing"
 
-	"code.linenisgreat.com/clown/internal/sessions"
+	"code.linenisgreat.com/clown/internal/alfa/sessions"
 )
 
 const spawnBriefTestBrief = "Implement the thing, then message me back."

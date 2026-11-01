@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"code.linenisgreat.com/clown/internal/profile"
-	"code.linenisgreat.com/clown/internal/promptwalk"
+	"code.linenisgreat.com/clown/internal/0/profile"
+	"code.linenisgreat.com/clown/internal/0/promptwalk"
 )
 
 // withAttach sets the package-level [attach] state for one test.

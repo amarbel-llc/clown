@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	rm "code.linenisgreat.com/clown/internal/juggler"
+	rm "code.linenisgreat.com/clown/internal/0/juggler"
 )
 
 // promptUsage is printed on any `juggler prompt` usage error.

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"code.linenisgreat.com/clown/internal/sessions"
+	"code.linenisgreat.com/clown/internal/alfa/sessions"
 )
 
 func recordedPin(pin *sessions.ProfilePin) profileLookup {

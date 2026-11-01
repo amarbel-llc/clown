@@ -1,6 +1,6 @@
 package main
 
-import "code.linenisgreat.com/clown/internal/toolcost"
+import "code.linenisgreat.com/clown/internal/alfa/toolcost"
 
 // Counters for a long unattended run: how often restarts were asked about,
 // what spinclass answered, and whether a relaunch happened, so a two-week run

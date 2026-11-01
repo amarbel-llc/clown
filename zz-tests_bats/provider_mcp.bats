@@ -65,7 +65,7 @@ run_clown_opencode_mcp_list() {
 @test "clown delivers its MCP servers to opencode under <plugin>__<server>" {
   run_clown_opencode_mcp_list
   assert_success
-  # The key proves the sanitized flat-map naming (internal/pluginhost
+  # The key proves the sanitized flat-map naming (internal/*/pluginhost
   # ServerEntries), not merely that some server arrived.
   assert_output --partial "synthetic-test__mock-mcp"
   # "connected" is the load-bearing word: opencode accepted the entry's

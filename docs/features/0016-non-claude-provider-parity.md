@@ -39,7 +39,7 @@ corrected inline below and marked.
 `runOpencode`/`runCrush` go through `runWithPluginHost`
 (`cmd/clown/opencode.go`, `cmd/clown/crush.go`; 2026-10-24 audit).*
 
-Today, `internal/pluginhost`'s plugin protocol (RFC 0002: HTTP MCP
+Today, `internal/*/pluginhost`'s plugin protocol (RFC 0002: HTTP MCP
 server lifecycle, tool injection, and FDR 0003's system-prompt-fragment
 contribution) only runs for the claude family (`claude`, `clownbox`).
 `providerUsesPluginDirs` (`cmd/clown/jobmonitor.go`) explicitly excludes
@@ -88,7 +88,7 @@ a `mkdtemp`, or `crush --continue` breaks.
   object keyed by server name. Each entry is either `McpLocalConfig`
   (stdio: `command`, `environment`, `cwd`) or `McpRemoteConfig`
   (`type: "remote"`, `url`, `headers`, `oauth`) — the remote shape is a
-  direct match for what `internal/pluginhost` already produces: an HTTP
+  direct match for what `internal/*/pluginhost` already produces: an HTTP
   MCP server bound to a loopback port with a known URL. opencode's
   config also has a top-level `instructions: string[]` field (file paths
   or patterns to include) — a plausible home for FDR 0003's
@@ -106,7 +106,7 @@ a `mkdtemp`, or `crush --continue` breaks.
   providers that run under the plugin host... the claude family."
 - **Candidate extension path (superseded — see the design doc):** add
   `CompileForOpencode` / `CompileForCrush` methods to
-  `internal/pluginhost` (siblings to the existing `CompileForClaude`,
+  `internal/*/pluginhost` (siblings to the existing `CompileForClaude`,
   `host.go:444`); wire `runOpencode`/`runCrush` through
   `runWithPluginHost`; teach the two config writers to include the
   compiled sections. **The approved design rejects the sibling-compilers

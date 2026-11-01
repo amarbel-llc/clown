@@ -10,7 +10,7 @@ import (
 
 	"code.linenisgreat.com/ringmaster/pkgs/jobwake"
 
-	"code.linenisgreat.com/clown/internal/sessions"
+	"code.linenisgreat.com/clown/internal/alfa/sessions"
 )
 
 // Key detection: a slashed positional that is not a URI parses into

@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"code.linenisgreat.com/clown/internal/clownfile"
-	"code.linenisgreat.com/clown/internal/testlane"
+	"code.linenisgreat.com/clown/internal/0/testlane"
+	"code.linenisgreat.com/clown/internal/alfa/clownfile"
 )
 
 func TestExtractAttachID(t *testing.T) {

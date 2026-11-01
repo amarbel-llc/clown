@@ -78,7 +78,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"code.linenisgreat.com/clown/internal/userpath"
+	"code.linenisgreat.com/clown/internal/0/userpath"
 )
 
 const (

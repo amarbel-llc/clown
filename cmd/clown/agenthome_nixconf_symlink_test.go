@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"code.linenisgreat.com/clown/internal/agentscope"
+	"code.linenisgreat.com/clown/internal/alfa/agentscope"
 )
 
 // The agent can write its own agent-home, and the frontend stages it as the

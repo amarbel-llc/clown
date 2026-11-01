@@ -8,7 +8,7 @@ import (
 	"io"
 	"time"
 
-	jr "code.linenisgreat.com/clown/internal/jugglerrun"
+	jr "code.linenisgreat.com/clown/internal/charlie/jugglerrun"
 )
 
 const jobLedgerUsage = "usage: juggler job-ledger <job> [--target <channel principal>] [--ringmaster <path>]"

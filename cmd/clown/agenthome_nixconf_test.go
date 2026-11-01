@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"code.linenisgreat.com/clown/internal/agentscope"
+	"code.linenisgreat.com/clown/internal/alfa/agentscope"
 )
 
 // A confined unit's nix must not fetch the global flake registry (its egress

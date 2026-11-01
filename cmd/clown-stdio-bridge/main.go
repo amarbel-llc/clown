@@ -18,7 +18,7 @@ import (
 	"syscall"
 	"time"
 
-	"code.linenisgreat.com/clown/internal/agentscope"
+	"code.linenisgreat.com/clown/internal/0/peercheck"
 )
 
 const stopGracePeriod = 5 * time.Second
@@ -81,14 +81,14 @@ func parseArgs(args []string) (parsedArgs, error) {
 
 // listen opens the bridge's listener: loopback TCP, or with --listen-unix a
 // unix socket whose Accept admits only the agent unit and the parent clown
-// (agentscope.ListenServeSocket). It returns the handshake's network type.
+// (peercheck.ListenServeSocket). It returns the handshake's network type.
 func listen(p parsedArgs) (net.Listener, string, error) {
 	if p.listenUnix == "" {
 		ln, err := net.Listen("tcp", "127.0.0.1:0")
 		return ln, "tcp", err
 	}
 	logger := log.New(os.Stderr, "clown-stdio-bridge: ", 0)
-	ln, err := agentscope.ListenServeSocket(p.listenUnix, p.peerUnit, os.Getppid, nil, logger.Printf)
+	ln, err := peercheck.ListenServeSocket(p.listenUnix, p.peerUnit, os.Getppid, nil, logger.Printf)
 	return ln, "unix", err
 }
 
@@ -116,7 +116,7 @@ func watchParent(ctx context.Context, initial int, getppid func() int, interval 
 }
 
 // handshakeLine is the plugin-protocol handshake; its format must match
-// internal/pluginhost/handshake.go.
+// internal/*/pluginhost/handshake.go.
 func handshakeLine(network, addr string) string {
 	return fmt.Sprintf("1|1|%s|%s|streamable-http", network, addr)
 }

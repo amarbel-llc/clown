@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	rm "code.linenisgreat.com/clown/internal/juggler"
-	"code.linenisgreat.com/clown/internal/jugglermodels"
+	rm "code.linenisgreat.com/clown/internal/0/juggler"
+	"code.linenisgreat.com/clown/internal/0/jugglermodels"
 )
 
 // mustJSON marshals v for use as an rm.Envelope's Params field in tests
@@ -35,7 +35,7 @@ func mustJSON(t *testing.T, v any) json.RawMessage {
 // limit on Unix domain socket paths (sun_path), and the project's
 // devshell sets TMPDIR inside the worktree, which can exceed it. Use
 // /tmp explicitly and clean up via t.Cleanup. Mirrors the helper in
-// internal/juggler/client_test.go; test packages are independent
+// internal/*/juggler/client_test.go; test packages are independent
 // so the helper is copied rather than imported.
 func shortTempDir(t *testing.T) string {
 	t.Helper()

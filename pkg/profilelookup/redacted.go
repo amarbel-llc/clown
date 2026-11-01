@@ -8,7 +8,7 @@ import (
 	"net/url"
 	"sort"
 
-	"code.linenisgreat.com/clown/internal/sessions"
+	"code.linenisgreat.com/clown/internal/alfa/sessions"
 )
 
 // RedactedFormVersion versions the redacted form. It is independent of

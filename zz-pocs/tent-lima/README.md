@@ -95,7 +95,7 @@ archive — subsequent runs reuse cached versions.
 - New flake input (`lima` from nixpkgs; already packaged at 2.1.1).
 - Different CLI inside the VM (`nerdctl` instead of `podman`). For
   clown's existing tent code, this means `cmd/clown/main.go`'s
-  podman invocations and `internal/tent/tent.go`'s `BuildArgs` need
+  podman invocations and `internal/*/tent/tent.go`'s `BuildArgs` need
   a backend abstraction.
 - Lima auto-rewrites the home mount; we have to work around it (see
   Gotcha #1).
@@ -111,7 +111,7 @@ production tent paths migrate too.
 
 Concrete next steps (not in this POC):
 
-1. Add a `Backend` interface in `internal/tent/` covering image-load,
+1. Add a `Backend` interface in `internal/*/tent/` covering image-load,
    container-run, image-exists. Implement `podman` and `nerdctl`
    variants behind it.
 2. Move `dev-tent-machine-*` and SSH-forwarder apps to use Lima.

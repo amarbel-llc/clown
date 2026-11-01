@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"code.linenisgreat.com/clown/internal/mcphttp"
+	"code.linenisgreat.com/clown/internal/0/mcphttp"
 )
 
 // heartbeatEnvVar selects the cadence at which the bridge emits keep-alive

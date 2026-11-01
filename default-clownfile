@@ -58,7 +58,7 @@ resume       = ["posh", "attach", "--create", "{id}", "{entry}"]
 # start/resume-only). It is written from INSIDE the multiplexer session's pty by
 # the inner clown, so the mux daemon holds the title and re-asserts it on attach,
 # session switch, and repaint (clown#231). {id} prefers the human-ergonomic
-# clown-name (clown#169's mutex-allocated name pool, internal/clownname) over the
+# clown-name (clown#169's mutex-allocated name pool, internal/*/clownname) over the
 # raw per-instance UUID, so under a spinclass session this renders the canonical
 # fully-qualified host-local session id "sc/<repo>/<branch>/<clown-name>" (e.g.
 # "sc/clown/deft-elm/bozo") — the literal "sc/" prefix is just a literal string
@@ -69,7 +69,7 @@ spawn        = ["posh", "attach", "--create", "{id}", "--detach", "{entry}"]
 spawn-entry  = ["clown", "--", "{prompt}"]
 # spawn-window has no default (unset = no window).
 # pty-suspend wraps the interactive provider in clown's escape-to-shell pty proxy
-# (internal/ptysuspend): clown runs the provider on an inner pty and intercepts
+# (internal/*/ptysuspend): clown runs the provider on an inner pty and intercepts
 # the escape key BEFORE the raw-mode TUI swallows it, hands the terminal to the
 # escape-command, and resumes the provider when it exits. A raw-mode TUI like
 # claude does not do this for itself. Works uniformly inline and inside a mux

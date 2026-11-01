@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"code.linenisgreat.com/clown/internal/mcphttp"
+	"code.linenisgreat.com/clown/internal/0/mcphttp"
 )
 
 // setOrUnsetEnv sets (or unsets) an env var for the duration of the test,

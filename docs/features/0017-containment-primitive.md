@@ -38,7 +38,7 @@ translate all five of these.
 | argv | passed through unchanged | `Executor.FormatArgs` rewrites it into `podman run … <image> <inner-binary> <args>` (`tentExecutor.FormatArgs` → `tent.BuildArgs`) |
 | environment | `Command.Env` appended to `os.Environ()` in `runProvider` | **no mechanism.** Ambient vars cross via tent's `DefaultEnvPassthrough`; clown-generated ones do not, and `tentExecutor.FormatArgs` now refuses them |
 | `$PATH` (special case) | inherited | `tent.RewritePathToNixStore` — resolve each entry through symlinks, keep it only if it canonicalises under `/nix/store/`, drop the rest |
-| files | `internal/staging.Root` — one directory per launch, placed by `stagingBaseFor` | `binds.go`'s static allowlist (ambient state), plus a blanket `$TMPDIR` bind that covers per-launch artifacts **by accident** |
+| files | `internal/*/staging.Root` — one directory per launch, placed by `stagingBaseFor` | `binds.go`'s static allowlist (ambient state), plus a blanket `$TMPDIR` bind that covers per-launch artifacts **by accident** |
 | network services | plugin host binds `127.0.0.1:<ephemeral>`; that URL goes straight into the compiled manifest | `pluginhost.Host.URLHostRewrite`, set by `pluginURLHostFor`: `host.containers.internal` on darwin, empty on linux (`--network=host` shares the namespace) |
 | tty | `ptysuspend` pty proxy, gated by `supportsPtySuspend` | podman `-i` always, `-t` only when `opts.Tty`, itself gated on `stdioIsTerminal()`; tent is *excluded* from the pty proxy because podman manages its own pty |
 
@@ -60,7 +60,7 @@ into `/nix/store` and drops everything that does not land there.
 What landed is a structural fix, not the interface. Three things are
 observable.
 
-**`internal/staging.Root` — one staging directory per launch.** Every
+**`internal/*/staging.Root` — one staging directory per launch.** Every
 artifact clown generates for a provider (compiled plugin dirs, synthesised
 job-monitor and juggler plugin dirs, the opencode and crush config dirs, the
 claude prompt-append file, the codex instructions file) is created under a
@@ -145,7 +145,7 @@ These are what a revived tent — or any container locus — has to provide.
 They are not a design; they are what running tent turned up.
 
 **1. The bind allowlist is *ambient policy*, and that is a security
-decision.** `internal/tent/binds.go` exposes a fixed read-only set:
+decision.** `internal/*/tent/binds.go` exposes a fixed read-only set:
 `/nix/var` and `/etc/nix` (daemon socket, profile-link targets, daemon
 config), `~/.nix-profile` and `~/.local/state/nix/profiles/profile` (so the
 in-tent `$PATH` resolves), `~/.gitconfig` and `~/.config/git`,
@@ -165,20 +165,20 @@ second one ended up with no mechanism. A locus interface must keep them
 apart: mechanical primitives on one side, the policy of which ambient paths
 to expose on the other.
 
-**2. `RewritePathToNixStore`** (`internal/tent/path.go`) — the `$PATH`
+**2. `RewritePathToNixStore`** (`internal/*/tent/path.go`) — the `$PATH`
 translation above. FDR 0007's strategy B: realpath-rewrite, no dedup,
 drop-on-failure. Its point is hermeticity — every surviving entry reaches a
 real binary through the existing read-only `/nix/store` bind, with no
 dependency on `$HOME` or any other host mount.
 
-**3. `URLHostRewrite`** (`internal/pluginhost/host.go`) — rewrites only the
+**3. `URLHostRewrite`** (`internal/*/pluginhost/host.go`) — rewrites only the
 host portion of the MCP server URLs written into the compiled manifest,
 preserving port and path. The host's own dial path (healthchecks, shutdown)
 keeps using `127.0.0.1`. That asymmetry is the general shape of service
 translation: the launcher and the launched process need *different* handles
 for the same listener, and only the latter gets rewritten.
 
-**4. The blanket `$TMPDIR` bind.** `internal/tent/tent.go` sets
+**4. The blanket `$TMPDIR` bind.** `internal/*/tent/tent.go` sets
 `Options.TmpDir` to `os.TempDir()` and binds it into the container at the
 same path. **This covers per-launch artifacts by accident, not by design**,
 and it is worth being exact about both failure modes:
@@ -191,7 +191,7 @@ and it is worth being exact about both failure modes:
 
 Both are arguments for a revived tent binding **the staging root
 specifically** — one mount covering every artifact, which is the entire
-point of the root existing. `internal/tent/tent.go`'s `TmpDir` doc comment
+point of the root existing. `internal/*/tent/tent.go`'s `TmpDir` doc comment
 says this; keep the two consistent if either changes.
 
 ## The `Placement` sketch — designed, deliberately not built
@@ -286,7 +286,7 @@ command that started it. A `Placement` implementation for such a locus must
 either hand ownership to the launched process, or arrange a reaper that is
 not the launcher; a `Close` that quietly does nothing is the wrong answer,
 because it makes the leak invisible rather than absent.
-`internal/provider/codex.go` records this at the one site where it is live
+`internal/*/provider/codex.go` records this at the one site where it is live
 today.
 
 ## Revival cost
@@ -316,7 +316,7 @@ An earlier revision of the design doc claimed that tent handed claude an
 reasoning that `binds.go` is a static allowlist of ambient dev state with no
 per-launch-artifact mechanism.
 
-**That claim was false.** `internal/tent/tent.go` sets
+**That claim was false.** `internal/*/tent/tent.go` sets
 `Options.TmpDir: os.TempDir()` and bind-mounts it into the container at the
 same path, so a prompt file at `$TMPDIR/clown-prompt-*.txt` has always been
 visible inside the tent. The reasoning had a hole: it looked only at

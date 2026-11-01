@@ -5,8 +5,8 @@ import (
 	"os"
 	"path/filepath"
 
-	rm "code.linenisgreat.com/clown/internal/juggler"
-	"code.linenisgreat.com/clown/internal/jugglermodels"
+	rm "code.linenisgreat.com/clown/internal/0/juggler"
+	"code.linenisgreat.com/clown/internal/0/jugglermodels"
 )
 
 // listAvailableModels returns the GGUF files under dir as rm.AvailableModel.

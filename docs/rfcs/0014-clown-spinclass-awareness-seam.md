@@ -214,7 +214,7 @@ orchestrator session key:
   `sc/clown/deft-elm/bozo` under a spinclass session, or `sc/bozo` for a bare
   clown (via `{group}`'s existing `{id}` fallback, §3.1).
 - `{id}` in `resume-title` now prefers a resolved human-ergonomic clown-name
-  (clown#169's mutex-allocated name pool, `internal/clownname`) over the raw
+  (clown#169's mutex-allocated name pool, `internal/*/clownname`) over the raw
   per-instance UUID when one is allocated for the session, falling back to
   the UUID otherwise (e.g. for `--naked`, which skips allocation entirely).
   This preference is a caller-side substitution (`cmd/clown/attach.go`), not
@@ -538,7 +538,7 @@ that gap is eliminated:
 ## Conformance Testing
 
 Conformance tests for clown's half of this specification live in
-`zz-tests_bats/` and `internal/clownfile` / `internal/jobwake` Go tests.
+`zz-tests_bats/` and `internal/*/clownfile` / `internal/jobwake` Go tests.
 
 Tests use binary injection via `bats-emo`:
 
@@ -548,10 +548,10 @@ Tests use binary injection via `bats-emo`:
 
 | Requirement | Test File | Description |
 |-------------|-----------|-------------|
-| §2.1 env interpolation of `group-id` | `internal/clownfile` | `${NAME}` expands; unset ⇒ empty; composes within string |
+| §2.1 env interpolation of `group-id` | `internal/*/clownfile` | `${NAME}` expands; unset ⇒ empty; composes within string |
 | §2.2 config-only group key | `internal/jobwake` | group key derives from `group-id`; no `SPINCLASS_SESSION_ID` code read |
 | §3 group-channel/decoration keying | `internal/jobwake` | group channel = `ChannelID(group-id)`; presence decoration = `group-id` |
-| §3.1 `{group}` title + fallback | `internal/clownfile` | `{group}` → group key; empty ⇒ falls back to `{id}` |
+| §3.1 `{group}` title + fallback | `internal/*/clownfile` | `{group}` → group key; empty ⇒ falls back to `{id}` |
 | §4.1/§4.2 presence schema + staleness | `internal/jobwake` | record fields; stale entries dropped; atomic refresh |
 | §4.3 `chat list` JSON | `zz-tests_bats` | `chat list` emits §4.1 records as JSON, stale excluded |
 | §5.1/§5.2 spawn-mode + prompt-return | `zz-tests_bats` | `--clown-attach=spawn` resolves `spawn` template, returns promptly (stub mux) |

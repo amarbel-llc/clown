@@ -45,7 +45,7 @@ This design does **not** sandbox the top-level agent. Claude Code, Codex, and ot
 
 Clown already parses subagent definitions from TOML frontmatter via `builtins.fromTOML`, producing an `agents-json` file that is currently passed to Claude via `--agents`. The schema has fields for `name`, `description`, `tools`, `disallowedTools`, and `model`, and the markdown body becomes the system prompt. Extending this schema with sandbox fields — `sandbox`, `egress`, `backend`, `timeout_seconds`, `reference_repos` — is a schema-level addition that reuses the existing parser. See RFC-0003.
 
-Lifecycle management of HTTP MCP servers is handled by `internal/pluginhost`: discover `clown.json` manifests, spawn servers, read handshakes, poll health endpoints, clean up on shutdown. Spawning a per-invocation egress broker uses the same mechanism — it is one more subprocess with a handshake and a health endpoint. See RFC-0005.
+Lifecycle management of HTTP MCP servers is handled by `internal/*/pluginhost`: discover `clown.json` manifests, spawn servers, read handshakes, poll health endpoints, clean up on shutdown. Spawning a per-invocation egress broker uses the same mechanism — it is one more subprocess with a handshake and a health endpoint. See RFC-0005.
 
 Per-provider safety defaults already exist: Claude gets `--disallowed-tools Bash(*)`, Codex gets `--sandbox workspace-write`. The sandboxed-subagent design adds a sibling path, not a replacement.
 
@@ -184,9 +184,9 @@ Credentials are not required to reach the subagent. When the broker does secret 
 
 ### With existing clown
 
-`internal/pluginhost` gains support for spawning per-invocation egress broker instances in addition to long-lived plugin servers. The clown-protocol handshake format already supports this.
+`internal/*/pluginhost` gains support for spawning per-invocation egress broker instances in addition to long-lived plugin servers. The clown-protocol handshake format already supports this.
 
-`internal/provider/claude.go` and `codex.go` are unchanged for the non-sandboxed path. A new dispatch path is added for sandboxed subagents, routed through the ringmaster MCP tool, not through `--agents`. See RFC-0004.
+`internal/*/provider/claude.go` and `codex.go` are unchanged for the non-sandboxed path. A new dispatch path is added for sandboxed subagents, routed through the ringmaster MCP tool, not through `--agents`. See RFC-0004.
 
 The flake exposes the ringmaster MCP server as a buildable derivation; it is auto-loaded like any other plugin via `clown.json`. Consumers who do not define sandboxed subagents pay zero cost.
 

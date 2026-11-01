@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"code.linenisgreat.com/clown/internal/sessionstatus"
+	"code.linenisgreat.com/clown/internal/alfa/sessionstatus"
 )
 
 // R9: a FIFO at a log path does not block the (serial) caller.

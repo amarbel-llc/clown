@@ -38,7 +38,7 @@ type openRouterModelsResponse struct {
 }
 
 // fetchOpenRouterModels fetches the live model list, using token as a
-// bearer credential. Mirrors internal/jugglermodels/download.go's HTTP
+// bearer credential. Mirrors internal/*/jugglermodels/download.go's HTTP
 // pattern (context-aware request, timeout client, status check, wrapped
 // errors) with a 5s timeout appropriate for an interactive prompt rather
 // than a multi-GB download.

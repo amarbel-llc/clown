@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"code.linenisgreat.com/clown/internal/buildcfg"
+	"code.linenisgreat.com/clown/internal/0/buildcfg"
 )
 
 // The relaunch resumes the same conversation: any --session-id/--resume the

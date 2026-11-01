@@ -111,6 +111,6 @@ $ clown --provider=opencode --backend=circus --circus-alias=qwen3-coder
 ## More Information
 
 - Prior art for home-manager service modules: `amarbel-llc/piggy`'s pivy-agent and ssh-agent-mux setup (launchd + systemd user units).
-- Prior art for clown-protocol JSON framing: `internal/pluginhost/handshake.go` uses newline-terminated text; ringmaster will use the same wrapping for JSON-RPC payloads.
+- Prior art for clown-protocol JSON framing: `internal/*/pluginhost/handshake.go` uses newline-terminated text; ringmaster will use the same wrapping for JSON-RPC payloads.
 - The motivation for this FDR is FDR-0011 (clown `--backend=circus` lifecycle), which depends on these capabilities.
 - Related issue: anomalyco/opencode#16885 (separate concern, fixed in clown by a symlink workaround in commit 9a0d6f9).

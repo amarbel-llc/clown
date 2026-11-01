@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"code.linenisgreat.com/clown/internal/mcpcollapse"
+	"code.linenisgreat.com/clown/internal/alfa/mcpcollapse"
 )
 
 func TestParseArgs(t *testing.T) {

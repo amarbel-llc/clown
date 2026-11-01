@@ -9,7 +9,7 @@
 # argv and succeeds), reached through JUGGLER_{RINGMASTER,TROUPE,
 # SYSTEMD_RUN}_BIN, plus a fake OpenRouter Decisions endpoint on loopback
 # that `juggler decide` resolves straight from the models file (no daemon).
-# fake-platform reuses the Go tests' fakes (internal/jugglerrun/
+# fake-platform reuses the Go tests' fakes (internal/*/jugglerrun/
 # jugglerruntest), so this lane and the unit tests agree on the platform's
 # shape. systemd never runs the unit: the agent inside it is played by the
 # tests, which write the terminal record the way `juggler run` or the post-stop

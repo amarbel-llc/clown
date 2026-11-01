@@ -92,8 +92,8 @@ import (
 	"sort"
 	"strings"
 
-	"code.linenisgreat.com/clown/internal/profile"
-	"code.linenisgreat.com/clown/internal/userpath"
+	"code.linenisgreat.com/clown/internal/0/profile"
+	"code.linenisgreat.com/clown/internal/0/userpath"
 )
 
 // ProtocolVersion is the registry/canonical-form protocol this build speaks.

@@ -576,7 +576,7 @@ debug-tent-cold-start ITERS='3':
         exit 2
     fi
 
-    # Common volume args mirror tent.BuildArgs in internal/tent/tent.go
+    # Common volume args mirror tent.BuildArgs in internal/*/tent/tent.go
     # well enough for the measurement to mean something. We omit the
     # ~/.claude / ~/.config/claude binds for (a) and (c) since those
     # paths aren't read by /bin/true or `claude --help`, but include
@@ -1219,7 +1219,7 @@ run-pty-suspend-demo:
 
 # Generic probe loop for FDR-0007 tent design work. Runs an arbitrary
 # bash script inside the tent image using the *same* podman invocation
-# shape clown --tent uses (BuildArgs in internal/tent/tent.go), then
+# shape clown --tent uses (BuildArgs in internal/*/tent/tent.go), then
 # prints stdout/stderr.
 #
 # Use this to iterate on:
@@ -1287,7 +1287,7 @@ run-tent-probe CMD USERNS='keep-id' IMAGE='' EXTRA_MOUNTS='' PASS_DEVSHELL='0':
 
     env_args=()
     if [[ "{{PASS_DEVSHELL}}" == "1" ]]; then
-        # Replicate internal/tent.FilterPathToNixStore: keep
+        # Replicate internal/*/tent.FilterPathToNixStore: keep
         # /nix/store/<hash>-<name>/{bin,sbin} entries, drop the rest.
         filtered=$(printf '%s' "$PATH" | tr ':' '\n' |
             awk '/^\/nix\/store\/[^\/]+\/s?bin$/' |

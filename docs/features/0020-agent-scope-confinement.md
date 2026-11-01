@@ -63,7 +63,7 @@ unconfined fallback.
 | `BindPaths=` | the worktree; spec `binds_rw[]`; each spec `sockets[].path` as a single inode | What the unit must see (spinclass's list). | works for the worktree and the ssh-agent socket |
 | `BindReadOnlyPaths=` | spec `binds_ro[]` (e.g. the madder store) | | |
 | `InaccessiblePaths=` | spec `deny_paths[]` | Belt and braces: ProtectHome already hides `/run/user`. | |
-| `MemoryHigh=`, `MemoryMax=`, `MemorySwapMax=` | `6G`, `8G`, `2G` | Resource limits (clown#320, operator ruling 2026-10-26), on every agent unit, rendered clown-side (`resourceLimits` in `internal/agentscope/unit.go`): no spec field (a new one would break older clowns, whose spec decoder refuses unknown fields), and no override. High throttles and reclaims before Max OOM-kills. | works: cgroup `memory.high` 6442450944, `memory.max` 8589934592, `memory.swap.max` 2147483648 (host agent_scope.bats, 2026-10-26) |
+| `MemoryHigh=`, `MemoryMax=`, `MemorySwapMax=` | `6G`, `8G`, `2G` | Resource limits (clown#320, operator ruling 2026-10-26), on every agent unit, rendered clown-side (`resourceLimits` in `internal/*/agentscope/unit.go`): no spec field (a new one would break older clowns, whose spec decoder refuses unknown fields), and no override. High throttles and reclaims before Max OOM-kills. | works: cgroup `memory.high` 6442450944, `memory.max` 8589934592, `memory.swap.max` 2147483648 (host agent_scope.bats, 2026-10-26) |
 | `TasksMax=` | `4096` | Fork-bomb and runaway-subagent ceiling. | works: `pids.max` 4096 |
 | `CPUQuota=` | `400%` | At most four CPUs' worth. | works: `cpu.max` 400000 100000 |
 | `IOWeight=` | `50` | Half the default share under IO contention. | works: `io.weight` default 50 |
@@ -111,7 +111,7 @@ traffic goes through a frontend-scope proxy:
    (`code.linenisgreat.com`, `forge.starbrandshoes.com`), `github.com`,
    `cache.nixos.org`, and the krone nix cache. Refusals are logged in the
    frontend. **Open (clown#300):** the krone nix cache is not in
-   `DefaultEgressAllow` (`internal/agentscope/egress.go`) today. That list
+   `DefaultEgressAllow` (`internal/*/agentscope/egress.go`) today. That list
    also has the claude.ai and console/platform login hosts and more GitHub
    hosts than are named here. Whether to add the cache or correct this
    sentence is the operator's decision.
@@ -178,7 +178,7 @@ then gets `CLOWN_DISABLE_STATSD=1` too, so senders inside do not try. A relay
 that fails to start is reported on stderr and the unit runs without one:
 metrics are not worth refusing a launch over. Capability: `statsd-relay`.
 
-Coverage: Go unit tests in `internal/agentscope` (forwarding unchanged, drop
+Coverage: Go unit tests in `internal/*/agentscope` (forwarding unchanged, drop
 from a foreign cgroup, the cgroup check runs on the kernel-attached pid, both
 ends end to end, the unit's binds/relay argv/env). `just verify-agent-scope`
 cannot run from inside a confined unit (no user manager there), so the
@@ -210,7 +210,7 @@ stray value from the spawner's environment then put the unit's producers
 one running the unit's shim and egress: round R saw two clown store paths of the
 same `0.4.4` version string in one unit. Now clown sets it (below).
 
-**Pass prefixes** (`passPrefixes` in `internal/agentscope/unit.go`). Every key
+**Pass prefixes** (`passPrefixes` in `internal/*/agentscope/unit.go`). Every key
 with one of these prefixes passes unless it is scrubbed. A prefix is a blanket
 grant, so each one needs a reason here, and a new one needs a review of what
 secrets could carry it:
@@ -299,7 +299,7 @@ from the frontend's values.
 ## The terminal
 
 The agent never receives the operator's tty. In agent-scope mode, clown
-always runs the `internal/ptysuspend` relay, which today is opt-in via
+always runs the `internal/*/ptysuspend` relay, which today is opt-in via
 `[attach] pty-suspend`:
 
 1. clown allocates a fresh pty in the frontend and keeps the master.
@@ -349,7 +349,7 @@ at all.
 | clown-hook-tee (Stop/SessionEnd) | troupe send | `troupe muc send` inside the unit, with the session's own password file (bound read-only) over the forwarded XMPP port; no troupe socket or directory |
 | clown-hook-toolcost | state dir, statsd | state under the redirected `XDG_STATE_HOME`; statsd through the statsd relay (Egress) |
 | self-close idle poke (Stop) | one datagram to the frontend | The per-session unixgram `$XDG_RUNTIME_DIR/clown/idle/<principal>.sock`, bound in as a single inode (`Launch.IdleSocket`, clown#287). The in-unit `clown idle-notify <sock>` Stop hook sends one byte and always exits 0. The frontend listener runs `spinclass close-self-run` for its own principal, serialized (pokes during a run coalesce into one more), outside the unit; it reads the datagram only to tell a turn-start byte (UserPromptSubmit, which marks the session busy and runs nothing) from a poke. The datagram is not authenticated: anything in the unit running as the session's uid (the agent's Bash as well as the hooks) can send either byte. So a unit can only trigger its own session's runner, a no-op unless the session queued a close and spinclass allows it; and when a restart is queued, a poke runs `spinclass restart-preflight` (spinclass#419, below), whose verdict still gates it. A forged poke cannot start a restart spinclass did not authorize, but it can time an authorized one: it clears the turn-running mark, so the restart can proceed mid-turn (an accepted limit). A second frontend for the same key does not take over a live idle socket. Armed only for a claude launch inside a spinclass session with `spinclass` on PATH. |
-| session restart (spinclass#419) | nothing inside the unit | `clown restart` runs from spinclass, outside the unit, and queues on the frontend's control socket `$XDG_RUNTIME_DIR/clown/control/<principal>.sock` (0600, dir 0700). It is not bound in, and the unit cannot reach it: `XDG_RUNTIME_DIR` is passed, but under `ProtectHome=tmpfs` the unit's `/run/user` is an empty tmpfs holding only the sockets bound in (the idle socket among them). `internal/agentscope/idle_test.go` pins the unit's systemd-run arguments for one launch (not checked live): ProtectHome=tmpfs is set and no BindPaths=/BindReadOnlyPaths= source is the control socket or a directory above it; that the control socket is then unreachable inside a running unit rests on systemd's tmpfs semantics, read from its documentation. The self-close plugin's UserPromptSubmit hook (`clown idle-notify --busy <sock>`) sends a turn-start byte on the idle socket, so a restart counting down is cancelled rather than stopping a running turn (forgeable, see the row above), except under a verdict whose `when` is `now`, where the turn is stopped on purpose. `clown restart --when now` reaches the same control socket, so it is equally out of the unit's reach; it only makes the frontend run the preflight at once instead of at the next idle poke (serialized with the idle runner), and the verdict, the profile gate and the countdown still decide. On a `restart` preflight verdict the frontend first dry-runs the relaunch's profile gate (a refusal leaves the session running), then stops the unit like any exit (if it has not exited 30 s later, `systemctl --user kill --signal=SIGKILL <unit>`, bounded at 10 s, only while that launch still owns the unit; until the relaunch, idle pokes run nothing and a second restart is refused), waits until the serve socket stops answering (`ListenServeSocket` refuses a live one), and, unless `spinclass restart-preflight --peek` (read-only, run immediately before the exec) reports the session closed (a close that has only started counts) or, as a fallback, its worktree is gone, re-execs `clown` from PATH (an unknown peek, e.g. a spinclass without `--peek`, relaunches on the worktree check alone) with `--resume <principal>`; the new frontend starts a new unit. See clown-restart(1). |
+| session restart (spinclass#419) | nothing inside the unit | `clown restart` runs from spinclass, outside the unit, and queues on the frontend's control socket `$XDG_RUNTIME_DIR/clown/control/<principal>.sock` (0600, dir 0700). It is not bound in, and the unit cannot reach it: `XDG_RUNTIME_DIR` is passed, but under `ProtectHome=tmpfs` the unit's `/run/user` is an empty tmpfs holding only the sockets bound in (the idle socket among them). `internal/*/agentscope/idle_test.go` pins the unit's systemd-run arguments for one launch (not checked live): ProtectHome=tmpfs is set and no BindPaths=/BindReadOnlyPaths= source is the control socket or a directory above it; that the control socket is then unreachable inside a running unit rests on systemd's tmpfs semantics, read from its documentation. The self-close plugin's UserPromptSubmit hook (`clown idle-notify --busy <sock>`) sends a turn-start byte on the idle socket, so a restart counting down is cancelled rather than stopping a running turn (forgeable, see the row above), except under a verdict whose `when` is `now`, where the turn is stopped on purpose. `clown restart --when now` reaches the same control socket, so it is equally out of the unit's reach; it only makes the frontend run the preflight at once instead of at the next idle poke (serialized with the idle runner), and the verdict, the profile gate and the countdown still decide. On a `restart` preflight verdict the frontend first dry-runs the relaunch's profile gate (a refusal leaves the session running), then stops the unit like any exit (if it has not exited 30 s later, `systemctl --user kill --signal=SIGKILL <unit>`, bounded at 10 s, only while that launch still owns the unit; until the relaunch, idle pokes run nothing and a second restart is refused), waits until the serve socket stops answering (`ListenServeSocket` refuses a live one), and, unless `spinclass restart-preflight --peek` (read-only, run immediately before the exec) reports the session closed (a close that has only started counts) or, as a fallback, its worktree is gone, re-execs `clown` from PATH (an unknown peek, e.g. a spinclass without `--peek`, relaunches on the worktree check alone) with `--resume <principal>`; the new frontend starts a new unit. See clown-restart(1). |
 | clown-hook-allow (PreToolUse) | nothing | pure |
 | moxy hook logger | `$XDG_LOG_HOME/moxy/hooks` | redirected under the agent home, unless spinclass binds the real dir rw |
 | claude itself | `~/.claude` config, credentials, transcripts | `CLAUDE_CONFIG_DIR` points at a per-session dir. The operator's `.credentials.json` is bound in **read-only** (see "The operator's claude credential" below). The project's transcript dir is bound rw, so `clown resume` and freud keep working. `~/.claude/settings.json` is never writable from inside: a hook written there would run in unconfined sessions. |
@@ -460,13 +460,13 @@ it sees bytes, not prompts.
 
 Evidence:
 
-- `internal/ptysuspend/ptysuspend_linux.go:79-98` allocates the inner pty and
+- `internal/*/ptysuspend/ptysuspend_linux.go:79-98` allocates the inner pty and
   starts the child on its slave. `relayInput` (`:177-201`) reads every
   operator byte in clown before writing it to the inner master. clown is the
   parent, outside the child's tree.
 - On the default path, claude inherits clown's stdio and no clown code sits in
   the input path. `pty-suspend` is off by default
-  (`internal/clownfile/clownfile.go:143`). The pty master is held by
+  (`internal/*/clownfile/clownfile.go:143`). The pty master is held by
   posh-server (the default multiplexer) or by the terminal emulator.
   posh-server also observes every keystroke above claude.
 - In agent-scope mode the relay is mandatory (the agent never gets the
@@ -512,7 +512,7 @@ and it translates the same five resources:
 
 ## Implementation status
 
-Built (`internal/agentscope`, `cmd/clown/agentscope.go`):
+Built (`internal/*/agentscope`, `cmd/clown/agentscope.go`):
 
 - `clown --agent-scope <spec>` / `CLOWN_AGENT_SCOPE` for the claude provider,
   refused with `--tent`, `--naked` and other providers; carried across the
@@ -667,7 +667,7 @@ Since then (2026-10-19, all on flic):
   list. The list on that day was `agent-unit`, `private-network`,
   `egress-proxy` and `frontend-mcp-sockets`. Capabilities are added only
   with their code. The current list is `Capabilities` in
-  `internal/agentscope/spec.go`: those four plus `in-unit-moxy`,
+  `internal/*/agentscope/spec.go`: those four plus `in-unit-moxy`,
   `statsd-relay`, `frontend-monitors`, `frontend-serve-socket` and
   `frontend-deadman` (clown#319).
 - **Evidence (that day).** `just verify-agent-scope` passed 11/11 (18/18 at

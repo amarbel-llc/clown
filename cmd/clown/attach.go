@@ -11,7 +11,7 @@ import (
 
 	"golang.org/x/term"
 
-	"code.linenisgreat.com/clown/internal/clownfile"
+	"code.linenisgreat.com/clown/internal/alfa/clownfile"
 )
 
 // attachIDFlag is the hidden clown flag that pins the per-instance id across the
@@ -150,7 +150,7 @@ func titleGate(interactive, stderrTTY, forced bool) bool {
 // cannot silently group two unrelated bare clowns that happen to share a repo.
 // Returns "" on any failure (not a git repo, git missing). A detached HEAD (no
 // current branch) yields just "<repo-basename>". Failing silent mirrors
-// internal/clownname.Claim's never-fail-the-launch contract for cosmetic data.
+// internal/*/clownname.Claim's never-fail-the-launch contract for cosmetic data.
 func gitRepoAndBranch() string {
 	top, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
 	if err != nil {

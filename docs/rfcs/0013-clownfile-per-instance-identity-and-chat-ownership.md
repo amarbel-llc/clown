@@ -108,7 +108,7 @@ ANTHROPIC_LOG = "info"
 3. **Amended (docs/plans/2026-07-06-openrouter-profiles-design.md).** `--profile
    <name>` / `CLOWN_PROFILE` do NOT resolve a `[profile.<name>]` sub-table of
    the clownfile — that design was superseded before implementation. Instead
-   clown ships a separate named-profile registry (`internal/profile`): a
+   clown ships a separate named-profile registry (`internal/*/profile`): a
    builtin set embedded from `cmd/clown/profiles/builtin.toml` merged with a
    user set at `$XDG_CONFIG_HOME/clown/profiles.toml` (managed by the `clown
    profile` subcommand and the startup picker's `+ add profile…` hook, not by
@@ -467,7 +467,7 @@ This RFC extends RFC-0012 and amends RFC-0009 §2 (§2.3). Migration:
 - **profiles.toml.** Superseded: the fold-into-clownfile plan quoted below was
   itself superseded before implementation — see the amendment at §1.2 point 3
   (docs/plans/2026-07-06-openrouter-profiles-design.md). A
-  separate named-profile registry (`internal/profile`, builtin + user
+  separate named-profile registry (`internal/*/profile`, builtin + user
   `profiles.toml`) DOES ship; the clownfile only pins a name into it. ~~The
   planned `--profile` / `profiles.toml` design folds into the clownfile
   `[profile]` table (§1.2); no separate profiles config ships.~~

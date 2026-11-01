@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"code.linenisgreat.com/clown/internal/clownfile"
+	"code.linenisgreat.com/clown/internal/alfa/clownfile"
 )
 
 // groupIDCommandTimeout bounds the boot-time [attach].group-id-command so a

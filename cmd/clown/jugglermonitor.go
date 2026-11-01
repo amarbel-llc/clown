@@ -5,8 +5,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"code.linenisgreat.com/clown/internal/buildcfg"
-	"code.linenisgreat.com/clown/internal/staging"
+	"code.linenisgreat.com/clown/internal/0/buildcfg"
+	"code.linenisgreat.com/clown/internal/0/staging"
 )
 
 // jugglerMCPDisabled reports whether the juggler subagent-delegation tool is

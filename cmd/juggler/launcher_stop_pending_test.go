@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	rm "code.linenisgreat.com/clown/internal/juggler"
+	rm "code.linenisgreat.com/clown/internal/0/juggler"
 )
 
 // neverHealthyLlamaServer is a llama-server that records its pid and then

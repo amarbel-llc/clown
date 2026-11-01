@@ -4,7 +4,7 @@ import (
 	"slices"
 	"testing"
 
-	"code.linenisgreat.com/clown/internal/clownfile"
+	"code.linenisgreat.com/clown/internal/alfa/clownfile"
 )
 
 // clown#159 review follow-ups.

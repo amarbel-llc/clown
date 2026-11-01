@@ -21,7 +21,7 @@ override with `CLOWN_PROVIDER` env var, or pin one per-directory via a
 tool-use loop against moxy under a spawner-minted principal, `juggler spawn`
 launches it as a systemd transient unit with a ringmaster job and a
 post-stop exit wake, `juggler decide` is the Decisions-API router. Code lives
-in `internal/juggler{loop,brief,eval,tools,decide,run}`; read the FDR before
+in `internal/*/juggler{loop,brief,eval,tools,decide,run}`; read the FDR before
 touching any of it.
 
 ## Agent gotchas specific to this repo
@@ -36,13 +36,13 @@ touching any of it.
   in-tree.** `internal/jobwake`, `internal/jobmcp`, and the
   producer/monitor/chat CLI verbs were extracted to the standalone
   `code.linenisgreat.com/ringmaster` module and are consumed as prebuilt
-  binaries (`RingmasterPath`/`TroupePath` in `internal/buildcfg`). Don't look
+  binaries (`RingmasterPath`/`TroupePath` in `internal/*/buildcfg`). Don't look
   for their implementation in this repo; `cmd/clown/jobmonitor.go` is just
   the synthesis point that wires those binaries into the
   `clown-builtin-jobs` plugin.
 - **`pkg/profilelookup` is clown's one public Go API, linked by spinclass
   (clown#264).** It resolves `--profile NAME` (builtin + user
-  `profiles.toml`, via `internal/profile`), returns the saved
+  `profiles.toml`, via `internal/*/profile`), returns the saved
   `--cheap-context` keep-set, env as per-value digests, the resolved `base`
   builtin, a canonical-JSON digest, and fails closed with `*SkewError` on a
   registry it cannot read (stamped outside protocols 1..`ProtocolVersion`,
@@ -54,10 +54,22 @@ touching any of it.
   (`clown_version`, and the lowest `protocol` that holds the file, so an
   untouched registry stays readable by older clowns); a new profile field
   also needs a field in the library's `canonical` struct (a test checks). clown publishes `go-pkgs`/`go-pkgs-test`
-  (`mkGoPkgs` in `flake.nix`) so consumers can bridge it; `internal/profile`'s
+  (`mkGoPkgs` in `flake.nix`) so consumers can bridge it; `internal/*/profile`'s
   `builtin.toml` is embedded and rides in `extras`. `RequiredServers` must
   keep naming servers the synthesized `clown-builtin-jobs` plugin declares
   (a test in `cmd/clown` pins this).
+- **`internal/` is in the dagnabit NATO-level layout (clown#328): packages
+  sit at `internal/<level>/<leaf>` (`0`, `alfa`, ...), the level being the
+  package's height in the import graph.** Name packages `internal/*/<leaf>`
+  in prose; levels move. `just codemod-layout` repositions (rewriting
+  imports), `just debug-plan-layout` previews, `checks.dagnabit-reposition`
+  (`just lint-layout`) fails on drift. Leaf names must stay unique. Opted-in
+  packages carry `//go:generate dagnabit export` and get a generated facade
+  under `pkgs/<leaf>` (the public, level-free import path; today
+  `pkgs/peercheck`, the unix-socket peer check spinclass links):
+  `just codemod-facade` regenerates, `checks.dagnabit-codegen`
+  (`just lint-facade`) fails on drift. Never hand-edit `pkgs/`.
+  `pkg/profilelookup` remains hand-written (its import path is spinclass's).
 - **There is no go.mod, go.sum, gomod2nix.toml or vendor/ — dependencies
   live in `go.nix` (igloo FDR 0008), and Go builds/tests run only inside
   nix.** The devShell has no Go toolchain; `go build`/`go test` in the
@@ -124,15 +136,15 @@ Format: `nix fmt` (conformist; overlay in `conformist.nix`, wired via `flake.nix
 The flake's `symlinkJoin` output bundles: the `clown` wrapper script, the
 `clown-go` Go binary (`cmd/clown/main.go` — the main entrypoint: provider
 dispatch, system-prompt injection, MCP plugin lifecycle via
-`internal/pluginhost`, `clownfile`-driven config via `internal/clownfile`,
-multiplexer self-attach via `internal/ptysuspend`/`cmd/clown/attach.go`,
-per-launch artifact staging via `internal/staging`, and tent (sandboxed
-container) support via `internal/tent`), the standalone
+`internal/*/pluginhost`, `clownfile`-driven config via `internal/*/clownfile`,
+multiplexer self-attach via `internal/*/ptysuspend`/`cmd/clown/attach.go`,
+per-launch artifact staging via `internal/*/staging`, and tent (sandboxed
+container) support via `internal/*/tent`), the standalone
 `clown-plugin-host` binary, the `clown-stdio-bridge` binary (wraps a
-single stdio MCP server over streamable-HTTP; see `internal/mcphttp`),
+single stdio MCP server over streamable-HTTP; see `internal/*/mcphttp`),
 the `clown-mcp-collapse` binary (aggregates N upstream MCP servers behind
 three generic verbs — `mcp_list`/`mcp_describe`/`mcp_call` — to save agent
-context; see `internal/mcpcollapse`), `clown sessions-complete`
+context; see `internal/*/mcpcollapse`), `clown sessions-complete`
 fish-completion support, and `completions/clown.fish`.
 
 Provider-specific behavior (juggler local models, opencode, crush, the

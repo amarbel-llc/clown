@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"code.linenisgreat.com/clown/internal/sessionstatus"
+	"code.linenisgreat.com/clown/internal/alfa/sessionstatus"
 )
 
 func recordRefusals() (*[]sessionstatus.RestartRefusal, func(sessionstatus.RestartRefusal)) {

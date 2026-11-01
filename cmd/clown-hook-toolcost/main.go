@@ -1,6 +1,6 @@
 // clown-hook-toolcost is a Claude Code Stop / SubagentStop / SessionEnd hook
 // handler that turns the session transcript into per-tool context-cost
-// metrics in stats-me (statsd over UDP). See package internal/toolcost for the
+// metrics in stats-me (statsd over UDP). See package internal/*/toolcost for the
 // metric definitions, the grouping/attribution rules and their
 // approximations.
 //
@@ -25,7 +25,7 @@
 // when set, receives the failures. CLOWN_DISABLE_STATSD=1 turns it off entirely.
 //
 // It also counts permission prompts and their outcomes (package
-// internal/permstat, clown#302) on PermissionRequest, PostToolUse,
+// internal/*/permstat, clown#302) on PermissionRequest, PostToolUse,
 // PostToolUseFailure, UserPromptSubmit, Stop and SessionEnd. On those it
 // prints nothing: a PermissionRequest hook's stdout is its decision.
 //
@@ -48,9 +48,9 @@ import (
 	"syscall"
 	"time"
 
-	"code.linenisgreat.com/clown/internal/permstat"
-	"code.linenisgreat.com/clown/internal/sessions"
-	"code.linenisgreat.com/clown/internal/toolcost"
+	"code.linenisgreat.com/clown/internal/alfa/sessions"
+	"code.linenisgreat.com/clown/internal/alfa/toolcost"
+	"code.linenisgreat.com/clown/internal/bravo/permstat"
 )
 
 // runBudget bounds one invocation well inside the hooks' timeout; hitting it

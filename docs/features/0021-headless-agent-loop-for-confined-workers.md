@@ -133,21 +133,21 @@ disposition: **reproduce** (the loop must provide an equivalent), **replace**
 Claude Code writes the session transcript to
 `~/.claude/projects/<slug>/<session>.jsonl` and per-subagent files under
 `subagents/agent-*.jsonl` (`docs/plans/2026-10-20-unused-tools-per-session.md`
-§1a; `internal/sessions/claude.go` lists sessions by walking
+§1a; `internal/*/sessions/claude.go` lists sessions by walking
 `~/.claude/projects`).
 
 Readers inside the repo:
 
 | Reader | What it takes from the transcript | Source |
 |---|---|---|
-| `clown-hook-toolcost` | per-response `message.usage`, `tool_use`/`tool_result` pairing (grouped by `message.id`), `compact_boundary`; offsets committed per transcript under `$XDG_STATE_HOME/clown/hook-toolcost/` | `internal/toolcost`; `cmd/clown-hook-toolcost` |
+| `clown-hook-toolcost` | per-response `message.usage`, `tool_use`/`tool_result` pairing (grouped by `message.id`), `compact_boundary`; offsets committed per transcript under `$XDG_STATE_HOME/clown/hook-toolcost/` | `internal/*/toolcost`; `cmd/clown-hook-toolcost` |
 | `clown-hook-tee` | assistant `text` blocks since a persisted byte cursor; one message per turn into the per-worktree MUC | `cmd/clown-hook-tee` |
-| `clown sessions` / resume listing | session discovery by mtime | `internal/sessions/claude.go` |
+| `clown sessions` / resume listing | session discovery by mtime | `internal/*/sessions/claude.go` |
 | freud (a moxy moxin) | session list, summary, tool usage, messages from `~/.claude/projects` | moxy's lane; internals not read |
 | spinclass `PostToolUse` hook | appends the raw hook payload to `$XDG_LOG_HOME/spinclass/tool-uses/<session>.jsonl` | spinclass `internal/hooks/hooks.go:1013` |
 
 Disposition: **replace**. The loop owns its transcript. FDR 0019 gives the loop
-a stanza-shaped `Turn` (`internal/jugglerloop/turn.go`) posted to the run's MUC
+a stanza-shaped `Turn` (`internal/*/jugglerloop/turn.go`) posted to the run's MUC
 per turn, but on disk the turns exist only as the final ledger (written once,
 at `finish`) and `traffic.jsonl` (per call, durable at once). A SIGKILL leaves
 traffic lines and no ledger (FDR 0019 §4). The loop therefore needs a
@@ -199,7 +199,7 @@ Claude Code decides per tool call: allow rules, hook verdicts, mode
 spinclass keeps its allow list as Claude rules in a `settings.local.json`
 (`permissions.allow`) and in tier files (`internal/perms/tiers.go`); rules are
 in Claude Code's rule grammar (`Bash(...)`, `mcp__…`). clown adds
-`--disallowed-tools` from a file (`internal/provider/claude.go`) and the hook
+`--disallowed-tools` from a file (`internal/*/provider/claude.go`) and the hook
 above. Argument-sensitive checks exist only as spinclass's `AlwaysAsk`
 predicate and moxy's `dynamic` moxin predicates; spinclass FDR 0036 §2 notes
 that `BuildPermissionString` discards MCP tool input, so a tier rule cannot
@@ -259,7 +259,7 @@ not an in-unit `systemd-run`.
 
 ### 1.7 MCP client behaviour
 
-What clown hands Claude Code is a compiled manifest (`internal/pluginhost`):
+What clown hands Claude Code is a compiled manifest (`internal/*/pluginhost`):
 HTTP URLs for servers clown launched, stdio servers wrapped by
 `clown-stdio-bridge` (FDR 0002), a per-server `timeout`, and, in agent scope,
 loopback ports reserved inside the unit and spliced to frontend unix sockets
@@ -275,10 +275,10 @@ Treat it as an operator observation with cause **UNVERIFIED**; candidates are
 the in-unit `agent-relay` splice, the stdio bridge's heartbeat mode, moxy's
 `serve-http`, or the client's idle policy. §6 Stage 0 lists the measurement.
 
-juggler's client (`internal/jugglertools/client.go`) is deliberately smaller:
+juggler's client (`internal/*/jugglertools/client.go`) is deliberately smaller:
 exactly **one** upstream; POST-only JSON-RPC through `mcphttp.PostJSONRPC`
 (which accepts both `application/json` and `text/event-stream` answers to a
-POST, `internal/mcphttp/client.go:51,71`); `Mcp-Session-Id` captured and
+POST, `internal/*/mcphttp/client.go:51,71`); `Mcp-Session-Id` captured and
 echoed; 30 s per-request timeout (`client.go:49`); 1 MiB response cap; no GET
 stream, no server-initiated requests, no reconnection, no re-initialise after a
 rejected session id (read: `rpc` never retries `initialize`). Because it holds
@@ -302,7 +302,7 @@ For Claude, clown builds `--system-prompt-file` (replace),
 `--append-system-prompt-file` (fragments from `.clown/system-prompt.d`, the
 repo's `system-prompt-append.d/`, and plugin servers that opt in with
 `systemPrompt: true`), `--agents`, `--disallowed-tools` and `--settings`
-(`internal/provider/claude.go`). In agent scope, dynamic fragments from
+(`internal/*/provider/claude.go`). In agent scope, dynamic fragments from
 in-unit servers are **not** fetched (FDR 0020 "What a confined worker loses").
 Claude Code adds its own base prompt, `CLAUDE.md`/`AGENTS.md`, skills and
 memory on top. A juggler agent's system prompt is `brief.system` verbatim.
@@ -328,7 +328,7 @@ harness tag, say) and this section must say so. Plugin fragments that opt in
 with `systemPrompt: true` still need a look when the loop is first pointed at
 them.
 
-Disposition: **reproduce selectively**. The composer (`internal/promptwalk`)
+Disposition: **reproduce selectively**. The composer (`internal/*/promptwalk`)
 runs in clown's frontend and produces the brief's `system`. Loading the repo's
 `AGENTS.md` is **required** (workers rely on it); skills and auto-memory are
 **dropped** for v1. The brief should also carry a short harness-specific
@@ -377,7 +377,7 @@ messages them and end only on close. The loop needs two modes (§2.3).
 Claude Code supplies Read/Write/Edit/Bash/Glob/Grep/WebFetch/WebSearch/Agent/
 Skill/NotebookEdit and more. The confined in-unit moxy allows
 `folio, grit, rg, jq, man, chix, env, batch, async, async-result, async-cancel,
-status, restart` (`internal/agentscope/inunit.go:66`): files, git, search and
+status, restart` (`internal/*/agentscope/inunit.go:66`): files, git, search and
 nix, but **no general shell**. FDR 0019 forbids `restart`, `batch`, `async*`
 and `status` in a brief (§5), so a loop worker loses background execution.
 
@@ -453,8 +453,8 @@ Read from FDR 0019 and the code, not inferred.
 
 | Piece | What it is | Source |
 |---|---|---|
-| `juggler run` | headless process: reads a brief, drives the tool-use loop against one moxy upstream, records ledger and `traffic.jsonl`, writes the ringmaster terminal | FDR 0019 §1; `internal/jugglerrun/agent.go` `RunAgent`; `cmd/juggler/run.go:197-255` |
-| the loop | `jugglerloop.Run`: step cap (12), wall clock (2 m), `cannot_complete`, `StopWhen` evaluator hook, stanza-shaped `Turn`s, two codecs (Anthropic Messages, OpenAI-compatible) | `internal/jugglerloop/loop.go`, `codec.go` |
+| `juggler run` | headless process: reads a brief, drives the tool-use loop against one moxy upstream, records ledger and `traffic.jsonl`, writes the ringmaster terminal | FDR 0019 §1; `internal/*/jugglerrun/agent.go` `RunAgent`; `cmd/juggler/run.go:197-255` |
+| the loop | `jugglerloop.Run`: step cap (12), wall clock (2 m), `cannot_complete`, `StopWhen` evaluator hook, stanza-shaped `Turn`s, two codecs (Anthropic Messages, OpenAI-compatible) | `internal/*/jugglerloop/loop.go`, `codec.go` |
 | the brief | `schema, principal, parent, room, model, system, task, moxyfile, env, tools, evaluator, limits`; **unknown fields are rejected at parse** (`jugglerbrief/brief.go:228`) | FDR 0019 §3 |
 | tool plane | juggler launches `moxy serve-http --name-template '{server}_{tool}'` from the brief's inline moxyfile, with `MOXY_PARENT_MOXYFILE` pinning the spawner's effective moxyfile; `allow-tools` is **derived from `tools`** | FDR 0019 §5; `agent.go:287-321` |
 | call-time allowlist | the loop refuses any tool name not offered (clown#261) | `loop.go:315-328` |
@@ -997,7 +997,7 @@ selectable:
 
 - **Harness value (recommended).** The profile's `provider` field is the
   harness axis in FDR 0006's mental model (its valid values today are
-  `claude`, `opencode`, `crush`, `openrouter`; `internal/profile/profile.go:150-155`).
+  `claude`, `opencode`, `crush`, `openrouter`; `internal/*/profile/profile.go:150-155`).
   Add a value (e.g. `juggler-run`; the bare name `juggler` is taken by the
   stub) with its `validCombos` backends (`anthropic`, `gateway`). No new
   profile field. **Resolved (read this pass):** `pkg/profilelookup`'s
@@ -1114,7 +1114,7 @@ Operator:
   `request_permission` tool that records the request and returns at once, as
   input to the card-rooted grant mechanism (spinclass#383/#384)?
 - **Q8. Where does the loop live** while juggler is mid-extraction
-  (clown#258): keep it in `internal/jugglerloop` behind the brief as the seam
+  (clown#258): keep it in `internal/*/jugglerloop` behind the brief as the seam
   (recommended), or a clown-native package?
 - **Q13. Embed moxy (moxy#487) as the end state?** This record assumes yes
   and sequences enforce mode first; confirm, since #487 is a moxy

@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"testing"
 
-	"code.linenisgreat.com/clown/internal/profile"
+	"code.linenisgreat.com/clown/internal/0/profile"
 )
 
 // fullyPopulatedProfile sets every field of profile.Profile to a non-zero

@@ -11,8 +11,8 @@ import (
 	"text/tabwriter"
 	"time"
 
-	rm "code.linenisgreat.com/clown/internal/juggler"
-	jr "code.linenisgreat.com/clown/internal/jugglerrun"
+	rm "code.linenisgreat.com/clown/internal/0/juggler"
+	jr "code.linenisgreat.com/clown/internal/charlie/jugglerrun"
 )
 
 func main() {

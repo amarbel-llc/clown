@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"code.linenisgreat.com/clown/internal/promptwalk"
+	"code.linenisgreat.com/clown/internal/0/promptwalk"
 )
 
 // The prompt sources, at their module-relative paths: the godyn lane places

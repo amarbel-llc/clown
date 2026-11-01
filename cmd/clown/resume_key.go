@@ -15,7 +15,7 @@ import (
 
 	"code.linenisgreat.com/ringmaster/pkgs/jobwake"
 
-	"code.linenisgreat.com/clown/internal/sessions"
+	"code.linenisgreat.com/clown/internal/alfa/sessions"
 )
 
 // poshAttachHint derives the one-line attach command for a live session.

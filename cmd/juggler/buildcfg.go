@@ -7,8 +7,8 @@ package main
 // (go build / go run), which the daemon and the launcher tests treat as
 // "not configured" / skip.
 //
-// This is deliberately juggler-owned rather than clown's internal/buildcfg:
-// cmd/juggler + internal/juggler* form a self-contained subsystem that
+// This is deliberately juggler-owned rather than clown's internal/*/buildcfg:
+// cmd/juggler + internal/*/juggler* form a self-contained subsystem that
 // imports nothing else from clown (enforced by checks.juggler-boundary), so
 // the extraction into a standalone repo is a clean cut (clown#258,
 // docs/plans/2026-10-20-juggler-extraction.md).

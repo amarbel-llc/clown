@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	rm "code.linenisgreat.com/clown/internal/juggler"
+	rm "code.linenisgreat.com/clown/internal/0/juggler"
 )
 
 // TestLauncher_ReapsUnexpectedExit verifies that when a llama-server

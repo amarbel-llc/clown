@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"code.linenisgreat.com/clown/internal/sessions"
+	"code.linenisgreat.com/clown/internal/alfa/sessions"
 )
 
 // recordsOf is a fake AgentScopeRecordOf over a fixed id -> spec map, with

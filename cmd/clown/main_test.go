@@ -11,14 +11,14 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"code.linenisgreat.com/clown/internal/buildcfg"
-	"code.linenisgreat.com/clown/internal/clownfile"
-	"code.linenisgreat.com/clown/internal/juggler"
-	"code.linenisgreat.com/clown/internal/profile"
-	"code.linenisgreat.com/clown/internal/promptwalk"
-	"code.linenisgreat.com/clown/internal/sessions"
-	"code.linenisgreat.com/clown/internal/tent"
-	"code.linenisgreat.com/clown/internal/testlane"
+	"code.linenisgreat.com/clown/internal/0/buildcfg"
+	"code.linenisgreat.com/clown/internal/0/juggler"
+	"code.linenisgreat.com/clown/internal/0/profile"
+	"code.linenisgreat.com/clown/internal/0/promptwalk"
+	"code.linenisgreat.com/clown/internal/0/tent"
+	"code.linenisgreat.com/clown/internal/0/testlane"
+	"code.linenisgreat.com/clown/internal/alfa/clownfile"
+	"code.linenisgreat.com/clown/internal/alfa/sessions"
 )
 
 func withBuildcfgString(t *testing.T, target *string, value string) {

@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"code.linenisgreat.com/clown/internal/pluginhost"
+	"code.linenisgreat.com/clown/internal/alfa/pluginhost"
 )
 
 // exclusionReadback records what happened to one server's saved exclusions

@@ -27,7 +27,7 @@ promotion-criteria: >
 
 ## Problem
 
-A profile (`internal/profile`, resolved by `pkg/profilelookup`) fixes the
+A profile (`internal/*/profile`, resolved by `pkg/profilelookup`) fixes the
 provider, model, URL, env, context-server keep-set and `base` a session
 runs with. It can change under a session: the user edits `profiles.toml`,
 a builtin changes in a clown upgrade, or a protocol bump changes every
@@ -102,7 +102,7 @@ Problem.
 - **spinclass** records the authorizing grant on the session
   (`authorizing_grant`) and the new `profile_digest` (FDR 0034).
 - **clown** records, per session, the profile **name and digest it was
-  launched with** (new field in `internal/sessions`, clown#295 option 1),
+  launched with** (new field in `internal/*/sessions`, clown#295 option 1),
   so `clown resume` works without spinclass. This is a *claim*, not an
   authorization: a mismatch is only ever resolved by an approval, never by
   clown updating its own record.

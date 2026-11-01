@@ -11,7 +11,7 @@ This record specifies clown's implementation of the host-mediated hook
 bridge defined in RFC 0007. It introduces:
 
 1. A new `hooks` block in `clown.json`, parsed alongside `httpServers`
-   and `stdioServers` in `internal/pluginhost`.
+   and `stdioServers` in `internal/*/pluginhost`.
 2. A dispatch loop in `clown-plugin-host` (in-process; not a separate
    binary) that listens on a per-session unix socket and spawns
    registered handler commands on the host with `cwd` set to the
@@ -95,9 +95,9 @@ the provider.
 
 Three pieces of code change or appear:
 
-- **`internal/pluginhost`**: gains a `Hooks` field in the parsed
-  `clown.json` config (`internal/pluginhost/config.go`), and
-  `Discover()` (`internal/pluginhost/host.go:53-82`) collects
+- **`internal/*/pluginhost`**: gains a `Hooks` field in the parsed
+  `clown.json` config (`internal/*/pluginhost/config.go`), and
+  `Discover()` (`internal/*/pluginhost/host.go:53-82`) collects
   per-plugin hook entries into a flat dispatch table alongside the
   HTTP server list.
 - **`clown-plugin-host`**: gains an in-process dispatch loop that
@@ -149,7 +149,7 @@ the right behavior.
 
 `pluginhost.Host.Discover()` today iterates plugin dirs, parses
 `clown.json`, and collects HTTP servers
-(`internal/pluginhost/host.go:53-82`). We extend it to also collect
+(`internal/*/pluginhost/host.go:53-82`). We extend it to also collect
 hook entries into a `[]DispatchEntry` keyed by
 `(pluginName, eventName, ordinal)`.
 
@@ -313,7 +313,7 @@ clown does not intermediate that path.
 
 ## Testing
 
-- **Unit, `internal/pluginhost`.** Dispatch table construction from
+- **Unit, `internal/*/pluginhost`.** Dispatch table construction from
   a synthetic `clown.json`. Frame parsing (request and response,
   including malformed cases). Peer-cred check on platforms where
   it's available; build-tag-skip on others.

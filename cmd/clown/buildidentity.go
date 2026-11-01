@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"strings"
 
-	"code.linenisgreat.com/clown/internal/buildcfg"
+	"code.linenisgreat.com/clown/internal/0/buildcfg"
 )
 
 // clownRepoURL is the canonical repository the agent links to when it signs
@@ -16,7 +16,7 @@ const clownRepoURL = "https://code.linenisgreat.com/clown"
 // buildIdentityFragment renders a system-prompt append fragment that tells the
 // agent which clown build it is running, so it stamps the version+shortSha and
 // the originating commit into its sign-offs (git commits, pull requests,
-// comments). The values come from build-time ldflags in internal/buildcfg.
+// comments). The values come from build-time ldflags in internal/*/buildcfg.
 //
 // In dev builds (go build / go run) those ldflags are empty; the fragment then
 // states it is an unversioned dev build with no commit link, so the agent does

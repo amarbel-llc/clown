@@ -9,7 +9,7 @@ import (
 	"os"
 	"time"
 
-	jr "code.linenisgreat.com/clown/internal/jugglerrun"
+	jr "code.linenisgreat.com/clown/internal/charlie/jugglerrun"
 )
 
 const spawnUsage = `usage: juggler spawn --new-run [--run-key <key>] --input <file|-> [--issuer <principal>] (--room <jid> | --room-domain <domain> --operator-jid <jid>)

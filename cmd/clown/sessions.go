@@ -5,7 +5,7 @@ import (
 	"os"
 	"strings"
 
-	"code.linenisgreat.com/clown/internal/sessions"
+	"code.linenisgreat.com/clown/internal/alfa/sessions"
 )
 
 // sessionsCompleteArgs holds the parsed `clown sessions-complete` flags.

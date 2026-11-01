@@ -14,7 +14,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	rm "code.linenisgreat.com/clown/internal/juggler"
+	rm "code.linenisgreat.com/clown/internal/0/juggler"
 )
 
 // --- sendPrompt unit tests (no juggler daemon involved) ---
