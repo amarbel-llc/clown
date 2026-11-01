@@ -5,13 +5,96 @@ default: lint build test
 # breaking the parent justfile.
 mod? explore 'zz-explore/justfile'
 
-lint: lint-fmt lint-worktree lint-man lint-juggler-boundary
+lint: lint-facade lint-fmt lint-layout lint-worktree lint-man lint-juggler-boundary
 
-test: test-go-godyn test-plugin-host test-stdio-bridge test-plugin-host-moxy test-plugin-host-moxy-disabled
+test:test-go-godyn test-plugin-host test-stdio-bridge test-plugin-host-moxy test-plugin-host-moxy-disabled
 
 verify: verify-agent-scope verify-clown-openrouter verify-clown-tailnet verify-cover-bats verify-cover-bats-html verify-crush-tailnet verify-dev-tent verify-juggler verify-juggler-multi verify-opencode-against-openrouter verify-opencode-tailnet verify-plugin-agents verify-tailnet-url verify-tent-smoke
 
-codemod: codemod-fmt
+codemod: codemod-facade codemod-fmt codemod-layout
+
+# Drift gate: checks.dagnabit-codegen regenerates the pkgs/ facade in the
+# vendored module tree and fails on any diff from the committed source, then
+# runs `dagnabit export -check`. A purse-first bump restamps the facade header;
+# fix with `just codemod-facade`.
+#
+# check that pkgs/ is what dagnabit export would emit
+[group('lint')]
+lint-facade:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    system=$(nix eval --raw --impure --expr 'builtins.currentSystem')
+    nix build ".#checks.${system}.dagnabit-codegen" --no-link --print-build-logs
+
+# Drift gate: checks.dagnabit-reposition runs `dagnabit -n internal` in the
+# vendored module tree; any NATO-level move it would make fails. Fix with
+# `just codemod-layout`.
+#
+# check that internal/ packages sit at their dagnabit level
+[group('lint')]
+lint-layout:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    system=$(nix eval --raw --impure --expr 'builtins.currentSystem')
+    nix build ".#checks.${system}.dagnabit-reposition" --no-link --print-build-logs
+
+# Moves every internal/<level>/<leaf> package to the NATO level its dependency
+# depth dictates (dagnabit(7)) and rewrites callers' imports. Runs inside
+# godyn-go (dagnabit type-loads through the go.mod rendered from go.nix; the
+# checkout has none), which patches the result back. dagnabit moves with `git
+# mv`, so the sandbox copy gets a throwaway repo, removed again so it stays out
+# of the patch. Gotchas: the trailing go.nix ingest cannot see moved files until
+# they are staged, so `git add -A` after the run; and dagnabit does not follow
+# imports under testdata/ (fix by hand).
+#
+# reposition internal/ packages by dependency depth
+[group('codemod')]
+codemod-layout:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    system=$(nix eval --raw --impure --expr 'builtins.currentSystem')
+    mkdir -p .tmp && cp go.nix .tmp/scratch-go.nix
+    nix run --inputs-from . igloo#godyn-go -- -A "packages.$system.clown-plugin-host" -m .tmp/scratch-go.nix -- sh -c 'git init -q && git add -A && dagnabit -v internal; rm -rf .git'
+
+# One-shot for a flat internal/<pkg> layout: inserts the NATO level segment
+# into every package path (dagnabit --initial). After it, `just codemod-layout`
+# is the steady-state recipe. Same godyn-go gotchas as codemod-layout.
+#
+# tier a flat internal/ layout into NATO levels
+[group('codemod')]
+codemod-layout-initial:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    system=$(nix eval --raw --impure --expr 'builtins.currentSystem')
+    mkdir -p .tmp && cp go.nix .tmp/scratch-go.nix
+    nix run --inputs-from . igloo#godyn-go -- -A "packages.$system.clown-plugin-host" -m .tmp/scratch-go.nix -- sh -c 'git init -q && git add -A && dagnabit -v --initial internal; rm -rf .git'
+
+# Regenerates pkgs/<leaf> from the `//go:generate dagnabit export` directives in
+# internal/, through godyn-go with the flake's dagnabitPinned (facade-format
+# pass pinned to the dagnabit-facade config). Run after changing an exported
+# symbol or bumping purse-first (the header stamps dagnabit's version).
+#
+# regenerate the dagnabit pkgs/ facade
+[group('codemod')]
+codemod-facade:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    system=$(nix eval --raw --impure --expr 'builtins.currentSystem')
+    mkdir -p .tmp && cp go.nix .tmp/scratch-go.nix
+    nix run --inputs-from . igloo#godyn-go -- -A "packages.$system.clown-plugin-host" -m .tmp/scratch-go.nix -- go generate -run dagnabit ./...
+
+# Previews what dagnabit would do to the internal/ layout (the NATO level rule,
+# dagnabit(7)) without moving anything. Prints nothing when the layout is
+# already correct. Add --initial for a flat layout.
+#
+# preview the dagnabit internal/ layout moves
+[group('debug')]
+debug-plan-layout *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    system=$(nix eval --raw --impure --expr 'builtins.currentSystem')
+    mkdir -p .tmp && cp go.nix .tmp/scratch-go.nix
+    nix run --inputs-from . igloo#godyn-go -- -A "packages.$system.clown-plugin-host" -m .tmp/scratch-go.nix -- sh -c 'git init -q && git add -A && dagnabit -n -v {{ARGS}} internal; rm -rf .git'
 
 # Sandboxed formatting check via conformist (reads only git-tracked files).
 # Drives `nix fmt` and checks.formatting. Fails if any file would change.

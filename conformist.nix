@@ -34,6 +34,8 @@
   linters.eng-versioning.key = "CLOWN_VERSION";
 
   settings.excludes = [
+    # The dagnabit facade is generated and formatted by dagnabit itself.
+    "pkgs/**"
     "flake.lock"
     "*.md"
     "result"
