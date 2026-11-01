@@ -2919,3 +2919,64 @@ verify-claude-monitor-line-cap:
     fi
     echo "claude: $bin"
     echo "monitor constants: $hit (first value is the per-line cap)"
+
+# Revoke the throwaway XMPP accounts that clown launches minted (troupe mint
+# creates one per session key through prosody). DRY-RUN by default: lists the
+# prosody users of the session vhost, subtracts the accounts of the LIVE session
+# keys, and prints what it would remove. Removal needs MODE=yes AND a PATTERN
+# (an extended regex on the localpart) so a stray account such as the
+# operator's is never matched by default.
+#
+# Usage:
+#   just debug-troupe-revoke-throwaways "KEY1 KEY2 ..."               # dry run
+#   just debug-troupe-revoke-throwaways "KEY1 ..." dry /path/users.txt  # dry run on a user list the operator saved
+#   just debug-troupe-revoke-throwaways "KEY1 ..." yes "" '^[0-9a-f-]{36}$'
+# LIVE: space-separated current session keys (chat_list sessionKey values).
+# USERLIST: a file of localparts, one per line, from `prosodyctl shell user list
+# <vhost>` run by the operator; without it the recipe prints that command
+# (it needs sudo, which the recipe does not call to LIST).
+# Unverified on this host: the prosodyctl subcommands used (user list, deluser).
+#
+# list, and with MODE=yes revoke, throwaway XMPP accounts not owned by a live session
+[group("debug")]
+[linux]
+debug-troupe-revoke-throwaways LIVE MODE="dry" USERLIST="" PATTERN="":
+    #!/usr/bin/env bash
+    set -uo pipefail
+    mode={{ quote(MODE) }}; live={{ quote(LIVE) }}; userlist={{ quote(USERLIST) }}; pattern={{ quote(PATTERN) }}
+    vhost="${TROUPE_XMPP_DOMAIN:-$(hostname -s).xmpp.starbrandshoes.com}"
+    execstart="$(systemctl show prosody.service -p ExecStart --value 2>/dev/null || systemctl --user show prosody.service -p ExecStart --value 2>/dev/null || true)"
+    prosody_bin="$(grep -oE '/nix/store/[^ ]+/bin/prosody' <<<"$execstart" | head -1)"
+    prosodyctl="${prosody_bin%/prosody}/prosodyctl"
+    if [ -z "$userlist" ] || [ ! -r "$userlist" ]; then
+        echo "no readable USERLIST. Listing needs sudo; run this yourself and pass the file:" >&2
+        echo "  sudo -n ${prosodyctl:-prosodyctl} shell user list $vhost | sed 's/@.*//' > /tmp/users.txt" >&2
+        exit 2
+    fi
+    if [ "$mode" = yes ] && [ -z "$pattern" ]; then
+        echo "MODE=yes needs a PATTERN (regex on the localpart); refusing." >&2
+        exit 2
+    fi
+    troupe="$(nix build --no-link --print-out-paths .#troupe)/bin/troupe"
+    keep="$(mktemp)"; trap 'rm -f "$keep"' EXIT
+    for key in $live; do
+        lp="$(env TROUPE_XMPP_DOMAIN="$vhost" "$troupe" derive-jid --session-key "$key" --vhost "$vhost" --json | jq -r .localpart)"
+        echo "live: key=$key localpart=$lp"
+        echo "$lp" >>"$keep"
+    done
+    echo "vhost=$vhost mode=$mode pattern=${pattern:-<none>}"
+    count=0
+    while read -r lp; do
+        [ -z "$lp" ] && continue
+        grep -qxF -- "$lp" "$keep" && { echo "keep (live): $lp"; continue; }
+        if [ -n "$pattern" ] && ! grep -qE -- "$pattern" <<<"$lp"; then echo "skip (pattern): $lp"; continue; fi
+        count=$((count+1))
+        cmd=(sudo -n "$prosodyctl" shell user delete "$lp@$vhost")
+        echo "WOULD: ${cmd[*]}"
+        if [ "$mode" = yes ]; then
+            echo "DO: ${cmd[*]}"
+            "${cmd[@]}" || echo "FAILED: $lp" >&2
+        fi
+    done <"$userlist"
+    echo "$count account(s) matched; mode=$mode"
+    [ "$mode" = yes ] || echo "dry run: nothing changed. Re-run with MODE=yes and a PATTERN after reviewing."
