@@ -237,7 +237,7 @@ run_plan() {
   assert_matches_golden claude
 }
 
-@test "CLOWN_UNATTENDED=1 adds only permissions.defaultMode dontAsk to claude's plan" {
+@test "CLOWN_UNATTENDED=1 adds only dontAsk, the Monitor deny and the hook marker to claude's plan" {
   # clown#323. The attended claude golden above pins the settings bytes
   # without the marker. With it, the plan must be that same golden plus
   # exactly one key in the --settings document: dropping the key again must
@@ -249,7 +249,10 @@ run_plan() {
   settings="$(jq -r '.args as $a | [range(0; $a | length) | select($a[.] == "--settings") | $a[. + 1]][0]' <<<"$output")"
   run jq -r '.permissions.defaultMode' <<<"$settings"
   assert_output "dontAsk"
-  output="$(jq -c '.args |= map(if (try (fromjson | type == "object" and has("permissions")) catch false) then (fromjson | del(.permissions) | tojson) else . end)' <<<"$(env CLOWN_UNATTENDED=1 timeout 120 "$CLOWN_BIN" --provider claude --print-launch-plan -- --version)")"
+  # clown#330: an unattended launch also denies the Monitor tool and puts the
+  # CLOWN_UNATTENDED marker (for clown-hook-allow's TaskStop rule) in the settings
+  # env; removing those three things must give back the attended golden.
+  output="$(jq -c '.args |= (. as $a | [range(0; $a | length) as $i | select(($a[$i] == "--disallowed-tools" and $a[$i + 1] == "Monitor") | not) | select(($i > 0 and $a[$i - 1] == "--disallowed-tools" and $a[$i] == "Monitor") | not) | $a[$i]]) | .args |= map(if (try (fromjson | type == "object" and has("permissions")) catch false) then (fromjson | del(.permissions) | del(.env.CLOWN_UNATTENDED) | tojson) else . end)' <<<"$(env CLOWN_UNATTENDED=1 timeout 120 "$CLOWN_BIN" --provider claude --print-launch-plan -- --version)")"
   assert_matches_golden claude
 }
 
