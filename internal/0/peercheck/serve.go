@@ -16,17 +16,34 @@ import (
 // or server that is not one path segment, and a path over the unix socket
 // limit.
 func ServeSocketPath(runtimeDir, principal, server string) (string, error) {
+	return sessionSocketPath(runtimeDir, principal, server+".sock")
+}
+
+// BrokerPort is the in-unit loopback port the policy-broker socket is relayed
+// from (clown#333): beside ServePortBase, which carries the one serve socket a
+// session has.
+const BrokerPort = ServePortBase + 1
+
+// BrokerSocketPath is the per-session policy-broker socket (clown#333):
+// <runtimeDir>/clown/serve/<principal>/broker.sock, in the session's own
+// directory beside its serve socket. Clown only names it; `spinclass serve`
+// creates it. The same limits as ServeSocketPath apply.
+func BrokerSocketPath(runtimeDir, principal string) (string, error) {
+	return sessionSocketPath(runtimeDir, principal, "broker.sock")
+}
+
+func sessionSocketPath(runtimeDir, principal, file string) (string, error) {
 	if !filepath.IsAbs(runtimeDir) {
-		return "", errors.New("XDG_RUNTIME_DIR is unset; nowhere to put the serve socket")
+		return "", errors.New("XDG_RUNTIME_DIR is unset; nowhere to put the session socket")
 	}
-	for _, seg := range []string{principal, server} {
+	for _, seg := range []string{principal, file} {
 		if seg == "" || seg == "." || seg == ".." || strings.ContainsAny(seg, "/\x00") {
 			return "", fmt.Errorf("%q is not a single path segment", seg)
 		}
 	}
-	p := filepath.Join(runtimeDir, "clown", "serve", principal, server+".sock")
+	p := filepath.Join(runtimeDir, "clown", "serve", principal, file)
 	if len(p) >= 108 {
-		return "", fmt.Errorf("serve socket path %q exceeds the unix socket limit", p)
+		return "", fmt.Errorf("session socket path %q exceeds the unix socket limit", p)
 	}
 	return p, nil
 }

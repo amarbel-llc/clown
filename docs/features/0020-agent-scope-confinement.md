@@ -880,6 +880,36 @@ What was built:
   port (`Launch.Serve`). The result gains `serve_socket`, and the
   capability list gains `frontend-serve-socket`. SpecVersion is unchanged.
 
+**A policy-broker socket (clown#333, spinclass#438), BUILT 2026-11-01; unit
+tests only.** `spinclass serve` is also the session's policy broker (moxy
+asks it before touching a file or blob), on a unix socket of its own, not a
+second socket on the bridge. Clown names the socket and tells both sides;
+it never speaks the protocol.
+- `cmd/clown/brokersocket.go` allocates
+  `$XDG_RUNTIME_DIR/clown/serve/<principal>/broker.sock`
+  (`agentscope.BrokerSocketPath`) in the same 0700 directory as the serve
+  socket, creates the directory, and passes the path to the spinclass serve
+  bridge's environment as `CLOWN_POLICY_BROKER`. Serve creates the socket
+  (0600). This runs confined or not. A session without a spinclass serve,
+  or without `XDG_RUNTIME_DIR`, allocates nothing and exports nothing, and
+  moxy then uses its static floor. The socket and directory are removed
+  when the session ends.
+- The agent gets the same variable once the serve is up and the session
+  still binds it. Unconfined its value is the socket path. The tent
+  executor is left out (it refuses any env and cannot reach the host
+  socket).
+- Confined, the unit cannot see the path: the socket is bound in as a
+  single inode and relayed from the in-unit loopback port
+  `agentscope.BrokerPort` (19001, `Launch.Broker`), and the variable's
+  value, for the agent and for every in-unit server's `Env` (moxy among
+  them), is that address (`127.0.0.1:19001`). The peer serve then sees is
+  `clown agent-relay` inside the unit's cgroup. So a client takes a value
+  starting with `/` as a unix path and anything else as host:port.
+- The relay row is added only if serve actually created the socket at
+  launch (systemd refuses a bind whose source is missing); otherwise
+  nothing is relayed or exported and the unit launches as before.
+- No handshake change, no new capability string.
+
 **Child lifetime: one shared child (changed plan).** An intermediate plan was
 one child per accepted connection. It is **withdrawn**: claude speaks
 streamable-HTTP to the bridge, and one MCP session spans several HTTP

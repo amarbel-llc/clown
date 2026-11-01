@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -115,6 +116,62 @@ func TestTwoSessionsNeverShareAServeSocket(t *testing.T) {
 	}
 	if !serveOnce(t, a, "u-1.service", 0, unitCgroup) || serveOnce(t, b, "u-2.service", 0, unitCgroup) {
 		t.Error("session a's unit must reach a's socket and be refused by b's")
+	}
+}
+
+// clown#333: the policy-broker socket sits in the session's own serve
+// directory, beside the serve socket, and is named under the same limits.
+func TestBrokerSocketPathIsBesideTheServeSocket(t *testing.T) {
+	got, err := BrokerSocketPath("/run/user/1001", "p1")
+	if err != nil || got != "/run/user/1001/clown/serve/p1/broker.sock" {
+		t.Errorf("BrokerSocketPath = %q, %v", got, err)
+	}
+	serve, _ := ServeSocketPath("/run/user/1001", "p1", "spinclass")
+	if filepath.Dir(got) != filepath.Dir(serve) {
+		t.Errorf("broker %q is not beside serve %q", got, serve)
+	}
+	other, _ := BrokerSocketPath("/run/user/1001", "p2")
+	if other == got {
+		t.Error("two sessions share a broker socket")
+	}
+	for _, p := range []string{"", ".", "..", "a/b"} {
+		if _, err := BrokerSocketPath("/run/user/1001", p); err == nil {
+			t.Errorf("principal %q accepted", p)
+		}
+	}
+	if _, err := BrokerSocketPath("", "p1"); err == nil {
+		t.Error("no runtime dir accepted")
+	}
+	if _, err := BrokerSocketPath("/run/user/1001", strings.Repeat("x", 100)); err == nil {
+		t.Error("an over-long path accepted")
+	}
+}
+
+// clown#333: the broker socket is bound into the unit as a single inode and
+// relayed from its own in-unit port; a launch without one adds neither.
+func TestLaunchBindsAndRelaysTheBrokerSocket(t *testing.T) {
+	l := testLaunch()
+	l.Broker = Relay{Listen: "127.0.0.1:19001", Socket: "/run/user/1001/clown/serve/p1/broker.sock"}
+	args, err := l.SystemdRunArgs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"--property=BindPaths=" + l.Broker.Socket, "--relay", "127.0.0.1:19001=" + l.Broker.Socket} {
+		if !slices.Contains(args, want) {
+			t.Errorf("missing %q in %v", want, args)
+		}
+	}
+	none, err := testLaunch().SystemdRunArgs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range none {
+		if strings.Contains(a, "broker.sock") || strings.Contains(a, ":19001=") {
+			t.Errorf("a launch without a broker mentions it: %q", a)
+		}
+	}
+	if BrokerPort == ServePortBase {
+		t.Error("the broker relay shares the serve relay's port")
 	}
 }
 

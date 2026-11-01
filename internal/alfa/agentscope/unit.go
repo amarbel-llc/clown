@@ -85,6 +85,10 @@ type Launch struct {
 	// bridge's peer-checked unix socket, bound in as a single inode and
 	// relayed from the in-unit port claude's manifest names. Zero: none.
 	Serve Relay
+	// Broker is the session's policy-broker socket (clown#333), which
+	// `spinclass serve` creates: bound in as a single inode and relayed from
+	// BrokerPort. Zero: none.
+	Broker Relay
 	// Unattended gives the unit its wall clock (unattendedRuntimeMax,
 	// clown#320). The frontend sets it from clown's unattended marker
 	// (CLOWN_UNATTENDED, or its [attach] carrier); it is not a spec field.
@@ -119,11 +123,15 @@ var resourceLimits = []string{
 const unattendedRuntimeMax = "RuntimeMaxSec=604800"
 
 // relays is every in-unit relay the shim starts: the egress proxy's, then the
-// forwards, then the serve socket's, then the statsd relay.
+// forwards, then the serve socket's, then the policy broker's, then the statsd
+// relay.
 func (l Launch) relays() []Relay {
 	rs := append([]Relay{{Listen: RelayAddr(), Socket: l.EgressSocket}}, l.Forwards...)
 	if l.Serve.Socket != "" {
 		rs = append(rs, l.Serve)
+	}
+	if l.Broker.Socket != "" {
+		rs = append(rs, l.Broker)
 	}
 	if l.StatsdSocket != "" {
 		rs = append(rs, Relay{Listen: StatsdAddr(), Socket: l.StatsdSocket, UDP: true})
@@ -231,6 +239,9 @@ func (l Launch) properties() []string {
 	}
 	if l.Serve.Socket != "" {
 		props = append(props, "BindPaths="+l.Serve.Socket)
+	}
+	if l.Broker.Socket != "" {
+		props = append(props, "BindPaths="+l.Broker.Socket)
 	}
 	if l.StatsdSocket != "" {
 		props = append(props, "BindPaths="+l.StatsdSocket)

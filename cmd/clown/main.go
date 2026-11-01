@@ -2163,6 +2163,16 @@ func runWithPluginHost(executor Executor, pluginDirs []string, flags parsedFlags
 		}
 	}
 
+	// clown#333: name the session's policy-broker socket for the spinclass
+	// serve. The broker is optional (moxy has a static floor), so a failure
+	// is logged and the session launches without one.
+	if routed, broker, err := routePolicyBroker(discovered, host.BridgePath, os.Getenv("XDG_RUNTIME_DIR"), flags.identity.Key); err != nil {
+		logger.Warn("policy broker: not allocated", "err", err)
+	} else if broker.Socket != "" {
+		discovered, flags.policyBroker = routed, broker
+		defer broker.cleanup() // after runManaged has stopped the bridge
+	}
+
 	// v2 (unlike v1): the --cheap-context picker no longer runs here, before
 	// any server starts. Fetching a per-tool catalog for grouping requires a
 	// resolved handshake address, so every discovered server is started
@@ -2257,6 +2267,7 @@ func runProvider(executor Executor, bound Command, logger *slog.Logger, flags pa
 			inUnit:       flags.agentScopeInUnit,
 			unit:         flags.agentScopeUnit,
 			serve:        flags.agentScopeServe,
+			broker:       flags.agentScopeBroker,
 			monitors:     flags.agentScopeMonitors,
 			argv:         append([]string{binary}, argv...),
 			extraEnv:     extraEnv,
@@ -2626,6 +2637,9 @@ func runManaged(
 			}
 		}
 	}
+
+	_, tent := executor.(*tentExecutor) // refuses any env, and cannot reach the host socket
+	applyPolicyBroker(&flags, &bound, !tent && brokerStarted(flags.policyBroker, report.Started, discovered), logger)
 
 	if flags.agentScopeSpec != "" {
 		flags.agentScopeForwards = frontendServerAddrs(host.Servers)
@@ -3355,6 +3369,11 @@ type parsedFlags struct {
 	// the started one's relay (set in runManaged), bound into the unit.
 	agentScopeServeRoutes map[string]agentscope.Relay
 	agentScopeServe       agentscope.Relay
+	// policyBroker is the session's policy-broker socket (clown#333), named at
+	// discovery for the spinclass serve; agentScopeBroker is its relay into
+	// the unit, set in runManaged only when serve created the socket.
+	policyBroker     policyBroker
+	agentScopeBroker agentscope.Relay
 	// mcpCollapse opts this launch into MCP-collapse mode (all-or-nothing for
 	// the prototype): after the discovered upstream MCP servers are started,
 	// clown launches ONE clown-mcp-collapse aggregator fronting them all and

@@ -14,6 +14,12 @@ import (
 // from its own session, so only the session's own unit may reach it.
 const servePlugin = "spinclass"
 
+// isServeServer is whether d is the spinclass serve: spinclass's bridged
+// frontend server.
+func isServeServer(d pluginhost.DiscoveredServer, bridgePath string) bool {
+	return d.PluginName == servePlugin && d.Def.Scope == pluginhost.ScopeFrontend && d.Def.Command == bridgePath
+}
+
 // routeServeSockets moves, under --agent-scope, spinclass's bridged frontend
 // server from loopback TCP to the session's serve socket: its bridge gets
 // --listen-unix <socket> --peer-unit <unit>, so it admits only the unit (and
@@ -26,7 +32,7 @@ func routeServeSockets(discovered []pluginhost.DiscoveredServer, bridgePath, run
 	out := slices.Clone(discovered)
 	relays := map[string]agentscope.Relay{}
 	for i, d := range out {
-		if d.PluginName != servePlugin || d.Def.Scope != pluginhost.ScopeFrontend || d.Def.Command != bridgePath {
+		if !isServeServer(d, bridgePath) {
 			continue
 		}
 		if len(relays) > 0 {

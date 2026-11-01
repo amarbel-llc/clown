@@ -46,6 +46,7 @@ func runInAgentScope(req agentScopeRequest, logger *slog.Logger) int {
 	launch.Principal = req.principal
 	launch.IdleSocket = req.idleSocket
 	launch.Serve = req.serve
+	launch.Broker = req.broker
 	wireAgentScopeStatus(&launch, req.status, req.onStarted)
 	// The unit's MainPID is this session's provider pid; a restart's
 	// relaunch tells its session so (clown#329).
@@ -113,6 +114,9 @@ type agentScopeRequest struct {
 	unit string
 	// serve is the session's serve socket relay (F12); zero: none.
 	serve agentscope.Relay
+	// broker is the session's policy-broker socket relay (clown#333); zero:
+	// none.
+	broker agentscope.Relay
 	// onStarted is called once a SIGTERM to clown reaches systemd-run, with
 	// a kill of the unit.
 	onStarted func(kill func() error)
