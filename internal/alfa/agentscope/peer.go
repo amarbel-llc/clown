@@ -12,6 +12,11 @@ import (
 // XMPP's 5222. The socket itself, and its peer check, live in peercheck.
 const ServePortBase = 19000
 
+// BrokerPort is the in-unit loopback port the policy-broker socket is relayed
+// from (clown#333): beside ServePortBase, which carries the one serve socket a
+// session has.
+const BrokerPort = ServePortBase + 1
+
 // The unit-peer primitives live in peercheck, which other modules link for
 // their own sockets; these keep agentscope's call sites short.
 

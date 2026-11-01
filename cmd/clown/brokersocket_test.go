@@ -7,8 +7,8 @@ import (
 	"slices"
 	"testing"
 
-	"code.linenisgreat.com/clown/internal/agentscope"
-	"code.linenisgreat.com/clown/internal/pluginhost"
+	"code.linenisgreat.com/clown/internal/alfa/agentscope"
+	"code.linenisgreat.com/clown/internal/alfa/pluginhost"
 )
 
 // shortRuntimeDir is a runtime dir short enough for a unix socket path

@@ -8,8 +8,9 @@ import (
 	"path/filepath"
 	"slices"
 
-	"code.linenisgreat.com/clown/internal/agentscope"
-	"code.linenisgreat.com/clown/internal/pluginhost"
+	"code.linenisgreat.com/clown/internal/0/peercheck"
+	"code.linenisgreat.com/clown/internal/alfa/agentscope"
+	"code.linenisgreat.com/clown/internal/alfa/pluginhost"
 )
 
 // policyBrokerEnv is the one variable that names the session's policy-broker
@@ -43,7 +44,7 @@ func routePolicyBroker(discovered []pluginhost.DiscoveredServer, bridgePath, run
 		if broker.Socket != "" {
 			return nil, policyBroker{}, fmt.Errorf("plugin %s declares more than one frontend server; one policy broker per session is supported", servePlugin)
 		}
-		sock, err := agentscope.BrokerSocketPath(runtimeDir, principal)
+		sock, err := peercheck.BrokerSocketPath(runtimeDir, principal)
 		if err != nil {
 			return nil, policyBroker{}, fmt.Errorf("policy broker socket for %s: %w", d.Name(), err)
 		}

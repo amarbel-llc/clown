@@ -19,11 +19,6 @@ func ServeSocketPath(runtimeDir, principal, server string) (string, error) {
 	return sessionSocketPath(runtimeDir, principal, server+".sock")
 }
 
-// BrokerPort is the in-unit loopback port the policy-broker socket is relayed
-// from (clown#333): beside ServePortBase, which carries the one serve socket a
-// session has.
-const BrokerPort = ServePortBase + 1
-
 // BrokerSocketPath is the per-session policy-broker socket (clown#333):
 // <runtimeDir>/clown/serve/<principal>/broker.sock, in the session's own
 // directory beside its serve socket. Clown only names it; `spinclass serve`

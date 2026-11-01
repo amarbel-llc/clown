@@ -887,7 +887,7 @@ second socket on the bridge. Clown names the socket and tells both sides;
 it never speaks the protocol.
 - `cmd/clown/brokersocket.go` allocates
   `$XDG_RUNTIME_DIR/clown/serve/<principal>/broker.sock`
-  (`agentscope.BrokerSocketPath`) in the same 0700 directory as the serve
+  (`peercheck.BrokerSocketPath`) in the same 0700 directory as the serve
   socket, creates the directory, and passes the path to the spinclass serve
   bridge's environment as `CLOWN_POLICY_BROKER`. Serve creates the socket
   (0600). This runs confined or not. A session without a spinclass serve,

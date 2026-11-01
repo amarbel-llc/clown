@@ -10,6 +10,12 @@ import internal "code.linenisgreat.com/clown/internal/0/peercheck"
 // (clown#301).
 type ServeConn = internal.ServeConn
 
+// BrokerSocketPath is the per-session policy-broker socket (clown#333):
+// <runtimeDir>/clown/serve/<principal>/broker.sock, in the session's own
+// directory beside its serve socket. Clown only names it; `spinclass serve`
+// creates it. The same limits as ServeSocketPath apply.
+var BrokerSocketPath = internal.BrokerSocketPath
+
 // CheckUnitCgroup reports whether pid runs in the agent unit's cgroup:
 // .../clown-agent.slice/<unitName>. read resolves a pid's cgroup (nil:
 // ProcCgroup).
