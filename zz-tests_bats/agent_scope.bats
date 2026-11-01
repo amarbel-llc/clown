@@ -337,6 +337,44 @@ run_probe() {
   [[ "$(jq -r .error "$RESULT")" == *'"127.0.0.1:8080"'* ]]
 }
 
+# connect_status HOST:PORT prints the proxy's answer to a CONNECT from inside
+# the unit (403 when the destination is not on the allowlist).
+connect_status() {
+  run_in_unit 'curl -s -o /dev/null --noproxy "" -x "$HTTPS_PROXY" -p -m 5 -w "connect %{http_connect}\n" "http://'"$1"'/" || true'
+}
+
+@test "agent_scope: an omitted egress_allow logs the default list at proxy start" {
+  run run_in_unit 'echo UNIT-RAN'
+  echo "$output"
+  [ "$status" -eq 0 ]
+  [ "$(grep -c 'egress allowlist' <<<"$output")" -eq 1 ]
+  grep 'egress allowlist' <<<"$output" | grep -q 'source=default'
+  grep 'egress allowlist' <<<"$output" | grep -q 'api.anthropic.com:443'
+}
+
+@test "agent_scope: an explicit egress_allow list is the whole list, logged with source=spec" {
+  jq '.egress_allow = ["cache.example.org:443"]' "$WT/spec.json" >"$WT/spec.new" && mv "$WT/spec.new" "$WT/spec.json"
+  run connect_status api.anthropic.com:443
+  echo "$output"
+  [ "$status" -eq 0 ]
+  grep -qx 'connect 403' <<<"$output"
+  [ "$(grep -c 'egress allowlist' <<<"$output")" -eq 1 ]
+  line="$(grep 'egress allowlist' <<<"$output")"
+  grep -q 'source=spec' <<<"$line"
+  grep -q 'allow=cache.example.org:443' <<<"$line"
+  [[ $line != *api.anthropic.com* ]]
+}
+
+@test "agent_scope: an explicit empty egress_allow denies even the model API" {
+  jq '.egress_allow = []' "$WT/spec.json" >"$WT/spec.new" && mv "$WT/spec.new" "$WT/spec.json"
+  run connect_status api.anthropic.com:443
+  echo "$output"
+  [ "$status" -eq 0 ]
+  grep -qx 'connect 403' <<<"$output"
+  grep 'egress allowlist' <<<"$output" | grep -q 'source=spec'
+  grep 'egress allowlist' <<<"$output" | grep -q 'allow=""'
+}
+
 @test "agent_scope: a unit whose shim refuses before the provider starts leaves an error result" {
   cd "$WT" || return 1
   run -127 "$CLOWN_BIN" agent-scope-run --spec "$WT/spec.json" -- /nonexistent/provider </dev/null

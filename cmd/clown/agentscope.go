@@ -1023,7 +1023,9 @@ func runAgentScopeCapabilities(args []string) int {
 // `clown agent-scope-run --spec <path> [--forward HOST:PORT]... -- argv...`.
 // --forward stands in for a frontend-class plugin server's address. It exists
 // for the host confinement test (zz-tests_bats/agent_scope.bats) and for
-// probing; it takes no provider, plugin host or prompt.
+// probing; it takes no provider, plugin host or prompt. Its launcher logs
+// (the effective egress allowlist, refused destinations) go to stderr, which
+// is where a probe reads them.
 func runAgentScopeRun(args []string) int {
 	var specPath string
 	var forwards []string
@@ -1047,5 +1049,6 @@ func runAgentScopeRun(args []string) int {
 		fmt.Fprintln(os.Stderr, "clown agent-scope-run: usage: clown agent-scope-run --spec <path> -- <argv>")
 		return 2
 	}
-	return runInAgentScope(agentScopeRequest{specPath: specPath, forwardAddrs: forwards, argv: args}, nil)
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	return runInAgentScope(agentScopeRequest{specPath: specPath, forwardAddrs: forwards, argv: args}, logger)
 }
