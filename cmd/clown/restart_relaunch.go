@@ -429,6 +429,10 @@ type frontendRestarter struct {
 	// queue holds a restart a turn start cancelled for its retry at the next
 	// idle transition (restart_defer.go); nil: a turn cancel is final.
 	queue *restartQueue
+	// jobRunning reports a running spinclass merge/check job in the session
+	// (runningSpinclassJob), with a description; a retry that would stop the
+	// provider under one is the final cancel instead. nil: never.
+	jobRunning func() (string, bool)
 }
 
 // cancelled records a restart dropped after spinclass consumed the request:
@@ -459,6 +463,10 @@ func (fr frontendRestarter) restart(req restartRequest, v preflightVerdict) {
 		return
 	}
 	if why, expired := fr.retryExpired(attempt); expired {
+		fr.cancelled(attempt.kind, why)
+		return
+	}
+	if why, blocked := fr.retryBlockedByJob(attempt); blocked {
 		fr.cancelled(attempt.kind, why)
 		return
 	}
@@ -496,6 +504,11 @@ func (fr frontendRestarter) restart(req restartRequest, v preflightVerdict) {
 	// requester asks again.
 	if cancelOnTurn && fr.busy != nil && fr.busy() {
 		fr.turnCancelled(sessionstatus.RefusalTurnStarted, "a turn started during the countdown", attempt)
+		return
+	}
+	// Again just before the stop: a job can start while a retry's countdown runs.
+	if why, blocked := fr.retryBlockedByJob(attempt); blocked {
+		fr.cancelled(attempt.kind, why)
 		return
 	}
 	// The plan is stored only while the provider still runs, checked under

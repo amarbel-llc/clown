@@ -1,8 +1,12 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -14,13 +18,21 @@ import (
 // under the SAME verdict, and the guard is unchanged: it never stops the
 // provider while a turn runs (every attempt ends in the same busy checks).
 //
-// TRADEOFF, read before relying on this: the retry acts on a verdict up to
-// restartDeferWindow old, and does not re-check the requester's `restart`
-// right (spinclass checks it only when the request is made, not at preflight;
-// there is nothing for clown to re-check it against). The bound keeps that
-// stale window small: 3 attempts, or restartDeferWindow from the first
-// verdict, whichever comes first. The profile gate IS re-checked on every
-// attempt. The cleaner fix is a spinclass `restart-preflight --rearm`, which
+// TRADEOFF, read before relying on this: the retry acts on a verdict from
+// before the turn that cancelled it, up to restartDeferWindow old, and does
+// not re-run spinclass's plan. It does not re-check the requester's `restart`
+// right (spinclass checks it only when the request is made) nor that the
+// [session-entry].restart hand-off is still configured (clown cannot read the
+// trusted sweatfile hierarchy cheaply and must not guess its trust rules). It
+// DOES re-check the profile gate on every attempt and spinclass's
+// running-job guard (retryBlockedByJob: a merge/check job started by the
+// turn that cancelled the restart makes the retry the final cancel). The
+// bound keeps the stale window small: 3 attempts, or restartDeferWindow from
+// the verdict (measured from startAttempt, just after the preflight, so a
+// retry can begin a little after spinclass's own in-flight window ends),
+// whichever comes first. Each attempt shows a fresh 30 s countdown, and the
+// holders spinclass told "restarting now" hear nothing until the restart
+// happens or the final cancel is recorded. The cleaner fix is a spinclass `restart-preflight --rearm`, which
 // would re-check the right and supersede the restart stamp (so its watchdog
 // does not report a restart that was re-armed); it needs spinclass to change
 // first and is the follow-up if the stale window ever matters. Only the final
@@ -129,6 +141,51 @@ func (fr frontendRestarter) retryExpired(d deferredRestart) (string, bool) {
 		return "", false
 	}
 	return fmt.Sprintf("%s; the retry window of %s passed before the turn ended", d.why, restartDeferWindow), true
+}
+
+// spinclassJob is the part of spinclass's per-worktree job record
+// (<worktree>/.spinclass/job.json, spinclass internal/alfa/job) that its own
+// restart guard reads.
+type spinclassJob struct {
+	ID       string `json:"id"`
+	Kind     string `json:"kind"`
+	Status   string `json:"status"`
+	ServePID int    `json:"serve_pid"`
+}
+
+// runningSpinclassJob mirrors spinclass's restart guard (restartPlan:
+// job.Read, Status "running"): a merge/check job is running in worktree when
+// its record says so and the serve process that owns it is alive (a record
+// whose serve died reads as interrupted). A missing, unreadable or finished
+// record is no job, as for spinclass. The worker can write .spinclass, so a
+// forged record can only cost a retry (it becomes the final cancel) or hide a
+// job; it is a guard against the honest race, not a boundary.
+func runningSpinclassJob(worktree string) (string, bool) {
+	data, err := os.ReadFile(filepath.Join(worktree, ".spinclass", "job.json"))
+	if err != nil {
+		return "", false
+	}
+	var j spinclassJob
+	if json.Unmarshal(data, &j) != nil || j.Status != "running" || j.ServePID <= 0 || syscall.Kill(j.ServePID, 0) != nil {
+		return "", false
+	}
+	return fmt.Sprintf("%s job %s", printableOneLine(j.Kind), printableOneLine(j.ID)), true
+}
+
+// retryBlockedByJob reports, for a retry (not a first attempt), a running
+// spinclass merge/check job and the final cancel's text. The retry acts on a
+// verdict from before the turn that cancelled it, so spinclass's own
+// running-job guard has not seen what that turn started; a stop now would
+// kill the job. Called before the countdown and again before the stop.
+func (fr frontendRestarter) retryBlockedByJob(d deferredRestart) (string, bool) {
+	if d.attempts <= 1 || fr.jobRunning == nil {
+		return "", false
+	}
+	desc, running := fr.jobRunning()
+	if !running {
+		return "", false
+	}
+	return fmt.Sprintf("%s; not retried: a %s is running in this session, which the restart would kill (spinclass checked this only before the turn that cancelled it)", d.why, desc), true
 }
 
 // isTurnCancel reports whether a countdown's note says a turn start cancelled it.

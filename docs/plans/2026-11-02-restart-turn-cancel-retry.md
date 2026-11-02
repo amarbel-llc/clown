@@ -1,8 +1,8 @@
 # Restart cancelled by a turn start: bounded retry (design note)
 
-Status: implemented on branch, not deployed. Code: `cmd/clown/restart_defer.go`,
-the call sites in `restart_relaunch.go` and `restart_idle.go`. Tests:
-`cmd/clown/restart_defer_test.go`.
+Status: implemented on master (see the git log for the SHAs), not deployed.
+Code: `cmd/clown/restart_defer.go`, the call sites in `restart_relaunch.go` and
+`restart_idle.go`. Tests: `cmd/clown/restart_defer_test.go`.
 
 ## The problem
 
@@ -29,32 +29,60 @@ On a turn-start cancel (`RefusalCountdown` whose note ends in
 was given and retries the countdown at the next idle transition, with no
 preflight. Bounds: 3 attempts in total, or `restartDeferWindow` (2 minutes,
 spinclass's own in-flight window) from the first verdict, whichever comes
-first. Only the final cancel is recorded as a refusal. Everything else is
-unchanged: an operator's or viewer's cancel, a profile-gate refusal and a
-`now` verdict are never retried, and every attempt still ends in the same busy
-checks, so the provider is never stopped mid-turn. The profile gate is
-re-checked on every attempt. A newer queued request replaces a deferred one.
+first. Only the final cancel is recorded as a refusal. Not retried: an
+operator's or viewer's cancel, a profile-gate refusal, a `now` verdict. A
+newer queued request replaces a deferred one. Nothing stops the provider
+mid-turn: every attempt ends in the same busy checks.
 
-`spinclass restart-watch` is silent once the relaunched session has stamped
-its return (R: `runRestartWatch`), so a refusal-free retried success produces
-no false CANCELLED wake. A restart whose retries are exhausted records its
-refusal well inside the watchdog's 5 minutes.
+Re-checked on every retry:
+- the profile gate (the same dry run as the first attempt);
+- spinclass's running-job guard, mirrored from `restartPlan`
+  (`runningSpinclassJob`: `<worktree>/.spinclass/job.json` is "running" with a
+  live serve pid). A merge/check job started by the turn that cancelled the
+  restart makes the retry the final cancel, with the job named, before the
+  countdown and again before the stop. Without this the retry would stop the
+  provider under the job, which spinclass's guard exists to prevent.
 
-## The tradeoff to know about
+## What the retry does NOT re-check
 
-The retry acts on a verdict up to 2 minutes old and does NOT re-check the
-requester's `restart` right: spinclass checks it only when the request is made,
-not at preflight, and clown has nothing to re-check it against. A right revoked
-inside that window is still honoured. The bound keeps the window small.
+The retry acts on a verdict from before the cancelling turn, up to 2 minutes
+old, and does not re-run spinclass's plan:
+- the requester's `restart` right: spinclass checks it only when the request is
+  made, so a right revoked inside the window is still honoured;
+- that the `[session-entry].restart` hand-off is still configured: clown cannot
+  read the trusted sweatfile hierarchy cheaply, and must not guess its trust
+  rules;
+- anything else `restartPlan` checks that changed since (a session that became
+  closed is covered separately by the peek before the relaunch exec).
 
-## Cleaner follow-up
+Also, the 2-minute window starts at `startAttempt`, just after the preflight, so
+a retry can begin a little after spinclass's own in-flight window ends. Each
+attempt shows a fresh 30 s countdown, and the holders spinclass told
+"restarting now" hear nothing until the restart happens or the final cancel is
+recorded.
 
-A spinclass `restart-preflight --rearm`: while the restart is in flight and
-the session has not returned, restore the request from the stamp after
-re-running the checks plus the requester's right, and supersede the stamp so
-its watchdog does not report a re-armed restart. It needs spinclass to change
-first (that repo's owner has proposed it and has not started). With it the
-retry would re-ask instead of acting on a held verdict.
+## What a failed retry looks like to the requester
+
+The final cancel is recorded in the status file, and spinclass's `restart-watch`
+(5 minutes after the preflight, unconfined sessions only) reports it. The final
+attempt only happens at an idle transition, which can be later than that, and a
+frontend that exits first only logs "exiting with a deferred restart never
+retried" (`noteExit`): in that case the requester hears only the watchdog's
+generic "did not come back" message, or nothing for a confined session. So the
+requester must still check that the session came back. `restart-watch` is silent
+once the relaunched session has stamped its return (R: `runRestartWatch`), so a
+retried success produces no false CANCELLED wake.
+
+## The cleaner fix, and where to swap it in
+
+A spinclass `restart-preflight --rearm`: while the restart is in flight and the
+session has not returned, restore the request after re-running the whole
+restart plan (including the requester's right and the running-job guard) and
+supersede the stamp so its watchdog does not report a re-armed restart. It
+needs spinclass to change first. The retry call site is the one marked
+SWAP POINT in `idleRunner.preflightQueued` (`restart_idle.go`); replacing it
+with a re-arming preflight makes `retryBlockedByJob` and the age rules in
+`restart_defer.go` unnecessary.
 
 ## Not verified
 

@@ -229,7 +229,10 @@ runs.
 The retry acts on a verdict up to 2 minutes old and does not re-check the
 requester's
 .Li restart
-right; the profile check is re-run on every attempt.
+right or that the restart hand-off is still configured; the profile check is
+re-run on every attempt, and a retry is dropped (and reported as the final
+cancel) while a spinclass merge or check job runs in the session, since the
+stop would kill it.
 A cancelled countdown (a viewer's cancel) and a profile refusal are not
 retried.
 spinclass has already consumed the request, so a cancel that is not retried,

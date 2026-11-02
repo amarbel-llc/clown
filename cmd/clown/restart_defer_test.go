@@ -2,6 +2,9 @@ package main
 
 import (
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -203,6 +206,112 @@ func TestNewerRequestSupersedesADeferredRestart(t *testing.T) {
 	h.q.put(restartRequest{When: "idle", Reason: "newer"})
 	if h.q.hasDeferred() {
 		t.Fatal("a deferred restart survived a newer request")
+	}
+}
+
+// setJobs makes the restarter see a spinclass merge/check job as jobs says.
+func (h *deferHarness) setJobs(jobs func() (string, bool)) {
+	h.fr.jobRunning = jobs
+	h.idle.restart = h.fr.restart // fr is a value; rebind the idle runner to the updated copy
+}
+
+// The retry acts on a verdict spinclass issued before the turn that cancelled
+// it, so spinclass's running-job guard (restartPlan) has not been re-run: a
+// merge/check job that turn started would be killed by the stop. The retry is
+// therefore dropped as the final cancel, with the job named.
+func TestRetryIsFinalWhileAJobRuns(t *testing.T) {
+	h := newDeferHarness(t, alwaysTurnCancelled, nil)
+	consulted := 0
+	h.setJobs(func() (string, bool) { consulted++; return "merge job merge-1", true })
+	h.first()
+	if consulted != 0 {
+		t.Fatalf("the first attempt consulted the job guard %d times; spinclass's preflight just ran it", consulted)
+	}
+	n := *h.calls
+	h.idle.preflightQueued()
+	if *h.calls != n || *h.stops != 0 {
+		t.Fatalf("countdowns ran %d more, stops %d; a retry went ahead under a running job", *h.calls-n, *h.stops)
+	}
+	if len(*h.refusals) != 1 || !strings.Contains((*h.refusals)[0].Text, "merge job merge-1") || !strings.Contains((*h.refusals)[0].Text, "would kill") {
+		t.Fatalf("refusals = %+v, want one naming the running job", *h.refusals)
+	}
+	if h.q.hasDeferred() {
+		t.Fatal("a restart blocked by a running job is still deferred")
+	}
+}
+
+// A job that starts during the retry's own countdown is caught before the stop.
+func TestRetryChecksTheJobGuardAgainBeforeTheStop(t *testing.T) {
+	running := false
+	h := newDeferHarness(t, func(call int) (bool, string) {
+		if call == 1 {
+			return alwaysTurnCancelled(call)
+		}
+		running = true
+		return true, "inline countdown elapsed"
+	}, nil)
+	h.setJobs(func() (string, bool) { return "check job check-2", running })
+	h.first()
+	h.idle.preflightQueued()
+	if *h.stops != 0 || len(*h.refusals) != 1 || !strings.Contains((*h.refusals)[0].Text, "check job check-2") {
+		t.Fatalf("stops %d, refusals %+v", *h.stops, *h.refusals)
+	}
+}
+
+func TestRetryProceedsWhenNoJobRuns(t *testing.T) {
+	h := newDeferHarness(t, func(call int) (bool, string) {
+		if call == 1 {
+			return alwaysTurnCancelled(call)
+		}
+		return true, "inline countdown elapsed"
+	}, nil)
+	h.setJobs(func() (string, bool) { return "", false })
+	h.first()
+	h.idle.preflightQueued()
+	if *h.stops != 1 || len(*h.refusals) != 0 {
+		t.Fatalf("stops %d, refusals %+v", *h.stops, *h.refusals)
+	}
+}
+
+// runningSpinclassJob mirrors spinclass's own guard (job.Read on
+// <worktree>/.spinclass/job.json: "running" with a live serve pid): a stale
+// record, a finished job, a missing or unreadable file all read as no job.
+func TestRunningSpinclassJob(t *testing.T) {
+	write := func(t *testing.T, body string) string {
+		t.Helper()
+		wt := t.TempDir()
+		if body == "" {
+			return wt
+		}
+		if err := os.MkdirAll(filepath.Join(wt, ".spinclass"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(wt, ".spinclass", "job.json"), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return wt
+	}
+	live := os.Getpid()
+	for name, c := range map[string]struct {
+		body    string
+		running bool
+	}{
+		"running with a live serve": {fmt.Sprintf(`{"id":"j1","kind":"merge","status":"running","serve_pid":%d}`, live), true},
+		"running but serve is dead": {`{"id":"j1","kind":"merge","status":"running","serve_pid":1073741823}`, false},
+		"running with no pid":       {`{"id":"j1","kind":"merge","status":"running"}`, false},
+		"succeeded":                 {fmt.Sprintf(`{"id":"j1","kind":"merge","status":"succeeded","serve_pid":%d}`, live), false},
+		"unreadable":                {`not json`, false},
+		"no job file":               {``, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			desc, running := runningSpinclassJob(write(t, c.body))
+			if running != c.running {
+				t.Fatalf("running = %v (%q), want %v", running, desc, c.running)
+			}
+			if running && !strings.Contains(desc, "merge job j1") {
+				t.Fatalf("description %q does not name the job", desc)
+			}
+		})
 	}
 }
 

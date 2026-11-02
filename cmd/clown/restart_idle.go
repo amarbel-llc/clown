@@ -294,7 +294,11 @@ func (r *idleRunner) preflightQueued() {
 		// Nothing newly queued: a restart a turn start cancelled gets its
 		// retry here, under the verdict it already has and with no
 		// preflight (restart_defer.go). A newer request, taken above, has
-		// already replaced it.
+		// already replaced it. SWAP POINT: once spinclass has a
+		// `restart-preflight --rearm` that re-runs the whole restart plan,
+		// this is the one call to replace with a re-arming preflight, which
+		// makes the running-job check and the age rules in restart_defer.go
+		// unnecessary.
 		if dreq, dv, ok := r.queue.takeDeferred(); ok {
 			logSelfClose(r.logPath, "retrying a deferred restart at the idle transition: %s", sanitizeRestartReason(dv.Reason))
 			r.restart(dreq, dv)
