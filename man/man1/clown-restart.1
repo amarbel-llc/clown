@@ -180,8 +180,8 @@ A forged
 from a process running as the session's user outside an agent unit can
 therefore make the frontend consume an authorized
 .Cm idle
-request mid-turn (the busy cancel then drops it, and its requester must ask
-again) and so block a close for that time; this is the same class of harm
+request mid-turn (the busy cancel then defers it, and if its retries run out
+its requester must ask again) and so block a close for that time; this is the same class of harm
 as the forged idle poke above.
 .Ss The restart
 On a
@@ -215,12 +215,26 @@ A detached session restarts at once.
 A turn that starts during the countdown (the self-close plugin's
 UserPromptSubmit hook,
 .Cm clown idle-notify --busy )
-cancels the restart, except under a
+cancels that attempt, except under a
 .Li now
-verdict.
-So does a cancelled countdown or a profile refusal.
-spinclass has already consumed the request, so a cancel is reported on the
-frontend's standard error and in the log, and the requester must ask again.
+verdict, and is not retried at once: the frontend keeps the verdict spinclass
+issued and runs the countdown again at the next idle transition, with no new
+preflight (a second
+.Ic restart-preflight
+answers
+.Li none ) .
+It gives up after 3 attempts in all, or 2 minutes after the verdict,
+whichever comes first, and the retry never stops the provider while a turn
+runs.
+The retry acts on a verdict up to 2 minutes old and does not re-check the
+requester's
+.Li restart
+right; the profile check is re-run on every attempt.
+A cancelled countdown (a viewer's cancel) and a profile refusal are not
+retried.
+spinclass has already consumed the request, so a cancel that is not retried,
+or the last one, is reported on the frontend's standard error and in the log
+and recorded in the status file, and the requester must ask again.
 A turn interrupted before its Stop leaves the turn-running mark set, so a
 restart queued then waits for the next Stop.
 .Pp
