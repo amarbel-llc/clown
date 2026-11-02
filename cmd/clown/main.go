@@ -1155,6 +1155,7 @@ func runWithFlags(flags parsedFlags) int {
 		notify:       os.Stderr,
 		worktree:     cwd,
 		logPath:      restartLog,
+		queue:        restarts, // a turn-cancelled restart is retried at the next idle (restart_defer.go)
 	}
 	idleDir, idleSock, restartTrig, sessionStatus, closeIdle := armSelfClose(flags, root, restarts, restarter.restart, turnRunning)
 	defer closeIdle()

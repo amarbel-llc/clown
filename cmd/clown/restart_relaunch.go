@@ -426,6 +426,9 @@ type frontendRestarter struct {
 	// status writer, which does not exist when the restarter is built); nil:
 	// nothing is recorded.
 	refusal func(sessionstatus.RestartRefusal)
+	// queue holds a restart a turn start cancelled for its retry at the next
+	// idle transition (restart_defer.go); nil: a turn cancel is final.
+	queue *restartQueue
 }
 
 // cancelled records a restart dropped after spinclass consumed the request:
@@ -449,8 +452,14 @@ func (fr frontendRestarter) cancelled(kind, why string) {
 }
 
 func (fr frontendRestarter) restart(req restartRequest, v preflightVerdict) {
+	// First, so a retry's bookkeeping is consumed whatever happens next.
+	attempt := fr.queue.startAttempt(req, v)
 	if !providerRunning.Load() {
 		logSelfClose(fr.logPath, "restart (%s): no provider is running; not restarting", fr.principal)
+		return
+	}
+	if why, expired := fr.retryExpired(attempt); expired {
+		fr.cancelled(attempt.kind, why)
 		return
 	}
 	if fr.profileCheck != nil {
@@ -472,15 +481,21 @@ func (fr frontendRestarter) restart(req restartRequest, v preflightVerdict) {
 		proceed, how := fr.countdown(reason, cancelOnTurn)
 		logSelfClose(fr.logPath, "restart (%s): countdown: %s", fr.principal, how)
 		if !proceed {
-			fr.cancelled(sessionstatus.RefusalCountdown, how)
+			if cancelOnTurn && isTurnCancel(how) {
+				fr.turnCancelled(sessionstatus.RefusalCountdown, how, attempt)
+			} else {
+				fr.cancelled(sessionstatus.RefusalCountdown, how)
+			}
 			return
 		}
 	}
 	// Re-checked after the countdown: a turn that started during it is not
-	// stopped mid-turn. The request was consumed by the preflight, so the
-	// restart is dropped; the requester asks again.
+	// stopped mid-turn. The request was consumed by the preflight; it is
+	// deferred to the next idle transition while its bound allows (see
+	// restart_defer.go for what that acts on), else dropped and the
+	// requester asks again.
 	if cancelOnTurn && fr.busy != nil && fr.busy() {
-		fr.cancelled(sessionstatus.RefusalTurnStarted, "a turn started during the countdown")
+		fr.turnCancelled(sessionstatus.RefusalTurnStarted, "a turn started during the countdown", attempt)
 		return
 	}
 	// The plan is stored only while the provider still runs, checked under

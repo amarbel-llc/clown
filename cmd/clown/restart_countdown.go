@@ -78,7 +78,7 @@ func (c restartCountdown) proceed(reason string, cancelOnTurn bool) (bool, strin
 		ok, decided, note := c.poshModal(reason)
 		if decided {
 			if ok && busy() {
-				return false, note + "; a turn started during the countdown, not restarting"
+				return false, note + "; " + turnStartedNote
 			}
 			return ok, note
 		}
@@ -90,7 +90,7 @@ func (c restartCountdown) proceed(reason string, cancelOnTurn bool) (bool, strin
 	fmt.Fprintf(c.notify, "\r\nclown: restart pending (%s); restarting in %ds\r\n", reason, restartCountdownSeconds)
 	for waited := time.Duration(0); waited < restartCountdownSeconds*time.Second; waited += countdownPoll {
 		if busy() {
-			return false, how + "a turn started during the countdown, not restarting"
+			return false, how + turnStartedNote
 		}
 		c.sleep(countdownPoll)
 	}

@@ -216,6 +216,8 @@ func (r *idleRunner) noteExit() {
 		logSelfClose(r.logPath, "frontend (%s) exiting with a restart check in flight: spinclass may have consumed the request; the requester must ask again", r.preflight.principal)
 	case r.queue != nil && r.queue.hasPending():
 		logSelfClose(r.logPath, "frontend (%s) exiting with a restart queued and never asked about", r.preflight.principal)
+	case r.queue != nil && r.queue.hasDeferred():
+		logSelfClose(r.logPath, "frontend (%s) exiting with a deferred restart never retried: spinclass consumed the request; the requester must ask again", r.preflight.principal)
 	}
 }
 
@@ -289,6 +291,14 @@ func (r *idleRunner) onIdle() {
 func (r *idleRunner) preflightQueued() {
 	req, ok := r.queue.take()
 	if !ok {
+		// Nothing newly queued: a restart a turn start cancelled gets its
+		// retry here, under the verdict it already has and with no
+		// preflight (restart_defer.go). A newer request, taken above, has
+		// already replaced it.
+		if dreq, dv, ok := r.queue.takeDeferred(); ok {
+			logSelfClose(r.logPath, "retrying a deferred restart at the idle transition: %s", sanitizeRestartReason(dv.Reason))
+			r.restart(dreq, dv)
+		}
 		return
 	}
 	principal := r.preflight.principal

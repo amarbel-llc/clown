@@ -55,12 +55,20 @@ type controlReply struct {
 type restartQueue struct {
 	mu      sync.Mutex
 	pending *restartRequest
+
+	// deferred and resuming hold a restart a turn start cancelled and its
+	// retry in progress (restart_defer.go). clock is time.Now when nil.
+	deferred, resuming *deferredRestart
+	clock              func() time.Time
 }
 
+// put queues r, replacing a queued request and a deferred restart: a newer
+// request is preflighted afresh.
 func (q *restartQueue) put(r restartRequest) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.pending = &r
+	q.deferred = nil
 }
 
 func (q *restartQueue) hasPending() bool {
