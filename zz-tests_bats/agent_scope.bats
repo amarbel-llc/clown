@@ -532,7 +532,9 @@ s.serve_forever()
     sleep 0.1
   done
   [[ -s $WT/api.port ]]
-  export CLOWN_MODEL_UPSTREAM="http://127.0.0.1:$(cat "$WT/api.port")"
+  local port
+  port="$(cat "$WT/api.port")"
+  export CLOWN_MODEL_UPSTREAM="http://127.0.0.1:$port"
 }
 
 @test "agent_scope: with a token file the unit holds only the placeholder and the frontend injects the bearer" {
@@ -566,10 +568,10 @@ s.serve_forever()
   cat "$WT/api.log"
   grep -qx 'POST /v1/messages?beta=true Bearer clown-test-bearer-not-real' "$WT/api.log"
   grep -qx 'HEAD /api/hello -' "$WT/api.log"
-  ! grep -q '/v1/models' "$WT/api.log"
-  ! grep -q clown-placeholder-not-a-credential "$WT/api.log"
-  # Nothing about the token reached the result file or the frontend's output.
-  ! grep -q clown-test-bearer-not-real "$RESULT"
+  [ "$(grep -c '/v1/models' "$WT/api.log")" -eq 0 ]
+  [ "$(grep -c clown-placeholder-not-a-credential "$WT/api.log")" -eq 0 ]
+  # Nothing about the token reached the result file.
+  [ "$(grep -c clown-test-bearer-not-real "$RESULT")" -eq 0 ]
   [ "$(jq -r .model_credential "$RESULT")" = proxy ]
   jq -e '.capabilities | index("model-inject-proxy")' "$RESULT"
 }
