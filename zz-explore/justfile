@@ -2239,11 +2239,20 @@ explore-model-inject-probe PORT='18080' UPSTREAM='api.anthropic.com' MAX_REQUEST
     root=$(git rev-parse --show-toplevel)
     script="$root/.tmp/model-inject-probe/probe.py"; mkdir -p "$(dirname "$script")"
     cat >"$script" <<'PY'
-    import http.client, http.server, ssl, sys, threading, time
+    import http.client, http.server, os, ssl, sys, threading, time
 
     PORT = int("{{PORT}}")
     UPSTREAM = "{{UPSTREAM}}"
     MAX_REQUESTS = int("{{MAX_REQUESTS}}")
+    # Every line printed is also appended here (same text: never the bearer,
+    # never a body), so the log survives a scrolled terminal.
+    LOG = open(os.environ["MODEL_INJECT_PROBE_LOG"], "a") if os.environ.get("MODEL_INJECT_PROBE_LOG") else None
+
+    def say(line):
+        print(line, flush=True)
+        if LOG:
+            LOG.write(line + "\n")
+            LOG.flush()
     PLACEHOLDER = "clown-placeholder-not-a-credential"
     DROP = {"host", "authorization", "connection", "keep-alive", "proxy-authorization",
             "transfer-encoding", "te", "trailer", "upgrade", "content-length"}
@@ -2322,8 +2331,8 @@ explore-model-inject-probe PORT='18080' UPSTREAM='api.anthropic.com' MAX_REQUEST
                     pass
             self.close_connection = True
             ms = int((time.monotonic() - start) * 1000)
-            print(f"{time.strftime('%H:%M:%S')} {self.command} {self.path} -> {status} authz={kind} "
-                  f"beta={beta} headers={names} req={len(body)}B resp={n}B {ms}ms{note}", flush=True)
+            say(f"{time.strftime('%H:%M:%S')} {self.command} {self.path} -> {status} authz={kind} "
+                f"beta={beta} headers={names} req={len(body)}B resp={n}B {ms}ms{note}")
             with lock:
                 served += 1
                 if MAX_REQUESTS and served >= MAX_REQUESTS:
@@ -2333,16 +2342,18 @@ explore-model-inject-probe PORT='18080' UPSTREAM='api.anthropic.com' MAX_REQUEST
 
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     srv.daemon_threads = True
-    print(f"probe: http://127.0.0.1:{PORT} -> https://{UPSTREAM}; bearer read from stdin; "
-          f"max_requests={MAX_REQUESTS or 'unbounded'}; Ctrl-C to stop", flush=True)
+    say(f"probe: {time.strftime('%Y-%m-%d %H:%M:%S')} http://127.0.0.1:{PORT} -> https://{UPSTREAM}; "
+        f"bearer read from stdin; max_requests={MAX_REQUESTS or 'unbounded'}; Ctrl-C to stop")
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
         pass
-    print(f"probe: served {served} request(s)", flush=True)
+    say(f"probe: served {served} request(s)")
     PY
     # stdin (the bearer) is inherited by python; nix shell does not read it.
-    exec nix shell --inputs-from "$root" nixpkgs#python3 -c python3 -I "$script"
+    echo "probe log file: $(dirname "$script")/probe.log (appended; read it after Ctrl-C)"
+    MODEL_INJECT_PROBE_LOG="$(dirname "$script")/probe.log" \
+        exec nix shell --inputs-from "$root" nixpkgs#python3 -c python3 -I "$script"
 
 # Resolve the probe's interpreter without the host's PATH: python3 from clown's
 # locked nixpkgs via `nix shell --inputs-from` (the flake.lock rev; no floating
@@ -2417,13 +2428,17 @@ explore-model-inject-probe-serve STORE='' PORT='18080' ENTRY='anthropic/claude-c
 # clown#336 probe, terminal 2: the three claude runs against the probe, in
 # order (OAuth variable; ANTHROPIC_AUTH_TOKEN; OAuth variable with stream-json),
 # each with the placeholder and an empty ANTHROPIC_API_KEY, from a scratch dir
-# under .tmp so the transcript lands in its own project. PAUSE=true waits for
-# Enter between runs (read from the terminal) so terminal 1 can be read;
-# ISOLATED=true adds a fresh CLAUDE_CONFIG_DIR, away from the stored login.
-explore-model-inject-probe-run ISOLATED='false' PAUSE='true' PORT='18080':
+# under .tmp so the transcript lands in its own project. VARIANTS picks which
+# to run ('1 2 3', or e.g. '3'); PAUSE=true waits for Enter between runs (read
+# from the terminal) so terminal 1 can be read; ISOLATED=true adds a fresh
+# CLAUDE_CONFIG_DIR, away from the stored login. Positional, in that order:
+# `just explore explore-model-inject-probe-run 3 false` runs variant 3 only,
+# without pauses.
+explore-model-inject-probe-run VARIANTS='1 2 3' PAUSE='true' ISOLATED='false' PORT='18080':
     #!/usr/bin/env bash
     set -uo pipefail
     for t in claude git mktemp; do command -v "$t" >/dev/null || { echo "FAIL: no $t on PATH" >&2; exit 2; }; done
+    want() { [[ " {{VARIANTS}} " == *" $1 "* ]]; }
     root=$(git rev-parse --show-toplevel)
     dir="$root/.tmp/model-inject-probe"; mkdir -p "$dir"; cd "$dir"
     (exec 3<>"/dev/tcp/127.0.0.1/{{PORT}}") 2>/dev/null \
@@ -2441,11 +2456,11 @@ explore-model-inject-probe-run ISOLATED='false' PAUSE='true' PORT='18080':
         echo "   exit=$?"
         if [[ "{{PAUSE}}" == true ]]; then read -r -p "   read terminal 1, then press Enter for the next variant " </dev/tty; fi
     }
-    run "CLAUDE_CODE_OAUTH_TOKEN=placeholder, claude -p" \
+    want 1 && run "1: CLAUDE_CODE_OAUTH_TOKEN=placeholder, claude -p" \
         "CLAUDE_CODE_OAUTH_TOKEN=$placeholder" claude -p 'say ok'
-    run "ANTHROPIC_AUTH_TOKEN=placeholder, claude -p" \
+    want 2 && run "2: ANTHROPIC_AUTH_TOKEN=placeholder, claude -p" \
         "ANTHROPIC_AUTH_TOKEN=$placeholder" claude -p 'say ok'
-    run "CLAUDE_CODE_OAUTH_TOKEN=placeholder, claude -p --verbose --output-format stream-json" \
+    want 3 && run "3: CLAUDE_CODE_OAUTH_TOKEN=placeholder, claude -p --verbose --output-format stream-json" \
         "CLAUDE_CODE_OAUTH_TOKEN=$placeholder" claude -p --verbose --output-format stream-json 'say ok'
     echo; echo "done; Ctrl-C terminal 1, then run 'just explore explore-model-inject-probe-report'"
 
@@ -2461,6 +2476,9 @@ explore-model-inject-probe-report:
     slug=$(printf '%s' "$dir" | sed 's/[^A-Za-z0-9]/-/g')
     dirs=("$HOME/.claude/projects/$slug")
     [[ -d $dir/isolated-config/projects/$slug ]] && dirs+=("$dir/isolated-config/projects/$slug")
+    echo ">> probe log ($dir/probe.log; every run appends, newest last)"
+    if [[ -f $dir/probe.log ]]; then tail -n 40 "$dir/probe.log"; else echo "no probe log yet (older than the log file, or the probe never started)"; fi
+    echo
     echo ">> probe-run transcripts containing the placeholder (${dirs[*]})"
     hits=$(grep -rl clown-placeholder-not-a-credential "${dirs[@]}" 2>/dev/null)
     if [[ -n $hits ]]; then echo "$hits"; else echo "no transcript contains the placeholder"; fi
@@ -2468,7 +2486,7 @@ explore-model-inject-probe-report:
     grep -rl clown-placeholder-not-a-credential "$HOME/.claude/projects/" 2>/dev/null | grep -v "/$slug/" || echo "none"
     echo
     echo ">> paste back to the coordinator:"
-    echo "   1. terminal 1's log lines (one per request: method, path, status, beta=, authz=, headers=; no secret in them)"
+    echo "   1. the probe log lines above (one per request: method, path, status, beta=, authz=, headers=; no secret in them)"
     echo "   2. for each of the three variants: did claude answer 'ok', prompt for login, or error (terminal 2's output)"
     echo "   3. the transcript result printed above"
 
@@ -2489,7 +2507,7 @@ debug-model-inject-probe-run-smoke PORT='18082':
         (exec 3<>"/dev/tcp/127.0.0.1/{{PORT}}") 2>/dev/null && break
         sleep 0.1
     done
-    timeout 180 just explore-model-inject-probe-run true false {{PORT}} </dev/null
+    timeout 180 just explore-model-inject-probe-run '1 2 3' false true {{PORT}} </dev/null
     echo "run exit=$?"
     kill -INT -- "-$pid" 2>/dev/null; sleep 1; kill -TERM -- "-$pid" 2>/dev/null; wait "$pid" 2>/dev/null
     echo "--- probe log"; cat "$log"

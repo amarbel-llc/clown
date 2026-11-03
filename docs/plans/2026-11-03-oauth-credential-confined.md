@@ -385,9 +385,27 @@ enough to settle most of the open points:
   in 401 after one turn, so a transcript with a full answer may still
   differ; the operator's run re-checks.
 
-Still needing the real token (the operator's run): that the API accepts a
-long-lived OAuth token on this path with this header set, and that a full
-answer streams back.
+**The operator's run at the card (2026-11-03, relayed by the coordinator):**
+variant 1 (`CLAUDE_CODE_OAUTH_TOKEN` placeholder, `claude -p`) answered
+"ok" with exit 0 through the probe, and the probe reported two requests
+served (`HEAD /api/hello` and one `POST /v1/messages`). So the API accepts
+the long-lived OAuth token injected by the proxy with the header set the
+OAuth variable produces, and the answer relays through the proxy's
+connection-close delimited stream. Variant 2 got `ECONNREFUSED`: a TCP
+refusal at the loopback port, which the probe cannot produce while it
+listens (an upstream failure comes back as a 502 or an upstream status),
+and the served count stayed at two, so the probe had already been stopped
+with Ctrl-C; no rerun of variant 2 is needed, the dummy-bearer smoke
+already showed what that variable changes. The per-request lines of that
+run were lost to scrollback; the probe now appends every line to
+`.tmp/model-inject-probe/probe.log`. Variant 1 also printed claude's
+warning that claude.ai connectors are disabled when another auth source
+is set: the connector loss noted above, observed. The report recipe found
+no placeholder in the probe run's transcripts.
+
+Still worth one cheap rerun (variant 3 only, one card PIN): the 200 and
+`beta=` line for the OAuth variable in the log file, and a full answer
+streamed as `stream-json`.
 
 ## Open and unverified
 
