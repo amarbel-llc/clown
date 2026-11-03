@@ -18,8 +18,20 @@ Nothing here was built or run.
   the text says "fallback", read "withdrawn".
 - **Default moxyfile for confined profiles: toolbox + env + man.** env carries the
   moxy#497 guards (merged in moxy, not deployed until the operator bumps moxy).
-- **Still open:** whether moxy accepts a clown-written moxyfile under
-  `permission-mode = enforce` (with moxy/sunny-sumac); whether the tool surface
+- **Answered (moxy/sunny-sumac, from source, FDR 0015 and bats; nothing run
+  against a clown-written file, so verify with `moxy narrows --parent P --child C`
+  before arming):** enforce accepts a clown-written moxyfile, no moxy change.
+  Writer requirements: the parent is written with `moxy show-effective-moxyfile`
+  (it records `resolved-moxins`; the narrowing check applies only when both sides
+  carry that record) and clown pins the SAME absolute `MOXIN_PATH`; the child sets
+  `permission-mode = "enforce"` (a non-enforcing child under an enforcing parent is
+  a violation); parent `allow-tools = ["toolbox","env","man"]`, child a subset;
+  `restart` is refused under enforce (drop it from the in-unit allow list);
+  `enforce-allow` is not needed for toolbox/env/man. `man` and most `env` tools
+  are always-allow; `toolbox.run` and `env.resolve` are dynamic (folio-perms
+  floor, the broker answers first when armed), and which toolbox commands pass
+  the floor is untested.
+- **Still open:** whether the tool surface
   may ever be a boundary (needs a posture without Bash/Write/`run_recipe`, a
   just-us question; the operator is asked separately). Until then V3's ceiling is
   policy, not a boundary (spinclass#400).
