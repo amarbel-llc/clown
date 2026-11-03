@@ -320,51 +320,77 @@ A probe, not product code, run by the operator with the card present:
    logged. `just explore debug-model-inject-probe-smoke` checks the
    plumbing with a dummy bearer (the upstream's 401 is the pass signal) and
    needs no card.
-2. Run, unconfined, at the operator's terminal with the card present.
-   Terminal 1, from the clown checkout (the entry lives in circus's
-   `infra/secrets`; its exact name is the operator's):
+2. Run, unconfined, at the operator's terminal with the card present, from
+   anywhere inside a clown checkout that has these recipes (they are on
+   `master`; the main checkout must be pulled first). Both sides are
+   recipes so nothing is typed by hand:
 
    ```
-   PIGGY_STORE_DIR=$HOME/eng/repos/circus/infra/secrets \
-     piggy pass show <entry> | just explore explore-model-inject-probe
+   just explore explore-model-inject-probe-serve     # terminal 1: card, PIN, then the probe
+   just explore explore-model-inject-probe-run       # terminal 2: the three variants, Enter between them
+   just explore explore-model-inject-probe-report    # afterwards: transcript check and what to paste back
    ```
 
-   Terminal 2, from any directory, once per variant:
-
-   ```
-   env ANTHROPIC_BASE_URL=http://127.0.0.1:18080 \
-       CLAUDE_CODE_OAUTH_TOKEN=clown-placeholder-not-a-credential \
-       ANTHROPIC_API_KEY= claude -p 'say ok'
-   env ANTHROPIC_BASE_URL=http://127.0.0.1:18080 \
-       ANTHROPIC_AUTH_TOKEN=clown-placeholder-not-a-credential \
-       ANTHROPIC_API_KEY= claude -p 'say ok'
-   env ANTHROPIC_BASE_URL=http://127.0.0.1:18080 \
-       CLAUDE_CODE_OAUTH_TOKEN=clown-placeholder-not-a-credential \
-       ANTHROPIC_API_KEY= claude -p --verbose --output-format stream-json 'say ok'
-   ```
-
-   If the stored login interferes with the first variant, repeat it with
-   `CLAUDE_CONFIG_DIR=$(mktemp -d)` added, which isolates the run from the
-   operator's `.credentials.json`.
-3. Record: does claude start without a login prompt; which variable yields
-   which header set (the probe's `beta=` and `headers=` fields); which
-   paths it calls; does streaming survive; does the placeholder appear in
-   the project transcript (`grep -rl clown-placeholder-not-a-credential
-   ~/.claude/projects/`).
+   The serve recipe resolves the store to the main circus checkout's
+   `infra/secrets` (a worktree is refused; `STORE` overrides), checks the
+   entry's ebox exists before touching the card, and pipes
+   `piggy pass show` into the probe. The run recipe takes `ISOLATED=true`
+   as its first argument to add a fresh `CLAUDE_CONFIG_DIR` under the
+   scratch dir, away from the stored login.
+3. Record: does claude answer "ok" in each variant (terminal 2); the
+   probe's log lines (terminal 1); the report recipe's transcript result.
 
 The probe's log decides the env knob, the header handling and the path
 allowlist; then the build is one component (`InjectProxy`), its launch
 wiring, unit tests with a fake API, and a `verify-agent-scope` bats case
 that asserts the placeholder is what `/proc/1/environ` holds inside a unit.
 
+## Probe findings with a dummy bearer (2026-11-03, no real credential)
+
+`just explore debug-model-inject-probe-run-smoke` ran the three claude
+variants (claude-code 2.1.310) against the probe fed a fake bearer; the
+upstream answered 401 to every model call, which is the expected result and
+enough to settle most of the open points:
+
+- claude accepts `ANTHROPIC_BASE_URL=http://127.0.0.1:<port>` with the
+  placeholder in either variable: no login prompt, requests go to the base
+  URL with `Authorization: Bearer <placeholder>` (`authz=placeholder`).
+- The variable decides the header set. With `CLAUDE_CODE_OAUTH_TOKEN` the
+  `anthropic-beta` list includes `oauth-2025-04-20`; with
+  `ANTHROPIC_AUTH_TOKEN` it does not. So the unit's placeholder goes in
+  `CLAUDE_CODE_OAUTH_TOKEN`, and the proxy passes the beta header through
+  unchanged.
+- Paths called: `HEAD /api/hello` (no `Authorization`; the gateway
+  discovery the binary's strings mention) before each run, then
+  `POST /v1/messages?beta=true`. That is the path allowlist for a first
+  `InjectProxy`, plus `/v1/messages/count_tokens`.
+- Streaming: the `--output-format stream-json` run came back through the
+  proxy's connection-close-delimited relay.
+- On 401 claude retries twice (`api_retry` attempts 1 and 2, under a second
+  apart) and then stops with "Failed to authenticate": three model calls
+  per run, so a proxy that returns the upstream's 401 needs no special
+  handling.
+- Request header names seen: `accept`, `accept-encoding`, `anthropic-beta`,
+  `anthropic-dangerous-direct-browser-access`, `anthropic-version`,
+  `authorization`, `content-length`, `content-type`, `host`, `user-agent`,
+  `x-app`, `x-claude-code-session-id`, `x-stainless-*`. Nothing the proxy
+  must rewrite besides `Host` and `Authorization`.
+
+- The report recipe found no placeholder in the probe run's transcripts
+  (both the normal and the isolated config dir). Caveat: those runs ended
+  in 401 after one turn, so a transcript with a full answer may still
+  differ; the operator's run re-checks.
+
+Still needing the real token (the operator's run): that the API accepts a
+long-lived OAuth token on this path with this header set, and that a full
+answer streams back.
+
 ## Open and unverified
 
-- claude's behaviour with a placeholder OAuth token and a loopback `http`
-  base URL (both knobs exist in 2.1.310; behaviour not observed).
-- The header set per variable, and which one the API accepts a long-lived
-  OAuth token on.
-- The set of hosts and paths claude calls with the credential, including
-  the `[gatewayDiscovery]` probe the binary's strings mention.
+- Whether the API accepts the long-lived OAuth token with the header set
+  the OAuth variable produces (the dummy-bearer probe settled the rest:
+  placeholder and loopback base URL accepted, header set per variable,
+  paths, streaming, retry count).
 - Whether the piggy secrets manifest accepts a target under
   `$XDG_RUNTIME_DIR`.
 - Readability of a user process's core dump by its own uid under

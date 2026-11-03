@@ -2362,3 +2362,103 @@ debug-model-inject-probe-smoke PORT='18081':
     echo "--- probe log"; cat "$log"
     echo "--- upstream body (first 300 bytes)"; head -c 300 "$body"; echo
     [[ $status == 401 ]]
+
+# clown#336 probe, terminal 1: decrypt the entry at the card and pipe it into
+# the probe; the token exists only in the pipe and the probe's memory. STORE
+# defaults to the operator's main circus checkout's infra/secrets (a worktree
+# is refused: the main checkout is the one with a .git directory). Checks that
+# the entry's ebox file exists before touching the card, printing only paths.
+explore-model-inject-probe-serve STORE='' PORT='18080' ENTRY='anthropic/claude-code-oauth-token':
+    #!/usr/bin/env bash
+    set -uo pipefail
+    command -v piggy >/dev/null || { echo "FAIL: no piggy on PATH" >&2; exit 2; }
+    store="{{STORE}}"
+    if [[ -z $store ]]; then
+        circus="$HOME/eng/repos/circus"
+        [[ -d $circus/.git ]] || { echo "FAIL: $circus is not the main circus checkout (no .git directory); pass STORE explicitly" >&2; exit 2; }
+        store="$circus/infra/secrets"
+    fi
+    [[ -d $store ]] || { echo "FAIL: store $store is not a directory" >&2; exit 2; }
+    [[ -f $store/{{ENTRY}}.ebox ]] || { echo "FAIL: no entry {{ENTRY}} in $store (expected $store/{{ENTRY}}.ebox)" >&2; exit 2; }
+    echo "store: $store"
+    echo "entry: {{ENTRY}} (decrypting at the card; the PIN prompt is piggy's)"
+    echo "probe: http://127.0.0.1:{{PORT}}; run 'just explore explore-model-inject-probe-run' in another terminal"
+    PIGGY_STORE_DIR="$store" piggy pass show "{{ENTRY}}" | just explore-model-inject-probe "{{PORT}}"
+
+# clown#336 probe, terminal 2: the three claude runs against the probe, in
+# order (OAuth variable; ANTHROPIC_AUTH_TOKEN; OAuth variable with stream-json),
+# each with the placeholder and an empty ANTHROPIC_API_KEY, from a scratch dir
+# under .tmp so the transcript lands in its own project. PAUSE=true waits for
+# Enter between runs (read from the terminal) so terminal 1 can be read;
+# ISOLATED=true adds a fresh CLAUDE_CONFIG_DIR, away from the stored login.
+explore-model-inject-probe-run ISOLATED='false' PAUSE='true' PORT='18080':
+    #!/usr/bin/env bash
+    set -uo pipefail
+    command -v claude >/dev/null || { echo "FAIL: no claude on PATH" >&2; exit 2; }
+    root=$(git rev-parse --show-toplevel)
+    dir="$root/.tmp/model-inject-probe"; mkdir -p "$dir"; cd "$dir"
+    (exec 3<>"/dev/tcp/127.0.0.1/{{PORT}}") 2>/dev/null \
+        || { echo "FAIL: nothing listens on 127.0.0.1:{{PORT}}; start terminal 1 first (explore-model-inject-probe-serve)" >&2; exit 2; }
+    placeholder=clown-placeholder-not-a-credential
+    base=(env "ANTHROPIC_BASE_URL=http://127.0.0.1:{{PORT}}" ANTHROPIC_API_KEY=)
+    if [[ "{{ISOLATED}}" == true ]]; then
+        cfg="$dir/isolated-config"; mkdir -p "$cfg"; base+=("CLAUDE_CONFIG_DIR=$cfg")
+        echo "isolated: CLAUDE_CONFIG_DIR=$cfg (the report recipe greps it too)"
+    fi
+    run() {
+        local label=$1; shift
+        echo; echo ">> variant: $label"
+        "${base[@]}" "$@"
+        echo "   exit=$?"
+        if [[ "{{PAUSE}}" == true ]]; then read -r -p "   read terminal 1, then press Enter for the next variant " </dev/tty; fi
+    }
+    run "CLAUDE_CODE_OAUTH_TOKEN=placeholder, claude -p" \
+        "CLAUDE_CODE_OAUTH_TOKEN=$placeholder" claude -p 'say ok'
+    run "ANTHROPIC_AUTH_TOKEN=placeholder, claude -p" \
+        "ANTHROPIC_AUTH_TOKEN=$placeholder" claude -p 'say ok'
+    run "CLAUDE_CODE_OAUTH_TOKEN=placeholder, claude -p --verbose --output-format stream-json" \
+        "CLAUDE_CODE_OAUTH_TOKEN=$placeholder" claude -p --verbose --output-format stream-json 'say ok'
+    echo; echo "done; Ctrl-C terminal 1, then run 'just explore explore-model-inject-probe-report'"
+
+# clown#336 probe, afterwards: does any transcript hold the placeholder, and
+# what to paste back to the coordinator.
+explore-model-inject-probe-report:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    root=$(git rev-parse --show-toplevel)
+    dir="$root/.tmp/model-inject-probe"
+    slug=$(printf '%s' "$dir" | sed 's/[^A-Za-z0-9]/-/g')
+    dirs=("$HOME/.claude/projects/$slug")
+    [[ -d $dir/isolated-config/projects/$slug ]] && dirs+=("$dir/isolated-config/projects/$slug")
+    echo ">> probe-run transcripts containing the placeholder (${dirs[*]})"
+    hits=$(grep -rl clown-placeholder-not-a-credential "${dirs[@]}" 2>/dev/null)
+    if [[ -n $hits ]]; then echo "$hits"; else echo "no transcript contains the placeholder"; fi
+    echo ">> other transcripts under ~/.claude/projects quoting the string (chats and notes about the probe are expected here)"
+    grep -rl clown-placeholder-not-a-credential "$HOME/.claude/projects/" 2>/dev/null | grep -v "/$slug/" || echo "none"
+    echo
+    echo ">> paste back to the coordinator:"
+    echo "   1. terminal 1's log lines (one per request: method, path, status, beta=, authz=, headers=; no secret in them)"
+    echo "   2. for each of the three variants: did claude answer 'ok', prompt for login, or error (terminal 2's output)"
+    echo "   3. the transcript result printed above"
+
+# Smoke of the terminal-2 recipe against a DUMMY-bearer probe (never a real
+# one): starts the probe on a scratch port, runs the three claude variants
+# without pauses and isolated, stops the probe and prints its log. claude is
+# expected to get 401s; the log shows which headers and paths each variant
+# sends, which is most of what the real run must show. Costs no model spend.
+debug-model-inject-probe-run-smoke PORT='18082':
+    #!/usr/bin/env bash
+    set -uo pipefail
+    log=$(mktemp); trap 'rm -f "$log"' EXIT
+    # Own session, so the whole probe pipeline (just + python) gets the stop signal.
+    setsid bash -c "printf 'dummy-bearer-not-a-credential\n' \
+        | just explore-model-inject-probe {{PORT}} api.anthropic.com 0" >"$log" 2>&1 &
+    pid=$!
+    for _ in $(seq 50); do
+        (exec 3<>"/dev/tcp/127.0.0.1/{{PORT}}") 2>/dev/null && break
+        sleep 0.1
+    done
+    timeout 180 just explore-model-inject-probe-run true false {{PORT}} </dev/null
+    echo "run exit=$?"
+    kill -INT -- "-$pid" 2>/dev/null; sleep 1; kill -TERM -- "-$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+    echo "--- probe log"; cat "$log"
