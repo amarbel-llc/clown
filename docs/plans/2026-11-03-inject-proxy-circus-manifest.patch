@@ -1,0 +1,22 @@
+HELD patch for the circus repo (NOT applied; the operator applies and merges it
+there). Apply from the circus checkout root with `git apply`. clown#336, see
+docs/plans/2026-11-03-inject-proxy-live-round.md in clown.
+
+--- a/infra/hosts/home/operator-secrets.nix
++++ b/infra/hosts/home/operator-secrets.nix
+@@ -69,5 +69,15 @@
+         source = ./piggy-store/circus/secrets-nix.env.ebox;
+         target = ".config/nix/secrets.env";
+         adopt = true;
+       };
++      # clown#336: the model API bearer clown's frontend injects for confined
++      # sessions (InjectProxy). The ebox lives in the repo-scoped store
++      # (infra/secrets), not in the operator's ./piggy-store. The target is the
++      # runtime dir (tmpfs, gone at reboot; the next reconcile rewrites it).
++      # The uid is the operator's on this host (flic: 1001); confirm per host.
++      # piggy writes the file 0600 and creates missing parent dirs 0700.
++      clown-model-oauth = {
++        source = ../../secrets/anthropic/claude-code-oauth-token.ebox;
++        target = "/run/user/1001/clown/credentials/anthropic-oauth";
++      };
+     };

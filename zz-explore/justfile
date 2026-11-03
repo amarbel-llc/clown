@@ -2490,6 +2490,101 @@ explore-model-inject-probe-report:
     echo "   2. for each of the three variants: did claude answer 'ok', prompt for login, or error (terminal 2's output)"
     echo "   3. the transcript result printed above"
 
+# clown#336 live round, step 1 (docs/plans/2026-11-03-inject-proxy-live-round.md):
+# is the model token file where the proxy reads it, and is it safe to use?
+# Prints only the path, mode, owner and whether the checks pass; never opens
+# the file, never starts anything. CLOWN_MODEL_TOKEN_FILE overrides the path.
+explore-model-live-check:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    path="${CLOWN_MODEL_TOKEN_FILE:-${XDG_RUNTIME_DIR:-}/clown/credentials/anthropic-oauth}"
+    echo "token file: $path"
+    if [[ ! -e $path ]]; then
+        echo "FAIL: absent. Run 'piggy secrets reconcile' with the card; a confined launch now falls back to the login-file bind (or is refused under CLOWN_MODEL_CREDENTIAL=proxy-only)"
+        exit 1
+    fi
+    mode=$(stat -c %a "$path"); owner=$(stat -c %u "$path"); me=$(id -u)
+    [[ -f $path ]] && kind=regular || kind="NOT a regular file"
+    echo "mode=$mode owner_uid=$owner my_uid=$me kind=$kind"
+    ok=0
+    [[ $mode == 600 ]] || { echo "FAIL: mode must be 600"; ok=1; }
+    [[ $owner == "$me" ]] || { echo "FAIL: owner must be you"; ok=1; }
+    [[ -f $path ]] || ok=1
+    [[ -s $path ]] || { echo "FAIL: empty"; ok=1; }
+    ((ok == 0)) && echo "PASS: the proxy will accept this file"
+    exit "$ok"
+
+# clown#336 live round, step 2: ONE confined launch with the injection proxy
+# on, through the same launcher claude uses (`clown agent-scope-run`, spec in
+# the style of agent_scope.bats; not a spinclass spawn, so no profile applies
+# and the unit sees only the worktree .tmp/model-live). Inside the unit it
+# prints the proxy settings (never a token), whether the environment holds
+# only the placeholder, the size of the in-unit credentials file, and then
+# runs `claude -p 'say ok'`; an answer proves the request went through the
+# proxy, because the unit has no route to the API host. Output goes to
+# .tmp/model-live/run.out. Reads no token: the frontend reads the token file
+# per request, exactly as in production. Run step 1 first.
+explore-model-live-run:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    for t in git jq nix claude; do command -v "$t" >/dev/null || { echo "FAIL: no $t on PATH" >&2; exit 2; }; done
+    root=$(git rev-parse --show-toplevel)
+    dir="$root/.tmp/model-live"
+    mkdir -p "$dir"
+    res=$(mktemp -d)
+    trap 'rm -rf "$res"' EXIT
+    unset TROUPE_XMPP_USER TROUPE_XMPP_PASSWORD_FILE ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN
+    export CLOWN_MODEL_CREDENTIAL=proxy-only
+    clown_out=$(nix build --no-link --print-out-paths "$root#default") || exit 1
+    jq -n --arg wt "$dir" --arg home "$HOME" --arg res "$res/result.json" \
+        '{version: 1, worktree: $wt, operator_home: $home, unit_name_hint: "clown-model-live", result_path: $res}' >"$res/spec.json"
+    cp "$res/spec.json" "$dir/spec.json"
+    script='
+      echo "base=$ANTHROPIC_BASE_URL"
+      [ "$CLAUDE_CODE_OAUTH_TOKEN" = clown-placeholder-not-a-credential ] && echo "oauth_is_placeholder=yes" || echo "oauth_is_placeholder=NO"
+      [ -z "${ANTHROPIC_API_KEY-unset}" ] && echo "api_key_empty=yes" || echo "api_key_empty=NO"
+      [ -z "${ANTHROPIC_AUTH_TOKEN:-}" ] && echo "auth_token_unset=yes" || echo "auth_token_unset=NO"
+      if grep -aq "sk-ant-" /proc/1/environ /proc/self/environ; then echo "environ_has_sk_ant=YES"; else echo "environ_has_sk_ant=no"; fi
+      echo "credentials_file_bytes=$(wc -c < "$CLAUDE_CONFIG_DIR/.credentials.json")"
+      echo ">> claude -p say ok"
+      claude -p "say ok"; echo "claude_exit=$?"
+    '
+    cd "$dir" || exit 1
+    "$clown_out/bin/clown" agent-scope-run --spec "$dir/spec.json" -- bash -c "$script" </dev/null 2>&1 | tee "$dir/run.out"
+    cp "$res/result.json" "$dir/result.json" 2>/dev/null
+    echo; echo "done; run 'just explore explore-model-live-report'"
+
+# clown#336 live round, step 3: what to check after the run. Prints the
+# result's model_credential and capability, the proxy's request lines (status
+# only), and greps the run output, the launch's transcripts and the agent home
+# for (a) the placeholder, expected in the unit's environment and possibly in
+# transcripts of `env`, and (b) the REAL token. (b) uses the token file as the
+# grep pattern list (grep -F -f): it prints file names only, never a value, and
+# is a read of the file by you at your terminal, not by this session.
+explore-model-live-report:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    root=$(git rev-parse --show-toplevel)
+    dir="$root/.tmp/model-live"
+    path="${CLOWN_MODEL_TOKEN_FILE:-${XDG_RUNTIME_DIR:-}/clown/credentials/anthropic-oauth}"
+    slug=$(printf '%s' "$dir" | sed 's/[^A-Za-z0-9]/-/g')
+    echo ">> result: model_credential, capability, error"
+    jq '{model_credential, model_inject_proxy: (.capabilities | index("model-inject-proxy") != null), error}' "$dir/result.json" 2>/dev/null || echo "no result.json (did the run reach the unit?)"
+    echo; echo ">> proxy request lines (inject: request ... status=)"
+    grep 'inject: ' "$dir/run.out" 2>/dev/null | sed 's/ elapsed=.*//' || echo "none"
+    echo; echo ">> unit-side values (never a token)"
+    grep -E '^(base|oauth_is_placeholder|api_key_empty|auth_token_unset|environ_has_sk_ant|credentials_file_bytes|claude_exit)=' "$dir/run.out" 2>/dev/null
+    echo; echo ">> claude's answer"
+    sed -n '/^>> claude -p/,$p' "$dir/run.out" 2>/dev/null
+    echo; echo ">> files under the run dir and its transcripts holding the placeholder"
+    grep -rl clown-placeholder-not-a-credential "$dir" "$HOME/.claude/projects/$slug" 2>/dev/null || echo "none"
+    echo; echo ">> files holding the REAL token (expected: none; names only)"
+    if [[ -f $path ]]; then
+        grep -rlF -f "$path" "$dir" "$HOME/.claude/projects/$slug" "$HOME/.local/state/clown" "$HOME/.local/log" 2>/dev/null || echo "none"
+    else
+        echo "token file $path absent; cannot grep for it"
+    fi
+
 # Smoke of the terminal-2 recipe against a DUMMY-bearer probe (never a real
 # one): starts the probe on a scratch port, runs the three claude variants
 # without pauses and isolated, stops the probe and prints its log. claude is
