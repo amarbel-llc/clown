@@ -323,6 +323,29 @@ func startFrontendEndpoints(launch *agentscope.Launch, forwardAddrs []string, in
 		}
 	}
 
+	// The in-unit moxy's ceiling (V3, clown#339): its read-only global
+	// moxyfile, the parent it is checked against, and the launch self-check;
+	// the server's env gains MOXY_PARENT_MOXYFILE and the pinned MOXIN_PATH
+	// before the servers file is written.
+	writable := append([]string{launch.Spec.Worktree}, launch.Spec.BindsRW...)
+	moxyIndex, moxyBin, moxinPath := inUnitMoxyServer(inUnit, writable)
+	ceiling, err := prepareInUnitMoxy(dir, launch.AgentHome, launch.WorkDir, moxyBin, moxinPath)
+	if err != nil {
+		stop()
+		return nil, err
+	}
+	if moxyIndex >= 0 {
+		if inUnit[moxyIndex].Env == nil {
+			inUnit[moxyIndex].Env = map[string]string{}
+		}
+		for k, v := range ceiling.serverEnv() {
+			inUnit[moxyIndex].Env[k] = v
+		}
+		if logger != nil {
+			logger.Info("agent scope: in-unit moxy under the ceiling", "parent", ceiling.parentInUnit, "moxin_path", ceiling.moxinPath)
+		}
+	}
+	launch.PlumbingRO = append(launch.PlumbingRO, ceiling.readOnlyBinds()...)
 	if len(inUnit) > 0 {
 		serve := filepath.Join(dir, "in-unit-servers.json")
 		if err := agentscope.WriteInUnitServers(serve, inUnit); err != nil {
@@ -357,21 +380,6 @@ func startFrontendEndpoints(launch *agentscope.Launch, forwardAddrs []string, in
 		closers = append(closers, func() error { return os.Remove(monitorDir) })
 	}
 
-	moxyfile := filepath.Join(dir, "moxyfile")
-	inUnitMoxyfile := filepath.Join(launch.AgentHome, ".config", "moxy", "moxyfile")
-	if err := os.WriteFile(moxyfile, []byte(agentscope.InUnitMoxyfile), 0o600); err != nil {
-		stop()
-		return nil, err
-	}
-	err = os.MkdirAll(filepath.Dir(inUnitMoxyfile), 0o700)
-	if err == nil {
-		err = touch(inUnitMoxyfile)
-	}
-	if err != nil {
-		stop()
-		return nil, err
-	}
-	launch.PlumbingRO = append(launch.PlumbingRO, moxyfile+":"+inUnitMoxyfile)
 	return stop, nil
 }
 

@@ -36,6 +36,18 @@ Nothing here was built or run.
   just-us question; the operator is asked separately). Until then V3's ceiling is
   policy, not a boundary (spinclass#400).
 
+## Build status (2026-11-03)
+
+The build plan and ratification package are
+`2026-11-03-structural-moxy-v3-build-plan.md` (operator ratified Shape P
+and the default tool list). Landed on master: the ceiling writer and the
+protocol-3 profile keys (01f2c35); the parent moxyfile, the launch
+`moxy narrows` self-check and the in-unit server env (the commit after
+it). Still to come, in order: the `worker` profile regaining `moxy/moxy`
+after spinclass#457 (R3'); the operator's moxy lock bump (floor f946bcb,
+recommended 5df5e35) and `[folio]` stanza; the host bats case; the live
+confined spawn.
+
 ## Status after the operator's challenge
 
 The operator asked what a sibling twin (V2) buys over **in-unit moxy with a

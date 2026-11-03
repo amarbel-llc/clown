@@ -39,6 +39,12 @@ through moxy; the call must not put the Cloudflare tunnel token (a file under
   a profile may keep any other server. The reason it forbids moxy even with
   per-tool exclusions is that exclusions are policy, not a boundary (the unit
   can reach `/clown/exclude-tools` on the serve socket: clown#301, open).
+  Since 2026-11-03 the ceiling itself is no longer an exclusion list: the
+  in-unit moxy's global moxyfile is an allow-list under `enforce` that moxy
+  checks against a parent clown wrote (V3,
+  `2026-11-03-structural-moxy-v3-build-plan.md`); the profile's exclusions
+  remain a deny-list within it, and the rule here relaxes to R3'
+  (spinclass#457) once the profile reports its ceiling.
 - **`moxy serve-moxin --name N` serves one moxin standalone.** Its man page
   says "builtin system moxins", but the experiment below (V) shows it also finds
   a moxin on `MOXIN_PATH`. `moxy serve-mcp` over a moxyfile with `allow-tools`
