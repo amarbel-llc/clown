@@ -2620,3 +2620,14 @@ debug-model-inject-probe-plain-env RECIPE='debug-model-inject-probe-smoke':
     echo "plain env PATH=$path"
     env -i HOME="$HOME" USER="${USER:-$(id -un)}" PATH="$path" TERM="${TERM:-dumb}" \
         just {{RECIPE}}
+
+# Check that a HELD patch under docs/plans/ (one the operator applies later,
+# e.g. a flake-input change whose lock change is theirs) still applies to the
+# checkout, without applying it. Serves the held-patch loop.
+# Usage: just explore debug-check-held-patch docs/plans/<name>.patch
+debug-check-held-patch PATCH:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "$(git rev-parse --show-toplevel)"
+    git apply --check --verbose "{{PATCH}}"
+    echo "ok: {{PATCH}} applies cleanly (not applied)"

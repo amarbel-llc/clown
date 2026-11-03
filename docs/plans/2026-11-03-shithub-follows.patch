@@ -1,0 +1,59 @@
+HELD patch (operator ruling Q3, 2026-11-03, shithub): not applied, no lock
+command run. Apply from the checkout root with
+`git apply docs/plans/2026-11-03-shithub-follows.patch`, then run the lock
+change described in docs/plans/2026-11-03-shithub-follows.md. Generated with
+`git diff -- flake.nix` from the edited tree, then the tree was restored.
+
+diff --git a/flake.nix b/flake.nix
+index 6fde954..a86a6c5 100644
+--- a/flake.nix
++++ b/flake.nix
+@@ -21,11 +21,6 @@
+     # during the vendor build).
+     nixpkgs-master.url = "github:NixOS/nixpkgs/b4fd65b198c599cbe814fcb9f42d25d021595ec9";
+     utils.url = "https://flakehub.com/f/numtide/flake-utils/0.1.102";
+-    # nixpkgs-claude-code is kept for reference but claude-code is now
+-    # sourced from llm-agents (2.1.150+). The old npm-source derivation
+-    # (2.1.111) used a JS patchPhase on cli.js; the new binary derivation
+-    # uses a postInstall binary string substitution on the Bun bundle.
+-    nixpkgs-claude-code.url = "github:NixOS/nixpkgs/b2b9662ffe1e9a5702e7bfbd983595dd56147dbf";
+     nixpkgs-codex.url = "github:NixOS/nixpkgs/0de8465d2b54ddd962422706d932c3354b4237ec";
+     # llama-cpp with Anthropic Messages API (/v1/messages) support — requires
+     # PR #17570 (merged 2025-11-28). Build 6981 in nixos-25.11 predates it.
+@@ -41,7 +36,12 @@
+     # written against that newer pin and `callPackage`-fail for the missing
+     # electron_42 when forced onto the older base. Letting llm-agents use its
+     # own locked nixpkgs costs a second nixpkgs evaluation in the closure but
+-    # keeps the package set self-consistent.
++    # keeps the package set self-consistent. Re-checked 2026-11-03 (shithub,
++    # operator ruling Q3 asks floating copies to follow the pin): with
++    # `llm-agents.inputs.nixpkgs.follows = "igloo"` the devshell no longer
++    # evaluates, because llm-agents' `chock` package needs `zig_0_17`, which
++    # igloo's base lacks (observed on flic). So this input is the named
++    # exception: its nixpkgs stays separate, and floats on nixpkgs-unstable.
+     llm-agents.url = "github:numtide/llm-agents.nix";
+     llm-agents.inputs.treefmt-nix.follows = "igloo/treefmt-nix";
+     # conformist: formatter/linter orchestrator replacing treefmt-nix.
+@@ -118,7 +118,6 @@
+       self,
+       igloo,
+       nixpkgs-master,
+-      nixpkgs-claude-code,
+       nixpkgs-codex,
+       nixpkgs-llama,
+       llm-agents,
+@@ -144,14 +143,6 @@
+           inherit system;
+           config.allowUnfree = true;
+         };
+-        # pkgs-claude-code is unused since the switch to llm-agents for
+-        # claude-code 2.1.150+. The nixpkgs-claude-code input (2.1.111
+-        # pre-binary-distribution era) is kept so the flake input stays
+-        # reachable; remove both together when the old SHA is no longer needed.
+-        pkgs-claude-code = import nixpkgs-claude-code {
+-          inherit system;
+-          config.allowUnfree = true;
+-        };
+         pkgs-codex = import nixpkgs-codex {
+           inherit system;
+           config.allowUnfree = true;
