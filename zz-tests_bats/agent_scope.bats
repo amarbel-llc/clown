@@ -598,3 +598,32 @@ s.serve_forever()
   grep -q "$BATS_TEST_TMPDIR/no-model-token" <<<"$output"
   jq -e '.error | contains("piggy secrets reconcile")' "$RESULT"
 }
+
+# V3 structural moxy (clown#339): the unit's global moxyfile is the rendered
+# ceiling, read-only, with enforce on and the ratified tools in; nothing the
+# unit does changes it. This launcher starts no in-unit moxy (agent-scope-run
+# has no plugin servers), so only the ceiling file is checked here.
+@test "agent_scope: the unit's global moxyfile is the read-only V3 ceiling under enforce" {
+  run run_in_unit '
+    f="$HOME/.config/moxy/moxyfile"
+    if grep -q "permission-mode = \"enforce\"" "$f"; then echo PASS enforce; else echo FAIL enforce; fi
+    if grep -q "\"folio.write\"" "$f" && grep -q "\"rg.search\"" "$f" && grep -q "\"toolbox\"" "$f"; then echo PASS ratified-tools; else echo FAIL ratified-tools; fi
+    allow=$(sed -n "/^allow-tools/,/^]/p" "$f")
+    if grep -q "\"restart\"" <<<"$allow" || grep -q "\"grit\"" <<<"$allow"; then echo FAIL dropped-tools-present; else echo PASS dropped-tools-absent; fi
+    if grep -q "\"grit\"" "$f"; then echo PASS grit-disabled; else echo FAIL grit-disabled; fi
+    if printf "allow-tools = [\"grit\"]\n" >>"$f" 2>/dev/null; then echo FAIL ceiling-writable; else echo PASS ceiling-read-only; fi
+    if [ -e "$HOME/.config/moxy/parent-moxyfile" ]; then echo "parent=present"; else echo "parent=absent"; fi
+  '
+  echo "$output"
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '^FAIL' <<<"$output")" -eq 0 ]
+  grep -q '^PASS enforce' <<<"$output"
+  grep -q '^PASS ratified-tools' <<<"$output"
+  grep -q '^PASS ceiling-read-only' <<<"$output"
+  # No in-unit moxy in this launcher: no parent, no narrows run.
+  grep -q '^parent=absent' <<<"$output"
+}
+
+@test "agent_scope: an in-unit moxy runs under the parent-enforced ceiling (needs the full launch)" {
+  skip "needs 'clown --agent-scope' with the moxy plugin and a moxy that has 'narrows' (moxy >= 2037822; f946bcb for toolbox): agent-scope-run starts no in-unit server. Covered at unit level by cmd/clown/inunitmoxy_test.go; the live check is the V3 plan's step 8."
+}
