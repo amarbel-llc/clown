@@ -1030,6 +1030,15 @@ explore-agents-schema: build
 # with no prompt, so it sits idle at its TUI; the recipe kills the session on the
 # way out, including on failure.
 #
+# Render a PlantUML file to a PNG next to it (named after the @startuml title,
+# else the file), so a design diagram is checked as an image, not only parsed.
+# Read the PNG afterwards. Serves the docs/plans design-note loop.
+#
+# render a PlantUML file (FILE) to PNG via nixpkgs plantuml
+[group("explore")]
+explore-render-plantuml FILE:
+    nix run nixpkgs#plantuml -- -tpng "{{FILE}}"
+
 # check the spawned session's title as posh's daemon holds it
 [group("explore")]
 explore-title-spawn-live: build

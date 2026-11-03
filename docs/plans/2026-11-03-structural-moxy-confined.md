@@ -118,6 +118,101 @@ What it costs:
   limitation (FDR 0020, "What a confined worker loses") carry over or need a
   line; a moxy unit that is clown-started could be given the session id.
 
+## V2 diagram
+
+Source `2026-11-03-structural-moxy-confined-v2.puml`, rendered with
+`just explore-render-plantuml docs/plans/2026-11-03-structural-moxy-confined-v2.puml`
+to `2026-11-03-structural-moxy-confined-v2.png` (rendered and looked at, not
+only parsed). Boxes are units and processes; numbers key into the tables.
+
+![V2 unit structure](2026-11-03-structural-moxy-confined-v2.png)
+
+### Edges (who can connect, and what checks them)
+
+| # | Edge | Mechanism | Who can connect | Check, and where |
+|---|---|---|---|---|
+| 1 | clown starts the agent unit | `systemd-run --user --pipe --collect` with the pty slave as stdio (R, FDR 0020) | clown only | required unit properties; clown refuses to launch if one cannot be applied (R) |
+| 2 | clown starts the twin | same launcher, twin spec, `BindReadOnlyPaths=` of the moxyfile directory (I) | clown only | same; spinclass checks the twin spec is a narrowing of the agent spec (I, needs spinclass: not built) |
+| 3 | agent to moxy-bridge | unix socket created by the frontend bridge, bound into the agent unit as one inode (R: the serve-socket pattern, `ServeConn.Frontend`) | processes in the agent unit's cgroup | frontend end checks `SO_PEERCRED` and `/proc/<pid>/cgroup` (R). `/mcp` and `/healthz` open to the unit; `/clown/exclude-tools` and `/clown/system-prompt` answer 403 to the unit and to a peer with no class (R, FDR 0020, clown#301) |
+| 4 | bridge to moxy | the stdio of `systemd-run --pipe ... moxy serve-mcp`: no socket exists | only the frontend holds the pipe; the agent cannot name it and cannot see the twin's pid ns (R for `PrivatePIDs`) | none needed beyond the kernel. **U:** the bridge today wraps a stdio child it starts itself; a child that is a `systemd-run --pipe` client (its lifetime, its signal handling, one child shared by all connections) is not tried |
+| 5 | moxy to broker | unix socket where `spinclass serve` listens, bound into the twin as one inode (I; the agent unit gets the same broker by a loopback relay, R) | the twin's processes | the broker's peer check (R: `peercheck`, spinclass links it). **U:** whether the broker admits a twin peer class today; broker down means moxy falls to its static floor, never to allow (R, moxy FDR 0016) |
+| 6 | agent to broker | loopback `127.0.0.1:19001` relay to the same socket (R, `brokersocket.go`) | the agent unit | unchanged |
+| 7 | deadman | shim connects to the frontend's socket before anything else; EOF means kill the unit (R, FDR 0020 #319) | one connection per unit | frontend peer-checks the cgroup (R). The twin needs its own; **U:** the second listener |
+| 8, 9 | shim execs claude / moxy; moxy forks a moxin per call | process exec inside each unit | in-unit | the moxin inherits the twin's view and nothing else (I; moxin commands are per-call subprocesses, R, `run.toml`) |
+
+### The two units and the frontend
+
+| | Agent unit | Twin unit | Frontend |
+|---|---|---|---|
+| Namespaces | private mount, pid, net (lo only), devpts, tmp | same set, own instances | host |
+| Worktree | read-write | **read-only** (I) | n/a |
+| Operator home | hidden (`ProtectHome=tmpfs`); `HOME` = agent home | hidden; same agent-home path readable, same `HOME` so `~` agrees (spinclass: broker maps `home:` to the agent home, R per light-cedar) | the real one |
+| Egress | proxy only, allowlist from the sweatfile | none (I) | n/a |
+| Sockets in | S1, relays, serve socket, deadman, idle, monitors | broker B, deadman | creates all |
+| Credentials | none (ssh agent only if the spec passes it) | none | all |
+| Env | scrubbed allowlist | scrubbed; no frontend env, no `CLOWN_SESSION_ID` (I) | full |
+| Limits | `MemoryHigh` 6G, `TasksMax` 4096, ... (R) | own, smaller (I, not designed) | n/a |
+
+### Where each rule is enforced
+
+| Rule | Enforced by | Fails closed how |
+|---|---|---|
+| The twin's spec never exceeds the agent's | clown derives it by narrowing (I); spinclass checks it (I, not built) | refuse to launch, no moxy |
+| The twin cannot write, reach the network, read the home or see the worker | kernel/systemd: RO bind, `PrivateNetwork`, `ProtectHome`, `PrivatePIDs` (R for the properties on the agent unit; the twin is the same builder, U) | the property is required, launch refused |
+| Only the profile's tools exist | moxy `allow-tools` from the moxyfile (R), enforced again by the frontend bridge's call refusal (R for the pattern) | a tool not listed is absent |
+| Read paths follow the sweatfile | broker, `[folio]` rules (R per light-cedar); `toolbox` re-asks and opens with `openat2(RESOLVE_NO_SYMLINKS)` (R, moxy FDR 0016); folio, rg, jq do not (R, moxy#490) | a denied path is refused; no broker falls to the static floor |
+| The worker cannot widen the ceiling | moxyfile is a read-only bind from clown state (I); exclusions and refusal live in the frontend (R pattern); control routes refuse the unit (R) | nothing in the unit can write either |
+| The profile's effective tool set has no `grit_*` | R3' in spinclass: profile resolution reports the set, no report means refuse (R per light-cedar; needs the profile field) | spawn refused |
+
+## Least privilege: is every moxin as privileged as the hungriest one?
+
+Short answer: **in one twin, yes**, for the process and its view. All the moxins
+in it share one filesystem view, one network (none) and one set of sockets, so
+the twin must hold what its most demanding tool needs. What follows is how far
+that is bounded, and what the options cost. Labels as above; none of it measured.
+
+### What bounds the twin (I)
+
+1. **The twin is a narrowing of the agent unit**, so everything it can reach
+   the worker can already reach with Bash and the native file tools in its own
+   unit (R: FDR 0020 lists Bash and the native tools as available). Adding the
+   twin gives the worker no filesystem or network authority it lacks. The
+   "maximum" is capped by the agent unit, not by the hungriest moxin in the
+   catalog.
+2. **Tools that need more than the unit never join it.** The credentialed or
+   host-reaching moxins stay separate frontend servers, each with its own scope:
+   issue-filer (a token), smith (forge credentials, absent in confinement),
+   chrest (the browser), the Google moxins. That is already "one small server per
+   moxin" (R: `frontendMoxins`), outside the unit.
+3. **The default moxyfile is one class.** The operator's default is `toolbox` +
+   `env` + `man` (rg and jq may fold into toolbox, moxy#502). These read files
+   under the unit's view and do nothing else (toolbox is read-only by its
+   annotation, R; `env` and `man` I, I did not read their annotations). One
+   **read-only twin, no network, no sockets but the broker** is their greatest
+   common denominator, and it is below the agent unit's privilege.
+
+### Options
+
+| Option | Least privilege it reaches | Cost | What fails closed |
+|---|---|---|---|
+| **A. One twin, all hosted moxins** (recommended to start, default moxyfile only) | the max over the hosted tools, capped at the agent unit; shared view | 1 extra unit per session; one more deadman, spec check, cgroup limits; startup latency unmeasured | unit does not start: no moxy. A tool that needs more than the twin has gets `EROFS`/`EACCES`; the twin cannot be widened at run time (spec fixed at launch). Inside the twin, which tool runs is moxy policy, and a bug in a hosted tool acts with the twin's authority |
+| **B. One twin per privilege class** (e.g. read-only; worktree-write; nix daemon + egress) | each class's max. A read tool never shares a process or view with a write or network tool | 2-3 units per session; each class is a separate MCP server, so the worker's tool names and the profile's `context_servers` change (`moxy-ro`, `moxy-rw`), one moxyfile and ceiling per class | each unit independently; a class that cannot start is simply absent |
+| **C. One tiny unit per moxin** (the `clown-builtin-moxins/issue-filer` shape, `moxy serve-moxin --name X`, R) | exact per-moxin: a moxin gets only the binds and network it declares | N units per session (3 for the default moxyfile); N deadmen, N cgroup budgets, N startups; **U:** moxins declare no needs (binds, sockets, net), so a per-moxin spec has no source today: it is new moxin metadata in moxy's lane | each unit independently; a moxin with no declared needs gets the narrowest default (I) |
+| **D. Per-call sandbox inside one twin** (a launcher wrapped around each moxin command: Landlock, seccomp or a bind subset) | per call: a moxin subprocess gets only its own paths and syscalls. The long-lived moxy proxy keeps the union | no new units; a wrapper in each moxin's `command` (moxy's lane), fork and ruleset setup per call, unmeasured. **U:** Landlock availability in the kernel build (the host reports Linux 6.12.76 in this session's environment, V; the build config was not read) | only if the wrapper aborts when it cannot apply the ruleset; a wrapper that falls back to running unsandboxed fails open, so that must be a design rule |
+
+Recommendation (I): start with A for the read-only default, and **only** that
+class. Add B when a profile names a tool that needs write or daemon authority
+(and ask first whether the worker's native tools already cover it: the
+unit has Write/Edit, and the chix tools in porter's keep set are the daemon users).
+Keep credentialed moxins as C-style frontend servers, as today. Treat D as
+defense in depth that moxy can add independently; it composes with any of A-C
+and is the only one that narrows within a single twin.
+
+What does **not** become structural under any option: moxy's allow-list inside
+the twin is policy relative to a bug in a hosted tool. The structural part is the
+unit boundary (what the twin can touch at all) and that the worker cannot reach
+or change the twin, its config or its refusals.
+
 ## The profile's moxyfile as the ceiling (U, needs a decision)
 
 A profile today is `context_servers` (keep servers) plus `context_excluded`

@@ -1,0 +1,54 @@
+@startuml structural-moxy-confined-v2
+' V2: moxy in a sibling ("twin") unit. Design diagram; nothing here is built.
+' Edge numbers key into the table in the design note. [S] spinclass, [C] clown,
+' [K] kernel/systemd, [M] moxy/broker enforce the rule on that element.
+skinparam shadowing false
+skinparam defaultFontSize 13
+skinparam rectangle {
+  RoundCorner 8
+}
+skinparam ArrowFontSize 12
+skinparam nodesep 40
+skinparam ranksep 70
+
+rectangle "AGENT UNIT   clown-agent.slice/<unit>.service\nspec = spinclass spec [S]   launched by clown [C]\nPrivatePIDs  PrivateNetwork (lo only)  ProtectHome=tmpfs\nworktree READ-WRITE  egress via proxy  no moxy [K]" as AU #E8F0FF {
+  rectangle "agent-exec shim\n(unit init, pid 1)" as SHIM1
+  rectangle "claude + Bash + subagents\n(the worker = the adversary)" as CLAUDE
+  rectangle "agent-relay\n127.0.0.1 -> unix sockets" as RELAY
+}
+
+rectangle "TWIN UNIT   clown-agent.slice/<unit>-moxy.service\nspec = NARROWING of the agent spec [C], checked [S]\nPrivatePIDs  PrivateNetwork  ProtectHome=tmpfs\nworktree READ-ONLY  no egress, no daemon, no credentials\nscrubbed env [K]" as TU #E8FFE8 {
+  rectangle "twin shim\n(unit init, pid 1)" as SHIM2
+  rectangle "moxy serve-mcp\nenforce mode, allow-tools = profile ceiling\nmoxyfile bound read-only [M][K]" as MOXY
+  rectangle "moxin subprocesses (per call)\ntoolbox, env, man\ntoolbox opens with openat2 NO_SYMLINKS [M]" as MOXINS
+}
+
+rectangle "FRONTEND SCOPE   operator uid, outside both units" as FE #F4F4F4 {
+  rectangle "clown (frontend)\nderives twin spec, writes moxyfile,\nlaunches both units, deadman listener [C]" as CLOWN
+  rectangle "moxy-bridge (clown-stdio-bridge)\ncall refusal by exclusion list [C]\ncontrol routes: frontend peers only [C]" as BRIDGE
+  rectangle "spinclass serve\npolicy broker: sweatfile [folio] rules [S]\ngrit_* with minted credential" as SERVE
+}
+
+AU -[hidden]right- TU
+SHIM1 -[hidden]right- SHIM2
+CLAUDE -[hidden]down- RELAY
+SHIM1 -[hidden]down- CLAUDE
+SHIM2 -[hidden]down- MOXY
+MOXY -[hidden]down- MOXINS
+AU -[hidden]down- FE
+TU -[hidden]down- FE
+CLOWN -[hidden]right- BRIDGE
+BRIDGE -[hidden]right- SERVE
+
+CLOWN -up-> SHIM1 : 1 launch
+CLOWN -up-> SHIM2 : 2 launch
+CLAUDE ..> BRIDGE : 3 MCP, unix socket
+BRIDGE <-up-> MOXY : 4 stdio pipe
+MOXY ..> SERVE : 5 broker socket
+RELAY ..> SERVE : 6 broker relay
+SHIM1 -down-> CLAUDE : 8 exec
+SHIM2 -down-> MOXY : 8 exec
+MOXY -down-> MOXINS : 9 fork/exec per call
+SHIM1 ..> CLOWN : 7 deadman
+SHIM2 ..> CLOWN : 7 deadman
+@enduml
