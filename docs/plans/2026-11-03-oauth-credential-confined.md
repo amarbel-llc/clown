@@ -10,6 +10,22 @@ Environment the facts were read against: clown dc55f0b (this worktree at
 59628ca), claude-code 2.1.310, spinclass 0.2.1+54e0b62, piggy and
 piggy-agent manpages as installed on flic on 2026-11-03.
 
+## Operator rulings (2026-11-03, relayed by the coordinator; tentative)
+
+1. Candidate B, the frontend injection proxy: approved, tentatively.
+2. Holder: H1 (a tmpfs runtime file written by `piggy secrets reconcile`)
+   to start. Moving to piggy's securely hosted secrets is a follow-up issue
+   the coordinator is filing in clown.
+3. Fallback, **reversed** from this note's first recommendation for v1: a
+   confined launch with no token source falls back to today's read-only
+   login-file bind. Once the token-file path has proven reliable (a few
+   weeks), the operator switches to refusing the launch. So the refusal is
+   a **switch** (a sweatfile or profile setting, default: fall back for
+   now), not a hardcode. The text below is updated to match.
+4. Go for the probe recipe (`just explore explore-model-inject-probe`,
+   below); the V3 structural-moxy build and the `InjectProxy` code wait for
+   the probe's result and the operator's go.
+
 ## Recommendation, in one paragraph
 
 Build the **model-API injection proxy** (candidate B below): the unit's
@@ -208,10 +224,15 @@ claude calls with the placeholder.
   rejected; rotate the entry and reconcile". It never retries with another
   credential and never falls back to a bound file.
 - The token source is missing at launch (first boot before a reconcile, or
-  a revoked entry): the confined launch is **refused** with a message
-  naming `piggy secrets reconcile`, in the same spirit as the 2026-10-26
-  ruling that an absent card has no fallback to the inherited ssh-agent
-  (clown#324). A silent fallback to the read-only bind would reopen fact 1.
+  a revoked entry): governed by a **switch** (ruling 3). Default for v1:
+  the launch falls back to today's read-only login-file bind and logs one
+  line saying so (the fallback is never silent). With the switch set to
+  refuse, the launch is refused with a message naming
+  `piggy secrets reconcile`, in the spirit of the 2026-10-26 ruling that an
+  absent card has no fallback to the inherited ssh-agent (clown#324). The
+  operator flips the switch once the token file has proven reliable; while
+  the fallback is on, fact 1 (the worker can read the login file) holds for
+  those launches, which is the accepted v1 trade.
 - The source vanishes mid-run (operator deleted it): the next request fails
   as above. H1's proxy reads the file per request (a few hundred bytes from
   tmpfs), so revocation is immediate and no proxy holds a stale copy
@@ -262,7 +283,7 @@ claude calls with the placeholder.
 
 | | Owns |
 |---|---|
-| clown | `InjectProxy`, its socket, relay entry and capability; the unit env (base URL, placeholder, empty API key); dropping the operator credential bind for confined launches; the no-fallback refusal; the 401 notice to holders; the canary redaction test; `LimitCORE=0` on agent units; the FDR 0020 update (environment table, sockets table, "The operator's claude credential"). The token-source path convention (a fixed path under `$XDG_RUNTIME_DIR`, published in FDR 0020) so spinclass needs no spec change for H1. |
+| clown | `InjectProxy`, its socket, relay entry and capability; the unit env (base URL, placeholder, empty API key); dropping the operator credential bind for confined launches when a token source exists; the fallback switch (fall back by default, refuse when set); the 401 notice to holders; the canary redaction test; `LimitCORE=0` on agent units; the FDR 0020 update (environment table, sockets table, "The operator's claude credential"). The token-source path convention (a fixed path under `$XDG_RUNTIME_DIR`, published in FDR 0020) so spinclass needs no spec change for H1. |
 | spinclass | Nothing for H1. For H2: the holder, its priming verb and the serve route; optionally `model-inject-proxy` in the sweatfile's required capabilities. The spec stays at version 1. |
 | piggy | The ebox entry format, `secrets reconcile` to a runtime-dir target (confirm the manifest allows it), the card-present decryption, the one-PIN batch. |
 | circus | The entry in `infra/secrets`, the home-manager manifest line, how the entry is addressed. |
@@ -275,8 +296,10 @@ claude calls with the placeholder.
 2. **Policy: where the plaintext may live.** H1 (tmpfs file, same exposure
    class as today's credentials file, machinery exists) or H2 (memory only,
    new spinclass machinery). H3 as an optional attended-only complement.
-3. **Policy: no fallback.** A confined launch with no token source refuses
-   rather than binding the login file.
+3. **Policy: fallback switch.** Ruled: v1 falls back to the login-file bind
+   when the token source is missing; the refusal is a setting the operator
+   flips later. Still open: where the switch lives (sweatfile, so spinclass
+   owns the policy per repo, or profile, so clown does) and its name.
 4. **Policy: egress.** Drop the API and login hosts from the confined
    default allowlist once B is live.
 5. **The card:** every reconcile, every rotation, and the probe below.
@@ -287,22 +310,47 @@ claude calls with the placeholder.
 
 A probe, not product code, run by the operator with the card present:
 
-1. Add `just explore-model-inject-probe` (group `explore`): a throwaway
-   loopback HTTP proxy under `zz-explore/` that reads the real bearer from
-   its stdin (so it is never in argv or a file), replaces `Authorization`,
-   forwards to the API host, and logs method, path, status and whether the
-   OAuth `anthropic-beta` header was present. It prints nothing else.
-2. Run, unconfined, at the operator's terminal:
-   `piggy pass show <entry> | just explore-model-inject-probe` in one
-   terminal, and in another `claude -p 'say ok'` with
-   `ANTHROPIC_BASE_URL=http://127.0.0.1:<port>`,
-   `CLAUDE_CODE_OAUTH_TOKEN=clown-placeholder-not-a-credential` and
-   `ANTHROPIC_API_KEY=` in the environment, then once more with
-   `ANTHROPIC_AUTH_TOKEN` instead of the OAuth variable, and once with
-   `--output-format stream-json` for streaming.
+1. `just explore explore-model-inject-probe` (in `zz-explore/justfile`,
+   written 2026-11-03): a throwaway loopback HTTP proxy that reads the real
+   bearer from its stdin (never argv, a file, the environment or a log),
+   replaces `Authorization`, forwards to the API host, and logs per request
+   the method, path, upstream status, the `anthropic-beta` value, what the
+   `Authorization` header held (placeholder, other or none, never the
+   value), the request header names, bytes and elapsed. Bodies are never
+   logged. `just explore debug-model-inject-probe-smoke` checks the
+   plumbing with a dummy bearer (the upstream's 401 is the pass signal) and
+   needs no card.
+2. Run, unconfined, at the operator's terminal with the card present.
+   Terminal 1, from the clown checkout (the entry lives in circus's
+   `infra/secrets`; its exact name is the operator's):
+
+   ```
+   PIGGY_STORE_DIR=$HOME/eng/repos/circus/infra/secrets \
+     piggy pass show <entry> | just explore explore-model-inject-probe
+   ```
+
+   Terminal 2, from any directory, once per variant:
+
+   ```
+   env ANTHROPIC_BASE_URL=http://127.0.0.1:18080 \
+       CLAUDE_CODE_OAUTH_TOKEN=clown-placeholder-not-a-credential \
+       ANTHROPIC_API_KEY= claude -p 'say ok'
+   env ANTHROPIC_BASE_URL=http://127.0.0.1:18080 \
+       ANTHROPIC_AUTH_TOKEN=clown-placeholder-not-a-credential \
+       ANTHROPIC_API_KEY= claude -p 'say ok'
+   env ANTHROPIC_BASE_URL=http://127.0.0.1:18080 \
+       CLAUDE_CODE_OAUTH_TOKEN=clown-placeholder-not-a-credential \
+       ANTHROPIC_API_KEY= claude -p --verbose --output-format stream-json 'say ok'
+   ```
+
+   If the stored login interferes with the first variant, repeat it with
+   `CLAUDE_CONFIG_DIR=$(mktemp -d)` added, which isolates the run from the
+   operator's `.credentials.json`.
 3. Record: does claude start without a login prompt; which variable yields
-   which header set; which paths it calls; does streaming survive; does the
-   placeholder appear in the project transcript.
+   which header set (the probe's `beta=` and `headers=` fields); which
+   paths it calls; does streaming survive; does the placeholder appear in
+   the project transcript (`grep -rl clown-placeholder-not-a-credential
+   ~/.claude/projects/`).
 
 The probe's log decides the env knob, the header handling and the path
 allowlist; then the build is one component (`InjectProxy`), its launch

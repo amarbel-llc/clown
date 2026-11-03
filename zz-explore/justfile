@@ -2214,3 +2214,151 @@ explore-agent-scope-mainpid PRIVATE_PIDS='yes' POLLS='400':
     cg=$(systemctl --user show -p ControlGroup --value "$unit")
     cat "/sys/fs/cgroup$cg/cgroup.procs" 2>/dev/null
     systemctl --user stop "$unit"
+
+# clown#336 probe: a throwaway loopback reverse proxy for the model API that
+# injects the real bearer, the shape the design note recommends for confined
+# sessions (docs/plans/2026-11-03-oauth-credential-confined.md, "Smallest first
+# step"). The bearer is read from STDIN (first line) and lives only in this
+# process's memory: never argv, a file, the environment or a log line. Each
+# request logs one line: method, path, upstream status, the anthropic-beta
+# header's value (not a secret), what the Authorization header held
+# (placeholder / other / none, never the value), the request header NAMES,
+# bytes and elapsed. Bodies are never logged. MAX_REQUESTS > 0 exits after that
+# many requests (the smoke recipe uses 1). Run it at the operator's card:
+#   PIGGY_STORE_DIR=<circus>/infra/secrets piggy pass show <entry> \
+#     | just explore explore-model-inject-probe
+# then point claude at http://127.0.0.1:PORT with the placeholder credential.
+# Serves the clown#336 design loop; retire once InjectProxy lands.
+explore-model-inject-probe PORT='18080' UPSTREAM='api.anthropic.com' MAX_REQUESTS='0':
+    #!/usr/bin/env -S python3 -I
+    import http.client, http.server, ssl, sys, threading, time
+
+    PORT = int("{{PORT}}")
+    UPSTREAM = "{{UPSTREAM}}"
+    MAX_REQUESTS = int("{{MAX_REQUESTS}}")
+    PLACEHOLDER = "clown-placeholder-not-a-credential"
+    DROP = {"host", "authorization", "connection", "keep-alive", "proxy-authorization",
+            "transfer-encoding", "te", "trailer", "upgrade", "content-length"}
+
+    bearer = sys.stdin.readline().strip()
+    sys.stdin.close()
+    if not bearer:
+        print("probe: no bearer on stdin; pipe `piggy pass show <entry>` into this recipe", file=sys.stderr)
+        sys.exit(2)
+    if bearer == PLACEHOLDER:
+        print("probe: the bearer on stdin is the placeholder itself", file=sys.stderr)
+        sys.exit(2)
+
+    lock = threading.Lock()
+    served = 0
+
+    def read_chunked(r):
+        out = b""
+        while True:
+            size = int(r.readline().split(b";")[0].strip() or b"0", 16)
+            if size == 0:
+                while r.readline().strip():
+                    pass
+                return out
+            out += r.read(size)
+            r.readline()
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, *args):
+            pass
+
+        def do_ANY(self):
+            global served
+            start = time.monotonic()
+            if self.headers.get("Transfer-Encoding", "").lower() == "chunked":
+                body = read_chunked(self.rfile)
+            else:
+                body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            authz = self.headers.get("Authorization")
+            kind = "none" if authz is None else ("placeholder" if authz == "Bearer " + PLACEHOLDER else "other")
+            beta = self.headers.get("anthropic-beta") or "-"
+            names = ",".join(sorted(set(k.lower() for k in self.headers.keys())))
+            out = [(k, v) for k, v in self.headers.items() if k.lower() not in DROP]
+            out += [("Host", UPSTREAM), ("Authorization", "Bearer " + bearer),
+                    ("Content-Length", str(len(body))), ("Connection", "close")]
+            status, n, note = "-", 0, ""
+            try:
+                conn = http.client.HTTPSConnection(UPSTREAM, 443, context=ssl.create_default_context(), timeout=600)
+                conn.putrequest(self.command, self.path, skip_host=True, skip_accept_encoding=True)
+                for k, v in out:
+                    conn.putheader(k, v)
+                conn.endheaders(body)
+                resp = conn.getresponse()
+                status = resp.status
+                self.send_response(resp.status, resp.reason)
+                for k, v in resp.getheaders():
+                    if k.lower() not in ("transfer-encoding", "connection", "content-length"):
+                        self.send_header(k, v)
+                self.send_header("Connection", "close")
+                self.end_headers()
+                while True:
+                    chunk = resp.read(8192)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    self.wfile.flush()
+                    n += len(chunk)
+                conn.close()
+            except Exception as e:
+                note = " upstream-error=" + type(e).__name__
+                try:
+                    self.send_error(502, "upstream error: " + type(e).__name__)
+                except Exception:
+                    pass
+            self.close_connection = True
+            ms = int((time.monotonic() - start) * 1000)
+            print(f"{time.strftime('%H:%M:%S')} {self.command} {self.path} -> {status} authz={kind} "
+                  f"beta={beta} headers={names} req={len(body)}B resp={n}B {ms}ms{note}", flush=True)
+            with lock:
+                served += 1
+                if MAX_REQUESTS and served >= MAX_REQUESTS:
+                    threading.Thread(target=self.server.shutdown, daemon=True).start()
+
+        do_GET = do_POST = do_PUT = do_PATCH = do_DELETE = do_HEAD = do_OPTIONS = do_ANY
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+    srv.daemon_threads = True
+    print(f"probe: http://127.0.0.1:{PORT} -> https://{UPSTREAM}; bearer read from stdin; "
+          f"max_requests={MAX_REQUESTS or 'unbounded'}; Ctrl-C to stop", flush=True)
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    print(f"probe: served {served} request(s)", flush=True)
+
+# Self-check of the probe's plumbing with a DUMMY bearer, never a real one:
+# starts the probe on a scratch port with MAX_REQUESTS=1, sends one
+# count_tokens request through it carrying the placeholder Authorization and
+# the OAuth beta header, and prints the probe's log line and the upstream's
+# status. The upstream answers 401 (the bearer is fake); that 401 proves the
+# forwarding, the header rewrite and the relay of the reply. Needs egress to
+# the upstream. Usage: just explore debug-model-inject-probe-smoke [PORT]
+debug-model-inject-probe-smoke PORT='18081':
+    #!/usr/bin/env bash
+    set -uo pipefail
+    log=$(mktemp); body=$(mktemp); trap 'rm -f "$log" "$body"' EXIT
+    printf 'dummy-bearer-not-a-credential\n' \
+        | just explore-model-inject-probe {{PORT}} api.anthropic.com 1 >"$log" 2>&1 &
+    pid=$!
+    for _ in $(seq 50); do
+        (exec 3<>"/dev/tcp/127.0.0.1/{{PORT}}") 2>/dev/null && break
+        sleep 0.1
+    done
+    status=$(curl -s -o "$body" -w '%{http_code}' -X POST \
+        "http://127.0.0.1:{{PORT}}/v1/messages/count_tokens" \
+        -H 'content-type: application/json' -H 'anthropic-version: 2023-06-01' \
+        -H 'anthropic-beta: oauth-2025-04-20' \
+        -H 'Authorization: Bearer clown-placeholder-not-a-credential' \
+        -d '{"model":"claude-sonnet-5-5","messages":[{"role":"user","content":"ok"}]}')
+    wait "$pid"
+    echo "status via probe: $status (401 expected with the dummy bearer)"
+    echo "--- probe log"; cat "$log"
+    echo "--- upstream body (first 300 bytes)"; head -c 300 "$body"; echo
+    [[ $status == 401 ]]
