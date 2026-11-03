@@ -2228,9 +2228,17 @@ explore-agent-scope-mainpid PRIVATE_PIDS='yes' POLLS='400':
 #   PIGGY_STORE_DIR=<circus>/infra/secrets piggy pass show <entry> \
 #     | just explore explore-model-inject-probe
 # then point claude at http://127.0.0.1:PORT with the placeholder credential.
+# python3 is not on the host's PATH (2026-11-03: the operator's shell had none),
+# so the script is written to .tmp and run through `nix shell` with python3
+# from clown's own locked nixpkgs (--inputs-from: no registry lookup, no
+# api.github.com resolve); `model-inject-python` is the shared resolver.
 # Serves the clown#336 design loop; retire once InjectProxy lands.
 explore-model-inject-probe PORT='18080' UPSTREAM='api.anthropic.com' MAX_REQUESTS='0':
-    #!/usr/bin/env -S python3 -I
+    #!/usr/bin/env bash
+    set -uo pipefail
+    root=$(git rev-parse --show-toplevel)
+    script="$root/.tmp/model-inject-probe/probe.py"; mkdir -p "$(dirname "$script")"
+    cat >"$script" <<'PY'
     import http.client, http.server, ssl, sys, threading, time
 
     PORT = int("{{PORT}}")
@@ -2332,6 +2340,24 @@ explore-model-inject-probe PORT='18080' UPSTREAM='api.anthropic.com' MAX_REQUEST
     except KeyboardInterrupt:
         pass
     print(f"probe: served {served} request(s)", flush=True)
+    PY
+    # stdin (the bearer) is inherited by python; nix shell does not read it.
+    exec nix shell --inputs-from "$root" nixpkgs#python3 -c python3 -I "$script"
+
+# Resolve the probe's interpreter without the host's PATH: python3 from clown's
+# locked nixpkgs via `nix shell --inputs-from` (the flake.lock rev; no floating
+# registry entry, so no api.github.com resolve). Prints nothing on success;
+# exits non-zero with the reason when nix cannot provide it. The card-side
+# recipe runs this BEFORE piggy so a missing interpreter never consumes a
+# decrypt. Usage: just explore model-inject-python
+model-inject-python:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    root=$(git rev-parse --show-toplevel)
+    command -v nix >/dev/null || { echo "FAIL: no nix on PATH" >&2; exit 2; }
+    out=$(nix shell --inputs-from "$root" nixpkgs#python3 -c python3 -I -c 'import http.client, http.server, ssl; print("ok")' </dev/null 2>&1) \
+        || { echo "FAIL: python3 via 'nix shell --inputs-from $root nixpkgs#python3' is unavailable:" >&2; echo "$out" | tail -n 20 >&2; exit 2; }
+    [[ $out == *ok* ]] || { echo "FAIL: python3 started but the probe's modules are missing:" >&2; echo "$out" | tail -n 20 >&2; exit 2; }
 
 # Self-check of the probe's plumbing with a DUMMY bearer, never a real one:
 # starts the probe on a scratch port with MAX_REQUESTS=1, sends one
@@ -2372,6 +2398,7 @@ explore-model-inject-probe-serve STORE='' PORT='18080' ENTRY='anthropic/claude-c
     #!/usr/bin/env bash
     set -uo pipefail
     command -v piggy >/dev/null || { echo "FAIL: no piggy on PATH" >&2; exit 2; }
+    command -v nix >/dev/null || { echo "FAIL: no nix on PATH" >&2; exit 2; }
     store="{{STORE}}"
     if [[ -z $store ]]; then
         circus="$HOME/eng/repos/circus"
@@ -2380,6 +2407,8 @@ explore-model-inject-probe-serve STORE='' PORT='18080' ENTRY='anthropic/claude-c
     fi
     [[ -d $store ]] || { echo "FAIL: store $store is not a directory" >&2; exit 2; }
     [[ -f $store/{{ENTRY}}.ebox ]] || { echo "FAIL: no entry {{ENTRY}} in $store (expected $store/{{ENTRY}}.ebox)" >&2; exit 2; }
+    echo "checking the probe's interpreter before any card use (nix shell, clown's locked nixpkgs; first time may download python3)"
+    just model-inject-python || { echo "FAIL: the probe cannot start, so piggy was not run; nothing decrypted" >&2; exit 2; }
     echo "store: $store"
     echo "entry: {{ENTRY}} (decrypting at the card; the PIN prompt is piggy's)"
     echo "probe: http://127.0.0.1:{{PORT}}; run 'just explore explore-model-inject-probe-run' in another terminal"
@@ -2394,7 +2423,7 @@ explore-model-inject-probe-serve STORE='' PORT='18080' ENTRY='anthropic/claude-c
 explore-model-inject-probe-run ISOLATED='false' PAUSE='true' PORT='18080':
     #!/usr/bin/env bash
     set -uo pipefail
-    command -v claude >/dev/null || { echo "FAIL: no claude on PATH" >&2; exit 2; }
+    for t in claude git mktemp; do command -v "$t" >/dev/null || { echo "FAIL: no $t on PATH" >&2; exit 2; }; done
     root=$(git rev-parse --show-toplevel)
     dir="$root/.tmp/model-inject-probe"; mkdir -p "$dir"; cd "$dir"
     (exec 3<>"/dev/tcp/127.0.0.1/{{PORT}}") 2>/dev/null \
@@ -2425,6 +2454,8 @@ explore-model-inject-probe-run ISOLATED='false' PAUSE='true' PORT='18080':
 explore-model-inject-probe-report:
     #!/usr/bin/env bash
     set -uo pipefail
+    for t in git grep sed; do command -v "$t" >/dev/null || { echo "FAIL: no $t on PATH" >&2; exit 2; }; done
+    grep --version 2>/dev/null | grep -q GNU || { echo "FAIL: grep is not GNU grep (-r is needed)" >&2; exit 2; }
     root=$(git rev-parse --show-toplevel)
     dir="$root/.tmp/model-inject-probe"
     slug=$(printf '%s' "$dir" | sed 's/[^A-Za-z0-9]/-/g')
@@ -2462,3 +2493,17 @@ debug-model-inject-probe-run-smoke PORT='18082':
     echo "run exit=$?"
     kill -INT -- "-$pid" 2>/dev/null; sleep 1; kill -TERM -- "-$pid" 2>/dev/null; wait "$pid" 2>/dev/null
     echo "--- probe log"; cat "$log"
+
+# Run the probe smokes the way the operator's shell sees them: no devshell, no
+# direnv, `env -i` with only HOME, USER, the just binary's dir, the nix profile
+# and the system profile on PATH. What fails here fails at the card terminal.
+# RECIPE is the smoke to run (default the dummy-bearer plumbing check; pass
+# debug-model-inject-probe-run-smoke for the three claude variants).
+debug-model-inject-probe-plain-env RECIPE='debug-model-inject-probe-smoke':
+    #!/usr/bin/env bash
+    set -uo pipefail
+    justbin=$(command -v just)
+    path="$(dirname "$justbin"):$HOME/.nix-profile/bin:/run/current-system/sw/bin:/run/wrappers/bin:/usr/bin:/bin"
+    echo "plain env PATH=$path"
+    env -i HOME="$HOME" USER="${USER:-$(id -un)}" PATH="$path" TERM="${TERM:-dumb}" \
+        just {{RECIPE}}

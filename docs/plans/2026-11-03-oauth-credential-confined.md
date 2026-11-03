@@ -333,8 +333,12 @@ A probe, not product code, run by the operator with the card present:
 
    The serve recipe resolves the store to the main circus checkout's
    `infra/secrets` (a worktree is refused; `STORE` overrides), checks the
-   entry's ebox exists before touching the card, and pipes
-   `piggy pass show` into the probe. The run recipe takes `ISOLATED=true`
+   entry's ebox exists and that the probe's interpreter starts (python3
+   through `nix shell --inputs-from` clown's locked nixpkgs: the host has
+   no python3 and the registry is never consulted) before touching the
+   card, and pipes `piggy pass show` into the probe. The recipes were
+   checked from an `env -i` shell with only the nix and system profiles on
+   PATH (`just explore debug-model-inject-probe-plain-env`). The run recipe takes `ISOLATED=true`
    as its first argument to add a fresh `CLAUDE_CONFIG_DIR` under the
    scratch dir, away from the stored login.
 3. Record: does claude answer "ok" in each variant (terminal 2); the
