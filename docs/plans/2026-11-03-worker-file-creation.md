@@ -5,6 +5,72 @@ facts from spinclass/light-cedar (marked "spinclass:" below; R = read in
 code or a manpage, I = inferred). Nothing here widens a profile; the
 recommendation is a permission-profile decision for the operator.
 
+## Operator ruling (2026-11-03, relayed by the coordinator): option B
+
+The operator chose **B**: workers get create, list and search through the
+V3 in-unit moxy (`folio` and `rg` tools, path policy per `[folio]` rule,
+broker denials naming the entry) and do **not** get the builtin `Glob`,
+`Grep` or `Write` back, so A is off for now. Consequences:
+
+- The V3 default confined moxyfile grows from `toolbox + env + man` to
+  include a `folio` and an `rg` subset. That widening is a separate
+  operator ratification: the V3 build plan must carry the exact tool
+  subsets, the `[folio]` rules that bound them to the worktree, and what
+  the broker denies, as one decision. A preliminary proposal is at the end
+  of this section; the build waits for the clown#336 variant-3 probe
+  result and the operator's go.
+- B reaches only launches that have the in-unit moxy, so the `worker`
+  profile must regain `moxy/moxy` in its keep set (with its saved
+  exclusions) once R3' accepts an in-unit moxy; see the scope analysis
+  below.
+
+**Scope: is the gap confined-only?** No, it is profile-bound. The denylist
+applies to every claude launch that is not `--tent` or `--naked`
+(`resolveClaudeForRun`: tent gets an empty denylist, naked bypasses clown).
+The gap appears exactly where a launch has no moxy: the builtin `worker`
+and `canary-spinclass` profiles drop `moxy/moxy` from their keep set
+(`context_servers` in `builtin.toml`); every other builtin profile keeps it
+(`reviewer`, `porter`, `canary`, `canary-grit` with exclusions; the
+provider profiles `claude-*` with no cheap-context at all), and an
+unconfined session with moxy creates files with `folio_write` and
+searches with `rg_search`, as the coordinator's own does. So:
+
+| Launch | moxy | Gap |
+|---|---|---|
+| confined spawn on `worker` (the clown#339 case) | none | yes |
+| an **unconfined** launch on `worker` or `canary-spinclass` (`clown --profile worker`, or a spawn that is not confined but uses the worker profile), attended or `dontAsk` | none | **yes, the same gap**; whether such launches occur is the coordinator's and spinclass's knowledge |
+| `porter`, `reviewer`, `canary`, `canary-grit`, `claude-*`, unconfined | frontend moxy | no |
+| confined spawn on a profile that keeps moxy | refused by R3 today (no in-unit `moxy/moxy`); under V3 the in-unit moxy | no gap once V3 lands |
+| `--tent` | moxy, and the native tools (empty denylist) | no |
+| `--naked` | no clown wrapping | no |
+| codex, opencode, crush providers | the denylist is claude-only | not this gap |
+
+So the operator's assumption holds for every launch except an unconfined
+one on the two moxy-less profiles. Under B that case closes by giving
+`worker` its moxy back for unconfined launches (the frontend moxy, as every
+other profile has it), which is the same profile edit B needs anyway; A is
+not needed for it. A re-proposal of A for those launches only would be: the
+subtractive knob honoured only when the profile keeps no moxy. Not
+recommended while B is the direction.
+
+**Preliminary `folio`/`rg` subset for the V3 ratification** (to be
+finalised with the V3 build plan, not a decision here):
+
+- `rg`: `search` (read-only; the broker judges each path operand).
+- `folio` read side: `read`, `ls`, `glob`, `tree`, `file-type`, `mktemp`
+  (writes under `.tmp`, which `pwd:` covers).
+- `folio` write side: `write`, `mkdir`, `mv`, `rm` (a worker that adds a
+  test also renames or removes one); each judged per path by the broker,
+  so a worktree-bounded `[folio]` write entry is the bound.
+- Excluded from the default: `cp` and `link` (a link into the worktree
+  from outside is the symlink case the structural-moxy note flags; `cp`
+  reads any path the broker allows, which the read entry already bounds,
+  so it may come back later), `chmod`, `du`, `df`, `tar`.
+- `[folio]`: one trusted write entry for `spinclass:worktree` (which
+  covers `.tmp` and the agent home per spinclass#443), read entries as the
+  sweatfile has them today; everything else unmatched, which under
+  `dontAsk` is a deny that names "unmatched".
+
 ## What was observed
 
 A confined, unattended session on the `worker` profile (posh/prime-olive,
@@ -205,6 +271,12 @@ creation through an unreviewed shell step rather than a permissioned tool.
   spinclass declines: the prefix rule covers creation.
 
 ## Smallest first change
+
+Superseded by the ruling above: with B chosen, the first change is the V3
+build plan carrying the ratification package (tool subsets, `[folio]`
+rules, denials) and the `worker` profile regaining moxy; the banner line
+in "Surfacing" still applies. The text below is kept as the record of
+what A would have been.
 
 Option A's two halves plus the banner line, landed in this order:
 
