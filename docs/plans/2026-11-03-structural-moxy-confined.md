@@ -6,6 +6,140 @@ note; this one covers what clown must build and change. Labels: **R** read in
 code or docs this session, **I** inferred, **U** unverified or undecided.
 Nothing here was built or run.
 
+## Status after the operator's challenge (read this first)
+
+The operator asked what a sibling twin (V2) buys over **in-unit moxy with a
+protected ceiling** (call it V3). I re-checked from code (next section). Revised
+view: **for tools whose authority is within the unit (toolbox, env, man, folio
+reads), V3 is adequate and much cheaper; V2 buys little there.** V2 below is kept
+as the fallback for a moxy that must hold more than the unit has, which by the
+existing pattern should instead be a frontend-class server. I recommended V2
+before checking how much moxy's in-unit holes matter against a worker that already
+has the unit; that recommendation is withdrawn for the default moxyfile.
+
+## Challenge: what does a twin buy over a hardened in-unit moxy?
+
+V3 = moxy stays in the agent unit; the ceiling is the profile's `allow-tools`
+written into the read-only global moxyfile; moxy's own narrowing is armed with
+`MOXY_PARENT_MOXYFILE`; broker and toolbox `openat2` as today. Labels: R read in
+code or docs this session, I inferred, U unverified.
+
+### The decisive fact: the worker has the unit's whole authority without moxy
+
+- The profile's `CLOWN_DISALLOWED_TOOLS` for `worker` does not list Bash, Read,
+  Write or Edit (R, `builtin.toml`); FDR 0020 lists Bash network tools as
+  available in the unit and the live-check runbook has the worker run `cat` from
+  its Bash (R). Whether the sweatfile's `[claude] allow` actually permits Bash in
+  a given unattended session is the operator's sweatfile (U; light-cedar asked
+  the same).
+- **Even with Bash denied there is another exec route (R):** FDR 0020 says "A
+  confined worker with just-us can run any recipe in its justfile", and the worker
+  can edit that justfile in its read-write worktree. `run_recipe` is therefore
+  arbitrary exec with the unit's authority, and it is a worker profile's required
+  server (R3 keeps just-us so `run_recipe` works).
+- So no moxy tool, in or out of a twin, gives a worker authority the unit does not
+  already give it. **The unit is the boundary; the tool ceiling is policy about
+  which MCP tools are offered.** That is the operator's reasoning and it holds.
+  It also means the sweatfile's `[folio]` read rules bind moxy's reads only: a
+  worker with Bash or `run_recipe` reads whatever the unit's mounts show. If read
+  rules must be structural, they belong in the unit's binds (the spec is
+  spinclass's "what the unit must see"), with the broker as a finer layer on top.
+
+### (1) Is the exclusion route the only way to widen the ceiling in-unit?
+
+No. From code and docs:
+
+| Route | Widens what | Status |
+|---|---|---|
+| `/clown/exclude-tools` on the in-unit bridge (FDR 0020, `agent-relay`) | clears the profile's **deny-list** (`context_excluded`) back to the `allow-tools` ceiling | R. Not a ceiling widening if the profile's ceiling is an allow-list in the read-only moxyfile; it only removes narrowing. Today the profile is only a deny-list, so today it IS the profile's whole expression |
+| worktree moxyfile / `.moxy/moxyfile` (the worktree is the in-unit moxy's cwd and is worker-writable) | `allow-tools` can only narrow through the hierarchy (R, `IntersectAllowTools`, FDR 0020 InUnitMoxyfile text). It can add `[[servers]]` (a server's command is arbitrary exec) | R for the narrowing; **U** whether a planted `[[servers]]` named like an allowed bare name (`folio`) is served: moxy says "bare names are one namespace" (R, moxy FDR 0013) |
+| `restart` (in `InUnitMoxyfile`'s allow-tools) | re-reads the hierarchy, so it picks up the worktree edits above | R. Judged only against `MOXY_PARENT_MOXYFILE`, which clown does **not** set for the in-unit moxy (R: the only non-test setters are juggler's) |
+| `MOXIN_PATH` / `.moxy/moxins` | a planted moxin (moxy FDR 0013: "the one way a child can widen a tier or gain a moxin outright is a different `MOXIN_PATH`") | R for the mechanism; **U** whether the in-unit moxy's `MOXIN_PATH` is set in practice (it comes from the plugin's server env, not checked). The `agent home` the twin would also read is worker-writable, so V2 has the same planted-moxin question |
+| env of the in-unit moxy | the relay starts it from `in-unit-servers.json`, bound read-only (R, `unit.go` `ServeFile`) | R: the worker cannot change what moxy is started with. It can start its own moxy; that is just a process |
+| sibling processes | ptrace, signal, kill the in-unit moxy: same uid in the same unit pid ns (R: `PrivatePIDs` hides other units, not this one); Yama state **U** | R. No authority gain (moxy has the unit's), but the worker can make moxy do anything the unit can, ignoring its ceiling |
+
+moxy has already built the answer for the file routes: `MOXY_PARENT_MOXYFILE`
+(R, moxy FDR 0013) makes `moxy serve mcp` refuse to serve unless its effective
+moxyfile narrows a reference read once at startup and pinned (so a later
+`restart` is judged against it), and `resolved-moxins` pins moxin identity.
+Clown does not arm it for the in-unit moxy today.
+
+### (2) Is the grit_* concern solvable by the in-unit allow-list?
+
+For **exposure**, yes, if (1)'s file routes are closed: an allow-list ceiling with
+no `grit` in it, in the read-only moxyfile, pinned by `MOXY_PARENT_MOXYFILE`.
+For **authority**, there is little to protect in-unit: a moxy `grit_*` call in the
+unit is git run with the unit's rights, and the unit's refs are read-only and it
+holds no credential (R, spinclass FDR 0035 round L: raw `update-ref`/commit fail
+on the read-only refs; the credential cannot be read). What R3 guards is therefore
+**spinclass's own grit policy** (stash refusal, force deny, FDR 0036) rather than
+authority the unit lacks. I could not confirm that is R3's intended threat; it is
+spinclass's rule and light-cedar can say (question below).
+
+### (3) Minimum changes, V3 vs V2
+
+| Repo | V3 (in-unit, protected ceiling) | V2 (twin) |
+|---|---|---|
+| clown | (a) a profile ceiling field written to the in-unit global moxyfile (`InUnitMoxyfile` becomes generated, still read-only) [small]; (b) render a parent reference and set `MOXY_PARENT_MOXYFILE` (absolute, outside every worker-writable path) plus an absolute pinned `MOXIN_PATH` for the in-unit moxy [small-medium]; (c) stop depending on `/clown/exclude-tools` for the ceiling | everything in V3's (a) and (b), **plus** a second-unit launcher, the narrowing function and its tests, a bridge whose child is a `systemd-run --pipe` client (not tried), a second deadman, a second socket, new peer classes |
+| spinclass | R3' accepts an in-unit moxy whose profile reports the effective tool set with no `grit_*`; `catalogWidenings` compares the new field. **No broker change: the in-unit moxy is in the agent unit's cgroup, which the broker admits today (R per light-cedar, `policybroker_serve.go:133-147`)** | R3' with `placement=sibling`; broker peer class + record field; per-unit probes (F10/F13/F7...); stop/close/`staleUnits` for a second unit; no spec-narrowing input exists |
+| moxy | confirm `MOXY_PARENT_MOXYFILE` under the in-unit `serve mcp` incl. a worktree `[[servers]]` and `.moxy/moxins` shadow (the earlier experiment E3 covered `serve-moxin` only, U); `openat2`-style opens for folio/rg/jq only matter if a moxy tool ever exceeds the unit | the same, and `serve mcp` behind the twin |
+
+V3 is two repos plus a moxy confirmation; V2 is three repos plus new unit
+machinery in spinclass. I did not size either beyond this.
+
+### (4) What V2 covers that V3 does not
+
+| Threat | V2 | V3 | Matters here? |
+|---|---|---|---|
+| ptrace / `/proc` / signalling of moxy by the worker | separate pid ns (R) | possible (same unit); Yama U | only for integrity of moxy's decisions. The worker has the unit's authority anyway |
+| resource exhaustion | own cgroup budget (the agent unit has 6G / 4096 tasks / 400% shared with moxy, R) | shared, so a runaway worker starves its own moxy | availability of the worker's own tools only |
+| compromised or planted moxin binary | no: the twin reads the same worker-writable agent home, so it needs the same `MOXIN_PATH` pin | no, same pin | equal, both need `resolved-moxins` |
+| a moxy tool with more authority than the unit | the twin could hold less than the unit (read-only worktree) | no | **this is the real V2 case, and it is not the default moxyfile**: toolbox/env/man are read-only compute within the unit's view. Tools that exceed the unit stay frontend-class (R: `frontendMoxins`) |
+
+So V2 mainly buys integrity against a worker who tampers with its own moxy, and
+that gains nothing while the worker has Bash or `run_recipe`.
+
+### The algebra question
+
+Operator: one permission-resolution model (grants as values, combined by a meet)
+instead of point rules across profile, sweatfile, broker and unit spec.
+
+- **It already exists in two places, as one relation**: moxy's narrowing relation
+  (`pkg/narrowing`, a child `<=` parent, R) and spinclass's `catalogWidenings`
+  (R per light-cedar) are two implementations of "child narrows parent" over
+  different domains (tools; profile fields). Unit-spec narrowing has none.
+- **Where a meet fits:** the sets (tool names, anchors, bind lists, egress hosts)
+  combine by intersection, and the "profile narrows a base" checks are `<=`. A
+  shared `narrows` over those would give V2 the missing "twin spec <= agent spec"
+  check and give both paths one definition of "never widens".
+- **Where it does not:** light-cedar's point stands: the broker's verdicts are
+  allow/ask/deny per evaluated layer then the minimum, which is a per-request
+  decision, not a merged grant value. A single lattice over all of it would be a
+  large cross-repo abstraction for decisions that differ in kind.
+- **Does it simplify either path?** Mostly V2 (it removes the "no input for a
+  narrowing check" gap). V3 needs little more than moxy's existing narrowing plus
+  one profile field. I would not gate either path on it; adopt it incrementally as
+  the shared `narrows` relation if spinclass and moxy want it. I did not design it.
+
+### Revised recommendation (I)
+
+1. **V3 for the default moxyfile** (toolbox, env, man): in-unit moxy, profile
+   ceiling as an allow-list in the read-only moxyfile, `MOXY_PARENT_MOXYFILE` and a
+   pinned `MOXIN_PATH` armed by clown. No broker change. Drop the dependence on
+   the in-unit exclusion route for anything that is meant to be a ceiling.
+2. **Anything beyond the unit stays a frontend-class server**, one per authority,
+   as `issue-filer` is.
+3. **If the operator wants the tool surface itself to be a security boundary**,
+   that needs the worker to lack Bash, Write/Edit and `run_recipe` over an
+   editable justfile; that is a posture and a just-us question, not a moxy one,
+   and it is the thing to decide before choosing V2 for its own sake.
+4. **Read rules as structure** belong in the unit's binds; the broker is the finer
+   layer. That is spinclass's spec.
+
+Questions to light-cedar: is R3's concern spinclass's grit policy or authority
+(item 2); where do the sweatfile's `[claude] allow` rules live and can the worker
+edit them; will R3' accept an in-unit moxy that reports its tool set.
+
 ## The directive
 
 Operator, via circus/eager-holly (2026-11-03): confined workers need to reach
@@ -70,7 +204,7 @@ make "more than defined" impossible:
 So a plain frontend moxy trades the unit's mount namespace, which is a boundary,
 for path-name policy, which is not. I recommend against it.
 
-## Recommendation: moxy in a sibling unit, same view, outside the worker's reach (I)
+## V2: moxy in a sibling unit, same view, outside the worker's reach (I; now the fallback, see the status section)
 
 Serve moxy from a **second transient service** that clown starts next to the
 agent unit, instead of inside it or in the frontend:
