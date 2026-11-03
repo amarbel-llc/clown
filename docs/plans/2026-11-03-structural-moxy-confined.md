@@ -136,9 +136,31 @@ instead of point rules across profile, sweatfile, broker and unit spec.
 4. **Read rules as structure** belong in the unit's binds; the broker is the finer
    layer. That is spinclass's spec.
 
-Questions to light-cedar: is R3's concern spinclass's grit policy or authority
-(item 2); where do the sweatfile's `[claude] allow` rules live and can the worker
-edit them; will R3' accept an in-unit moxy that reports its tool set.
+### Spinclass's answers to the three questions (light-cedar, as reported)
+
+1. **R3 is policy, not authority.** FDR 0035 R3 calls itself "the grit tool-kind
+   right, the first hard-coded instance of the rights the moxy frontend will
+   enforce" (R). Moxy's grit would bypass spinclass's ownership model (FDR 0036:
+   stash refusal, force deny, branch ownership), not reach a credential: the
+   minted credential is outside the unit and refs, logs, config and hooks are
+   read-only (R, `buildUnitSpec` comments). My reading was right.
+2. **The `[claude] allow` rules are worker-writable today.** They are written to
+   `<worktree>/.claude/settings.local.json` at session creation
+   (`sweatfile.ApplyClaudeSettings`, `apply.go:261`), inside the read-write
+   worktree bind (R). FDR 0035 records it as a worker-writable file the
+   harness consumes, tracked as spinclass#400, open. Whether claude re-reads it
+   mid-session or only at (re)start is U; a restart picks up a planted file
+   either way. The worktree `.mcp.json` is the same. So under dontAsk the allow
+   list is policy, not a boundary, until #400 closes: the tool surface is not a
+   boundary against the worker, which is the V3 framing.
+3. **R3' would accept an in-unit moxy whose profile reports its tool set**, as a
+   design: reported set present, no `grit_*`, just-us kept; the placement report is
+   unnecessary for V3. Not built: it needs clown's profile field and spinclass's
+   `catalogWidenings` comparing it (until then a new field is unchecked).
+   **Caution to carry:** the reported set is clown's claim about the moxyfile it
+   armed; the worker can still exec another moxy in the unit. R3' is then an
+   honest check of the profile and a guard against a confused worker. **This note
+   must not call it structural**, and V3's ceiling is not either.
 
 ## The directive
 
