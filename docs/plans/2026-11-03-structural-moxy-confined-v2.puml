@@ -17,7 +17,7 @@ rectangle "AGENT UNIT   clown-agent.slice/<unit>.service\nspec = spinclass spec 
   rectangle "agent-relay\n127.0.0.1 -> unix sockets" as RELAY
 }
 
-rectangle "TWIN UNIT   clown-agent.slice/<unit>-moxy.service\nspec = NARROWING of the agent spec [C], checked [S]\nPrivatePIDs  PrivateNetwork  ProtectHome=tmpfs\nworktree READ-ONLY  no egress, no daemon, no credentials\nscrubbed env [K]" as TU #E8FFE8 {
+rectangle "TWIN UNIT   clown-agent.slice/<unit>-moxy.service\nspec = NARROWING of the agent spec [C]; running twin probed [S] (not built)\nPrivatePIDs  PrivateNetwork  ProtectHome=tmpfs\nworktree READ-ONLY  no egress, no daemon, no credentials\nscrubbed env [K]" as TU #E8FFE8 {
   rectangle "twin shim\n(unit init, pid 1)" as SHIM2
   rectangle "moxy serve-mcp\nenforce mode, allow-tools = profile ceiling\nmoxyfile bound read-only [M][K]" as MOXY
   rectangle "moxin subprocesses (per call)\ntoolbox, env, man\ntoolbox opens with openat2 NO_SYMLINKS [M]" as MOXINS
@@ -44,7 +44,7 @@ CLOWN -up-> SHIM1 : 1 launch
 CLOWN -up-> SHIM2 : 2 launch
 CLAUDE ..> BRIDGE : 3 MCP, unix socket
 BRIDGE <-up-> MOXY : 4 stdio pipe
-MOXY ..> SERVE : 5 broker socket
+MOXY ..> SERVE : 5 broker socket (refused today)
 RELAY ..> SERVE : 6 broker relay
 SHIM1 -down-> CLAUDE : 8 exec
 SHIM2 -down-> MOXY : 8 exec

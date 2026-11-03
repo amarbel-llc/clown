@@ -106,8 +106,11 @@ What it costs:
 - A second unit per session: lifecycle (start before the agent, stop with the
   session, die when the frontend dies, the same deadman as the agent unit),
   startup latency, a second cgroup under `clown-agent.slice`, and spinclass's
-  confinement check, which currently expects one unit per session (**U**: see
-  question (a) to spinclass).
+  confinement machinery, which assumes one unit per session (R per light-cedar:
+  the unit record carries one Unit/Cgroup/ServeSocket; F11 iterates one record
+  per live session; `staleUnits`, `stop.go` and `close_signal.go` act on
+  `rec.Unit`; F10, F13, F7 and the rest probe only the agent unit, so **nothing
+  probes the twin today**, and the deadman alone is not a close).
 - Not everything moxy does is reachable with the unit's authority. That is the
   point, but it means: git remote operations still go through spinclass serve's
   frontend grit; nix builds still go through the daemon socket the spec binds;
@@ -132,10 +135,10 @@ only parsed). Boxes are units and processes; numbers key into the tables.
 | # | Edge | Mechanism | Who can connect | Check, and where |
 |---|---|---|---|---|
 | 1 | clown starts the agent unit | `systemd-run --user --pipe --collect` with the pty slave as stdio (R, FDR 0020) | clown only | required unit properties; clown refuses to launch if one cannot be applied (R) |
-| 2 | clown starts the twin | same launcher, twin spec, `BindReadOnlyPaths=` of the moxyfile directory (I) | clown only | same; spinclass checks the twin spec is a narrowing of the agent spec (I, needs spinclass: not built) |
+| 2 | clown starts the twin | same launcher, twin spec, `BindReadOnlyPaths=` of the moxyfile directory (I) | clown only | same. clown derives the twin spec by a pure function of the agent spec (read-only worktree, no egress, fewer sockets) with a clown test that it only narrows (I). Spinclass does **not** check a twin spec: it writes the one spec and never sees a derived one (R per light-cedar); it would probe the RUNNING twin instead (new F-rows, not built) |
 | 3 | agent to moxy-bridge | unix socket created by the frontend bridge, bound into the agent unit as one inode (R: the serve-socket pattern, `ServeConn.Frontend`) | processes in the agent unit's cgroup | frontend end checks `SO_PEERCRED` and `/proc/<pid>/cgroup` (R). `/mcp` and `/healthz` open to the unit; `/clown/exclude-tools` and `/clown/system-prompt` answer 403 to the unit and to a peer with no class (R, FDR 0020, clown#301) |
 | 4 | bridge to moxy | the stdio of `systemd-run --pipe ... moxy serve-mcp`: no socket exists | only the frontend holds the pipe; the agent cannot name it and cannot see the twin's pid ns (R for `PrivatePIDs`) | none needed beyond the kernel. **U:** the bridge today wraps a stdio child it starts itself; a child that is a `systemd-run --pipe` client (its lifetime, its signal handling, one child shared by all connections) is not tried |
-| 5 | moxy to broker | unix socket where `spinclass serve` listens, bound into the twin as one inode (I; the agent unit gets the same broker by a loopback relay, R) | the twin's processes | the broker's peer check (R: `peercheck`, spinclass links it). **U:** whether the broker admits a twin peer class today; broker down means moxy falls to its static floor, never to allow (R, moxy FDR 0016) |
+| 5 | moxy to broker | unix socket where `spinclass serve` listens, bound into the twin as one inode (I; the agent unit gets the same broker by a loopback relay, R) | the twin's processes | the broker's peer check (R: `peercheck`, spinclass links it). **Today the broker refuses a twin** (R per light-cedar, `policybroker_serve.go:133-147`): it admits `SameUID` plus a pid in the agent unit's cgroup (`CheckUnitCgroup(pid, rec.Unit)`), and a confined launch whose record is unreadable admits nobody. Refused until a spinclass change and a record field naming the twin unit/cgroup both land (the record is clown's format, `LoadUnitRecord`). Broker down means moxy falls to its static floor, never to allow (R, moxy FDR 0016) |
 | 6 | agent to broker | loopback `127.0.0.1:19001` relay to the same socket (R, `brokersocket.go`) | the agent unit | unchanged |
 | 7 | deadman | shim connects to the frontend's socket before anything else; EOF means kill the unit (R, FDR 0020 #319) | one connection per unit | frontend peer-checks the cgroup (R). The twin needs its own; **U:** the second listener |
 | 8, 9 | shim execs claude / moxy; moxy forks a moxin per call | process exec inside each unit | in-unit | the moxin inherits the twin's view and nothing else (I; moxin commands are per-call subprocesses, R, `run.toml`) |
@@ -157,7 +160,7 @@ only parsed). Boxes are units and processes; numbers key into the tables.
 
 | Rule | Enforced by | Fails closed how |
 |---|---|---|
-| The twin's spec never exceeds the agent's | clown derives it by narrowing (I); spinclass checks it (I, not built) | refuse to launch, no moxy |
+| The twin's spec never exceeds the agent's | clown derives it by a pure narrowing function with a clown test (I); spinclass does not check the spec but would probe the running twin (new F-rows, not built) | refuse to launch, no moxy |
 | The twin cannot write, reach the network, read the home or see the worker | kernel/systemd: RO bind, `PrivateNetwork`, `ProtectHome`, `PrivatePIDs` (R for the properties on the agent unit; the twin is the same builder, U) | the property is required, launch refused |
 | Only the profile's tools exist | moxy `allow-tools` from the moxyfile (R), enforced again by the frontend bridge's call refusal (R for the pattern) | a tool not listed is absent |
 | Read paths follow the sweatfile | broker, `[folio]` rules (R per light-cedar); `toolbox` re-asks and opens with `openat2(RESOLVE_NO_SYMLINKS)` (R, moxy FDR 0016); folio, rg, jq do not (R, moxy#490) | a denied path is refused; no broker falls to the static floor |
@@ -237,14 +240,16 @@ allow-list the moxy unit enforces. Three shapes:
 My preference is (1) for clown plus (3)'s trust rule: the profile proposes, the
 trusted sweatfile may only narrow, and the moxy unit's effective list is the
 intersection. This is the same shape as the user-profile "narrows a builtin"
-rule spinclass already enforces (Tier 1), so a new `moxy_allow` is checked by the
-existing `catalogWidenings`. **U:** whether that check can read a new field
-without a spinclass change.
+rule spinclass already enforces (Tier 1), but `catalogWidenings` lists the
+fields it compares explicitly, so a new `moxy_allow` is **not** compared until
+spinclass adds it (R per light-cedar). Until then a user profile could widen the
+ceiling unchecked. The change is small and test-first on their side and must land
+with or before clown's field.
 
 ## What clown has to change (R for locations, I for the changes)
 
 1. **A second-unit launcher** next to `runInAgentScope`
-   (`cmd/clown/agentscope.go`): same spec, different command (`moxy serve-mcp`
+   (`cmd/clown/agentscope.go`): the narrowed spec (a pure function, tested), different command (`moxy serve-mcp`
    behind the stdio bridge), no pty, a unix socket output. Reuses
    `prepareAgentScope`; the unit properties are the agent unit's.
 2. **The socket into the agent unit** (`Spec.Sockets` / the serve-socket
@@ -257,10 +262,18 @@ without a spinclass change.
 4. **The exclusion push** (`applyInUnitExclusions`, readback file) becomes a
    frontend push over the control route plus a frontend readback, not an
    in-unit record.
-5. **Profile templates:** `worker` and `canary-spinclass` keep `moxy/moxy` with
-   a real `moxy_allow` (no `grit_*`, `toolbox_run` in); the partition test and
-   the "worker must drop moxy whole" test change **only after** spinclass's R3
-   changes. I have not touched either.
+5. **Profile templates:** `worker` and `canary-spinclass` keep moxy with a real
+   `moxy_allow` (no `grit_*`, `toolbox_run` in); the partition test and the
+   "worker must drop moxy whole" test change **only after** spinclass's R3
+   changes. I have not touched either. Server name: R3's test keys on the exact
+   name `moxy/moxy` (`confineprofile.go` `moxyServer`), so R3' could not tell an
+   in-unit moxy from the twin by name. Proposal (spinclass's preference):
+   profile resolution reports **(a)** the effective tool set and **(b)**
+   `placement=sibling`; clown guarantees a confined launch never starts an
+   in-unit moxy when the profile reports sibling; R3' accepts only if both are
+   reported and the set has no `grit_*`, and refuses anything else. The
+   alternative, a distinct server name for the twin, needs `claude.allow`
+   entries or a hook change (below). Not decided.
 6. **Docs:** FDR 0020: the "Consumer" table row for moxy (it is no longer "inside
    the unit as claude's stdio child"), the sentence "A frontend moxy would be a
    ProtectHome bypass" (replaced by why a sibling unit is not), the
@@ -318,6 +331,38 @@ defense in depth. Their answers, as reported, not re-verified by me:
 Consequence for the ceiling: the profile gets an explicit tool list field
 (shape 1) and `profilelookup` reports the effective set; the sweatfile does not
 supply tools. The "hybrid with intersection" preference above is dropped.
+
+## Corrections from spinclass's review (light-cedar, on 054f655)
+
+Five points where my first draft was wrong or too optimistic; the sections above
+now say so. Checked by light-cedar against spinclass code, not re-read by me.
+
+1. The broker refuses a twin today (peer check is the agent unit's cgroup); it
+   needs a spinclass change and a unit-record field naming the twin.
+2. Spinclass does not check a twin spec; `catalogWidenings` compares profiles,
+   not unit specs. The honest design is a pure derivation function in clown with
+   a clown test, plus spinclass probing the running twin.
+3. The confinement checks, `stop`, `close` and `staleUnits` assume one unit per
+   session; the twin needs its own record entry, probe set and stop path.
+4. A new profile field is not compared by `catalogWidenings` until spinclass adds
+   it.
+5. R3' cannot tell the twin from an in-unit moxy by server name; use the explicit
+   report (tool set plus `placement=sibling`).
+
+Confirmed: `home:` in a confined session maps to the agent home (the twin must set
+the same `HOME`); `[folio]` is evaluated only by `spinclass serve`'s broker; the
+option recommendation (A for the read-only default, B on demand, credentialed
+moxins stay frontend, D as defense in depth with abort-on-failure).
+
+Flagged, unresolved (inferred by spinclass, not checked):
+
+- **A read-only twin versus cached results.** moxy streams large results into the
+  madder blob store and tools take `madder://blobs/<digest>` back (chaining).
+  A read-only twin cannot write blobs unless the madder store is bound writable.
+  Where results land is undecided; it is an authority the twin would then hold.
+- **The hook's moxy read allow list (#372)** matches the existing plugin prefix; a
+  twin under another server name needs `claude.allow` entries or a hook change
+  (operator question 4, unruled).
 
 ## Open questions
 
