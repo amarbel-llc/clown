@@ -160,8 +160,14 @@ func prepareAgentScope(specPath, specDigest, unit string, argv, extraEnv []strin
 	if err != nil {
 		return refused, err
 	}
+	// Decided before anything is staged: proxy-only refuses here, before the
+	// unit exists, and the answer decides whether the operator's login is bound.
+	credential, err := launchModelCredential(os.Stderr)
+	if err != nil {
+		return refused, err
+	}
 	agentHome := filepath.Join(spec.Worktree, ".tmp", "agent-home")
-	plumbing, err := stageAgentHome(spec, agentHome, cwd)
+	plumbing, err := stageAgentHomeFor(spec, agentHome, cwd, credential != agentscope.ModelCredentialProxy)
 	if err != nil {
 		return refused, fmt.Errorf("staging the agent home: %w", err)
 	}
@@ -177,6 +183,9 @@ func prepareAgentScope(specPath, specDigest, unit string, argv, extraEnv []strin
 		PlumbingRO:     plumbing.ro,
 		Shim:           []string{clownExePath(), "agent-exec"},
 		Argv:           argv,
+		// ModelCredential is where the unit's credential comes from; the proxy
+		// itself starts in startFrontendEndpoints.
+		ModelCredential: credential,
 		// Read here, in the frontend that launches the unit: the marker
 		// (or its [attach] carrier) never enters the unit (clown#320).
 		Unattended: unattendedValue() == "1",
@@ -221,7 +230,8 @@ func startFrontendEndpoints(launch *agentscope.Launch, forwardAddrs []string, in
 		return p, nil
 	}
 
-	allow, err := agentEgressAllowlist(launch.Spec.EgressAllow, os.Getenv("ANTHROPIC_BASE_URL"), logger)
+	modelProxy := launch.ModelCredential == agentscope.ModelCredentialProxy
+	allow, err := agentEgressAllowlistFor(launch.Spec.EgressAllow, os.Getenv("ANTHROPIC_BASE_URL"), modelProxy, logger)
 	if err != nil {
 		stop()
 		return nil, err
@@ -253,6 +263,25 @@ func startFrontendEndpoints(launch *agentscope.Launch, forwardAddrs []string, in
 	}
 	closers = append(closers, deadman.Close)
 	launch.DeadManSocket = sock
+
+	// The model injection proxy (clown#336): the unit's claude talks plain HTTP
+	// to a loopback port relayed to this socket; the real bearer is added here.
+	if modelProxy {
+		inject, err := newModelInjectProxy(launch.Unit, logger)
+		if err == nil {
+			sock, err = socket("model.sock")
+			if err == nil {
+				err = inject.Listen(sock)
+			}
+		}
+		if err != nil {
+			stop()
+			return nil, fmt.Errorf("model injection proxy: %w", err)
+		}
+		closers = append(closers, inject.Close)
+		launch.Model = agentscope.Relay{Listen: agentscope.ModelAddr(), Socket: sock}
+		fmt.Fprintln(os.Stderr, "clown: agent scope: model credential: injected by the frontend (placeholder in the unit)")
+	}
 
 	seen := map[string]bool{}
 	for _, addr := range forwardAddrs {
@@ -396,6 +425,14 @@ func baseURLHostPort(raw string) string {
 // not added, since the proxy refuses loopback targets and an agent unit never
 // reaches the host's loopback. The effective list is logged once.
 func agentEgressAllowlist(specAllow []string, baseURL string, logger *slog.Logger) (agentscope.Allowlist, error) {
+	return agentEgressAllowlistFor(specAllow, baseURL, false, logger)
+}
+
+// agentEgressAllowlistFor is agentEgressAllowlist; dropModelAPI removes the
+// model API and login hosts from clown's default list, for a launch whose model
+// traffic leaves from the frontend (the injection proxy, clown#336). A list the
+// spec names is the sweatfile's and is left alone.
+func agentEgressAllowlistFor(specAllow []string, baseURL string, dropModelAPI bool, logger *slog.Logger) (agentscope.Allowlist, error) {
 	for _, e := range specAllow {
 		host, _, err := net.SplitHostPort(e)
 		if err == nil && agentscope.IsLoopbackHost(host) {
@@ -415,6 +452,9 @@ func agentEgressAllowlist(specAllow []string, baseURL string, logger *slog.Logge
 			allow = append(append(agentscope.Allowlist{}, allow...), hp)
 		}
 	}
+	if dropModelAPI && source == "default" {
+		allow = agentscope.WithoutModelAPIHosts(allow)
+	}
 	if logger != nil {
 		logger.Info("agent scope: egress allowlist", "source", source, "allow", strings.Join(allow, ","))
 	}
@@ -433,6 +473,13 @@ type plumbingBinds struct{ rw, ro []string }
 // dir are bound over the seeded copies so login and `clown resume` keep
 // working.
 func stageAgentHome(spec agentscope.Spec, agentHome, cwd string) (plumbingBinds, error) {
+	return stageAgentHomeFor(spec, agentHome, cwd, true)
+}
+
+// stageAgentHomeFor is stageAgentHome; bindLogin false leaves the operator's
+// credentials file unbound (the model injection proxy is on, clown#336): the
+// in-unit file stays the empty seed, so claude still finds a file.
+func stageAgentHomeFor(spec agentscope.Spec, agentHome, cwd string, bindLogin bool) (plumbingBinds, error) {
 	var p plumbingBinds
 	opHome := spec.OperatorHome
 	cfg := filepath.Join(agentHome, ".claude")
@@ -455,14 +502,16 @@ func stageAgentHome(spec agentscope.Spec, agentHome, cwd string) (plumbingBinds,
 	}
 
 	creds := filepath.Join(opHome, ".claude", ".credentials.json")
-	if _, err := os.Stat(creds); err == nil {
+	if _, err := os.Stat(creds); err == nil || !bindLogin {
 		dst := filepath.Join(cfg, ".credentials.json")
 		if err := touch(dst); err != nil {
 			return p, err
 		}
-		// Read-only: the worker can still READ the operator's credential
-		// (FDR 0020), but can no longer overwrite or truncate it.
-		p.ro = append(p.ro, creds+":"+dst)
+		if bindLogin {
+			// Read-only: the worker can still READ the operator's credential
+			// (FDR 0020), but can no longer overwrite or truncate it.
+			p.ro = append(p.ro, creds+":"+dst)
+		}
 	}
 	slug := claudeProjectSlug(cwd)
 	transcripts := filepath.Join(opHome, ".claude", "projects", slug)

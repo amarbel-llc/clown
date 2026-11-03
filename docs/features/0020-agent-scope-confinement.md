@@ -70,6 +70,7 @@ unconfined fallback.
 | `OOMPolicy=` | `stop` | An OOM kill inside stops the whole unit rather than leaving a partial session. | works (shown by systemctl) |
 | `Restart=` | `no` | A stopped or killed unit stays down; recovering a hung session is the operator's, or spinclass's bounded `restart-hung-child` (ruled 2026-10-26; FDR 0023). Pinned explicitly although it is the transient default. | works |
 | `RuntimeMaxSec=` | `604800` (7 days), **unattended launches only**; none for interactive ones | Wall clock for a session nobody watches. "Unattended" is clown's `CLOWN_UNATTENDED=1` marker (FDR 0023), read by the frontend that launches the unit (`unattendedValue()`, so its [attach] carrier counts too); the marker itself never enters the unit. It is the backstop behind the frontend dead-man (#319). `clown agent-scope-run` reads the same marker, so its units get the wall clock under it too, although it applies no `dontAsk`. | works: `RuntimeMaxUSec` `1w` with the marker, `infinity` without |
+| model socket (`BindPaths=` of `$XDG_RUNTIME_DIR/clown/agent/<unit>/model.sock`, relayed from in-unit `127.0.0.1:19002`) | a launch with a usable model token file | clown#336. The frontend's `InjectProxy`: peer-checked like the forwards, three request shapes only, the real bearer injected there; the unit holds a placeholder. See "Model credential injection". |
 | dead-man socket (`BindPaths=` of `$XDG_RUNTIME_DIR/clown/agent/<unit>/deadman.sock`, shim `--deadman`) | every agent unit | clown#319. The shim, the unit's init, connects to the frontend's socket before it starts anything else; the frontend (`agentscope.DeadMan`) peer-checks that the caller is in the unit, holds that one connection, never writes to it, discards what arrives, and closes its listener, so nothing else in the unit can connect. When the frontend dies by any means (V: SIGKILL, which runs no defer, but the kernel closes its fds; R: SIGTERM, whose defer also stops the unit; R/I: SIGHUP, which the frontend does not handle, so Go's default action ends it, unless it was started with SIGHUP ignored, e.g. under nohup), the shim reads EOF, sends SIGTERM to every process in the unit's pid namespace (`kill(-1)` from init), SIGKILLs them after a 10 s grace (`DeadManGrace`), and exits, so the unit ends and `--collect` removes it. A provider still not reaped 5 s after the SIGKILL (uninterruptible sleep) does not hold the unit: the shim exits anyway, and init's exit tears the namespace down. The deadman tracks the frontend that launched the unit, which under [attach] is the inner clown inside the multiplexer: killing the outer clown or detaching the multiplexer client leaves the inner frontend, and so the unit, running, as the attach model intends. After a dead-man stop nothing writes an exit code: the frontend that writes the result is dead and the unit cannot write the state dir (no bind is added for it), so a result file that says the provider started, has no `exit_code`, and whose frontend is gone means the dead-man (or the wall clock) ended the unit. spinclass should require the `frontend-deadman` capability before it launches a confined session, since an older clown frontend runs units with no dead-man. Only EOF counts: no message from inside can keep the unit alive. A shim that cannot reach the socket, or is not the unit's init, refuses to start the provider. A restart stops its unit before it execs the new frontend, so the EOF from that exec finds no unit; the [attach] wrap runs the inner frontend as a child and never execs over a live unit. The unattended wall clock (`RuntimeMaxSec`) is the backstop. | works: a SIGKILLed `agent-scope-run` frontend took its unit down (host agent_scope.bats, 2026-10-26) |
 | `UnsetEnvironment=` | every key of `systemctl --user show-environment` not on the allowlist below | The user manager injects its own environment into every unit, including `DBUS_SESSION_BUS_ADDRESS` and `XDG_RUNTIME_DIR` (observed). | works |
 | `--slice=` | `clown-agent.slice` | Stable cgroup prefix for the piggy, posh and spinclass checks. | works |
@@ -219,8 +220,8 @@ secrets could carry it:
 |---|---|---|
 | `LC_` | locale; tools misrender without it | none |
 | `NIX_` | the devshell's toolchain wiring (`NIX_CC`, `NIX_CFLAGS_COMPILE`, `NIX_LDFLAGS`, ...), `NIX_PATH`, `NIX_SSL_CERT_FILE`, `NIX_REMOTE`, `NIX_PROFILES` | `NIX_CONFIG`, `NIX_USER_CONF_FILES` and `NIX_CONF_DIR` are **scrubbed** (clown#272): on the dev hosts `NIX_CONFIG` carries `access-tokens`, and the other two redirect nix to a config file that can. |
-| `ANTHROPIC_` | provider routing clown itself sets (`ANTHROPIC_BASE_URL`, model choice) | an `ANTHROPIC_API_KEY` passes. It is the agent's own model credential, which the agent needs. |
-| `CLAUDE_CODE_` | claude's own settings (`CLAUDE_CODE_TMPDIR` is redirected separately) | a `CLAUDE_CODE_OAUTH_TOKEN` passes. Like `ANTHROPIC_API_KEY`, it is a model credential the agent then holds. |
+| `ANTHROPIC_` | provider routing clown itself sets (`ANTHROPIC_BASE_URL`, model choice) | an `ANTHROPIC_API_KEY` passes. It is the agent's own model credential, which the agent needs. **With the model injection proxy on (clown#336) the credential keys are scrubbed** (`ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`, `ANTHROPIC_CUSTOM_HEADERS`, `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_CODE_OAUTH_REFRESH_TOKEN`, from the frontend env, the provider binding and the spec alike) and the unit gets `ANTHROPIC_BASE_URL=http://127.0.0.1:19002`, `CLAUDE_CODE_OAUTH_TOKEN=clown-placeholder-not-a-credential` and an empty `ANTHROPIC_API_KEY`; see "Model credential injection". |
+| `CLAUDE_CODE_` | claude's own settings (`CLAUDE_CODE_TMPDIR` is redirected separately) | a `CLAUDE_CODE_OAUTH_TOKEN` passes. Like `ANTHROPIC_API_KEY`, it is a model credential the agent then holds (not with the proxy on: see the `ANTHROPIC_` row). |
 | `TROUPE_` | the session's own XMPP identity (`TROUPE_XMPP_USER`) | `TROUPE_XMPP_PASSWORD_FILE` passes only as a path, bound read-only, and only when it names this session's own principal (clown#267). |
 
 **nix configuration (clown#272).** The nix config keys are dropped, not
@@ -352,7 +353,7 @@ at all.
 | session restart (spinclass#419) | nothing inside the unit | `clown restart` runs from spinclass, outside the unit, and queues on the frontend's control socket `$XDG_RUNTIME_DIR/clown/control/<principal>.sock` (0600, dir 0700). It is not bound in, and the unit cannot reach it: `XDG_RUNTIME_DIR` is passed, but under `ProtectHome=tmpfs` the unit's `/run/user` is an empty tmpfs holding only the sockets bound in (the idle socket among them). `internal/*/agentscope/idle_test.go` pins the unit's systemd-run arguments for one launch (not checked live): ProtectHome=tmpfs is set and no BindPaths=/BindReadOnlyPaths= source is the control socket or a directory above it; that the control socket is then unreachable inside a running unit rests on systemd's tmpfs semantics, read from its documentation. The self-close plugin's UserPromptSubmit hook (`clown idle-notify --busy <sock>`) sends a turn-start byte on the idle socket, so a restart counting down is cancelled rather than stopping a running turn (forgeable, see the row above), except under a verdict whose `when` is `now`, where the turn is stopped on purpose. `clown restart --when now` reaches the same control socket, so it is equally out of the unit's reach; it only makes the frontend run the preflight at once instead of at the next idle poke (serialized with the idle runner), and the verdict, the profile gate and the countdown still decide. On a `restart` preflight verdict the frontend first dry-runs the relaunch's profile gate (a refusal leaves the session running), then stops the unit like any exit (if it has not exited 30 s later, `systemctl --user kill --signal=SIGKILL <unit>`, bounded at 10 s, only while that launch still owns the unit; until the relaunch, idle pokes run nothing and a second restart is refused), waits until the serve socket stops answering (`ListenServeSocket` refuses a live one), and, unless `spinclass restart-preflight --peek` (read-only, run immediately before the exec) reports the session closed (a close that has only started counts) or, as a fallback, its worktree is gone, re-execs `clown` from PATH (an unknown peek, e.g. a spinclass without `--peek`, relaunches on the worktree check alone) with `--resume <principal>`; the new frontend starts a new unit. See clown-restart(1). |
 | clown-hook-allow (PreToolUse) | nothing | pure |
 | moxy hook logger | `$XDG_LOG_HOME/moxy/hooks` | redirected under the agent home, unless spinclass binds the real dir rw |
-| claude itself | `~/.claude` config, credentials, transcripts | `CLAUDE_CONFIG_DIR` points at a per-session dir. The operator's `.credentials.json` is bound in **read-only** (see "The operator's claude credential" below). The project's transcript dir is bound rw, so `clown resume` and freud keep working. `~/.claude/settings.json` is never writable from inside: a hook written there would run in unconfined sessions. |
+| claude itself | `~/.claude` config, credentials, transcripts | `CLAUDE_CONFIG_DIR` points at a per-session dir. The operator's `.credentials.json` is bound in **read-only** unless the model injection proxy is on, when it is not bound at all (see "The operator's claude credential" and "Model credential injection" below). The project's transcript dir is bound rw, so `clown resume` and freud keep working. `~/.claude/settings.json` is never writable from inside: a hook written there would run in unconfined sessions. |
 | ssh / git signing | piggy-agent socket | spec `sockets[]`. Every act prompts the operator (piggy-agent(1) SCOPES: the boundary is the prompt surface and the home directory, not the socket). |
 | nix | nix-daemon socket | `/nix/var/nix/daemon-socket/socket` (visible: outside `/home`, read-only under ProtectSystem, which does not stop `connect`) |
 
@@ -668,8 +669,9 @@ Since then (2026-10-19, all on flic):
   `egress-proxy` and `frontend-mcp-sockets`. Capabilities are added only
   with their code. The current list is `Capabilities` in
   `internal/*/agentscope/spec.go`: those four plus `in-unit-moxy`,
-  `statsd-relay`, `frontend-monitors`, `frontend-serve-socket` and
-  `frontend-deadman` (clown#319).
+  `statsd-relay`, `frontend-monitors`, `frontend-serve-socket`,
+  `frontend-deadman` (clown#319) and `model-inject-proxy` (clown#336; the
+  result's `model_credential` says which path a launch took).
 - **Evidence (that day).** `just verify-agent-scope` passed 11/11 (18/18 at
   2026-10-24), including a
   forwarded loopback listener being reachable while unforwarded ones and a
@@ -1043,7 +1045,64 @@ Open points to size before building it:
 
 Rough size: one new frontend component (an HTTP-aware sibling of
 `PortForward`), a token source and refresh in the frontend, unit tests,
-and a live round. Not built; a separate design.
+and a live round. Built as "Model credential injection" below (clown#336).
+
+## Model credential injection (clown#336)
+
+Design and rulings: `docs/plans/2026-11-03-oauth-credential-confined.md`;
+build plan: `docs/plans/2026-11-03-inject-proxy-build-plan.md`.
+
+`agentscope.InjectProxy` (`internal/*/agentscope/inject.go`) is a reverse
+proxy in the frontend on `$XDG_RUNTIME_DIR/clown/agent/<unit>/model.sock`,
+bound into the unit as a single inode and relayed from the in-unit
+`127.0.0.1:19002` (`ModelPort`; `Launch.Model`). It is peer-checked at
+accept with `authorizeUnitPeer`, as `PortForward` is. It forwards only
+`HEAD /api/hello` (without `Authorization`), `POST /v1/messages` (any query)
+and `POST /v1/messages/count_tokens` to `https://api.anthropic.com`; any
+other request is a 403 from the proxy with the path logged and no upstream
+call. It replaces `Authorization` with `Bearer <token>`, relays every other
+header (`anthropic-beta` included, never allowlisted) untouched, streams
+both bodies (`FlushInterval = -1`), passes an upstream status through
+(no retry) and logs method, path, status, bytes and elapsed, never a header
+or body. The first 401/403 per launch writes one stderr line and one log
+line naming the unit and "rotate the entry and run piggy secrets reconcile".
+
+**Token source.** `TokenSource` reads
+`$XDG_RUNTIME_DIR/clown/credentials/anthropic-oauth` (override:
+`CLOWN_MODEL_TOKEN_FILE`, frontend only) on every request: it must be a
+regular 0600 file owned by the frontend's uid and non-empty; one trailing
+newline is trimmed; the value is never in an error or log. Replacing the
+file rotates the credential and deleting it revokes at once. `piggy secrets
+reconcile` writes it at a card-present moment (circus's manifest entry).
+`CLOWN_MODEL_UPSTREAM` (https, or http on the loopback) and
+`CLOWN_MODEL_PROXY_PERMISSIVE=1` (any `/v1/` or `/api/` path, logged) are
+frontend-only test and probe seams; neither reaches the unit.
+
+**Unit side, proxy on.** The env credential keys are scrubbed and the unit
+gets the loopback base URL, the placeholder in `CLAUDE_CODE_OAUTH_TOKEN` and
+an empty `ANTHROPIC_API_KEY` (see the environment table). The operator's
+`.credentials.json` is not bound (the in-unit file stays the empty seed). With
+no `egress_allow` in the spec, the default list drops `api.anthropic.com`,
+`console.anthropic.com`, `platform.claude.com` and `claude.ai`: all model
+traffic leaves from the frontend. A spec list is the sweatfile's and is left
+alone. The result carries `model_credential: "proxy"` and the capability
+`model-inject-proxy` is listed.
+
+**Fallback.** The profile env knob `CLOWN_MODEL_CREDENTIAL` (frontend only)
+decides a launch with no usable token file: `proxy-or-login` (default) prints
+one stderr line, binds the operator login read-only as before and reports
+`model_credential: "login-file"`; `proxy-only` refuses the launch before the
+unit starts, naming the token path and `piggy secrets reconcile`, and the
+result file carries the error. A launch whose frontend env routes the model
+API elsewhere (a gateway or juggler-remote `ANTHROPIC_BASE_URL`) keeps its own
+routing: no proxy, no `model_credential`.
+
+**What the proxy does not change.** A worker can still use the model on the
+operator's account for the unit's lifetime through the proxy; it cannot read,
+copy or persist the credential. claude.ai connectors authenticate with the
+same token and stay off with another auth source set (claude prints a
+warning). A fallback launch has exactly the exposure the section above
+describes.
 
 ## Limitations and follow-ups
 

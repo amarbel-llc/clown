@@ -430,7 +430,7 @@ func (l Launch) Fail(err error) error { return l.fail(err) }
 
 func (l Launch) fail(err error) error {
 	if l.Spec.ResultPath != "" {
-		_ = WriteResult(l.Spec.ResultPath, Result{Unit: l.Unit, UID: os.Getuid(), Error: err.Error()})
+		_ = WriteResult(l.Spec.ResultPath, Result{Unit: l.Unit, UID: os.Getuid(), ModelCredential: l.ModelCredential, Error: err.Error()})
 	}
 	return err
 }

@@ -89,6 +89,14 @@ type Launch struct {
 	// `spinclass serve` creates: bound in as a single inode and relayed from
 	// BrokerPort. Zero: none.
 	Broker Relay
+	// Model is the model injection proxy's socket (clown#336), bound in as a
+	// single inode and relayed from ModelAddr(); the unit then holds only
+	// ModelPlaceholder. Zero: no proxy.
+	Model Relay
+	// ModelCredential is which path the unit got its model credential by,
+	// ModelCredentialProxy or ModelCredentialLoginFile, reported in the result;
+	// empty when the launch routes the model API itself (a gateway profile).
+	ModelCredential string
 	// Unattended gives the unit its wall clock (unattendedRuntimeMax,
 	// clown#320). The frontend sets it from clown's unattended marker
 	// (CLOWN_UNATTENDED, or its [attach] carrier); it is not a spec field.
@@ -133,6 +141,9 @@ func (l Launch) relays() []Relay {
 	if l.Broker.Socket != "" {
 		rs = append(rs, l.Broker)
 	}
+	if l.Model.Socket != "" {
+		rs = append(rs, l.Model)
+	}
 	if l.StatsdSocket != "" {
 		rs = append(rs, Relay{Listen: StatsdAddr(), Socket: l.StatsdSocket, UDP: true})
 	}
@@ -141,7 +152,7 @@ func (l Launch) relays() []Relay {
 
 // baseResult is the result fields known from the launch alone.
 func (l Launch) baseResult() Result {
-	return Result{Unit: l.Unit, Principal: l.Principal, UID: os.Getuid(), ServeSocket: l.Serve.Socket}
+	return Result{Unit: l.Unit, Principal: l.Principal, UID: os.Getuid(), ServeSocket: l.Serve.Socket, ModelCredential: l.ModelCredential}
 }
 
 // UnitName turns spinclass's hint into a valid, unique service name.
@@ -243,6 +254,9 @@ func (l Launch) properties() []string {
 	if l.Broker.Socket != "" {
 		props = append(props, "BindPaths="+l.Broker.Socket)
 	}
+	if l.Model.Socket != "" {
+		props = append(props, "BindPaths="+l.Model.Socket)
+	}
 	if l.StatsdSocket != "" {
 		props = append(props, "BindPaths="+l.StatsdSocket)
 	}
@@ -299,6 +313,14 @@ var passKeys = map[string]bool{
 // scrubbedKeys. FDR 0020 "Environment" justifies each one; a new prefix needs
 // an entry there.
 var passPrefixes = []string{"LC_", "NIX_", "ANTHROPIC_", "CLAUDE_CODE_", "TROUPE_"}
+
+// modelCredentialKeys carry, or redirect, a model credential; with the
+// injection proxy on none of them reaches the unit as the frontend, the
+// provider binding or the spec had it.
+var modelCredentialKeys = []string{
+	"ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_CUSTOM_HEADERS",
+	"CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
+}
 
 // tmpDirKeys name temp directories; they pass only when inside the worktree.
 var tmpDirKeys = map[string]bool{"TMPDIR": true, "CLAUDE_CODE_TMPDIR": true}
@@ -403,6 +425,19 @@ func (l Launch) environment() (set, unset []string) {
 	// The operator's ~/.ssh is hidden anyway.
 	if len(l.Shim) > 0 {
 		env["GIT_SSH_COMMAND"] = fmt.Sprintf("ssh -F none -o ProxyCommand=%q", l.Shim[0]+" egress-connect "+l.EgressSocket+" %h %p")
+	}
+	// With the model injection proxy the unit holds a placeholder and nothing
+	// else (clown#336): whatever credential the frontend env, the provider
+	// binding or the spec passed (the ANTHROPIC_ and CLAUDE_CODE_ prefixes
+	// pass by design otherwise) is dropped, and the proxy's settings are set
+	// last so none of those sources can override them.
+	if l.Model.Socket != "" {
+		for _, k := range modelCredentialKeys {
+			delete(env, k)
+		}
+		env["ANTHROPIC_BASE_URL"] = "http://" + l.Model.Listen
+		env["CLAUDE_CODE_OAUTH_TOKEN"] = ModelPlaceholder
+		env["ANTHROPIC_API_KEY"] = ""
 	}
 	for k, v := range env {
 		set = append(set, k+"="+v)

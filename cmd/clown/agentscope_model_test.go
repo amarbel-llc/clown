@@ -151,7 +151,14 @@ type modelLaunchFixture struct {
 func newModelLaunchFixture(t *testing.T, egressAllow []string) modelLaunchFixture {
 	t.Helper()
 	root := t.TempDir()
-	wt, opHome, runtime := filepath.Join(root, "wt"), filepath.Join(root, "home"), filepath.Join(root, "rt")
+	// A short runtime dir: the unit's sockets live under it and a unix socket
+	// path is limited to 107 bytes, which a test's own temp dir can exceed.
+	runtime, err := os.MkdirTemp("", "cm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(runtime) })
+	wt, opHome := filepath.Join(root, "wt"), filepath.Join(root, "home")
 	for _, d := range []string{wt, opHome, runtime} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			t.Fatal(err)

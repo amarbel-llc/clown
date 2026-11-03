@@ -245,6 +245,7 @@ var Capabilities = []string{
 	"frontend-monitors",     // job-platform monitors run in the frontend; no ringmaster or troupe state is bound into the unit
 	"frontend-serve-socket", // spinclass serve's bridge listens on a per-session unix socket admitting only the unit (Result.ServeSocket); no TCP listener
 	"frontend-deadman",      // the unit stops when its frontend dies, by any signal (clown#319)
+	"model-inject-proxy",    // the model API credential is injected by the frontend (InjectProxy); the unit holds a placeholder. Result.ModelCredential says which path a launch took
 }
 
 // Result is what clown reports back once the unit is active (FDR 0020
@@ -266,6 +267,11 @@ type Result struct {
 	// socket spinclass serve's bridge listens on, which admits only this unit
 	// (and the frontend). Absent when the session has none.
 	ServeSocket string `json:"serve_socket,omitempty"`
+	// ModelCredential is how the unit got its model credential: "proxy" (the
+	// frontend injects it; the unit holds a placeholder) or "login-file" (the
+	// operator's login bound read-only, the fallback). Absent when the launch
+	// routes the model API itself (a gateway profile). Read-only for consumers.
+	ModelCredential string `json:"model_credential,omitempty"`
 	// ExitCode is set once the unit has exited after its provider started.
 	ExitCode *int   `json:"exit_code,omitempty"`
 	Error    string `json:"error,omitempty"`

@@ -21,6 +21,11 @@ setup() {
   # The launcher binds the session's own XMPP credential; the caller's (often
   # a clown session) is not this test's business.
   unset TROUPE_XMPP_USER TROUPE_XMPP_PASSWORD_FILE
+  # Hermetic about the model credential (clown#336): no token file, so every
+  # test but the model-proxy ones below takes the login-file fallback however
+  # the operator's real runtime dir looks.
+  export CLOWN_MODEL_TOKEN_FILE="$BATS_TEST_TMPDIR/no-model-token"
+  unset CLOWN_MODEL_CREDENTIAL CLOWN_MODEL_UPSTREAM CLOWN_MODEL_PROXY_PERMISSIVE ANTHROPIC_BASE_URL
   local root
   root="$(git rev-parse --show-toplevel)"
   mkdir -p "$root/.tmp"
@@ -493,4 +498,101 @@ unit_props() {
   [ "$status" -eq 0 ]
   [ "$(jq -r .exit_code "$RESULT")" = 0 ]
   [ "$(jq -r '.error // ""' "$RESULT")" = "" ]
+}
+
+# start_fake_model_api serves a stand-in for api.anthropic.com on the
+# frontend's loopback and records "<method> <path> <Authorization>" per request
+# in $WT/api.log. The only credential in these tests is a fake (clown#336).
+start_fake_model_api() {
+  python3 -I -c '
+import sys
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+port_file, log_file = sys.argv[1], sys.argv[2]
+class H(BaseHTTPRequestHandler):
+    def handle_any(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        self.rfile.read(n)
+        with open(log_file, "a") as f:
+            f.write("%s %s %s\n" % (self.command, self.path, self.headers.get("Authorization", "-")))
+        body = b"fake-api-ok"
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+    do_GET = do_POST = do_HEAD = handle_any
+    def log_message(self, *a): pass
+s = ThreadingHTTPServer(("127.0.0.1", 0), H)
+with open(port_file, "w") as f: f.write(str(s.server_address[1]))
+s.serve_forever()
+' "$WT/api.port" "$WT/api.log" &
+  LISTENER_PID=$!
+  for _ in $(seq 50); do
+    [[ -s $WT/api.port ]] && break
+    sleep 0.1
+  done
+  [[ -s $WT/api.port ]]
+  export CLOWN_MODEL_UPSTREAM="http://127.0.0.1:$(cat "$WT/api.port")"
+}
+
+@test "agent_scope: with a token file the unit holds only the placeholder and the frontend injects the bearer" {
+  start_fake_model_api
+  printf '%s\n' clown-test-bearer-not-real >"$BATS_TEST_TMPDIR/model-token"
+  chmod 600 "$BATS_TEST_TMPDIR/model-token"
+  export CLOWN_MODEL_TOKEN_FILE="$BATS_TEST_TMPDIR/model-token"
+  run run_in_unit '
+    if grep -q clown-test-bearer-not-real /proc/1/environ /proc/self/environ; then echo FAIL token-in-environ; else echo PASS no-token-in-environ; fi
+    if [ "$CLAUDE_CODE_OAUTH_TOKEN" = clown-placeholder-not-a-credential ]; then echo PASS placeholder; else echo FAIL placeholder; fi
+    if [ -z "${ANTHROPIC_API_KEY-unset}" ] && [ -z "${ANTHROPIC_AUTH_TOKEN:-}" ]; then echo PASS api-key-empty; else echo FAIL api-key-empty; fi
+    if [ ! -s "$CLAUDE_CONFIG_DIR/.credentials.json" ]; then echo PASS credentials-empty; else echo FAIL credentials-empty; fi
+    echo "base=$ANTHROPIC_BASE_URL"
+    echo "answer=$(curl -s -m 15 -X POST -H "Authorization: Bearer $CLAUDE_CODE_OAUTH_TOKEN" -H "anthropic-beta: oauth-2025-04-20,x-future" -d "{}" "$ANTHROPIC_BASE_URL/v1/messages?beta=true")"
+    echo "hello=$(curl -s -m 15 -o /dev/null -w "%{http_code}" -I "$ANTHROPIC_BASE_URL/api/hello")"
+    echo "refused=$(curl -s -m 15 -o /dev/null -w "%{http_code}" "$ANTHROPIC_BASE_URL/v1/models")"
+  '
+  echo "$output"
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '^FAIL' <<<"$output")" -eq 0 ]
+  grep -q '^PASS no-token-in-environ' <<<"$output"
+  grep -q '^PASS placeholder' <<<"$output"
+  grep -q '^PASS credentials-empty' <<<"$output"
+  grep -q '^base=http://127.0.0.1:19002$' <<<"$output"
+  grep -q '^answer=fake-api-ok$' <<<"$output"
+  grep -q '^hello=200$' <<<"$output"
+  grep -q '^refused=403$' <<<"$output"
+  grep -q 'model credential: injected' <<<"$output"
+  # What the fake API saw: the injected bearer on the model call, no
+  # Authorization on hello, and no request for the refused path.
+  cat "$WT/api.log"
+  grep -qx 'POST /v1/messages?beta=true Bearer clown-test-bearer-not-real' "$WT/api.log"
+  grep -qx 'HEAD /api/hello -' "$WT/api.log"
+  ! grep -q '/v1/models' "$WT/api.log"
+  ! grep -q clown-placeholder-not-a-credential "$WT/api.log"
+  # Nothing about the token reached the result file or the frontend's output.
+  ! grep -q clown-test-bearer-not-real "$RESULT"
+  [ "$(jq -r .model_credential "$RESULT")" = proxy ]
+  jq -e '.capabilities | index("model-inject-proxy")' "$RESULT"
+}
+
+@test "agent_scope: without a token file the launch falls back to the login bind, and says so in the result" {
+  run run_in_unit '
+    if [ "${CLAUDE_CODE_OAUTH_TOKEN:-}" = clown-placeholder-not-a-credential ]; then echo FAIL placeholder-without-proxy; else echo PASS no-placeholder; fi
+    case "${ANTHROPIC_BASE_URL:-}" in *19002*) echo FAIL proxy-url ;; *) echo PASS no-proxy-url ;; esac
+  '
+  echo "$output"
+  [ "$status" -eq 0 ]
+  [ "$(grep -c '^FAIL' <<<"$output")" -eq 0 ]
+  grep -q 'binding the operator login read-only (fallback)' <<<"$output"
+  [ "$(jq -r .model_credential "$RESULT")" = login-file ]
+}
+
+@test "agent_scope: CLOWN_MODEL_CREDENTIAL=proxy-only refuses a launch with no token file, before the unit starts" {
+  export CLOWN_MODEL_CREDENTIAL=proxy-only
+  run run_in_unit 'echo UNIT-RAN'
+  echo "$output"
+  [ "$status" -ne 0 ]
+  [[ $output != *UNIT-RAN* ]]
+  grep -q 'piggy secrets reconcile' <<<"$output"
+  grep -q "$BATS_TEST_TMPDIR/no-model-token" <<<"$output"
+  jq -e '.error | contains("piggy secrets reconcile")' "$RESULT"
 }
