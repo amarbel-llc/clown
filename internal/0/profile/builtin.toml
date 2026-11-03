@@ -46,8 +46,11 @@ model = "qwen3-coder"
 # tools no worker uses; the global --disallowed-tools set still applies. The
 # knobs ride the env table (CLOWN_DISABLE_CLAUDEAI_CONNECTORS,
 # CLOWN_DISALLOWED_TOOLS), so no profile-protocol bump is needed. Lists derived
-# from real worker transcripts against moxy's 156-tool catalog: every template's
-# keep set plus its context_excluded."moxy/moxy" partitions that catalog.
+# from real worker transcripts against moxy's 157-tool catalog: every template's
+# keep set plus its context_excluded."moxy/moxy" partitions that catalog. The
+# keep sets include toolbox_run (moxy#500): the exclusion lists are deny-lists,
+# so the toolbox moxin is on in each template that keeps moxy by not being
+# named here.
 
 [[profile]]
 name = "reviewer"

@@ -10,12 +10,13 @@ import (
 // keeps only the servers and moxy tools its task calls, drops the claude.ai
 // connectors, and disallows the builtins no worker uses. The lists come from
 // transcripts of real spawned workers (circus/neat-sycamore's measurement);
-// moxy's catalog is 156 tools, so every template's keep set and exclude set
-// must partition it.
+// moxy's catalog is 157 tools (156 plus toolbox_run, moxy#500), so every
+// template's keep set and exclude set must partition it. toolbox_run is in
+// every keep set: the operator enabled the toolbox moxin for all profiles.
 
-const moxyCatalogSize = 156
+const moxyCatalogSize = 157
 
-var reviewerMoxyKeep = strings.Fields(`folio_read folio_ls folio_glob folio_tree rg_search jq_jq
+var reviewerMoxyKeep = strings.Fields(`folio_read folio_ls folio_glob folio_tree rg_search jq_jq toolbox_run
 	man_list man_toc man_section grit_branch grit_stage smith_content-get smith_issue-get
 	smith_issue-list smith_pr-get smith_pr-list smith_pr-status smith_repo-get`)
 
@@ -23,11 +24,11 @@ var porterMoxyExtra = strings.Fields(`folio_write folio_cp folio_mkdir grit_comm
 	chix_build chix_develop-run chix_flake-update chix_flake-lock chix_flake-check chix_log
 	env_clock env_which smith_pr-create`)
 
-var canaryMoxyKeep = strings.Fields(`folio_read folio_ls rg_search grit_stage`)
+var canaryMoxyKeep = strings.Fields(`folio_read folio_ls rg_search grit_stage toolbox_run`)
 
 // canary-grit tests spinclass's own grit under confinement, so moxy keeps none
 // of its grit (nor chix or smith) and no write tool.
-var canaryGritMoxyKeep = strings.Fields(`folio_read folio_ls rg_search jq_jq`)
+var canaryGritMoxyKeep = strings.Fields(`folio_read folio_ls rg_search jq_jq toolbox_run`)
 
 func builtinByName(t *testing.T, name string) Profile {
 	t.Helper()

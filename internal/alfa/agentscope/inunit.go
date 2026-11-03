@@ -59,7 +59,8 @@ func ReadInUnitServers(path string) ([]InUnitServer, error) {
 // intersect down moxy's hierarchy, so a worktree moxyfile can only narrow it.
 //
 // Allowed: moxins that act only on what the unit sees (files, git, nix via the
-// daemon, local docs) plus moxy's meta tools. Disabled, with the reason a
+// daemon, local docs, toolbox's pure applets over files the policy blesses)
+// plus moxy's meta tools. Disabled, with the reason a
 // confined worker loses them (FDR 0020 "What a confined worker loses"):
 // smith (writes to forges; a confined worker files through issue-filer),
 // chrest (drives the operator's browser: the prompt surface), the Google
@@ -67,6 +68,6 @@ func ReadInUnitServers(path string) ([]InUnitServer, error) {
 // stats-me (a host-loopback service the unit cannot reach).
 const InUnitMoxyfile = `# Written by clown for an agent unit (clown#244, FDR 0020). Read-only inside
 # the unit; allow-tools intersects down the hierarchy, so nothing below widens it.
-allow-tools = ["folio", "grit", "rg", "jq", "man", "chix", "env", "batch", "async", "async-result", "async-cancel", "status", "restart"]
+allow-tools = ["folio", "grit", "rg", "jq", "man", "chix", "env", "toolbox", "batch", "async", "async-result", "async-cancel", "status", "restart"]
 disable-moxins = ["smith", "chrest", "calendar", "car", "gmail", "gws", "piers", "prison", "freud", "stats-me"]
 `
