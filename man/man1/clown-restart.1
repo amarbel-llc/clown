@@ -36,6 +36,16 @@ until someone prompts it, so the frontend runs that transition at once, in the
 background; a session with a turn running waits for its Stop.
 The command authorizes nothing: a queued request only makes the frontend ask
 spinclass again at that transition.
+Before queuing, the frontend runs the profile check of
+.Sx The restart
+below (this binary's half of it): a request the relaunch's profile gate
+would refuse is not queued, the command exits 1 with
+.Dq the relaunch's profile gate would refuse, so the session keeps running:
+and the gate's own refusal (the pin, the digests, the field diff and which
+build pinned), and spinclass clears the request and shows that output.
+The check runs again, with the clown on
+.Ev PATH ,
+before anything is stopped.
 .Pp
 .Fl -when Cm idle
 is the default.
@@ -191,10 +201,38 @@ check the relaunch will run (the
 .Cm clown resume
 check of FDR 0022: the launch's
 .Fl -profile
-against the session's recorded pin, with no launcher approval).
-If it would refuse (the profile changed, no longer resolves, or cannot be
-pinned) the restart is dropped, the reason is logged, and the session keeps
-running.
+against the session's recorded pin, with no launcher approval), in two
+halves.
+First in this binary, with the same refusal text as
+.Cm clown resume
+(the field diff against the recorded redacted form, and which clown build
+and profile protocol wrote the pin, see
+.Xr clown-profiles 5 ) .
+Then with the clown on
+.Ev PATH ,
+the binary the relaunch execs (clown#340): the frontend runs its
+.Cm clown profile digest Ar profile
+under the relaunch's environment, bounded at 10 seconds, and compares the
+digest it prints with the session's pin.
+A digest is a function of the definition and of the build, so a build on
+.Ev PATH
+that computes another digest for the same registry (a profile protocol bump,
+which changes every digest; a changed builtin the profile is based on) would
+pass this binary's check and refuse after the stop.
+A clown on
+.Ev PATH
+without that verb (an older build, which answers it as a usage error), or
+none, leaves this binary's verdict; one that cannot answer (an unpinnable
+profile there, a failure, a timeout) refuses, since the relaunch would run
+it.
+Nothing is asked for a launch without a profile, an unpinned session or an
+unpinnable pin.
+If either half would refuse (the profile changed, no longer resolves, or
+cannot be pinned, in this build or in the one on
+.Ev PATH )
+the restart is dropped, the reason is logged and recorded in the status file
+.Pq kind Li profile-gate ,
+and the session keeps running.
 .Pp
 An attached session then gets a 30 second countdown.
 Inside a
@@ -274,8 +312,12 @@ A session without such a record keeps every operand, and the restart notice
 below tells it a replayed brief is a replay;
 the profile check of
 .Cm clown resume
-applies unchanged; a profile edited between the dry run and the relaunch is
-still refused there, after the stop.
+applies unchanged; a profile edited between the dry run and the relaunch, or
+a clown on
+.Ev PATH
+replaced in that window, is still refused there, after the stop (kind
+.Li resume
+in the status file).
 The resumed session's system prompt carries a
 .Dq restarted: Ar reason
 fragment, appended after clown's build-identity, host-identity and
@@ -461,6 +503,10 @@ principal.
 A restart has stopped, or is stopping, the provider; or, for
 .Cm now ,
 a preflight or restart is in flight.
+.It Li the relaunch's profile gate would refuse, so the session keeps running: ...
+The relaunch would refuse to resume under the session's profile (changed,
+unresolvable or unpinnable); the gate's refusal follows, and nothing is
+queued.
 .El
 .Pp
 A usage error exits

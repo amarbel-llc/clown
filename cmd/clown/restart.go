@@ -141,6 +141,16 @@ func restartControlHandlerTriggers(provider, unarmedReason string, q *restartQue
 			}
 			return controlReply{Error: fmt.Sprintf("restart needs an idle trigger; %s's is not armed (%s)", provider, unarmedReason)}
 		}
+		// The relaunch's profile gate, at request time (clown#340): a request
+		// the relaunch would refuse is not queued at all, so the requester
+		// hears why now (spinclass clears the request and shows this), instead
+		// of at the idle transition. The gate runs again before the stop.
+		if trig != nil && trig.gate != nil {
+			if err := trig.gate(); err != nil {
+				countMetric(metricRestartRequestRefused)
+				return controlReply{Error: restartGateRefusal(err)}
+			}
+		}
 		req := restartRequest{When: m.When, Reason: sanitizeRestartReason(m.Reason)}
 		if m.When == "idle" {
 			if idle != nil {
@@ -158,6 +168,12 @@ func restartControlHandlerTriggers(provider, unarmedReason string, q *restartQue
 		}
 		return controlReply{OK: true}
 	}
+}
+
+// restartGateRefusal is the control reply, and the dropped-restart reason,
+// for a relaunch the profile gate would refuse: the session keeps running.
+func restartGateRefusal(err error) string {
+	return "the relaunch's profile gate would refuse, so the session keeps running: " + err.Error()
 }
 
 // restartReasonMaxRunes caps a restart reason.

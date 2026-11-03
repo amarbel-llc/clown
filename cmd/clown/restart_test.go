@@ -2,9 +2,11 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -112,6 +114,44 @@ func TestRestartVerbOnAnUnarmedProviderFails(t *testing.T) {
 	}
 	if _, ok := q.take(); ok {
 		t.Fatal("an unarmed frontend must queue nothing")
+	}
+}
+
+// clown#340: a request the relaunch's profile gate would refuse is refused at
+// request time, with the gate's own text, and nothing is queued, so spinclass
+// clears the request and shows the reason instead of the frontend finding out
+// at the idle transition. A passing gate queues as before.
+func TestRestartVerbRefusedByTheProfileGateQueuesNothing(t *testing.T) {
+	runtime := shortSocketDir(t)
+	t.Setenv("XDG_RUNTIME_DIR", runtime)
+	counted := recordMetrics(t)
+	q := &restartQueue{}
+	gateErr := errors.New("session " + restartTestPrincipal + " was launched with profile \"worker\" (digest d1); this launch applies profile \"worker\" (digest d2)\nchanges:\n  model: a -> b")
+	trig := &restartTriggers{gate: func() error { return gateErr }}
+	startTestControl(t, runtime, restartControlHandlerTriggers("claude", "", q, trig))
+
+	code, _, stderr := runRestartVerbForTest(t, "--session", restartTestPrincipal, "--reason", "new build")
+	if code == 0 {
+		t.Fatal("a request the gate refuses must exit non-zero")
+	}
+	for _, want := range []string{"profile gate would refuse", "session keeps running", "digest d2", "model: a -> b"} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("stderr %q lacks %q", stderr, want)
+		}
+	}
+	if _, ok := q.take(); ok {
+		t.Fatal("a refused request must not be queued")
+	}
+	if g := counted(); !slices.Equal(g, []string{metricRestartRequestRefused}) {
+		t.Errorf("counted %q", g)
+	}
+
+	trig.gate = func() error { return nil }
+	if code, _, stderr := runRestartVerbForTest(t, "--session", restartTestPrincipal); code != 0 {
+		t.Fatalf("a passing gate: code %d, %q", code, stderr)
+	}
+	if _, ok := q.take(); !ok {
+		t.Fatal("a passing gate must queue")
 	}
 }
 

@@ -201,6 +201,10 @@ type restartTriggers struct {
 	now func(restartRequest) bool
 	// idle is idleRunner.queueIdle, for `--when idle`.
 	idle func(restartRequest)
+	// gate is the relaunch's profile gate run at request time
+	// (restartProfileCheck.check); a request it refuses is not queued. nil:
+	// not checked until the restart.
+	gate func() error
 }
 
 // noteExit logs, when the frontend exits, a restart it leaves behind: one in

@@ -675,38 +675,18 @@ func peekSessionState(bin, principal string, environ []string, timeout time.Dura
 	if timeout <= 0 {
 		timeout = defaultPeekTimeout
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, bin, "restart-preflight", "--peek")
 	// The launch environment minus the keys the relaunch drops
 	// (restartEnvDropped), plus the principal; not clown's current
 	// environment, which runWithFlags has added to. Unlike the relaunch, no
 	// restart notice is added.
-	cmd.Env = append(environWithout(environ, restartEnvDropped...), "CLOWN_SESSION_ID="+principal)
-	// Its own process group; on timeout only, the whole group is killed, so
-	// nothing it started outlives the peek. WaitDelay is not for I/O (stdout
-	// is a file, so Wait has no copy goroutines): if the group kill failed,
-	// it makes Go kill the direct child after a second, so Wait still ends.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.WaitDelay = time.Second
-	var cancelErr error
-	cmd.Cancel = func() error {
-		if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
-			cancelErr = err
-		}
-		return nil
-	}
-	out, err := outputViaFile(cmd)
-	if ctx.Err() != nil {
-		if cancelErr != nil {
-			return "", fmt.Errorf("restart-preflight --peek timed out after %s, and killing its process group failed: %v", timeout, cancelErr)
-		}
-		return "", fmt.Errorf("restart-preflight --peek timed out after %s", timeout)
-	}
+	res, err := runBounded(bin, []string{"restart-preflight", "--peek"}, append(environWithout(environ, restartEnvDropped...), "CLOWN_SESSION_ID="+principal), timeout)
 	if err != nil {
 		return "", fmt.Errorf("restart-preflight --peek: %w", err)
 	}
-	line := strings.TrimSpace(string(out))
+	if res.exitCode != 0 {
+		return "", fmt.Errorf("restart-preflight --peek: exit status %d", res.exitCode)
+	}
+	line := strings.TrimSpace(string(res.stdout))
 	if line == "" || strings.Contains(line, "\n") {
 		return "", fmt.Errorf("restart-preflight --peek: want one JSON line, got %q", line)
 	}
@@ -725,6 +705,77 @@ func peekSessionState(bin, principal string, environ []string, timeout time.Dura
 		return "", fmt.Errorf("restart-preflight --peek: state %q", v.State)
 	}
 	return v.State, nil
+}
+
+// boundedResult is what runBounded captured: the command's stdout (64 KiB at
+// most), the first 4 KiB of its stderr, and its exit code.
+type boundedResult struct {
+	stdout   []byte
+	stderr   []byte
+	exitCode int
+}
+
+// stderrLine is the stderr as one printable line, for a refusal.
+func (r boundedResult) stderrLine() string {
+	return cmpOr(printableOneLine(string(r.stderr)), "(no output)")
+}
+
+// runBounded runs bin with args and env, bounded by timeout, in its own
+// process group: on timeout only, the whole group is killed, so nothing it
+// started outlives the call, and the error says so. A non-zero exit is not
+// an error (exitCode carries it); failing to start, a timeout or an
+// unreadable output is. stdout goes through a file (outputViaFile), so a
+// grandchild that inherited it cannot stall Wait. WaitDelay is not for I/O:
+// if the group kill failed, it makes Go kill the direct child after a
+// second, so Wait still ends.
+func runBounded(bin string, args, env []string, timeout time.Duration) (boundedResult, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd.Env = env
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.WaitDelay = time.Second
+	var cancelErr error
+	cmd.Cancel = func() error {
+		if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+			cancelErr = err
+		}
+		return nil
+	}
+	stderr := &boundedBuffer{max: 4 << 10}
+	cmd.Stderr = stderr
+	out, err := outputViaFile(cmd)
+	if ctx.Err() != nil {
+		if cancelErr != nil {
+			return boundedResult{}, fmt.Errorf("timed out after %s, and killing its process group failed: %v", timeout, cancelErr)
+		}
+		return boundedResult{}, fmt.Errorf("timed out after %s", timeout)
+	}
+	res := boundedResult{stdout: out, stderr: stderr.b}
+	var exit *exec.ExitError
+	switch {
+	case errors.As(err, &exit):
+		res.exitCode = exit.ExitCode()
+	case err != nil:
+		return boundedResult{}, err
+	}
+	return res, nil
+}
+
+// boundedBuffer keeps the first max bytes written and drops the rest.
+type boundedBuffer struct {
+	b   []byte
+	max int
+}
+
+func (w *boundedBuffer) Write(p []byte) (int, error) {
+	if room := w.max - len(w.b); room > 0 {
+		if len(p) > room {
+			p = p[:room]
+		}
+		w.b = append(w.b, p...)
+	}
+	return len(p), nil
 }
 
 // waitServeSocketsGone polls dir until none of its sockets accepts a

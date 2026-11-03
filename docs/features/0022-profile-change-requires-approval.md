@@ -388,6 +388,27 @@ resume has no local confirmation (decision 2), and the env names are final.
      new definition's redacted form. They say "the previous definition is
      not recorded" only when the pin stored no form, such as a pin written
      before this change.
+3d. **Done (clown#340).** Pin provenance. Every pin record also carries
+   `profile_writer` (the clown version, `buildcfg.Version`) and
+   `profile_protocol` (`profilelookup.ProtocolVersion`) of the build that
+   computed `profile_digest`. A digest is a function of the definition and
+   of the build: a protocol bump changes every digest, and a builtin a user
+   profile is based on ships with the build. Without the writer, a
+   refusal could not tell "profiles.toml was edited" from "the build
+   changed", and both look alike when the redacted forms are equal (an env
+   value, a URL path). `sessions.PinRecordOf` returns the provenance with
+   the pin; `describePinProvenance` (`cmd/clown/profilegate.go`) turns it
+   into one line every pin-change refusal ends with: the same build pinned,
+   so the definition changed; another build under another protocol, so
+   every digest changed and the definition may be unchanged (a kept
+   definition is re-approved with `CLOWN_PROFILE_DIGEST`); another build
+   under the same protocol, so either; no provenance, for a pin that
+   predates this. Both fields are `omitempty` and ignored by older readers.
+   `clown profile digest <name>` prints the digest a build pins a profile
+   at, so an operator can compare builds and approve a known digest instead
+   of reading it out of a refusal. Not done: a bulk re-approval of kept pins
+   at a protocol-bump deploy; the provenance makes it possible (every pin
+   under the old protocol is a candidate) and the verb gives the digests.
 
 ## Notes
 
@@ -397,7 +418,18 @@ resume has no local confirmation (decision 2), and the env names are final.
   recorded pin with no launcher approval) and drops the restart if it would
   refuse; the relaunch itself then runs the same check again. Because the
   dry run uses the resolved profile name, a defaulted profile counts as
-  requested for an unpinned session (I).
+  requested for an unpinned session (I). Since clown#340 the dry run has
+  two halves and runs twice: in this binary at request time (the control
+  socket refuses `clown restart` outright, so spinclass clears the request
+  and shows the gate's text), and before the stop in this binary AND with
+  the clown on PATH (the binary the relaunch execs), which is asked
+  `clown profile digest` under the relaunch's environment; a build on PATH
+  that computes another digest for the same registry refuses before the
+  stop instead of after it. A PATH clown without the verb (an older build)
+  leaves this binary's verdict; one that cannot answer refuses. The window
+  that remains is a registry edit or a PATH change between the pre-stop
+  check and the relaunch, which the relaunch's own gate refuses after the
+  stop (`RefusalResume` in the status file), as before.
 - #296 (hold the first turn until MCP servers connect) shipped alongside
   and touches the same launch path, not this gate.
 - #295 is the resume issue; #293 (wake truncation) was a wrong number.

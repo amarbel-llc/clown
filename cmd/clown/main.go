@@ -157,11 +157,15 @@ func launchProfilePin(selected *profile.Profile, registryPath string) (pin sessi
 	return sessions.ProfilePin{Name: r.Name, Digest: r.DigestSHA256}, form, true
 }
 
-// withProfileForm attaches form to rec when rec carries a pin (the launch's
-// own: every caller sets rec's pin from the same launchProfilePin).
-func withProfileForm(rec sessions.NameRecord, form []byte) sessions.NameRecord {
+// withPinProvenance attaches form and this build's provenance (clown#340:
+// the clown version and profile protocol that computed the digest) to rec
+// when rec carries a pin (the launch's own: every caller sets rec's pin from
+// the same launchProfilePin, computed by this build).
+func withPinProvenance(rec sessions.NameRecord, form []byte) sessions.NameRecord {
 	if rec.Profile != "" {
 		rec.ProfileForm = form
+		rec.ProfileWriter = buildcfg.Version
+		rec.ProfileProtocol = profilelookup.ProtocolVersion
 	}
 	return rec
 }
@@ -849,6 +853,7 @@ func runWithFlags(flags parsedFlags) int {
 			return profilelookup.Resolve(name, profilelookup.Options{RegistryPath: profilesPath})
 		}, profilelookup.RedactedFormByDigest)
 	}
+	gate.describeProvenance = pinProvenanceLine
 	decision, err := checkLaunchProfile(gate, sessions.ProfileOf)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
@@ -863,7 +868,7 @@ func runWithFlags(flags parsedFlags) int {
 	if decision.pinEarly != nil && !flags.printLaunchPlan {
 		// pinEarly is always the launch's own pin (checkLaunchProfile), so
 		// launchForm describes it.
-		if err := sessions.RecordSession(withProfileForm(sessions.NameRecord{SessionID: gate.resumeID, Profile: decision.pinEarly.Name, ProfileDigest: decision.pinEarly.Digest}, launchForm)); err != nil {
+		if err := sessions.RecordSession(withPinProvenance(sessions.NameRecord{SessionID: gate.resumeID, Profile: decision.pinEarly.Name, ProfileDigest: decision.pinEarly.Digest}, launchForm)); err != nil {
 			fmt.Fprintf(os.Stderr, "clown: recording the profile pin for session %s: %v; refusing\n", gate.resumeID, err)
 			return 1
 		}
@@ -1039,7 +1044,7 @@ func runWithFlags(flags parsedFlags) int {
 			}
 		}
 		build := func(id string) sessions.NameRecord {
-			return withProfileForm(launchRecordFor(sessionRecordBase(id, flags), gate.launch, decision.approvesRecordFor(id), sessions.ProfileOf), launchForm)
+			return withPinProvenance(launchRecordFor(sessionRecordBase(id, flags), gate.launch, decision.approvesRecordFor(id), sessions.ProfileOf), launchForm)
 		}
 		if err := recordLaunchSessions(ids, flags.agentScopeSpec != "", build, sessions.RecordSession, os.Stderr); err != nil {
 			fmt.Fprintf(os.Stderr, "clown: %v\n", err)
@@ -1151,6 +1156,10 @@ func runWithFlags(flags parsedFlags) int {
 	// The status writer is built by armSelfClose below, after the restarter;
 	// the refusal hook reads it when a restart is dropped.
 	var statusWriter atomic.Pointer[sessionstatus.Writer]
+	// The relaunch's profile gate (restart_gate.go): in this binary at
+	// request time (the control socket, below), and with the clown on PATH
+	// too before the stop (clown#340).
+	profileCheck := newRestartProfileCheck(flags, attachedID, profilesPath)
 	restarter := frontendRestarter{
 		profile:      flags.profile,
 		refusal:      func(r sessionstatus.RestartRefusal) { statusWriter.Load().SetRestartRefusal(r) },
@@ -1158,7 +1167,7 @@ func runWithFlags(flags parsedFlags) int {
 		argv:         restartArgv(flags, attachedID),
 		stop:         stopProviderBySignal,
 		countdown:    countdown.proceed,
-		profileCheck: newRestartProfileCheck(flags, attachedID).check,
+		profileCheck: profileCheck.checkWithPathClown,
 		busy:         turnRunning.Load,
 		notify:       os.Stderr,
 		worktree:     cwd,
@@ -1169,6 +1178,9 @@ func runWithFlags(flags parsedFlags) int {
 	idleDir, idleSock, restartTrig, sessionStatus, closeIdle := armSelfClose(flags, root, restarts, restarter.restart, turnRunning)
 	defer closeIdle()
 	statusWriter.Store(sessionStatus)
+	if restartTrig != nil {
+		restartTrig.gate = profileCheck.check
+	}
 	if idleDir != "" {
 		pluginDirs = append(pluginDirs, idleDir)
 		flags.idleSocket = idleSock

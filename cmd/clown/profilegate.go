@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"code.linenisgreat.com/clown/internal/0/buildcfg"
 	"code.linenisgreat.com/clown/internal/alfa/sessions"
 	"code.linenisgreat.com/clown/pkg/profilelookup"
 )
@@ -47,10 +48,51 @@ type profileGate struct {
 	// describeChange, when set, explains a pin change in the refusal
 	// (describeProfileChange); nil adds nothing.
 	describeChange func(old, new sessions.ProfilePin) string
+	// describeProvenance, when set, says which build pinned the session and
+	// what that tells about the change (pinProvenanceLine); nil adds
+	// nothing.
+	describeProvenance func(id string) string
 }
 
 // profileDiffLines caps the field diff a refusal prints.
 const profileDiffLines = 6
+
+// pinProvenanceLine is describePinProvenance for the pin session id holds,
+// against this build; "" when the pin cannot be read (the refusal already
+// says what it can).
+func pinProvenanceLine(id string) string {
+	rec, ok, err := sessions.PinRecordOf(id)
+	if err != nil || !ok {
+		return ""
+	}
+	return describePinProvenance(rec, buildcfg.Version, profilelookup.ProtocolVersion)
+}
+
+// describePinProvenance explains, for a refusal, what the build that
+// recorded pin (clown#340) tells about a digest that no longer matches. A
+// digest is a function of the definition and the build, so:
+//   - the same build pinned it: the definition changed (profiles.toml, or
+//     a builtin the profile is based on, which ships with the build only
+//     when the build changed too, so here it is the registry);
+//   - another build under another profile protocol: every digest changed
+//     with the protocol, and the definition may be unchanged;
+//   - another build under the same protocol: either, not told apart here;
+//   - no provenance recorded: the pin predates it, nothing is known.
+//
+// version and protocol are this build's (buildcfg.Version,
+// profilelookup.ProtocolVersion; parameters for tests).
+func describePinProvenance(rec sessions.PinRecord, version string, protocol int) string {
+	switch {
+	case rec.Writer == "":
+		return "the pin records no writing build (it predates clown#340), so whether the definition or the build changed is unknown"
+	case rec.Protocol != protocol:
+		return fmt.Sprintf("the pin was written by clown %s under profile protocol %d; this clown %s speaks protocol %d, and a protocol change changes every digest, so the definition itself may be unchanged (a kept definition is re-approved with CLOWN_PROFILE_DIGEST set to the new digest)", rec.Writer, rec.Protocol, version, protocol)
+	case rec.Writer == version:
+		return fmt.Sprintf("the pin was written by this same clown build (%s, protocol %d), so the definition changed: profiles.toml, or a builtin the profile is based on", version, protocol)
+	default:
+		return fmt.Sprintf("the pin was written by clown %s; this clown %s speaks the same profile protocol %d, so the digest changed with the build (a builtin the profile is based on, or how the build computes it) or with an edit of the definition; this build's digest for the profile is what `clown profile digest` prints", rec.Writer, version, protocol)
+	}
+}
 
 // describeProfileChange explains a change from the pinned profile old to new
 // for a refusal (FDR 0022 slice 3b), in up to profileDiffLines diff lines.
@@ -101,13 +143,18 @@ func describeProfileChange(old, new sessions.ProfilePin, resolve func(name strin
 	return "changes (against the redacted form recorded with the pin; url path, url credential and env value changes are not shown):\n  " + strings.Join(lines, "\n  ")
 }
 
-// withChange appends g.describeChange's explanation of old -> new to msg.
+// withChange appends g.describeChange's explanation of old -> new to msg,
+// then g.describeProvenance's line on the build that pinned.
 func (g profileGate) withChange(msg string, old, new sessions.ProfilePin) string {
-	if g.describeChange == nil {
-		return msg
+	if g.describeChange != nil {
+		if d := g.describeChange(old, new); d != "" {
+			msg = msg + "\n" + d
+		}
 	}
-	if d := g.describeChange(old, new); d != "" {
-		return msg + "\n" + d
+	if g.describeProvenance != nil {
+		if p := g.describeProvenance(g.resumeID); p != "" {
+			msg = msg + "\n" + p
+		}
 	}
 	return msg
 }

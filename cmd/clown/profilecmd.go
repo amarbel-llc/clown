@@ -13,12 +13,16 @@ import (
 	"code.linenisgreat.com/clown/internal/0/buildcfg"
 	"code.linenisgreat.com/clown/internal/0/profile"
 	"code.linenisgreat.com/clown/internal/alfa/pluginhost"
+	"code.linenisgreat.com/clown/pkg/profilelookup"
 )
 
-const profileCmdUsage = "usage: clown profile <list|add|edit <name>|remove <name>>"
+const profileCmdUsage = "usage: clown profile <list|add|edit <name>|remove <name>|digest <name>>"
 
-// runProfileCmd dispatches `clown profile <list|add|edit|remove>` — the
-// management surface for the named-profile registry (user profiles.toml).
+// runProfileCmd dispatches `clown profile <list|add|edit|remove|digest>` —
+// the management surface for the named-profile registry (user
+// profiles.toml). An unknown verb is a usage error (exit 2), which the
+// restart's pre-stop check relies on when PATH holds an older clown
+// (pathProfileDigest).
 func runProfileCmd(args []string) int {
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, profileCmdUsage)
@@ -27,6 +31,12 @@ func runProfileCmd(args []string) int {
 	switch args[0] {
 	case "list":
 		return runProfileList()
+	case "digest":
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, profileCmdUsage)
+			return 2
+		}
+		return profileDigest(args[1], "", os.Stdout, os.Stderr)
 	case "add":
 		return runProfileAdd()
 	case "edit":
@@ -115,6 +125,28 @@ func listProfiles(additionalPath string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "clown: %v\n", skew)
 		return 1
 	}
+	return 0
+}
+
+// profileDigest is `clown profile digest <name>` (clown#340): one line, the
+// pkg/profilelookup digest this build computes for the named profile, as a
+// launch would pin it. It is the digest CLOWN_PROFILE_DIGEST approves and
+// `clown resume` compares, from THIS build: a digest is a function of the
+// definition and the build. A profile the library cannot vouch for (an
+// unstamped or skewed registry, a stale base) prints the reason and exits 1,
+// as does an unknown name. additionalPath overrides the registry (tests).
+func profileDigest(name, additionalPath string, stdout, stderr io.Writer) int {
+	_, _, path, err := loadProfileSets(additionalPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "clown: %v\n", err)
+		return 1
+	}
+	r, err := profilelookup.Resolve(name, profilelookup.Options{RegistryPath: path})
+	if err != nil {
+		fmt.Fprintf(stderr, "clown: profile %q cannot be pinned by this clown (%s, profile protocol %d): %v\n", name, buildcfg.Version, profilelookup.ProtocolVersion, err)
+		return 1
+	}
+	fmt.Fprintln(stdout, r.DigestSHA256)
 	return 0
 }
 

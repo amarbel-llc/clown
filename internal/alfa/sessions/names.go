@@ -47,6 +47,15 @@ import (
 // one was given but not stored, ProfileFormOmitted says why. Both are
 // omitted otherwise, and readers that predate them ignore them.
 //
+// ProfileWriter and ProfileProtocol (clown#340) are the clown version and
+// the pkg/profilelookup protocol of the build that computed ProfileDigest.
+// A digest is a function of the definition AND the build (a protocol bump
+// changes every digest; a builtin a user profile is based on changes with
+// the build), so a later refusal can only say whether the definition or the
+// build changed when it knows which build pinned. Both are omitted when no
+// profile was applied; readers that predate them ignore them, and a pin
+// written before them has neither (PinRecordOf reports "" and 0).
+//
 // AgentScope (clown#318) is the --agent-scope spec path of a confined
 // launch, so `clown resume` relaunches the session confined (AgentScopeOf).
 type NameRecord struct {
@@ -57,6 +66,8 @@ type NameRecord struct {
 	ProfileDigest      string          `json:"profile_digest,omitempty"`
 	ProfileForm        json.RawMessage `json:"profile_form,omitempty"`
 	ProfileFormOmitted string          `json:"profile_form_omitted,omitempty"`
+	ProfileWriter      string          `json:"profile_writer,omitempty"`
+	ProfileProtocol    int             `json:"profile_protocol,omitempty"`
 	AgentScope         string          `json:"agent_scope,omitempty"`
 	AgentScopeDigest   string          `json:"agent_scope_digest,omitempty"`
 	SpawnBriefSHA256   string          `json:"spawn_brief_sha256,omitempty"`
@@ -179,6 +190,16 @@ const UnpinnableDigest = "unpinnable"
 type ProfilePin struct {
 	Name   string
 	Digest string
+}
+
+// PinRecord is a session's pin with the provenance recorded beside it
+// (clown#340): Writer is the clown version and Protocol the profile
+// protocol of the build that computed the digest; "" and 0 for a pin
+// written before provenance was recorded.
+type PinRecord struct {
+	ProfilePin
+	Writer   string
+	Protocol int
 }
 
 // namesPath resolves $XDG_STATE_HOME/clown/session-names.jsonl (throwaway
@@ -373,22 +394,31 @@ func NamesFor(ids []string) map[string]string {
 // that cannot be this session's pin are skipped, so one bad line elsewhere
 // in this never-pruned file does not block every resume.
 func ProfileOf(id string) (pin ProfilePin, ok bool, err error) {
-	err = scanRecords(func(line string, rec *NameRecord) error {
-		if rec == nil {
+	rec, ok, err := PinRecordOf(id)
+	return rec.ProfilePin, ok, err
+}
+
+// PinRecordOf is ProfileOf with the provenance recorded beside the pin: the
+// same LAST record that carries a profile, so the writer and protocol are
+// those of the build that computed exactly that digest. It fails closed the
+// same way.
+func PinRecordOf(id string) (rec PinRecord, ok bool, err error) {
+	err = scanRecords(func(line string, r *NameRecord) error {
+		if r == nil {
 			if strings.Contains(line, `"profile`) && strings.Contains(line, id) {
 				return fmt.Errorf("session-names sidecar holds an unparseable profile record for session %s: %.200s", id, line)
 			}
 			return nil
 		}
-		if rec.SessionID == id && rec.Profile != "" {
-			pin, ok = ProfilePin{Name: rec.Profile, Digest: rec.ProfileDigest}, true
+		if r.SessionID == id && r.Profile != "" {
+			rec, ok = PinRecord{ProfilePin: ProfilePin{Name: r.Profile, Digest: r.ProfileDigest}, Writer: r.ProfileWriter, Protocol: r.ProfileProtocol}, true
 		}
 		return nil
 	})
 	if err != nil {
-		return ProfilePin{}, false, err
+		return PinRecord{}, false, err
 	}
-	return pin, ok, nil
+	return rec, ok, nil
 }
 
 // scanRecords calls fn for every non-empty sidecar line in file order, with

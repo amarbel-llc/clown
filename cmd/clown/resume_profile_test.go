@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"code.linenisgreat.com/clown/internal/0/buildcfg"
 	"code.linenisgreat.com/clown/internal/0/profile"
 	"code.linenisgreat.com/clown/internal/alfa/sessions"
 	"code.linenisgreat.com/clown/pkg/profilelookup"
@@ -386,6 +387,64 @@ func TestLaunchProfilePin(t *testing.T) {
 		t.Fatal(err)
 	}
 	unpinnable(mine, skewed)
+}
+
+// clown#340: the refusal says which build pinned the session and what that
+// tells: the same build means the definition changed; another protocol means
+// every digest changed with the build; no provenance means nothing is known.
+func TestResumeProfileNamesThePinningBuild(t *testing.T) {
+	const id = "11111111-2222-3333-4444-555555555555"
+	setBuildcfg(t, "0.4.5+abcdef0", "abcdef0", "abcdef0123456789")
+	registry := filepath.Join(t.TempDir(), "profiles.toml")
+	p := profile.Profile{Name: "e2e-pin", Provider: "claude", Backend: "anthropic", Model: "model-a"}
+	if err := profile.Save(registry, []profile.Profile{p}, "0.4.5"); err != nil {
+		t.Fatal(err)
+	}
+	pin, form, ok := launchProfilePin(&p, registry)
+	if !ok {
+		t.Fatalf("launchProfilePin = %+v, %v", pin, ok)
+	}
+	for name, c := range map[string]struct {
+		writer   string
+		protocol int
+		want     string
+	}{
+		"same build":        {buildcfg.Version, profilelookup.ProtocolVersion, "written by this same clown build"},
+		"older protocol":    {"0.4.0+0000000", profilelookup.ProtocolVersion - 1, "a protocol change changes every digest"},
+		"other build":       {"0.4.0+0000000", profilelookup.ProtocolVersion, "changed with the build"},
+		"before provenance": {"", 0, "predates clown#340"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("XDG_STATE_HOME", t.TempDir())
+			if err := sessions.RecordSession(sessions.NameRecord{SessionID: id, Profile: pin.Name, ProfileDigest: pin.Digest, ProfileForm: form, ProfileWriter: c.writer, ProfileProtocol: c.protocol}); err != nil {
+				t.Fatal(err)
+			}
+			edited := filepath.Join(t.TempDir(), "profiles.toml")
+			q := p
+			q.Model = "model-b"
+			if err := profile.Save(edited, []profile.Profile{q}, "0.4.5"); err != nil {
+				t.Fatal(err)
+			}
+			_, err := resumeProfile(id, false, profilelookup.Options{RegistryPath: edited})
+			if err == nil || !strings.Contains(err.Error(), c.want) || !strings.Contains(err.Error(), `model: "model-a" -> "model-b"`) {
+				t.Fatalf("refusal = %v; want the diff and %q", err, c.want)
+			}
+		})
+	}
+}
+
+// clown#340: the pin a launch records carries this build's version and
+// profile protocol beside the form, and only beside a pin.
+func TestWithPinProvenance(t *testing.T) {
+	setBuildcfg(t, "0.4.5+abcdef0", "abcdef0", "abcdef0123456789")
+	rec := withPinProvenance(sessions.NameRecord{SessionID: "id", Profile: "p", ProfileDigest: "d"}, []byte(`{"form":1}`))
+	if rec.ProfileWriter != "0.4.5+abcdef0" || rec.ProfileProtocol != profilelookup.ProtocolVersion || string(rec.ProfileForm) != `{"form":1}` {
+		t.Errorf("record = %+v, want this build's version %q and protocol %d with the form", rec, buildcfg.Version, profilelookup.ProtocolVersion)
+	}
+	none := withPinProvenance(sessions.NameRecord{SessionID: "id", Name: "bozo"}, []byte(`{"form":1}`))
+	if none.ProfileWriter != "" || none.ProfileProtocol != 0 || none.ProfileForm != nil {
+		t.Errorf("a record without a pin carries provenance: %+v", none)
+	}
 }
 
 // clown#298: a same-name edit no longer resolves to the pinned digest, but

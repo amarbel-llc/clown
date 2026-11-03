@@ -191,6 +191,41 @@ func TestProfileOf(t *testing.T) {
 	}
 }
 
+// clown#340: the provenance recorded beside a pin (the writing clown version
+// and profile protocol) comes back with the SAME record the pin comes from,
+// and a pin written without it reports none.
+func TestPinRecordOf(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	records := []NameRecord{
+		{SessionID: "id-1", Name: "bozo", Profile: "p1", ProfileDigest: "aaa", ProfileWriter: "0.4.4+aaaaaaa", ProfileProtocol: 2},
+		{SessionID: "id-2", Name: "krusty", Profile: "p1", ProfileDigest: "aaa"},
+		{SessionID: "id-1", Name: "bozo", Profile: "p2", ProfileDigest: "bbb", ProfileWriter: "0.4.5+bbbbbbb", ProfileProtocol: 3},
+		{SessionID: "id-1", Name: "bozo"}, // no profile: never erases the pin or its provenance
+	}
+	for _, r := range records {
+		if err := RecordSession(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, ok, err := PinRecordOf("id-1")
+	if err != nil || !ok {
+		t.Fatalf("PinRecordOf(id-1) = %+v, %v, %v", got, ok, err)
+	}
+	if want := (PinRecord{ProfilePin: ProfilePin{Name: "p2", Digest: "bbb"}, Writer: "0.4.5+bbbbbbb", Protocol: 3}); got != want {
+		t.Errorf("PinRecordOf(id-1) = %+v, want the last pin with its own provenance %+v", got, want)
+	}
+	if pin, ok, err := ProfileOf("id-1"); err != nil || !ok || pin != got.ProfilePin {
+		t.Errorf("ProfileOf(id-1) = %+v, %v, %v; want the same pin", pin, ok, err)
+	}
+	got, ok, err = PinRecordOf("id-2")
+	if err != nil || !ok || got != (PinRecord{ProfilePin: ProfilePin{Name: "p1", Digest: "aaa"}}) {
+		t.Errorf("a pin written without provenance = %+v, %v, %v; want the pin with no writer and protocol 0", got, ok, err)
+	}
+	if _, ok, err := PinRecordOf("id-3"); err != nil || ok {
+		t.Errorf("unknown session: ok %v, err %v", ok, err)
+	}
+}
+
 // A record written before FDR 0022 (no profile keys) still parses, and a
 // record carrying a profile still serves name lookups.
 func TestSidecarProfileFieldsCompatible(t *testing.T) {

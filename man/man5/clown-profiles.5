@@ -340,6 +340,24 @@ are kept as they are and can be changed only by hand or by the
 save prompt.
 .It Cm clown profile remove Ar name
 Remove a user profile after a confirmation.
+.It Cm clown profile digest Ar name
+Print, on one line, the digest this clown build pins the named profile at:
+what a launch records, what
+.Cm clown resume
+compares and what
+.Ev CLOWN_PROFILE_DIGEST
+approves.
+A digest is a function of the definition and of the build (the profile
+protocol, and the builtin a profile is based on), so two builds can print
+different digests for the same registry; the restart's pre-stop check asks
+the clown on
+.Ev PATH
+this way (see
+.Xr clown-restart 1 ) .
+A profile that cannot be pinned by this build (an unknown name, a registry
+it cannot vouch for, a stale base) prints why on standard error and exits 1,
+with nothing on standard output.
+Read-only.
 .El
 .Pp
 .Cm add ,
@@ -358,7 +376,15 @@ The user registry
 The legacy location, read with a warning when the canonical file does not
 exist; never written.
 .It Pa $XDG_STATE_HOME/clown/session-names.jsonl
-Session records, including profile pins.
+Session records, including profile pins: the profile's name and digest, its
+redacted form, and (clown#340) the clown version and profile protocol of
+the build that computed the digest
+.Pq Li profile_writer , Li profile_protocol .
+A pin-change refusal uses the last two to say what it can: the same build
+pinned, so the definition changed; another build under another protocol, so
+every digest changed and the definition may be unchanged; another build
+under the same protocol, so either; or no provenance, for a pin written
+before it was recorded.
 .It Pa $XDG_STATE_HOME/clown/readback/ Ns Ar principal Ns Pa .json
 The exclusion readback of the last launch under a saved selection.
 .El
