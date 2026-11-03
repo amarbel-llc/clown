@@ -196,9 +196,19 @@ the moxyfile from it, intersected with the compiled-in default (narrowing
 only), and refuses a spec that would widen the default. This bumps the
 spec version (`SpecVersion` 1 to 2; `LoadSpec` refuses unknown fields),
 which is a clown-spinclass contract with no profile digest involved: no
-pin re-approval, no `SkewError`. R3' needs no profile report: spinclass
-knows the ceiling it passed. The profile keeps `moxy/moxy` with its
-exclusions as the deny-list within the ceiling.
+pin re-approval, no `SkewError`. The profile keeps `moxy/moxy` with its
+exclusions as the deny-list within the ceiling. spinclass's condition
+(light-cedar, 2026-11-03): under S an R3' check against the spec list is
+spinclass checking its own intent, not what the unit serves. That is
+acceptable as policy only if clown's unit record (the frontend-owned
+result file spinclass reads back after launch) carries the **digest of
+the read-only moxyfile it mounted** and the **effective tool list it
+derived**, so spinclass can assert "armed == asked" and close the session
+on a mismatch, as the record already carries the unit name and cgroup.
+Without that record-back S "gives workers the tools but gives R3' nothing
+to stand on" and spinclass would document it as unchecked. P remains the
+shape for the real check, because the digest pins the ceiling before
+launch.
 
 **Recommendation:** spinclass designed and prefers Shape P (its R3' check
 reads the profile's own report, and the spawn grant's digest pins the
@@ -244,7 +254,13 @@ stanza (item 2) are the same.
    content changes with it.
 5. **Shape S plumbing** (if chosen): `Spec.MoxyAllow []string`,
    `SpecVersion` 2 accepted alongside 1 (a version-1 spec means "the
-   default ceiling"); `Validate` refuses an entry outside the default.
+   default ceiling"); `Validate` refuses an entry outside the default; and
+   the record-back spinclass requires: `Result.MoxyfileDigest` (sha256 of
+   the mounted read-only moxyfile bytes) and `Result.MoxyTools` (the
+   effective tool list clown derived), written with the "provider
+   started" result, so spinclass can assert armed == asked. Under Shape P
+   the same two result fields are still worth writing: they let spinclass
+   compare the launch against the profile's `moxy.tools` it already pinned.
 6. **Exclusion push** stays as today (`applyInUnitExclusions`): the
    profile's `context_excluded` is a deny-list within the ceiling; the
    readback refusal is unchanged.
