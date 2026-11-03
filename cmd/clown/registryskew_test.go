@@ -28,8 +28,12 @@ backend = "anthropic"
 func TestLoadProfileSetsRefusesARegistryItCannotReadInFull(t *testing.T) {
 	for name, c := range map[string]struct{ body, want string }{
 		"newer protocol": {
-			knownProfile + "\n[registry]\nclown_version = \"9.9.9\"\nprotocol = \"3\"\n",
-			"profile protocol 3, written by clown 9.9.9",
+			knownProfile + "\n[registry]\nclown_version = \"9.9.9\"\nprotocol = \"4\"\n",
+			"profile protocol 4, written by clown 9.9.9",
+		},
+		"moxy keys under a protocol-2 stamp": {
+			knownProfile + "moxy_placement = \"in-unit\"\n\n[registry]\nclown_version = \"0.4.4\"\nprotocol = \"2\"\n",
+			"a moxy table on profiles mine under a protocol 2 stamp",
 		},
 		"base under a protocol-1 stamp": {
 			knownProfile + "base = \"canary\"\n\n[registry]\nclown_version = \"0.4.4\"\nprotocol = \"1\"\n",
@@ -58,7 +62,7 @@ func TestLoadProfileSetsRefusesARegistryItCannotReadInFull(t *testing.T) {
 	}
 }
 
-const skewedRegistry = knownProfile + "context_kept = [\"moxy/moxy\"]\n\n[registry]\nclown_version = \"9.9.9\"\nprotocol = \"3\"\n"
+const skewedRegistry = knownProfile + "context_kept = [\"moxy/moxy\"]\n\n[registry]\nclown_version = \"9.9.9\"\nprotocol = \"4\"\n"
 
 // TestProfileListShowsBuiltinsBesideARefusedRegistry: list is read-only, so
 // it shows what it can vouch for (the builtins), prints the refusal, exits
@@ -72,7 +76,7 @@ func TestProfileListShowsBuiltinsBesideARefusedRegistry(t *testing.T) {
 	if !strings.Contains(out.String(), "canary") || strings.Contains(out.String(), "mine") {
 		t.Errorf("list printed %q; want the builtins and nothing from the refused registry", out.String())
 	}
-	for _, want := range []string{"profile protocol 3, written by clown 9.9.9", "context_kept", "refuses the registry"} {
+	for _, want := range []string{"profile protocol 4, written by clown 9.9.9", "context_kept", "refuses the registry"} {
 		if !strings.Contains(errOut.String(), want) {
 			t.Errorf("stderr %q does not say %q", errOut.String(), want)
 		}

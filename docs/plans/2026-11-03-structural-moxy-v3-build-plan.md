@@ -143,11 +143,22 @@ rule; the shape spinclass asked for).** A new optional `moxy` table on the
 profile (light-cedar, 2026-11-03):
 
 ```toml
-[profile.moxy]
-placement   = "in-unit"          # or "frontend" | "twin"
-allow_tools = ["mcp__plugin_moxy_moxy__folio_read", ...]   # the ceiling, as the agent sees the names
-tools       = ["mcp__plugin_moxy_moxy__folio_read", ...]   # the effective set after the ceiling and the exclusions
+[[profile]]
+name = "worker"
+# ...
+moxy_placement   = "in-unit"          # or "frontend" | "twin"
+moxy_allow_tools = ["mcp__plugin_moxy_moxy__folio_read", ...]   # the ceiling, as the agent sees the names
+moxy_tools       = ["mcp__plugin_moxy_moxy__folio_read", ...]   # the effective set after the ceiling and the exclusions
 ```
+
+(Build note, 2026-11-03: the TOML spelling is three flat keys on the
+profile, not a `[profile.moxy]` sub-table, because the in-place TOML
+encoder clown saves with (tommy) writes primitives, lists and map tables
+but drops a nested struct table; the canonical JSON key is still the one
+`moxy` object below, and `profile.Profile.MoxyTable()` is the typed view.
+Tool names are `mcp__<server>__<tool>` as claude renders them, e.g.
+`mcp__plugin_moxy_moxy__folio_read`: two `__`-separated parts after the
+prefix.)
 
 `allow_tools` is the read-only global moxyfile's ceiling; `tools` is what
 spinclass judges; both ride so spinclass can check `tools ⊆ allow_tools`
@@ -305,6 +316,30 @@ every path argument of the kept tools is judged per resource against the
 stanza; `mktemp` creates under `.tmp`, inside the worktree; the excluded
 tools are exactly those whose second argument or effect is not a plain
 path check.
+
+## Pin re-approval at the bump (for the operator)
+
+What changes when the protocol-3 clown is deployed: the canonical form of
+every profile, builtin and user, now starts with `"protocol":3`, so every
+profile digest differs from the one pinned by a session launched under
+protocol 2. Nothing is lost; the gate asks once per kept session.
+
+- **A session resumed or restarted after the deploy** is refused by the
+  profile gate with a message that names the pinned digest, the current
+  one and the field diff (empty here: only the protocol number moved).
+  Approve it the way the refusal says: rerun the same command with
+  `--profile <name>` and `CLOWN_PROFILE_DIGEST=<the current digest the
+  message printed>` (plus `CLOWN_PROFILE_SESSION` when the message asks
+  for it). The session then carries the new pin.
+- **A session pinned as unpinnable** (clown#334, clown#337) stays as it is;
+  the bump does not change that case.
+- **New launches** pin the new digest; nothing to do.
+- **profiles.toml** is untouched by the deploy: the stamp becomes 3 only
+  when a profile with moxy keys is saved. An older clown on another host
+  keeps reading it until then.
+- **spinclass** relinks clown at its own cycle; its spawn grants pin
+  profile digests too (light-cedar), so grants made under protocol 2 need
+  re-pinning after the relink. That is spinclass's step, announced here.
 
 ## Order and gates
 

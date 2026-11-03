@@ -37,6 +37,11 @@ type profileFormValues struct {
 	contextServers  []string
 	contextExcluded map[string][]string
 	base            string
+	// The moxy keys (protocol 3, V3 structural moxy) are not editable here
+	// either: a ceiling is the operator's deliberate, pinned act.
+	moxyPlacement  string
+	moxyAllowTools []string
+	moxyTools      []string
 }
 
 func (v profileFormValues) toProfile() profile.Profile {
@@ -52,6 +57,9 @@ func (v profileFormValues) toProfile() profile.Profile {
 		ContextServers:  v.contextServers,
 		ContextExcluded: v.contextExcluded,
 		Base:            v.base,
+		MoxyPlacement:   v.moxyPlacement,
+		MoxyAllowTools:  v.moxyAllowTools,
+		MoxyTools:       v.moxyTools,
 	}
 }
 
@@ -68,6 +76,9 @@ func valuesFromProfile(p profile.Profile) profileFormValues {
 		contextServers:  p.ContextServers,
 		contextExcluded: p.ContextExcluded,
 		base:            p.Base,
+		moxyPlacement:   p.MoxyPlacement,
+		moxyAllowTools:  p.MoxyAllowTools,
+		moxyTools:       p.MoxyTools,
 	}
 }
 

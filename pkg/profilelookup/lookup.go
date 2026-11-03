@@ -38,9 +38,12 @@
 // ProtocolVersion versions the profiles.toml schema, the registry stamp and
 // the canonical form below together. A launcher pins the constant it was built
 // against; bumping it is a breaking change announced to consumers first.
-// Protocol 2 added `base` and env-value digests. This build reads registries
-// stamped 1 or 2; the digest depends only on the profile and this build's
-// protocol, never on the registry's stamp.
+// Protocol 2 added `base` and env-value digests. Protocol 3 added the `moxy`
+// key (the profile's moxy_placement, moxy_allow_tools and moxy_tools keys:
+// where its moxy runs under confinement and the tool ceiling; announced to
+// spinclass 2026-11-03). This
+// build reads registries stamped 1 to 3; the digest depends only on the
+// profile and this build's protocol, never on the registry's stamp.
 //
 // # Canonical form and digest
 //
@@ -49,7 +52,11 @@
 //
 //   - one object, keys in this fixed order: protocol, name, display, provider,
 //     backend, model, url, token_set, env, context_servers, context_excluded,
-//     base;
+//     base, moxy;
+//   - moxy is null when the profile has none of the moxy_placement,
+//     moxy_allow_tools and moxy_tools keys, else an object {placement,
+//     allow_tools, tools}: placement as written, the two lists sorted and
+//     deduplicated, [] when empty (never null inside);
 //   - every key is always present: an unset string is "", never omitted;
 //   - protocol is the integer ProtocolVersion; no floats occur anywhere;
 //   - token is NEVER included: token_set is whether one is configured, so
@@ -128,6 +135,9 @@ type SkewError struct {
 	// MisstampedBase names profiles carrying `base` under a stamp older than
 	// protocol 2: a writer that did not know what base means.
 	MisstampedBase []string
+	// MisstampedMoxy names profiles carrying a `moxy` table under a stamp
+	// older than protocol 3: a writer that did not know what the table means.
+	MisstampedMoxy []string
 }
 
 func (e *SkewError) Error() string {
@@ -139,6 +149,8 @@ func (e *SkewError) Error() string {
 		return fmt.Sprintf("profile registry %s was last written by clown %s (profile protocol %d); %s", e.RegistryPath, e.RegistryVersion, e.RegistryProtocol, reads)
 	case len(e.MisstampedBase) > 0:
 		return fmt.Sprintf("profile registry %s is stamped profile protocol %d (by clown %s) but profiles %s carry base, which needs protocol 2; save it with a clown that speaks protocol 2, or remove base", e.RegistryPath, e.RegistryProtocol, e.RegistryVersion, strings.Join(e.MisstampedBase, ", "))
+	case len(e.MisstampedMoxy) > 0:
+		return fmt.Sprintf("profile registry %s is stamped profile protocol %d (by clown %s) but profiles %s carry a moxy table, which needs protocol 3; save it with a clown that speaks protocol 3, or remove the table", e.RegistryPath, e.RegistryProtocol, e.RegistryVersion, strings.Join(e.MisstampedMoxy, ", "))
 	default:
 		return fmt.Sprintf("profile registry %s (last written by clown %s) holds fields unknown to this library (%s): %s", e.RegistryPath, e.RegistryVersion, reads, strings.Join(e.UnknownFields, ", "))
 	}
@@ -381,8 +393,8 @@ func loadUserRegistry(opts Options) (profile.Registry, RegistryStamp, error) {
 		return profile.Registry{}, RegistryStamp{}, err
 	}
 	stamp := RegistryStamp{Present: true, ClownVersion: reg.Stamp.ClownVersion, ProtocolVersion: reg.Stamp.Protocol}
-	misstamped := reg.MisstampedBase()
-	if !profile.ReadableProtocol(reg.Stamp.Protocol) || len(reg.Undecoded) > 0 || len(misstamped) > 0 {
+	misstamped, misstampedMoxy := reg.MisstampedBase(), reg.MisstampedMoxy()
+	if !profile.ReadableProtocol(reg.Stamp.Protocol) || len(reg.Undecoded) > 0 || len(misstamped) > 0 || len(misstampedMoxy) > 0 {
 		return profile.Registry{}, stamp, &SkewError{
 			RegistryPath:     path,
 			RegistryVersion:  reg.Stamp.ClownVersion,
@@ -390,6 +402,7 @@ func loadUserRegistry(opts Options) (profile.Registry, RegistryStamp, error) {
 			LibraryProtocol:  ProtocolVersion,
 			UnknownFields:    reg.Undecoded,
 			MisstampedBase:   misstamped,
+			MisstampedMoxy:   misstampedMoxy,
 		}
 	}
 	return reg, stamp, nil
@@ -456,6 +469,16 @@ type canonical struct {
 	ContextServers  []string            `json:"context_servers"`
 	ContextExcluded map[string][]string `json:"context_excluded"`
 	Base            string              `json:"base"`
+	Moxy            *canonicalMoxy      `json:"moxy"`
+}
+
+// canonicalMoxy is the canonical shape of a profile's moxy table (protocol
+// 3): placement as written, both lists sorted and deduplicated, never
+// omitted (an absent table renders the whole key as null).
+type canonicalMoxy struct {
+	Placement  string   `json:"placement"`
+	AllowTools []string `json:"allow_tools"`
+	Tools      []string `json:"tools"`
 }
 
 // Canonicalize renders p in the canonical form documented on the package.
@@ -476,6 +499,13 @@ func Canonicalize(p profile.Profile) ([]byte, error) {
 	if p.ContextServers != nil {
 		c.ContextServers = sortedUnique(p.ContextServers)
 	}
+	if m := p.MoxyTable(); m != nil {
+		c.Moxy = &canonicalMoxy{
+			Placement:  m.Placement,
+			AllowTools: nonNil(sortedUnique(m.AllowTools)),
+			Tools:      nonNil(sortedUnique(m.Tools)),
+		}
+	}
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
@@ -483,4 +513,13 @@ func Canonicalize(p profile.Profile) ([]byte, error) {
 		return nil, fmt.Errorf("canonicalize profile %q: %w", p.Name, err)
 	}
 	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
+}
+
+// nonNil renders an empty list as [] rather than null inside the moxy table,
+// where the lists are always present.
+func nonNil(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
 }

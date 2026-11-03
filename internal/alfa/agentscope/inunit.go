@@ -54,20 +54,5 @@ func ReadInUnitServers(path string) ([]InUnitServer, error) {
 	return servers, nil
 }
 
-// InUnitMoxyfile is the global moxyfile of an in-unit moxy, bound read-only
-// over $HOME/.config/moxy/moxyfile inside the unit. allow-tools lists
-// intersect down moxy's hierarchy, so a worktree moxyfile can only narrow it.
-//
-// Allowed: moxins that act only on what the unit sees (files, git, nix via the
-// daemon, local docs, toolbox's pure applets over files the policy blesses)
-// plus moxy's meta tools. Disabled, with the reason a
-// confined worker loses them (FDR 0020 "What a confined worker loses"):
-// smith (writes to forges; a confined worker files through issue-filer),
-// chrest (drives the operator's browser: the prompt surface), the Google
-// moxins (credentials under the hidden home), freud (operator transcripts),
-// stats-me (a host-loopback service the unit cannot reach).
-const InUnitMoxyfile = `# Written by clown for an agent unit (clown#244, FDR 0020). Read-only inside
-# the unit; allow-tools intersects down the hierarchy, so nothing below widens it.
-allow-tools = ["folio", "grit", "rg", "jq", "man", "chix", "env", "toolbox", "batch", "async", "async-result", "async-cancel", "status", "restart"]
-disable-moxins = ["smith", "chrest", "calendar", "car", "gmail", "gws", "piers", "prison", "freud", "stats-me"]
-`
+// The in-unit moxy's global moxyfile (InUnitMoxyfile) is rendered from the
+// ratified ceiling in ceiling.go.

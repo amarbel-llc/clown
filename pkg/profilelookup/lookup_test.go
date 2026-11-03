@@ -203,7 +203,7 @@ func TestSkewOtherProtocolNamesBothSides(t *testing.T) {
 	if !errors.As(err, &skew) {
 		t.Fatalf("err = %v, want *SkewError", err)
 	}
-	for _, want := range []string{"7.7.7", "protocol 99", "speaks profile protocol 2", "reads protocols 1 to 2"} {
+	for _, want := range []string{"7.7.7", "protocol 99", "speaks profile protocol 3", "reads protocols 1 to 3"} {
 		if !strings.Contains(skew.Error(), want) {
 			t.Errorf("message %q lacks %q", skew.Error(), want)
 		}
@@ -234,7 +234,7 @@ func TestCanonicalGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"protocol":2,"name":"trimmed","display":"Trimmed","provider":"claude","backend":"anthropic","model":"opus","url":"https://x.example/a?b=1&c=<2>","token_set":true,"env":{"ALPHA":"` + sha256Hex("${HOME}") + `","ZED":"` + sha256Hex("z") + `"},"context_servers":["clown-builtin-jobs/ringmaster","clown-builtin-jobs/troupe","moxy/moxy"],"context_excluded":{"moxy/moxy":["folio.read","folio.write"]},"base":""}`
+	want := `{"protocol":3,"name":"trimmed","display":"Trimmed","provider":"claude","backend":"anthropic","model":"opus","url":"https://x.example/a?b=1&c=<2>","token_set":true,"env":{"ALPHA":"` + sha256Hex("${HOME}") + `","ZED":"` + sha256Hex("z") + `"},"context_servers":["clown-builtin-jobs/ringmaster","clown-builtin-jobs/troupe","moxy/moxy"],"context_excluded":{"moxy/moxy":["folio.read","folio.write"]},"base":"","moxy":null}`
 	if string(got) != want {
 		t.Fatalf("canonical =\n%s\nwant\n%s", got, want)
 	}
@@ -245,9 +245,31 @@ func TestCanonicalNilSelectionAndDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"protocol":2,"name":"p","display":"","provider":"claude","backend":"anthropic","model":"","url":"","token_set":false,"env":{},"context_servers":null,"context_excluded":{},"base":""}`
+	want := `{"protocol":3,"name":"p","display":"","provider":"claude","backend":"anthropic","model":"","url":"","token_set":false,"env":{},"context_servers":null,"context_excluded":{},"base":"","moxy":null}`
 	if string(got) != want {
 		t.Fatalf("canonical =\n%s\nwant\n%s", got, want)
+	}
+}
+
+// Protocol 3: the moxy table renders as an object with sorted, deduplicated
+// lists ([] when empty), and its presence changes the digest.
+func TestCanonicalMoxyTable(t *testing.T) {
+	p := profile.Profile{
+		Name: "p", Provider: "claude", Backend: "anthropic",
+		MoxyPlacement:  "in-unit",
+		MoxyAllowTools: []string{"mcp__plugin_moxy_moxy__folio_write", "mcp__plugin_moxy_moxy__folio_read", "mcp__plugin_moxy_moxy__folio_read"},
+	}
+	got, err := profilelookup.Canonicalize(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"protocol":3,"name":"p","display":"","provider":"claude","backend":"anthropic","model":"","url":"","token_set":false,"env":{},"context_servers":null,"context_excluded":{},"base":"","moxy":{"placement":"in-unit","allow_tools":["mcp__plugin_moxy_moxy__folio_read","mcp__plugin_moxy_moxy__folio_write"],"tools":[]}}`
+	if string(got) != want {
+		t.Fatalf("canonical =\n%s\nwant\n%s", got, want)
+	}
+	without, _ := profilelookup.Canonicalize(profile.Profile{Name: "p", Provider: "claude", Backend: "anthropic"})
+	if sha256Hex(string(got)) == sha256Hex(string(without)) {
+		t.Error("the moxy table does not change the digest")
 	}
 }
 

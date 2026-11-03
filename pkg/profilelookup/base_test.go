@@ -194,8 +194,12 @@ func TestEveryProfileFieldIsInTheCanonicalForm(t *testing.T) {
 	ty := reflect.TypeOf(profile.Profile{})
 	for i := range ty.NumField() {
 		tag, _, _ := strings.Cut(ty.Field(i).Tag.Get("toml"), ",")
-		if tag == "token" {
+		switch {
+		case tag == "token":
 			tag = "token_set"
+		case strings.HasPrefix(tag, "moxy_"):
+			// The three moxy keys render as the one `moxy` object.
+			tag = "moxy"
 		}
 		if _, ok := keys[tag]; !ok {
 			t.Errorf("profile field %s (toml %q) has no canonical key; add it and bump ProtocolVersion", ty.Field(i).Name, tag)
@@ -205,12 +209,38 @@ func TestEveryProfileFieldIsInTheCanonicalForm(t *testing.T) {
 
 func TestSkewNewerProtocolStillRefused(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "profiles.toml")
-	body := "[registry]\nclown_version = \"9.9.9\"\nprotocol = \"3\"\n\n[[profile]]\nname = \"a\"\nprovider = \"claude\"\nbackend = \"anthropic\"\n"
+	body := "[registry]\nclown_version = \"9.9.9\"\nprotocol = \"4\"\n\n[[profile]]\nname = \"a\"\nprovider = \"claude\"\nbackend = \"anthropic\"\n"
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	var skew *profilelookup.SkewError
-	if _, err := profilelookup.Resolve("a", profilelookup.Options{RegistryPath: path}); !errors.As(err, &skew) || !strings.Contains(err.Error(), "protocol 3") {
-		t.Errorf("err = %v, want *SkewError naming protocol 3", err)
+	if _, err := profilelookup.Resolve("a", profilelookup.Options{RegistryPath: path}); !errors.As(err, &skew) || !strings.Contains(err.Error(), "protocol 4") {
+		t.Errorf("err = %v, want *SkewError naming protocol 4", err)
+	}
+}
+
+// A moxy table under a protocol-2 stamp (a writer that did not know the
+// table) is refused, naming the profile and protocol 3.
+func TestSkewMoxyTableUnderAProtocol2Stamp(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "profiles.toml")
+	body := "[registry]\nclown_version = \"0.4.4\"\nprotocol = \"2\"\n\n[[profile]]\nname = \"w\"\nprovider = \"claude\"\nbackend = \"anthropic\"\nmoxy_placement = \"in-unit\"\nmoxy_allow_tools = [\"mcp__plugin_moxy_moxy__folio_read\"]\nmoxy_tools = [\"mcp__plugin_moxy_moxy__folio_read\"]\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := profilelookup.Resolve("w", profilelookup.Options{RegistryPath: path})
+	var skew *profilelookup.SkewError
+	if !errors.As(err, &skew) || !reflect.DeepEqual(skew.MisstampedMoxy, []string{"w"}) || !strings.Contains(err.Error(), "needs protocol 3") {
+		t.Errorf("err = %v, want *SkewError naming w and protocol 3", err)
+	}
+	// Stamped 3, the same registry resolves and the table is on the profile.
+	if err := os.WriteFile(path, []byte(strings.Replace(body, `protocol = "2"`, `protocol = "3"`, 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r, err := profilelookup.Resolve("w", profilelookup.Options{RegistryPath: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Registry.ProtocolVersion != 3 {
+		t.Errorf("stamp = %d, want 3", r.Registry.ProtocolVersion)
 	}
 }

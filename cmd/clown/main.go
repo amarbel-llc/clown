@@ -108,6 +108,14 @@ func registrySkewRefusal(path string, reg profile.Registry) error {
 		held = append(held, fmt.Sprintf("base on profiles %s under %s (base needs protocol 2)", strings.Join(names, ", "), stamp))
 		remedy = append(remedy, `if you wrote base on purpose, set the [registry] protocol to "2" by hand; otherwise remove base`)
 	}
+	if names := reg.MisstampedMoxy(); len(names) > 0 && reg.Stamp.Protocol >= 0 {
+		stamp := "no protocol stamp"
+		if reg.Stamp.Protocol > 0 {
+			stamp = fmt.Sprintf("a protocol %d stamp", reg.Stamp.Protocol)
+		}
+		held = append(held, fmt.Sprintf("a moxy table on profiles %s under %s (the table needs protocol 3)", strings.Join(names, ", "), stamp))
+		remedy = append(remedy, `if you wrote the moxy table on purpose, set the [registry] protocol to "3" by hand; otherwise remove it`)
+	}
 	if len(held) == 0 {
 		return nil
 	}
