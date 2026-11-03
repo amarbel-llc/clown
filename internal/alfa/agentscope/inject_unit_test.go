@@ -2,6 +2,7 @@ package agentscope
 
 import (
 	"encoding/json"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -120,6 +121,18 @@ func TestModelCredentialIsReportedInTheResultAndCapabilities(t *testing.T) {
 	raw, _ := os.ReadFile(l.Spec.ResultPath)
 	if !strings.Contains(string(raw), `"model_credential": "login-file"`) {
 		t.Errorf("failure result lacks the credential path: %s", raw)
+	}
+}
+
+func TestInjectDefaultsToTheAnthropicAPIAndIgnoresProxyEnvironment(t *testing.T) {
+	u, err := (&InjectProxy{}).upstream()
+	if err != nil || u.Scheme != "https" || u.Host != "api.anthropic.com" {
+		t.Errorf("default upstream = %v, %v", u, err)
+	}
+	t.Setenv("HTTPS_PROXY", "http://proxy.invalid:3128")
+	tr, ok := (&InjectProxy{}).transport().(*http.Transport)
+	if !ok || tr.Proxy != nil {
+		t.Errorf("default transport %T must set no Proxy", tr)
 	}
 }
 

@@ -102,6 +102,25 @@ func TestChooseModelCredential(t *testing.T) {
 	}
 }
 
+func TestModelUpstreamOverrideIsLoopbackHTTPOnly(t *testing.T) {
+	for _, bad := range []string{"https://attacker.example", "https://127.0.0.1:1", "http://attacker.example:80", "http://10.0.0.1:80", "ftp://127.0.0.1"} {
+		t.Setenv("CLOWN_MODEL_UPSTREAM", bad)
+		if _, err := newModelInjectProxy("u.service", nil); err == nil || !strings.Contains(err.Error(), "loopback") {
+			t.Errorf("%q: err %v, want a refusal naming the loopback", bad, err)
+		}
+	}
+	t.Setenv("CLOWN_MODEL_UPSTREAM", "http://127.0.0.1:4321")
+	p, err := newModelInjectProxy("u.service", nil)
+	if err != nil || p.Upstream == nil || p.Upstream.Host != "127.0.0.1:4321" {
+		t.Errorf("loopback http: %+v, %v", p, err)
+	}
+	t.Setenv("CLOWN_MODEL_UPSTREAM", "")
+	p, err = newModelInjectProxy("u.service", nil)
+	if err != nil || p.Upstream != nil {
+		t.Errorf("unset: %+v, %v; want the default upstream (nil)", p, err)
+	}
+}
+
 func TestStageAgentHomeForLoginBind(t *testing.T) {
 	opHome, agentHome := t.TempDir(), t.TempDir()
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())

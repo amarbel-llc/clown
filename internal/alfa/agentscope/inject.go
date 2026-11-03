@@ -94,12 +94,9 @@ type InjectProxy struct {
 
 // Listen creates the socket at path (0600) and serves it until Close.
 func (p *InjectProxy) Listen(path string) error {
-	up := p.Upstream
-	if up == nil {
-		var err error
-		if up, err = url.Parse(DefaultModelUpstream); err != nil {
-			return err
-		}
+	up, err := p.upstream()
+	if err != nil {
+		return err
 	}
 	if up.Scheme == "" || up.Host == "" || (up.Path != "" && up.Path != "/") {
 		return fmt.Errorf("model upstream %q must be a scheme and host without a path", up.Redacted())
@@ -140,6 +137,14 @@ func (p *InjectProxy) Listen(path string) error {
 	return nil
 }
 
+// upstream is Upstream, or DefaultModelUpstream when unset.
+func (p *InjectProxy) upstream() (*url.URL, error) {
+	if p.Upstream != nil {
+		return p.Upstream, nil
+	}
+	return url.Parse(DefaultModelUpstream)
+}
+
 // Close stops accepting and drops open connections.
 func (p *InjectProxy) Close() error {
 	p.mu.Lock()
@@ -155,7 +160,7 @@ func (p *InjectProxy) transport() http.RoundTripper {
 		return p.Transport
 	}
 	return &http.Transport{
-		Proxy:                 http.ProxyFromEnvironment,
+		Proxy:                 nil, // forwarding must not depend on the frontend's HTTPS_PROXY
 		DialContext:           (&net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
 		ForceAttemptHTTP2:     true,
 		TLSHandshakeTimeout:   15 * time.Second,

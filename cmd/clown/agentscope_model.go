@@ -80,8 +80,8 @@ func chooseModelCredential(tokenPath, policy string, warn io.Writer) (string, er
 }
 
 // newModelInjectProxy is the InjectProxy for unit: it reads the bearer from the
-// token file on every request. CLOWN_MODEL_UPSTREAM (https, or http on the
-// loopback) points it elsewhere and CLOWN_MODEL_PROXY_PERMISSIVE=1 forwards
+// token file on every request. CLOWN_MODEL_UPSTREAM (http on the loopback
+// only) points it elsewhere and CLOWN_MODEL_PROXY_PERMISSIVE=1 forwards
 // other /v1/ and /api/ paths, logged; both are frontend-only, for the bats
 // case and for the probe of a new claude version, and neither reaches the unit.
 func newModelInjectProxy(unit string, logger *slog.Logger) (*agentscope.InjectProxy, error) {
@@ -96,8 +96,10 @@ func newModelInjectProxy(unit string, logger *slog.Logger) (*agentscope.InjectPr
 		if err != nil {
 			return nil, fmt.Errorf("CLOWN_MODEL_UPSTREAM: %w", err)
 		}
-		if u.Scheme != "https" && !(u.Scheme == "http" && agentscope.IsLoopbackHost(u.Hostname())) {
-			return nil, fmt.Errorf("CLOWN_MODEL_UPSTREAM %q must be https, or http on the loopback: the bearer is sent there", u.Redacted())
+		// Only a loopback http fake: an https override would let a planted
+		// environment (a worktree .envrc) send the operator's bearer anywhere.
+		if u.Scheme != "http" || !agentscope.IsLoopbackHost(u.Hostname()) {
+			return nil, fmt.Errorf("CLOWN_MODEL_UPSTREAM %q must be http on the loopback: the bearer is sent there", u.Redacted())
 		}
 		p.Upstream = u
 	}

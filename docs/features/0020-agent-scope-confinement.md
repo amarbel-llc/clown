@@ -1074,7 +1074,8 @@ regular 0600 file owned by the frontend's uid and non-empty; one trailing
 newline is trimmed; the value is never in an error or log. Replacing the
 file rotates the credential and deleting it revokes at once. `piggy secrets
 reconcile` writes it at a card-present moment (circus's manifest entry).
-`CLOWN_MODEL_UPSTREAM` (https, or http on the loopback) and
+`CLOWN_MODEL_UPSTREAM` (http on the loopback only; the upstream transport
+ignores the frontend's proxy environment) and
 `CLOWN_MODEL_PROXY_PERMISSIVE=1` (any `/v1/` or `/api/` path, logged) are
 frontend-only test and probe seams; neither reaches the unit.
 
