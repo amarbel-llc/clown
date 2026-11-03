@@ -189,15 +189,49 @@ without a spinclass change.
   way to get `toolbox_run` into `worker` alone, but it does not answer "moxy for
   confined workers". It stays a fallback if the sibling unit is not built.
 
+## Spinclass's answers (light-cedar, 2026-11-03; their note: spinclass
+`docs/plans/2026-11-03-structural-confined-moxy.md`, commit 808155c, branch only)
+
+They call this design V2 and recommend it as the boundary; they add V1 (broker
+floor with a resolved-realpath check, plus `openat2` in moxy) as an interim and
+defense in depth. Their answers, as reported, not re-verified by me:
+
+- **(a) Units:** the spec is one JSON with one unit name hint and one result
+  record per worktree. They did not read every confinement-check row and infer
+  the checks assume one unit per session. A twin needs a second result path, or
+  clown launching it from the same spec without a second spinclass record (my
+  call). The protected-bind and probe checks run on the spec, so one spec covers
+  both units.
+- **(b) Sweatfile `[folio]`:** anchors, not only host paths: `pwd`, `home`,
+  `env:`, `nix-store`, `spinclass:{worktree,repo,worktrees,children,siblings}`,
+  `madder:`. Evaluated only by `spinclass serve`'s broker. In a confined session
+  `home:` means the unit's agent home (the broker already maps it), so the twin
+  must set the same `HOME`.
+- **(c) Ceiling ownership:** split. The tool ceiling (moxyfile `allow-tools`) is
+  the profile's, clown-owned; the resource rules are the sweatfile's, spinclass-
+  owned. Neither may come from inside the unit. This settles shape 1 above for
+  the tool ceiling; shape 3 is not wanted for tools.
+- **(d) R3:** becomes R3': keep the "no in-unit `moxy/moxy`" test and `just-us`;
+  if the frontend moxy server is kept, profile resolution must **report** its
+  effective tool set, which must contain no `grit_*`; no report means refuse. That
+  needs the new profile-protocol field, announced to spinclass first. Spinclass
+  changes nothing in R3 until clown reports it.
+- Unverified on their side: moxy's `serve-mcp` config discovery (the cwd/moxyfile
+  experiment covered `serve-moxin` only), that the twin can reuse the agent-unit
+  property builder, and the context cost.
+
+Consequence for the ceiling: the profile gets an explicit tool list field
+(shape 1) and `profilelookup` reports the effective set; the sweatfile does not
+supply tools. The "hybrid with intersection" preference above is dropped.
+
 ## Open questions
 
-- (spinclass) May the spec yield two units per session, and what does the
-  confinement check do with the second? What does the sweatfile resource stanza
-  name (host paths, `~` of what), and is the broker the only evaluator?
-  Asked of light-cedar; their answers belong in their note.
-- (operator) Who owns the ceiling: the profile (shape 1), the sweatfile (shape 3)
-  or both with intersection (my preference)? A `profilelookup` protocol bump
-  needs announcing to spinclass before it lands.
+- (clown) Second result path vs launching the twin from the same spec with no
+  second spinclass record: the second keeps spinclass's checks honest, the first
+  is less spinclass work. Undecided.
+- (operator) Approve shape 1 (profile field) and V2 as the boundary with V1 as
+  the interim? A `profilelookup` protocol bump needs announcing to spinclass
+  before it lands.
 - (moxy) Does `moxy serve-mcp` take everything needed from a clown-written
   moxyfile under `permission-mode = "enforce"` with the broker (moxy FDR 0015)?
   `enforce` refuses `restart` and any unannotated tool; the in-unit ceiling lists
