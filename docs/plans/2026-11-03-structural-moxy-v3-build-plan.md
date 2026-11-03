@@ -84,12 +84,44 @@ naming "unmatched". When no layer above the repo sets `[folio]`, the
 broker does not listen and moxy's compiled-in rule applies (folio write
 auto-allows inside the CWD and the Claude dirs).
 
-Proposed for the confined-spawn default: one trusted write entry for
-`spinclass:worktree`; read entries for the worktree, `/nix/store` and the
-madder read-write store (moxy writes large tool outputs there); nothing
-else. **Pending:** the exact stanza text as spinclass-sweatfile(5) accepts
-it, and what spinclass's current default already contains, from
-light-cedar.
+spinclass (light-cedar, 2026-11-03): there is **no** default stanza a
+confined spawn gets. The stanza is operator config read only from the
+global and parent-directory layers (a repo- or worktree-level value is
+ignored with a warning), not merged, one policy for every session in that
+hierarchy, confined or not (per-profile patterns are the later half of
+spinclass#438). Per-caller anchors make one stanza serve both:
+`spinclass:worktree` is the caller's own worktree; for a confined session
+the agent home at `<worktree>/.tmp/agent-home` is under it (#443). The
+text spinclass-sweatfile(5) accepts today, for the B workers:
+
+```toml
+[folio]
+read  = ["spinclass:worktree", "nix-store:", "madder:"]
+write = ["spinclass:worktree"]
+deny  = ["spinclass:worktrees/*/.spinclass", "spinclass:worktree/.claude", "spinclass:worktree/.mcp.json"]
+unmatched = "ask"
+```
+
+Reading it: a path under the caller's worktree is allowed for read and
+write; `/nix/store` is readable (derivation outputs a worker inspects);
+`madder:` lets a tool read back the blobs moxy streams its outputs to
+(add it to `write` only if the in-unit moxy's streaming needs the broker's
+say; today the broker never sees the stream itself). The denies: the
+`.spinclass` mirror of session state and the spawn log (a deny applies to
+every operation and its specificity beats the allow), `.claude`
+(`settings.local.json` is read-only in the unit since #400 anyway) and
+`.mcp.json` (the #400 planting vector). `unmatched = "ask"` is a deny under
+`dontAsk` and the refusal names "unmatched"; writing `"deny"` is equivalent
+for workers but turns every operator session's out-of-worktree read into a
+deny instead of a prompt, which is why the manpage's example uses `ask`. An
+exec check has no allow list, so only deny or unmatched answers it: with
+this stanza an exec-class moxy tool is asked, i.e. denied for a worker. The
+worktree's gate files (`justfile`, `flake.nix`, `flake.lock`) are the
+guarded gate's control (#449), not the stanza's. `sc validate` checks the
+stanza.
+
+This stanza is the operator's to add to the global or parent layer; it is
+not written by clown or spinclass.
 
 ### 3. What the broker denies, and how it reads
 
@@ -107,26 +139,55 @@ light-cedar.
 ### 4. Where the ceiling comes from: two shapes, pick one
 
 **Shape P, profile field (the structural note's preference 1 + 3's trust
-rule).** A new profile field `moxy_allow` (TOML `moxy_allow = [...]`, the
-dotted tool list) names the ceiling; the trusted sweatfile may only narrow
-it; the effective list is the intersection. This is a `ProtocolVersion`
-bump (2 to 3) in `pkg/profilelookup`, announced to spinclass first:
+rule; the shape spinclass asked for).** A new optional `moxy` table on the
+profile (light-cedar, 2026-11-03):
 
-- canonical form: a new key `moxy_allow` after `base`, a sorted,
-  deduplicated array, `null` when unset; `protocol` becomes 3;
-- registry stamp: `Save` stamps 3 only when a profile uses `moxy_allow`
-  (as protocol 2 does for `base`), so an untouched registry stays readable
-  by protocol-2 clowns; `OldestReadableProtocol` stays 1;
-- **cost:** `protocol` is part of every canonical form, so the bump changes
-  every profile digest, builtin and user. Every pinned session's profile
-  gate then sees a mismatch at its next resume or restart and needs the
-  operator's approval (`CLOWN_PROFILE_DIGEST`), and a spinclass built
-  against protocol 2 fails closed (`SkewError`) on a registry stamped 3
-  until it relinks clown. That is a flag day: spinclass relinks, clown
-  merges the bump, the operator re-approves the pins they keep;
-- spinclass: `catalogWidenings` compares `moxy_allow` (a user profile may
-  only narrow its builtin's); R3' reads the field for the in-unit moxy
-  check.
+```toml
+[profile.moxy]
+placement   = "in-unit"          # or "frontend" | "twin"
+allow_tools = ["mcp__plugin_moxy_moxy__folio_read", ...]   # the ceiling, as the agent sees the names
+tools       = ["mcp__plugin_moxy_moxy__folio_read", ...]   # the effective set after the ceiling and the exclusions
+```
+
+`allow_tools` is the read-only global moxyfile's ceiling; `tools` is what
+spinclass judges; both ride so spinclass can check `tools ⊆ allow_tools`
+(proof the set is no wider than the ceiling). clown computes both from the
+profile alone (the ceiling list minus `context_excluded`; no live catalog,
+so the canonical form stays a function of the definition). A profile
+without the table keeps today's meaning. The trusted sweatfile may only
+narrow the ceiling; the effective moxyfile is the intersection.
+`checkConfinedToolSurface` then accepts `moxy/moxy` in the keep set iff
+`placement == "in-unit"`, `tools` is non-empty and `⊆ allow_tools`, and
+contains no `grit_*`, no `smith_*`, no `restart`/`batch`/`async`, and no
+tool outside the toolbox+env+man default plus the B subsets (the spawn
+grant's profile digest pins the whole table anyway); anything else refuses
+naming the tool; `frontend` with moxy kept stays refused; `twin` refused
+until specified.
+
+This is a `ProtocolVersion` bump (2 to 3) in `pkg/profilelookup`,
+announced to spinclass first:
+
+- canonical form: a new key `moxy` after `base`: an object
+  `{placement, allow_tools, tools}` with sorted, deduplicated arrays, or
+  `null` when the table is absent; `protocol` becomes 3;
+- registry stamp: `Save` stamps 3 only when a profile uses `moxy` (as
+  protocol 2 does for `base`), so an untouched registry stays readable by
+  protocol-2 clowns; `OldestReadableProtocol` stays 1;
+- `profile.Validate`: `placement` in the three values, `tools ⊆
+  allow_tools`, names in the `mcp__<plugin>__<server>__<tool>` shape;
+- **cost, clown side:** `protocol` is part of every canonical form, so the
+  bump changes every profile digest, builtin and user. Every pinned
+  session's profile gate sees a mismatch at its next resume or restart and
+  needs the operator's approval (`CLOWN_PROFILE_DIGEST`); the operator
+  re-approves the pins they keep. (The protocol-2 bump had the same
+  effect.)
+- **spinclass side, no flag day** (light-cedar): spinclass resolves
+  profiles through the clown library it links (`LinkedClownRev`, from its
+  locked clown input), so the field reaches it only after a spinclass
+  clown-input bump, rebuild and deploy; until then it sees no `moxy` table
+  and keeps refusing moxy whole (R3 as today). Lead time: one spinclass
+  release cycle after clown's merge. `catalogWidenings` compares the table
+  (narrow-only against the base).
 
 **Shape S, spec field (no profile protocol change).** spinclass puts the
 ceiling in the launch spec (`moxy_allow` in the FDR 0035 spec, from its
@@ -139,17 +200,21 @@ pin re-approval, no `SkewError`. R3' needs no profile report: spinclass
 knows the ceiling it passed. The profile keeps `moxy/moxy` with its
 exclusions as the deny-list within the ceiling.
 
-**Recommendation:** Shape S for v1. It puts the ceiling where the #339
-ownership table already puts "what a tool may touch" (spinclass's trusted
-layers), avoids invalidating every profile pin, and needs one spec field
-on each side. Shape P can follow if the operator wants a profile to carry
-its own ceiling; the structural note's R3' discussion then applies.
+**Recommendation:** spinclass designed and prefers Shape P (its R3' check
+reads the profile's own report, and the spawn grant's digest pins the
+table), and with the linked-library fact there is no spinclass flag day;
+the remaining cost is clown's pin re-approval, a one-time operator act the
+protocol-2 bump already exercised. So: **Shape P**, unless the operator
+wants to avoid the pin re-approval now, in which case Shape S is the
+cheaper interim and P follows. Either way the ceiling text (item 1) and the
+stanza (item 2) are the same.
 
 ### 5. Prerequisites outside clown
 
 | Who | What | Status |
 |---|---|---|
-| spinclass | the `[folio]` default stanza text (item 2); under Shape S the spec field and `SpecVersion` 2; under Shape P `catalogWidenings` and R3' on the new field; R3 relaxed so a confined spawn may keep `moxy/moxy` when the ceiling is the pinned one | pending (asked light-cedar 2026-11-03) |
+| spinclass | under Shape P: `catalogWidenings` and `checkConfinedToolSurface` on the `moxy` table, after relinking clown at the bump (light-cedar files the spinclass side once the bump and field name are announced); under Shape S: the spec field and `SpecVersion` 2 | answered 2026-11-03; spinclass work waits on the shape decision |
+| operator (sweatfile) | the `[folio]` stanza of item 2 in the global or parent layer, checked with `sc validate` | pending |
 | moxy | a deployed moxy whose `serve-mcp` honours `MOXY_PARENT_MOXYFILE` and `permission-mode = "enforce"` (the build here, 0.6.46+7edf873, ships `moxy narrows` and the NARROWING contract), plus the moxy#497 env guards; the lock bump is the operator's, not this session's | to confirm with moxy/sunny-sumac |
 | operator | this package; the `worker` profile regaining `moxy/moxy` (a pinned-profile change) | pending |
 
@@ -210,12 +275,20 @@ keeps meaning the default ceiling; clown refuses an entry the default
 does not hold. No profile protocol change."
 
 Shape P: "clown will bump `pkg/profilelookup.ProtocolVersion` to 3: new
-canonical key `moxy_allow` after `base` (sorted unique array or null),
-registry stamp 3 only for profiles using it, `OldestReadableProtocol` 1.
-Every profile digest changes with the protocol number; spinclass must
-relink clown at or after the bump commit before any registry is stamped
-3, and the operator re-approves kept pins. `catalogWidenings` should
-compare `moxy_allow` (narrow-only against the base)."
+canonical key `moxy` after `base`, an object `{placement, allow_tools,
+tools}` (sorted unique arrays) or null when the profile has no `[profile.moxy]`
+table; registry stamp 3 only for profiles using it; `OldestReadableProtocol`
+1. Every profile digest changes with the protocol number (the operator
+re-approves kept pins). spinclass relinks clown at or after the bump
+commit on its own release cycle; until then it sees no table and R3 holds.
+`catalogWidenings` should compare the table (narrow-only against the
+base)."
+
+Tool subsets (item 1): no objection from the broker side (light-cedar):
+every path argument of the kept tools is judged per resource against the
+stanza; `mktemp` creates under `.tmp`, inside the worktree; the excluded
+tools are exactly those whose second argument or effect is not a plain
+path check.
 
 ## Order and gates
 
