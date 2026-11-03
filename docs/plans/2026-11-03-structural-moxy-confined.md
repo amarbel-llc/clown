@@ -6,14 +6,32 @@ note; this one covers what clown must build and change. Labels: **R** read in
 code or docs this session, **I** inferred, **U** unverified or undecided.
 Nothing here was built or run.
 
-## Status after the operator's challenge (read this first)
+## Operator ruling (2026-11-03, relayed by the coordinator): V3 approved, V2 withdrawn
+
+- **V3 is the direction.** Moxy stays in the agent unit; the allow-tools ceiling
+  lives in the read-only global moxyfile; clown arms `MOXY_PARENT_MOXYFILE` and a
+  pinned absolute `MOXIN_PATH`. No twin, no second unit. A moxin that must hold
+  more than the unit has stays a frontend-class server.
+- **V2 (sibling twin unit) is withdrawn, with no fallback.** Every section below
+  that describes V2, its diagram, the least-privilege options A-D and the "stays a
+  fallback" remarks is kept as the record of the analysis, not as a plan. Where
+  the text says "fallback", read "withdrawn".
+- **Default moxyfile for confined profiles: toolbox + env + man.** env carries the
+  moxy#497 guards (merged in moxy, not deployed until the operator bumps moxy).
+- **Still open:** whether moxy accepts a clown-written moxyfile under
+  `permission-mode = enforce` (with moxy/sunny-sumac); whether the tool surface
+  may ever be a boundary (needs a posture without Bash/Write/`run_recipe`, a
+  just-us question; the operator is asked separately). Until then V3's ceiling is
+  policy, not a boundary (spinclass#400).
+
+## Status after the operator's challenge
 
 The operator asked what a sibling twin (V2) buys over **in-unit moxy with a
 protected ceiling** (call it V3). I re-checked from code (next section). Revised
 view: **for tools whose authority is within the unit (toolbox, env, man, folio
 reads), V3 is adequate and much cheaper; V2 buys little there.** V2 below is kept
-as the fallback for a moxy that must hold more than the unit has, which by the
-existing pattern should instead be a frontend-class server. I recommended V2
+as analysis only (withdrawn, see the ruling above): a moxy that must hold more
+than the unit has should instead be a frontend-class server, by the existing pattern. I recommended V2
 before checking how much moxy's in-unit holes matter against a worker that already
 has the unit; that recommendation is withdrawn for the default moxyfile.
 
@@ -226,7 +244,7 @@ make "more than defined" impossible:
 So a plain frontend moxy trades the unit's mount namespace, which is a boundary,
 for path-name policy, which is not. I recommend against it.
 
-## V2: moxy in a sibling unit, same view, outside the worker's reach (I; now the fallback, see the status section)
+## V2: moxy in a sibling unit, same view, outside the worker's reach (I; WITHDRAWN by the operator, no fallback; kept as analysis)
 
 Serve moxy from a **second transient service** that clown starts next to the
 agent unit, instead of inside it or in the frontend:
@@ -451,7 +469,7 @@ with or before clown's field.
   same uid inside the unit). A boundary needs a different process owner.
 - **A toolbox-only in-unit server** (my earlier option (a)): still the cheapest
   way to get `toolbox_run` into `worker` alone, but it does not answer "moxy for
-  confined workers". It stays a fallback if the sibling unit is not built.
+  confined workers". With V2 withdrawn this is not a fallback either; V3 covers it.
 
 ## Spinclass's answers (light-cedar, 2026-11-03; their note: spinclass
 `docs/plans/2026-11-03-structural-confined-moxy.md`, commit 808155c, branch only)
