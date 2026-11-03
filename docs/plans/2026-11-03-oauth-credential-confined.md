@@ -403,9 +403,41 @@ warning that claude.ai connectors are disabled when another auth source
 is set: the connector loss noted above, observed. The report recipe found
 no placeholder in the probe run's transcripts.
 
-Still worth one cheap rerun (variant 3 only, one card PIN): the 200 and
-`beta=` line for the OAuth variable in the log file, and a full answer
-streamed as `stream-json`.
+**Variant-3 rerun at the card (2026-11-03, from the probe's log file,
+pasted by the operator):**
+
+```
+POST /v1/messages?beta=true -> 200 authz=placeholder beta=claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,per-turn-control-2026-07-01,mid-conversation-tool-changes-2026-07-01,inline-tools-2026-09-15,advisor-tool-2026-03-01,effort-2025-11-24,thinking-display-updates-2026-08-18,extended-cache-ttl-2025-04-11 headers=accept,accept-encoding,anthropic-beta,anthropic-dangerous-direct-browser-access,anthropic-version,authorization,connection,content-length,content-type,host,user-agent,x-app,x-claude-code-session-id,x-stainless-* req=118465B resp=698B 1750ms
+probe: served 2 request(s)
+```
+
+A 200 with the OAuth beta set: the real long-lived token works through the
+injection proxy, streamed back (`stream-json`). What this fixes for the
+build:
+
+- The `anthropic-beta` list is long and differs between runs and claude
+  versions (this run added `inline-tools-2026-09-15` and
+  `advisor-tool-2026-03-01` over the smoke's list): the proxy relays it
+  untouched and never allowlists beta values.
+- The header-name set above is what the proxy forwards, minus
+  `authorization` (replaced), `host` (set to the upstream) and the
+  hop-by-hop headers (`connection`, `content-length` recomputed).
+- A one-word prompt is a 118 KB request (the system prompt and tool
+  schemas): the proxy streams request bodies too and buffers nothing.
+- Two requests per run: `HEAD /api/hello` then one `POST`. The report
+  recipe again found no placeholder in the probe run's transcripts, now
+  with a real answer in them.
+
+Terminal 2's final `stream-json` result event for that run (operator's
+paste): `type result, subtype success, is_error false, stop_reason
+end_turn, result "ok", permission_denials [], num_turns 1, exit 0`; time
+to first token about 1.9 s, API duration about 1.8 s; the account's
+default model answered; usage input 2, output 4, cache creation 12646,
+cache read 30043 tokens. So a full streamed answer came through the proxy,
+and the placeholder reached no transcript.
+
+No probe question remains open. The build plan is
+`2026-11-03-inject-proxy-build-plan.md`.
 
 ## Open and unverified
 
