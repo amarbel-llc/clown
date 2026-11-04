@@ -44,7 +44,9 @@ touching any of it.
   (clown#264).** It resolves `--profile NAME` (builtin + user
   `profiles.toml`, via `internal/*/profile`), returns the saved
   `--cheap-context` keep-set, env as per-value digests, the resolved `base`
-  builtin, a canonical-JSON digest, and fails closed with `*SkewError` on a
+  builtin, the profile's moxy table as a typed view (`Resolved.Moxy`, derived
+  from the canonical form, never part of it), a canonical-JSON digest, and
+  fails closed with `*SkewError` on a
   registry it cannot read (stamped outside protocols 1..`ProtocolVersion`,
   unknown keys, or `base` under a pre-2 stamp) and `*BaseError` on a base it
   cannot vouch for. Its package doc is the normative spec for the

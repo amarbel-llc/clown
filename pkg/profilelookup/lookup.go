@@ -10,8 +10,10 @@
 //   - Resolve returns a Resolved: the profile's identity (never its token), its
 //     Selection (the saved --cheap-context keep-set), its Env as per-value
 //     digests, its Base (the builtin it declares it narrows, resolved the same
-//     way), the canonical JSON of the definition, and the sha256 of those
-//     bytes. A base that cannot be vouched for fails with *BaseError.
+//     way), its Moxy table (protocol 3; the canonical moxy object as a typed
+//     view, nil when the profile has none, clown#343), the canonical JSON of
+//     the definition, and the sha256 of those bytes. A base that cannot be
+//     vouched for fails with *BaseError.
 //   - RequiredServers is the set of MCP servers a worker needs to reach its
 //     driver (job-wake and chat); Selection.Missing checks it against the
 //     keep-set so a launcher can refuse before spawning a mute worker.
@@ -268,12 +270,32 @@ type Resolved struct {
 	// the profile has no base.
 	Base *Resolved
 
+	// Moxy is the profile's moxy table (protocol 3: where its moxy runs
+	// under confinement and the tool ceiling), as the canonical `moxy`
+	// object renders it; nil when the profile has none. Base carries its
+	// own, so a launcher can check a user profile's table against its base's
+	// without reading Canonical (clown#343). A view of the definition, not a
+	// part of the canonical form: it never changes a digest.
+	Moxy *MoxyTable
+
 	// Canonical is the canonical JSON of the definition (see package doc) and
 	// DigestSHA256 the lowercase hex sha256 of it.
 	Canonical    []byte
 	DigestSHA256 string
 
 	Registry RegistryStamp
+}
+
+// MoxyTable is a profile's moxy table as Resolved reports it: Placement as
+// written ("in-unit", "frontend" or "twin"), AllowTools the ceiling (the
+// allow-tools list of the read-only global moxyfile the unit mounts) and
+// Tools the effective set under it, both sorted and deduplicated, [] when
+// empty, in the names the agent sees (mcp__<server>__<tool>). Validate has
+// already held Tools ⊆ AllowTools.
+type MoxyTable struct {
+	Placement  string
+	AllowTools []string
+	Tools      []string
 }
 
 // Resolve looks up name among the builtin profiles and the user registry (a
@@ -335,6 +357,7 @@ func resolved(p profile.Profile, source Source, stamp RegistryStamp) (*Resolved,
 		Source:       source,
 		Selection:    selectionOf(p),
 		Env:          envDigests(p.Env),
+		Moxy:         moxyTableOf(p),
 		Canonical:    canonical,
 		DigestSHA256: hex.EncodeToString(sum[:]),
 		Registry:     stamp,
@@ -499,12 +522,8 @@ func Canonicalize(p profile.Profile) ([]byte, error) {
 	if p.ContextServers != nil {
 		c.ContextServers = sortedUnique(p.ContextServers)
 	}
-	if m := p.MoxyTable(); m != nil {
-		c.Moxy = &canonicalMoxy{
-			Placement:  m.Placement,
-			AllowTools: nonNil(sortedUnique(m.AllowTools)),
-			Tools:      nonNil(sortedUnique(m.Tools)),
-		}
+	if m := moxyTableOf(p); m != nil {
+		c.Moxy = &canonicalMoxy{Placement: m.Placement, AllowTools: m.AllowTools, Tools: m.Tools}
 	}
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
@@ -513,6 +532,21 @@ func Canonicalize(p profile.Profile) ([]byte, error) {
 		return nil, fmt.Errorf("canonicalize profile %q: %w", p.Name, err)
 	}
 	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
+}
+
+// moxyTableOf is p's moxy table in the shape both Resolved.Moxy and the
+// canonical `moxy` object carry (one source, so the two cannot drift), nil
+// when the profile has none.
+func moxyTableOf(p profile.Profile) *MoxyTable {
+	m := p.MoxyTable()
+	if m == nil {
+		return nil
+	}
+	return &MoxyTable{
+		Placement:  m.Placement,
+		AllowTools: nonNil(sortedUnique(m.AllowTools)),
+		Tools:      nonNil(sortedUnique(m.Tools)),
+	}
 }
 
 // nonNil renders an empty list as [] rather than null inside the moxy table,

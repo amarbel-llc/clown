@@ -273,6 +273,52 @@ func TestCanonicalMoxyTable(t *testing.T) {
 	}
 }
 
+// clown#343: the moxy table rides on Resolved as a typed view, populated as
+// the canonical `moxy` object is (lists sorted and deduplicated, [] when
+// empty), nil for a profile without one; the base carries its own, so a
+// launcher compares the two without reading Canonical.
+func TestResolvedExposesTheMoxyTable(t *testing.T) {
+	const read, write = "mcp__plugin_moxy_moxy__folio_read", "mcp__plugin_moxy_moxy__folio_write"
+	p := child(baseName)
+	p.MoxyPlacement = "in-unit"
+	p.MoxyAllowTools = []string{write, read, read}
+	p.MoxyTools = []string{read}
+	got, err := profilelookup.Resolve(p.Name, profilelookup.Options{RegistryPath: writeRegistry(t, "1.2.3", p)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := &profilelookup.MoxyTable{Placement: "in-unit", AllowTools: []string{read, write}, Tools: []string{read}}
+	if !reflect.DeepEqual(got.Moxy, want) {
+		t.Errorf("moxy = %#v, want %#v", got.Moxy, want)
+	}
+	if got.Base == nil || got.Base.Moxy != nil {
+		t.Errorf("base %q declares no moxy table, resolved to %#v", baseName, got.Base)
+	}
+	// The view is derived from the canonical form, not part of it: the
+	// bytes (TestCanonicalMoxyTable pins their shape) carry the same table
+	// and nothing more, so the digest is what it was without the field.
+	if canonical, _ := profilelookup.Canonicalize(p); string(canonical) != string(got.Canonical) || !strings.Contains(string(canonical), `"moxy":{"placement":"in-unit","allow_tools":["`+read+`","`+write+`"],"tools":["`+read+`"]}`) {
+		t.Errorf("canonical = %s", got.Canonical)
+	}
+
+	p.MoxyTools = nil
+	got, err = profilelookup.Resolve(p.Name, profilelookup.Options{RegistryPath: writeRegistry(t, "1.2.3", p)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Moxy == nil || got.Moxy.Tools == nil || len(got.Moxy.Tools) != 0 {
+		t.Errorf("an unset tools list = %#v, want [] (never nil inside a table)", got.Moxy)
+	}
+
+	without, err := profilelookup.Resolve("trimmed", profilelookup.Options{RegistryPath: writeRegistry(t, "1.2.3", trimmed())})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if without.Moxy != nil {
+		t.Errorf("a profile without moxy keys resolved to table %#v, want nil", without.Moxy)
+	}
+}
+
 func TestDigestStableAcrossOrderAndTokenRotation(t *testing.T) {
 	a := trimmed()
 	a.Token = "one"
