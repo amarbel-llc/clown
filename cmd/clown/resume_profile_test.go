@@ -18,7 +18,10 @@ import (
 // session was launched with, and refuses rather than resume under a profile
 // that changed since.
 func TestResumeProfile(t *testing.T) {
-	const builtinName = "canary-spinclass"
+	const (
+		builtinName = "canary-spinclass"
+		id          = "11111111-2222-3333-4444-555555555555"
+	)
 	absent := filepath.Join(t.TempDir(), "absent.toml")
 	current, err := profilelookup.Resolve(builtinName, profilelookup.Options{RegistryPath: absent})
 	if err != nil {
@@ -102,10 +105,21 @@ func TestResumeProfile(t *testing.T) {
 			refuse: []string{`"mine"`, stale, "but the builtin now has"},
 		},
 		{
-			name:     "profile that could not be pinned at launch refuses",
+			// clown#337: the refusal says what this build finds NOW. Here the
+			// registry vouches (it was stamped, or removed, since the launch), so
+			// it names the digest a launcher approves and the verb that prints it.
+			name:     "profile that could not be pinned at launch refuses, naming the digest it pins now",
 			record:   &sessions.ProfilePin{Name: builtinName, Digest: sessions.UnpinnableDigest},
 			registry: func(*testing.T) string { return absent },
-			refuse:   []string{builtinName, "could not be pinned", "clown profile edit"},
+			refuse:   []string{builtinName, "could not be pinned", current.DigestSHA256, "clown profile digest " + builtinName, "CLOWN_PROFILE_SESSION=" + id},
+		},
+		{
+			// clown#337: still unpinnable, so the refusal carries the library's
+			// own reason instead of "cannot vouch", and the restamp advice.
+			name:     "profile that could not be pinned at launch refuses with the current reason",
+			record:   &sessions.ProfilePin{Name: "mine", Digest: sessions.UnpinnableDigest},
+			registry: skewedRegistry,
+			refuse:   []string{`"mine"`, "could not be pinned", "still cannot", "from_a_newer_clown", "clown profile edit"},
 		},
 		{
 			name:              "unreadable sidecar refuses",
@@ -147,7 +161,6 @@ func TestResumeProfile(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			const id = "11111111-2222-3333-4444-555555555555"
 			if tc.record != nil {
 				if err := sessions.RecordSession(sessions.NameRecord{SessionID: id, Name: "bozo", Profile: tc.record.Name, ProfileDigest: tc.record.Digest}); err != nil {
 					t.Fatal(err)

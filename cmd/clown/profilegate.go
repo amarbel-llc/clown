@@ -52,6 +52,9 @@ type profileGate struct {
 	// what that tells about the change (pinProvenanceLine); nil adds
 	// nothing.
 	describeProvenance func(id string) string
+	// describeUnpinnable, when set, says why the applied profile cannot be
+	// pinned (unpinnableReason); nil adds nothing.
+	describeUnpinnable func(name string) string
 }
 
 // profileDiffLines caps the field diff a refusal prints.
@@ -141,6 +144,30 @@ func describeProfileChange(old, new sessions.ProfilePin, resolve func(name strin
 		return "only fields the recorded redacted form does not show (the display name, env values, the url path, a url that may carry a credential) differ"
 	}
 	return "changes (against the redacted form recorded with the pin; url path, url credential and env value changes are not shown):\n  " + strings.Join(lines, "\n  ")
+}
+
+// unpinnableReason explains, for a refusal, why profile name cannot be pinned
+// by this build (clown#337). The pin records only that the launch could not
+// pin it, and the reason to fix is the one that holds now, so the profile is
+// resolved again and the library's own error is quoted (a *SkewError or
+// *BaseError text: the registry, what is wrong with it, what to do). When it
+// resolves now (the registry was stamped since the launch) it says so and
+// names the digest a launcher approves. resolve is profilelookup.Resolve bound
+// to the registry (registryResolver; a parameter for tests).
+func unpinnableReason(name string, resolve func(name string) (*profilelookup.Resolved, error)) string {
+	r, err := resolve(name)
+	if err != nil {
+		return fmt.Sprintf("it still cannot be pinned: %v. Stamp the registry by saving a profile with `clown profile edit`, then check with `clown profile digest %s`", err, name)
+	}
+	return fmt.Sprintf("the registry now vouches for it: this build pins it at digest %s (what `clown profile digest %s` prints)", r.DigestSHA256, name)
+}
+
+// registryResolver is profilelookup.Resolve bound to registryPath, the shape
+// describeProfileChange and unpinnableReason take.
+func registryResolver(registryPath string) func(name string) (*profilelookup.Resolved, error) {
+	return func(name string) (*profilelookup.Resolved, error) {
+		return profilelookup.Resolve(name, profilelookup.Options{RegistryPath: registryPath})
+	}
 }
 
 // withChange appends g.describeChange's explanation of old -> new to msg,
@@ -237,7 +264,13 @@ func checkLaunchProfile(g profileGate, recorded profileLookup) (profileDecision,
 		case g.launch == nil:
 			return profileDecision{}, fmt.Errorf("CLOWN_PROFILE_DIGEST is set (%s) but no profile is applied; refusing", g.approvedDigest)
 		case g.launch.Digest == sessions.UnpinnableDigest:
-			return profileDecision{}, fmt.Errorf("profile %q cannot be pinned (pkg/profilelookup cannot vouch for its registry), so it cannot match CLOWN_PROFILE_DIGEST %s; refusing", g.launch.Name, g.approvedDigest)
+			msg := fmt.Sprintf("profile %q cannot be pinned (pkg/profilelookup cannot vouch for its registry), so it cannot match CLOWN_PROFILE_DIGEST %s; refusing", g.launch.Name, g.approvedDigest)
+			if g.describeUnpinnable != nil {
+				if d := g.describeUnpinnable(g.launch.Name); d != "" {
+					msg += "\n" + d
+				}
+			}
+			return profileDecision{}, errors.New(msg)
 		case g.launch.Digest != g.approvedDigest:
 			return profileDecision{}, fmt.Errorf("profile %q resolves to digest %s, not the CLOWN_PROFILE_DIGEST %s the launcher pinned; refusing", g.launch.Name, g.launch.Digest, g.approvedDigest)
 		}

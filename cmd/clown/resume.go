@@ -310,21 +310,22 @@ func resumeProfile(sessionID string, approved bool, opts profilelookup.Options) 
 	if approved {
 		return pin.Name, nil
 	}
+	resolve := func(name string) (*profilelookup.Resolved, error) { return profilelookup.Resolve(name, opts) }
 	if pin.Digest == sessions.UnpinnableDigest {
-		return "", fmt.Errorf("session %s was launched with profile %q, which could not be pinned at launch (pkg/profilelookup could not vouch for it, e.g. an unstamped profiles.toml), so resume cannot verify the profile is unchanged; refusing to resume. Stamp the registry by saving a profile with `clown profile edit` so future launches are pinned; this session resumes only when its launcher approves a digest (CLOWN_PROFILE_DIGEST)", sessionID, pin.Name)
+		// The refusal says what this build finds now (clown#337): the reason
+		// it still cannot pin the profile, or the digest it pins.
+		return "", fmt.Errorf("session %s was launched with profile %q, which could not be pinned at launch (pkg/profilelookup could not vouch for it, e.g. an unstamped profiles.toml), so resume cannot verify the profile is unchanged; refusing to resume. This session resumes only when its launcher approves a digest for it (CLOWN_PROFILE_DIGEST=<digest> CLOWN_PROFILE_SESSION=%s, with --profile %s)\n%s", sessionID, pin.Name, sessionID, pin.Name, unpinnableReason(pin.Name, resolve))
 	}
 	recorded := pin.Digest
 	if recorded == "" {
 		recorded = "(none recorded)"
 	}
-	current, err := profilelookup.Resolve(pin.Name, opts)
+	current, err := resolve(pin.Name)
 	if err != nil {
 		return "", fmt.Errorf("session %s was launched with profile %q (digest %s), which no longer resolves: %w; refusing to resume without it", sessionID, pin.Name, recorded, err)
 	}
 	if current.DigestSHA256 != pin.Digest {
-		detail := describeProfileChange(pin, sessions.ProfilePin{Name: pin.Name, Digest: current.DigestSHA256}, func(name string) (*profilelookup.Resolved, error) {
-			return profilelookup.Resolve(name, opts)
-		}, profilelookup.RedactedFormByDigest)
+		detail := describeProfileChange(pin, sessions.ProfilePin{Name: pin.Name, Digest: current.DigestSHA256}, resolve, profilelookup.RedactedFormByDigest)
 		if p := pinProvenanceLine(sessionID); p != "" {
 			detail += "\n" + p
 		}

@@ -848,12 +848,12 @@ func runWithFlags(flags parsedFlags) int {
 		launch = &launchPin
 	}
 	gate := newProfileGate(flags, flagProfile, consumeLauncherProfileEnv(), launch, attachedID != "", sessions.ProfileOf)
+	resolve := registryResolver(profilesPath)
 	gate.describeChange = func(old, new sessions.ProfilePin) string {
-		return describeProfileChange(old, new, func(name string) (*profilelookup.Resolved, error) {
-			return profilelookup.Resolve(name, profilelookup.Options{RegistryPath: profilesPath})
-		}, profilelookup.RedactedFormByDigest)
+		return describeProfileChange(old, new, resolve, profilelookup.RedactedFormByDigest)
 	}
 	gate.describeProvenance = pinProvenanceLine
+	gate.describeUnpinnable = func(name string) string { return unpinnableReason(name, resolve) }
 	decision, err := checkLaunchProfile(gate, sessions.ProfileOf)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown: %v\n", err)

@@ -247,7 +247,11 @@ resume has no local confirmation (decision 2), and the env names are final.
 1. **Done.** clown#295: record `(name, digest)` per session; `clown resume`
    restores it, re-resolves, and fails closed on a mismatch (tests first).
    A profile `profilelookup` cannot vouch for is recorded with the digest
-   `unpinnable`, which never matches.
+   `unpinnable`, which never matches. The refusals that pin produces (a
+   `clown resume`, an approval attempt under `CLOWN_PROFILE_DIGEST`) quote
+   what this build finds now: the library's own reason it still cannot pin
+   the profile, or the digest it pins since the registry was stamped
+   (clown#337; `clown profile digest <name>` prints the same).
 2. **Done.** `CLOWN_PROFILE_DIGEST` enforcement at launch (decision 8) and
    `--profile` on resume as a requested transition (decision 3).
    `runWithFlags` checks a session's existing pin before appending a

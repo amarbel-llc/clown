@@ -57,9 +57,11 @@ func TestCheckLaunchProfile(t *testing.T) {
 			refuse: []string{"CLOWN_PROFILE_DIGEST", dOld, "no profile"},
 		},
 		{
+			// clown#337: the refusal carries the reason the profile cannot be
+			// pinned (describeUnpinnable), not only that it cannot.
 			name:   "fresh, digest set but profile unpinnable",
-			gate:   profileGate{approvedDigest: dOld, launch: pin("p1", sessions.UnpinnableDigest)},
-			refuse: []string{`"p1"`, dOld, "cannot be pinned"},
+			gate:   profileGate{approvedDigest: dOld, launch: pin("p1", sessions.UnpinnableDigest), describeUnpinnable: func(name string) string { return "registry for " + name + " is unstamped (test)" }},
+			refuse: []string{`"p1"`, dOld, "cannot be pinned", "registry for p1 is unstamped (test)"},
 		},
 
 		// Resumes.

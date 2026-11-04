@@ -59,9 +59,7 @@ func newRestartProfileCheck(flags parsedFlags, attachedID, registryPath string) 
 		pinNow:      currentProfilePin,
 		recorded:    sessions.ProfileOf,
 		describeChange: func(old, new sessions.ProfilePin) string {
-			return describeProfileChange(old, new, func(name string) (*profilelookup.Resolved, error) {
-				return profilelookup.Resolve(name, profilelookup.Options{RegistryPath: registryPath})
-			}, profilelookup.RedactedFormByDigest)
+			return describeProfileChange(old, new, registryResolver(registryPath), profilelookup.RedactedFormByDigest)
 		},
 		describeProvenance: pinProvenanceLine,
 		pathClown:          lookPathOrEmpty("clown"),
