@@ -35,8 +35,22 @@ func TestModelTokenPathConventionAndOverride(t *testing.T) {
 		t.Errorf("modelTokenPath() = %q, want %q", got, want)
 	}
 	t.Setenv("CLOWN_MODEL_TOKEN_FILE", "/elsewhere/token")
+	t.Setenv("CLOWN_MODEL_UPSTREAM", "http://127.0.0.1:4321")
 	if got := modelTokenPath(); got != "/elsewhere/token" {
-		t.Errorf("override: modelTokenPath() = %q", got)
+		t.Errorf("override with a loopback upstream: modelTokenPath() = %q", got)
+	}
+}
+
+// A planted CLOWN_MODEL_TOKEN_FILE alone must never name the file whose
+// contents go to the real API as the bearer.
+func TestModelTokenOverrideNeedsALoopbackUpstream(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", "/run/user/1001")
+	t.Setenv("CLOWN_MODEL_TOKEN_FILE", "/home/op/.ssh/id_ed25519")
+	for _, upstream := range []string{"", "https://attacker.example", "http://attacker.example:80", "https://127.0.0.1:1"} {
+		t.Setenv("CLOWN_MODEL_UPSTREAM", upstream)
+		if got := modelTokenPath(); got != "" {
+			t.Errorf("upstream %q: modelTokenPath() = %q, want the override ignored", upstream, got)
+		}
 	}
 }
 
@@ -254,6 +268,7 @@ func unitEnvOf(t *testing.T, l agentscope.Launch) (args []string, env map[string
 
 func TestLaunchWithATokenFileRunsTheProxyAndBindsNoLogin(t *testing.T) {
 	f := newModelLaunchFixture(t, nil)
+	t.Setenv("CLOWN_MODEL_UPSTREAM", "http://127.0.0.1:1")
 	t.Setenv("CLOWN_MODEL_TOKEN_FILE", writeFakeTokenFile(t, 0o600))
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "clown-test-bearer-inherited")
 	t.Setenv("ANTHROPIC_AUTH_TOKEN", "clown-test-bearer-gateway")
@@ -293,6 +308,7 @@ func TestLaunchWithATokenFileRunsTheProxyAndBindsNoLogin(t *testing.T) {
 
 func TestLaunchWithASpecEgressListLeavesItAlone(t *testing.T) {
 	f := newModelLaunchFixture(t, []string{"api.anthropic.com:443", "github.com:443"})
+	t.Setenv("CLOWN_MODEL_UPSTREAM", "http://127.0.0.1:1")
 	t.Setenv("CLOWN_MODEL_TOKEN_FILE", writeFakeTokenFile(t, 0o600))
 	f.prepare(t)
 	if !strings.Contains(f.logs.String(), "source=spec") || !strings.Contains(f.logs.String(), "api.anthropic.com:443") {
@@ -302,6 +318,7 @@ func TestLaunchWithASpecEgressListLeavesItAlone(t *testing.T) {
 
 func TestLaunchWithoutATokenFileFallsBackToTheLoginBind(t *testing.T) {
 	f := newModelLaunchFixture(t, nil)
+	t.Setenv("CLOWN_MODEL_UPSTREAM", "http://127.0.0.1:1")
 	t.Setenv("CLOWN_MODEL_TOKEN_FILE", filepath.Join(t.TempDir(), "absent"))
 	launch, _ := f.prepare(t)
 
@@ -324,6 +341,7 @@ func TestLaunchWithoutATokenFileFallsBackToTheLoginBind(t *testing.T) {
 func TestProxyOnlyRefusesTheLaunchBeforeTheUnitAndRecordsIt(t *testing.T) {
 	f := newModelLaunchFixture(t, nil)
 	absent := filepath.Join(t.TempDir(), "absent")
+	t.Setenv("CLOWN_MODEL_UPSTREAM", "http://127.0.0.1:1")
 	t.Setenv("CLOWN_MODEL_TOKEN_FILE", absent)
 	t.Setenv("CLOWN_MODEL_CREDENTIAL", "proxy-only")
 	launch, err := prepareAgentScope(f.spec, "", "", []string{"claude"}, nil)
@@ -341,6 +359,7 @@ func TestProxyOnlyRefusesTheLaunchBeforeTheUnitAndRecordsIt(t *testing.T) {
 // would send its traffic to the wrong place, so it stays out of the way.
 func TestAGatewayBaseURLKeepsTheProxyOff(t *testing.T) {
 	f := newModelLaunchFixture(t, nil)
+	t.Setenv("CLOWN_MODEL_UPSTREAM", "http://127.0.0.1:1")
 	t.Setenv("CLOWN_MODEL_TOKEN_FILE", writeFakeTokenFile(t, 0o600))
 	t.Setenv("ANTHROPIC_BASE_URL", "https://gateway.example/v1")
 	launch, _ := f.prepare(t)

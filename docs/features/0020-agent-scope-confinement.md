@@ -1070,7 +1070,9 @@ line naming the unit and "rotate the entry and run piggy secrets reconcile".
 
 **Token source.** `TokenSource` reads
 `$XDG_RUNTIME_DIR/clown/credentials/anthropic-oauth` (override:
-`CLOWN_MODEL_TOKEN_FILE`, frontend only) on every request: it must be a
+`CLOWN_MODEL_TOKEN_FILE`, frontend only, honored only together with a
+loopback `CLOWN_MODEL_UPSTREAM`, so a planted environment cannot name another
+file as the bearer for the real API) on every request: it must be a
 regular 0600 file owned by the frontend's uid and non-empty; one trailing
 newline is trimmed; the value is never in an error or log. Replacing the
 file rotates the credential and deleting it revokes at once. `piggy secrets

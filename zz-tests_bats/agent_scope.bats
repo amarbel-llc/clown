@@ -590,6 +590,8 @@ s.serve_forever()
 
 @test "agent_scope: CLOWN_MODEL_CREDENTIAL=proxy-only refuses a launch with no token file, before the unit starts" {
   export CLOWN_MODEL_CREDENTIAL=proxy-only
+  # The token-file override is honored only beside a loopback upstream.
+  export CLOWN_MODEL_UPSTREAM="http://127.0.0.1:1"
   run run_in_unit 'echo UNIT-RAN'
   echo "$output"
   [ "$status" -ne 0 ]

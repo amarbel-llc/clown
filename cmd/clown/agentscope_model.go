@@ -26,9 +26,16 @@ const (
 
 // modelTokenPath is where the frontend reads the bearer to inject:
 // $XDG_RUNTIME_DIR/clown/credentials/anthropic-oauth, or CLOWN_MODEL_TOKEN_FILE
-// (frontend only; never passed into the unit).
+// (frontend only; never passed into the unit). The override is honored only
+// together with a loopback CLOWN_MODEL_UPSTREAM: alone, a planted environment
+// (a worktree .envrc) could name any 0600 file of the operator's and have it
+// sent as the bearer to the real API. An unpaired override yields "" (no
+// token file, so no proxy).
 func modelTokenPath() string {
 	if p := os.Getenv("CLOWN_MODEL_TOKEN_FILE"); p != "" {
+		if !loopbackModelUpstream(os.Getenv("CLOWN_MODEL_UPSTREAM")) {
+			return ""
+		}
 		return p
 	}
 	runtime := os.Getenv("XDG_RUNTIME_DIR")
@@ -36,6 +43,12 @@ func modelTokenPath() string {
 		return ""
 	}
 	return filepath.Join(runtime, "clown", "credentials", "anthropic-oauth")
+}
+
+// loopbackModelUpstream reports whether raw is an http URL on the loopback.
+func loopbackModelUpstream(raw string) bool {
+	u, err := url.Parse(raw)
+	return raw != "" && err == nil && u.Scheme == "http" && agentscope.IsLoopbackHost(u.Hostname())
 }
 
 // launchModelCredential decides how a confined launch gets its model
