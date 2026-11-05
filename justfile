@@ -3033,6 +3033,39 @@ verify-claude-monitor-line-cap:
     echo "claude: $bin"
     echo "monitor constants: $hit (first value is the per-line cap)"
 
+# Report how the pinned claude keys background task ids by type (clown#335):
+# internal/0/taskowner believes the harness's backgrounding notice for an MCP
+# call only for an id with the mcp_task prefix and so keeps the monitors, keyed
+# by theirs, out of reach of a mimicked notice. Fails if the map is not found,
+# if mcp_task is no longer "k", or if a type a monitor runs as shares it, so a
+# claude-code bump that changes the map is noticed, not silent.
+#
+# check the claude binary still keys task ids by type the way taskowner assumes
+[group("verify")]
+verify-claude-task-id-prefixes:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    bin="$(readlink -f "$(command -v claude)")"
+    wrapped="$(dirname "$bin")/.claude-wrapped"
+    [[ -e "$wrapped" ]] && bin="$wrapped"
+    hit="$(grep -a -o -E 'local_bash:"[a-z]"(,[a-z_]+:"[a-z]")+' "$bin" | head -1 || true)"
+    if [[ -z "$hit" ]]; then
+        echo "task id prefix map not found in $bin: re-check internal/0/taskowner's MCP task prefix (clown#335)" >&2
+        exit 1
+    fi
+    echo "claude: $bin"
+    echo "task id prefixes: $hit"
+    if [[ "$hit" != *'mcp_task:"k"'* ]]; then
+        echo "mcp_task is no longer keyed by \"k\": update internal/0/taskowner (clown#335)" >&2
+        exit 1
+    fi
+    for t in local_bash monitor_mcp monitor_ws; do
+        if [[ "$hit" == *"$t:\"k\""* ]]; then
+            echo "$t shares the mcp_task prefix: taskowner's notice rule is unsafe (clown#335)" >&2
+            exit 1
+        fi
+    done
+
 # Revoke the throwaway XMPP accounts that clown launches minted (troupe mint
 # creates one per session key through prosody). DRY-RUN by default: lists the
 # prosody users of the session vhost, subtracts the accounts of the LIVE session
