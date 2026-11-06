@@ -36,17 +36,7 @@ func TestResumeProfile(t *testing.T) {
 		}
 		return path
 	}
-	skewedRegistry := func(t *testing.T) string {
-		path := userRegistry(t, profile.Profile{Name: "mine", Provider: "claude", Backend: "anthropic"})
-		b, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, append([]byte("from_a_newer_clown = true\n"), b...), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		return path
-	}
+	skewedRegistry := skewedProfilesRegistry
 
 	cases := []struct {
 		name     string
@@ -387,19 +377,29 @@ func TestLaunchProfilePin(t *testing.T) {
 	unpinnable(profile.Profile{Name: "not-in-any-registry", Provider: "claude", Backend: "anthropic"}, absent)
 
 	// A registry profilelookup refuses (*SkewError: an unknown key).
-	mine := profile.Profile{Name: "mine", Provider: "claude", Backend: "anthropic"}
-	skewed := filepath.Join(t.TempDir(), "profiles.toml")
-	if err := profile.Save(skewed, []profile.Profile{mine}, "0.4.5"); err != nil {
+	unpinnable(skewedProfile, skewedProfilesRegistry(t))
+}
+
+// skewedProfile is the one profile skewedProfilesRegistry saves.
+var skewedProfile = profile.Profile{Name: "mine", Provider: "claude", Backend: "anthropic"}
+
+// skewedProfilesRegistry writes a user registry holding skewedProfile and
+// prepends a key this build does not know, so pkg/profilelookup refuses it
+// with a *SkewError (the shape of a registry a newer clown wrote).
+func skewedProfilesRegistry(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "profiles.toml")
+	if err := profile.Save(path, []profile.Profile{skewedProfile}, "0.4.5"); err != nil {
 		t.Fatal(err)
 	}
-	b, err := os.ReadFile(skewed)
+	b, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(skewed, append([]byte("from_a_newer_clown = true\n"), b...), 0o644); err != nil {
+	if err := os.WriteFile(path, append([]byte("from_a_newer_clown = true\n"), b...), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	unpinnable(mine, skewed)
+	return path
 }
 
 // clown#340: the refusal says which build pinned the session and what that

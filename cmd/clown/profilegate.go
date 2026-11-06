@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"io"
@@ -510,7 +511,7 @@ func claudeSessionIDArg(args []string) string {
 // --session-id, else the --resume/-r value (lenient, claudeResumeValue). It
 // selects the [attach] resume template and feeds the group-id command.
 func claudeSessionRef(args []string) string {
-	return cmpOr(claudeSessionIDArg(args), claudeResumeValue(args))
+	return cmp.Or(claudeSessionIDArg(args), claudeResumeValue(args))
 }
 
 // gatedSessionID returns the existing session a claude launch continues, for

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -884,7 +885,7 @@ func runWithFlags(flags parsedFlags) int {
 	// it resumes with, so a pre-pin profiled session never silently loses or
 	// gains one. Not under --print-launch-plan, which writes no pin.
 	if flags.resumeDefaultProfile && !flags.printLaunchPlan {
-		fmt.Fprintf(os.Stderr, "clown: %s\n", unpinnedResumeNotice(cmpOr(gate.resumeID, claudeResumeValue(flags.forwarded)), selectedProfile, decision.pinEarly != nil, resumeDefaultSkipped))
+		fmt.Fprintf(os.Stderr, "clown: %s\n", unpinnedResumeNotice(cmp.Or(gate.resumeID, claudeResumeValue(flags.forwarded)), selectedProfile, decision.pinEarly != nil, resumeDefaultSkipped))
 	}
 
 	// clown#169/#216: resolve this session's human-ergonomic clown name and
@@ -3254,9 +3255,12 @@ Clown flags (must appear before --):
   list [--json]              List live clown sessions (spinclass-list-shaped table)
   presence list              List live presence records (clown-presence(1))
   restart --session KEY [--when idle|now] [--reason TEXT]
+          [--posture unattended|attended|keep]
                              Ask KEY's live frontend to restart at its next idle
                              transition, or (now) to ask spinclass at once
-                             (spinclass's [session-entry].restart)
+                             (spinclass's [session-entry].restart); --posture is
+                             the hand-off's argument, the verdict decides
+                             (clown-restart(1))
 
 The job-wakeup producer/read surface and monitor are ringmaster's
 (ringmaster start|progress|done|read, ringmaster monitor; RFC-0015).

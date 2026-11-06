@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"os"
@@ -196,7 +197,7 @@ func launchResume(s sessions.Session, args resumeArgs) int {
 	// plain launch) is a requested transition: runWithFlags' checkLaunchProfile
 	// allows it only when it equals the session's pin or the launcher approved
 	// it with CLOWN_PROFILE_DIGEST (FDR 0022 decisions 3, 8).
-	requested := cmpOr(args.profile, os.Getenv("CLOWN_PROFILE"))
+	requested := cmp.Or(args.profile, os.Getenv("CLOWN_PROFILE"))
 	launcherDigest := os.Getenv("CLOWN_PROFILE_DIGEST")
 	var recorded, userConfirmed string
 	if requested == "" {
@@ -223,7 +224,7 @@ func launchResume(s sessions.Session, args resumeArgs) int {
 	// The spec asked for (--agent-scope, else CLOWN_AGENT_SCOPE, the same order
 	// as a plain launch). runWithFlags checks it against the session's
 	// confinement record like any launch's (agentScopeForLaunch, clown#318).
-	flags := resumeLaunchFlags(s.ID, args, requested, recorded, cmpOr(args.agentScope, os.Getenv("CLOWN_AGENT_SCOPE")))
+	flags := resumeLaunchFlags(s.ID, args, requested, recorded, cmp.Or(args.agentScope, os.Getenv("CLOWN_AGENT_SCOPE")))
 	flags.userConfirmedDigest = userConfirmed
 	return runWithFlags(flags)
 }
@@ -295,13 +296,6 @@ func unpinnedResumeNotice(id string, selected *profile.Profile, pinned bool, ski
 		// whose provider is not claude, so no claude session is gated.
 		return prefix + "resuming with profile " + selected.Name + " (not pinned)"
 	}
-}
-
-func cmpOr(a, b string) string {
-	if a != "" {
-		return a
-	}
-	return b
 }
 
 // resumeProfile returns the named profile a resumed session launches with

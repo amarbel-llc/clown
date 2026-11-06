@@ -2,12 +2,10 @@ package main
 
 import (
 	"errors"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"code.linenisgreat.com/clown/internal/0/profile"
 	"code.linenisgreat.com/clown/internal/alfa/sessions"
 	"code.linenisgreat.com/clown/pkg/profilelookup"
 )
@@ -27,20 +25,7 @@ func TestResumeProfileRefusalNamesTheDigestItWouldPinNow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	skewed := func(t *testing.T) string {
-		path := filepath.Join(t.TempDir(), "profiles.toml")
-		if err := profile.Save(path, []profile.Profile{{Name: "mine", Provider: "claude", Backend: "anthropic"}}, "0.4.5"); err != nil {
-			t.Fatal(err)
-		}
-		b, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, append([]byte("from_a_newer_clown = true\n"), b...), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		return path
-	}
+	skewed := skewedProfilesRegistry
 	stale := strings.Repeat("0", 64)
 	cases := []struct {
 		name     string

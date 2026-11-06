@@ -92,37 +92,26 @@ func (q *restartQueue) take() (restartRequest, bool) {
 	return r, true
 }
 
-// restartControlHandler is restartControlHandlerNow for a frontend with no
-// immediate trigger: it queues `idle` and refuses `now`.
-func restartControlHandler(provider, unarmedReason string, q *restartQueue) func(controlMessage) controlReply {
-	return restartControlHandlerNow(provider, unarmedReason, q, nil)
-}
-
 // restartAlreadyUnderway is the refusal for a request that arrives while a
 // restart is stopping the provider, or while a preflight or restart runs
 // (which may still end without a restart).
 const restartAlreadyUnderway = "a restart or restart check is already underway for this session; ask again if the session does not relaunch"
 
-// restartControlHandlerNow answers control messages for a frontend running
-// provider. unarmedReason is selfCloseDecision's reason ("" when the idle
-// trigger is armed): without the trigger nothing would ever act on a queued
-// restart, so it is refused rather than queued.
+// restartControlHandlerTriggers answers control messages for a frontend
+// running provider. unarmedReason is selfCloseDecision's reason ("" when the
+// idle trigger is armed): without the trigger nothing would ever act on a
+// queued restart, so it is refused rather than queued.
 //
-// `idle` is queued for the next idle poke. `now` is handed to now
-// (idleRunner.triggerNow), which queues it, replacing a queued `idle`, and
-// runs the preflight at once in the background, so the reply comes back
-// before the preflight; it reports false while a preflight or restart is
-// already in flight, which is refused. Either way the request only makes the
-// frontend ask spinclass: nothing restarts without spinclass's "restart"
-// verdict. now is nil when the frontend has no immediate trigger.
-func restartControlHandlerNow(provider, unarmedReason string, q *restartQueue, now func(restartRequest) bool) func(controlMessage) controlReply {
-	return restartControlHandlerTriggers(provider, unarmedReason, q, &restartTriggers{now: now})
-}
-
-// restartControlHandlerTriggers is restartControlHandlerNow with the idle
-// runner's triggers: `idle` goes to trig.idle, which queues it and, when the
-// session is already idle, runs the idle transition at once (clown#327); with
-// no idle trigger it is only queued for the next poke. trig may be nil.
+// `idle` goes to trig.idle (idleRunner.queueIdle), which queues it and, when
+// the session is already idle, runs the idle transition at once (clown#327);
+// with no idle trigger it is only queued for the next poke. `now` is handed
+// to trig.now (idleRunner.triggerNow), which queues it, replacing a queued
+// `idle`, and runs the preflight at once in the background, so the reply
+// comes back before the preflight; it reports false while a preflight or
+// restart is already in flight, which is refused. Either way the request only
+// makes the frontend ask spinclass: nothing restarts without spinclass's
+// "restart" verdict. trig may be nil (no triggers: `idle` is queued, `now` is
+// refused), as the test helpers in restart_handlers_test.go build it.
 func restartControlHandlerTriggers(provider, unarmedReason string, q *restartQueue, trig *restartTriggers) func(controlMessage) controlReply {
 	var now func(restartRequest) bool
 	var idle func(restartRequest)

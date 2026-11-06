@@ -13,8 +13,9 @@ attach/multiplexing, and cross-session job/chat coordination. A single
 `clown` binary dispatches to the selected provider via
 `--provider <claude|codex|juggler|opencode|crush>` (default: `claude`;
 override with `CLOWN_PROVIDER` env var, or pin one per-directory via a
-`clownfile`). Built entirely with Nix flakes; no standalone test suite
-(pre-merge validation via `just build`, which runs `nix build --show-trace`).
+`clownfile`). Built entirely with Nix flakes; every lane runs inside nix
+(pre-merge validation via `just`, the default recipe: `just build`, which
+runs `nix build --show-trace`, then the test lanes; see Build commands).
 
 `juggler` is also the fleet's **headless agent substrate** (FDR 0019,
 `docs/features/0019-juggler-agent-substrate.md`): `juggler run` drives a
