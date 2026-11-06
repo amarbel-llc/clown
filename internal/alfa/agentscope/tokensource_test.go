@@ -73,6 +73,16 @@ func TestTokenSourceRefusesAFileItCannotTrust(t *testing.T) {
 			},
 			want: "owned by uid",
 		},
+		"a symlink to a good file": {
+			src: func(t *testing.T) TokenSource {
+				link := filepath.Join(t.TempDir(), "link")
+				if err := os.Symlink(writeTokenFile(t, canaryToken, 0o600), link); err != nil {
+					t.Fatal(err)
+				}
+				return TokenSource{Path: link}
+			},
+			want: "symlink",
+		},
 		"a directory": {
 			src:  func(t *testing.T) TokenSource { return TokenSource{Path: t.TempDir()} },
 			want: "regular file",

@@ -32,10 +32,15 @@ func (s TokenSource) Token() (string, error) {
 	if s.Path == "" {
 		return "", errors.New("no model credential path (XDG_RUNTIME_DIR is unset and CLOWN_MODEL_TOKEN_FILE is not)")
 	}
-	f, err := os.Open(s.Path)
+	// O_NOFOLLOW: a symlink at the path (a planted one) is never followed to
+	// some other file of the operator's.
+	f, err := os.OpenFile(s.Path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return "", fmt.Errorf("no model credential at %s: absent", s.Path)
+		}
+		if errors.Is(err, syscall.ELOOP) {
+			return "", fmt.Errorf("model credential %s is a symlink; it must be a regular file", s.Path)
 		}
 		return "", s.readError(err)
 	}

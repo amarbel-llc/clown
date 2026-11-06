@@ -108,6 +108,24 @@ checked answer stands with its evidence.
 - juggler, once #258 extracts it: #260, #263, #271, #270, #252, #251, #245,
   #317, #315.
 
+## Close list (prepared, NOT executed; firm-maple)
+
+Nothing below has been closed; it waits for the operator's confirmation from a Claude session. "Proven" means the commit named does what the title asks, judged from its message and the files it touches; I did not re-run live checks.
+
+| # | Commit(s) | Close comment |
+|---|---|---|
+| 328 | 882c06c, e1bcb59 | Adopted: internal/ is in the dagnabit layout, the facade and layout drift gates are wired (`just lint-layout`, `just lint-facade`), and AGENTS.md documents it. |
+| 330 | f014fde, f3d7a74 | Done: unattended sessions lose the Monitor tool and cannot TaskStop the wake/troupe monitors; the bats case pins the launch plan. |
+| 331 | 3605b87 | Done: no Agent tool where moxy is dropped, and Discover names only tools the unit exposes. |
+| 333 | 08149d2, d1ea34a, 4d01efb | Done: a per-session policy-broker socket is named, handed to the spinclass serve and exported as CLOWN_POLICY_BROKER; the handoff note lists what the next lock bump must carry. |
+
+Held back from the list: #243 (the operator's call); #318, #319, #320, #337 (verify first); #336, #338, #339 (open work).
+
+## Ready cleanup, status
+
+- `O_NOFOLLOW` on the token open: done in the commit that follows this note, with a symlink case in `TestTokenSourceRefusesAFileItCannotTrust`.
+- Deduping the loopback check in `newModelInjectProxy` (item 1): left as is. The helper returns a bool, while the call site needs the parsed URL and two distinct error messages, so a refactor would add a second parse or change the messages for little gain.
+
 ## 5. Ready to work, with scope (rare-walnut; not in section 1)
 
 | Issue | Acceptance test | Files | Size | Ruling? |
