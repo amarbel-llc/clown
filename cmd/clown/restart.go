@@ -136,8 +136,9 @@ func restartControlHandlerTriggers(provider, unarmedReason string, q *restartQue
 		if m.When != "idle" && m.When != "now" {
 			return controlReply{Error: fmt.Sprintf("restart --when %q is not supported; use idle or now", m.When)}
 		}
+		m.Posture = normalizePosture(m.Posture)
 		if !validPosture(m.Posture) {
-			return controlReply{Error: fmt.Sprintf("restart --posture %q is not supported; use unattended or attended", m.Posture)}
+			return controlReply{Error: fmt.Sprintf("restart --posture %q is not supported; use unattended, attended or keep", m.Posture)}
 		}
 		if restartUnderway() {
 			return controlReply{Error: restartAlreadyUnderway}
@@ -391,7 +392,7 @@ func validSessionKey(key string) bool {
 }
 
 // restartVerbUsage is `clown restart`'s usage line.
-const restartVerbUsage = "usage: clown restart --session KEY [--when idle|now] [--reason TEXT] [--posture unattended|attended]"
+const restartVerbUsage = "usage: clown restart --session KEY [--when idle|now] [--reason TEXT] [--posture unattended|attended|keep]"
 
 // runRestartVerb is `clown restart --session K [--when idle|now] [--reason R]
 // [--posture P]`. It exits 0 once the frontend has accepted the request, and
@@ -439,8 +440,9 @@ func runRestartVerb(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "clown restart: --when %q is not supported; use idle or now\n", when)
 		return 2
 	}
+	posture = normalizePosture(posture)
 	if !validPosture(posture) {
-		fmt.Fprintf(stderr, "clown restart: --posture %q is not supported; use unattended or attended\n", posture)
+		fmt.Fprintf(stderr, "clown restart: --posture %q is not supported; use unattended, attended or keep\n", posture)
 		return 2
 	}
 	runtime := os.Getenv("XDG_RUNTIME_DIR")

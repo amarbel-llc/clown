@@ -31,6 +31,17 @@ func validPosture(p string) bool {
 	return p == postureKeep || p == postureUnattended || p == postureAttended
 }
 
+// normalizePosture maps the explicit spelling "keep" to postureKeep, for a
+// hand-off whose placeholder substitution cannot drop the flag pair and for a
+// verdict that says keep in so many words (spinclass/light-cedar, 2026-11-06);
+// any other value is returned for validPosture to judge.
+func normalizePosture(p string) string {
+	if p == "keep" {
+		return postureKeep
+	}
+	return p
+}
+
 // postureEnv applies posture to the relaunch's environment: unattended sets
 // exactly one CLOWN_UNATTENDED=1 whatever the launch had, attended removes the
 // marker, keep leaves the environment as it is.

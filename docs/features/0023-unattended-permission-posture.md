@@ -187,9 +187,12 @@ half (rights, the request record, the entry rewrite) is spinclass's.
   `restart-this-session` with a posture; narrowing is free, widening to
   attended is operator-gated, confined sessions refused) is recorded on the
   session; on a `restart` verdict spinclass rewrites the pinned resume entry
-  (the argv splice and the `Entry.Env` marker) so the next `sc resume`
+  (the `Entry.Env` marker; the entry's argv carries no mode flag, spinclass's
+  dontAsk splice being on the spawn argv only) so the next `sc resume`
   agrees, and the verdict carries `"posture": "unattended"|"attended"`
-  (absent: keep). An older spinclass sends none; an older clown ignores the
+  (absent or `"keep"`: keep; `keep` is also accepted on the hand-off's
+  `--posture`, for a launcher whose placeholder substitution cannot drop
+  the flag pair). An older spinclass sends none; an older clown ignores the
   key (and relaunches in the old posture while the entry says the new one,
   until the next `sc resume`).
 - **What clown does.** The hand-off `clown restart --posture P` carries P as

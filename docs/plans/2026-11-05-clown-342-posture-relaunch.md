@@ -29,7 +29,11 @@ return, keeping its identity and conversation.
 - spinclass's half of the posture (R per spinclass, read in its spawn code):
   for an unconfined worker it splices `--permission-mode dontAsk` into the
   spawn argv AND pins `CLOWN_UNATTENDED=1` into the session's pinned resume
-  entry (`session.State.Entry.Env`), which `sc resume` relaunches from.
+  entry (`session.State.Entry.Env`), which `sc resume` relaunches from; the
+  pinned entry's argv itself is not spliced, so a resume gets dontAsk from
+  the marker alone (spinclass/light-cedar, 2026-11-06). A restart of a
+  spawned session therefore sees the splice in its forwarded args, a
+  resume does not; clown's relaunch rule below handles both.
 - A clown restart relaunches the same frontend by exec of the clown on PATH
   with `--resume <principal>` (`restart_relaunch.go`). Its environment is
   **clown's own launch environment** (`launchEnviron`) minus
@@ -64,13 +68,17 @@ runs with `CLOWN_UNATTENDED=1` and `--permission-mode dontAsk`), `attended`
 - **spinclass is the source.** The request (`sc restart-child-session
   --posture`, `restart-this-session --posture`) is recorded on
   `RestartRequest`; on a `restart` verdict the preflight rewrites the pinned
-  entry (argv splice or unsplice, `Entry.Env` marker set or cleared) in the
+  entry (the `Entry.Env` marker set or cleared; the entry's argv carries no
+  mode flag, since spinclass's dontAsk splice is on the spawn argv only,
+  per spinclass/light-cedar's reading of its spawn code, 2026-11-06) in the
   same locked `session.Update` that stamps `RestartingAt`, so a crash cannot
   leave them apart; `cancel-restart` drops the posture with the request.
   The marker in `Entry.Env` is the record; `sc list` can derive a column.
 - **The verdict mirrors it.** `restart-preflight`'s line gains
-  `"posture": "unattended"|"attended"` (absent = keep), also on `--peek` and
-  `--rearm`.
+  `"posture": "unattended"|"attended"` (absent or `"keep"` = keep), also on
+  `--peek` and `--rearm`. `keep` is accepted on the hand-off's `--posture`
+  too, since spinclass substitutes placeholders per argv element and cannot
+  drop the flag pair (agreed with spinclass/light-cedar, 2026-11-06).
 - **clown applies the mirror to the relaunch**, because the relaunch runs
   from clown's own launch argv and env (above). `relaunchPlan` gains
   `posture`; `restartEnv` for `unattended` removes any existing marker and

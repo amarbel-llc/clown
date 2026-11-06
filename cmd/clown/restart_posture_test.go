@@ -24,6 +24,9 @@ func TestParsePreflightVerdictPosture(t *testing.T) {
 	if v, err := parsePreflightVerdict([]byte(`{"verdict":"restart"}`)); err != nil || v.Posture != postureKeep {
 		t.Errorf("absent posture = %+v, %v; want keep", v, err)
 	}
+	if v, err := parsePreflightVerdict([]byte(`{"verdict":"restart","posture":"keep"}`)); err != nil || v.Posture != postureKeep {
+		t.Errorf("explicit keep = %+v, %v; want the empty posture", v, err)
+	}
 	if _, err := parsePreflightVerdict([]byte(`{"verdict":"restart","posture":"auto"}`)); err == nil || !strings.Contains(err.Error(), "posture") {
 		t.Errorf("unknown posture accepted: %v", err)
 	}
@@ -151,6 +154,17 @@ func TestRestartVerbPosture(t *testing.T) {
 	}
 	if code, _, stderr := runRestartVerbForTest(t, "--session", restartTestPrincipal, "--posture", "auto"); code != 2 || !strings.Contains(stderr, "posture") {
 		t.Errorf("bad posture: code %d, stderr %q; want a usage error", code, stderr)
+	}
+	// "keep" and the empty string both spell the empty posture: a hand-off
+	// that cannot drop the flag pair passes one of them.
+	for _, spelled := range []string{"keep", ""} {
+		code, stdout, stderr := runRestartVerbForTest(t, "--session", restartTestPrincipal, "--posture", spelled)
+		if code != 0 || got.Posture != postureKeep || strings.Contains(stdout, "posture") {
+			t.Errorf("--posture %q: code %d, message %+v, stdout %q, stderr %q; want keep", spelled, code, got, stdout, stderr)
+		}
+		if req, ok := q.take(); !ok || req.Posture != postureKeep {
+			t.Errorf("--posture %q queued %+v, %v", spelled, req, ok)
+		}
 	}
 }
 

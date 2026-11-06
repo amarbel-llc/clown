@@ -45,6 +45,7 @@ func parsePreflightVerdict(out []byte) (preflightVerdict, error) {
 	default:
 		return preflightVerdict{}, fmt.Errorf("unknown verdict %q", v.Verdict)
 	}
+	v.Posture = normalizePosture(v.Posture)
 	if !validPosture(v.Posture) {
 		return preflightVerdict{}, fmt.Errorf("unknown posture %q", v.Posture)
 	}
