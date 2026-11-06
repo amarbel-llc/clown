@@ -11,6 +11,7 @@
 .Fl -session Ar key
 .Op Fl -when Cm idle | now
 .Op Fl -reason Ar text
+.Op Fl -posture Cm unattended | attended | keep
 .Sh DESCRIPTION
 .Nm clown restart
 is the clown half of a spinclass session restart (spinclass#419, spinclass FDR
@@ -56,6 +57,33 @@ A newer request replaces a queued one, so a
 .Cm now
 replaces a queued
 .Cm idle .
+.Pp
+.Fl -posture
+names the permission posture spinclass recorded for the relaunch (clown#342,
+FDR 0023):
+.Cm unattended
+relaunches with
+.Ev CLOWN_UNATTENDED Ns =1
+(claude in dontAsk),
+.Cm attended
+without it, and
+.Cm keep
+(or the flag absent, or an empty value) keeps the launch's.
+It is the hand-off's argument only: the frontend checks at request time that
+the relaunch could take an
+.Cm unattended
+posture (a claude provider, no
+.Fl -naked ,
+no forwarded
+.Fl -settings ) ,
+refusing with
+.Dq the relaunch could not take posture unattended ...
+and queuing nothing, and otherwise ignores the value.
+What the relaunch takes is the
+.Li posture
+field of spinclass's verdict (below): the control socket is reachable by any
+process running as the session's user, so a widening out of dontAsk is never
+decided there.
 .Ss The idle transition
 The frontend's idle trigger is the self-close Stop hook (clown#287): after
 each turn the agent's
@@ -72,9 +100,23 @@ with
 .Ev CLOWN_SESSION_ID
 set to the session's principal.
 The preflight prints one JSON line,
-.Li {\(dqverdict\(dq:\(dqrestart\(dq|\(dqnone\(dq|\(dqrefused\(dq,\(dqreason\(dq:...,\(dqwhen\(dq:...} ,
+.Li {\(dqverdict\(dq:\(dqrestart\(dq|\(dqnone\(dq|\(dqrefused\(dq,\(dqreason\(dq:...,\(dqwhen\(dq:...,\(dqposture\(dq:...} ,
 and consumes the request itself, so a relaunched session does not restart
 again.
+Its optional
+.Li posture
+.Pq Li unattended , attended No or Li keep ; absent is keep
+is what the relaunch takes: the marker set or cleared in the relaunch
+environment, every forwarded permission-mode flag dropped and one
+.Fl -permission-mode Cm dontAsk
+added for
+.Li unattended ,
+only the dontAsk flags dropped for
+.Li attended .
+An unknown value does not restart.
+A relaunch that could not take the posture is dropped before the stop,
+recorded in the status file as kind
+.Li posture .
 Only
 .Li restart
 proceeds.
@@ -514,13 +556,23 @@ A usage error exits
 a missing
 .Fl -session ,
 an unknown argument, a flag without its value, a session key that is not
-one path segment, or a
+one path segment, a
 .Fl -when
 other than
 .Cm idle
 or
-.Cm now ;
+.Cm now ,
+or a
+.Fl -posture
+other than
+.Cm unattended ,
+.Cm attended
+or
+.Cm keep ;
 these are checked before any frontend is contacted.
+A request whose posture the relaunch could not take exits
+.Sy 1
+with the reason, as a profile-gate refusal does.
 spinclass reads only 0 against non-zero.
 .Sh SEE ALSO
 .Xr clown 1 ,
