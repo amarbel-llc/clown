@@ -60,6 +60,9 @@ type relaunchPlan struct {
 	// worktree is the session's working directory at launch; "" skips the
 	// check.
 	worktree string
+	// posture is the verdict's permission posture for the relaunch
+	// (clown#342; restart_posture.go): postureKeep inherits the launch's.
+	posture string
 	// prevPID is the pid of the provider this restart stops (0: unknown) and
 	// at when the restart began; the relaunched frontend reports both to its
 	// own session (restartwake.go).
@@ -138,8 +141,15 @@ func storePlanIfRunning(plan *relaunchPlan) bool {
 // restartArgv is this launch's argv for the relaunch: the resolved flags
 // (reexecArgv, as the [attach] re-exec uses), with any --session-id/--resume
 // replaced by --resume <principal>, and the [attach] id kept for the inner
-// clown of a multiplexer so it does not wrap again.
+// clown of a multiplexer so it does not wrap again. The posture is kept.
 func restartArgv(flags parsedFlags, attachedID string) []string {
+	return restartArgvPosture(flags, attachedID, postureKeep)
+}
+
+// restartArgvPosture is restartArgv for a relaunch under posture (clown#342):
+// claude's flags before any `--` are rewritten by postureArgs, and the
+// [attach] inner's carrier follows the posture (postureCarrierArgs).
+func restartArgvPosture(flags parsedFlags, attachedID, posture string) []string {
 	f := flags
 	// The --resume goes before any `--`, after which claude reads operands.
 	kept := withoutSpawnBrief(withoutClaudeSessionArgs(flags.forwarded), flags.identity.Key)
@@ -147,12 +157,12 @@ func restartArgv(flags parsedFlags, attachedID string) []string {
 	if i := slices.Index(kept, "--"); i >= 0 {
 		end = i
 	}
-	f.forwarded = slices.Concat(kept[:end], []string{"--resume", flags.identity.Key}, kept[end:])
+	f.forwarded = slices.Concat(postureArgs(kept[:end], posture), []string{"--resume", flags.identity.Key}, kept[end:])
 	var argv []string
 	if attachedID != "" {
 		// The inner of an [attach] wrap may not have the marker in its
 		// environment (unattendedCarrierFlag), so its restart carries it too.
-		argv = append(append(argv, attachIDFlag, attachedID), unattendedCarrierArgs()...)
+		argv = append(append(argv, attachIDFlag, attachedID), postureCarrierArgs(posture)...)
 	}
 	return append(argv, f.reexecArgv()...)
 }
@@ -259,9 +269,10 @@ var restartEnvDropped = []string{"CLOWN_SESSION_ID", "CLAUDE_SESSION_ID", "CLOWN
 // principal in CLOWN_SESSION_ID and the notice in CLOWN_RESTARTED_REASON. The
 // launcher's one-shot profile approval is not replayed (the argv carries
 // --profile, and the session is already pinned), and no other session id
-// survives.
+// survives. The plan's posture sets or clears the unattended marker
+// (postureEnv, clown#342); keep leaves the launch's.
 func restartEnv(environ []string, plan *relaunchPlan) []string {
-	env := environWithout(environ, restartEnvDropped...)
+	env := postureEnv(environWithout(environ, restartEnvDropped...), plan.posture)
 	env = append(env, "CLOWN_SESSION_ID="+plan.principal, restartedReasonEnv+"="+plan.reason)
 	if plan.prevPID > 0 {
 		env = append(env, restartedPrevPIDEnv+"="+strconv.Itoa(plan.prevPID))
@@ -404,6 +415,12 @@ type frontendRestarter struct {
 	// profileCheck dry-runs the relaunch's profile gate before anything is
 	// stopped (restartProfileCheck); nil skips it.
 	profileCheck func() error
+	// postureCheck says why the relaunch could not take the verdict's
+	// posture (relaunchPostureError, clown#342), before anything is stopped;
+	// nil skips it. postureArgv is the relaunch argv for a posture
+	// (restartArgvPosture); nil uses argv whatever the posture.
+	postureCheck func(posture string) error
+	postureArgv  func(posture string) []string
 	// busy reports a turn running (the UserPromptSubmit hook); nil: never.
 	busy func() bool
 	// stopGrace bounds the wait for the provider to exit after the stop;
@@ -476,10 +493,27 @@ func (fr frontendRestarter) restart(req restartRequest, v preflightVerdict) {
 			return
 		}
 	}
+	// The verdict's posture, never the request's (clown#342): the control
+	// socket is any-same-uid. A relaunch that could not take it is dropped
+	// while the provider still runs.
+	if v.Posture != postureKeep && fr.postureCheck != nil {
+		if err := fr.postureCheck(v.Posture); err != nil {
+			fr.cancelled(sessionstatus.RefusalPosture, restartPostureRefusal(v.Posture, err))
+			return
+		}
+	}
+	argv := fr.argv
+	if v.Posture != postureKeep && fr.postureArgv != nil {
+		argv = fr.postureArgv(v.Posture)
+	}
 	// spinclass's own reason, from the verdict. The queued one came over the
 	// control socket, which any same-uid process can write, so it is not
-	// used.
+	// used. A posture change is named, so the relaunched session knows its
+	// prompts now deny (or ask).
 	reason := cmpOr(sanitizeRestartReason(v.Reason), restartFallbackReason)
+	if v.Posture != postureKeep {
+		reason += " (posture " + v.Posture + ")"
+	}
 	// Under spinclass's `now` verdict a running turn is expected (the stop
 	// kills it, which is the point), so a turn start cancels nothing; under
 	// any other the busy cancel applies. The verdict decides, not the
@@ -514,7 +548,7 @@ func (fr frontendRestarter) restart(req restartRequest, v preflightVerdict) {
 	// The plan is stored only while the provider still runs, checked under
 	// the lock its exit takes: a provider that exited (during the countdown or
 	// just now) gets no plan, so main does not relaunch a session that ended.
-	plan := &relaunchPlan{principal: fr.principal, reason: reason, argv: fr.argv, worktree: fr.worktree, prevPID: int(providerPID.Load()), at: time.Now()}
+	plan := &relaunchPlan{principal: fr.principal, reason: reason, argv: argv, worktree: fr.worktree, posture: v.Posture, prevPID: int(providerPID.Load()), at: time.Now()}
 	if !storePlanIfRunning(plan) {
 		logSelfClose(fr.logPath, "restart (%s): the provider exited during the countdown; not restarting", fr.principal)
 		return

@@ -63,6 +63,10 @@ type Status struct {
 	MainPID int `json:"main_pid"`
 	// TranscriptPath is what the last turn-start hook reported.
 	TranscriptPath string `json:"transcript_path"`
+	// Unattended reports the frontend's permission posture (CLOWN_UNATTENDED=1,
+	// claude in dontAsk; FDR 0023), so a holder sees it and sees it change
+	// after a restart (clown#342). Additive: the version stays 1.
+	Unattended bool `json:"unattended"`
 	// RestartRefusal is set when a restart spinclass consumed was dropped
 	// (refusal.go); absent otherwise. Additive: the version stays 1.
 	RestartRefusal *RestartRefusal `json:"restart_refusal,omitempty"`
@@ -210,6 +214,9 @@ func (w *Writer) SetUnit(unit string) { w.update(func(st *Status) { st.Unit = un
 
 // SetMainPID records the provider's pid (unconfined) or the unit's MainPID.
 func (w *Writer) SetMainPID(pid int) { w.update(func(st *Status) { st.MainPID = pid }, false) }
+
+// SetUnattended records the frontend's permission posture.
+func (w *Writer) SetUnattended(on bool) { w.update(func(st *Status) { st.Unattended = on }, false) }
 
 // Remove deletes the file at a clean exit; nothing is written after it.
 func (w *Writer) Remove() {

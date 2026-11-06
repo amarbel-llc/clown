@@ -1180,6 +1180,8 @@ func runWithFlags(flags parsedFlags) int {
 		stop:         stopProviderBySignal,
 		countdown:    countdown.proceed,
 		profileCheck: profileCheck.checkWithPathClown,
+		postureCheck: func(p string) error { return relaunchPostureError(flags, p) },
+		postureArgv:  func(p string) []string { return restartArgvPosture(flags, attachedID, p) },
 		busy:         turnRunning.Load,
 		notify:       os.Stderr,
 		worktree:     cwd,
@@ -1190,8 +1192,12 @@ func runWithFlags(flags parsedFlags) int {
 	idleDir, idleSock, restartTrig, sessionStatus, closeIdle := armSelfClose(flags, root, restarts, restarter.restart, turnRunning)
 	defer closeIdle()
 	statusWriter.Store(sessionStatus)
+	// The posture a holder sees in the status file (clown#342); a nil writer
+	// (self-close not armed) records nothing.
+	sessionStatus.SetUnattended(unattendedValue() == "1")
 	if restartTrig != nil {
 		restartTrig.gate = profileCheck.check
+		restartTrig.posture = func(p string) error { return relaunchPostureError(flags, p) }
 	}
 	if idleDir != "" {
 		pluginDirs = append(pluginDirs, idleDir)

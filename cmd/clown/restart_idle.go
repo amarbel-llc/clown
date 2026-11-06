@@ -16,11 +16,14 @@ import (
 
 // preflightVerdict is `spinclass restart-preflight`'s one JSON line (spinclass
 // FDR 0037): restart (consumed, go ahead), none (nothing to restart), refused
-// (an obstacle; spinclass cleared the request and told the holders).
+// (an obstacle; spinclass cleared the request and told the holders). Posture
+// is the permission posture spinclass recorded for the relaunch (clown#342):
+// unattended, attended, or absent to keep the launch's (restart_posture.go).
 type preflightVerdict struct {
 	Verdict string `json:"verdict"`
 	Reason  string `json:"reason"`
 	When    string `json:"when"`
+	Posture string `json:"posture"`
 }
 
 // parsePreflightVerdict accepts exactly one JSON line naming a known verdict.
@@ -39,9 +42,13 @@ func parsePreflightVerdict(out []byte) (preflightVerdict, error) {
 	}
 	switch v.Verdict {
 	case "restart", "none", "refused":
-		return v, nil
+	default:
+		return preflightVerdict{}, fmt.Errorf("unknown verdict %q", v.Verdict)
 	}
-	return preflightVerdict{}, fmt.Errorf("unknown verdict %q", v.Verdict)
+	if !validPosture(v.Posture) {
+		return preflightVerdict{}, fmt.Errorf("unknown posture %q", v.Posture)
+	}
+	return v, nil
 }
 
 // preflightTimeout bounds `spinclass restart-preflight`; a hung preflight must
@@ -205,6 +212,10 @@ type restartTriggers struct {
 	// (restartProfileCheck.check); a request it refuses is not queued. nil:
 	// not checked until the restart.
 	gate func() error
+	// posture is the relaunch's posture gate run at request time for a
+	// request that names one (relaunchPostureError, clown#342); a request it
+	// refuses is not queued. nil: not checked until the restart.
+	posture func(posture string) error
 }
 
 // noteExit logs, when the frontend exits, a restart it leaves behind: one in

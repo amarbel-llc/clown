@@ -19,6 +19,9 @@ const (
 	RefusalCountdown = "countdown"
 	// RefusalTurnStarted: a turn started during the countdown.
 	RefusalTurnStarted = "turn-started"
+	// RefusalPosture: the relaunch could not take the posture the verdict
+	// carried (clown#342), refused before anything was stopped.
+	RefusalPosture = "posture"
 )
 
 // MaxRefusalText bounds RestartRefusal.Text.

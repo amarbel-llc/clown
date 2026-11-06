@@ -77,7 +77,9 @@ launch has no way to ask for it.
     (`launchEnviron`, captured from the process environment at start)
     minus `restartEnvDropped`, which does not list the marker, so a
     restarted unattended session keeps it (R, tests incl. a child process
-    started with the marker);
+    started with the marker), unless spinclass's preflight verdict carries
+    a posture for the relaunch (clown#342, below), which sets or clears
+    the marker and the `--permission-mode dontAsk` splice;
   - `clown resume` runs `runWithFlags` in the same process and builds its
     settings from the environment it was started with; nothing of the
     posture is recorded (R, test). What claude then does is B5;
@@ -173,6 +175,48 @@ must be denied with no dialog and the session must carry on.
 - A spinclass spawn of a non-claude provider must not set the marker:
   clown refuses it.
 
+## Posture change on restart (clown#342)
+
+A restart (spinclass FDR 0037, `cmd/clown/restart*.go`) may change the
+posture of an existing unconfined session, into dontAsk before the operator
+leaves and out of it on return, keeping its identity and conversation. Design
+note: `docs/plans/2026-11-05-clown-342-posture-relaunch.md`; the spinclass
+half (rights, the request record, the entry rewrite) is spinclass's.
+
+- **Who decides.** spinclass. The request (`restart-child-session` or
+  `restart-this-session` with a posture; narrowing is free, widening to
+  attended is operator-gated, confined sessions refused) is recorded on the
+  session; on a `restart` verdict spinclass rewrites the pinned resume entry
+  (the argv splice and the `Entry.Env` marker) so the next `sc resume`
+  agrees, and the verdict carries `"posture": "unattended"|"attended"`
+  (absent: keep). An older spinclass sends none; an older clown ignores the
+  key (and relaunches in the old posture while the entry says the new one,
+  until the next `sc resume`).
+- **What clown does.** The hand-off `clown restart --posture P` carries P as
+  an argument only: the frontend gates it at request time
+  (`relaunchPostureError`: `unattended` needs what the marker needs, so
+  `--naked`, a non-claude provider or a forwarded `--settings` is refused
+  while the session runs; `attended` is never refused here) and never acts on
+  it by itself, since the control socket is any-same-uid and a widening must
+  not be decidable there. The relaunch takes the verdict's posture
+  (`restart_posture.go`): `unattended` sets exactly one `CLOWN_UNATTENDED=1`
+  in the relaunch environment, drops every forwarded permission-mode flag and
+  adds exactly one `--permission-mode dontAsk` (so argv and settings agree
+  with spinclass's splice); `attended` removes the marker and drops the
+  dontAsk flags only (claude's default mode until the next `sc resume`, whose
+  mode is spinclass's spawn rule); the [attach] inner's carrier follows. The
+  same check runs again before the stop (`RefusalPosture` in the status file
+  when it refuses), the restart notice names the posture, and the status
+  file's `unattended` field shows the posture after the relaunch. Nothing is
+  recorded in the sidecar: the rule above stands, spinclass's entry is the
+  record.
+- **Limitation (spinclass's, stated plainly).** The request lives in state
+  an unconfined agent can write, and rights are re-checked only at request
+  time, as for a forged `when: now`; a hand-edited widening takes effect at
+  the next idle restart. The always-ask guards the tool, not the file; an
+  attended relaunch has a human at it. Whether a trusted-layer key should
+  gate widening at all is an open question for the operator.
+
 ## Hung-session status file (clown#322)
 
 This section is the contract between clown and spinclass for telling a hung
@@ -237,7 +281,8 @@ pull (`session-health`); spinclass has no periodic or push detector yet.
 | `unit` | string | The agent-scope unit, when confined; empty unconfined or before systemd-run ran. |
 | `main_pid` | int | Unconfined: the provider's pid. Confined: the unit's `MainPID`, the in-unit init (the provider, or the exec shim running it as a child), as the agent-scope result file records it. 0 until known. |
 | `transcript_path` | string | `transcript_path` from the last turn-start hook's stdin (absolute, or the payload is dropped); empty until one reported it. |
-| `restart_refusal` | object, optional | Present only after a restart that spinclass's preflight consumed was dropped, so the requester must ask again (see `docs/plans/2026-10-26-restart-refusal-visible.md`). `{at, kind, profile, pinned_digest, current_digest, text}`: `at` a time (spinclass dedups on it), `kind` one of `profile-gate`, `resume`, `countdown`, `turn-started` (an unknown kind means "a consumed restart was dropped"), `profile` the launch's profile, the digests empty unless known, `text` one printable line of at most 300 bytes. Written only by the frontend; a successful launch of the principal opens a new file without it. Additive: the file's `version` stays 1. |
+| `unattended` | bool | The frontend's permission posture: true when it runs claude in dontAsk (`CLOWN_UNATTENDED=1`). Frontend-written, so a holder sees a posture change after a restart (clown#342). Additive: the file's `version` stays 1; a reader of an older file sees false, which here means "not reported", not attended. |
+| `restart_refusal` | object, optional | Present only after a restart that spinclass's preflight consumed was dropped, so the requester must ask again (see `docs/plans/2026-10-26-restart-refusal-visible.md`). `{at, kind, profile, pinned_digest, current_digest, text}`: `at` a time (spinclass dedups on it), `kind` one of `profile-gate`, `resume`, `countdown`, `turn-started`, `posture` (an unknown kind means "a consumed restart was dropped"), `profile` the launch's profile, the digests empty unless known, `text` one printable line of at most 300 bytes. Written only by the frontend; a successful launch of the principal opens a new file without it. Additive: the file's `version` stays 1. |
 | `written_at` | time | This write. |
 
 Times are RFC 3339 in UTC with nine fraction digits

@@ -31,17 +31,21 @@ func controlSocketPath(runtimeDir, key string) string {
 	return filepath.Join(runtimeDir, "clown", "control", key+".sock")
 }
 
-// restartRequest is one queued restart.
+// restartRequest is one queued restart. Posture is the hand-off's argument
+// (clown#342), carried for the log; the verdict's posture is what the
+// relaunch takes.
 type restartRequest struct {
-	When   string `json:"when"`
-	Reason string `json:"reason"`
+	When    string `json:"when"`
+	Reason  string `json:"reason"`
+	Posture string `json:"posture,omitempty"`
 }
 
 // controlMessage is the one JSON line `clown restart` writes.
 type controlMessage struct {
-	Op     string `json:"op"`
-	When   string `json:"when"`
-	Reason string `json:"reason"`
+	Op      string `json:"op"`
+	When    string `json:"when"`
+	Reason  string `json:"reason"`
+	Posture string `json:"posture,omitempty"`
 }
 
 // controlReply is the one JSON line the frontend answers with.
@@ -132,6 +136,9 @@ func restartControlHandlerTriggers(provider, unarmedReason string, q *restartQue
 		if m.When != "idle" && m.When != "now" {
 			return controlReply{Error: fmt.Sprintf("restart --when %q is not supported; use idle or now", m.When)}
 		}
+		if !validPosture(m.Posture) {
+			return controlReply{Error: fmt.Sprintf("restart --posture %q is not supported; use unattended or attended", m.Posture)}
+		}
 		if restartUnderway() {
 			return controlReply{Error: restartAlreadyUnderway}
 		}
@@ -151,7 +158,15 @@ func restartControlHandlerTriggers(provider, unarmedReason string, q *restartQue
 				return controlReply{Error: restartGateRefusal(err)}
 			}
 		}
-		req := restartRequest{When: m.When, Reason: sanitizeRestartReason(m.Reason)}
+		// The relaunch's posture gate (clown#342), the same way: a session
+		// that cannot take the requested posture is refused while it runs.
+		if m.Posture != postureKeep && trig != nil && trig.posture != nil {
+			if err := trig.posture(m.Posture); err != nil {
+				countMetric(metricRestartRequestRefused)
+				return controlReply{Error: restartPostureRefusal(m.Posture, err)}
+			}
+		}
+		req := restartRequest{When: m.When, Reason: sanitizeRestartReason(m.Reason), Posture: m.Posture}
 		if m.When == "idle" {
 			if idle != nil {
 				idle(req)
@@ -375,20 +390,25 @@ func validSessionKey(key string) bool {
 	return key != "" && key != "." && key != ".." && !strings.ContainsAny(key, "/\x00")
 }
 
-// runRestartVerb is `clown restart --session K [--when idle|now] [--reason R]`.
-// It exits 0 once the frontend has accepted the request, and non-zero, with
-// the reason on stderr, when there is no live frontend for K or the frontend
-// refuses (spinclass clears the request and shows that output). For `now`,
-// accepted means the frontend has started asking spinclass; a refusal by the
-// preflight after that is spinclass's to report.
+// restartVerbUsage is `clown restart`'s usage line.
+const restartVerbUsage = "usage: clown restart --session KEY [--when idle|now] [--reason TEXT] [--posture unattended|attended]"
+
+// runRestartVerb is `clown restart --session K [--when idle|now] [--reason R]
+// [--posture P]`. It exits 0 once the frontend has accepted the request, and
+// non-zero, with the reason on stderr, when there is no live frontend for K or
+// the frontend refuses (spinclass clears the request and shows that output).
+// For `now`, accepted means the frontend has started asking spinclass; a
+// refusal by the preflight after that is spinclass's to report. --posture is
+// the hand-off's argument (clown#342): the frontend gates it at request time
+// and the preflight's verdict decides what the relaunch takes.
 func runRestartVerb(args []string, stdout, stderr io.Writer) int {
-	var session, reason string
+	var session, reason, posture string
 	when := "idle"
 	sessionSet := false
 	for len(args) > 0 {
 		flag := args[0]
-		if flag != "--session" && flag != "--when" && flag != "--reason" {
-			fmt.Fprintf(stderr, "clown restart: unknown argument %q\nusage: clown restart --session KEY [--when idle|now] [--reason TEXT]\n", flag)
+		if flag != "--session" && flag != "--when" && flag != "--reason" && flag != "--posture" {
+			fmt.Fprintf(stderr, "clown restart: unknown argument %q\n%s\n", flag, restartVerbUsage)
 			return 2
 		}
 		if len(args) < 2 {
@@ -402,11 +422,13 @@ func runRestartVerb(args []string, stdout, stderr io.Writer) int {
 			when = args[1]
 		case "--reason":
 			reason = args[1]
+		case "--posture":
+			posture = args[1]
 		}
 		args = args[2:]
 	}
 	if !sessionSet {
-		fmt.Fprintln(stderr, "clown restart: --session is required\nusage: clown restart --session KEY [--when idle|now] [--reason TEXT]")
+		fmt.Fprintf(stderr, "clown restart: --session is required\n%s\n", restartVerbUsage)
 		return 2
 	}
 	if !validSessionKey(session) {
@@ -415,6 +437,10 @@ func runRestartVerb(args []string, stdout, stderr io.Writer) int {
 	}
 	if when != "idle" && when != "now" {
 		fmt.Fprintf(stderr, "clown restart: --when %q is not supported; use idle or now\n", when)
+		return 2
+	}
+	if !validPosture(posture) {
+		fmt.Fprintf(stderr, "clown restart: --posture %q is not supported; use unattended or attended\n", posture)
 		return 2
 	}
 	runtime := os.Getenv("XDG_RUNTIME_DIR")
@@ -427,7 +453,7 @@ func runRestartVerb(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "clown restart: %v\n", err)
 		return 1
 	}
-	reply, err := sendControl(path, controlMessage{Op: "restart", When: when, Reason: reason})
+	reply, err := sendControl(path, controlMessage{Op: "restart", When: when, Reason: reason, Posture: posture})
 	if errors.Is(err, errNoFrontend) {
 		fmt.Fprintf(stderr, "no live clown frontend for %s\n", session)
 		return 1
@@ -439,6 +465,10 @@ func runRestartVerb(args []string, stdout, stderr io.Writer) int {
 	if !reply.OK {
 		fmt.Fprintln(stderr, reply.Error)
 		return 1
+	}
+	if posture != postureKeep {
+		fmt.Fprintf(stdout, "restart queued for %s (when %s, posture %s)\n", session, when, posture)
+		return 0
 	}
 	fmt.Fprintf(stdout, "restart queued for %s (when %s)\n", session, when)
 	return 0
