@@ -296,12 +296,43 @@ func TestBuiltinWorkerIsCanarySpinclassPlusTheLandingTools(t *testing.T) {
 		t.Errorf("shape = %s/%s/%s, want canary-spinclass's", w.Provider, w.Backend, w.Model)
 	}
 	for k, v := range cs.Env {
+		if k == "CLOWN_DISALLOWED_TOOLS" {
+			// The one builtin worker may call that canary-spinclass may not
+			// (TestBuiltinWorkerMayReadMCPResources).
+			v = strings.ReplaceAll(v, ",ReadMcpResourceTool", "")
+		}
 		if w.Env[k] != v {
 			t.Errorf("env %s = %q, want canary-spinclass's %q", k, w.Env[k], v)
 		}
 	}
 	if w.Env["CLOWN_DISABLE_CLAUDEAI_CONNECTORS"] != "1" {
 		t.Error("no worker profile turns the claude.ai connectors on")
+	}
+}
+
+// Operator ruling 2026-11-05: worker alone may read MCP resources by URI
+// (ringmaster#43 serves a job's output and records that way, scoped to the
+// caller's channel). The wake names the URI, so listing stays disallowed; every
+// other template is unchanged. Allowing it changed worker's digest: a session
+// pinned to the old one is refused on resume and restart until re-pinned.
+func TestBuiltinWorkerMayReadMCPResources(t *testing.T) {
+	resourceTools := []string{"ListMcpResourcesTool", "ReadMcpResourceTool", "ReadMcpResourceDirTool"}
+	w := strings.Split(builtinByName(t, "worker").Env["CLOWN_DISALLOWED_TOOLS"], ",")
+	if slices.Contains(w, "ReadMcpResourceTool") {
+		t.Error("worker must be allowed ReadMcpResourceTool")
+	}
+	for _, still := range []string{"ListMcpResourcesTool", "ReadMcpResourceDirTool"} {
+		if !slices.Contains(w, still) {
+			t.Errorf("worker must still disallow %s", still)
+		}
+	}
+	for _, name := range []string{"reviewer", "porter", "canary", "canary-grit", "canary-spinclass"} {
+		disallowed := strings.Split(builtinByName(t, name).Env["CLOWN_DISALLOWED_TOOLS"], ",")
+		for _, tool := range resourceTools {
+			if !slices.Contains(disallowed, tool) {
+				t.Errorf("%s must still disallow %s: only worker reads MCP resources", name, tool)
+			}
+		}
 	}
 }
 

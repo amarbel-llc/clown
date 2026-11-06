@@ -238,6 +238,13 @@ CLOWN_DISALLOWED_TOOLS = "Artifact,ArtifactData,ArtifactComments,DesignSync,Work
 # its token file is missing, or the launch is unconfined) skips the saved
 # server and the worker just lacks that tool. See
 # docs/plans/2026-10-26-confined-moxy-sequencing.md.
+#
+# Unlike every other template, worker keeps ReadMcpResourceTool (operator
+# ruling 2026-11-05): ringmaster serves a job's output and records as MCP
+# resources (ringmaster://jobs/<id>/output, /records; ringmaster#43), scoped to
+# the caller's own channel, and a dontAsk worker has no other way to read
+# them. The job wake names the URI, so ListMcpResourcesTool and
+# ReadMcpResourceDirTool stay disallowed.
 [[profile]]
 name = "worker"
 display = "Worker (confined unattended: edit, commit, run recipes, merge, file issues)"
@@ -248,7 +255,7 @@ context_servers = ["clown-builtin-jobs/ringmaster", "clown-builtin-jobs/troupe",
 
 [profile.env]
 CLOWN_DISABLE_CLAUDEAI_CONNECTORS = "1"
-CLOWN_DISALLOWED_TOOLS = "Artifact,ArtifactData,ArtifactComments,DesignSync,Workflow,SendFeedback,EnterPlanMode,ExitPlanMode,ScheduleWakeup,CronCreate,CronDelete,CronList,RemoteTrigger,EndConversation,ReportFindings,PushNotification,ListMcpResourcesTool,ReadMcpResourceTool,ReadMcpResourceDirTool,WaitForMcpServers,Agent"
+CLOWN_DISALLOWED_TOOLS = "Artifact,ArtifactData,ArtifactComments,DesignSync,Workflow,SendFeedback,EnterPlanMode,ExitPlanMode,ScheduleWakeup,CronCreate,CronDelete,CronList,RemoteTrigger,EndConversation,ReportFindings,PushNotification,ListMcpResourcesTool,ReadMcpResourceDirTool,WaitForMcpServers,Agent"
 
 [profile.context_excluded]
 "spinclass/spinclass" = [
