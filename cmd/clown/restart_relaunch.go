@@ -403,8 +403,10 @@ func restartedNotice(reason string) string {
 // background jobs it started before it (clown#242): the job's process
 // outlives the restart, but its terminal record and completion wake are
 // written by the server that launched it, which died with the old session,
-// so the wake never comes and the record can say running for ever.
-const restartedJobsNotice = "Background jobs you started before this restart outlive it, but their completion wake does not: the record and the wake are written by the MCP server that launched the job, and that server died with the old session. Do not wait for a wake from a job started before the restart; check the job's effects or its job_status tail, and treat a state of running as unknown (ringmaster(1) CAVEATS)."
+// so the wake never comes and the record can say running for ever
+// (ringmaster(1) CAVEATS). Kept short: the whole notice, with a 300-rune
+// reason, must stay under the bound TestRestartedNoticeIsOneBoundedLine pins.
+const restartedJobsNotice = "Jobs started before this restart keep running but their wake died with the session: do not wait; check job_status, treat running as unknown."
 
 // restartFallbackReason is the relaunch's reason when spinclass's verdict
 // gives none.
