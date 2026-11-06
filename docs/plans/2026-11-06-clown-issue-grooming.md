@@ -112,9 +112,9 @@ checked answer stands with its evidence.
 
 | Issue | Acceptance test | Files | Size | Ruling? |
 |---|---|---|---|---|
-| #242 jobs outlive a restart, wakes do not | the fragment is in the prompt (a builtinfragments test row) | `system-prompt-append.d/` | XS | no |
+| #242 jobs outlive a restart, wakes do not | **corrected**: the issue's comment hands the prompt rule to ringmaster#40 (the job-platform fragment lives there), so #242 closes after a ringmaster bump, which is the operator's lock change. clown's own piece, done in this pass: the restart notice tells a relaunched session not to wait for pre-restart wakes (`restartedJobsNotice`, `restart_relaunch.go`) | `cmd/clown/restart_relaunch.go` | XS | the bump |
 | #150 flip pty-suspend default | clownfile(5) states the default; a test of the resolved default (today: "Unset is off") | `internal/alfa/clownfile`, `man/man5/clownfile.5` | XS | yes |
-| #165 `--print-session-id` on spawn | spawn mode prints the minted id once; a test | `cmd/clown/attach.go` | S | no |
+| #165 `--print-session-id` on spawn | spawn mode prints the minted id once; a test | `cmd/clown/attach.go` | S | **corrected**: spinclass consumes the spawn-entry's stdout and uses the hook round-trip today ("direction B" in the issue); a new stdout line is a contract change for spinclass's lane, so not a solo change here |
 | #199 `ENABLE_TOOL_SEARCH` by model | no code mentions it; a settings-env test per model | `cmd/clown/claudesettings.go` | S | once the rule is known |
 | #116 re-enable WebSearch | find where it is denied; a test | the global denylist | XS | yes (egress) |
 | #77 Go 1.26.3 | `go.nix` says `go = "1.26.0"` for the module; the toolchain is igloo's: check the built binary after the next input bump | flake inputs | XS | the bump is the operator's |
@@ -211,3 +211,35 @@ wanted. Then: the transfer policy for troupe, ringmaster and circus issues
 #345, #326); the tent group (section 6); one code commit for cleanup items
 1, 2, 7 to 10 and 12. Neither pass filed a new issue; nothing found is a
 defect beyond the help-text drift this merge fixes in the manpage.
+
+## 9. Close list (prepared, not run)
+
+Per the coordinator (2026-11-06 12:11Z): nothing is closed by hand until
+the operator confirms from a Claude session. Each row is an issue proven
+fixed, the exact commit, and the one-line close comment to post. Where a
+file moved in the dagnabit relayout (882c06c) the introducing commit
+predates it and is named by the file instead.
+
+| Issue | Commit(s) | Close comment |
+|---|---|---|
+| #328 | 882c06c, e1bcb59 | Landed: `internal/` is in the dagnabit NATO-level layout (882c06c) with the `lint-layout` and `lint-facade` gates (e1bcb59); AGENTS.md documents it. |
+| #330 | f014fde, f3d7a74; refined by 0e3d121 | Landed: unattended sessions lose the Monitor tool and cannot TaskStop the wake or troupe monitors (f014fde; bats f3d7a74); #335 (0e3d121) lets them stop their own backgrounded MCP calls. |
+| #333 | 08149d2, d1ea34a (handoff 4d01efb) | Landed: a per-session broker socket path, `CLOWN_POLICY_BROKER` exported to the agent and relayed into confined units (08149d2, d1ea34a). The handoff's lock-bump step is the operator's. |
+| #325 | 0718edf, then 7504d6e, 6f5a8e0, ee0c381 | Landed: the issue-filer moxin is served frontend-side as `clown-builtin-moxins/issue-filer` and forwarded into the unit (0718edf and follow-ups); the token file is only stat'ed, never read, by the frontend. |
+| #323 | 8a7bc4d, 3984da5 | Landed per the 2026-10-26 ruling: `CLOWN_UNATTENDED=1` puts claude in dontAsk through `--settings` (8a7bc4d), carried across [attach] and refused from config (3984da5); FDR 0023. The B5 live checks remain unrecorded, as the FDR says. |
+| #322 | acc1a8301a93 (clown's half) | Landed on clown's side: the hung-session status file (FDR 0023 "Hung-session status file"). Per the 2026-10-26 ruling the notification is spinclass's; closing here, tracked there. |
+| #318 | 449c680, df1b923, 947679a, 51b672d | Landed: a resumed session relaunches under its recorded agent-scope spec, bound to the spec's bytes, and is refused rather than run unconfined when the spec is gone or changed (the confinement gate series). |
+| #319 | `internal/alfa/agentscope/deadman.go` (predates 882c06c) | Landed per the 2026-10-26 ruling: the dead-man socket; the in-unit shim treats EOF as frontend death and stops the unit; RuntimeMaxSec (#320) is the backstop. |
+| #320 | 31a87cb | Landed: `MemoryMax=8G`, `TasksMax=4096`, `CPUQuota=400%` on every unit and `RuntimeMaxSec=604800` for unattended launches (31a87cb). The values are constants; a per-launch knob is a new issue if wanted. |
+| #302 | `internal/bravo/permstat/permstat.go` (predates 882c06c) | Landed: `clown.permission.<key>.{prompted,approved,declined}` counters from the PermissionRequest hook (permstat); FDR 0023 names them and notes that dontAsk sessions count nothing. |
+| #331 | 3605b87 | Landed: templates that drop moxy disallow the `Agent` tool, so no subagent is spawned with zero tools; Discover's list names only real tools (3605b87). The portable-list and move-to-moxy options stay with #11. |
+| #337 | 7802efc, 5277fce | Landed: the refusals quote pkg/profilelookup's own reason or the digest the registry now vouches for (7802efc, item 2); `clown profile digest NAME` prints a profile's digest (5277fce, item 3); #334 is linked and built (6a6eda5, item 4). Item 1 was an operator read of that host. |
+| #175 | `cmd/clown-stdio-bridge/http.go:51-57` | Landed: moxy ships `/clown/exclude-tools` (moxy#399) with the same contract as the bridge, and clown's cheap-context client pushes the exclusion set to native httpServers plugins too. |
+| #243 | bd338b9, 61b7af2 | Landed: `system-prompt-append.d/04-no-file-memory.md` forbids the harness's file-based memory unless the user asks in the conversation. Not verified live that MEMORY.md is no longer loaded; close only if that is acceptable. |
+| #163 | `cmd/clown/claudesettings.go:141` | Landed: clown injects `CLAUDE_AFK_TIMEOUT_MS` (max int32) into claude's settings env, disabling AskUserQuestion's auto-continue; no version pin needed. |
+| #189 | no commit | Done: `code.linenisgreat.com/clown` is the push remote and every merge lands through it. |
+
+Not in the list on purpose: #292 (retitle to the URL half), #336 and #338
+(the live round), #339 (the narrows check), #334 (switch to C), #342
+(spinclass's half), #242 (ringmaster#40's bump; clown's restart notice now
+carries the rule).

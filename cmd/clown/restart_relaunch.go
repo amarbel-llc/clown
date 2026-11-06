@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -395,8 +396,15 @@ func restartedNotice(reason string) string {
 	if clean == "" {
 		return ""
 	}
-	return "restarted: " + clean + "\n\nThis session was stopped and relaunched by its clown frontend at spinclass's request (spinclass#419). The conversation is the same session under the same principal; its tools and configuration were loaded afresh and may have changed.\n\nIf the message that started this session (your original brief) arrives again as a new message, it is a replay caused by this restart, not a new request: if you finished the task it describes, say so and stop; do not redo it; if you were part-way through, continue from where your earlier turns left off."
+	return "restarted: " + clean + "\n\nThis session was stopped and relaunched by its clown frontend at spinclass's request (spinclass#419). The conversation is the same session under the same principal; its tools and configuration were loaded afresh and may have changed.\n\nIf the message that started this session (your original brief) arrives again as a new message, it is a replay caused by this restart, not a new request: if you finished the task it describes, say so and stop; do not redo it; if you were part-way through, continue from where your earlier turns left off.\n\n" + restartedJobsNotice
 }
+
+// restartedJobsNotice tells a relaunched session what a restart does to the
+// background jobs it started before it (clown#242): the job's process
+// outlives the restart, but its terminal record and completion wake are
+// written by the server that launched it, which died with the old session,
+// so the wake never comes and the record can say running for ever.
+const restartedJobsNotice = "Background jobs you started before this restart outlive it, but their completion wake does not: the record and the wake are written by the MCP server that launched the job, and that server died with the old session. Do not wait for a wake from a job started before the restart; check the job's effects or its job_status tail, and treat a state of running as unknown (ringmaster(1) CAVEATS)."
 
 // restartFallbackReason is the relaunch's reason when spinclass's verdict
 // gives none.
@@ -510,7 +518,7 @@ func (fr frontendRestarter) restart(req restartRequest, v preflightVerdict) {
 	// control socket, which any same-uid process can write, so it is not
 	// used. A posture change is named, so the relaunched session knows its
 	// prompts now deny (or ask).
-	reason := cmpOr(sanitizeRestartReason(v.Reason), restartFallbackReason)
+	reason := cmp.Or(sanitizeRestartReason(v.Reason), restartFallbackReason)
 	if v.Posture != postureKeep {
 		reason += " (posture " + v.Posture + ")"
 	}
@@ -751,7 +759,7 @@ type boundedResult struct {
 
 // stderrLine is the stderr as one printable line, for a refusal.
 func (r boundedResult) stderrLine() string {
-	return cmpOr(printableOneLine(string(r.stderr)), "(no output)")
+	return cmp.Or(printableOneLine(string(r.stderr)), "(no output)")
 }
 
 // runBounded runs bin with args and env, bounded by timeout, in its own
