@@ -1,8 +1,12 @@
 # clown#334: a user-only override for an unpinnable or changed profile on resume (design and test plan)
 
-Status: design and test plan only; **blocked on one operator ruling**
-(below) before any code. Written 2026-11-05 under a memory HOLD; claims are
-**R** (read in code at 0e3d121) or **I** (inferred). Companion: FDR 0022
+Status: **ruled 2026-11-05 (operator, via the coordinator): option A now,
+C when the card path exists.** Implemented on rare-walnut as FDR 0022 slice
+3e (`cmd/clown/resume.go`, `profilegate.go`, `main.go`,
+`internal/alfa/sessions`; tests in `resume_override_test.go` and
+`sessions/pinsource_test.go`), written under the memory HOLD of 2026-11-05/06
+and not yet built, run or merged. The design below is as written before the
+ruling; claims are **R** (read in code at 0e3d121) or **I** (inferred). Companion: FDR 0022
 (decisions 2 and 8), FDR 0023, spinclass FDR 0032 (D11 card path), clown#337
 (diagnostics, done), clown#340 (provenance, done).
 

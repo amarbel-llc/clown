@@ -847,7 +847,14 @@ func runWithFlags(flags parsedFlags) int {
 	if selectedProfile != nil {
 		launch = &launchPin
 	}
-	gate := newProfileGate(flags, flagProfile, consumeLauncherProfileEnv(), launch, attachedID != "", sessions.ProfileOf)
+	launcherEnv := consumeLauncherProfileEnv()
+	if flags.userConfirmedDigest != "" {
+		// clown#334: the person at the terminal confirmed the re-pin in
+		// launchResume; it approves exactly that digest, bound to the resumed
+		// session as a launcher's CLOWN_PROFILE_SESSION would be.
+		launcherEnv = launcherProfileEnv{digest: flags.userConfirmedDigest, session: claudeResumeID(flags.forwarded), source: sessions.PinSourceUserConfirm}
+	}
+	gate := newProfileGate(flags, flagProfile, launcherEnv, launch, attachedID != "", sessions.ProfileOf)
 	resolve := registryResolver(profilesPath)
 	gate.describeChange = func(old, new sessions.ProfilePin) string {
 		return describeProfileChange(old, new, resolve, profilelookup.RedactedFormByDigest)
@@ -868,7 +875,7 @@ func runWithFlags(flags parsedFlags) int {
 	if decision.pinEarly != nil && !flags.printLaunchPlan {
 		// pinEarly is always the launch's own pin (checkLaunchProfile), so
 		// launchForm describes it.
-		if err := sessions.RecordSession(withPinProvenance(sessions.NameRecord{SessionID: gate.resumeID, Profile: decision.pinEarly.Name, ProfileDigest: decision.pinEarly.Digest}, launchForm)); err != nil {
+		if err := sessions.RecordSession(withPinProvenance(sessions.NameRecord{SessionID: gate.resumeID, Profile: decision.pinEarly.Name, ProfileDigest: decision.pinEarly.Digest, ProfilePinSource: decision.source}, launchForm)); err != nil {
 			fmt.Fprintf(os.Stderr, "clown: recording the profile pin for session %s: %v; refusing\n", gate.resumeID, err)
 			return 1
 		}
@@ -1044,7 +1051,12 @@ func runWithFlags(flags parsedFlags) int {
 			}
 		}
 		build := func(id string) sessions.NameRecord {
-			return withPinProvenance(launchRecordFor(sessionRecordBase(id, flags), gate.launch, decision.approvesRecordFor(id), sessions.ProfileOf), launchForm)
+			approved := decision.approvesRecordFor(id)
+			rec := launchRecordFor(sessionRecordBase(id, flags), gate.launch, approved, sessions.ProfileOf)
+			if approved && rec.Profile != "" {
+				rec.ProfilePinSource = decision.source
+			}
+			return withPinProvenance(rec, launchForm)
 		}
 		if err := recordLaunchSessions(ids, flags.agentScopeSpec != "", build, sessions.RecordSession, os.Stderr); err != nil {
 			fmt.Fprintf(os.Stderr, "clown: %v\n", err)
@@ -3466,6 +3478,13 @@ type parsedFlags struct {
 	// (launchProfileName). Set only by resumeLaunchFlags; not carried by
 	// reexecArgv (the outer pins the session before any re-exec).
 	resumeDefaultProfile bool
+	// userConfirmedDigest is the digest the person at the terminal confirmed
+	// in launchResume (clown#334): runWithFlags runs the launch as an
+	// approval of exactly that digest, bound to the resumed session and
+	// recorded with profile_pin_source user-confirm. Set only by
+	// launchResume; not carried by reexecArgv (the pin is recorded before any
+	// re-exec).
+	userConfirmedDigest string
 	// idleSocket is the frontend's idle-listener socket when self-close is
 	// armed (clown#287); an agent unit binds it in so the Stop hook can reach it.
 	idleSocket string

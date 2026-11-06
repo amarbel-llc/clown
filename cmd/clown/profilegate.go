@@ -33,6 +33,9 @@ type profileGate struct {
 	// approvedSession is CLOWN_PROFILE_SESSION (consumeLauncherProfileEnv),
 	// "" when unset: the one session the launcher's approval is for.
 	approvedSession string
+	// approvedSource is who supplied approvedDigest (launcherProfileEnv.source),
+	// recorded with the pin it approves.
+	approvedSource string
 	// launch is the applied profile's pin (launchProfilePin); nil when the
 	// launch applies no profile.
 	launch *sessions.ProfilePin
@@ -85,6 +88,19 @@ func pinProvenanceLine(id string) string {
 // version and protocol are this build's (buildcfg.Version,
 // profilelookup.ProtocolVersion; parameters for tests).
 func describePinProvenance(rec sessions.PinRecord, version string, protocol int) string {
+	line := describePinBuild(rec, version, protocol)
+	switch rec.Source {
+	case sessions.PinSourceLauncher:
+		line += "; the pin was approved by the launcher (profile_pin_source launcher)"
+	case sessions.PinSourceUserConfirm:
+		line += "; the pin was approved by a person at a terminal through the clown resume confirm (profile_pin_source user-confirm, clown#334)"
+	}
+	return line
+}
+
+// describePinBuild is describePinProvenance's line about the build that
+// pinned, without the approver.
+func describePinBuild(rec sessions.PinRecord, version string, protocol int) string {
 	switch {
 	case rec.Writer == "":
 		return "the pin records no writing build (it predates clown#340), so whether the definition or the build changed is unknown"
@@ -274,7 +290,7 @@ func checkLaunchProfile(g profileGate, recorded profileLookup) (profileDecision,
 		case g.launch.Digest != g.approvedDigest:
 			return profileDecision{}, fmt.Errorf("profile %q resolves to digest %s, not the CLOWN_PROFILE_DIGEST %s the launcher pinned; refusing", g.launch.Name, g.launch.Digest, g.approvedDigest)
 		}
-		d := profileDecision{approved: true, approvedSession: g.approvedSession}
+		d := profileDecision{approved: true, approvedSession: g.approvedSession, source: g.approvedSource}
 		if g.resumeID != "" {
 			d.pinEarly = g.launch
 		}
@@ -320,6 +336,9 @@ type profileDecision struct {
 	// approvedSession is the session the approval is bound to
 	// (CLOWN_PROFILE_SESSION); "" when unbound.
 	approvedSession string
+	// source is who approved (sessions.PinSource*), recorded as the pin's
+	// profile_pin_source; "" when not approved.
+	source string
 	// pinEarly is the pin to record for the gated session before any
 	// [attach] re-exec (an approved pin, or a trust-on-first-use pin); nil
 	// for none. The write must succeed or the launch is refused.
@@ -346,6 +365,7 @@ func newProfileGate(flags parsedFlags, flagProfile string, env launcherProfileEn
 		profileEnvSet:   env.profile != "",
 		approvedDigest:  env.digest,
 		approvedSession: env.session,
+		approvedSource:  env.source,
 		launch:          launch,
 	}
 	if !flags.profileFromRecord && !attachInner {
@@ -544,6 +564,10 @@ func launchRecordFor(base sessions.NameRecord, launch *sessions.ProfilePin, appr
 // CLOWN_PROFILE_DIGEST and CLOWN_PROFILE_SESSION (a launcher's approval).
 type launcherProfileEnv struct {
 	profile, digest, session string
+	// source is who supplied digest (sessions.PinSource*): the launcher for
+	// the environment variables, user-confirm for the confirm `clown resume`
+	// offers at a terminal (clown#334); "" without a digest.
+	source string
 }
 
 // consumeLauncherProfileEnv returns the profile environment and removes it
@@ -561,6 +585,9 @@ func consumeLauncherProfileEnv() launcherProfileEnv {
 		profile: os.Getenv("CLOWN_PROFILE"),
 		digest:  os.Getenv("CLOWN_PROFILE_DIGEST"),
 		session: os.Getenv("CLOWN_PROFILE_SESSION"),
+	}
+	if env.digest != "" {
+		env.source = sessions.PinSourceLauncher
 	}
 	for _, k := range []string{"CLOWN_PROFILE", "CLOWN_PROFILE_DIGEST", "CLOWN_PROFILE_SESSION"} {
 		_ = os.Unsetenv(k)

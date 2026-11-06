@@ -197,19 +197,35 @@ func launchResume(s sessions.Session, args resumeArgs) int {
 	// allows it only when it equals the session's pin or the launcher approved
 	// it with CLOWN_PROFILE_DIGEST (FDR 0022 decisions 3, 8).
 	requested := cmpOr(args.profile, os.Getenv("CLOWN_PROFILE"))
-	var recorded string
+	launcherDigest := os.Getenv("CLOWN_PROFILE_DIGEST")
+	var recorded, userConfirmed string
 	if requested == "" {
 		var err error
-		recorded, err = resumeProfile(s.ID, os.Getenv("CLOWN_PROFILE_DIGEST") != "", profilelookup.Options{})
+		recorded, err = resumeProfile(s.ID, launcherDigest != "", profilelookup.Options{})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "clown: %v\n", err)
-			return 1
+			// clown#334: the terminal speed bump, where it may be offered.
+			r, ok := pinOverrideOffered(err, s.ID, args.yes, unattendedValue(), launcherDigest, isInteractiveTerminal())
+			if !ok {
+				return 1
+			}
+			yes, cerr := confirmPinOverride(r, s.ID)
+			if cerr != nil {
+				fmt.Fprintf(os.Stderr, "clown: confirmation prompt: %v\n", cerr)
+				return 1
+			}
+			if !yes {
+				return 1
+			}
+			recorded, userConfirmed = r.pin.Name, r.current
 		}
 	}
 	// The spec asked for (--agent-scope, else CLOWN_AGENT_SCOPE, the same order
 	// as a plain launch). runWithFlags checks it against the session's
 	// confinement record like any launch's (agentScopeForLaunch, clown#318).
-	return runWithFlags(resumeLaunchFlags(s.ID, args, requested, recorded, cmpOr(args.agentScope, os.Getenv("CLOWN_AGENT_SCOPE"))))
+	flags := resumeLaunchFlags(s.ID, args, requested, recorded, cmpOr(args.agentScope, os.Getenv("CLOWN_AGENT_SCOPE")))
+	flags.userConfirmedDigest = userConfirmed
+	return runWithFlags(flags)
 }
 
 // resumeLaunchFlags builds the launch for resuming session id. The provider
@@ -313,8 +329,13 @@ func resumeProfile(sessionID string, approved bool, opts profilelookup.Options) 
 	resolve := func(name string) (*profilelookup.Resolved, error) { return profilelookup.Resolve(name, opts) }
 	if pin.Digest == sessions.UnpinnableDigest {
 		// The refusal says what this build finds now (clown#337): the reason
-		// it still cannot pin the profile, or the digest it pins.
-		return "", fmt.Errorf("session %s was launched with profile %q, which could not be pinned at launch (pkg/profilelookup could not vouch for it, e.g. an unstamped profiles.toml), so resume cannot verify the profile is unchanged; refusing to resume. This session resumes only when its launcher approves a digest for it (CLOWN_PROFILE_DIGEST=<digest> CLOWN_PROFILE_SESSION=%s, with --profile %s)\n%s", sessionID, pin.Name, sessionID, pin.Name, unpinnableReason(pin.Name, resolve))
+		// it still cannot pin the profile, or the digest it pins (which the
+		// confirm of clown#334 can pin the session to).
+		current := ""
+		if r, err := resolve(pin.Name); err == nil {
+			current = r.DigestSHA256
+		}
+		return "", &profileRefusal{pin: pin, current: current, text: fmt.Sprintf("session %s was launched with profile %q, which could not be pinned at launch (pkg/profilelookup could not vouch for it, e.g. an unstamped profiles.toml), so resume cannot verify the profile is unchanged; refusing to resume. This session resumes only when its launcher approves a digest for it (CLOWN_PROFILE_DIGEST=<digest> CLOWN_PROFILE_SESSION=%s, with --profile %s)\n%s", sessionID, pin.Name, sessionID, pin.Name, unpinnableReason(pin.Name, resolve))}
 	}
 	recorded := pin.Digest
 	if recorded == "" {
@@ -329,9 +350,61 @@ func resumeProfile(sessionID string, approved bool, opts profilelookup.Options) 
 		if p := pinProvenanceLine(sessionID); p != "" {
 			detail += "\n" + p
 		}
-		return "", fmt.Errorf("session %s was launched with profile %q (digest %s), which now resolves to digest %s; refusing to resume under a changed profile (restore the profile's previous definition, have the launcher approve the new digest with CLOWN_PROFILE_DIGEST, or start a new session)\n%s", sessionID, pin.Name, recorded, current.DigestSHA256, detail)
+		return "", &profileRefusal{pin: pin, current: current.DigestSHA256, text: fmt.Sprintf("session %s was launched with profile %q (digest %s), which now resolves to digest %s; refusing to resume under a changed profile (restore the profile's previous definition, have the launcher approve the new digest with CLOWN_PROFILE_DIGEST, or start a new session)\n%s", sessionID, pin.Name, recorded, current.DigestSHA256, detail)}
 	}
 	return pin.Name, nil
+}
+
+// profileRefusal is resumeProfile's refusal of a session whose pin no longer
+// matches: a changed digest, or an unpinnable pin. It carries what the
+// confirm of clown#334 needs: the pin, and the digest this build pins the
+// profile at now ("" when it still cannot be pinned, so no confirm can help).
+type profileRefusal struct {
+	pin     sessions.ProfilePin
+	current string
+	text    string
+}
+
+func (r *profileRefusal) Error() string { return r.text }
+
+// pinOverrideOffered decides whether `clown resume` offers the confirm of
+// clown#334 (FDR 0022 decision 2 as amended, operator 2026-11-05) for the
+// refusal err of session id: only for a profileRefusal with a digest to pin
+// to, at a terminal (stdin and stdout ttys), with the unattended marker unset
+// (FDR 0023: an unattended session never waits at a dialog and approves
+// nothing; a misspelt marker counts as set), without -y (a scripted resume
+// must not approve a transition), without a launcher's CLOWN_PROFILE_DIGEST
+// (the gate decides that), and for a UUID session id (the approval is bound
+// to it).
+//
+// This is a speed bump for a person at a terminal, not an authority
+// boundary: clown cannot tell a tty from a pty an agent drives, and such an
+// agent can already set CLOWN_PROFILE_DIGEST itself. The real gate is the
+// launcher's grant, and spinclass FDR 0032 D11's card path once it exists;
+// then this function, confirmPinOverride and their call in launchResume are
+// deleted (decision C) and the profile_pin_source field stays.
+func pinOverrideOffered(err error, id string, yes bool, unattended, launcherDigest string, tty bool) (*profileRefusal, bool) {
+	var r *profileRefusal
+	if !errors.As(err, &r) || r.current == "" {
+		return nil, false
+	}
+	if yes || launcherDigest != "" || !tty || !isUUID(id) {
+		return nil, false
+	}
+	if on, err := unattendedRequested(unattended); on || err != nil {
+		return nil, false
+	}
+	return r, true
+}
+
+// confirmPinOverride asks, default No, whether to re-pin session id to the
+// digest r names; Yes resumes as an approval of that digest (clown#334).
+func confirmPinOverride(r *profileRefusal, id string) (bool, error) {
+	return runResumeConfirm(
+		fmt.Sprintf("Re-pin session %s to profile %q at digest %s?", id, r.pin.Name, r.current),
+		"Yes records that you approved this profile change at this terminal (profile_pin_source user-confirm) and resumes. This is a speed bump for a person at a terminal, not an authority boundary: anything that can drive this terminal can answer it. Enter cancels.",
+		false,
+	)
 }
 
 func isInteractiveTerminal() bool {
@@ -589,7 +662,20 @@ Profiles (all modes):
   --profile <name> (or CLOWN_PROFILE) asks to resume under a profile.
   Naming the profile the session is pinned to, at the same digest, is a
   no-op; any other profile is a profile change and is refused unless
-  approved. There is no local confirmation.
+  approved.
+
+  At a terminal (stdin and stdout both ttys), with CLOWN_UNATTENDED unset,
+  without -y and without CLOWN_PROFILE_DIGEST, a resume refused because
+  the pinned profile's digest changed, or because the pin could not be
+  recorded at launch and the registry now vouches, prints the refusal
+  and then asks whether to re-pin the session to the digest this build
+  resolves (default: cancel). Yes resumes as an approval bound to this
+  session and records the pin with profile_pin_source = user-confirm,
+  so it can be told from a launcher's. This is a speed bump for a person
+  at a terminal, not an authority boundary: anything that can drive the
+  terminal can answer it. It is not offered for --profile <name>, and it
+  is replaced by the operator's card path once that exists (FDR 0022
+  decision 2 as amended, clown#334).
 
   Approval: the launcher (spinclass, after verifying an operator grant)
   passes --profile <name> as a flag, CLOWN_PROFILE_DIGEST (the approved

@@ -172,6 +172,18 @@ selecting plugins by profile is orthogonal.
    digest and keeps no signed record.
 2. Plain `clown resume` without spinclass refuses on any mismatch. There
    is no local confirmation path.
+
+   **Amended (operator, 2026-11-05, clown#334; "A for now, C when we have
+   the card path"):** at a terminal (stdin and stdout ttys), with
+   `CLOWN_UNATTENDED` unset, no `-y` and no `CLOWN_PROFILE_DIGEST`,
+   `clown resume` may offer a confirm (default No) that re-pins the
+   session to the digest this build resolves now, recorded with
+   `profile_pin_source = user-confirm` (slice 3e). It is a speed bump for
+   a person at a terminal, not an authority boundary: clown cannot tell a
+   tty from a pty an agent drives, and such an agent can already set
+   `CLOWN_PROFILE_DIGEST` itself. Once spinclass FDR 0032 D11's card path
+   (PIN and touch, operator-act) exists, the confirm is replaced by it and
+   this decision returns to its first two sentences.
 3. `clown resume --profile X` is a requested transition and needs approval.
 4. The signed text shows both digests plus a field diff, within piggy's
    ~15-line budget.
@@ -413,6 +425,25 @@ resume has no local confirmation (decision 2), and the env names are final.
    of reading it out of a refusal. Not done: a bulk re-approval of kept pins
    at a protocol-bump deploy; the provenance makes it possible (every pin
    under the old protocol is a candidate) and the verb gives the digests.
+3e. **Done (clown#334).** The terminal speed bump (decision 2 as amended).
+   `resumeProfile`'s two pin refusals are typed (`profileRefusal`,
+   `cmd/clown/resume.go`) and carry the digest this build pins the profile
+   at now ("" while it still cannot be pinned). `launchResume` prints the
+   refusal and, when `pinOverrideOffered` allows (a tty, the unattended
+   marker unset, no `-y`, no launcher digest, a UUID session id, a digest to
+   pin to), asks a huh confirm, default No. Yes runs the launch as an
+   approval of exactly that digest bound to that session
+   (`parsedFlags.userConfirmedDigest` becomes the gate's
+   `launcherProfileEnv`, source `user-confirm`); the gate itself is
+   unchanged, so `pinEarly` records the pin before the provider runs.
+   Every approved pin now records `profile_pin_source` (`launcher` for the
+   environment variables, `user-confirm` for the prompt; `omitempty`,
+   older records read as "", `sessions.PinRecordOf` returns it), and
+   `describePinProvenance` names it in later refusals. No canonical-form,
+   digest or `ProtocolVersion` change. Not offered for `--profile <name>`
+   (decision 3 unchanged) or for a direct `clown -- --resume <id>`. To
+   remove (decision C): delete `pinOverrideOffered`, `confirmPinOverride`
+   and their call in `launchResume`; the source field stays.
 
 ## Notes
 

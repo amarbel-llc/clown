@@ -56,6 +56,12 @@ import (
 // profile was applied; readers that predate them ignore them, and a pin
 // written before them has neither (PinRecordOf reports "" and 0).
 //
+// ProfilePinSource (clown#334) says who approved a pin that replaced a
+// different one: PinSourceLauncher for CLOWN_PROFILE_DIGEST from the
+// launcher, PinSourceUserConfirm for the confirm `clown resume` offers at a
+// terminal. Omitted for a trust-on-first-use or unchanged pin, and by writers
+// that predate it.
+//
 // AgentScope (clown#318) is the --agent-scope spec path of a confined
 // launch, so `clown resume` relaunches the session confined (AgentScopeOf).
 type NameRecord struct {
@@ -68,6 +74,7 @@ type NameRecord struct {
 	ProfileFormOmitted string          `json:"profile_form_omitted,omitempty"`
 	ProfileWriter      string          `json:"profile_writer,omitempty"`
 	ProfileProtocol    int             `json:"profile_protocol,omitempty"`
+	ProfilePinSource   string          `json:"profile_pin_source,omitempty"`
 	AgentScope         string          `json:"agent_scope,omitempty"`
 	AgentScopeDigest   string          `json:"agent_scope_digest,omitempty"`
 	SpawnBriefSHA256   string          `json:"spawn_brief_sha256,omitempty"`
@@ -192,14 +199,22 @@ type ProfilePin struct {
 	Digest string
 }
 
+// The values NameRecord.ProfilePinSource takes (clown#334).
+const (
+	PinSourceLauncher    = "launcher"
+	PinSourceUserConfirm = "user-confirm"
+)
+
 // PinRecord is a session's pin with the provenance recorded beside it
 // (clown#340): Writer is the clown version and Protocol the profile
 // protocol of the build that computed the digest; "" and 0 for a pin
-// written before provenance was recorded.
+// written before provenance was recorded. Source is who approved the pin
+// (a PinSource* value), "" when not recorded (clown#334).
 type PinRecord struct {
 	ProfilePin
 	Writer   string
 	Protocol int
+	Source   string
 }
 
 // namesPath resolves $XDG_STATE_HOME/clown/session-names.jsonl (throwaway
@@ -411,7 +426,7 @@ func PinRecordOf(id string) (rec PinRecord, ok bool, err error) {
 			return nil
 		}
 		if r.SessionID == id && r.Profile != "" {
-			rec, ok = PinRecord{ProfilePin: ProfilePin{Name: r.Profile, Digest: r.ProfileDigest}, Writer: r.ProfileWriter, Protocol: r.ProfileProtocol}, true
+			rec, ok = PinRecord{ProfilePin: ProfilePin{Name: r.Profile, Digest: r.ProfileDigest}, Writer: r.ProfileWriter, Protocol: r.ProfileProtocol, Source: r.ProfilePinSource}, true
 		}
 		return nil
 	})

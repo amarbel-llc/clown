@@ -418,7 +418,8 @@ func TestConsumeLauncherProfileEnv(t *testing.T) {
 	t.Setenv("CLOWN_PROFILE_SESSION", "id-1")
 	t.Setenv("CLOWN_PROFILE", "p1")
 	got := consumeLauncherProfileEnv()
-	if got != (launcherProfileEnv{profile: "p1", digest: "aaaa", session: "id-1"}) {
+	// A digest from the environment is the launcher's approval (clown#334).
+	if got != (launcherProfileEnv{profile: "p1", digest: "aaaa", session: "id-1", source: sessions.PinSourceLauncher}) {
 		t.Errorf("consumeLauncherProfileEnv = %+v", got)
 	}
 	for _, k := range []string{"CLOWN_PROFILE", "CLOWN_PROFILE_DIGEST", "CLOWN_PROFILE_SESSION"} {
