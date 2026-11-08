@@ -238,10 +238,19 @@ JSON-RPC error (code -32001) that names the record's resource URI. The plugin
 host writes `bridge_exit` when the bridge itself dies mid-session, unless the
 bridge recorded its own end in that life. Both sit under
 `$XDG_STATE_HOME/clown/disconnects/<hex sha256(session key)>/<plugin>/<server>/<n>.json`
-(20 per server, 30 days). The bridge learns its identity from
+(20 per server; a session's whole directory goes 30 days after its newest
+record). The bridge learns its identity from
 `CLOWN_SESSION_ID`, `CLOWN_BRIDGE_PLUGIN_NAME`, `CLOWN_BRIDGE_SERVER_NAME` and
 `CLOWN_BRIDGE_RECORD_DIR`, and writes none without all four. A record holds no
-request or response content, and the child's last 40 stderr lines are scrubbed.
+request or response content. The child's last 40 stderr lines are scrubbed on a
+best-effort basis: control characters, `key=value`, `key: value` and JSON
+`"key":"value"` pairs and command-line flags whose key names a token, key,
+secret or password, Bearer tokens, `Authorization: token|Basic` values, URL
+userinfo, known token prefixes (`sk-`, `gh?_`, `xox`, `AKIA`), long hex runs
+and long base64-looking runs. It does not catch a secret under another key
+name (`pw`, `passphrase`), in prose, short and bare, or spread over lines, so
+the tail is to be treated as sensitive. The man page `clown-stdio-bridge(1)`
+lists the rules.
 
 A session reads its records as MCP resources from the built-in
 `clown-builtin-diagnostics/disconnects` server (resources only, frontend scope,

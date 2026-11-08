@@ -42,8 +42,9 @@ var canaryMoxyKeep = strings.Fields(`folio_read folio_ls rg_search grit_stage to
 // of its grit (nor chix or smith) and no write tool.
 var canaryGritMoxyKeep = strings.Fields(`folio_read folio_ls rg_search jq_jq toolbox_run`)
 
-// engineer-debug (clown#345) is read-only: folio read tools, rg, jq, man,
-// toolbox, freud, env and smith's read verbs. just-us stays whole.
+// engineer-debug (clown#345) keeps moxy's read tools only: folio read tools,
+// rg, jq, man, toolbox, freud, env, smith's read verbs, a chix subset and
+// stats-me. just-us stays whole (run_recipe runs any recipe).
 var engineerDebugMoxyKeep = strings.Fields(`folio_read folio_ls folio_glob folio_tree rg_search jq_jq toolbox_run
 	man_list man_toc man_section
 	freud_interruptions freud_interruptions-timeseries freud_messages freud_sessions freud_subagents
@@ -376,11 +377,12 @@ func TestBuiltinWorkerIsCanarySpinclassPlusTheLandingTools(t *testing.T) {
 	}
 }
 
-// Operator ruling 2026-11-05: worker alone may read MCP resources by URI
+// Operator ruling 2026-11-05: worker may read MCP resources by URI
 // (ringmaster#43 serves a job's output and records that way, scoped to the
-// caller's channel). The wake names the URI, so listing stays disallowed; every
-// other template is unchanged. Allowing it changed worker's digest: a session
-// pinned to the old one is refused on resume and restart until re-pinned.
+// caller's channel); engineer-debug does too (clown#345). The wake names the
+// URI, so listing stays disallowed; every other template is unchanged.
+// Allowing it changed worker's digest: a session pinned to the old one is
+// refused on resume and restart until re-pinned.
 func TestBuiltinWorkerMayReadMCPResources(t *testing.T) {
 	resourceTools := []string{"ListMcpResourcesTool", "ReadMcpResourceTool", "ReadMcpResourceDirTool"}
 	w := strings.Split(builtinByName(t, "worker").Env["CLOWN_DISALLOWED_TOOLS"], ",")
@@ -396,16 +398,19 @@ func TestBuiltinWorkerMayReadMCPResources(t *testing.T) {
 		disallowed := strings.Split(builtinByName(t, name).Env["CLOWN_DISALLOWED_TOOLS"], ",")
 		for _, tool := range resourceTools {
 			if !slices.Contains(disallowed, tool) {
-				t.Errorf("%s must still disallow %s: only worker reads MCP resources", name, tool)
+				t.Errorf("%s must still disallow %s: only worker and engineer-debug read MCP resources", name, tool)
 			}
 		}
 	}
 }
 
-// engineer-debug is read-only (clown#345): it keeps no write or side-effect
-// moxy tool, and, like worker, may read MCP resources by URI while listing
-// stays disallowed.
-func TestBuiltinEngineerDebugIsReadOnly(t *testing.T) {
+// engineer-debug (clown#345) keeps no write or side-effect moxy tool, and,
+// like worker, may read MCP resources by URI while listing stays disallowed.
+// That is all it pins: the profile is not read-only as a whole (just-us stays
+// whole, so run_recipe runs any recipe; the native Bash, Edit and Write tools
+// are not disallowed; freud_transcript reads any session's transcript), which
+// clown-profiles(5) says.
+func TestBuiltinEngineerDebugMoxyKeepsNoWriters(t *testing.T) {
 	for _, tool := range engineerDebugMoxyKeep {
 		for _, writer := range []string{"folio_write", "folio_rm", "folio_mv", "folio_cp", "folio_chmod", "folio_link", "folio_mkdir"} {
 			if tool == writer {

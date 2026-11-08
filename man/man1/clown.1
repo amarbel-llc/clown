@@ -70,7 +70,7 @@ of one server as JSON.
 The records are written by the bridges that front stdio plugin servers and by
 the plugin host, under
 .Pa $XDG_STATE_HOME/clown/disconnects ,
-and are removed after 30 days.
+and a session's directory is removed 30 days after its newest record.
 A session reads its own through the MCP server
 .Li clown-builtin-diagnostics/disconnects ,
 which serves them as resources and is told of a new one by a wake on the job

@@ -180,14 +180,51 @@ end: the child exiting, its stdout reaching end of file, a failed write to its
 stdin, a signal, the host going away, or the HTTP server failing.
 The record holds the time, the kind, who closed it, the child's exit status,
 the requests in flight and abandoned, the queue depth, and the last 40 lines
-of the child's stderr, scrubbed of control characters and of values that look
-like credentials.
+of the child's stderr, scrubbed as described below.
 It never holds request or response content.
+.Pp
+The scrub is best effort, not a guarantee.
+It turns control characters into spaces, drops other non-printing characters,
+and cuts a line to 512 bytes; it replaces the value of
+.Li key=value ,
+.Li key: value
+and the same pairs written as quoted JSON, whose key contains
+.Li token ,
+.Li key ,
+.Li secret
+or
+.Li password ;
+the value of a command-line flag whose name contains one of them;
+.Li Bearer
+tokens;
+.Li Authorization: token
+and
+.Li Authorization: Basic
+values; the user and password of a URL
+.Pq Li scheme://user:pass@host ;
+tokens with the prefixes
+.Li sk- ,
+.Li ghp_ ,
+.Li gho_ ,
+.Li ghu_ ,
+.Li ghs_ ,
+.Li ghr_ ,
+.Li xox
+and
+.Li AKIA ;
+hex runs of 32 or more characters; and base64-looking runs of 40 or more
+characters that hold both letters and digits.
+It does not catch a secret whose key or flag has none of those four words
+.Pq for example Li pw=x No or Li passphrase ,
+a secret written in prose, a short bare token, a multi-line key block line by
+line, or anything the child prints in a form not listed here.
+Treat the tail as sensitive.
 Records are files named
 .Pa <n>.json
 under
 .Pa <record dir>/<hex sha256 of the session key>/<plugin>/<server>/ ,
-written atomically; at most 20 are kept per server.
+written atomically; at most 20 are kept per server, and a session's whole
+directory is removed 30 days after its newest record.
 .Pp
 Every request in flight when the child goes away fails with a JSON-RPC error
 (code
@@ -228,6 +265,10 @@ Set by the plugin host together with
 and
 .Ev CLOWN_BRIDGE_SERVER_NAME ;
 without all four the bridge writes no records.
+.It Ev CLOWN_SESSION_ID
+The session's key, as the record's session; the records directory is named by
+its hash.
+Set by the plugin host.
 .It Ev CLOWN_BRIDGE_PLUGIN_NAME
 The plugin's name, as the record's plugin.
 .It Ev CLOWN_BRIDGE_HOST_LOG
@@ -319,7 +360,7 @@ When set to
 disables statsd emission entirely.
 .It Ev CLOWN_BRIDGE_SERVER_NAME
 Logical name of the bridged server, used as the statsd metric prefix
-segment.
+segment and as the record's server.
 Set automatically by
 .Nm clown Ns 's
 .Fa stdioServers

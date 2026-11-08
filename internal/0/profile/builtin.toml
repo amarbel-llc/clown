@@ -246,7 +246,8 @@ CLOWN_DISALLOWED_TOOLS = "Artifact,ArtifactData,ArtifactComments,DesignSync,Work
 # server and the worker just lacks that tool. See
 # docs/plans/2026-10-26-confined-moxy-sequencing.md.
 #
-# Unlike every other template, worker keeps ReadMcpResourceTool (operator
+# Unlike the other templates (engineer-debug, below, is the one other), worker
+# keeps ReadMcpResourceTool (operator
 # ruling 2026-11-05): ringmaster serves a job's output and records as MCP
 # resources (ringmaster://jobs/<id>/output, /records; ringmaster#43), scoped to
 # the caller's own channel, and a dontAsk worker has no other way to read
@@ -271,8 +272,12 @@ CLOWN_DISALLOWED_TOOLS = "Artifact,ArtifactData,ArtifactComments,DesignSync,Work
 ]
 "just-us/just-us" = ["dump_justfile", "list_variables"]
 
-# engineer-debug is the read-only debugging template (clown#345): moxy keeps
-# the folio read tools (read, ls, glob, tree), rg, jq, man, toolbox, freud, env,
+# engineer-debug is the debugging template (clown#345). Only its moxy catalog is
+# cut to read tools; the profile as a whole is NOT read-only: just-us stays
+# whole (run_recipe runs any recipe), the native Bash/Edit/Write/NotebookEdit
+# tools are not disallowed, and freud_transcript returns any session's raw
+# transcript (the display name says "read-only"; clown-profiles(5) says what
+# that covers). Moxy keeps the folio read tools (read, ls, glob, tree), rg, jq, man, toolbox, freud, env,
 # smith's read verbs, stats-me (all five tools are queries) and chix's read-only
 # subset (search, which, doc, doc-options, doc-tree, flake-show, store-ls,
 # store-cat, store-path-info, derivation-show, log, why-depends); just-us stays
@@ -284,8 +289,8 @@ CLOWN_DISALLOWED_TOOLS = "Artifact,ArtifactData,ArtifactComments,DesignSync,Work
 # store or flake (build, run, develop-run, flake-check, flake-lock, flake-init,
 # flake-update, store-gc, store-realize, nix-hash).
 # Like worker it allows ReadMcpResourceTool (ringmaster serves job output and
-# records as resources), so the others' "only worker reads MCP resources" rule
-# is now "worker and engineer-debug". It keeps moxy, so Agent stays allowed.
+# records as resources), so the rule "only worker reads MCP resources" is now
+# "worker and engineer-debug". It keeps moxy, so Agent stays allowed.
 # Refine over time.
 [[profile]]
 name = "engineer-debug"

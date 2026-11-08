@@ -61,22 +61,41 @@ in their
 .Sy env .
 .Pp
 .Li engineer-debug
-is the read-only debugging template: moxy keeps the folio read tools
+is the debugging template.
+Its moxy catalog is cut to read tools, but the profile as a whole is not
+read-only: the final paragraph below says what it still can do.
+Moxy keeps the folio read tools
 .Pq Li read , ls , glob , tree ,
 ripgrep, jq, the man tools, toolbox, the freud and env tools, smith's
 read verbs, stats-me's queries and chix's read-only subset
 .Pq Li search , which , doc , doc-options , doc-tree , flake-show , store-ls ,
 .Li store-cat , store-path-info , derivation-show , log , why-depends ,
 and just-us stays whole.
-It drops every write and side-effect tool: folio write, rm, mv, cp, chmod,
-link and mkdir, smith's write verbs, chrest, the Google tools, moxy's async,
-batch and restart, and the chix tools that build, run, lock or change the
-store or flake.
+Moxy drops its write and side-effect tools: folio write, rm, mv, cp, chmod,
+link and mkdir, smith's write verbs, chrest, the Google tools, the nebulous
+tools (several write to NewsBlur), issue-filer_file, moxy's async, batch and
+restart, and the chix tools that build, run, lock or change the store or flake.
 It also drops all of grit, because each grit tool mixes read and write verbs
 and a profile excludes whole tools, not verbs.
 Unlike the other templates it does not disallow
 .Li ReadMcpResourceTool ,
 so it can read the resources MCP servers serve, such as a job's output.
+.Pp
+What it does not restrict:
+just-us stays whole, so
+.Li run_recipe
+runs any recipe of the repository's justfile;
+the native
+.Li Bash ,
+.Li Edit ,
+.Li Write
+and
+.Li NotebookEdit
+tools stay available; and
+.Li freud_transcript
+returns the raw transcript of any session.
+So the profile limits what moxy offers, not what the session can do through
+those paths.
 .Sh FILE FORMAT
 .Pa profiles.toml
 is TOML: one
