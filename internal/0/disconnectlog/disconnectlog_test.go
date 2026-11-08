@@ -203,6 +203,41 @@ func TestParseURI(t *testing.T) {
 	}
 }
 
+// Unseen returns each record once, oldest first, opens only records above the
+// mark, and a damaged record does not hold the later ones back.
+func TestUnseenReturnsEachRecordOnceAndSkipsADamagedOne(t *testing.T) {
+	root := t.TempDir()
+	write := func() Record {
+		t.Helper()
+		r, err := Write(root, newRecord(KindSignal))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	seen := map[string]int{}
+	write() // 1: history
+	if got := Unseen(root, principal, seen); len(got) != 1 {
+		t.Fatalf("baseline read %d records, want the 1 existing", len(got))
+	}
+	if got := Unseen(root, principal, seen); len(got) != 0 {
+		t.Fatalf("a quiet poll returned %v", got)
+	}
+
+	dir := filepath.Join(root, SessionDir(principal), "cutting-garden", "cg")
+	if err := os.WriteFile(filepath.Join(dir, "2.json"), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	third := write() // 3 (Write takes the next number after the damaged 2)
+	got := Unseen(root, principal, seen)
+	if len(got) != 1 || got[0].URI != third.URI {
+		t.Fatalf("after a damaged record and a good one: %+v, want only %s", got, third.URI)
+	}
+	if again := Unseen(root, principal, seen); len(again) != 0 {
+		t.Errorf("records returned twice: %+v", again)
+	}
+}
+
 func TestSweepRemovesOnlySessionsOlderThanRetention(t *testing.T) {
 	root := t.TempDir()
 	old, fresh := newRecord(KindSignal), newRecord(KindSignal)

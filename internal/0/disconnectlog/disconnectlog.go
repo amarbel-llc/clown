@@ -435,6 +435,60 @@ func ListAll(root, principal string) []Entry {
 	return es
 }
 
+// Unseen returns, oldest first, the session's records numbered above the
+// highest the caller has seen for their server, and raises those marks in seen
+// (keyed "plugin/server" by directory name). It reads only the new records:
+// a poll of a quiet session lists directories and opens no file. Numbers only
+// grow while a server's directory lives (the oldest records are pruned, the
+// highest stays), so the mark never goes stale. Call it once with an empty
+// map to take a baseline; the records it returns then are history.
+func Unseen(root, principal string, seen map[string]int) []Entry {
+	if root == "" || principal == "" {
+		return nil
+	}
+	base := filepath.Join(root, SessionDir(principal))
+	plugins, err := os.ReadDir(base)
+	if err != nil {
+		return nil
+	}
+	var es []Entry
+	for _, p := range plugins {
+		if !p.IsDir() {
+			continue
+		}
+		servers, err := os.ReadDir(filepath.Join(base, p.Name()))
+		if err != nil {
+			continue
+		}
+		for _, s := range servers {
+			if !s.IsDir() {
+				continue
+			}
+			dir := filepath.Join(base, p.Name(), s.Name())
+			key := p.Name() + "/" + s.Name()
+			for _, n := range numbers(dir) {
+				if n <= seen[key] {
+					continue
+				}
+				seen[key] = n
+				// Records are written whole (temp file and link), so one that
+				// does not read is damaged or already pruned: skip it, never
+				// let it hold the later ones back.
+				if e, ok := entryOf(dir, p.Name(), s.Name(), n); ok {
+					es = append(es, e)
+				}
+			}
+		}
+	}
+	sort.SliceStable(es, func(i, j int) bool {
+		if es[i].At != es[j].At {
+			return es[i].At < es[j].At
+		}
+		return es[i].N < es[j].N
+	})
+	return es
+}
+
 // Sweep removes every session directory whose newest record is older than
 // retention, and returns how many it removed. It is the launch-time floor of
 // "pruned with the session": spinclass's close may prune sooner.

@@ -29,7 +29,9 @@ import (
 //     resources, resources only, scope frontend so a confined unit reaches it
 //     over the same serve socket as ringmaster and troupe;
 //   - a wake (a ringmaster job on the session's own channel, as for a restart)
-//     naming the record, for a death with no call in flight;
+//     naming the record, for every new record: a call in flight also fails
+//     with an error that names it, and the wake is how a session that was
+//     waiting on nothing learns of the death;
 //   - `clown disconnects`, the operator's view of the same records.
 
 // disconnectsServerName is the diagnostics plugin's one server.
@@ -153,17 +155,23 @@ func disconnectWakeMessage(e disconnectlog.Entry) string {
 	return fmt.Sprintf("plugin %s/%s disconnected (%s) at %s; the record is readable as the MCP resource %s (server clown-builtin-diagnostics/disconnects). Calls to that plugin in flight failed with an error that names it.", e.Plugin, e.Server, e.Kind, e.At, e.URI)
 }
 
+// disconnectBaseline is the marks of the records a session already has, taken
+// at launch before the plugin servers start: those are history, and a record
+// written after it, even while the servers are still starting, is news.
+func disconnectBaseline(root, session string) map[string]int {
+	seen := map[string]int{}
+	disconnectlog.Unseen(root, session, seen)
+	return seen
+}
+
 // watchDisconnectWakes wakes the session once for each record that appears for
-// it after the watch starts (records from before are the session's history, not
-// news): it polls the session's records every period until ctx ends and calls
-// send for each new one, in the background so a slow wake never holds the poll.
-func watchDisconnectWakes(ctx context.Context, root, session string, every time.Duration, send wakeSender, logf func(format string, args ...any)) {
+// it after the baseline seen (records from before are the session's history,
+// not news): it polls the session's records every period until ctx ends and
+// calls send for each new one, in the background so a slow wake never holds the
+// poll. A poll opens only records it has not seen.
+func watchDisconnectWakes(ctx context.Context, root, session string, seen map[string]int, every time.Duration, send wakeSender, logf func(format string, args ...any)) {
 	if root == "" || session == "" || send == nil {
 		return
-	}
-	seen := map[string]bool{}
-	for _, e := range disconnectlog.ListAll(root, session) {
-		seen[e.URI] = true
 	}
 	go func() {
 		t := time.NewTicker(every)
@@ -174,13 +182,7 @@ func watchDisconnectWakes(ctx context.Context, root, session string, every time.
 				return
 			case <-t.C:
 			}
-			entries := disconnectlog.ListAll(root, session)
-			for i := len(entries) - 1; i >= 0; i-- { // oldest first
-				e := entries[i]
-				if seen[e.URI] {
-					continue
-				}
-				seen[e.URI] = true
+			for _, e := range disconnectlog.Unseen(root, session, seen) { // oldest first
 				msg := disconnectWakeMessage(e)
 				wakeWG.Add(1)
 				go func() {
@@ -198,7 +200,7 @@ func watchDisconnectWakes(ctx context.Context, root, session string, every time.
 // recording bridge that dies mid-session as a record (writeBridgeExit), and
 // wakes the session for every new record. Neither does anything for a launch
 // without a record root.
-func armDisconnectRecords(ctx context.Context, host *pluginhost.Host, session, recordRoot, hostLog string, logf func(format string, args ...any)) {
+func armDisconnectRecords(ctx context.Context, host *pluginhost.Host, session, recordRoot, hostLog string, seen map[string]int, logf func(format string, args ...any)) {
 	if recordRoot == "" || session == "" {
 		return
 	}
@@ -215,7 +217,7 @@ func armDisconnectRecords(ctx context.Context, host *pluginhost.Host, session, r
 	if buildcfg.RingmasterPath != "" && !jobWakeupDisabled() {
 		send = ringmasterWakeAs(buildcfg.RingmasterPath, "plugin-disconnect", "clown-disconnect")
 	}
-	watchDisconnectWakes(ctx, recordRoot, session, disconnectPollEvery, send, logf)
+	watchDisconnectWakes(ctx, recordRoot, session, seen, disconnectPollEvery, send, logf)
 }
 
 // sweepDisconnects removes the records of sessions untouched for the retention

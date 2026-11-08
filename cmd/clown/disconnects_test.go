@@ -180,7 +180,7 @@ func TestWatchDisconnectWakesWakesOnceForNewRecordsOnly(t *testing.T) {
 		got <- struct{}{}
 		return nil
 	}
-	watchDisconnectWakes(ctx, root, testSession, 10*time.Millisecond, send, t.Logf)
+	watchDisconnectWakes(ctx, root, testSession, disconnectBaseline(root, testSession), 10*time.Millisecond, send, t.Logf)
 	fresh := writeTestRecord(t, root, testSession, "cg", "s")
 
 	select {
@@ -197,6 +197,30 @@ func TestWatchDisconnectWakesWakesOnceForNewRecordsOnly(t *testing.T) {
 	defer mu.Unlock()
 	if len(msgs) != 1 || !strings.Contains(msgs[0], fresh.URI) || strings.Contains(msgs[0], old.URI+" ") {
 		t.Errorf("wakes = %v", msgs)
+	}
+}
+
+// A record written after the baseline but before the watcher's first poll (a
+// bridge that dies while the servers are still starting) is news, not history.
+func TestWatchDisconnectWakesWakesForARecordWrittenBeforeTheWatchStarted(t *testing.T) {
+	root := t.TempDir()
+	writeTestRecord(t, root, testSession, "cg", "s") // history
+	baseline := disconnectBaseline(root, testSession)
+	early := writeTestRecord(t, root, testSession, "cg", "s") // during StartAll
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	got := make(chan string, 4)
+	send := func(_, message string) error { got <- message; return nil }
+	watchDisconnectWakes(ctx, root, testSession, baseline, 10*time.Millisecond, send, t.Logf)
+
+	select {
+	case msg := <-got:
+		if !strings.Contains(msg, early.URI) {
+			t.Errorf("wake %q does not name the early record %s", msg, early.URI)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no wake for a record written between the baseline and the watch")
 	}
 }
 

@@ -2538,8 +2538,11 @@ func runManaged(
 	}
 	logger.Info("launching plugin servers", "count", len(discovered))
 
+	// The records already there are history; one written while the servers
+	// start is news, so the baseline is taken before StartAll.
+	disconnectSeen := disconnectBaseline(flags.disconnectRoot, flags.identity.Key)
 	report := host.StartAll(ctx, startableHere(host, discovered))
-	armDisconnectRecords(ctx, host, flags.identity.Key, flags.disconnectRoot, host.LogPath, func(format string, args ...any) {
+	armDisconnectRecords(ctx, host, flags.identity.Key, flags.disconnectRoot, host.LogPath, disconnectSeen, func(format string, args ...any) {
 		logger.Info(fmt.Sprintf(format, args...))
 	})
 	// F12: claude reaches a serve-socket server through the in-unit relay's
