@@ -315,16 +315,17 @@ func serveDisconnects(in io.Reader, out io.Writer, root, session string) error {
 				"protocolVersion": p.ProtocolVersion,
 				"capabilities":    map[string]any{"resources": map[string]any{}},
 				"serverInfo":      map[string]any{"name": "clown-disconnects", "version": buildcfg.Version},
-				"instructions":    "Resources only: this session's plugin disconnect records. Read clown://session/" + session + "/plugins/disconnects for the list.",
+				"instructions":    "Resources only: this session's plugin disconnect records. Read " + disconnectlog.AllURI(session) + " for the list.",
 			}, nil)
 		case "ping":
 			err = reply(req.ID, map[string]any{}, nil)
 		case "resources/list":
 			err = reply(req.ID, map[string]any{"resources": listResources(root, session)}, nil)
 		case "resources/templates/list":
+			pluginsBase := strings.TrimSuffix(disconnectlog.AllURI(session), "/disconnects")
 			err = reply(req.ID, map[string]any{"resourceTemplates": []map[string]any{
-				{"uriTemplate": disconnectlog.URIScheme + session + "/plugins/{plugin}/{server}/disconnects", "name": "a plugin server's disconnect records", "mimeType": disconnectsMIME},
-				{"uriTemplate": disconnectlog.URIScheme + session + "/plugins/{plugin}/{server}/disconnects/{n}", "name": "one disconnect record", "mimeType": disconnectsMIME},
+				{"uriTemplate": pluginsBase + "/{plugin}/{server}/disconnects", "name": "a plugin server's disconnect records", "mimeType": disconnectsMIME},
+				{"uriTemplate": pluginsBase + "/{plugin}/{server}/disconnects/{n}", "name": "one disconnect record", "mimeType": disconnectsMIME},
 			}}, nil)
 		case "resources/read":
 			var p struct {

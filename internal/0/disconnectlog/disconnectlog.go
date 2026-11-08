@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -164,17 +165,17 @@ func serverDir(root, principal, plugin, server string) string {
 
 // URI is the resource URI of record n of a server's disconnects.
 func URI(principal, plugin, server string, n int) string {
-	return fmt.Sprintf("%s%s/plugins/%s/%s/disconnects/%d", URIScheme, principal, Segment(plugin), Segment(server), n)
+	return fmt.Sprintf("%s%s/plugins/%s/%s/disconnects/%d", URIScheme, url.PathEscape(principal), Segment(plugin), Segment(server), n)
 }
 
 // ListURI is the resource URI of a server's list of records.
 func ListURI(principal, plugin, server string) string {
-	return fmt.Sprintf("%s%s/plugins/%s/%s/disconnects", URIScheme, principal, Segment(plugin), Segment(server))
+	return fmt.Sprintf("%s%s/plugins/%s/%s/disconnects", URIScheme, url.PathEscape(principal), Segment(plugin), Segment(server))
 }
 
 // AllURI is the resource URI of the list across every plugin of a session.
 func AllURI(principal string) string {
-	return URIScheme + principal + "/plugins/disconnects"
+	return URIScheme + url.PathEscape(principal) + "/plugins/disconnects"
 }
 
 // RefKind says what a parsed URI names.
@@ -210,7 +211,13 @@ func ParseURI(uri string) (Ref, error) {
 	if len(parts) < 3 || parts[1] != "plugins" {
 		return Ref{}, errors.New("URI is not clown://session/<id>/plugins/...")
 	}
-	ref := Ref{Principal: parts[0]}
+	// The principal rides percent-escaped (a "/" in an operator-provided
+	// session key must not split the path).
+	principal, err := url.PathUnescape(parts[0])
+	if err != nil || principal == "" {
+		return Ref{}, errors.New("session in URI is not a valid escaped name")
+	}
+	ref := Ref{Principal: principal}
 	switch {
 	case len(parts) == 3 && parts[2] == "disconnects":
 		ref.Kind = RefAll
@@ -484,11 +491,19 @@ func RemoveSession(root, principal string) error {
 }
 
 var (
-	secretKV = regexp.MustCompile(`(?i)([A-Za-z0-9_.-]*(?:token|key|secret|password)[A-Za-z0-9_.-]*)=(\S+)`)
-	bearerRe = regexp.MustCompile(`(?i)\bbearer\s+[^\s"']+`)
-	prefixRe = regexp.MustCompile(`\b(?:sk-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9]{8,}|xox[abprs]-[A-Za-z0-9-]{8,}|AKIA[0-9A-Z]{12,})`)
-	hexRe    = regexp.MustCompile(`\b[0-9a-fA-F]{32,}\b`)
-	b64Re    = regexp.MustCompile(`[A-Za-z0-9+/]{40,}={0,2}`)
+	// secretKV: a key naming a token, key, secret or password, then = or :,
+	// then the value (quoted, as in JSON, or a bare word).
+	secretKV = regexp.MustCompile(`(?i)([A-Za-z0-9_.-]*(?:token|key|secret|password)[A-Za-z0-9_.-]*"?)\s*[=:]\s*("[^"]*"|'[^']*'|\S+)`)
+	// secretFlag: a command-line flag naming a secret, then its value.
+	secretFlag = regexp.MustCompile(`(?i)(--?[A-Za-z0-9_-]*(?:token|key|secret|password)[A-Za-z0-9_-]*)\s+(\S+)`)
+	// authHeader: Authorization: token x / Basic x (Bearer has its own rule).
+	authHeader = regexp.MustCompile(`(?i)\b((?:proxy-)?authorization\s*[=:]\s*)(?:token|basic)\s+\S+`)
+	// urlUserinfo: user:password@ (or a bare token@) in a URL.
+	urlUserinfo = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.-]*://)[^\s/@]+@`)
+	bearerRe    = regexp.MustCompile(`(?i)\bbearer\s+[^\s"']+`)
+	prefixRe    = regexp.MustCompile(`\b(?:sk-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9]{8,}|xox[abprs]-[A-Za-z0-9-]{8,}|AKIA[0-9A-Z]{12,})`)
+	hexRe       = regexp.MustCompile(`\b[0-9a-fA-F]{32,}\b`)
+	b64Re       = regexp.MustCompile(`[A-Za-z0-9+/]{40,}={0,2}`)
 )
 
 const redacted = "<redacted>"
@@ -511,8 +526,11 @@ func Scrub(s string) string {
 		}
 		return r
 	}, s)
-	s = secretKV.ReplaceAllString(s, "${1}="+redacted)
+	s = urlUserinfo.ReplaceAllString(s, "${1}"+redacted+"@")
 	s = bearerRe.ReplaceAllString(s, "Bearer "+redacted)
+	s = authHeader.ReplaceAllString(s, "${1}"+redacted)
+	s = secretFlag.ReplaceAllString(s, "${1} "+redacted)
+	s = secretKV.ReplaceAllString(s, "${1}="+redacted)
 	s = prefixRe.ReplaceAllString(s, redacted)
 	s = hexRe.ReplaceAllString(s, redacted)
 	s = b64Re.ReplaceAllStringFunc(s, func(m string) string {

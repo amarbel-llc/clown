@@ -175,6 +175,11 @@ func TestParseURI(t *testing.T) {
 		{uri: AllURI("p1"), want: Ref{Kind: RefAll, Principal: "p1"}},
 		{uri: ListURI("p1", "cg", "srv"), want: Ref{Kind: RefList, Principal: "p1", Plugin: "cg", Server: "srv"}},
 		{uri: URI("p1", "cg", "srv", 12), want: Ref{Kind: RefOne, Principal: "p1", Plugin: "cg", Server: "srv", N: 12}},
+		// A "/" in an operator-provided session key rides percent-escaped and
+		// comes back whole.
+		{uri: URI("repo/branch", "cg", "srv", 3), want: Ref{Kind: RefOne, Principal: "repo/branch", Plugin: "cg", Server: "srv", N: 3}},
+		{uri: AllURI("repo/branch"), want: Ref{Kind: RefAll, Principal: "repo/branch"}},
+		{uri: "clown://session/%zz/plugins/disconnects", bad: true},
 		{uri: "clown://claude/p1", bad: true},
 		{uri: "file:///etc/passwd", bad: true},
 		{uri: "clown://session/p1/plugins/cg/srv/disconnects/0", bad: true},
@@ -228,17 +233,25 @@ func TestSweepRemovesOnlySessionsOlderThanRetention(t *testing.T) {
 
 func TestScrub(t *testing.T) {
 	cases := map[string]struct{ in, mustNot, must string }{
-		"key value":   {"starting with TOKEN=abc123def and more", "abc123def", "TOKEN=<redacted> and more"},
-		"lower key":   {"api_key=sk_live_notreal password=hunter2", "hunter2", "password=<redacted>"},
-		"bearer":      {"Authorization: Bearer eyJhbGciOi.payload.sig trailing", "eyJhbGciOi", "Bearer <redacted> trailing"},
-		"prefixed":    {"saw ghp_abcdefghij1234567890 in the env", "ghp_abcdefghij", "saw <redacted> in the env"},
-		"aws":         {"id AKIAABCDEFGHIJKLMNOP", "AKIAABCDEFGH", "id <redacted>"},
-		"hex":         {"digest 0123456789abcdef0123456789abcdef0123 end", "0123456789abcdef0123456789abcdef", "digest <redacted> end"},
-		"base64":      {"blob aGVsbG8gd29ybGQgdGhpcyBpcyBhIGxvbmcgYmFzZTY0IHN0cmluZw== end", "aGVsbG8gd29ybGQ", "blob <redacted> end"},
-		"escape":      {"red \x1b[31mtext\x1b[0m", "\x1b", "red"},
-		"zero width":  {"a​b", "​", "ab"},
-		"plain words": {"the server started on port 8080 and read 12 files", "<redacted>", "the server started on port 8080 and read 12 files"},
-		"long path":   {"/nix/store/aaaaaaaa-some-package-1.2.3/bin/tool failed", "<redacted>", "/nix/store/aaaaaaaa-some-package-1.2.3/bin/tool failed"},
+		"key value":       {"starting with TOKEN=abc123def and more", "abc123def", "TOKEN=<redacted> and more"},
+		"lower key":       {"api_key=sk_live_notreal password=hunter2", "hunter2", "password=<redacted>"},
+		"bearer":          {"Authorization: Bearer eyJhbGciOi.payload.sig trailing", "eyJhbGciOi", "Bearer <redacted> trailing"},
+		"prefixed":        {"saw ghp_abcdefghij1234567890 in the env", "ghp_abcdefghij", "saw <redacted> in the env"},
+		"aws":             {"id AKIAABCDEFGHIJKLMNOP", "AKIAABCDEFGH", "id <redacted>"},
+		"hex":             {"digest 0123456789abcdef0123456789abcdef0123 end", "0123456789abcdef0123456789abcdef", "digest <redacted> end"},
+		"base64":          {"blob aGVsbG8gd29ybGQgdGhpcyBpcyBhIGxvbmcgYmFzZTY0IHN0cmluZw== end", "aGVsbG8gd29ybGQ", "blob <redacted> end"},
+		"escape":          {"red \x1b[31mtext\x1b[0m", "\x1b", "red"},
+		"zero width":      {"a​b", "​", "ab"},
+		"json quoted":     {`{"api_key":"abc-not-real","n":1}`, "abc-not-real", "<redacted>"},
+		"colon form":      {"config token: s3cr3tvalue loaded", "s3cr3tvalue", "<redacted>"},
+		"flag":            {"exec foo --password hunter2 --verbose", "hunter2", "--password <redacted> --verbose"},
+		"short flag":      {"exec foo -secret hunter2", "hunter2", "-secret <redacted>"},
+		"auth token":      {"Authorization: token ghpnotreal123", "ghpnotreal123", "Authorization: <redacted>"},
+		"auth basic":      {"authorization: Basic dXNlcjpwYXNz", "dXNlcjpwYXNz", "authorization: <redacted>"},
+		"url userinfo":    {"fetching https://user:pa55w0rd@example.com/x.git", "pa55w0rd", "https://<redacted>@example.com/x.git"},
+		"url no userinfo": {"fetching https://example.com/a@b", "<redacted>", "https://example.com/a@b"},
+		"plain words":     {"the server started on port 8080 and read 12 files", "<redacted>", "the server started on port 8080 and read 12 files"},
+		"long path":       {"/nix/store/aaaaaaaa-some-package-1.2.3/bin/tool failed", "<redacted>", "/nix/store/aaaaaaaa-some-package-1.2.3/bin/tool failed"},
 	}
 	for name, c := range cases {
 		got := Scrub(c.in)
