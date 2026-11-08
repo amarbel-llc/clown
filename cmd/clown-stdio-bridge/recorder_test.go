@@ -126,6 +126,57 @@ func TestRecorderWritesTheRecordAndFailsWhatIsInFlight(t *testing.T) {
 	}
 }
 
+// A child's last stderr lines are still in the pipe when its exit is seen; the
+// record waits for the tee to reach EOF, so they land in stderr_tail.
+func TestRecorderWaitsForTheStderrTeeBeforeSnapshotting(t *testing.T) {
+	root := t.TempDir()
+	tail := disconnectlog.NewRing()
+	tr := newTranslator(io.Discard, strings.NewReader(""), nullLogger{})
+	rec := newRecorder(recorderEnv(root), 4242, tr, tail, nullLogger{})
+
+	pr, pw := io.Pipe()
+	done := make(chan struct{})
+	go func() {
+		teeStderr(pr, io.Discard, tail)
+		close(done)
+	}()
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		_, _ = pw.Write([]byte("fatal: the last words\n"))
+		_ = pw.Close()
+	}()
+	rec.awaitStderr(done, 10*time.Second)
+
+	rec.record(disconnectlog.KindChildExit, disconnectlog.ClosedByChild, &disconnectlog.Exit{Code: 1})
+	raw, err := disconnectlog.Read(root, recorderTestSession, "cutting-garden", "cg", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back disconnectlog.Record
+	if err := json.Unmarshal(raw, &back); err != nil {
+		t.Fatal(err)
+	}
+	if len(back.StderrTail) != 1 || !strings.Contains(back.StderrTail[0].Line, "the last words") {
+		t.Errorf("stderr_tail = %+v; want the child's last line", back.StderrTail)
+	}
+}
+
+// A stderr pipe that never reaches EOF (a grandchild kept the write end) holds
+// the record up for the bound and no longer.
+func TestRecorderStopsWaitingForStderrAtTheBound(t *testing.T) {
+	tr := newTranslator(io.Discard, strings.NewReader(""), nullLogger{})
+	rec := newRecorder(recorderEnv(t.TempDir()), 4242, tr, disconnectlog.NewRing(), nullLogger{})
+	rec.awaitStderr(make(chan struct{}), 30*time.Millisecond)
+
+	start := time.Now()
+	if rec.record(disconnectlog.KindSignal, disconnectlog.ClosedByExternal, nil) == "" {
+		t.Fatal("no record written")
+	}
+	if time.Since(start) > 5*time.Second {
+		t.Errorf("record waited %v for a stderr that never ends", time.Since(start))
+	}
+}
+
 func TestRecorderIsAbsentWithoutAFullIdentity(t *testing.T) {
 	root := t.TempDir()
 	tr := newTranslator(io.Discard, strings.NewReader(""), nullLogger{})

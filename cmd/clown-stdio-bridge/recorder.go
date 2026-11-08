@@ -41,8 +41,28 @@ type recorder struct {
 	tail                                   *disconnectlog.Ring
 	logger                                 logger
 
+	// stderrDone, when set, closes once the stderr tee has read to EOF; record
+	// waits for it, at most stderrBound, so the tail holds the child's last
+	// words and not just what the tee goroutine had reached.
+	stderrDone  <-chan struct{}
+	stderrBound time.Duration
+
 	once sync.Once
 	rec  disconnectlog.Record
+}
+
+// stderrDrainBound is how long a record waits for the stderr tee to finish: a
+// dead child's pipe reaches EOF at once, but a grandchild that kept the write
+// end open must not hold the record up.
+const stderrDrainBound = 500 * time.Millisecond
+
+// awaitStderr makes record wait up to bound for done before it snapshots the
+// stderr tail. A nil recorder ignores it.
+func (r *recorder) awaitStderr(done <-chan struct{}, bound time.Duration) {
+	if r == nil {
+		return
+	}
+	r.stderrDone, r.stderrBound = done, bound
 }
 
 // newRecorder reads the identity from getenv and returns nil (a no-op
@@ -79,6 +99,12 @@ func (r *recorder) record(kind, closedBy string, childExit *disconnectlog.Exit) 
 	}
 	var summary string
 	r.once.Do(func() {
+		if r.stderrDone != nil {
+			select {
+			case <-r.stderrDone:
+			case <-time.After(r.stderrBound):
+			}
+		}
 		live, abandoned := r.tr.inFlight()
 		depth, dropped := r.tr.queueStats()
 		rec := disconnectlog.Record{

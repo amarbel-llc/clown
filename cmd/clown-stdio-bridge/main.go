@@ -171,14 +171,20 @@ func run(p parsedArgs) int {
 		closeStderrPipe()
 		return 1
 	}
+	// stderrDone closes when the tee has read the child's stderr to EOF, so the
+	// disconnect record can wait for the child's last lines.
+	stderrDone := make(chan struct{})
 	if pipeErr == nil {
 		// The child holds the write end now; ours must close for EOF to arrive
 		// when the child (and anything it started) is gone.
 		_ = stderrW.Close()
 		go func() {
+			defer close(stderrDone)
 			defer stderrR.Close()
 			teeStderr(stderrR, os.Stderr, tail)
 		}()
+	} else {
+		close(stderrDone)
 	}
 
 	childDone := make(chan error, 1)
@@ -199,6 +205,7 @@ func run(p parsedArgs) int {
 	// The disconnect record (clown#344); nil, and so a no-op, unless the host
 	// gave this bridge a session, a plugin and a record directory.
 	rec := newRecorder(os.Getenv, cmd.Process.Pid, tr, tail, stdLogger)
+	rec.awaitStderr(stderrDone, stderrDrainBound)
 	stdinFail := make(chan struct{}, 1)
 	tr.onStdinFail = func() {
 		select {
