@@ -46,7 +46,8 @@ model = "qwen3-coder"
 # tools no worker uses; the global --disallowed-tools set still applies. The
 # knobs ride the env table (CLOWN_DISABLE_CLAUDEAI_CONNECTORS,
 # CLOWN_DISALLOWED_TOOLS), so no profile-protocol bump is needed. Lists derived
-# from real worker transcripts against moxy's 157-tool catalog: every template's
+# from real worker transcripts against moxy's catalog (157 tools then; the
+# nebulous tools and issue-filer_file were added to every list later, 167): every template's
 # keep set plus its context_excluded."moxy/moxy" partitions that catalog. The
 # keep sets include toolbox_run (moxy#500): the exclusion lists are deny-lists,
 # so the toolbox moxin is on in each template that keeps moxy by not being
@@ -96,6 +97,8 @@ CLOWN_DISALLOWED_TOOLS = "Artifact,ArtifactData,ArtifactComments,DesignSync,Work
   "smith_repo-label-create", "smith_repo-label-delete", "smith_repo-label-list", "smith_tag-create",
   "smith_tag-delete", "smith_tag-list", "smith_tag-view", "smith_whoami",
   "stats-me_export", "stats-me_labels", "stats-me_query", "stats-me_range", "stats-me_series",
+  "nebulous_feed_query", "nebulous_mark_all_read", "nebulous_mark_feed_read", "nebulous_mark_read", "nebulous_opml_export",
+  "nebulous_opml_import", "nebulous_resource-read", "nebulous_resource-templates", "nebulous_story_query", "issue-filer_file",
   "status",
 ]
 
@@ -149,6 +152,8 @@ CLOWN_DISALLOWED_TOOLS = "Artifact,ArtifactData,ArtifactComments,DesignSync,Work
   "smith_repo-label-create", "smith_repo-label-delete", "smith_repo-label-list", "smith_tag-create",
   "smith_tag-delete", "smith_tag-list", "smith_tag-view", "smith_whoami",
   "stats-me_export", "stats-me_labels", "stats-me_query", "stats-me_range", "stats-me_series",
+  "nebulous_feed_query", "nebulous_mark_all_read", "nebulous_mark_feed_read", "nebulous_mark_read", "nebulous_opml_export",
+  "nebulous_opml_import", "nebulous_resource-read", "nebulous_resource-templates", "nebulous_story_query", "issue-filer_file",
   "status",
 ]
 
@@ -187,6 +192,8 @@ CLOWN_DISALLOWED_TOOLS = "Artifact,ArtifactData,ArtifactComments,DesignSync,Work
   "gmail_read", "gmail_triage",
   "grit_branch", "grit_clone", "grit_commit", "grit_merge", "grit_remote", "grit_stash", "grit_tag", "grit_worktree",
   "gws_api", "jq_jq", "man_list", "man_section", "man_toc",
+  "nebulous_feed_query", "nebulous_mark_all_read", "nebulous_mark_feed_read", "nebulous_mark_read", "nebulous_opml_export",
+  "nebulous_opml_import", "nebulous_resource-read", "nebulous_resource-templates", "nebulous_story_query", "issue-filer_file",
   "piers_batch-update", "piers_comment", "piers_create", "piers_get", "piers_outline", "piers_tab", "piers_update",
   "prison_get", "restart",
   "smith_content-get", "smith_issue-close", "smith_issue-comment", "smith_issue-create", "smith_issue-edit", "smith_issue-edit-labels",
@@ -272,7 +279,8 @@ CLOWN_DISALLOWED_TOOLS = "Artifact,ArtifactData,ArtifactComments,DesignSync,Work
 # whole. Excluded: folio write/rm/mv/cp/chmod/link/mkdir; all of grit (moxy's
 # grit tools each mix read and write verbs, and a profile excludes whole tools,
 # not verbs); smith's write verbs; chrest; the Google tools; moxy's
-# async/batch/restart; and the chix tools that build, run, lock or change the
+# async/batch/restart; the nebulous tools (several write to NewsBlur);
+# issue-filer_file (files a forge issue); and the chix tools that build, run, lock or change the
 # store or flake (build, run, develop-run, flake-check, flake-lock, flake-init,
 # flake-update, store-gc, store-realize, nix-hash).
 # Like worker it allows ReadMcpResourceTool (ringmaster serves job output and
@@ -315,6 +323,8 @@ CLOWN_DISALLOWED_TOOLS = "Artifact,ArtifactData,ArtifactComments,DesignSync,Work
   "smith_milestone-edit", "smith_pr-comment", "smith_pr-create", "smith_pr-merge",
   "smith_pr-watch", "smith_release-create", "smith_release-delete", "smith_repo-label-create", "smith_repo-label-delete",
   "smith_tag-create", "smith_tag-delete",
+  "nebulous_feed_query", "nebulous_mark_all_read", "nebulous_mark_feed_read", "nebulous_mark_read", "nebulous_opml_export",
+  "nebulous_opml_import", "nebulous_resource-read", "nebulous_resource-templates", "nebulous_story_query", "issue-filer_file",
 ]
 
 # canary-grit is canary for runs that test spinclass's own grit tools under
@@ -363,6 +373,8 @@ CLOWN_DISALLOWED_TOOLS = "Artifact,ArtifactData,ArtifactComments,DesignSync,Work
   "gmail_read", "gmail_triage",
   "grit_branch", "grit_clone", "grit_commit", "grit_merge", "grit_remote", "grit_stage", "grit_stash", "grit_tag", "grit_worktree",
   "gws_api", "man_list", "man_section", "man_toc",
+  "nebulous_feed_query", "nebulous_mark_all_read", "nebulous_mark_feed_read", "nebulous_mark_read", "nebulous_opml_export",
+  "nebulous_opml_import", "nebulous_resource-read", "nebulous_resource-templates", "nebulous_story_query", "issue-filer_file",
   "piers_batch-update", "piers_comment", "piers_create", "piers_get", "piers_outline", "piers_tab", "piers_update",
   "prison_get", "restart",
   "smith_content-get", "smith_issue-close", "smith_issue-comment", "smith_issue-create", "smith_issue-edit", "smith_issue-edit-labels",

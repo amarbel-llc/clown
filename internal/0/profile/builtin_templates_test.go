@@ -10,11 +10,23 @@ import (
 // keeps only the servers and moxy tools its task calls, drops the claude.ai
 // connectors, and disallows the builtins no worker uses. The lists come from
 // transcripts of real spawned workers (circus/neat-sycamore's measurement);
-// moxy's catalog is 157 tools (156 plus toolbox_run, moxy#500), so every
-// template's keep set and exclude set must partition it. toolbox_run is in
-// every keep set: the operator enabled the toolbox moxin for all profiles.
+// moxy's catalog is 167 tools (the 156 of the original measurement, plus
+// toolbox_run (moxy#500), the nine nebulous tools and issue-filer_file), so
+// every template's keep set and exclude set must partition it. The partition
+// is checked by name against the reviewer template's, not only by count: a
+// tool added to one template's list and not another's shows up as a named
+// difference. toolbox_run is in every keep set: the operator enabled the
+// toolbox moxin for all profiles.
 
-const moxyCatalogSize = 157
+const moxyCatalogSize = 167
+
+// moxyWritersNotInTheOriginalMeasurement are the tools added to moxy after the
+// templates' lists were measured: nebulous marks stories read and imports
+// OPML (writes to NewsBlur), issue-filer_file files a forge issue. No
+// template that keeps moxy wants any of them.
+var moxyWritersNotInTheOriginalMeasurement = strings.Fields(`nebulous_feed_query nebulous_mark_all_read
+	nebulous_mark_feed_read nebulous_mark_read nebulous_opml_export nebulous_opml_import
+	nebulous_resource-read nebulous_resource-templates nebulous_story_query issue-filer_file`)
 
 var reviewerMoxyKeep = strings.Fields(`folio_read folio_ls folio_glob folio_tree rg_search jq_jq toolbox_run
 	man_list man_toc man_section grit_branch grit_stage smith_content-get smith_issue-get
@@ -59,6 +71,17 @@ func builtinByName(t *testing.T, name string) Profile {
 	return Profile{}
 }
 
+// moxyCatalogNames is moxy's catalog as the reviewer template partitions it:
+// its keep set plus its exclusions. Every other template must partition the
+// same names.
+func moxyCatalogNames(t *testing.T) []string {
+	t.Helper()
+	names := slices.Clone(reviewerMoxyKeep)
+	names = append(names, builtinByName(t, "reviewer").ContextExcluded["moxy/moxy"]...)
+	slices.Sort(names)
+	return slices.Compact(names)
+}
+
 func TestBuiltinTaskTemplates(t *testing.T) {
 	cases := []struct {
 		name        string
@@ -66,22 +89,22 @@ func TestBuiltinTaskTemplates(t *testing.T) {
 		moxyKeep    []string
 		wantExclude int
 	}{
-		{"reviewer", []string{"clown-builtin-jobs/ringmaster", "clown-builtin-jobs/troupe", "moxy/moxy"}, reviewerMoxyKeep, 138},
+		{"reviewer", []string{"clown-builtin-jobs/ringmaster", "clown-builtin-jobs/troupe", "moxy/moxy"}, reviewerMoxyKeep, 148},
 		{
 			"porter",
 			[]string{"clown-builtin-jobs/ringmaster", "clown-builtin-jobs/troupe", "just-us/just-us", "moxy/moxy", "spinclass/spinclass"},
-			append(slices.Clone(reviewerMoxyKeep), porterMoxyExtra...), 124,
+			append(slices.Clone(reviewerMoxyKeep), porterMoxyExtra...), 134,
 		},
-		{"canary", []string{"clown-builtin-jobs/ringmaster", "clown-builtin-jobs/troupe", "moxy/moxy"}, canaryMoxyKeep, 152},
+		{"canary", []string{"clown-builtin-jobs/ringmaster", "clown-builtin-jobs/troupe", "moxy/moxy"}, canaryMoxyKeep, 162},
 		{
 			"canary-grit",
 			[]string{"clown-builtin-jobs/ringmaster", "clown-builtin-jobs/troupe", "just-us/just-us", "moxy/moxy", "spinclass/spinclass"},
-			canaryGritMoxyKeep, 152,
+			canaryGritMoxyKeep, 162,
 		},
 		{
 			"engineer-debug",
 			[]string{"clown-builtin-jobs/ringmaster", "clown-builtin-jobs/troupe", "just-us/just-us", "moxy/moxy"},
-			engineerDebugMoxyKeep, 95,
+			engineerDebugMoxyKeep, 105,
 		},
 	}
 	for _, c := range cases {
@@ -117,6 +140,29 @@ func TestBuiltinTaskTemplates(t *testing.T) {
 			}
 			if len(c.moxyKeep)+len(excluded) != moxyCatalogSize {
 				t.Errorf("keep %d + exclude %d = %d, want the %d-tool catalog", len(c.moxyKeep), len(excluded), len(c.moxyKeep)+len(excluded), moxyCatalogSize)
+			}
+			// By name: this template's keep + exclude is the reviewer's, tool
+			// for tool.
+			catalog := moxyCatalogNames(t)
+			for _, tool := range catalog {
+				if !seen[tool] && !slices.Contains(c.moxyKeep, tool) {
+					t.Errorf("moxy tool %q is neither kept nor excluded", tool)
+				}
+			}
+			for tool := range seen {
+				if !slices.Contains(catalog, tool) {
+					t.Errorf("moxy tool %q is excluded but not in the catalog", tool)
+				}
+			}
+			for _, tool := range c.moxyKeep {
+				if !slices.Contains(catalog, tool) {
+					t.Errorf("moxy tool %q is kept but not in the catalog", tool)
+				}
+			}
+			for _, tool := range moxyWritersNotInTheOriginalMeasurement {
+				if !seen[tool] {
+					t.Errorf("moxy tool %q must be excluded", tool)
+				}
 			}
 
 			if p.Env["CLOWN_DISABLE_CLAUDEAI_CONNECTORS"] != "1" {
