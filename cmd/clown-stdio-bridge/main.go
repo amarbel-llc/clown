@@ -241,74 +241,27 @@ func run(p parsedArgs) int {
 		go watchParent(ctx, os.Getppid(), os.Getppid, parentPollInterval, func() { close(parentGone) })
 	}
 
-	exit := 0
-	terminateChild := false
-	// reportChildExit is the child-exit path, shared by the exit itself and by
-	// the pipe events that arrive just ahead of it.
-	reportChildExit := func(err error) {
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "clown-stdio-bridge: wrapped child exited unexpectedly: %v\n", err)
-		} else {
-			fmt.Fprintln(os.Stderr, "clown-stdio-bridge: wrapped child exited cleanly")
-		}
-		rec.record(disconnectlog.KindChildExit, disconnectlog.ClosedByChild, exitOf(err))
-		exit = 1
-	}
-	// pipeEvent handles the child's stdout or stdin ending: a child that is
-	// dying shows these within milliseconds of its exit, so the exit gets a
-	// moment to arrive and is what the record then says; a child that is still
-	// alive with a dead pipe is unusable, so the bridge records that and stops
-	// it, as for an exit.
-	pipeEvent := func(kind string) {
-		if exited, err := awaitChild(childDone, childSettle); exited {
-			reportChildExit(err)
-			return
-		}
-		fmt.Fprintf(os.Stderr, "clown-stdio-bridge: wrapped child is alive but its pipe ended (%s); stopping it\n", kind)
-		rec.record(kind, disconnectlog.ClosedByChild, nil)
-		terminateChild = true
-		exit = 1
-	}
-	select {
-	case sig := <-sigCh:
-		fmt.Fprintf(os.Stderr, "clown-stdio-bridge: received %s; shutting down\n", sig)
-		// The host says so before the SIGTERM that ends a session; any other
-		// signal is a disconnect worth a record.
-		if !handler.shutdownNoticed.Load() {
-			rec.record(disconnectlog.KindSignal, disconnectlog.ClosedByExternal, nil)
-		}
-		terminateChild = true
-	case <-parentGone:
-		fmt.Fprintln(os.Stderr, "clown-stdio-bridge: parent clown is gone; shutting down the serve socket")
-		rec.record(disconnectlog.KindParentGone, disconnectlog.ClosedByHost, nil)
-		terminateChild = true
-		exit = 1
-	case err := <-childDone:
-		// Re-fill the channel so terminate() doesn't block if it's
-		// invoked elsewhere (defensive — it's not, in this path).
-		childDone <- err
-		reportChildExit(err)
-	case <-tr.readerDone:
-		pipeEvent(disconnectlog.KindChildStdoutEOF)
-	case <-stdinFail:
-		pipeEvent(disconnectlog.KindChildStdinClosed)
-	case err := <-serveErr:
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "clown-stdio-bridge: HTTP serve error: %v\n", err)
-			rec.record(disconnectlog.KindHTTPServeError, disconnectlog.ClosedByBridge, nil)
-			exit = 1
-		}
-		terminateChild = true
-	}
+	end := awaitEnd(endInputs{
+		sig:             sigCh,
+		parentGone:      parentGone,
+		childDone:       childDone,
+		readerDone:      tr.readerDone,
+		stdinFail:       stdinFail,
+		serveErr:        serveErr,
+		shutdownNoticed: handler.shutdownNoticed.Load,
+		rec:             rec,
+		settle:          childSettle,
+		stderr:          os.Stderr,
+	})
 
-	if terminateChild {
+	if end.terminateChild {
 		terminate(cmd, childDone)
 	}
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer shutdownCancel()
 	_ = srv.Shutdown(shutdownCtx)
-	return exit
+	return end.exit
 }
 
 // childSettle is how long a pipe event waits for the child's exit to arrive
