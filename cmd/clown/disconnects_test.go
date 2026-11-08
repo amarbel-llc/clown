@@ -95,7 +95,7 @@ func TestDisconnectsServerServesOnlyItsOwnSessionsRecords(t *testing.T) {
 		t.Errorf("templates = %v", replies[2])
 	}
 	contents := replies[3]["result"].(map[string]any)["contents"].([]any)[0].(map[string]any)
-	if !strings.Contains(contents["text"].(string), `"kind": "child_exit"`) {
+	if !strings.Contains(contents["text"].(string), `"kind":"child_exit"`) {
 		t.Errorf("record text = %v", contents["text"])
 	}
 	for _, i := range []int{4, 6} { // another principal's record, and a traversal URI
