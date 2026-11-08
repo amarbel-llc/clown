@@ -96,8 +96,9 @@ Three roles, placed where the facts are:
    and ends with the resource URI, delivered before the bridge shuts its
    HTTP server. (b) The frontend sends the session one job-wake message
    (`restartwake.go` already sends wakes to the principal) with the same
-   summary and URI; this covers a bridge death with no call in flight and
-   the case where the agent never saw the error. The next tool result after
+   summary and URI, for every new record whether or not a call was in
+   flight (built that way, not gated); this covers a bridge death with no
+   call in flight and the case where the agent never saw the error. The next tool result after
    a reconnect is **not** rewritten: the bridge exits after a child death
    (FDR 0002 "Crash behavior") and claude's reconnect lands on a refused
    port, so there is no later result to annotate; a wake is the honest
