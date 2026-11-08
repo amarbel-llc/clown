@@ -356,7 +356,19 @@ func approveCommandLine(id, name, digest string) string {
 	if digest == "" {
 		return ""
 	}
-	return fmt.Sprintf("\nto approve this digest: CLOWN_PROFILE_DIGEST=%s CLOWN_PROFILE_SESSION=%s clown resume %s --profile %s", digest, id, id, name)
+	return fmt.Sprintf("\nto approve this digest: CLOWN_PROFILE_DIGEST=%s CLOWN_PROFILE_SESSION=%s clown resume %s --profile %s",
+		shellWord(digest), shellWord(id), shellWord("clown://claude/"+id), shellWord(name))
+}
+
+var plainShellWord = regexp.MustCompile(`^[A-Za-z0-9._/:@%+=,-]+$`)
+
+// shellWord quotes s for a POSIX shell unless it is plain enough to paste
+// as is.
+func shellWord(s string) string {
+	if plainShellWord.MatchString(s) {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // profileRefusal is resumeProfile's refusal of a session whose pin no longer
