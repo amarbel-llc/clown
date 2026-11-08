@@ -329,7 +329,7 @@ func resumeProfile(sessionID string, approved bool, opts profilelookup.Options) 
 		if r, err := resolve(pin.Name); err == nil {
 			current = r.DigestSHA256
 		}
-		return "", &profileRefusal{pin: pin, current: current, text: fmt.Sprintf("session %s was launched with profile %q, which could not be pinned at launch (pkg/profilelookup could not vouch for it, e.g. an unstamped profiles.toml), so resume cannot verify the profile is unchanged; refusing to resume. This session resumes only when its launcher approves a digest for it (CLOWN_PROFILE_DIGEST=<digest> CLOWN_PROFILE_SESSION=%s, with --profile %s)\n%s", sessionID, pin.Name, sessionID, pin.Name, unpinnableReason(pin.Name, resolve))}
+		return "", &profileRefusal{pin: pin, current: current, text: fmt.Sprintf("session %s was launched with profile %q, which could not be pinned at launch (pkg/profilelookup could not vouch for it, e.g. an unstamped profiles.toml), so resume cannot verify the profile is unchanged; refusing to resume. This session resumes only when its launcher approves a digest for it (CLOWN_PROFILE_DIGEST=<digest> CLOWN_PROFILE_SESSION=%s, with --profile %s)\n%s%s", sessionID, pin.Name, sessionID, pin.Name, unpinnableReason(pin.Name, resolve), approveCommandLine(sessionID, pin.Name, current))}
 	}
 	recorded := pin.Digest
 	if recorded == "" {
@@ -344,9 +344,19 @@ func resumeProfile(sessionID string, approved bool, opts profilelookup.Options) 
 		if p := pinProvenanceLine(sessionID); p != "" {
 			detail += "\n" + p
 		}
-		return "", &profileRefusal{pin: pin, current: current.DigestSHA256, text: fmt.Sprintf("session %s was launched with profile %q (digest %s), which now resolves to digest %s; refusing to resume under a changed profile (restore the profile's previous definition, have the launcher approve the new digest with CLOWN_PROFILE_DIGEST, or start a new session)\n%s", sessionID, pin.Name, recorded, current.DigestSHA256, detail)}
+		return "", &profileRefusal{pin: pin, current: current.DigestSHA256, text: fmt.Sprintf("session %s was launched with profile %q (digest %s), which now resolves to digest %s; refusing to resume under a changed profile (restore the profile's previous definition, have the launcher approve the new digest with CLOWN_PROFILE_DIGEST, or start a new session)\n%s%s", sessionID, pin.Name, recorded, current.DigestSHA256, detail, approveCommandLine(sessionID, pin.Name, current.DigestSHA256))}
 	}
 	return pin.Name, nil
+}
+
+// approveCommandLine is the line a profile refusal ends with: the command a
+// launcher runs to approve digest for session id under profile name. "" when
+// there is no digest to approve (the profile still cannot be pinned).
+func approveCommandLine(id, name, digest string) string {
+	if digest == "" {
+		return ""
+	}
+	return fmt.Sprintf("\nto approve this digest: CLOWN_PROFILE_DIGEST=%s CLOWN_PROFILE_SESSION=%s clown resume %s --profile %s", digest, id, id, name)
 }
 
 // profileRefusal is resumeProfile's refusal of a session whose pin no longer
