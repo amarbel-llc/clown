@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"code.linenisgreat.com/clown/internal/0/mcphttp"
@@ -57,6 +58,28 @@ type httpHandler struct {
 	// httpServers plugin like moxy that implements the route itself.
 	excludeMu    sync.RWMutex
 	excludeTools map[string]bool
+
+	// shutdownNoticed is set by POST /clown/shutdown, which the plugin host
+	// sends before the end-of-session SIGTERM: a bridge that has been told is
+	// stopping on purpose and writes no disconnect record for the signal
+	// (clown#344).
+	shutdownNoticed atomic.Bool
+}
+
+// handleShutdownNotice implements POST /clown/shutdown: the host's note that
+// the SIGTERM that follows is the end of the session, not a disconnect.
+func (h *httpHandler) handleShutdownNotice(w http.ResponseWriter, r *http.Request) {
+	if !mcphttp.ValidateOrigin(r) {
+		http.Error(w, "origin not permitted", http.StatusForbidden)
+		return
+	}
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	h.shutdownNoticed.Store(true)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // excludeToolsBody is the JSON shape of both the POST request and the

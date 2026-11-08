@@ -168,6 +168,44 @@ existing failure path
 handles restart-or-abort.
 .Nm
 is a transport adapter, not a supervisor.
+.Pp
+The bridge also exits when it can no longer talk to a child that is still
+running: the child's stdout reaches end of file, or a write to its stdin
+fails.
+.Sh DISCONNECT RECORDS
+When the host gave the bridge a record identity
+.Pq see Ev CLOWN_BRIDGE_RECORD_DIR ,
+the bridge writes one JSON record for each way it sees its child's session
+end: the child exiting, its stdout reaching end of file, a failed write to its
+stdin, a signal, the host going away, or the HTTP server failing.
+The record holds the time, the kind, who closed it, the child's exit status,
+the requests in flight and abandoned, the queue depth, and the last 40 lines
+of the child's stderr, scrubbed of control characters and of values that look
+like credentials.
+It never holds request or response content.
+Records are files named
+.Pa <n>.json
+under
+.Pa <record dir>/<hex sha256 of the session key>/<plugin>/<server>/ ,
+written atomically; at most 20 are kept per server.
+.Pp
+Every request in flight when the child goes away fails with a JSON-RPC error
+(code
+.Li -32001 )
+whose message states the kind and exit status, and names the record's
+resource URI and the MCP server
+.Li clown-builtin-diagnostics/disconnects
+that serves it.
+The host's death of a bridge is recorded by the host as kind
+.Li bridge_exit .
+The records are read with
+.Xr clown 1
+.Cm disconnects .
+.Pp
+.Li POST /clown/shutdown
+(loopback, origin-checked, no body) tells the bridge that the SIGTERM about to
+follow is the host stopping it on purpose; the bridge then writes no record
+for that signal.
 .Sh SHUTDOWN
 On
 .Dv SIGTERM
@@ -182,6 +220,19 @@ exit, then escalates to
 The HTTP server is gracefully shut down on the same path.
 .Sh ENVIRONMENT
 .Bl -tag -width Ds
+.It Ev CLOWN_BRIDGE_RECORD_DIR
+The directory disconnect records are written under.
+Set by the plugin host together with
+.Ev CLOWN_SESSION_ID ,
+.Ev CLOWN_BRIDGE_PLUGIN_NAME
+and
+.Ev CLOWN_BRIDGE_SERVER_NAME ;
+without all four the bridge writes no records.
+.It Ev CLOWN_BRIDGE_PLUGIN_NAME
+The plugin's name, as the record's plugin.
+.It Ev CLOWN_BRIDGE_HOST_LOG
+Path of the host's log, copied into the record so a reader knows where the
+host's side is.
 .It Ev CLOWN_BRIDGE_HEARTBEAT_INTERVAL
 Cadence of the keep-alive heartbeats emitted on streaming
 .Li POST /mcp

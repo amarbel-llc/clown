@@ -61,6 +61,24 @@ for its next idle transition, or with
 ask spinclass at once: spinclass's restart hand-off.
 See
 .Xr clown-restart 1 .
+.It Cm disconnects Fl -session Ar key Oo Fl -plugin Ar plugin Fl -server Ar server Oo Ar n Oc Oc
+List the plugin disconnect records of session
+.Ar key ,
+newest first, or one server's, or print record
+.Ar n
+of one server as JSON.
+The records are written by the bridges that front stdio plugin servers and by
+the plugin host, under
+.Pa $XDG_STATE_HOME/clown/disconnects ,
+and are removed after 30 days.
+A session reads its own through the MCP server
+.Li clown-builtin-diagnostics/disconnects ,
+which serves them as resources and is told of a new one by a wake on the job
+channel.
+.It Cm disconnects-serve Fl -session Ar key Fl -root Ar dir
+The stdio MCP server behind
+.Li clown-builtin-diagnostics/disconnects ;
+not for manual use.
 .It Fl -provider Ar name
 Select the provider CLI.
 Valid values are
@@ -714,9 +732,17 @@ and
 .Pa version-info
 files.
 Set automatically by the Nix wrapper; not intended for manual use.
+.It Ev CLOWN_DISABLE_DISCONNECT_RECORDS
+Set to
+.Li 1
+to turn off plugin disconnect records, the diagnostics server and its wake.
 .El
 .Sh FILES
 .Bl -tag -width Ds
+.It Pa $XDG_STATE_HOME/clown/disconnects/
+Plugin disconnect records, one directory per session.
+See
+.Cm disconnects .
 .It Pa .clown/system-prompt
 Replace-mode system prompt file (deepest wins).
 .It Pa .clown/system-prompt.d/*.md

@@ -123,6 +123,12 @@ type wakeSender func(principal, message string) error
 // session's monitor reports as a notification line. It runs the burned-in
 // ringmaster binary with the principal as the session key.
 func ringmasterWake(bin string) wakeSender {
+	return ringmasterWakeAs(bin, "restarted", "clown-restart")
+}
+
+// ringmasterWakeAs is ringmasterWake with the job's label and source named, so
+// each kind of wake is told apart on the channel (restart, plugin disconnect).
+func ringmasterWakeAs(bin, label, source string) wakeSender {
 	return func(principal, message string) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
@@ -135,7 +141,7 @@ func ringmasterWake(bin string) wakeSender {
 			}
 			return strings.TrimSpace(string(out)), nil
 		}
-		id, err := run("start", "--label", "restarted", "--source", "clown-restart")
+		id, err := run("start", "--label", label, "--source", source)
 		if err != nil {
 			return err
 		}

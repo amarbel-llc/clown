@@ -228,6 +228,28 @@ deliberately generous v1 default that absorbs bursts without unbounded
 growth; it is a tuning parameter, not a wire-format commitment, and the
 implementing RFC may surface it as a flag if real load demands.
 
+### Disconnect records (clown#344)
+
+A bridge whose child goes away used to leave the caller an empty failure and
+the operator a log line. The bridge now writes one JSON record for each end it
+can see (`child_exit`, `child_stdout_eof`, `child_stdin_closed`, `signal`,
+`parent_gone`, `http_serve_error`), and fails every request in flight with a
+JSON-RPC error (code -32001) that names the record's resource URI. The plugin
+host writes `bridge_exit` when the bridge itself dies mid-session, unless the
+bridge recorded its own end in that life. Both sit under
+`$XDG_STATE_HOME/clown/disconnects/<hex sha256(session key)>/<plugin>/<server>/<n>.json`
+(20 per server, 30 days). The bridge learns its identity from
+`CLOWN_SESSION_ID`, `CLOWN_BRIDGE_PLUGIN_NAME`, `CLOWN_BRIDGE_SERVER_NAME` and
+`CLOWN_BRIDGE_RECORD_DIR`, and writes none without all four. A record holds no
+request or response content, and the child's last 40 stderr lines are scrubbed.
+
+A session reads its records as MCP resources from the built-in
+`clown-builtin-diagnostics/disconnects` server (resources only, frontend scope,
+its own principal's records only) and is woken by a job on its channel when a
+new one appears. The host posts `/clown/shutdown` to a bridge before it stops
+it, so a stop on purpose writes no record. The design note is
+`docs/plans/2026-11-06-clown-344-disconnect-record.md`.
+
 ## Trust Boundary
 
 The bridge runs in the same trust tier as any other

@@ -251,7 +251,7 @@ display = "Worker (confined unattended: edit, commit, run recipes, merge, file i
 provider = "claude"
 backend = "anthropic"
 model = "claude-sonnet-5-5"
-context_servers = ["clown-builtin-jobs/ringmaster", "clown-builtin-jobs/troupe", "spinclass/spinclass", "just-us/just-us", "clown-builtin-moxins/issue-filer"]
+context_servers = ["clown-builtin-jobs/ringmaster", "clown-builtin-jobs/troupe", "spinclass/spinclass", "just-us/just-us", "clown-builtin-moxins/issue-filer", "clown-builtin-diagnostics/disconnects"]
 
 [profile.env]
 CLOWN_DISABLE_CLAUDEAI_CONNECTORS = "1"

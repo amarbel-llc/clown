@@ -78,6 +78,15 @@ type Host struct {
 	// rewritten as httpServers entries pointing at the bridge.
 	BridgePath string
 
+	// RecordRoot, when set, is the directory the disconnect records live under
+	// (clown#344): Discover gives every bridge it desugars the plugin name and
+	// this root, so the bridge can write a record when its child goes away, and
+	// WatchExits can report the bridge itself dying. LogPath is the host's own
+	// log, named in the record so a reader can find it. Empty RecordRoot is the
+	// old behaviour: bridges record nothing.
+	RecordRoot string
+	LogPath    string
+
 	// BaseEnv is clown-injected identity (CLOWN_SESSION_ID, CLOWN_BIN) applied
 	// to every managed server clown spawns (clown#136). Threading it here is
 	// what lets clown stop stamping the per-instance key onto its own process
@@ -143,6 +152,12 @@ func (h *Host) Discover() ([]DiscoveredServer, error) {
 		}
 
 		for serverName, def := range cfg.HTTPServers {
+			// A bridge (the desugared stdioServers) gets the identity it needs
+			// to write a disconnect record. The diagnostics plugin that serves
+			// the records is excluded.
+			if h.RecordRoot != "" && h.BridgePath != "" && def.Command == h.BridgePath && pluginName != DiagnosticsPluginName {
+				def.Env = recordEnv(def.Env, pluginName, h.RecordRoot, h.LogPath)
+			}
 			found = append(found, DiscoveredServer{
 				PluginDir:  dir,
 				PluginName: pluginName,
@@ -175,11 +190,12 @@ func (h *Host) StartAll(ctx context.Context, discovered []DiscoveredServer) Star
 		go func(d DiscoveredServer) {
 			defer wg.Done()
 			srv := &ManagedServer{
-				Name:      d.Name(),
-				Def:       d.Def,
-				PluginDir: d.PluginDir,
-				Logger:    h.Logger,
-				BaseEnv:   h.BaseEnv,
+				Name:       d.Name(),
+				Def:        d.Def,
+				PluginDir:  d.PluginDir,
+				PluginName: d.PluginName,
+				Logger:     h.Logger,
+				BaseEnv:    h.BaseEnv,
 			}
 			err := srv.Start(ctx)
 			results <- startResult{server: srv, src: d, err: err}

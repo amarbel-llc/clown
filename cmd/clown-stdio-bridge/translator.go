@@ -8,10 +8,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"code.linenisgreat.com/clown/internal/0/disconnectlog"
 	"code.linenisgreat.com/clown/internal/0/mcphttp"
 )
 
@@ -103,13 +105,21 @@ type translator struct {
 	trace  bool
 
 	droppedOutbound atomic.Int64
+
+	// onStdinFail, when set before Run, is called once per failed write to the
+	// child's stdin (the disconnect record's child_stdin_closed, clown#344).
+	onStdinFail func()
+	// readerDone is closed when the child's stdout ends (EOF or a read error).
+	readerDone chan struct{}
 }
 
 // pendingEntry tracks one in-flight or abandoned request. respCh is nil
-// for abandoned entries.
+// for abandoned entries. method is the JSON-RPC method of the request, kept
+// for the disconnect record (never its arguments).
 type pendingEntry struct {
 	respCh chan json.RawMessage
 	seenAt time.Time
+	method string
 }
 
 type subscriber struct {
@@ -133,6 +143,7 @@ func newTranslator(stdin io.Writer, stdout io.Reader, log logger) *translator {
 		subscribers: make(map[*subscriber]struct{}),
 		logger:      log,
 		trace:       tracingEnabled(),
+		readerDone:  make(chan struct{}),
 	}
 }
 
@@ -147,7 +158,11 @@ func (t *translator) Run(ctx context.Context) error {
 	}()
 
 	readerErr := make(chan error, 1)
-	go func() { readerErr <- t.runReader() }()
+	go func() {
+		err := t.runReader()
+		close(t.readerDone)
+		readerErr <- err
+	}()
 
 	select {
 	case <-ctx.Done():
@@ -214,6 +229,80 @@ func (t *translator) pendingActiveCount() int {
 func (t *translator) logExitOrphans(reason string, err error) {
 	t.logger.Printf("clown-stdio-bridge: %s: %v; writer exiting; pending_orphaned=%d",
 		reason, err, t.pendingActiveCount())
+	if t.onStdinFail != nil {
+		t.onStdinFail()
+	}
+}
+
+// inFlight lists the requests that have no response yet, split into those a
+// handler still waits on and those the client already gave up on, each with
+// its method and age and capped at disconnectlog.MaxInFlight. It reads no
+// request content.
+func (t *translator) inFlight() (live, abandoned []disconnectlog.InFlight) {
+	now := time.Now()
+	t.pendingMu.Lock()
+	defer t.pendingMu.Unlock()
+	for id, entry := range t.pending {
+		item := disconnectlog.InFlight{
+			ID:        id,
+			Method:    entry.method,
+			StartedAt: entry.seenAt.UTC().Format(disconnectlog.TimeFormat),
+			ElapsedMS: now.Sub(entry.seenAt).Milliseconds(),
+		}
+		if entry.respCh != nil {
+			live = append(live, item)
+		} else {
+			abandoned = append(abandoned, item)
+		}
+	}
+	oldestFirst := func(s []disconnectlog.InFlight) {
+		sort.Slice(s, func(i, j int) bool { return s[i].StartedAt < s[j].StartedAt })
+	}
+	oldestFirst(live)
+	oldestFirst(abandoned)
+	if len(live) > disconnectlog.MaxInFlight {
+		live = live[:disconnectlog.MaxInFlight]
+	}
+	if len(abandoned) > disconnectlog.MaxInFlight {
+		abandoned = abandoned[:disconnectlog.MaxInFlight]
+	}
+	return live, abandoned
+}
+
+// failAll answers every request a handler still waits on with a JSON-RPC error
+// whose message is message, and forgets it, so the handlers return at once and
+// the session's call fails with the reason instead of a closed connection.
+// Abandoned entries stay: a late response for one is still logged and dropped.
+// It returns how many requests it failed.
+func (t *translator) failAll(message string) int {
+	failed := 0
+	t.pendingMu.Lock()
+	defer t.pendingMu.Unlock()
+	for id, entry := range t.pending {
+		if entry.respCh == nil {
+			continue
+		}
+		body, err := json.Marshal(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      json.RawMessage(id),
+			"error":   map[string]any{"code": -32001, "message": message},
+		})
+		if err != nil {
+			continue
+		}
+		select {
+		case entry.respCh <- body:
+			failed++
+		default:
+		}
+		delete(t.pending, id)
+	}
+	return failed
+}
+
+// queueStats are the counters the disconnect record carries.
+func (t *translator) queueStats() (queueDepth int, droppedOutbound int64) {
+	return len(t.writeQueue), t.droppedOutbound.Load()
 }
 
 func (t *translator) runReader() error {
@@ -352,7 +441,7 @@ func (t *translator) SendRequest(ctx context.Context, idKey string, msg []byte) 
 		}
 		return nil, fmt.Errorf("duplicate JSON-RPC id %s in flight", idKey)
 	}
-	t.pending[idKey] = pendingEntry{respCh: respCh, seenAt: time.Now()}
+	t.pending[idKey] = pendingEntry{respCh: respCh, seenAt: time.Now(), method: methodOf(msg)}
 	t.pendingMu.Unlock()
 
 	defer func() {
@@ -363,7 +452,7 @@ func (t *translator) SendRequest(ctx context.Context, idKey string, msg []byte) 
 		// dropped rather than cross-contaminating a future SendRequest
 		// that reuses this id.
 		if entry, ok := t.pending[idKey]; ok && entry.respCh == respCh {
-			t.pending[idKey] = pendingEntry{respCh: nil, seenAt: entry.seenAt}
+			t.pending[idKey] = pendingEntry{respCh: nil, seenAt: entry.seenAt, method: entry.method}
 		}
 		t.pendingMu.Unlock()
 	}()
@@ -380,6 +469,15 @@ func (t *translator) SendRequest(ctx context.Context, idKey string, msg []byte) 
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
+}
+
+// methodOf is the JSON-RPC method of a request body, "" when it has none.
+func methodOf(msg []byte) string {
+	var probe struct {
+		Method string `json:"method"`
+	}
+	_ = json.Unmarshal(msg, &probe)
+	return probe.Method
 }
 
 // SendNotification writes a JSON-RPC notification or response to the

@@ -493,6 +493,10 @@ func run(rawArgs []string) int {
 			return runIdleNotify(rawArgs[1:])
 		case "frontend-moxin":
 			return runFrontendMoxinCap(rawArgs[1:])
+		case "disconnects":
+			return runDisconnectsVerb(rawArgs[1:], os.Stdout, os.Stderr)
+		case "disconnects-serve":
+			return runDisconnectsServe(rawArgs[1:], os.Stdin, os.Stdout, os.Stderr)
 		case "restart":
 			return runRestartVerb(rawArgs[1:], os.Stdout, os.Stderr)
 		case "agent-monitor":
@@ -1134,6 +1138,18 @@ func runWithFlags(flags parsedFlags) int {
 			fmt.Fprintf(os.Stderr, "clown: registering juggler-prompt tool: %v\n", err)
 		} else if jugglerDir != "" {
 			pluginDirs = append(pluginDirs, jugglerDir)
+		}
+	}
+
+	// Plugin disconnect records (clown#344): the bridges write them, the
+	// built-in diagnostics plugin serves them. A failure only costs the session
+	// the resource, so it is logged, not fatal.
+	if flags.disconnectRoot = disconnectRecordRoot(flags); flags.disconnectRoot != "" {
+		sweepDisconnects(flags.disconnectRoot)
+		if diagDir, err := addDiagnosticsPlugin(root, flags, flags.disconnectRoot); err != nil {
+			fmt.Fprintf(os.Stderr, "clown: registering the disconnect diagnostics: %v\n", err)
+		} else if diagDir != "" {
+			pluginDirs = append(pluginDirs, diagDir)
 		}
 	}
 
@@ -2173,6 +2189,9 @@ func runWithPluginHost(executor Executor, pluginDirs []string, flags parsedFlags
 		// resolves the same channel without clown polluting its own (and the
 		// claude subtree's) env (clown#136).
 		BaseEnv: flags.identity.envMap(),
+		// The bridges write their disconnect records here (clown#344).
+		RecordRoot: flags.disconnectRoot,
+		LogPath:    logPath,
 	}
 	discovered, err := host.Discover()
 	if err != nil {
@@ -2520,6 +2539,9 @@ func runManaged(
 	logger.Info("launching plugin servers", "count", len(discovered))
 
 	report := host.StartAll(ctx, startableHere(host, discovered))
+	armDisconnectRecords(ctx, host, flags.identity.Key, flags.disconnectRoot, host.LogPath, func(format string, args ...any) {
+		logger.Info(fmt.Sprintf(format, args...))
+	})
 	// F12: claude reaches a serve-socket server through the in-unit relay's
 	// port, never the socket path the handshake names.
 	for _, srv := range report.Started {
@@ -3394,6 +3416,9 @@ type parsedFlags struct {
 	// bound read-only into the agent scope so claude can read clown's
 	// generated plugin dirs and prompt files.
 	stagingRootPath string
+	// disconnectRoot is the plugin disconnect-record directory this launch
+	// writes and serves (clown#344); "" when it has none.
+	disconnectRoot string
 	// agentScopeForwards are the loopback addresses of the frontend-class
 	// plugin servers (set in runManaged), forwarded into the agent unit.
 	agentScopeForwards []string

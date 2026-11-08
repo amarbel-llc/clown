@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -28,7 +29,10 @@ type ManagedServer struct {
 	Name      string
 	Def       ServerDef
 	PluginDir string
-	Logger    *slog.Logger
+	// PluginName is the plugin's name (its plugin.json), set by StartAll; the
+	// disconnect record names the bridge's plugin and server (clown#344).
+	PluginName string
+	Logger     *slog.Logger
 	// BaseEnv is clown-injected identity (CLOWN_SESSION_ID, CLOWN_BIN) applied
 	// to every managed server's environment (clown#136). It lets clown thread
 	// the per-instance routing key to producers explicitly instead of stamping
@@ -41,6 +45,10 @@ type ManagedServer struct {
 	done       chan struct{}
 	stderrDone chan struct{}
 	waitState  *os.ProcessState
+	// startedAt is when the process was started; stopping is set once the host
+	// begins to stop it on purpose, so WatchExits can tell that from a death.
+	startedAt time.Time
+	stopping  atomic.Bool
 	// reserved marks an entry from Host.Reserve: no process here.
 	reserved bool
 	// manifestAddress, when set, is the TCP address claude's manifest names
@@ -131,6 +139,7 @@ func (s *ManagedServer) Start(ctx context.Context) error {
 		log.Error("plugin server failed to start", "err", err)
 		return fmt.Errorf("server %s: start: %w", s.Name, err)
 	}
+	s.startedAt = time.Now()
 	log.Info("plugin server process started", "pid", s.cmd.Process.Pid)
 
 	s.stderrDone = make(chan struct{})
@@ -187,6 +196,10 @@ func (s *ManagedServer) Stop() {
 	}
 
 	log.Info("stopping plugin server", "pid", pid)
+	// A stop on purpose is not a disconnect: tell a recording bridge before the
+	// SIGTERM so it writes no record for it, and let WatchExits see it too.
+	s.stopping.Store(true)
+	s.noteShutdown()
 	pgid, err := syscall.Getpgid(pid)
 	if err == nil {
 		_ = syscall.Kill(-pgid, syscall.SIGTERM)

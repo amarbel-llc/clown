@@ -240,8 +240,9 @@ func TestBuiltinWorkerIsCanarySpinclassPlusTheLandingTools(t *testing.T) {
 	got := slices.Clone(w.ContextServers)
 	slices.Sort(got)
 	// canary-spinclass's servers plus the frontend-served issue-filer moxin
-	// (cmd/clown/frontendmoxin.go names it "<plugin>/<moxin>").
-	want := []string{"clown-builtin-jobs/ringmaster", "clown-builtin-jobs/troupe", "clown-builtin-moxins/issue-filer", "just-us/just-us", "spinclass/spinclass"}
+	// (cmd/clown/frontendmoxin.go names it "<plugin>/<moxin>") and the
+	// diagnostics server that serves plugin disconnect records (clown#344).
+	want := []string{"clown-builtin-diagnostics/disconnects", "clown-builtin-jobs/ringmaster", "clown-builtin-jobs/troupe", "clown-builtin-moxins/issue-filer", "just-us/just-us", "spinclass/spinclass"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("context_servers = %v, want %v", got, want)
 	}

@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"code.linenisgreat.com/clown/internal/0/disconnectlog"
 	"code.linenisgreat.com/clown/internal/0/peercheck"
 )
 
@@ -133,22 +134,51 @@ func run(p parsedArgs) int {
 
 	cmd := exec.CommandContext(ctx, cmdPath, p.args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Stderr = os.Stderr
+	// The child's stderr goes through a pipe the bridge reads, so it can keep a
+	// scrubbed tail for the disconnect record (clown#344) while copying every
+	// byte on to its own stderr, which the host logs as before. If the pipe
+	// cannot be made the child keeps the bridge's stderr and the record has no
+	// tail.
+	tail := disconnectlog.NewRing()
+	stderrR, stderrW, pipeErr := os.Pipe()
+	if pipeErr == nil {
+		cmd.Stderr = stderrW
+	} else {
+		cmd.Stderr = os.Stderr
+	}
+	closeStderrPipe := func() {
+		if pipeErr == nil {
+			_ = stderrR.Close()
+			_ = stderrW.Close()
+		}
+	}
 
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown-stdio-bridge: stdin pipe: %v\n", err)
+		closeStderrPipe()
 		return 1
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "clown-stdio-bridge: stdout pipe: %v\n", err)
+		closeStderrPipe()
 		return 1
 	}
 
 	if err := cmd.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "clown-stdio-bridge: start %q: %v\n", cmdPath, err)
+		closeStderrPipe()
 		return 1
+	}
+	if pipeErr == nil {
+		// The child holds the write end now; ours must close for EOF to arrive
+		// when the child (and anything it started) is gone.
+		_ = stderrW.Close()
+		go func() {
+			defer stderrR.Close()
+			teeStderr(stderrR, os.Stderr, tail)
+		}()
 	}
 
 	childDone := make(chan error, 1)
@@ -166,6 +196,16 @@ func run(p parsedArgs) int {
 
 	stdLogger := log.New(os.Stderr, "", 0)
 	tr := newTranslator(stdin, stdout, stdLogger)
+	// The disconnect record (clown#344); nil, and so a no-op, unless the host
+	// gave this bridge a session, a plugin and a record directory.
+	rec := newRecorder(os.Getenv, cmd.Process.Pid, tr, tail, stdLogger)
+	stdinFail := make(chan struct{}, 1)
+	tr.onStdinFail = func() {
+		select {
+		case stdinFail <- struct{}{}:
+		default:
+		}
+	}
 	go func() {
 		if err := tr.Run(ctx); err != nil {
 			stdLogger.Printf("clown-stdio-bridge: translator: %v", err)
@@ -196,27 +236,59 @@ func run(p parsedArgs) int {
 
 	exit := 0
 	terminateChild := false
+	// reportChildExit is the child-exit path, shared by the exit itself and by
+	// the pipe events that arrive just ahead of it.
+	reportChildExit := func(err error) {
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "clown-stdio-bridge: wrapped child exited unexpectedly: %v\n", err)
+		} else {
+			fmt.Fprintln(os.Stderr, "clown-stdio-bridge: wrapped child exited cleanly")
+		}
+		rec.record(disconnectlog.KindChildExit, disconnectlog.ClosedByChild, exitOf(err))
+		exit = 1
+	}
+	// pipeEvent handles the child's stdout or stdin ending: a child that is
+	// dying shows these within milliseconds of its exit, so the exit gets a
+	// moment to arrive and is what the record then says; a child that is still
+	// alive with a dead pipe is unusable, so the bridge records that and stops
+	// it, as for an exit.
+	pipeEvent := func(kind string) {
+		if exited, err := awaitChild(childDone, childSettle); exited {
+			reportChildExit(err)
+			return
+		}
+		fmt.Fprintf(os.Stderr, "clown-stdio-bridge: wrapped child is alive but its pipe ended (%s); stopping it\n", kind)
+		rec.record(kind, disconnectlog.ClosedByChild, nil)
+		terminateChild = true
+		exit = 1
+	}
 	select {
 	case sig := <-sigCh:
 		fmt.Fprintf(os.Stderr, "clown-stdio-bridge: received %s; shutting down\n", sig)
+		// The host says so before the SIGTERM that ends a session; any other
+		// signal is a disconnect worth a record.
+		if !handler.shutdownNoticed.Load() {
+			rec.record(disconnectlog.KindSignal, disconnectlog.ClosedByExternal, nil)
+		}
 		terminateChild = true
 	case <-parentGone:
 		fmt.Fprintln(os.Stderr, "clown-stdio-bridge: parent clown is gone; shutting down the serve socket")
+		rec.record(disconnectlog.KindParentGone, disconnectlog.ClosedByHost, nil)
 		terminateChild = true
 		exit = 1
 	case err := <-childDone:
 		// Re-fill the channel so terminate() doesn't block if it's
 		// invoked elsewhere (defensive — it's not, in this path).
 		childDone <- err
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "clown-stdio-bridge: wrapped child exited unexpectedly: %v\n", err)
-		} else {
-			fmt.Fprintln(os.Stderr, "clown-stdio-bridge: wrapped child exited cleanly")
-		}
-		exit = 1
+		reportChildExit(err)
+	case <-tr.readerDone:
+		pipeEvent(disconnectlog.KindChildStdoutEOF)
+	case <-stdinFail:
+		pipeEvent(disconnectlog.KindChildStdinClosed)
 	case err := <-serveErr:
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "clown-stdio-bridge: HTTP serve error: %v\n", err)
+			rec.record(disconnectlog.KindHTTPServeError, disconnectlog.ClosedByBridge, nil)
 			exit = 1
 		}
 		terminateChild = true
@@ -230,6 +302,22 @@ func run(p parsedArgs) int {
 	defer shutdownCancel()
 	_ = srv.Shutdown(shutdownCtx)
 	return exit
+}
+
+// childSettle is how long a pipe event waits for the child's exit to arrive
+// before the record says the child is still alive.
+const childSettle = 300 * time.Millisecond
+
+// awaitChild waits up to d for the child to exit. It leaves the exit status in
+// childDone for terminate and the caller.
+func awaitChild(childDone chan error, d time.Duration) (exited bool, err error) {
+	select {
+	case err := <-childDone:
+		childDone <- err
+		return true, err
+	case <-time.After(d):
+		return false, nil
+	}
 }
 
 // terminate sends SIGTERM to the wrapped child's process group and

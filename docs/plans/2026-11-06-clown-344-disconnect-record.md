@@ -1,7 +1,13 @@
 # clown#344: a plugin disconnect record the session reads as an MCP resource (design note)
 
-Status: design only, nothing implemented; implementation waits for the
-operator's review (coordinator, 2026-11-06). Claims are **R** (read in code
+Status: implemented (operator-approved 2026-11-08), with these departures
+from the text below: the bridge takes its identity from the environment
+(`CLOWN_SESSION_ID`, `CLOWN_BRIDGE_PLUGIN_NAME`, `CLOWN_BRIDGE_SERVER_NAME`,
+`CLOWN_BRIDGE_RECORD_DIR`, `CLOWN_BRIDGE_HOST_LOG`), not flags; a host that is
+gone is recorded as `parent_gone` with `closed_by` host; the host skips a
+`bridge_exit` when the bridge recorded its own end in that life; the worker
+profile keeps `clown-builtin-diagnostics/disconnects`, which changes the
+worker digest again. See FDR 0002 "Disconnect records". Claims are **R** (read in code
 at 70f904a) or **I** (inferred) unless marked otherwise. Companion: FDR 0002
 (the stdio bridge), RFC 0002 (plugin host lifecycle), FDR 0023 (the
 hung-session status file, whose state-dir conventions this reuses).

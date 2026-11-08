@@ -86,5 +86,10 @@ func newMux(handler *httpHandler, tr *translator, childDone <-chan error, serveM
 	// Contract matches moxy's independently-shipped /clown/exclude-tools
 	// (amarbel-llc/moxy#399): see httpHandler.handleExcludeTools.
 	mux.HandleFunc("/clown/exclude-tools", control(handler.handleExcludeTools))
+	// The host's note, before the end-of-session SIGTERM, that the stop is
+	// intended (clown#344): the bridge then writes no disconnect record for it.
+	// A control route like the others: frontend-only on the serve socket,
+	// loopback-only on TCP.
+	mux.HandleFunc("/clown/shutdown", control(handler.handleShutdownNotice))
 	return mux
 }
