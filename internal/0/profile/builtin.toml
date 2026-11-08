@@ -265,10 +265,16 @@ CLOWN_DISALLOWED_TOOLS = "Artifact,ArtifactData,ArtifactComments,DesignSync,Work
 "just-us/just-us" = ["dump_justfile", "list_variables"]
 
 # engineer-debug is the read-only debugging template (clown#345): moxy keeps
-# the folio read tools (read, ls, glob, tree), rg, jq, man, toolbox, freud, env
-# and smith's read verbs; just-us stays whole. Every write or side-effect tool
-# is excluded: folio write/rm/mv/cp/chmod/link/mkdir, all of grit, smith's write
-# verbs, chrest, the Google tools, chix, stats-me and moxy's async/batch/restart.
+# the folio read tools (read, ls, glob, tree), rg, jq, man, toolbox, freud, env,
+# smith's read verbs, stats-me (all five tools are queries) and chix's read-only
+# subset (search, which, doc, doc-options, doc-tree, flake-show, store-ls,
+# store-cat, store-path-info, derivation-show, log, why-depends); just-us stays
+# whole. Excluded: folio write/rm/mv/cp/chmod/link/mkdir; all of grit (moxy's
+# grit tools each mix read and write verbs, and a profile excludes whole tools,
+# not verbs); smith's write verbs; chrest; the Google tools; moxy's
+# async/batch/restart; and the chix tools that build, run, lock or change the
+# store or flake (build, run, develop-run, flake-check, flake-lock, flake-init,
+# flake-update, store-gc, store-realize, nix-hash).
 # Like worker it allows ReadMcpResourceTool (ringmaster serves job output and
 # records as resources), so the others' "only worker reads MCP resources" rule
 # is now "worker and engineer-debug". It keeps moxy, so Agent stays allowed.
@@ -290,11 +296,8 @@ CLOWN_DISALLOWED_TOOLS = "Artifact,ArtifactData,ArtifactComments,DesignSync,Work
   "async", "async-cancel", "async-result", "batch", "restart", "status",
   "calendar_agenda",
   "car_doc-graph", "car_export", "car_get", "car_list", "car_search",
-  "chix_build", "chix_derivation-show", "chix_develop-run", "chix_doc", "chix_doc-options",
-  "chix_doc-tree", "chix_flake-check", "chix_flake-init", "chix_flake-lock", "chix_flake-show",
-  "chix_flake-update", "chix_log", "chix_nix-hash", "chix_run", "chix_search",
-  "chix_store-cat", "chix_store-gc", "chix_store-ls", "chix_store-path-info", "chix_store-realize",
-  "chix_which", "chix_why-depends",
+  "chix_build", "chix_develop-run", "chix_flake-check", "chix_flake-init", "chix_flake-lock",
+  "chix_flake-update", "chix_nix-hash", "chix_run", "chix_store-gc", "chix_store-realize",
   "chrest_browser-info", "chrest_capture", "chrest_close-tab", "chrest_close-window", "chrest_create-tab",
   "chrest_create-window", "chrest_get-tab", "chrest_get-window", "chrest_init", "chrest_items-get",
   "chrest_items-put", "chrest_list-extensions", "chrest_list-tabs", "chrest_list-windows", "chrest_read-resource",
@@ -312,7 +315,6 @@ CLOWN_DISALLOWED_TOOLS = "Artifact,ArtifactData,ArtifactComments,DesignSync,Work
   "smith_milestone-edit", "smith_pr-comment", "smith_pr-create", "smith_pr-merge",
   "smith_pr-watch", "smith_release-create", "smith_release-delete", "smith_repo-label-create", "smith_repo-label-delete",
   "smith_tag-create", "smith_tag-delete",
-  "stats-me_export", "stats-me_labels", "stats-me_query", "stats-me_range", "stats-me_series",
 ]
 
 # canary-grit is canary for runs that test spinclass's own grit tools under

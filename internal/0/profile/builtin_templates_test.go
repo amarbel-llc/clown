@@ -39,7 +39,10 @@ var engineerDebugMoxyKeep = strings.Fields(`folio_read folio_ls folio_glob folio
 	freud_tool-usage freud_transcript freud_unique-tools
 	env_clock env_cpu env_date env_get env_loadavg env_meminfo env_resolve env_uptime env_which
 	smith_content-get smith_issue-get smith_issue-list smith_pr-get smith_pr-list smith_pr-status smith_repo-get
-	smith_milestone-list smith_release-list smith_release-view smith_repo-label-list smith_tag-list smith_tag-view smith_whoami`)
+	smith_milestone-list smith_release-list smith_release-view smith_repo-label-list smith_tag-list smith_tag-view smith_whoami
+	chix_search chix_which chix_doc chix_doc-options chix_doc-tree chix_flake-show chix_store-ls chix_store-cat
+	chix_store-path-info chix_derivation-show chix_log chix_why-depends
+	stats-me_query stats-me_range stats-me_series stats-me_labels stats-me_export`)
 
 func builtinByName(t *testing.T, name string) Profile {
 	t.Helper()
@@ -78,7 +81,7 @@ func TestBuiltinTaskTemplates(t *testing.T) {
 		{
 			"engineer-debug",
 			[]string{"clown-builtin-jobs/ringmaster", "clown-builtin-jobs/troupe", "just-us/just-us", "moxy/moxy"},
-			engineerDebugMoxyKeep, 112,
+			engineerDebugMoxyKeep, 95,
 		},
 	}
 	for _, c := range cases {
@@ -363,8 +366,18 @@ func TestBuiltinEngineerDebugIsReadOnly(t *testing.T) {
 				t.Errorf("engineer-debug keeps %s", tool)
 			}
 		}
-		for _, prefix := range []string{"grit_", "chix_", "chrest_", "gmail_", "car_", "piers_", "gws_", "calendar_", "prison_", "stats-me_"} {
+		for _, prefix := range []string{"grit_", "chrest_", "gmail_", "car_", "piers_", "gws_", "calendar_", "prison_"} {
 			if strings.HasPrefix(tool, prefix) {
+				t.Errorf("engineer-debug keeps %s", tool)
+			}
+		}
+		// chix keeps only its read-only subset: nothing that builds, runs,
+		// locks, updates or changes the store.
+		for _, mutator := range []string{
+			"chix_build", "chix_run", "chix_develop-run", "chix_flake-check", "chix_flake-lock",
+			"chix_flake-init", "chix_flake-update", "chix_store-gc", "chix_store-realize", "chix_nix-hash",
+		} {
+			if tool == mutator {
 				t.Errorf("engineer-debug keeps %s", tool)
 			}
 		}
