@@ -30,6 +30,17 @@ var canaryMoxyKeep = strings.Fields(`folio_read folio_ls rg_search grit_stage to
 // of its grit (nor chix or smith) and no write tool.
 var canaryGritMoxyKeep = strings.Fields(`folio_read folio_ls rg_search jq_jq toolbox_run`)
 
+// engineer-debug (clown#345) is read-only: folio read tools, rg, jq, man,
+// toolbox, freud, env and smith's read verbs. just-us stays whole.
+var engineerDebugMoxyKeep = strings.Fields(`folio_read folio_ls folio_glob folio_tree rg_search jq_jq toolbox_run
+	man_list man_toc man_section
+	freud_interruptions freud_interruptions-timeseries freud_messages freud_sessions freud_subagents
+	freud_summary freud_tool-frequency freud_tool-results-summary freud_tool-results-timeseries
+	freud_tool-usage freud_transcript freud_unique-tools
+	env_clock env_cpu env_date env_get env_loadavg env_meminfo env_resolve env_uptime env_which
+	smith_content-get smith_issue-get smith_issue-list smith_pr-get smith_pr-list smith_pr-status smith_repo-get
+	smith_milestone-list smith_release-list smith_release-view smith_repo-label-list smith_tag-list smith_tag-view smith_whoami`)
+
 func builtinByName(t *testing.T, name string) Profile {
 	t.Helper()
 	ps, err := Builtin()
@@ -63,6 +74,11 @@ func TestBuiltinTaskTemplates(t *testing.T) {
 			"canary-grit",
 			[]string{"clown-builtin-jobs/ringmaster", "clown-builtin-jobs/troupe", "just-us/just-us", "moxy/moxy", "spinclass/spinclass"},
 			canaryGritMoxyKeep, 152,
+		},
+		{
+			"engineer-debug",
+			[]string{"clown-builtin-jobs/ringmaster", "clown-builtin-jobs/troupe", "just-us/just-us", "moxy/moxy"},
+			engineerDebugMoxyKeep, 112,
 		},
 	}
 	for _, c := range cases {
@@ -124,7 +140,7 @@ func TestBuiltinTaskTemplates(t *testing.T) {
 // strips that server's tools, so every template must keep both whole.
 func TestBuiltinTemplatesKeepTheServersAWorkerNeedsToReportBack(t *testing.T) {
 	required := []string{"clown-builtin-jobs/ringmaster", "clown-builtin-jobs/troupe"}
-	for _, name := range []string{"reviewer", "porter", "canary", "canary-grit", "canary-spinclass", "worker"} {
+	for _, name := range []string{"reviewer", "porter", "canary", "canary-grit", "canary-spinclass", "worker", "engineer-debug"} {
 		p := builtinByName(t, name)
 		for _, srv := range required {
 			if !slices.Contains(p.ContextServers, srv) {
@@ -215,7 +231,7 @@ func TestBuiltinTemplatesWithoutMoxyDisallowTheAgentTool(t *testing.T) {
 	}
 	for _, p := range ps {
 		switch p.Name {
-		case "reviewer", "porter", "canary", "canary-grit", "canary-spinclass", "worker":
+		case "reviewer", "porter", "canary", "canary-grit", "canary-spinclass", "worker", "engineer-debug":
 		default:
 			continue
 		}
@@ -334,6 +350,48 @@ func TestBuiltinWorkerMayReadMCPResources(t *testing.T) {
 				t.Errorf("%s must still disallow %s: only worker reads MCP resources", name, tool)
 			}
 		}
+	}
+}
+
+// engineer-debug is read-only (clown#345): it keeps no write or side-effect
+// moxy tool, and, like worker, may read MCP resources by URI while listing
+// stays disallowed.
+func TestBuiltinEngineerDebugIsReadOnly(t *testing.T) {
+	for _, tool := range engineerDebugMoxyKeep {
+		for _, writer := range []string{"folio_write", "folio_rm", "folio_mv", "folio_cp", "folio_chmod", "folio_link", "folio_mkdir"} {
+			if tool == writer {
+				t.Errorf("engineer-debug keeps %s", tool)
+			}
+		}
+		for _, prefix := range []string{"grit_", "chix_", "chrest_", "gmail_", "car_", "piers_", "gws_", "calendar_", "prison_", "stats-me_"} {
+			if strings.HasPrefix(tool, prefix) {
+				t.Errorf("engineer-debug keeps %s", tool)
+			}
+		}
+		switch tool {
+		case "async", "async-cancel", "async-result", "batch", "restart":
+			t.Errorf("engineer-debug keeps %s", tool)
+		}
+		if strings.HasPrefix(tool, "smith_") {
+			for _, verb := range []string{"create", "close", "comment", "edit", "merge", "delete", "watch"} {
+				if strings.Contains(tool, "-"+verb) {
+					t.Errorf("engineer-debug keeps smith write verb %s", tool)
+				}
+			}
+		}
+	}
+	p := builtinByName(t, "engineer-debug")
+	disallowed := strings.Split(p.Env["CLOWN_DISALLOWED_TOOLS"], ",")
+	if slices.Contains(disallowed, "ReadMcpResourceTool") {
+		t.Error("engineer-debug must be allowed ReadMcpResourceTool")
+	}
+	for _, still := range []string{"ListMcpResourcesTool", "ReadMcpResourceDirTool"} {
+		if !slices.Contains(disallowed, still) {
+			t.Errorf("engineer-debug must still disallow %s", still)
+		}
+	}
+	if len(p.ContextExcluded["just-us/just-us"]) > 0 {
+		t.Error("engineer-debug keeps just-us whole")
 	}
 }
 

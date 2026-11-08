@@ -52,13 +52,25 @@ backend (there is no builtin
 or
 .Cm openrouter
 profile), and claude worker templates
-.Pq Li reviewer , Li porter , Li canary No and its variants , Li worker
+.Pq Li reviewer , Li porter , Li canary No and its variants , Li worker , Li engineer-debug
 that keep only the MCP servers and tools their task uses and set
 .Ev CLOWN_DISABLE_CLAUDEAI_CONNECTORS
 and
 .Ev CLOWN_DISALLOWED_TOOLS
 in their
 .Sy env .
+.Pp
+.Li engineer-debug
+is the read-only debugging template: moxy keeps the folio read tools
+.Pq Li read , ls , glob , tree ,
+ripgrep, jq, the man tools, toolbox, the freud and env tools and smith's
+read verbs, and just-us stays whole.
+It drops every write and side-effect tool: folio write, rm, mv, cp, chmod,
+link and mkdir, all of grit and smith's write verbs, chrest, the Google
+tools, chix, stats-me and moxy's async, batch and restart.
+Unlike the other templates it does not disallow
+.Li ReadMcpResourceTool ,
+so it can read the resources MCP servers serve, such as a job's output.
 .Sh FILE FORMAT
 .Pa profiles.toml
 is TOML: one
