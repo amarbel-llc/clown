@@ -54,7 +54,7 @@ var Rules = []RuleSpec{
 		"R-3: [+ …] has no !type: a creation allowance names the type it creates",
 	},
 	{
-		"R-4", Refuse, "an atom-less typed _ node in a stencil carries the tag open, on every level",
+		"R-4", Refuse, "an atom-less typed _ node in a stencil carries the tag open, on every level; a perm atom does not count, since it matches nothing",
 		"R-4: [_ !<type>] has no atoms and no open tag: write [_ !<type> open] to admit every <type>, or add atoms",
 	},
 	{
@@ -66,7 +66,7 @@ var Rules = []RuleSpec{
 		"R-6: op=create at <node>: creation is spelled by a + node ([-> + !<type> …]), never by op=create",
 	},
 	{
-		"R-7", Refuse, "every atom names a field the node's type carries (RFC 0018 §1, §3); plugin cg types unchecked",
+		"R-7", Refuse, "every atom names a field the node's type carries (RFC 0018 §1, §3); plugin cg types unchecked; perm is exempt (a decision on any node, R-14)",
 		"R-7: <field> is not a field of <type> (it carries: <fields>); an atom on a missing field never holds",
 	},
 	{
@@ -92,6 +92,10 @@ var Rules = []RuleSpec{
 	{
 		"R-13", Refuse, "a cg-field-v1 node's parent admits op=patch or op=put",
 		"R-13: cg-field-v1 under <parent> is unreachable unless <parent> admits op=patch or op=put",
+	},
+	{
+		"R-14", Refuse, "a perm atom is a decision (FDR 0028): at most one per node, perm= with one value of allow|ask|dynamic, never negated, never beside deny, never in a patch",
+		"R-14: atom `<atom>`: <why> (one of: a patch may only deny; `perm` decides, so it belongs in a stencil | a node carries one `perm` atom | `perm` is a decision, not a condition, so it cannot be negated | `perm` takes `=` only | `perm` takes one value | `perm` is allow, ask or dynamic | a node that carries `deny` decides nothing else)",
 	},
 	{
 		"W-1", Warn, "a stencil admits harness/Bash or moxy/toolbox/run with command open or unconstrained",
@@ -148,10 +152,6 @@ var Rules = []RuleSpec{
 	{
 		"H-9", Refuse, "no head key outside role, harness, mode, model, provider, spend_cap_usd, _base",
 		"H-9: unknown head key <k>",
-	},
-	{
-		"M-1", Refuse, "unattended: no perm=ask atom",
-		"M-1: perm=ask in an unattended profile: nobody can answer",
 	},
 	{
 		"M-2", Refuse, "unattended: no troupe/chat_send and no spinclass server node that is not deny",

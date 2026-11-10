@@ -55,16 +55,17 @@ Severity: **refuse** blocks the bless; **warn** does not.
 | R-1 | the body parses as the stencil fragment (`ajour.ParseStencil`) | refuse | stencils, patches | `R-1: <ajour's parse error>` |
 | R-2 | a `_` node carries `!type` | refuse | stencils, patches | `R-2: [_ …] has no !type: the null id matches by type and atoms, so say which type (e.g. [-> _ !tool-input-v1 open])` |
 | R-3 | a `+` node carries `!type` | refuse | stencils, patches | `R-3: [+ …] has no !type: a creation allowance names the type it creates` |
-| R-4 | an atom-less typed `_` node carries the tag `open`, on every level, interior and deny-chain nodes included (R 2026-11-10) | refuse | stencils | `R-4: [_ !<type>] has no atoms and no open tag: write [_ !<type> open] to admit every <type>, or add atoms` |
+| R-4 | an atom-less typed `_` node carries the tag `open`, on every level, interior and deny-chain nodes included (R 2026-11-10). A `perm` atom does not count as an atom: it matches nothing, so a `_` whose only atom is `perm` is still a wildcard (FDR 0028) | refuse | stencils | `R-4: [_ !<type>] has no atoms and no open tag: write [_ !<type> open] to admit every <type>, or add atoms` |
 | R-5 | a `_` node on the plugin or server level appears only on a chain whose every leaf carries `deny` (a cross-cutting deny root) | refuse | stencils | `R-5: [_ !<clown-plugin-v1|mcp-server-v1>] admits through every <plugin|server>: name it, or end every branch beneath it in deny` |
 | R-6 | no atom names the verb `create` (`op=create`, `op=[…, create]`, `^op=create`) | refuse | stencils, patches | `R-6: op=create at <node>: creation is spelled by a + node ([-> + !<type> …]), never by op=create` |
-| R-7 | every atom names a field the node's type carries (RFC 0018 §1, §3); a plugin's own cg type is not checked. So no `op=` on a catalog node or an `fs-path-v1` node (RFC 0018 §6: the tool is the verb) | refuse | stencils, patches | `R-7: <field> is not a field of <type> (it carries: <fields>); an atom on a missing field never holds` |
+| R-7 | every atom names a field the node's type carries (RFC 0018 §1, §3); a plugin's own cg type is not checked. So no `op=` on a catalog node or an `fs-path-v1` node (RFC 0018 §6: the tool is the verb). `perm` is exempt: it is a decision, not a field, and may sit on any node (R-14) | refuse | stencils, patches | `R-7: <field> is not a field of <type> (it carries: <fields>); an atom on a missing field never holds` |
 | R-8 | an `op=` atom's values other than `create` (R-6's) are among `read`, `patch`, `put`, `delete` | refuse | stencils, patches | `R-8: op=<v> at <node>: verbs are read, patch, put, delete` |
 | R-9 | no `tool-arg-v1` node (RFC 0018 §9 item 1, agreed 2026-11-10) | refuse | stencils, patches | `R-9: tool-arg-v1 is retired: write [-> _ !tool-input-v1 field=<arg> value=[…]] beside [-> _ !tool-input-v1 ^field=<arg> open]` |
 | R-10 | no `cg-roots-v1` or `cg-node-v1` node (retired 2026-11-09) | refuse | stencils, patches | `R-10: <type> is retired: hang cg roots under [-> resources !mcp-resources-v1] and give each step the plugin's own type (or none)` |
 | R-11 | a locked id's digest is a markl id that parses, purpose `blake2b256`, blech32 checksum valid | refuse | stencils, patches | `R-11: <id>@<digest> is not a valid markl id (<reason>): copy the lock from the catalog listing` |
 | R-12 | a resource-step node (`mcp-resources-v1`, `mcp-resource-v1`, `cg-root-v1`, a plugin's cg type) that admits a subject by itself (a leaf of its allowance, or a node carrying `subtree`) and is not `deny` carries an `op=` atom. A pass-through container step, whose only job is to lead to a child with its own `op`, may omit it; `+` and `cg-field-v1` nodes are exempt | refuse | stencils | `R-12: <node> admits every verb: say which, e.g. op=[read]` |
 | R-13 | a `cg-field-v1` node's parent carries `op=` including `patch` or `put` | refuse | stencils | `R-13: cg-field-v1 under <parent> is unreachable unless <parent> admits op=patch or op=put` |
+| R-14 | a `perm` atom is a decision, not a pin (cutting-garden FDR 0028 "Facts are pins, perm is a decision", 2026-11-10): at most one per node, `perm=` with one value of `allow`, `ask` or `dynamic`; never negated, never `perm^=` or another operator, never a list, never beside `deny`, and none in a patch (asking from a patch awaits an operator ruling). ajour's parser refuses the same forms (R-1); R-14 names them with its wording | refuse | stencils, patches | `R-14: atom `<atom>`: <why>`, where `<why>` is ajour's: `a patch may only deny; perm decides, so it belongs in a stencil`, `a node carries one perm atom`, `perm is a decision, not a condition, so it cannot be negated`, `perm takes = only`, `perm takes one value`, `perm is allow, ask or dynamic`, `a node that carries deny decides nothing else` |
 | W-1 | a stencil admits `harness/Bash` or `moxy/toolbox/run` with `command` open or unconstrained | warn | stencils | `W-1: <tool> admitted with an open command: the command line names files and hosts ajour cannot scope (RFC 0018 §7)` |
 | W-2 | a `ReadMcpResourceTool` or `ListMcpResourcesTool` node under `clown-builtin-harness/harness` | warn | stencils | `W-2: <tool> presents no tool step; this node is inert. Allow the resource under its owner's surface (RFC 0018 §7)` |
 | W-4 | `subtree` on a catalog node | warn | stencils, patches | `W-4: subtree on <type> is inert: catalog ids are not paths` |
@@ -116,9 +117,14 @@ agreed with circus/eager-holly before the validator ships.
 
 | Id | Rule | Severity | Message |
 |---|---|---|---|
-| M-1 | unattended: no `perm=ask` atom | refuse | `M-1: perm=ask in an unattended profile: nobody can answer` |
 | M-2 | unattended: no `troupe/chat_send` and no `spinclass` server node that is not `deny` | refuse | `M-2: <node> in an unattended profile: a node reports through its job` |
 | M-3 | attended: `clown-builtin-jobs/ringmaster` and `clown-builtin-jobs/troupe` are present and tagged `required` | refuse | `M-3: attended profiles require <server> tagged required (the hello)` |
+
+M-1 ("unattended: no `perm=ask` atom") is retired (2026-11-10, cutting-garden
+FDR 0028 "Facts are pins, perm is a decision"). `perm=ask` is allowed in any
+profile, and the enforcer resolves it by its posture: attended prompts;
+unattended escalates when a channel exists, else refuses. The head's `mode`
+is a declaration, not that posture. D2 §5's text follows (circus/eager-holly).
 
 ## 5. Vectors
 
@@ -168,6 +174,15 @@ name the finding. The `…` elisions below are abbreviations;
 | PR-36 | `[spinclass !clown-plugin-v1 [-> spinclass !mcp-server-v1 [-> grit_commit !mcp-tool-v1 …]]]` | ok (spinclass's own tool name; W-5 reads moxy only) |
 | PR-37 | `[moxy !clown-plugin-v1 [-> folio !mcp-server-v1 [-> _ !mcp-tool-v1 kind=read …]]]` | warn W-6 (FDR 0028's engineer example; the first ajour dry run refused every read through it) |
 | PR-38 | `[clown-builtin-harness !clown-plugin-v1 [-> harness !mcp-server-v1 [-> _ !mcp-tool-v1 kind=read …]]]` | ok (the built-ins carry their catalog kind) |
+| PR-39 | `… [-> read !mcp-tool-v1 ^perm=allow …]` | refuse R-14 (never negated) |
+| PR-40 | `… [-> read !mcp-tool-v1 perm=[allow, ask] …]` | refuse R-14 (one value) |
+| PR-41 | `… [-> read !mcp-tool-v1 perm^=a …]` | refuse R-14 (`=` only) |
+| PR-42 | `… [-> read !mcp-tool-v1 perm=allow perm=ask …]` | refuse R-14 (one per node) |
+| PR-43 | `… [-> file:/wt/secrets !fs-path-v1 subtree perm=ask deny]` | refuse R-14 (never beside deny) |
+| PR-44 | `… [-> read !mcp-tool-v1 perm=never …]` | refuse R-14 (allow, ask or dynamic) |
+| PR-45 | a patch `… [-> read !mcp-tool-v1 perm=ask [-> file:/wt/x !fs-path-v1 subtree deny]]` | refuse R-14 (none in a patch) |
+| PR-46 | `… [-> resources !mcp-resources-v1 perm=ask [-> ynab:main !cg-root-v1 subtree op=[read]]]` | ok (perm may sit on any node; R-7 exempts it) |
+| PR-47 | `[moxy !clown-plugin-v1 [-> folio !mcp-server-v1 [-> _ !mcp-tool-v1 perm=allow]]]` | refuse R-4 (a perm-only `_` is still a wildcard) |
 | PH-1 | head with `! espalier-profile-v2` | refuse H-1 |
 | PH-2 | head with no `mode` | refuse H-2 |
 | PH-3 | `mode = supervised` | refuse H-3 |
@@ -178,7 +193,7 @@ name the finding. The `…` elisions below are abbreviations;
 | PH-8 | `mode = attended` with no `_base` (a root profile) | ok |
 | PH-9 | `role = reviewer` | refuse H-8 |
 | PH-10 | head with `- owner = me` | refuse H-9 |
-| PM-1 | unattended, body has `… [-> read !mcp-tool-v1 perm=ask]` | refuse M-1 |
+| PM-1 | unattended, body has `… [-> read !mcp-tool-v1 perm=ask]` | ok (M-1 retired: the enforcer resolves ask by posture) |
 | PM-2 | unattended, body has `[clown-builtin-jobs … [-> troupe !mcp-server-v1 [-> chat_send !mcp-tool-v1]]]` | refuse M-2 |
 | PM-3 | attended, body lacks `clown-builtin-jobs/troupe` | refuse M-3 |
 | PM-4 | D2 sample A, body rewritten per RFC 0018 (`tool-arg-v1` nodes as `tool-input-v1`, `!just-recipe-v1` given the id `_` and `open` rules applied) | ok |

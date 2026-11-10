@@ -113,8 +113,17 @@ such an input value, never the tool subject's `async` field (§3).
 | `async` | `yes`, `no` | the tool's manifest declaration, when its manifest has one |
 | `impure` | `yes`, `no` | the tool's manifest declaration, when its manifest has one |
 
-All four are facts about the TOOL, from its manifest, and are pins (D2
-V-D2-11: a profile's `perm=allow` against a manifest's `ask` refuses).
+All four are facts about the TOOL, from its manifest. `kind`, `async` and
+`impure` are **pins** (D2 V-D2-11, kept as the kind mismatch: a profile's
+`kind=read` against a manifest's `write` does not match). `perm` is **not a
+pin** (cutting-garden FDR 0028 "Facts are pins, perm is a decision",
+2026-11-10). The catalog lists the manifest's tier so a writer can see it,
+but in a profile an unquoted `perm=` is the node's decision, on any node:
+- `ask`: admit subject to a human;
+- `allow`: the enforcer skips its own ask tier for this call;
+- `dynamic`, or no atom: the manifest tier applies.
+
+ajour never matches `perm` against the subject's field (RFC 0019 R-14).
 No manifest declares `async` or `impure` today, so no tool subject
 presents them and an atom on them never holds (§9 item 3). A call's own
 `async: true` or `impure: true` argument is an input value (§4), never
