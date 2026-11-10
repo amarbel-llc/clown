@@ -411,6 +411,12 @@ op=[read]]]]]`.
      (`list`, `issue`), a different vocabulary, and no moxin declares it
      today.
 
+   The most consequential effect (the first ajour dry run, 2026-11-10;
+   clown#356): FDR 0028's `[-> _ !mcp-tool-v1 kind=read …]` idiom never
+   admits a moxy call, and every sample and probe writer reached for it.
+   Until moxy presents a kind, a profile that admits moxy reads must name
+   each tool. RFC 0019 W-6 warns on the idiom.
+
    Proposed keys: `_meta` keys for the canonical server, tool and
    perms-request, with `kind`'s values settled separately so the two
    meanings do not share a name. This is a moxy issue, routed via circus

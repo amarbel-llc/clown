@@ -107,6 +107,12 @@
   {"id": "PR-36", "layer": "stencil",
    "body": "[spinclass !clown-plugin-v1 [-> spinclass !mcp-server-v1 [-> grit_commit !mcp-tool-v1 [-> _ !tool-input-v1 open]]]]",
    "expect": [], "note": "spinclass's own tool name: W-5 reads moxy's servers only"},
+  {"id": "PR-37", "layer": "stencil",
+   "body": "[moxy !clown-plugin-v1 [-> folio !mcp-server-v1 [-> _ !mcp-tool-v1 kind=read [-> file:eng/repos !fs-path-v1 subtree] [-> _ !tool-input-v1 open]]]]",
+   "expect": [{"rule": "W-6", "count": 1}], "note": "FDR 0028's engineer example idiom; never holds for a moxy tool (clown#356)"},
+  {"id": "PR-38", "layer": "stencil",
+   "body": "[clown-builtin-harness !clown-plugin-v1 [-> harness !mcp-server-v1 [-> _ !mcp-tool-v1 kind=read [-> file:eng/repos !fs-path-v1 subtree] [-> _ !tool-input-v1 open]]]]",
+   "expect": [], "note": "harness built-ins carry their catalog kind: no W-6"},
 
   {"id": "PH-1", "layer": "stencil",
    "head": "- role = engineer-reviewer\n- harness = claude-code\n- mode = attended\n! espalier-profile-v2",

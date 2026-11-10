@@ -110,6 +110,10 @@ var Rules = []RuleSpec{
 		"W-5: <id> is Claude Code's spelling of moxy's <s>.<t>; it matches nothing: write [-> <s> !mcp-server-v1 [-> <t> !mcp-tool-v1 …]]",
 	},
 	{
+		"W-6", Warn, "a kind= atom on an mcp-tool-v1 node under plugin moxy (no moxy tool presents a kind, clown#356)",
+		"W-6: kind=<v> at <node> never holds for a moxy tool (none presents a kind, clown#356): name the tool, e.g. [-> read !mcp-tool-v1 …]",
+	},
+	{
 		"H-1", Refuse, "the type line is ! espalier-profile-v1",
 		"H-1: the type line is <x>; a capability profile is ! espalier-profile-v1",
 	},

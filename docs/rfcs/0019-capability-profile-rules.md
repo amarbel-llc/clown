@@ -69,6 +69,7 @@ Severity: **refuse** blocks the bless; **warn** does not.
 | W-2 | a `ReadMcpResourceTool` or `ListMcpResourcesTool` node under `clown-builtin-harness/harness` | warn | stencils | `W-2: <tool> presents no tool step; this node is inert. Allow the resource under its owner's surface (RFC 0018 §7)` |
 | W-4 | `subtree` on a catalog node | warn | stencils, patches | `W-4: subtree on <type> is inert: catalog ids are not paths` |
 | W-5 | an `mcp-tool-v1` id in Claude Code's mangled spelling: one starting `mcp__`, or, under plugin `moxy`, `<s>_<t>` where `<s>` is a moxy server `catalog.json` names (RFC 0018 §2) | warn | stencils, patches | `W-5: <id> is Claude Code's spelling of moxy's <s>.<t>; it matches nothing: write [-> <s> !mcp-server-v1 [-> <t> !mcp-tool-v1 …]]` |
+| W-6 | a `kind=` atom on an `mcp-tool-v1` node under plugin `moxy` (clown#356: no moxy tool presents a kind until moxy publishes one, so the atom never holds and every call through the node is refused) | warn | stencils | `W-6: kind=<v> at <node> never holds for a moxy tool (none presents a kind, clown#356): name the tool, e.g. [-> read !mcp-tool-v1 …]` |
 
 Notes on the choices the brief left open:
 
@@ -164,6 +165,8 @@ name the finding. The `…` elisions below are abbreviations;
 | PR-34 | `[moxy !clown-plugin-v1 [-> moxy !mcp-server-v1 [-> folio_read !mcp-tool-v1 …]]]` | warn W-5 |
 | PR-35 | `… [-> folio !mcp-server-v1 [-> mcp__plugin_moxy_moxy__folio_read !mcp-tool-v1 …]]` | warn W-5 |
 | PR-36 | `[spinclass !clown-plugin-v1 [-> spinclass !mcp-server-v1 [-> grit_commit !mcp-tool-v1 …]]]` | ok (spinclass's own tool name; W-5 reads moxy only) |
+| PR-37 | `[moxy !clown-plugin-v1 [-> folio !mcp-server-v1 [-> _ !mcp-tool-v1 kind=read …]]]` | warn W-6 (FDR 0028's engineer example; the first ajour dry run refused every read through it) |
+| PR-38 | `[clown-builtin-harness !clown-plugin-v1 [-> harness !mcp-server-v1 [-> _ !mcp-tool-v1 kind=read …]]]` | ok (the built-ins carry their catalog kind) |
 | PH-1 | head with `! espalier-profile-v2` | refuse H-1 |
 | PH-2 | head with no `mode` | refuse H-2 |
 | PH-3 | `mode = supervised` | refuse H-3 |
