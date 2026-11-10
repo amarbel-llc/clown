@@ -447,8 +447,9 @@ op=[read]]]]]`.
   - **Roots.** One root per running session: the snapshot records its
     frontend's pid and start ticks, and a root is served while that pid
     exists with the same ticks (an existing pid is enough where `/proc` is
-    absent). A dead session's snapshot is neither served nor deleted;
-    pruning is #351.
+    absent). A dead session's snapshot is not served. Each launch deletes
+    the snapshots of dead sessions written more than 7 days earlier
+    (`catalogsnap.Retention`); a live session's is never deleted.
   - **Shape.** The URI carries no hostname: the plugin serves one host, and
     a hostname in every id is a redaction hazard when a listing is pasted.
     Plugin, server and tool nodes are containers. A tool also has a body,

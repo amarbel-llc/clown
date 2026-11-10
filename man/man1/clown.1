@@ -767,7 +767,8 @@ Capability-catalog snapshots, one file per session, 0600: tool names,
 descriptions, input schemas and
 .Li _meta
 only.
-A dead session's snapshot is not served but stays on disk.
+A dead session's snapshot is not served, and a launch deletes those written
+more than 7 days earlier.
 See
 .Cm catalog traversal-serve .
 .It Pa .clown/system-prompt

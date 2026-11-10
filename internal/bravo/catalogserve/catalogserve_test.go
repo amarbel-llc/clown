@@ -175,7 +175,7 @@ func TestRequestsBeforeInitializeAndUnknownMethodsAreRefused(t *testing.T) {
 }
 
 // A dead session's snapshot is hidden from roots.list and unreachable, but
-// left on disk (clown#351 prunes).
+// left on disk (a launch prunes it after catalogsnap.Retention).
 func TestADeadSessionIsAbsentFromRootsButStillOnDisk(t *testing.T) {
 	s, dir := initialized(t)
 	raw, rerr := call(t, s, "roots.list", map[string]any{})

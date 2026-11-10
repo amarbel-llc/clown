@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"code.linenisgreat.com/clown/internal/0/buildcfg"
 	"code.linenisgreat.com/clown/internal/0/catalogcontract"
@@ -111,6 +112,10 @@ func recordCatalogSnapshot(ctx context.Context, host *pluginhost.Host, started [
 		return
 	}
 	go func() {
+		// Dead sessions' snapshots older than the retention go at launch.
+		if removed := catalogsnap.Prune(dir, time.Now(), catalogsnap.Retention, catalogserve.FrontendAlive); len(removed) > 0 {
+			logf("catalog: pruned %d dead session snapshot(s)", len(removed))
+		}
 		servers := catalogServers(started, kept, func(srv *pluginhost.ManagedServer) ([]pluginhost.ToolInfo, bool) {
 			return host.FetchToolCatalog(ctx, srv)
 		})

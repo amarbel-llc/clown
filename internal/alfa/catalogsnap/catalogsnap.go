@@ -150,6 +150,29 @@ func List(dir string) []Snapshot {
 	return out
 }
 
+// Retention is how long a dead session's snapshot is kept, counted from when
+// it was written (a launch rewrites it, so this is the session's start): a
+// week covers a session resumed after a weekend, and Prune never deletes a
+// live session's snapshot whatever its age.
+const Retention = 7 * 24 * time.Hour
+
+// Prune deletes, in dir, every snapshot whose session is not alive and that
+// was written more than maxAge before now, and returns the principals it
+// removed. A file it cannot parse or date is left alone.
+func Prune(dir string, now time.Time, maxAge time.Duration, alive func(Snapshot) bool) []string {
+	var removed []string
+	for _, s := range List(dir) {
+		written, err := time.Parse(time.RFC3339Nano, s.WrittenAt)
+		if err != nil || now.Sub(written) <= maxAge || alive(s) {
+			continue
+		}
+		if os.Remove(filepath.Join(dir, FileName(s.Principal))) == nil {
+			removed = append(removed, s.Principal)
+		}
+	}
+	return removed
+}
+
 // ToolNode is one tool as the catalog presents it.
 type ToolNode struct {
 	Plugin, Server, Tool string
