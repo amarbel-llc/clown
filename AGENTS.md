@@ -69,7 +69,9 @@ touching any of it.
   (`just lint-layout`) fails on drift. Leaf names must stay unique. Opted-in
   packages carry `//go:generate dagnabit export` and get a generated facade
   under `pkgs/<leaf>` (the public, level-free import path; today
-  `pkgs/peercheck`, the unix-socket peer check spinclass links):
+  `pkgs/peercheck`, the unix-socket peer check spinclass links, and
+  `pkgs/catalogcontract` / `pkgs/profilerules`, RFC 0018's catalog table
+  and RFC 0019's profile ruleset and vectors for ajour enforcers):
   `just codemod-facade` regenerates, `checks.dagnabit-codegen`
   (`just lint-facade`) fails on drift. Never hand-edit `pkgs/`.
   `pkg/profilelookup` remains hand-written (its import path is spinclass's).
