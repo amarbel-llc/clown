@@ -96,8 +96,9 @@ Notes on the choices the brief left open:
 ## 3. Head rules (hyphence metadata)
 
 circus D2 §2 owns the head's semantics; these are its rules as the
-validator enforces them, to be agreed with circus/eager-holly before the
-validator ships.
+validator enforces them. The operator ruled H-6 and H-7 as written
+(2026-11-10, via circus/eager-holly, recorded in D2). The rest are to be
+agreed with circus/eager-holly before the validator ships.
 
 | Id | Rule | Severity | Message |
 |---|---|---|---|
