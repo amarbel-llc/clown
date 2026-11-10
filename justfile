@@ -2488,8 +2488,9 @@ explore-catalog-conformance CG_REPO:
     tmp="$(mktemp -d /tmp/cc-conf-XXXXXX)"
     trap 'rm -rf "$tmp"' EXIT
     clown="$(nix build --no-link --print-out-paths .#default)/bin/clown"
-    driver="$(nix build --no-link --print-out-paths "$cg#conformance-traversal")/bin/cutting-garden-conformance-traversal"
-    cgbin="$(nix build --no-link --print-out-paths "$cg#default")/bin/cutting-garden"
+    # --no-write-lock-file: a stale lock in CG_REPO is never rewritten.
+    driver="$(nix build --no-write-lock-file --no-link --print-out-paths "$cg#conformance-traversal")/bin/cutting-garden-conformance-traversal"
+    cgbin="$(nix build --no-write-lock-file --no-link --print-out-paths "$cg#default")/bin/cutting-garden"
     bats_libs="$(nix build --no-link --print-out-paths .#bats-libs)/share/bats"
     bats_bin="$(nix build --no-link --print-out-paths 'nixpkgs#bats')/bin/bats"
     state="$tmp/state"

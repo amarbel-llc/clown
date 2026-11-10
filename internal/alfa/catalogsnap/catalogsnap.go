@@ -166,7 +166,14 @@ func Prune(dir string, now time.Time, maxAge time.Duration, alive func(Snapshot)
 		if err != nil || now.Sub(written) <= maxAge || alive(s) {
 			continue
 		}
-		if os.Remove(filepath.Join(dir, FileName(s.Principal))) == nil {
+		// A resumed session reuses its principal and may have rewritten the
+		// file since List read it: re-read, and keep a file that changed.
+		path := filepath.Join(dir, FileName(s.Principal))
+		var cur Snapshot
+		if b, err := os.ReadFile(path); err != nil || json.Unmarshal(b, &cur) != nil || cur.WrittenAt != s.WrittenAt {
+			continue
+		}
+		if os.Remove(path) == nil {
 			removed = append(removed, s.Principal)
 		}
 	}
@@ -200,11 +207,17 @@ func Present(s Snapshot, c catalogcontract.Contract) []ToolNode {
 			if srv.Plugin == MoxyPlugin {
 				server, tool = splitMoxyName(t.Name)
 			}
+			if !oneSegment(srv.Plugin) || !oneSegment(server) || !oneSegment(tool) {
+				continue
+			}
 			if entry, ok := c.Tool(srv.Plugin, server, tool); ok && entry.Presents != "" {
 				continue
 			}
 			n := ToolNode{Plugin: srv.Plugin, Server: server, Tool: tool, Kind: metaKind(t.Meta), Perm: permFromDescription(t.Description)}
 			for _, name := range schemaProperties(t.InputSchema) {
+				if !oneSegment(name) {
+					continue
+				}
 				n.Inputs = append(n.Inputs, Input{Name: name, FieldKind: c.Field(srv.Plugin, server, tool, name).Kind})
 			}
 			out = append(out, n)
@@ -235,6 +248,11 @@ func Present(s Snapshot, c catalogcontract.Contract) []ToolNode {
 	})
 	return out
 }
+
+// oneSegment reports whether an id can be one URI segment of the listing
+// (cutting-garden RFC 0018 §3): not empty, and not a dot segment a URI
+// normalizer would collapse. The listing leaves out a node whose id cannot.
+func oneSegment(id string) bool { return id != "" && id != "." && id != ".." }
 
 // splitMoxyName splits the name moxy's own tools/list advertises under its
 // default name template ({server}.{tool}, e.g. folio.read; the "_" form is
