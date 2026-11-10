@@ -43,7 +43,7 @@ runs 1 to 4, 2026-11-09/10), with its convergence count.
 | `clown-plugin-v1` | catalog | `Path[0]` | root | the clown plugin name (`moxy`, `just-us`, `spinclass`, `cutting-garden`, `clown-builtin-jobs`, `clown-builtin-harness`) | none |
 | `mcp-server-v1` | catalog | `Path[1]` | plugin | the MCP server name inside the plugin; for moxy, the child server (`folio`, `rg`, `smith`, …), and `moxy` for moxy's own resources | none |
 | `mcp-tool-v1` | catalog, lockable | `Path[2]` | server | the tool name as its server's manifest spells it, verbatim (`read`, `run_recipe`, `issue-list`, `Read`); never the harness's prefixed form (`mcp__plugin_moxy_moxy__folio_read`) | `kind`, `perm`, `async`, `impure` (§3) |
-| `just-recipe-v1` | catalog, lockable | `Path[3]` of a `run_recipe` call | `run_recipe` | the recipe namepath verbatim (`test-go`, `explore::debug-io-probe`, `zz-tests/run`) | `group` (every group the recipe is in) |
+| `just-recipe-v1` | catalog, lockable | the first step of a `run_recipe` call's recipe value path | `run_recipe` | the recipe namepath verbatim (`test-go`, `explore::debug-io-probe`, `zz-tests/run`) | `group` (every group the recipe is in) |
 | `recipe-arg-v1` | instance | a value path's step under the recipe | recipe | the recipe's declared parameter name at that position (a variadic parameter names every position it absorbs) | `position` (1-based), `value` |
 | `tool-input-v1` | instance | a value path's only step | the last `Path` node | the input field's name | `field`, `value` |
 | `fs-path-v1` | instance | a value path's only step | the last `Path` node | a `file:` id (§4.1) | `field` |
@@ -55,11 +55,25 @@ runs 1 to 4, 2026-11-09/10), with its convergence count.
 
 Retired (R 2026-11-09): `cg-roots-v1` and `cg-node-v1`. A cg object carries
 the plugin's own node type at every step; "any node type" is a type-less
-node. `tool-arg-v1`: see §9 item 1 (proposed retirement).
+node. `tool-arg-v1` is retired too (§9 item 1): an enumerable subcommand is
+`[-> _ !tool-input-v1 field=subcommand value=[…]]`.
 
-A tool's `Path` is exactly three steps (`[plugin, server, tool]`), except a
-`run_recipe` call, whose path continues into the recipe (four steps; FDR
-0028 "The call"). `Anchor` is always `1`, the server.
+A tool's `Path` is exactly three steps (`[plugin, server, tool]`), a
+`run_recipe` call included. `Anchor` is always `1`, the server.
+
+**`run_recipe`** (cutting-garden/swift-plum, 2026-11-10; this replaces FDR
+0028's "the path continues into the recipe"). The recipe is a **value
+path** under the tool step, as a resource path is under the surface:
+`[{just-recipe-v1 release, group…}, {recipe-arg-v1 verb, position 1,
+value status}, …]`, one value path per argument, each starting at the
+recipe step, plus one value path of the recipe step alone, so a recipe
+called with no arguments is still checked. A lock on the recipe
+(`release@<digest>`) applies to the value step (FDR 0028 rule 3).
+`run_recipe`'s other inputs (`timeout`, `async`, `impure`) are ordinary
+`tool-input-v1` values under the tool, siblings of the recipe, so
+`[-> run_recipe !mcp-tool-v1 [-> _ !just-recipe-v1 group=[test]] [-> _
+!tool-input-v1 open]]` means what it says. The call's `async: true` is
+such an input value, never the tool subject's `async` field (§3).
 
 ## 2. Ids
 
@@ -87,17 +101,20 @@ A tool's `Path` is exactly three steps (`[plugin, server, tool]`), except a
 |---|---|---|
 | `kind` | `read`, `write`, `exec` | the moxin manifest's `kind` (moxin(7) TOOL KIND); for a non-moxy server, the server's own `_meta.kind`; for a harness built-in, §7's table. A tool with no declared kind presents no `kind` field (an atom on it then never holds). |
 | `perm` | `allow`, `ask`, `dynamic` | the manifest's `perms-request`: `always-allow` is `allow`, `each-use` and `delegate-to-client` are `ask`, `dynamic` is `dynamic` (the tier is resolved per call by path, so it is not a pin). Harness built-ins present none. |
-| `async` | `yes`, `no` | whether THIS call is dispatched in the background (moxy's `async` wrapper, a just-us `async=true`). |
-| `impure` | `yes`, `no` | whether THIS call runs impure (`run_recipe` `impure=true`, `nix develop --impure`); `no` for every tool with no such switch. |
+| `async` | `yes`, `no` | the tool's manifest declaration, when its manifest has one |
+| `impure` | `yes`, `no` | the tool's manifest declaration, when its manifest has one |
 
-`kind` and `perm` are manifest pins (D2 V-D2-11: a profile's `perm=allow`
-against a manifest's `ask` refuses). `async` and `impure` are facts about
-the call, since no manifest declares them (see §9 item 3).
+All four are facts about the TOOL, from its manifest, and are pins (D2
+V-D2-11: a profile's `perm=allow` against a manifest's `ask` refuses).
+No manifest declares `async` or `impure` today, so no tool subject
+presents them and an atom on them never holds (§9 item 3). A call's own
+`async: true` or `impure: true` argument is an input value (§4), never
+one of these fields.
 
 **Wrappers present the wrapped call.** moxy's `async` tool presents the
-call named by its `tool` argument with `args` as its inputs and `async=yes`;
-`batch` presents one call per sub-call, and the batch is admitted only when
-every sub-call is. The wrapper itself presents no subject.
+call named by its `tool` argument with `args` as its inputs; `batch`
+presents one call per sub-call, and the batch is admitted only when every
+sub-call is. The wrapper itself presents no subject.
 
 ## 4. Inputs: one kind per field
 
@@ -110,8 +127,8 @@ per field"):
 | **path** | one `fs-path-v1` subject per path, `field=<name>`, no verb (the tool is the verb); a value that is a URI with a scheme other than `file:` is a resource read instead (§4.2) | `Read.file_path`, `folio cp.source`, `rg search.path` |
 | **reference** | one resource path per object named, under the surface of the server that owns the URI's scheme (§5) | `list_nodes.uri`, `mutate_nodes.groups`, `chrest read-resource.uri`, `ReadMcpResourceTool.uri` |
 | **content** | a value that is, whole and trimmed, a `madder://blobs/<digest>` URI is a resource read under moxy's surface; any other value is a `tool-input-v1` subject | `jq.stdin`, `toolbox run.stdin` |
-| **recipe** | the recipe step of `Path`; its `args` field is the recipe's `recipe-arg-v1` value paths | `run_recipe.recipe`, `run_recipe.args` |
-| **route** | nothing: the enforcer consumes it to build the call (which server, which wrapped call, a tool-subject fact) | `ReadMcpResourceTool.server`, moxy `async.tool`/`args`, `run_recipe.async`/`impure` |
+| **recipe** | the recipe value path (§1); `args` adds one `recipe-arg-v1` step per argument | `run_recipe.recipe`, `run_recipe.args` |
+| **route** | nothing: the enforcer consumes it to build the call (which server, which wrapped call) | `ReadMcpResourceTool.server`, moxy `async.tool`/`args` |
 | **input** (default) | one `tool-input-v1` subject, `field=<name>`, `value=<the value, §4.3>` | everything not declared otherwise |
 
 A URI-carrying field MUST NOT be left at the default: the table in
@@ -288,7 +305,7 @@ own `clown-builtin-*` plugin naming, so it is adopted as guessed.
 | `Edit` | write | `file_path` (write) | | |
 | `Write` | write | `file_path` (write) | | not `New`, ever |
 | `NotebookEdit` | write | `notebook_path` (write) | | |
-| `Glob` | read | `path` (read, resolve cwd) | | `pattern` is input |
+| `Glob` | read | `path` (read, resolve cwd) | | `pattern` is input; see below |
 | `Grep` | read | `path` (read, resolve cwd) | | |
 | `Bash` | exec | | | `command` is input, never parsed |
 | `Agent` | exec | | | |
@@ -296,15 +313,22 @@ own `clown-builtin-*` plugin naming, so it is adopted as guessed.
 | `WebSearch` | read | | | |
 | `Skill` | exec | | | |
 | `ReadMcpResourceTool` | read | | `uri` | see below |
-| `ListMcpResourcesTool` | read | | `server` | see below |
+| `ListMcpResourcesTool` | read | | | `server` is route; see below |
 
 Any other built-in (`TaskCreate`, `AskUserQuestion`, …) presents its fields
 as input and no `kind`.
 
-**`Bash` is not scoped by this contract.** Its `command` is one opaque
-`tool-input-v1` value; a stencil that admits `Bash` with `command` open
-admits every path and every network reach the shell has. RFC 0019 warns
-on it (W-1). Narrowing Bash is the confinement layer's (FDR 0020), not
+**A glob pattern stays inside its `path`.** `Glob.pattern`, `folio
+glob.pattern` and `Grep.glob` are input values, so the `path` field is
+the only scope a stencil sees. The enforcer therefore refuses, before
+ajour is asked, a pattern that is absolute or has a `..` segment: either
+would reach outside the `path` it is presented with.
+
+**`Bash` and `toolbox run` are not scoped by this contract.** Its `command` is one opaque
+`tool-input-v1` value (as is `toolbox run`'s, whose command line names
+the files toolbox reads); a stencil that admits either with `command`
+open admits every path the command can name, and for `Bash` every network
+reach the shell has. RFC 0019 warns on both (W-1). Narrowing Bash is the confinement layer's (FDR 0020), not
 ajour's.
 
 **`ReadMcpResourceTool` and `ListMcpResourcesTool` present no harness tool
@@ -336,7 +360,8 @@ op=[read]]]]]`.
 
 ## 9. Open items
 
-1. **Retire `tool-arg-v1`.** D2 sample A spells an enumerable subcommand as
+1. **Retire `tool-arg-v1`** (agreed with cutting-garden/swift-plum
+   2026-11-10; D2's table and sample A follow, eager-holly). D2 sample A spells an enumerable subcommand as
    `[-> status !tool-arg-v1 arg=subcommand]`; every probe writer who scoped
    a subcommand (P ×5) wrote `[-> _ !tool-input-v1 field=subcommand
    value=[…]]` instead, and "one kind per field" forbids presenting
@@ -344,19 +369,12 @@ op=[read]]]]]`.
    `tool-arg-v1`; RFC 0019 refuses the type with a pointer to the
    `tool-input-v1` spelling. Needs circus D2 §2's table to follow
    (eager-holly).
-2. **`run_recipe`'s other inputs** (`async`, `impure`, `timeout`). The
-   path continues into the recipe, so these are values under the recipe
-   step, not siblings of it under `run_recipe`. A writer must open them
-   under the recipe node (`[-> _ !just-recipe-v1 group=[test] [-> _
-   !tool-input-v1 open]]`) or they refuse; the run-4 engineer put the
-   `open` beside the recipe, where it is never reached. `async` and
-   `impure` already ride on the tool subject (§3), so the proposal is that
-   `run_recipe` presents only `timeout` as an input, and RFC 0019 warns
-   when a `tool-input-v1` sibling of a `just-recipe-v1` node is unreachable.
-3. **`async` and `impure` as call facts.** D2 §2 lists them with `kind` and
-   `perm` as manifest pins; no manifest declares them, so this RFC presents
-   them from the call. If the operator wants them as pins, a manifest key
-   is needed first.
+2. (Decided 2026-11-10, §1: the recipe is a value path under
+   `run_recipe`.)
+3. **`async` and `impure` pins have no source.** D2 §2 lists them with
+   `kind` and `perm` as manifest pins, but no manifest declares them, so
+   no tool subject presents them today. A manifest key is needed before
+   D2 sample A's `async=no impure=no` can hold.
 4. **moxy manifests declaring field kinds.** moxin(7)'s `substitute-args`
    names the fields a tool reads as files, which is most of the path kind;
    asking moxy for a `path-args` (with verb) and `reference-args` key would

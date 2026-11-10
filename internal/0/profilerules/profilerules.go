@@ -70,7 +70,7 @@ var Rules = []RuleSpec{
 		"R-7: <field> is not a field of <type> (it carries: <fields>); an atom on a missing field never holds",
 	},
 	{
-		"R-8", Refuse, "op= values are among read, patch, put, delete",
+		"R-8", Refuse, "op= values other than create (R-6's) are among read, patch, put, delete",
 		"R-8: op=<v> at <node>: verbs are read, patch, put, delete",
 	},
 	{
@@ -86,7 +86,7 @@ var Rules = []RuleSpec{
 		"R-11: <id>@<digest> is not a valid markl id (<reason>): copy the lock from the catalog listing",
 	},
 	{
-		"R-12", Refuse, "a resource-step node that ends an allowance and is not deny carries op=; + and cg-field-v1 exempt",
+		"R-12", Refuse, "a resource-step node that admits a subject by itself (a leaf of its allowance, or subtree) and is not deny carries op=; pass-through container steps, + and cg-field-v1 exempt",
 		"R-12: <node> admits every verb: say which, e.g. op=[read]",
 	},
 	{
@@ -94,16 +94,12 @@ var Rules = []RuleSpec{
 		"R-13: cg-field-v1 under <parent> is unreachable unless <parent> admits op=patch or op=put",
 	},
 	{
-		"W-1", Warn, "a stencil admits harness/Bash with command open or unconstrained",
-		"W-1: Bash admitted with an open command: the shell reaches every path and host; ajour cannot scope it (RFC 0018 §7)",
+		"W-1", Warn, "a stencil admits harness/Bash or moxy/toolbox/run with command open or unconstrained",
+		"W-1: <tool> admitted with an open command: the command line names files and hosts ajour cannot scope (RFC 0018 §7)",
 	},
 	{
 		"W-2", Warn, "a ReadMcpResourceTool or ListMcpResourcesTool node under clown-builtin-harness/harness",
 		"W-2: <tool> presents no tool step; this node is inert. Allow the resource under its owner's surface (RFC 0018 §7)",
-	},
-	{
-		"W-3", Warn, "a tool-input-v1 node beside a just-recipe-v1 node under run_recipe",
-		"W-3: inputs of run_recipe hang under the recipe step; this node is never reached (RFC 0018 §9 item 2)",
 	},
 	{
 		"W-4", Warn, "subtree on a catalog node",

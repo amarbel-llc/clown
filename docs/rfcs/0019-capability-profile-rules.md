@@ -59,15 +59,14 @@ Severity: **refuse** blocks the bless; **warn** does not.
 | R-5 | a `_` node on the plugin or server level appears only on a chain whose every leaf carries `deny` (a cross-cutting deny root) | refuse | stencils | `R-5: [_ !<clown-plugin-v1|mcp-server-v1>] admits through every <plugin|server>: name it, or end every branch beneath it in deny` |
 | R-6 | no atom names the verb `create` (`op=create`, `op=[…, create]`, `^op=create`) | refuse | stencils, patches | `R-6: op=create at <node>: creation is spelled by a + node ([-> + !<type> …]), never by op=create` |
 | R-7 | every atom names a field the node's type carries (RFC 0018 §1, §3); a plugin's own cg type is not checked. So no `op=` on a catalog node or an `fs-path-v1` node (RFC 0018 §6: the tool is the verb) | refuse | stencils, patches | `R-7: <field> is not a field of <type> (it carries: <fields>); an atom on a missing field never holds` |
-| R-8 | an `op=` atom's values are among `read`, `patch`, `put`, `delete` | refuse | stencils, patches | `R-8: op=<v> at <node>: verbs are read, patch, put, delete` |
-| R-9 | no `tool-arg-v1` node (RFC 0018 §9 item 1, proposed) | refuse | stencils, patches | `R-9: tool-arg-v1 is retired: write [-> _ !tool-input-v1 field=<arg> value=[…]] beside [-> _ !tool-input-v1 ^field=<arg> open]` |
+| R-8 | an `op=` atom's values other than `create` (R-6's) are among `read`, `patch`, `put`, `delete` | refuse | stencils, patches | `R-8: op=<v> at <node>: verbs are read, patch, put, delete` |
+| R-9 | no `tool-arg-v1` node (RFC 0018 §9 item 1, agreed 2026-11-10) | refuse | stencils, patches | `R-9: tool-arg-v1 is retired: write [-> _ !tool-input-v1 field=<arg> value=[…]] beside [-> _ !tool-input-v1 ^field=<arg> open]` |
 | R-10 | no `cg-roots-v1` or `cg-node-v1` node (retired 2026-11-09) | refuse | stencils, patches | `R-10: <type> is retired: hang cg roots under [-> resources !mcp-resources-v1] and give each step the plugin's own type (or none)` |
 | R-11 | a locked id's digest is a markl id that parses, purpose `blake2b256`, blech32 checksum valid | refuse | stencils, patches | `R-11: <id>@<digest> is not a valid markl id (<reason>): copy the lock from the catalog listing` |
-| R-12 | a resource-step node (`mcp-resources-v1`, `mcp-resource-v1`, `cg-root-v1`, a plugin's cg type) that ends an allowance (a leaf, or carries `subtree`) and is not `deny` carries an `op=` atom; `+` and `cg-field-v1` nodes are exempt | refuse | stencils | `R-12: <node> admits every verb: say which, e.g. op=[read]` |
+| R-12 | a resource-step node (`mcp-resources-v1`, `mcp-resource-v1`, `cg-root-v1`, a plugin's cg type) that admits a subject by itself (a leaf of its allowance, or a node carrying `subtree`) and is not `deny` carries an `op=` atom. A pass-through container step, whose only job is to lead to a child with its own `op`, may omit it; `+` and `cg-field-v1` nodes are exempt | refuse | stencils | `R-12: <node> admits every verb: say which, e.g. op=[read]` |
 | R-13 | a `cg-field-v1` node's parent carries `op=` including `patch` or `put` | refuse | stencils | `R-13: cg-field-v1 under <parent> is unreachable unless <parent> admits op=patch or op=put` |
-| W-1 | a stencil admits `harness/Bash` with `command` open or unconstrained | warn | stencils | `W-1: Bash admitted with an open command: the shell reaches every path and host; ajour cannot scope it (RFC 0018 §7)` |
+| W-1 | a stencil admits `harness/Bash` or `moxy/toolbox/run` with `command` open or unconstrained | warn | stencils | `W-1: <tool> admitted with an open command: the command line names files and hosts ajour cannot scope (RFC 0018 §7)` |
 | W-2 | a `ReadMcpResourceTool` or `ListMcpResourcesTool` node under `clown-builtin-harness/harness` | warn | stencils | `W-2: <tool> presents no tool step; this node is inert. Allow the resource under its owner's surface (RFC 0018 §7)` |
-| W-3 | a `tool-input-v1` node beside a `just-recipe-v1` node under `run_recipe` | warn | stencils | `W-3: inputs of run_recipe hang under the recipe step; this node is never reached (RFC 0018 §9 item 2)` |
 | W-4 | `subtree` on a catalog node | warn | stencils, patches | `W-4: subtree on <type> is inert: catalog ids are not paths` |
 
 Notes on the choices the brief left open:
@@ -154,9 +153,12 @@ name the finding. The `…` elisions below are abbreviations;
 | PR-24 | `… [-> budget/b1 !cutting_garden-ynab-budget-v1 op=[read] [-> _ !cg-field-v1 field=[memo]]]` | refuse R-13 |
 | PR-25 | `… [-> _ !cutting_garden-ynab-transaction-v1 op=[patch] [-> _ !cg-field-v1 field=[category, memo]]]` | ok |
 | PR-26 | `[clown-builtin-harness !clown-plugin-v1 [-> harness !mcp-server-v1 [-> Bash !mcp-tool-v1 [-> _ !tool-input-v1 open]]]]` | warn W-1 |
+| PR-31 | `[moxy !clown-plugin-v1 [-> toolbox !mcp-server-v1 [-> run !mcp-tool-v1 [-> _ !tool-input-v1 open]]]]` | warn W-1 |
 | PR-27 | `… [-> Bash !mcp-tool-v1 [-> command !tool-input-v1 value^="just "]]` | ok |
 | PR-28 | `[clown-builtin-harness … [-> ReadMcpResourceTool !mcp-tool-v1 [-> _ !tool-input-v1 open]]]` | warn W-2 |
-| PR-29 | `… [-> run_recipe !mcp-tool-v1 [-> _ !just-recipe-v1 group=[test]] [-> _ !tool-input-v1 open]]` | warn W-3 |
+| PR-29 | `… [-> run_recipe !mcp-tool-v1 [-> _ !just-recipe-v1 group=[test]] [-> _ !tool-input-v1 open]]` | ok (the recipe is a value path; its sibling input node is reached, RFC 0018 §1) |
+| PR-32 | `… [-> ynab:main !cg-root-v1 [-> budget/b1 !cutting_garden-ynab-budget-v1 [-> transactions [-> _ !cutting_garden-ynab-transaction-v1 op=[patch] [-> _ !cg-field-v1 field=[memo]]]]]]` | ok (op-less pass-through steps) |
+| PR-33 | `… [-> resources !mcp-resources-v1 [-> madder://blobs !mcp-resource-v1]]` | refuse R-12 (op-less leaf) |
 | PR-30 | `… [-> folio !mcp-server-v1 subtree …]` | warn W-4 |
 | PH-1 | head with `! espalier-profile-v2` | refuse H-1 |
 | PH-2 | head with no `mode` | refuse H-2 |
