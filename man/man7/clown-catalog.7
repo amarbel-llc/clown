@@ -266,6 +266,51 @@ are
   [-> resources !mcp-resources-v1
     [-> madder://blobs !mcp-resource-v1 subtree op=[read]]]]]
 .Ed
+.Sh PERM AND PATCHES
+A
+.Li perm=
+atom is the profile's decision for the calls that reach that node, not a
+copy of the manifest's tier, and it never has to match anything:
+.Bl -tag -width "dynamic"
+.It Li allow
+the enforcer skips its own ask prompt for the call;
+.It Li ask
+the call is admitted subject to a human: an attended session prompts, an
+unattended one escalates when it has a channel and otherwise refuses;
+.It Li dynamic
+the same as no
+.Li perm
+atom: the manifest's tier decides.
+.El
+.Pp
+It may sit on any node, not only a tool node: one
+.Li perm
+per node, written
+.Li perm= Ns Ar value
+with one value, never negated and never beside
+.Li deny
+(RFC 0019 R-14).
+Because it matches nothing, a typed
+.Li _
+node whose only atom is
+.Li perm
+is still a wildcard and needs
+.Li open
+(R-4).
+.Pp
+A patch only denies: every leaf carries
+.Li deny ,
+and a patch carries no
+.Li perm .
+Whether a patch may ask is awaiting a ruling.
+.Pp
+.Li kind ,
+unlike
+.Li perm ,
+is a fact that must match.
+No moxy tool presents one yet, so
+.Li [-> _ !mcp-tool-v1 kind=read ...]
+admits no moxy call: name each moxy tool instead (RFC 0019 W-6).
 .Sh LOCKS
 A lock pins a tool to the exact input schema the writer reviewed: the
 tool's id is followed by
@@ -300,7 +345,11 @@ A tool node carries its
 .Li kind
 and
 .Li perm
-facets when known; reading it
+facets when known (the
+.Li perm
+facet is the manifest's tier, shown for reference; see
+.Sx PERM AND PATCHES ) ;
+reading it
 .Pq Li read_node
 gives those and its
 .Li lock .
@@ -314,12 +363,10 @@ present them, so a writer copies from it rather than guessing.
 The listing is only as complete as the launch that recorded it: servers
 started inside an agent unit are absent, a harness built-in lists only the
 inputs the contract names (its full parameter list is the harness's, not
-readable by clown), and moxy's
-.Li kind
-and
+readable by clown), and a moxy older than moxy#517 has its server, tool and
 .Li perm
-are read from moxy's advertised names and descriptions until moxy
-publishes them as metadata (RFC 0018 \(sc9 item 7).
+read from its advertised names and descriptions instead of its metadata
+(RFC 0018 \(sc9 item 7).
 No moxy tool presents a
 .Li kind
 yet, so
