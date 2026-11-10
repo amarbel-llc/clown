@@ -407,17 +407,19 @@ op=[read]]]]]`.
    FDR 0028's existential rule, and picking one verb depends on a per-tool
    "most destructive verb" convention no writer can see. Revisit if a tool
    with path fields appears whose verbs `kind=` cannot split.
-7. **moxy's canonical server, tool, perm and kind** (transitional in the
-   live listing, §10). moxy's tools/list carries none of them in `_meta`
-   (moxy/live-aspen, 2026-11-10). The listing therefore:
-   - splits moxy's advertised name at the first `.` (§2), which holds
+7. **moxy's canonical server, tool, perm and kind.** Since moxy master
+   f044c7a (moxy#517), moxy's tools/list carries `_meta` `moxy/server`,
+   `moxy/tool` and `moxy/perms-request`. The listing reads those first. For
+   a moxy that predates them, it falls back to:
+   - splitting moxy's advertised name at the first `.` (§2), which holds
      only under the default `{server}.{tool}` template;
-   - reads `perm` from the `[perms: X]` suffix moxy appends to each
-     description (prose moxy may reword);
-   - presents `kind` only when a server's `_meta.kind` is `read`, `write`
-     or `exec`. moxy's existing `_meta.kind` is moxin(7)'s result label
-     (`list`, `issue`), a different vocabulary, and no moxin declares it
-     today.
+   - reading `perm` from the `[perms: X]` suffix moxy appends to each
+     description (prose moxy may reword).
+
+   `kind` is still presented only when a server's `_meta.kind` is `read`,
+   `write` or `exec`. moxy's existing `_meta.kind` is moxin(7)'s result
+   label (`list`, `issue`), a different vocabulary, and no moxin declares
+   it today.
 
    The most consequential effect (the first ajour dry run, 2026-11-10;
    clown#356): FDR 0028's `[-> _ !mcp-tool-v1 kind=read …]` idiom never
@@ -425,10 +427,8 @@ op=[read]]]]]`.
    Until moxy presents a kind, a profile that admits moxy reads must name
    each tool. RFC 0019 W-6 warns on the idiom.
 
-   Proposed keys: `_meta` keys for the canonical server, tool and
-   perms-request, with `kind`'s values settled separately so the two
-   meanings do not share a name. This is a moxy issue, routed via circus
-   eager-holly; the spellings are moxy's to choose.
+   Still open: settling `kind`'s values separately from moxy's existing
+   `_meta.kind`, so the two meanings do not share a name (moxy's call).
 
 ## 10. Publication
 
@@ -503,6 +503,57 @@ op=[read]]]]]`.
     (`command = ["clown", "catalog", "traversal-serve"]`, scheme
     `clown-catalog`) in the host's cutting-garden `config.toml` is a host
     configuration step outside this repo.
+
+## 11. Enforcers: one escalator, posture and layers
+
+Agreed by clown/ready-elder, moxy/live-aspen and spinclass/slim-myrtle
+(2026-11-10, via cutting-garden/swift-plum). These are contracts, because both
+enforcers fire on a moxy call: clown's PreToolUse hook (matcher `.*`) and
+moxy's own hook. claude-code's ordering between them is unverified.
+
+- **Exactly one escalator.**
+  - moxy runs with escalation off: an Ask verdict in an unattended
+    session is a refusal in moxy.
+  - clown's hook is the only enforcer that escalates. A hook is
+    synchronous and cannot wait for a human, so escalating means denying
+    the call with a reason that names the escalation and sending one
+    troupe DM (to the coordinator, or the operator's channel) carrying
+    the call.
+  - The session retries when the answer arrives on its wake channel.
+  - Neither enforcer escalates the same call twice.
+- **Posture reaches moxy as `MOXY_POSTURE=attended|unattended`.** clown
+  sets it in moxy's environment at spawn, derived from clown's own launch
+  flags (its dontAsk / unattended launch, and spinclass's record), never
+  from inherited env and never from a moxyfile: the working directory's
+  moxyfile is writable by the agent. A running server's environment is out
+  of reach of the session's tool calls. That makes posture unforgeable
+  only for a confined session (FDR 0020); an unconfined session's Bash can
+  restart moxy, so there posture is as soft as spinclass's handles, and the
+  operator is told so.
+- **The profile stack reaches moxy as `MOXY_PROFILE_LAYERS=<absolute path>`,**
+  set the same way. spinclass writes the per-session layers file: ordered
+  entries `{path, role: stencil|patch, digest, act}` (role as in
+  piggy-act-verdict-v1; act is the signed act's digest, for provenance).
+  moxy fails closed when:
+  - layers are present without posture;
+  - the file is unreadable or unparseable;
+  - ajour refuses a layer;
+  - a digest does not match (cutting-garden's `Stencil.Digest()`, purpose
+    `cutting_garden-stencil-digest-v1`).
+
+  No layers means no profile, and the manifest tier decides.
+- **The hook names tools as the harness does.** A PreToolUse event
+  carries only Claude Code's tool name, for example
+  `mcp__plugin_moxy_moxy__folio_read`. `catalogsnap.Resolve` maps that name
+  back to `[plugin, server, tool]` through the session's snapshot. Each
+  presented tool records its `HarnessName`: the advertised name, with every
+  character outside `[A-Za-z0-9_-]` replaced by `_`. That mangling rule is
+  observed, not documented by Claude Code.
+- **Not yet built in clown:**
+  - the hook computing ajour's Verdict, which needs `pkgs/ajour` or the
+    `cutting-garden-ajour` binary in clown's closure (an operator call,
+    clown#349);
+  - setting the two environment variables.
 
 ## More information
 

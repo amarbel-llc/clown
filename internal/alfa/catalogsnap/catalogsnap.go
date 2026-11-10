@@ -230,8 +230,13 @@ type ToolNode struct {
 	Perm string
 	// Lock is RFC 0018 §2's lock digest of the tool's inputSchema, or ""
 	// when it has none (the harness built-ins).
-	Lock   string
-	Inputs []Input
+	Lock string
+	// HarnessName is the name the harness calls the tool by: the built-in's
+	// own name, or mcp__plugin_<plugin>_<server>__<advertised name, mangled>
+	// (harnessMangle). An enforcer that sees only that name maps it back
+	// with Resolve.
+	HarnessName string
+	Inputs      []Input
 }
 
 // Input is one input field of a tool and how RFC 0018 §4 presents it.
@@ -249,7 +254,7 @@ func Present(s Snapshot, c catalogcontract.Contract) []ToolNode {
 		for _, t := range srv.Tools {
 			server, tool := srv.Server, t.Name
 			if srv.Plugin == MoxyPlugin {
-				server, tool = splitMoxyName(t.Name)
+				server, tool = moxyIDs(t)
 			}
 			if !oneSegment(srv.Plugin) || !oneSegment(server) || !oneSegment(tool) {
 				continue
@@ -257,7 +262,12 @@ func Present(s Snapshot, c catalogcontract.Contract) []ToolNode {
 			if entry, ok := c.Tool(srv.Plugin, server, tool); ok && entry.Presents != "" {
 				continue
 			}
-			n := ToolNode{Plugin: srv.Plugin, Server: server, Tool: tool, Kind: metaKind(t.Meta), Perm: permFromDescription(t.Description)}
+			n := ToolNode{
+				Plugin: srv.Plugin, Server: server, Tool: tool,
+				Kind:        metaKind(t.Meta),
+				Perm:        toolPerm(t),
+				HarnessName: "mcp__plugin_" + srv.Plugin + "_" + srv.Server + "__" + harnessMangle(t.Name),
+			}
 			if len(t.InputSchema) > 0 {
 				n.Lock, _ = catalogcontract.LockDigest(t.InputSchema) // an unparseable schema has no lock
 			}
@@ -275,7 +285,7 @@ func Present(s Snapshot, c catalogcontract.Contract) []ToolNode {
 			if t.Plugin != HarnessPlugin || t.Presents != "" {
 				continue
 			}
-			n := ToolNode{Plugin: t.Plugin, Server: t.Server, Tool: t.Tool, Kind: t.Kind}
+			n := ToolNode{Plugin: t.Plugin, Server: t.Server, Tool: t.Tool, Kind: t.Kind, HarnessName: t.Tool}
 			for _, f := range t.Fields {
 				n.Inputs = append(n.Inputs, Input{Name: f.Name, FieldKind: f.Kind})
 			}
@@ -296,6 +306,68 @@ func Present(s Snapshot, c catalogcontract.Contract) []ToolNode {
 	return out
 }
 
+// Resolve maps the name the harness calls a tool by (a PreToolUse event's
+// tool_name) back to the tool as the catalog presents it, through s.
+func Resolve(s Snapshot, c catalogcontract.Contract, harnessName string) (ToolNode, bool) {
+	if harnessName == "" {
+		return ToolNode{}, false
+	}
+	for _, n := range Present(s, c) {
+		if n.HarnessName == harnessName {
+			return n, true
+		}
+	}
+	return ToolNode{}, false
+}
+
+// harnessMangle is Claude Code's rewrite of an advertised MCP tool name into
+// its own tool name: every character outside [A-Za-z0-9_-] becomes "_".
+// Observed, not documented (moxy's folio.read is called folio_read; hyphens
+// survive, as in smith_issue-list).
+func harnessMangle(name string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-':
+			return r
+		}
+		return '_'
+	}, name)
+}
+
+// moxyMeta is the canonical identity moxy publishes in a tool's _meta
+// (moxy#517): its child server, its tool, and the manifest's perms-request.
+type moxyMeta struct {
+	Server       string `json:"moxy/server"`
+	Tool         string `json:"moxy/tool"`
+	PermsRequest string `json:"moxy/perms-request"`
+}
+
+func readMoxyMeta(meta json.RawMessage) moxyMeta {
+	var m moxyMeta
+	if len(meta) > 0 {
+		_ = json.Unmarshal(meta, &m) // a malformed _meta reads as none
+	}
+	return m
+}
+
+// moxyIDs is a moxy tool's [server, tool]: moxy's _meta when it publishes
+// both, else the advertised name split at the first "." (splitMoxyName).
+func moxyIDs(t Tool) (server, tool string) {
+	if m := readMoxyMeta(t.Meta); m.Server != "" && m.Tool != "" {
+		return m.Server, m.Tool
+	}
+	return splitMoxyName(t.Name)
+}
+
+// toolPerm is a tool's perm: moxy's _meta perms-request when published, else
+// the "[perms: X]" description suffix.
+func toolPerm(t Tool) string {
+	if p := permFromTier(readMoxyMeta(t.Meta).PermsRequest); p != "" {
+		return p
+	}
+	return permFromDescription(t.Description)
+}
+
 // oneSegment reports whether an id can be one URI segment of the listing
 // (cutting-garden RFC 0018 §3): not empty, and not a dot segment a URI
 // normalizer would collapse. The listing leaves out a node whose id cannot.
@@ -304,9 +376,8 @@ func oneSegment(id string) bool { return id != "" && id != "." && id != ".." }
 // splitMoxyName splits the name moxy's own tools/list advertises under its
 // default name template ({server}.{tool}, e.g. folio.read; the "_" form is
 // Claude Code's mangling, which this never sees) at the first "."; a name
-// with none is moxy's own tool. Transitional (RFC 0018 §9): moxy publishes no
-// canonical server and tool in _meta, and a non-default --name-template
-// would defeat this.
+// with none is moxy's own tool. The fallback for a moxy that predates its
+// _meta keys (moxy#517, moxyIDs); a non-default --name-template defeats it.
 func splitMoxyName(name string) (server, tool string) {
 	if s, t, ok := strings.Cut(name, "."); ok && s != "" && t != "" {
 		return s, t
@@ -330,14 +401,20 @@ func metaKind(meta json.RawMessage) string {
 var permsSuffix = regexp.MustCompile(`\[perms: ([a-z-]+)\]`)
 
 // permFromDescription maps the "[perms: X]" suffix moxy appends to a tool's
-// description to RFC 0018's perm. Transitional (RFC 0018 §9): the suffix is
-// prose moxy may reword; the manifest's perms-request has no _meta key yet.
+// description to RFC 0018's perm: the fallback for a moxy that predates its
+// moxy/perms-request _meta key (moxy#517, toolPerm).
 func permFromDescription(desc string) string {
 	m := permsSuffix.FindStringSubmatch(desc)
 	if m == nil {
 		return ""
 	}
-	switch m[1] {
+	return permFromTier(m[1])
+}
+
+// permFromTier maps a manifest perms-request to RFC 0018's perm, "" for
+// anything else.
+func permFromTier(tier string) string {
+	switch tier {
 	case "always-allow":
 		return PermAllow
 	case "each-use", "delegate-to-client":

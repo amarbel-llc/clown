@@ -124,7 +124,9 @@ M-1 ("unattended: no `perm=ask` atom") is retired (2026-11-10, cutting-garden
 FDR 0028 "Facts are pins, perm is a decision"). `perm=ask` is allowed in any
 profile, and the enforcer resolves it by its posture: attended prompts;
 unattended escalates when a channel exists, else refuses. The head's `mode`
-is a declaration, not that posture. D2 §5's text follows (circus/eager-holly).
+is a declaration, not that posture. RFC 0018 §11 has the contract: clown's
+hook is the one escalator, and posture reaches moxy as `MOXY_POSTURE`. D2 §5's
+text follows (circus/eager-holly).
 
 ## 5. Vectors
 
