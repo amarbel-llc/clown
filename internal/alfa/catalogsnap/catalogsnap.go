@@ -21,6 +21,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -106,7 +107,7 @@ func Write(dir string, s Snapshot) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(dir, ".snapshot-*")
+	f, err := os.CreateTemp(dir, tempPrefix+strconv.Itoa(os.Getpid())+"-*")
 	if err != nil {
 		return err
 	}
@@ -156,10 +157,50 @@ func List(dir string) []Snapshot {
 // live session's snapshot whatever its age.
 const Retention = 7 * 24 * time.Hour
 
+// tempPrefix starts the name of Write's temp file, followed by the writer's
+// pid and a random suffix (.snapshot-<pid>-<random>); List never reads one.
+const tempPrefix = ".snapshot-"
+
+// tempWriterPID is the writer pid a temp file's name carries.
+func tempWriterPID(name string) (int, bool) {
+	rest, ok := strings.CutPrefix(name, tempPrefix)
+	if !ok {
+		return 0, false
+	}
+	digits, _, ok := strings.Cut(rest, "-")
+	pid, err := strconv.Atoi(digits)
+	if !ok || err != nil || pid <= 0 {
+		return 0, false
+	}
+	return pid, true
+}
+
+// pruneTemps removes the temp files of interrupted Writes (#355): one last
+// modified more than maxAge before now whose writer is not running.
+func pruneTemps(dir string, now time.Time, maxAge time.Duration, alive func(Snapshot) bool) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		pid, ok := tempWriterPID(e.Name())
+		if !ok || !e.Type().IsRegular() {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil || now.Sub(info.ModTime()) <= maxAge || alive(Snapshot{FrontendPID: pid}) {
+			continue
+		}
+		_ = os.Remove(filepath.Join(dir, e.Name()))
+	}
+}
+
 // Prune deletes, in dir, every snapshot whose session is not alive and that
 // was written more than maxAge before now, and returns the principals it
-// removed. A file it cannot parse or date is left alone.
+// removed. A file it cannot parse or date is left alone. It also removes the
+// temp files of Writes interrupted that long ago (pruneTemps).
 func Prune(dir string, now time.Time, maxAge time.Duration, alive func(Snapshot) bool) []string {
+	pruneTemps(dir, now, maxAge, alive)
 	var removed []string
 	for _, s := range List(dir) {
 		written, err := time.Parse(time.RFC3339Nano, s.WrittenAt)
