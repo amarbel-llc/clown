@@ -68,6 +68,7 @@ Severity: **refuse** blocks the bless; **warn** does not.
 | W-1 | a stencil admits `harness/Bash` or `moxy/toolbox/run` with `command` open or unconstrained | warn | stencils | `W-1: <tool> admitted with an open command: the command line names files and hosts ajour cannot scope (RFC 0018 §7)` |
 | W-2 | a `ReadMcpResourceTool` or `ListMcpResourcesTool` node under `clown-builtin-harness/harness` | warn | stencils | `W-2: <tool> presents no tool step; this node is inert. Allow the resource under its owner's surface (RFC 0018 §7)` |
 | W-4 | `subtree` on a catalog node | warn | stencils, patches | `W-4: subtree on <type> is inert: catalog ids are not paths` |
+| W-5 | an `mcp-tool-v1` id in Claude Code's mangled spelling: one starting `mcp__`, or, under plugin `moxy`, `<s>_<t>` where `<s>` is a moxy server `catalog.json` names (RFC 0018 §2) | warn | stencils, patches | `W-5: <id> is Claude Code's spelling of moxy's <s>.<t>; it matches nothing: write [-> <s> !mcp-server-v1 [-> <t> !mcp-tool-v1 …]]` |
 
 Notes on the choices the brief left open:
 
@@ -160,6 +161,9 @@ name the finding. The `…` elisions below are abbreviations;
 | PR-32 | `… [-> ynab:main !cg-root-v1 [-> budget/b1 !cutting_garden-ynab-budget-v1 [-> transactions [-> _ !cutting_garden-ynab-transaction-v1 op=[patch] [-> _ !cg-field-v1 field=[memo]]]]]]` | ok (op-less pass-through steps) |
 | PR-33 | `… [-> resources !mcp-resources-v1 [-> madder://blobs !mcp-resource-v1]]` | refuse R-12 (op-less leaf) |
 | PR-30 | `… [-> folio !mcp-server-v1 subtree …]` | warn W-4 |
+| PR-34 | `[moxy !clown-plugin-v1 [-> moxy !mcp-server-v1 [-> folio_read !mcp-tool-v1 …]]]` | warn W-5 |
+| PR-35 | `… [-> folio !mcp-server-v1 [-> mcp__plugin_moxy_moxy__folio_read !mcp-tool-v1 …]]` | warn W-5 |
+| PR-36 | `[spinclass !clown-plugin-v1 [-> spinclass !mcp-server-v1 [-> grit_commit !mcp-tool-v1 …]]]` | ok (spinclass's own tool name; W-5 reads moxy only) |
 | PH-1 | head with `! espalier-profile-v2` | refuse H-1 |
 | PH-2 | head with no `mode` | refuse H-2 |
 | PH-3 | `mode = supervised` | refuse H-3 |
@@ -182,8 +186,9 @@ message template) and `vectors.json` (the rows above, the `…` elisions
 completed into whole documents). Its test pins that the two agree with
 each other. `Validate` is not written: it needs `pkgs/ajour`'s parser,
 which reaches clown through a new flake input; that input, and the
-validator, are clown#349. The live catalog listing it would also read for
-R-7 on plugin cg types is clown#350.
+validator, are clown#349. For R-7 on plugin cg types the validator would
+also read the live catalog listing (RFC 0018 §10). The listing's first cut
+carries no resource surfaces, so those types stay unchecked.
 
 ## More information
 

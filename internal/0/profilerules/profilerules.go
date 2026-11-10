@@ -106,6 +106,10 @@ var Rules = []RuleSpec{
 		"W-4: subtree on <type> is inert: catalog ids are not paths",
 	},
 	{
+		"W-5", Warn, "an mcp-tool-v1 id in Claude Code's mangled spelling: starting mcp__, or under plugin moxy <s>_<t> where <s> is a moxy server catalog.json names",
+		"W-5: <id> is Claude Code's spelling of moxy's <s>.<t>; it matches nothing: write [-> <s> !mcp-server-v1 [-> <t> !mcp-tool-v1 …]]",
+	},
+	{
 		"H-1", Refuse, "the type line is ! espalier-profile-v1",
 		"H-1: the type line is <x>; a capability profile is ! espalier-profile-v1",
 	},

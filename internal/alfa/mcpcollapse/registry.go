@@ -32,8 +32,7 @@ type Entry struct {
 	URL string
 	// Schema is the upstream tool's inputSchema, kept as json.RawMessage so the
 	// aggregator hands it back verbatim in mcp_describe and validates mcp_call
-	// args against it later — a deliberate contrast with pluginhost's ToolInfo,
-	// which drops the schema.
+	// args against it later.
 	Schema json.RawMessage
 	// Description is the upstream tool's one-line description, surfaced in
 	// mcp_list.

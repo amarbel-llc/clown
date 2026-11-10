@@ -497,6 +497,8 @@ func run(rawArgs []string) int {
 			return runDisconnectsVerb(rawArgs[1:], os.Stdout, os.Stderr)
 		case "disconnects-serve":
 			return runDisconnectsServe(rawArgs[1:], os.Stdin, os.Stdout, os.Stderr)
+		case "catalog":
+			return runCatalogVerb(rawArgs[1:], os.Stdin, os.Stdout, os.Stderr)
 		case "restart":
 			return runRestartVerb(rawArgs[1:], os.Stdout, os.Stderr)
 		case "agent-monitor":
@@ -2634,6 +2636,12 @@ func runManaged(
 				"the selection kept none of them (discovered: %s; started here: %d)", discoveredServerNames(offered), len(report.Started)))
 		}
 	}
+
+	// The live capability catalog's record of this session (clown#350): what
+	// the servers kept above report in tools/list, after any exclusions.
+	recordCatalogSnapshot(ctx, host, report.Started, discovered, flags, func(format string, args ...any) {
+		logger.Info(fmt.Sprintf(format, args...))
+	})
 
 	// --mcp-collapse: front every healthy upstream behind ONE clown-mcp-collapse
 	// aggregator (all-or-nothing for the prototype). Done HERE — after StartAll

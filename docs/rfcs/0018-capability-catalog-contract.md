@@ -79,6 +79,15 @@ such an input value, never the tool subject's `async` field (§3).
 
 - **Catalog ids are verbatim names.** No case folding, no underscore or
   hyphen normalization (FDR 0028 "Idioms": `run_recipe`, `issue-list`).
+- **A moxy tool's server and tool come from its advertised name.** moxy's
+  tools/list names a child tool `<server>.<tool>` (`folio.read`,
+  `smith.issue-list`): the server id is the text before the first `.`, the
+  tool id the rest. A name with no `.` is moxy's own tool, under server
+  `moxy`. The `_`-joined spelling (`folio_read`, inside
+  `mcp__plugin_moxy_moxy__folio_read`) is Claude Code's mangling of that
+  name and is never an id. `[-> folio_read !mcp-tool-v1]` matches nothing;
+  RFC 0019 warns on it (W-5). Limit: the rule assumes moxy's default name
+  template; a non-default `--name-template` defeats it (§9 item 7).
 - **Every instance subject has an id**, so a writer may name it or use `_`:
   a `tool-input-v1` and a `cg-field-v1` subject's id is the field name, a
   `recipe-arg-v1`'s is the parameter name, a `fs-path-v1`'s is the `file:`
@@ -93,7 +102,8 @@ such an input value, never the tool subject's `async` field (§3).
   enforcer presents the digest it computed from what it is about to
   dispatch; an enforcer that cannot compute one presents none (and every
   lock under it refuses, FDR 0028 rule 3). The values a writer locks to are
-  published by the live listing (§10).
+  to be published by the live listing (§10). The listing does not report
+  them yet (clown#354).
 
 ## 3. Tool subject fields
 
@@ -221,8 +231,9 @@ routed by its scheme, never by which tool or `server` argument carried it:
 | `clown:` | `clown-builtin-diagnostics/disconnects` (session records) |
 | every scheme cutting-garden's roots listing reports (`caldav:`, `ynab:`, `smith:`, `org:`, `newsblur:`, `fastmail:`, …) | `cutting-garden/cutting-garden` |
 
-The live listing (§10) is authoritative for the scheme set; this table is
-the seed.
+This table is the seed for the scheme set. The live listing (§10) becomes
+authoritative once it lists resource surfaces, which its first cut does
+not.
 
 ### 5.2 Resource paths
 
@@ -388,6 +399,22 @@ op=[read]]]]]`.
    FDR 0028's existential rule, and picking one verb depends on a per-tool
    "most destructive verb" convention no writer can see. Revisit if a tool
    with path fields appears whose verbs `kind=` cannot split.
+7. **moxy's canonical server, tool, perm and kind** (transitional in the
+   live listing, §10). moxy's tools/list carries none of them in `_meta`
+   (moxy/live-aspen, 2026-11-10). The listing therefore:
+   - splits moxy's advertised name at the first `.` (§2), which holds
+     only under the default `{server}.{tool}` template;
+   - reads `perm` from the `[perms: X]` suffix moxy appends to each
+     description (prose moxy may reword);
+   - presents `kind` only when a server's `_meta.kind` is `read`, `write`
+     or `exec`. moxy's existing `_meta.kind` is moxin(7)'s result label
+     (`list`, `issue`), a different vocabulary, and no moxin declares it
+     today.
+
+   Proposed keys: `_meta` keys for the canonical server, tool and
+   perms-request, with `kind`'s values settled separately so the two
+   meanings do not share a name. This is a moxy issue, routed via circus
+   eager-holly; the spellings are moxy's to choose.
 
 ## 10. Publication
 
@@ -406,12 +433,55 @@ op=[read]]]]]`.
   RFC declares. Field entries beyond the RFC's prose: `split = whitespace`
   (one value per word: `folio rm.paths`), `relative_to` (a relative path
   resolves against another path field, or `repo-root`).
-- **The live listing** `cg list -format espalier clown-catalog://<host>/…`
-  (D2 §6), carrying each tool's `kind`, `perm` and lock digest from the
-  launched session, is not built: it needs a cutting-garden plugin inside
-  clown and a flake input clown does not yet have. Until it exists, writers
-  lock nothing (P ×7 omitted locks for want of digests) and the scheme
-  table in §5.1 is the seed. Tracked as clown#350.
+- **The live listing** (D2 §6, clown#350) is
+  `cg list -format espalier clown-catalog://<principal>/…`. It is served by
+  `clown catalog traversal-serve`, a cutting-garden traversal plugin
+  (cutting-garden RFC 0013, `traversal-plugin/v1`). The protocol is
+  hand-rolled, as smith's is, so it needs no cutting-garden flake input.
+  - **Snapshot.** Each launch records, in the background after its servers
+    start and after `--cheap-context`'s exclusions, what every bound
+    server's tools/list reported. The record holds names, descriptions,
+    input schemas and `_meta` only, never URLs, commands, args or env
+    (#292). It is written to `$XDG_STATE_HOME/clown/catalog/<sha256(principal)>.json`
+    (0600).
+  - **Roots.** One root per running session: the snapshot records its
+    frontend's pid and start ticks, and a root is served while that pid
+    exists with the same ticks (an existing pid is enough where `/proc` is
+    absent). A dead session's snapshot is neither served nor deleted;
+    pruning is #351.
+  - **Shape.** The URI carries no hostname: the plugin serves one host, and
+    a hostname in every id is a redaction hazard when a listing is pasted.
+    Plugin, server and tool nodes are containers. A tool also has a body,
+    `leaf.read` → `{kind?, perm?}`, which never carries the schema.
+    Its inputs (`tool-input-v1`, the schema's top-level properties) are
+    leaves whose `field_kind` facet is §4's kind.
+  - **Locks are not reported yet.** §2's digest needs blake2b256, which Go's
+    standard library lacks, and adding `golang.org/x/crypto` to `go.nix` is
+    held for the operator (clown#354). A stopgap spelling was ruled out,
+    since profiles would be written against it. The snapshot keeps each
+    `inputSchema` verbatim, so the digest can be reported without
+    relaunching. An absent live lock is a mismatch (FDR 0028 rule 3), so no
+    profile can lean on one meanwhile.
+  - **What is listed.** Tool nodes carry `kind` and `perm` facets when
+    known (§9 item 7). For a claude launch the harness built-ins are listed
+    from §7's table (they have no schema, so no lock). Tools that present no tool step (moxy
+    `async` and `batch`, `ReadMcpResourceTool`, `ListMcpResourcesTool`)
+    are not listed.
+  - **Built-in inputs.** The frontend cannot read the harness's own tool
+    schemas, so a built-in lists only the fields `catalog.json` names
+    (`Read.file_path`, `Bash.command`, `Grep.pattern`, …), not every
+    parameter it takes.
+  - **Approximations.** A built-in turned off for the launch is still
+    listed. Under `--mcp-collapse` the snapshot records the upstream
+    servers, not the aggregator claude binds.
+  - **Not listed yet.** Servers reserved for an agent unit (not started by
+    the frontend) are absent. `just-recipe-v1` and `recipe-arg-v1` keep
+    their type names here only: who serves recipes and their locks, just-us
+    or clown, is #352.
+  - **Setup.** Registering the plugin's `[[traversal_plugins]]` stanza
+    (`command = ["clown", "catalog", "traversal-serve"]`, scheme
+    `clown-catalog`) in the host's cutting-garden `config.toml` is a host
+    configuration step outside this repo.
 
 ## More information
 

@@ -79,6 +79,21 @@ channel.
 The stdio MCP server behind
 .Li clown-builtin-diagnostics/disconnects ;
 not for manual use.
+.It Cm catalog traversal-serve
+The cutting-garden traversal plugin (protocol
+.Li traversal-plugin/v1 )
+serving the live capability catalog (RFC 0018) as
+.Li clown-catalog:// Ns Ar principal Ns Li / Ns Ar plugin Ns Li / Ns Ar server Ns Li / Ns Ar tool Ns Li / Ns Ar input ,
+one root per running session, each tool carrying its kind and perm, and
+each input its field kind
+.Pq see Xr clown-catalog 7 .
+Every launch records what its servers' tools/list reported under
+.Pa $XDG_STATE_HOME/clown/catalog ;
+cutting-garden starts this verb from a
+.Li [[traversal_plugins]]
+stanza with
+.Ev TRAVERSAL_PLUGIN_COOKIE
+set; not for manual use.
 .It Fl -provider Ar name
 Select the provider CLI.
 Valid values are
@@ -736,6 +751,10 @@ Set automatically by the Nix wrapper; not intended for manual use.
 Set to
 .Li 1
 to turn off plugin disconnect records, the diagnostics server and its wake.
+.It Ev CLOWN_DISABLE_CATALOG
+Set to
+.Li 1
+to record no capability-catalog snapshot at launch.
 .El
 .Sh FILES
 .Bl -tag -width Ds
@@ -743,6 +762,14 @@ to turn off plugin disconnect records, the diagnostics server and its wake.
 Plugin disconnect records, one directory per session.
 See
 .Cm disconnects .
+.It Pa $XDG_STATE_HOME/clown/catalog/
+Capability-catalog snapshots, one file per session, 0600: tool names,
+descriptions, input schemas and
+.Li _meta
+only.
+A dead session's snapshot is not served but stays on disk.
+See
+.Cm catalog traversal-serve .
 .It Pa .clown/system-prompt
 Replace-mode system prompt file (deepest wins).
 .It Pa .clown/system-prompt.d/*.md

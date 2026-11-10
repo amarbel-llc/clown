@@ -386,11 +386,14 @@ func (h *Host) logPromptSkip(srv *ManagedServer, err error) {
 	}
 }
 
-// ToolInfo is the subset of an MCP tools/list entry --cheap-context's
-// picker needs: enough to group and label a tool, not the full inputSchema.
+// ToolInfo is one MCP tools/list entry: its name and description (what
+// --cheap-context's picker groups and labels by) and its inputSchema and
+// _meta verbatim (what the capability catalog locks to, clown#350).
 type ToolInfo struct {
-	Name        string
-	Description string
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	InputSchema json.RawMessage `json:"inputSchema,omitempty"`
+	Meta        json.RawMessage `json:"_meta,omitempty"`
 }
 
 // FetchToolCatalog issues a minimal MCP handshake (initialize, then

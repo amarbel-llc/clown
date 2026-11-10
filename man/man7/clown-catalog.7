@@ -1,0 +1,330 @@
+.\" Copyright (c) 2026 amarbel, LLC
+.\" SPDX-License-Identifier: MIT
+.Dd @MDOCDATE@
+.Dt CLOWN-CATALOG 7
+.Os
+.Sh NAME
+.Nm clown-catalog
+.Nd what a capability profile names: the catalog an enforcer presents, for profile writers
+.Sh DESCRIPTION
+A capability profile
+.Pq Li \&! espalier-profile-v1
+admits an agent session's tool calls by matching the subjects an enforcer
+presents for each call: a path of catalog nodes (plugin, server, tool) and,
+under the tool, one instance subject per input.
+This page is for the writer of such a profile.
+It answers the three questions profile writers get wrong most often:
+.Bl -enum -offset indent
+.It
+where the harness built-ins hang
+.Pq Sx THE HARNESS BUILT-INS ;
+.It
+which input fields are paths or tree references rather than plain values
+.Pq Sx FIELD KINDS ;
+.It
+how a lock is spelled and where its digest comes from
+.Pq Sx LOCKS .
+.El
+.Pp
+clown RFC 0018 (the capability catalog contract,
+.Pa docs/rfcs/0018-capability-catalog-contract.md )
+is normative; where this page and the RFC disagree, the RFC is right.
+The rules a profile body must also follow are RFC 0019's; the matching is
+cutting-garden's
+.Xr ajour 7 .
+.Sh THE CATALOG PATH
+Every call is presented under three catalog nodes, always in this order:
+.Bl -tag -width "mcp-server-v1"
+.It Li clown-plugin-v1
+the clown plugin name, verbatim:
+.Li moxy ,
+.Li just-us ,
+.Li cutting-garden ,
+.Li spinclass ,
+.Li clown-builtin-jobs ,
+.Li clown-builtin-harness .
+.It Li mcp-server-v1
+the MCP server inside the plugin.
+For moxy this is the child server
+.Pq Li folio , Li rg , Li grit , Li smith , No ... ,
+and
+.Li moxy
+for moxy's own tools and resources.
+.It Li mcp-tool-v1
+the tool name as its server spells it, verbatim:
+.Li read ,
+.Li issue-list ,
+.Li run_recipe ,
+.Li Read .
+.El
+.Pp
+Ids are never normalized: no case folding, no
+.Ql _
+for
+.Ql - .
+The harness's prefixed spelling
+.Pq Li mcp__plugin_moxy_moxy__folio_read
+is never an id, and neither is its
+.Li folio_read :
+moxy names that tool
+.Li folio.read ,
+and the server is the text before the first
+.Ql \&. ,
+so it is
+.Li moxy
+/
+.Li folio
+/
+.Li read .
+A moxy tool with no
+.Ql \&.
+in its name
+.Pq Li status , Li async
+is under server
+.Li moxy .
+RFC 0019 warns on a
+.Ql _ Ns -joined
+moxy id (W-5).
+.Bd -literal -offset indent
+[moxy !clown-plugin-v1
+  [-> folio !mcp-server-v1
+    [-> read !mcp-tool-v1 [-> file:eng/repos !fs-path-v1 subtree]]]]
+.Ed
+.Sh THE HARNESS BUILT-INS
+The tools the harness implements itself (claude-code's
+.Li Read ,
+.Li Edit ,
+.Li Write ,
+.Li NotebookEdit ,
+.Li Glob ,
+.Li Grep ,
+.Li Bash ,
+.Li Agent ,
+.Li Skill ,
+.Li WebFetch ,
+.Li WebSearch )
+hang under a plugin and server clown declares for them:
+.Bd -literal -offset indent
+[clown-builtin-harness !clown-plugin-v1
+  [-> harness !mcp-server-v1
+    [-> Read !mcp-tool-v1 [-> file:eng/repos !fs-path-v1 subtree]]
+    [-> Edit !mcp-tool-v1 [-> file:eng/repos/x/.worktrees/w !fs-path-v1 subtree]]]]
+.Ed
+.Pp
+Two exceptions:
+.Bl -bullet
+.It
+.Li ReadMcpResourceTool
+and
+.Li ListMcpResourcesTool
+present no tool step.
+The call is presented as the resource read it is, under the server that
+owns the URI's scheme
+.Pq Sx RESOURCES .
+A node for either tool under
+.Li clown-builtin-harness/harness
+never matches anything (RFC 0019 warns, W-2).
+.It
+.Li Bash
+.Pq and moxy's Li toolbox/run
+take one opaque
+.Li command
+value.
+A profile that admits either with the command open admits every file and
+host the command line can name; the catalog cannot scope it (RFC 0019
+warns, W-1).
+.El
+.Sh FIELD KINDS
+Each input field of a tool is presented as exactly one kind.
+The kind decides what a profile writes under the tool:
+.Bl -tag -width "reference"
+.It path
+one
+.Li fs-path-v1
+subject per path, with
+.Li field= Ns Ar name
+and no verb (the tool is the verb).
+Write
+.Li [-> file: Ns Ar id Li !fs-path-v1 subtree] .
+.It reference
+one resource path per object, under the surface of the server that owns the
+URI's scheme
+.Pq Sx RESOURCES ,
+never under the tool.
+.It content
+a value that is, whole, a
+.Li madder://blobs/ Ns Ar digest
+URI is a resource read under
+.Li moxy/moxy ;
+any other value is an input.
+.It recipe
+.Li run_recipe Ns 's
+recipe and its arguments, as a value path under the tool.
+.It route
+nothing: the enforcer consumes it.
+.It input
+the default: one
+.Li tool-input-v1
+subject,
+.Li field= Ns Ar name Li value= Ns Ar value .
+Write
+.Li [-> _ !tool-input-v1 field=repo value=[a, b]]
+beside
+.Li [-> _ !tool-input-v1 ^field=repo open] .
+.El
+.Pp
+The path and reference fields of the tools a writer meets most:
+.Bl -column "cutting-garden list_nodes, read_node, read_facets" "source, destination" -offset indent
+.It Sy tool Ta Sy path fields Ta Sy reference fields
+.It harness Read, Edit, Write Ta file_path Ta \(em
+.It harness NotebookEdit Ta notebook_path Ta \(em
+.It harness Glob, Grep Ta path Ta \(em
+.It harness ReadMcpResourceTool Ta \(em Ta uri
+.It moxy folio read, write Ta file_path Ta \(em
+.It moxy folio ls, glob, tree, mkdir, chmod, ... Ta path Ta \(em
+.It moxy folio rm Ta paths Ta \(em
+.It moxy folio cp, mv Ta source, destination Ta \(em
+.It moxy folio link Ta source, target Ta \(em
+.It moxy rg search Ta path Ta \(em
+.It moxy jq jq Ta files, cwd Ta \(em
+.It moxy grit status, diff, log Ta paths Ta \(em
+.It moxy grit commit, merge, remote, tag Ta repo_path Ta \(em
+.It moxy grit branch, stage, stash Ta repo_path, paths Ta \(em
+.It moxy grit clone Ta source, destination Ta \(em
+.It moxy chix build, flake-* Ta flake_dir Ta \(em
+.It spinclass grit_* Ta repo_path (and as grit) Ta \(em
+.It cutting-garden list_nodes, read_node, read_facets Ta \(em Ta uri
+.It cutting-garden mutate_nodes Ta \(em Ta groups
+.It moxy chrest, nebulous resource-read Ta \(em Ta uri
+.El
+.Pp
+The
+.Li stdin
+of moxy's
+.Li jq
+and
+.Li toolbox run
+is content.
+.Pp
+The complete table is
+.Pa internal/*/catalogcontract/catalog.json ;
+the live listing
+.Pq Sx THE LIVE LISTING
+shows each field's kind as its
+.Li field_kind
+facet.
+A field neither lists is an input.
+.Ss Spelling a path
+A path is presented by its canonical
+.Li file:
+id: symlinks resolved, no
+.Ql \&.
+or
+.Ql .. ,
+no trailing slash.
+Under the home directory it is
+.Li file:
+and the path relative to home, with no leading
+.Ql / :
+.Li file:eng/repos/clown/.worktrees/w .
+Elsewhere it is
+.Li file:
+and the absolute path:
+.Li file:/nix/store .
+A worktree reached through a symlink is presented by its resolved path,
+so a profile naming the symlink never matches.
+.Pp
+A path field holding a URI with another scheme
+.Pq Li madder:// , Li clown://
+is a resource read under that scheme's owner, not a path.
+A glob pattern that is absolute or has a
+.Ql ..
+segment is refused before the profile is asked.
+.Sh RESOURCES
+A server's resources hang under one surface node beside its tools,
+.Li [-> resources !mcp-resources-v1] ,
+and every resource step carries its verb as
+.Li op=
+.Pq Li read , Li patch , Li put , Li delete .
+The owning server is chosen by the URI's scheme:
+.Li madder:
+is
+.Li moxy/moxy ;
+.Li chrest:
+and
+.Li nebulous:
+are their moxy servers;
+.Li clown:
+is
+.Li clown-builtin-diagnostics/disconnects ;
+cutting-garden's schemes
+.Pq Li caldav: , Li org: , Li smith: , No ...
+are
+.Li cutting-garden/cutting-garden .
+.Bd -literal -offset indent
+[moxy !clown-plugin-v1 [-> moxy !mcp-server-v1
+  [-> resources !mcp-resources-v1
+    [-> madder://blobs !mcp-resource-v1 subtree op=[read]]]]]
+.Ed
+.Sh LOCKS
+A lock pins a tool to the exact input schema the writer reviewed: the
+tool's id is followed by
+.Ql @
+and the schema's digest.
+.Bd -literal -offset indent
+[-> run_recipe@blake2b256-<digest> !mcp-tool-v1]
+.Ed
+.Pp
+The digest is the blake2b256 markl id
+.Pq Xr markl-id 7
+of the canonical JSON (sorted keys, no whitespace) of the tool's MCP
+.Li inputSchema .
+A server that changes the tool's schema changes the digest, and the locked
+node stops matching until the profile is re-locked.
+Never compute a digest by hand, and never use a digest of anything else:
+an enforcer that cannot present the same digest refuses every lock beneath
+it.
+The live listing does not report digests yet (clown#354), so until it does
+a profile cannot be locked from it.
+The harness built-ins have no schema and cannot be locked.
+.Sh THE LIVE LISTING
+Every clown launch records what its servers report, and
+.Ic clown catalog traversal-serve ,
+a cutting-garden traversal plugin, serves the running sessions as
+.Li clown-catalog:// Ns Ar principal Ns Li / Ns Ar plugin Ns Li / Ns Ar server Ns Li / Ns Ar tool Ns Li / Ns Ar input :
+.Bd -literal -offset indent
+cg list -format espalier clown-catalog://<principal>/moxy/folio
+.Ed
+.Pp
+A tool node carries its
+.Li kind
+and
+.Li perm
+facets when known; reading it
+.Pq Li read_node
+gives the same.
+An input node's
+.Li field_kind
+facet is its kind
+.Pq Sx FIELD KINDS .
+The listing copies ids, digests and kinds exactly as an enforcer will
+present them, so a writer copies from it rather than guessing.
+.Pp
+The listing is only as complete as the launch that recorded it: servers
+started inside an agent unit are absent, a harness built-in lists only the
+inputs the contract names (its full parameter list is the harness's, not
+readable by clown), and moxy's
+.Li kind
+and
+.Li perm
+are read from moxy's advertised names and descriptions until moxy
+publishes them as metadata (RFC 0018 \(sc9 item 7).
+.Sh SEE ALSO
+.Xr clown 1 ,
+.Xr cutting-garden 1 ,
+.Xr ajour 7 ,
+.Xr markl-id 7 ,
+.Xr moxin 7
+.Pp
+clown RFC 0018 (the catalog contract) and RFC 0019 (the profile rules);
+cutting-garden FDR 0028 (ajour).

@@ -1286,6 +1286,7 @@
           "man5/clown-profiles.5"
           "man5/clownfile.5"
           "man7/clown-plugin-protocol.7"
+          "man7/clown-catalog.7"
           # man1/ringmaster.1 + man1/troupe.1 ship from the external
           # ringmaster module (ringmasterPkg's share/man, merged into the
           # default symlinkJoin) — the job-platform CLI pages. But the man7
