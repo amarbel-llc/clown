@@ -2525,6 +2525,55 @@ explore-catalog-conformance CG_REPO:
     echo "driver exit $driver_status, bats exit $bats_status"
     [[ $driver_status -eq 0 && $bats_status -eq 0 ]]
 
+# The first "a real call becomes a Call" dry run (cutting-garden FDR 0028):
+# DIR holds snapshot.json (one session's tools/list entries), the layer bodies
+# (stencil-engineer.espalier, stencil-d2-sample-a.espalier, patch-p.espalier)
+# and call-*.json. Lists the snapshot through cutting-garden's host and
+# `clown catalog traversal-serve` (the ids a writer would copy), then runs
+# cutting-garden-ajour for each call against three stacks: the engineer
+# stencil alone, + D2 sample A, + FDR patch P. Read-only toward CG_REPO
+# (--no-write-lock-file); config and state live in a temp dir.
+#
+# list a fixture catalog and evaluate calls against sample profiles with ajour
+[group("explore")]
+explore-ajour-dry-run CG_REPO DIR:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    cg="$(readlink -f "{{ CG_REPO }}")"
+    dir="$(readlink -f "{{ DIR }}")"
+    tmp="$(mktemp -d /tmp/ajour-dry-XXXXXX)"
+    trap 'rm -rf "$tmp"' EXIT
+    clown="$(nix build --no-link --print-out-paths .#default)/bin/clown"
+    cgpkg="$(nix build --no-write-lock-file --no-link --print-out-paths "$cg#default")"
+    principal="$(jq -r .principal "$dir/snapshot.json")"
+    mkdir -p "$tmp/state/clown/catalog" "$tmp/config/cutting-garden"
+    snap="$tmp/state/clown/catalog/$(printf '%s' "$principal" | sha256sum | cut -d' ' -f1).json"
+    cp "$dir/snapshot.json" "$snap" && chmod 600 "$snap"
+    peer="$tmp/clown-catalog-peer"
+    printf '#!/bin/sh\nexec env XDG_STATE_HOME=%s %s catalog traversal-serve\n' "$tmp/state" "$clown" >"$peer"
+    chmod +x "$peer"
+    printf '[[traversal_plugins]]\nname = "clown-catalog"\ncommand = ["%s"]\nschemes = ["clown-catalog"]\n' "$peer" \
+        >"$tmp/config/cutting-garden/config.toml"
+    for uri in "" /moxy /moxy/folio /moxy/folio/read /just-us/just-us /just-us/just-us/run_recipe \
+        /cutting-garden/cutting-garden /cutting-garden/cutting-garden/mutate_nodes; do
+        echo "== cutting-garden list -format espalier clown-catalog://$principal$uri"
+        env HOME="$tmp" XDG_CONFIG_HOME="$tmp/config" \
+            "$cgpkg/bin/cutting-garden" list -format espalier "clown-catalog://$principal$uri"
+    done
+    ajour="$cgpkg/bin/cutting-garden-ajour"
+    for call in "$dir"/call-*.json; do
+        for stack in "engineer" "engineer + d2-sample-a" "engineer + patch-p"; do
+            args=(--stencil "$dir/stencil-engineer.espalier")
+            case "$stack" in
+                *d2-sample-a) args+=(--stencil "$dir/stencil-d2-sample-a.espalier") ;;
+                *patch-p) args+=(--patch "$dir/patch-p.espalier") ;;
+            esac
+            echo "== $(basename "$call") against [$stack]"
+            "$ajour" "${args[@]}" --call "$call" 2>&1
+            echo "exit $?"
+        done
+    done
+
 # Print `clown --print-launch-plan` for the built clown under PROFILE and
 # summarize what shapes the context floor: the --disallowed-tools set, the
 # --settings JSON (connector switches, env) and the --plugin-dir count. A saved
