@@ -229,9 +229,9 @@ func TestForeignSchemesAndMissingNodesAreCallerFaults(t *testing.T) {
 	}
 }
 
-// The tool's body is its pins, never its schema; no lock until a digest the
-// enforcers share lands (clown#354), so none is reported.
-func TestLeafReadOnAToolCarriesThePinsAndNoSchemaKeyOrLock(t *testing.T) {
+// The tool's body is its pins and its lock (RFC 0018 §2), never the schema
+// the lock is computed from.
+func TestLeafReadOnAToolCarriesThePinsAndLockAndNoSchemaKey(t *testing.T) {
 	s, _ := initialized(t)
 	raw, rerr := call(t, s, "leaf.read", map[string]string{"uri": "clown-catalog://live/moxy/folio/read"})
 	if rerr != nil {
@@ -244,10 +244,11 @@ func TestLeafReadOnAToolCarriesThePinsAndNoSchemaKeyOrLock(t *testing.T) {
 	if err := json.Unmarshal(raw, &res); err != nil {
 		t.Fatal(err)
 	}
-	if !res.OK || res.Structured["perm"] != "dynamic" {
-		t.Errorf("leaf.read = %s", raw)
+	want, _ := catalogcontract.LockDigest([]byte(`{"type":"object","properties":{"file_path":{"type":"string"}},"required":["file_path"]}`))
+	if !res.OK || res.Structured["perm"] != "dynamic" || res.Structured["lock"] != want {
+		t.Errorf("leaf.read = %s, want perm dynamic and lock %s", raw, want)
 	}
-	for _, key := range []string{"properties", "required", `"type"`, "file_path", "lock"} {
+	for _, key := range []string{"properties", "required", `"type"`, "file_path"} {
 		if bytes.Contains(raw, []byte(key)) {
 			t.Errorf("leaf.read on a tool carries %s: %s", key, raw)
 		}

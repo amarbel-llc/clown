@@ -21,11 +21,22 @@ type Scheme = internal.Scheme
 // is KindInput.
 type Tool = internal.Tool
 
+// CanonicalJSON re-serializes one JSON value with object keys sorted, no
+// insignificant whitespace and strings and numbers as their JSON text (a
+// number keeps its literal spelling; nothing is HTML-escaped).
+var CanonicalJSON = internal.CanonicalJSON
+
 // Kinds is every field kind RFC 0018 §4 declares.
 var Kinds = internal.Kinds
 
 // Load parses the embedded table, refusing unknown keys.
 var Load = internal.Load
+
+// LockDigest is RFC 0018 §2's lock: the blake2b256 markl id of the canonical
+// JSON of raw (a tool's MCP inputSchema). The catalog listing and every
+// enforcer call this one function, so a lock is spelled the same by both
+// (FDR 0028 rule 3).
+var LockDigest = internal.LockDigest
 
 // Presentations is every value of Tool.Presents.
 var Presentations = internal.Presentations

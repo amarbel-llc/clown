@@ -84,8 +84,8 @@ The cutting-garden traversal plugin (protocol
 .Li traversal-plugin/v1 )
 serving the live capability catalog (RFC 0018) as
 .Li clown-catalog:// Ns Ar principal Ns Li / Ns Ar plugin Ns Li / Ns Ar server Ns Li / Ns Ar tool Ns Li / Ns Ar input ,
-one root per running session, each tool carrying its kind and perm, and
-each input its field kind
+one root per running session, each tool carrying its kind, perm and lock
+digest, and each input its field kind
 .Pq see Xr clown-catalog 7 .
 Every launch records what its servers' tools/list reported under
 .Pa $XDG_STATE_HOME/clown/catalog ;

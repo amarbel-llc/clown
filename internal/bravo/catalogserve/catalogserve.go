@@ -6,7 +6,7 @@
 //	clown-catalog://<principal>/<plugin>/<server>/<tool>/<input>
 //
 // One root per live session. Plugins, servers and tools are containers; a
-// tool also has a body (its kind and perm), and its inputs are leaves.
+// tool also has a body (its kind, perm and lock), and its inputs are leaves.
 // The protocol is hand-rolled, as smith's plugin is, so clown links no
 // cutting-garden module.
 package catalogserve
@@ -260,7 +260,7 @@ func (s *server) initialize(params json.RawMessage) (any, *rpcError) {
 			}},
 		},
 		"bodies": []map[string]any{
-			{"tag": typeTool, "accepts": []string{"application/json: the tool's kind and perm (read-only)"}},
+			{"tag": typeTool, "accepts": []string{"application/json: the tool's kind, perm and lock digest (read-only)"}},
 		},
 	}, nil
 }
@@ -412,7 +412,7 @@ func (t target) children() []map[string]any {
 	return out
 }
 
-// body is the node's own body: a tool's pins, an input's field kind;
+// body is the node's own body: a tool's pins and lock, an input's field kind;
 // the other levels have none.
 func (t target) body() map[string]any {
 	m := t.match()
@@ -422,7 +422,7 @@ func (t target) body() map[string]any {
 	n := m[0]
 	structured := map[string]string{}
 	if len(t.segs) == 4 {
-		for k, v := range map[string]string{"kind": n.Kind, "perm": n.Perm} {
+		for k, v := range map[string]string{"kind": n.Kind, "perm": n.Perm, "lock": n.Lock} {
 			if v != "" {
 				structured[k] = v
 			}

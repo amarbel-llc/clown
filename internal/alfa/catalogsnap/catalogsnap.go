@@ -227,7 +227,10 @@ type ToolNode struct {
 	// Kind is read, write or exec, or "" when nothing declares one.
 	Kind string
 	// Perm is PermAllow, PermAsk or PermDynamic, or "" when unknown.
-	Perm   string
+	Perm string
+	// Lock is RFC 0018 §2's lock digest of the tool's inputSchema, or ""
+	// when it has none (the harness built-ins).
+	Lock   string
 	Inputs []Input
 }
 
@@ -255,6 +258,9 @@ func Present(s Snapshot, c catalogcontract.Contract) []ToolNode {
 				continue
 			}
 			n := ToolNode{Plugin: srv.Plugin, Server: server, Tool: tool, Kind: metaKind(t.Meta), Perm: permFromDescription(t.Description)}
+			if len(t.InputSchema) > 0 {
+				n.Lock, _ = catalogcontract.LockDigest(t.InputSchema) // an unparseable schema has no lock
+			}
 			for _, name := range schemaProperties(t.InputSchema) {
 				if !oneSegment(name) {
 					continue

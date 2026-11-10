@@ -284,8 +284,8 @@ node stops matching until the profile is re-locked.
 Never compute a digest by hand, and never use a digest of anything else:
 an enforcer that cannot present the same digest refuses every lock beneath
 it.
-The live listing does not report digests yet (clown#354), so until it does
-a profile cannot be locked from it.
+Copy the digest from the live listing: reading a tool node gives its
+.Li lock .
 The harness built-ins have no schema and cannot be locked.
 .Sh THE LIVE LISTING
 Every clown launch records what its servers report, and
@@ -302,7 +302,8 @@ and
 .Li perm
 facets when known; reading it
 .Pq Li read_node
-gives the same.
+gives those and its
+.Li lock .
 An input node's
 .Li field_kind
 facet is its kind

@@ -201,6 +201,11 @@
       indirect = true;
       version = "v0.0.0-20220910002029-abceb7e1c41e";
     };
+    "golang.org/x/crypto" = {
+      go = "1.25.0";
+      hash = "sha256-/R74sc1mcOaOuBeXRQzrXrHAgA5VhNWc6SfQJaxb17U=";
+      version = "v0.51.0";
+    };
     "golang.org/x/sys" = {
       go = "1.26.0";
       hash = "sha256-/1S3yy3in72ygZT1CKymvOzJZqCMYiGSqZDfvSyB3LI=";
@@ -208,14 +213,14 @@
     };
     "golang.org/x/term" = {
       go = "1.25.0";
-      hash = "sha256-FCiDvAfq7dgBGQuiDYDFJbj/JPawhrmPF2qdUEftQ1c=";
-      version = "v0.42.0";
+      hash = "sha256-gFV1oGgs/vpRamvDWmu93voN57iyZMk/hh+oL8L9VrQ=";
+      version = "v0.43.0";
     };
     "golang.org/x/text" = {
       go = "1.25.0";
-      hash = "sha256-/0t9C6Mc8kYjxweFB0us2lGKo8GovHhBiq5nlMOppC0=";
+      hash = "sha256-8XDOnlPIybcDRy89fkjG5VqtIt5Ku+LmaqYhgKl7i1E=";
       indirect = true;
-      version = "v0.36.0";
+      version = "v0.37.0";
     };
   };
 }

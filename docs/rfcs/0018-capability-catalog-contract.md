@@ -102,8 +102,7 @@ such an input value, never the tool subject's `async` field (§3).
   enforcer presents the digest it computed from what it is about to
   dispatch; an enforcer that cannot compute one presents none (and every
   lock under it refuses, FDR 0028 rule 3). The values a writer locks to are
-  to be published by the live listing (§10). The listing does not report
-  them yet (clown#354).
+  published by the live listing (§10), computed by `catalogcontract.LockDigest`.
 
 ## 3. Tool subject fields
 
@@ -461,20 +460,20 @@ op=[read]]]]]`.
   - **Shape.** The URI carries no hostname: the plugin serves one host, and
     a hostname in every id is a redaction hazard when a listing is pasted.
     Plugin, server and tool nodes are containers. A tool also has a body,
-    `leaf.read` → `{kind?, perm?}`, which never carries the schema.
+    `leaf.read` → `{kind?, perm?, lock?}`, which never carries the schema.
     Its inputs (`tool-input-v1`, the schema's top-level properties) are
     leaves whose `field_kind` facet is §4's kind. Each type declares a
     `uri_template` (cutting-garden RFC 0018), one variable per segment, so
     the host resolves a tool URI to its body-declaring type. `just
     explore-catalog-conformance <cutting-garden checkout>` runs
     cutting-garden's conformance driver and portable bats cases against it.
-  - **Locks are not reported yet.** §2's digest needs blake2b256, which Go's
-    standard library lacks, and adding `golang.org/x/crypto` to `go.nix` is
-    held for the operator (clown#354). A stopgap spelling was ruled out,
-    since profiles would be written against it. The snapshot keeps each
-    `inputSchema` verbatim, so the digest can be reported without
-    relaunching. An absent live lock is a mismatch (FDR 0028 rule 3), so no
-    profile can lean on one meanwhile.
+  - **Locks.** A tool's body carries its `lock`: `catalogcontract.LockDigest`
+    of the snapshot's verbatim `inputSchema` (canonical JSON, then
+    blake2b256, then blech32; `golang.org/x/crypto`, allowed by the operator
+    2026-11-10, clown#354). An enforcer that links `pkgs/catalogcontract`
+    calls the same function, so a lock is spelled the same by both (FDR
+    0028 rule 3). The test vectors are toolbox(1)'s independent `digest -a
+    blake2b256`.
   - **What is listed.** Tool nodes carry `kind` and `perm` facets when
     known (§9 item 7). For a claude launch the harness built-ins are listed
     from §7's table (they have no schema, so no lock). Tools that present no tool step (moxy
