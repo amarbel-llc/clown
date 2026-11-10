@@ -240,11 +240,15 @@ func (s *server) initialize(params json.RawMessage) (any, *rpcError) {
 		"schemes":      []string{Scheme},
 		"type_tag":     "cutting_garden-capture_receipt-clown_catalog-v1",
 		"capabilities": []string{"roots", "leaf-read"},
+		// uri_template (cutting-garden RFC 0018): one variable per segment,
+		// each a single percent-escaped segment (uriOf), so the segment count
+		// alone keeps the four disjoint and lets the host resolve a tool
+		// URI to its body-declaring type.
 		"node_types": []map[string]any{
-			{"tag": typePlugin, "container": true},
-			{"tag": typeServer, "container": true},
-			{"tag": typeTool, "container": true},
-			{"tag": typeInput, "container": false, "mime_type": "application/json"},
+			{"tag": typePlugin, "container": true, "uri_template": schemePrefix + "{principal}/{plugin}"},
+			{"tag": typeServer, "container": true, "uri_template": schemePrefix + "{principal}/{plugin}/{server}"},
+			{"tag": typeTool, "container": true, "uri_template": schemePrefix + "{principal}/{plugin}/{server}/{tool}"},
+			{"tag": typeInput, "container": false, "mime_type": "application/json", "uri_template": schemePrefix + "{principal}/{plugin}/{server}/{tool}/{input}"},
 		},
 		"facets": []map[string]any{
 			{"tag": typeTool, "dimensions": []map[string]any{

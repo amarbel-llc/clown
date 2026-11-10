@@ -449,13 +449,19 @@ op=[read]]]]]`.
     exists with the same ticks (an existing pid is enough where `/proc` is
     absent). A dead session's snapshot is not served. Each launch deletes
     the snapshots of dead sessions written more than 7 days earlier
-    (`catalogsnap.Retention`); a live session's is never deleted.
+    (`catalogsnap.Retention`); a live session's is never deleted. The age
+    is measured from the snapshot's `written_at`, not from its start ticks:
+    ticks count from boot, so they decide liveness only.
   - **Shape.** The URI carries no hostname: the plugin serves one host, and
     a hostname in every id is a redaction hazard when a listing is pasted.
     Plugin, server and tool nodes are containers. A tool also has a body,
     `leaf.read` → `{kind?, perm?}`, which never carries the schema.
     Its inputs (`tool-input-v1`, the schema's top-level properties) are
-    leaves whose `field_kind` facet is §4's kind.
+    leaves whose `field_kind` facet is §4's kind. Each type declares a
+    `uri_template` (cutting-garden RFC 0018), one variable per segment, so
+    the host resolves a tool URI to its body-declaring type. `just
+    explore-catalog-conformance <cutting-garden checkout>` runs
+    cutting-garden's conformance driver and portable bats cases against it.
   - **Locks are not reported yet.** §2's digest needs blake2b256, which Go's
     standard library lacks, and adding `golang.org/x/crypto` to `go.nix` is
     held for the operator (clown#354). A stopgap spelling was ruled out,

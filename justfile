@@ -2465,6 +2465,65 @@ explore-claude-connector-switches:
         ' <<<"$out" || echo "$variant: no usable output"
     done
 
+# Run cutting-garden's RFC 0013 conformance against `clown catalog
+# traversal-serve` (clown#350): its published driver
+# (`.#conformance-traversal`) with a read-only manifest for this peer, then
+# its unmodified zz-tests_bats/traversal_serve.bats filtered to `portable`,
+# with this peer as CG_TEST_TRAVERSAL_SERVE. Read-only toward CG_REPO (the
+# cutting-garden checkout): nothing there is written. cutting-garden's own
+# debug-test-bats cannot be used, since its runner (`env -i`) pins its own
+# testpeer as CG_TEST_TRAVERSAL_SERVE; this recipe runs bats directly as the
+# workaround until cutting-garden#407 is fixed. The peer sees one fixture session whose
+# snapshot names pid 1 with no start ticks (always alive). The two portable
+# conformance-driver bats cases pin cutting-garden's testpeer manifest
+# (cgtest://), so they SKIP here (CG_CONFORMANCE_TRAVERSAL unset); the driver
+# run above is this peer's equivalent.
+#
+# run cutting-garden's RFC 0013 conformance against clown catalog traversal-serve
+[group("explore")]
+explore-catalog-conformance CG_REPO:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    cg="$(readlink -f "{{ CG_REPO }}")"
+    tmp="$(mktemp -d /tmp/cc-conf-XXXXXX)"
+    trap 'rm -rf "$tmp"' EXIT
+    clown="$(nix build --no-link --print-out-paths .#default)/bin/clown"
+    driver="$(nix build --no-link --print-out-paths "$cg#conformance-traversal")/bin/cutting-garden-conformance-traversal"
+    cgbin="$(nix build --no-link --print-out-paths "$cg#default")/bin/cutting-garden"
+    bats_libs="$(nix build --no-link --print-out-paths .#bats-libs)/share/bats"
+    bats_bin="$(nix build --no-link --print-out-paths 'nixpkgs#bats')/bin/bats"
+    state="$tmp/state"
+    mkdir -p "$state/clown/catalog"
+    principal=conformance
+    name="$(printf '%s' "$principal" | sha256sum | cut -d' ' -f1).json"
+    cat >"$state/clown/catalog/$name" <<EOF
+    {"version":1,"principal":"$principal","harness":"claude-code","frontend_pid":1,"frontend_start_ticks":0,"written_at":"2026-11-10T00:00:00Z","servers":[{"plugin":"moxy","server":"moxy","tools":[{"name":"folio.read","description":"Read a file. [perms: dynamic]","input_schema":{"type":"object","properties":{"file_path":{"type":"string"}}}}]}]}
+    EOF
+    chmod 600 "$state/clown/catalog/$name"
+    peer="$tmp/clown-catalog-peer"
+    printf '#!/bin/sh\nexec env XDG_STATE_HOME=%s %s catalog traversal-serve\n' "$state" "$clown" >"$peer"
+    chmod +x "$peer"
+    cat >"$tmp/manifest.toml" <<EOF
+    command = ["$peer"]
+    schemes = ["clown-catalog"]
+
+    [container_body]
+    uri = "clown-catalog://$principal/moxy/folio/read"
+    EOF
+    echo "== conformance driver (read-only manifest)"
+    "$driver" --manifest "$tmp/manifest.toml"
+    driver_status=$?
+    echo "== cutting-garden traversal_serve.bats, portable cases"
+    (
+        cd "$cg/zz-tests_bats"
+        env -u CG_CONFORMANCE_TRAVERSAL \
+            CG_TEST_TRAVERSAL_SERVE="$peer" CG_BIN="$cgbin" BATS_LIB_PATH="$bats_libs" \
+            "$bats_bin" --filter-tags portable traversal_serve.bats
+    )
+    bats_status=$?
+    echo "driver exit $driver_status, bats exit $bats_status"
+    [[ $driver_status -eq 0 && $bats_status -eq 0 ]]
+
 # Print `clown --print-launch-plan` for the built clown under PROFILE and
 # summarize what shapes the context floor: the --disallowed-tools set, the
 # --settings JSON (connector switches, env) and the --plugin-dir count. A saved
