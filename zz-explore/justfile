@@ -2162,6 +2162,10 @@ explore-agent-scope-claude PROMPT='Use the Read tool to read hello.txt, then rep
     specdir="$root/.tmp/agent-scope-e2e.spec"
     rm -rf "$wt" "$specdir"; mkdir -p "$wt" "$specdir"
     echo "agent-scope-e2e-ok" > "$wt/hello.txt"
+    # A tiny justfile and git repo, so a prompt can exercise run_recipe and grit
+    # inside the unit (the clown#341 trimmed-PATH recipe check).
+    printf 'hello:\n    echo recipe-ok\n' > "$wt/justfile"
+    git -C "$wt" init -q && git -C "$wt" add -A
     sockets='[]'
     [[ -S ${SSH_AUTH_SOCK:-} ]] && sockets=$(jq -n --arg p "$SSH_AUTH_SOCK" '[{path:$p,purpose:"piggy-agent"}]')
     # The madder store moxy writes large tool outputs to, as spinclass binds it.
