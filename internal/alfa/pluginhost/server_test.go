@@ -183,6 +183,34 @@ func TestManagedServer_UnexpectedDeath(t *testing.T) {
 	}
 }
 
+// A server that dies mid-session is logged when it dies, once, with its exit
+// code; Stop afterwards does not log it a second time (clown#241).
+func TestManagedServer_DeathIsLoggedWhenItHappens(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	srv := newTestServer(t, "exit-code")
+	srv.Logger = logger
+	if err := srv.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-srv.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for server to die")
+	}
+
+	before := buf.String()
+	if !strings.Contains(before, "plugin server died unexpectedly") || !strings.Contains(before, "exit_code=42") {
+		t.Errorf("death not logged before Stop, got:\n%s", before)
+	}
+
+	srv.Stop()
+	if n := strings.Count(buf.String(), "plugin server died unexpectedly"); n != 1 {
+		t.Errorf("death logged %d times, want once:\n%s", n, buf.String())
+	}
+}
+
 func TestManagedServer_UnexpectedDeathNonZero(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))

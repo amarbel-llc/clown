@@ -49,6 +49,9 @@ type ManagedServer struct {
 	// begins to stop it on purpose, so WatchExits can tell that from a death.
 	startedAt time.Time
 	stopping  atomic.Bool
+	// exitLogged is set once the death has been logged (by reap, mid-session),
+	// so Stop does not log the same death again at shutdown.
+	exitLogged atomic.Bool
 	// reserved marks an entry from Host.Reserve: no process here.
 	reserved bool
 	// manifestAddress, when set, is the TCP address claude's manifest names
@@ -190,7 +193,9 @@ func (s *ManagedServer) Stop() {
 
 	select {
 	case <-s.done:
-		s.logUnexpectedExit(log, pid)
+		if !s.exitLogged.Load() {
+			s.logUnexpectedExit(log, pid)
+		}
 		return
 	default:
 	}
@@ -234,6 +239,13 @@ func (s *ManagedServer) reap() {
 	<-s.stderrDone
 	_ = s.cmd.Wait()
 	s.waitState = s.cmd.ProcessState
+	// A death the host did not ask for is logged when it happens, not only at
+	// session end (clown#241): until then nothing in the host log says a server
+	// that is not a recording bridge has gone.
+	if !s.stopping.Load() {
+		s.exitLogged.Store(true)
+		s.logUnexpectedExit(s.logger(), s.cmd.Process.Pid)
+	}
 	close(s.done)
 }
 
