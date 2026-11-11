@@ -190,6 +190,9 @@ func prepareAgentScope(specPath, specDigest, unit string, argv, extraEnv []strin
 		// (or its [attach] carrier) never enters the unit (clown#320).
 		Unattended: unattendedValue() == "1",
 	}
+	// clown#341 ask 3: names-only difference between the launcher's
+	// environment and the unit's, logged before any enforcement tightens.
+	fmt.Fprintf(os.Stderr, "clown: agent scope: %s\n", launch.EnvironmentReport())
 	return launch, nil
 }
 
