@@ -2157,7 +2157,10 @@ explore-agent-scope-claude PROMPT='Use the Read tool to read hello.txt, then rep
     clown="$root/result/bin/clown"
     [[ -x $clown ]] || { echo "FAIL: run 'just build' first" >&2; exit 2; }
     wt="$root/.tmp/agent-scope-e2e"
-    rm -rf "$wt"; mkdir -p "$wt"
+    # The spec lives beside the worktree, not in it: the launch refuses a spec
+    # the unit could write (or it would be unit-controlled input).
+    specdir="$root/.tmp/agent-scope-e2e.spec"
+    rm -rf "$wt" "$specdir"; mkdir -p "$wt" "$specdir"
     echo "agent-scope-e2e-ok" > "$wt/hello.txt"
     sockets='[]'
     [[ -S ${SSH_AUTH_SOCK:-} ]] && sockets=$(jq -n --arg p "$SSH_AUTH_SOCK" '[{path:$p,purpose:"piggy-agent"}]')
@@ -2166,13 +2169,13 @@ explore-agent-scope-claude PROMPT='Use the Read tool to read hello.txt, then rep
     binds='[]'; [[ -d $madder ]] && binds=$(jq -n --arg p "$madder" '[$p]')
     jq -n --arg wt "$wt" --arg home "$HOME" --argjson s "$sockets" --argjson b "$binds" \
         '{version:1, worktree:$wt, operator_home:$home, unit_name_hint:"clown-agent-e2e",
-          result_path:($wt+".result.json"), sockets:$s, binds_rw:$b}' > "$wt/spec.json"
+          result_path:($wt+".result.json"), sockets:$s, binds_rw:$b}' > "$specdir/spec.json"
     slug=$(printf '%s' "$wt" | sed 's/[^A-Za-z0-9]/-/g')
     state=${XDG_STATE_HOME:-$HOME/.local/state}
     since=$(date '+%Y-%m-%d %H:%M:%S')
     stamp=$(mktemp); touch "$stamp"
     echo ">> clown --agent-scope (claude -p)"
-    (cd "$wt" && "$clown" {{EXTRA}} --agent-scope "$wt/spec.json" -- -p "{{PROMPT}}" < /dev/null)
+    (cd "$wt" && "$clown" {{EXTRA}} --agent-scope "$specdir/spec.json" -- --session-id "$(cat /proc/sys/kernel/random/uuid)" -p "{{PROMPT}}" < /dev/null)
     echo "   exit=$?"
     echo ">> result"; cat "$wt.result.json"
     unit=$(jq -r .unit "$wt.result.json")
