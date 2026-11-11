@@ -39,6 +39,10 @@ type Launch struct {
 	ManagerEnvKeys []string
 	// ExtraEnv is the provider binding's own "K=V" entries.
 	ExtraEnv []string
+	// TrimPath is the clown#341 trial: the unit's PATH is the frontend's with
+	// the store entries outside TrimPathKeep dropped and duplicates removed.
+	// Off by default; behind CLOWN_AGENT_PATH_TRIM=1 in the frontend.
+	TrimPath bool
 	// PlumbingRW and PlumbingRO are clown's own binds (job-platform state,
 	// claude config). Missing paths are skipped rather than failing the start.
 	PlumbingRW []string
@@ -386,6 +390,9 @@ func (l Launch) environment() (set, unset []string) {
 		env[k] = v
 	}
 	env["HOME"] = l.AgentHome
+	if l.TrimPath {
+		env["PATH"] = TrimPath(env["PATH"], l.Shim)
+	}
 	// The marker spinclass's hook reads to tell it runs confined (FDR 0035): set
 	// last and scrubbed from every other source, so it is the unit's own name or
 	// absent. A hint for choosing defer-vs-ask, not a boundary: an agent inside

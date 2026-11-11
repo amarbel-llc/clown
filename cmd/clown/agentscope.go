@@ -194,6 +194,8 @@ func prepareAgentScope(specPath, specDigest, unit string, argv, extraEnv []strin
 		// Read here, in the frontend that launches the unit: the marker
 		// (or its [attach] carrier) never enters the unit (clown#320).
 		Unattended: unattendedValue() == "1",
+		// clown#341 trial, off unless the operator sets it in the frontend.
+		TrimPath: os.Getenv("CLOWN_AGENT_PATH_TRIM") == "1",
 	}
 	return launch, nil
 }

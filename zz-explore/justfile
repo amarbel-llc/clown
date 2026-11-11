@@ -2150,7 +2150,7 @@ explore-agent-unit-probe DEVPTS='/dev/pts' PIDNS='1':
 #
 # EXTRA is passed to clown before --agent-scope (e.g. `--plugin-dir <moxy
 # plugin dir>` to exercise in-unit moxy).
-explore-agent-scope-claude PROMPT='Use the Read tool to read hello.txt, then reply with exactly its contents.' EXTRA='':
+explore-agent-scope-claude PROMPT='Use the Read tool to read hello.txt, then reply with exactly its contents.' EXTRA='' TRIM='':
     #!/usr/bin/env bash
     set -uo pipefail
     root=$(git rev-parse --show-toplevel)
@@ -2175,7 +2175,8 @@ explore-agent-scope-claude PROMPT='Use the Read tool to read hello.txt, then rep
     since=$(date '+%Y-%m-%d %H:%M:%S')
     stamp=$(mktemp); touch "$stamp"
     echo ">> clown --agent-scope (claude -p)"
-    (cd "$wt" && "$clown" {{EXTRA}} --agent-scope "$specdir/spec.json" -- --session-id "$(cat /proc/sys/kernel/random/uuid)" -p "{{PROMPT}}" < /dev/null)
+    # TRIM=1 sets CLOWN_AGENT_PATH_TRIM=1 for the clown#341 trimmed-PATH trial.
+    (cd "$wt" && CLOWN_AGENT_PATH_TRIM={{TRIM}} "$clown" {{EXTRA}} --agent-scope "$specdir/spec.json" -- --session-id "$(cat /proc/sys/kernel/random/uuid)" -p "{{PROMPT}}" < /dev/null)
     echo "   exit=$?"
     echo ">> result"; cat "$wt.result.json"
     unit=$(jq -r .unit "$wt.result.json")
