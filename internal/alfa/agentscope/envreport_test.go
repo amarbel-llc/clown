@@ -33,6 +33,9 @@ func TestEnvironmentReportIsNamesOnlyAndSplitsBySource(t *testing.T) {
 	if r.PathEntries != 3 || r.PathStoreEntries != 2 {
 		t.Errorf("PATH = %d entries, %d in store; want 3, 2", r.PathEntries, r.PathStoreEntries)
 	}
+	if want := []string{"go/bin", "just/bin"}; !slices.Equal(r.PathStoreNames, want) {
+		t.Errorf("PathStoreNames = %v, want %v (no hashes, no non-store entries)", r.PathStoreNames, want)
+	}
 	if s := r.String(); strings.Contains(s, "hunter2") || strings.Contains(s, "secretish") {
 		t.Errorf("report leaks a value: %s", s)
 	}
