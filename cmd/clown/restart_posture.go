@@ -61,8 +61,7 @@ func postureEnv(env []string, posture string) []string {
 // mirroring spinclass's splice so argv and settings agree. attended drops
 // only those that name dontAsk (claude's own flag would otherwise keep the
 // mode) and nothing else: which attended mode spinclass's pinned entry
-// carries is its spawn rule, and clown's relaunch runs claude's default mode
-// until the next `sc resume`. keep leaves the args.
+// carries is its spawn rule. keep leaves the args.
 func postureArgs(args []string, posture string) []string {
 	switch posture {
 	case postureUnattended:
@@ -72,6 +71,27 @@ func postureArgs(args []string, posture string) []string {
 	}
 	return args
 }
+
+// attendedModeArgs makes an attended claude relaunch name its mode
+// (spinclass#476): an interactive `claude --resume` with no mode flag restores
+// the last permission-mode its transcript recorded, so a session narrowed to
+// dontAsk would come back in dontAsk however the flags and the marker were
+// cleared. When args (already rewritten by postureArgs) keep no mode flag,
+// `--permission-mode default` is appended; a mode they keep is left as the
+// one the relaunch runs in. Other postures and providers get args unchanged.
+func attendedModeArgs(args []string, provider, posture string) []string {
+	if posture != postureAttended || provider != "claude" {
+		return args
+	}
+	if len(withoutPermissionMode(args, func(string) bool { return true })) != len(args) {
+		return args
+	}
+	return append(args, "--permission-mode", attendedMode)
+}
+
+// attendedMode is the claude permission mode an attended relaunch names when
+// the launch named none.
+const attendedMode = "default"
 
 // withoutPermissionMode drops each --permission-mode/--inherit-permission-mode
 // in args (either spelling, with the value in the same or the next token)

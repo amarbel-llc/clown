@@ -3082,6 +3082,108 @@ explore-permission-hook-events model="haiku":
     run_case reject deny "" "" "Run exactly this one Bash command, once, verbatim: touch X"
     run_case dontask "" dontAsk "" "Run exactly this one Bash command, once, verbatim: touch X"
 
+# Check whether `claude --resume` restores the permission mode the transcript
+# recorded when no mode flag is given (spinclass#476: an attended restart
+# relaunch came back in dontAsk). One throwaway session in a temp git repo with
+# only project settings; a UserPromptSubmit hook logs the permission_mode claude
+# reports. Steps: start with --permission-mode dontAsk, resume with no mode
+# flag, resume with --permission-mode default. One small model call per step.
+# Output: .tmp/resume-permission-mode/ (hook.log, step-*.out), kept.
+#
+# record the permission mode a resumed claude session runs in
+[group("explore")]
+explore-resume-permission-mode model="haiku":
+    #!/usr/bin/env bash
+    set -uo pipefail
+    command -v claude >/dev/null || { echo "no claude on PATH"; exit 1; }
+    dir="$PWD/.tmp/resume-permission-mode"
+    rm -rf "$dir"
+    mkdir -p "$dir/.claude"
+    git -C "$dir" init -q
+    cat >"$dir/record.sh" <<'EOF'
+    #!/bin/sh
+    input=$(cat)
+    printf '{"step":"%s","input":%s}\n' "$(cat "$(dirname "$0")/step")" "$input" >>"$(dirname "$0")/hook.log"
+    EOF
+    chmod +x "$dir/record.sh"
+    printf '{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"%s"}]}]}}\n' "$dir/record.sh" >"$dir/.claude/settings.json"
+    sid="$(cat /proc/sys/kernel/random/uuid)"
+    step() {
+        local name=$1
+        shift
+        printf '%s' "$name" >"$dir/step"
+        (cd "$dir" && env -u CLOWN_SESSION_ID -u SPINCLASS_SESSION_ID -u CLAUDE_SESSION_ID -u CLOWN_UNATTENDED \
+            claude -p "Reply with the single word ok." --setting-sources project --model {{ quote(model) }} "$@" >"$dir/step-$name.out" 2>&1)
+        echo "== step $name ($*) exit=$?"
+    }
+    claude --version
+    step start --session-id "$sid" --permission-mode dontAsk
+    step resume-no-flag --resume "$sid"
+    step resume-default --resume "$sid" --permission-mode default
+    jq -c '{step, mode: .input.permission_mode, session: .input.session_id}' "$dir/hook.log"
+    transcript="$(ls "$HOME"/.claude/projects/*/"$sid".jsonl 2>/dev/null | head -1)"
+    echo "transcript: ${transcript:-none}"
+    [ -n "$transcript" ] && jq -c 'select(.type == "permission-mode")' "$transcript"
+
+# The interactive twin of explore-resume-permission-mode: the same three steps,
+# each an interactive claude under a poshterity PTY that answers folder trust
+# (first step only), sends one trivial turn and /exit. CLAUDE_CONFIG_DIR is an
+# isolated dir holding a copy of ~/.claude.json and a SYMLINK to the
+# credentials, so the transcript lands there, not in ~/.claude. Output:
+# .tmp/resume-permission-mode-tty/ (hook.log, step-*.castx; keep out of git).
+#
+# record the permission mode a resumed interactive claude session runs in
+[group("explore")]
+explore-resume-permission-mode-tty model="haiku":
+    #!/usr/bin/env bash
+    set -uo pipefail
+    command -v claude >/dev/null || { echo "no claude on PATH"; exit 1; }
+    command -v poshterity >/dev/null || { echo "no poshterity on PATH"; exit 1; }
+    root="$PWD/.tmp/resume-permission-mode-tty"
+    rm -rf "$root"
+    dir="$root/work" iso="$root/claude-config"
+    mkdir -p "$dir/.claude" "$iso"
+    git -C "$dir" init -q
+    [[ -f "$HOME/.claude.json" ]] && cp "$HOME/.claude.json" "$iso/.claude.json"
+    [[ -f "$HOME/.claude/.credentials.json" ]] && ln -s "$HOME/.claude/.credentials.json" "$iso/.credentials.json"
+    cat >"$dir/record.sh" <<'EOF'
+    #!/bin/sh
+    input=$(cat)
+    printf '{"step":"%s","input":%s}\n' "$(cat "$(dirname "$0")/step")" "$input" >>"$(dirname "$0")/../hook.log"
+    EOF
+    chmod +x "$dir/record.sh"
+    printf '{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"%s"}]}]}}\n' "$dir/record.sh" >"$dir/.claude/settings.json"
+    sid="$(cat /proc/sys/kernel/random/uuid)"
+    step() {
+        local name=$1 trust=$2
+        shift 2
+        printf '%s' "$name" >"$dir/step"
+        local script="$root/step-$name.script"
+        {
+            if [[ $trust == yes ]]; then
+                printf '%s\n' "wait-for --timeout 90 Yes, I trust this folder" "sleep 1" "send \\e[B" "sleep 1" "send \\r"
+            fi
+            printf '%s\n' "sleep 6" "send Reply with the word formed by joining RE and ADY and nothing else." "sleep 1" "send \\r" \
+                "wait-for --timeout 120 READY" "sleep 2" "send /exit" "sleep 1" "send \\r" "sleep 4"
+        } >"$script"
+        (cd "$dir" && env -u CLOWN_SESSION_ID -u SPINCLASS_SESSION_ID -u CLAUDE_SESSION_ID -u CLOWN_UNATTENDED \
+            poshterity record --size 160x50 --out "$root/step-$name.castx" --script "$script" -- \
+            env CLAUDE_CONFIG_DIR="$iso" claude --setting-sources project --model {{ quote(model) }} "$@" >"$root/step-$name.log" 2>&1)
+        echo "== step $name ($*) poshterity exit=$?"
+    }
+    claude --version
+    step start yes --session-id "$sid" --permission-mode dontAsk
+    step resume-no-flag no --resume "$sid"
+    step resume-default no --resume "$sid" --permission-mode default
+    jq -c '{step, mode: .input.permission_mode}' "$root/hook.log"
+    transcript="$(ls "$iso"/projects/*/"$sid".jsonl 2>/dev/null | head -1)"
+    echo "transcript: ${transcript:-none}"
+    [ -n "$transcript" ] && jq -c 'select(.type == "permission-mode")' "$transcript"
+    for n in start resume-no-flag resume-default; do
+        echo "== final screen: $n"
+        poshterity replay "$root/step-$n.castx" 2>/dev/null | sed 's/[[:space:]]*$//' | grep -v '^$' | tail -8 | cut -c1-160
+    done
+
 # Wait (at most `max` seconds) until load1 < `load` and MemAvailable >
 # `mem_gb` GB, for agents gating nix runs on host resources; exits 1 on
 # timeout. Run it async and job_wait on it rather than polling.

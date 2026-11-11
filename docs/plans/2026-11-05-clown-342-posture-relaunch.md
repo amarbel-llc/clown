@@ -90,8 +90,13 @@ runs with `CLOWN_UNATTENDED=1` and `--permission-mode dontAsk`), `attended`
   a forwarded `--permission-mode dontAsk` / `--inherit-permission-mode
   dontAsk` (else claude's own flag keeps dontAsk and the relaunch is
   attended in name only). Which mode "attended" is belongs to spinclass's
-  spawn rule (auto unless disable-auto-mode); on clown's side attended only
-  means no marker and no dontAsk flag.
+  spawn rule (auto unless disable-auto-mode); on clown's side attended
+  means no marker, no dontAsk flag, and a named mode: an interactive
+  `claude --resume` with no mode flag runs in the transcript's last
+  permission-mode (observed 2026-11-11 on claude 2.1.318 with
+  `just explore-resume-permission-mode-tty`, spinclass#476), so when the
+  launch's flags keep no mode, the attended relaunch appends
+  `--permission-mode default` (`attendedModeArgs`).
 
 The control message (`clown restart --posture ...`) carries the posture as
 the hand-off's argument, so the frontend can run the request-time gate

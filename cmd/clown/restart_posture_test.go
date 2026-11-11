@@ -108,6 +108,38 @@ func TestRestartArgvPosture(t *testing.T) {
 	}
 }
 
+// spinclass#476: an interactive `claude --resume` with no mode flag runs in
+// the transcript's last mode, so an attended claude relaunch whose launch was
+// in dontAsk must name a mode; a mode the launch kept is the one it runs in,
+// and keep, unattended and other providers are not given one.
+func TestRestartArgvAttendedNamesAMode(t *testing.T) {
+	t.Setenv(unattendedEnv, "")
+	f := parsedFlags{provider: "claude", forwarded: []string{"--permission-mode", "dontAsk", "--model", "m", "--", "op"}}
+	f.identity.Key = restartTestPrincipal
+
+	got := restartArgvPosture(f, "", postureAttended)
+	want := []string{"--provider", "claude", "--", "--model", "m", "--permission-mode", "default", "--resume", restartTestPrincipal, "--", "op"}
+	if !slices.Equal(got, want) {
+		t.Errorf("attended over a dontAsk launch = %q, want %q", got, want)
+	}
+	f.forwarded = []string{"--model", "m"}
+	if got := restartArgvPosture(f, "", postureAttended); countOf(got, "default") != 1 || countOf(got, "--permission-mode") != 1 {
+		t.Errorf("attended over a launch with no mode = %q, want exactly one --permission-mode default", got)
+	}
+	f.forwarded = []string{"--permission-mode", "auto", "--model", "m"}
+	if got := restartArgvPosture(f, "", postureAttended); countOf(got, "--permission-mode") != 1 || !slices.Contains(got, "auto") {
+		t.Errorf("attended over an auto launch = %q, want auto kept and no other mode", got)
+	}
+	f.forwarded = []string{"--model", "m"}
+	if got := restartArgvPosture(f, "", postureKeep); slices.Contains(got, "--permission-mode") {
+		t.Errorf("keep = %q, want no mode added", got)
+	}
+	f.provider = "codex"
+	if got := restartArgvPosture(f, "", postureAttended); slices.Contains(got, "--permission-mode") {
+		t.Errorf("attended codex relaunch = %q, want no claude mode flag", got)
+	}
+}
+
 // unattended is refused for what the marker cannot put in dontAsk; a forwarded
 // non-dontAsk mode is rewritten away, so it does not refuse. attended and keep
 // are never refused here.

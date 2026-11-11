@@ -148,8 +148,9 @@ func restartArgv(flags parsedFlags, attachedID string) []string {
 }
 
 // restartArgvPosture is restartArgv for a relaunch under posture (clown#342):
-// claude's flags before any `--` are rewritten by postureArgs, and the
-// [attach] inner's carrier follows the posture (postureCarrierArgs).
+// claude's flags before any `--` are rewritten by postureArgs, an attended
+// claude relaunch names its mode (attendedModeArgs), and the [attach]
+// inner's carrier follows the posture (postureCarrierArgs).
 func restartArgvPosture(flags parsedFlags, attachedID, posture string) []string {
 	f := flags
 	// The --resume goes before any `--`, after which claude reads operands.
@@ -158,7 +159,8 @@ func restartArgvPosture(flags parsedFlags, attachedID, posture string) []string 
 	if i := slices.Index(kept, "--"); i >= 0 {
 		end = i
 	}
-	f.forwarded = slices.Concat(postureArgs(kept[:end], posture), []string{"--resume", flags.identity.Key}, kept[end:])
+	claudeArgs := attendedModeArgs(postureArgs(kept[:end], posture), flags.provider, posture)
+	f.forwarded = slices.Concat(claudeArgs, []string{"--resume", flags.identity.Key}, kept[end:])
 	var argv []string
 	if attachedID != "" {
 		// The inner of an [attach] wrap may not have the marker in its
