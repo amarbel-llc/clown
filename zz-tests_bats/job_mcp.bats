@@ -41,7 +41,13 @@ teardown() {
   assert_output --partial '"name":"clown-ringmaster"'
 }
 
-# `ringmaster mcp` exposes only the eight job-control tools (clown#144).
+# `ringmaster mcp` exposes only the job-control tools (clown#144). clown launches
+# it unfiltered, so this list is exactly what every session can call.
+#
+# job_output (ringmaster f70c918) reads a job's spool without a path grant. The
+# operator ruled on 2026-11-11 that clown passes it through to every session.
+# It is optional here only so the test passes both before and after the
+# ringmaster input bump that brings it in; nothing else may join the set.
 @test "ringmaster mcp exposes only the job-control tools" {
   req='{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
   run bash -c "printf '%s\n' '$req' | '$RINGMASTER_BIN' mcp"
@@ -52,8 +58,12 @@ teardown() {
   for tool in chat_send chat_read chat_list job_message; do
     refute_output --partial "\"$tool\""
   done
+  expected=8
+  if printf '%s' "$output" | jq -e '.result.tools | any(.name == "job_output")' >/dev/null; then
+    expected=9
+  fi
   count="$(printf '%s' "$output" | jq -r '.result.tools | length')"
-  assert_equal "$count" "8"
+  assert_equal "$count" "$expected"
 }
 
 # `troupe mcp` exposes only the six messaging tools and reports the clown-troupe
