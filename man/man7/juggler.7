@@ -611,6 +611,14 @@ or still registered fails at once, spawning nothing:
 .Ql alias \(dqX\(dq is already starting
 or
 .Ql ... is already running .
+.Cm ResolveModel
+does not fail on
+.Ql already starting
+(clown#315): it waits for that start to end, then returns its instance's
+URL, or its error; a start that ended because its own client left is
+started again for this caller.
+.Cm StartInstance
+still fails at once.
 .It
 Pick a free TCP port via
 .Fn net.Listen :0

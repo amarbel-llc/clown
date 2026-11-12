@@ -156,7 +156,7 @@ func TestLauncherRegisterRefusesACancelledStart(t *testing.T) {
 	if tracked || !reserved {
 		t.Errorf("tracked %v, still reserved %v; want untracked and reserved until endStart", tracked, reserved)
 	}
-	l.endStart("a", ps)
+	l.endStart("a", ps, err)
 	assertNothingTracked(t, l)
 }
 

@@ -69,13 +69,19 @@ func newLauncher(binary string, reg *rm.Registry, modelsDir string) *llauncher {
 }
 
 // pendingStart is a Start in progress: Stop cancels it through cancel and
-// waits on done, closed once that Start has returned.
+// waits on done, closed once that Start has returned; err is that Start's
+// result, set before done is closed (WaitStarting reads it after).
 type pendingStart struct {
 	cancel context.CancelCauseFunc
 	done   chan struct{}
+	err    error
 }
 
 var errStoppedWhileStarting = errors.New("stopped while starting")
+
+// errAlreadyStarting is wrapped by a Start refused because another Start of
+// its alias is in progress, which ResolveModel joins (WaitStarting).
+var errAlreadyStarting = errors.New("already starting")
 
 // pendingStopWait bounds how long Stop waits for a cancelled start to end.
 // A cancelled start ends at once (its health wait returns, its child is
@@ -88,7 +94,7 @@ func (l *llauncher) reserveAlias(alias string, cancel context.CancelCauseFunc) (
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if _, ok := l.starting[alias]; ok {
-		return nil, fmt.Errorf("alias %q is already starting", alias)
+		return nil, fmt.Errorf("alias %q is %w", alias, errAlreadyStarting)
 	}
 	// The registry outlives children during Stop's grace window (children
 	// cleared first, the registry after the exit): still running there.
@@ -104,14 +110,34 @@ func (l *llauncher) reserveAlias(alias string, cancel context.CancelCauseFunc) (
 }
 
 // endStart drops a Start's reservation, unless register already handed it
-// to children, and then marks the Start done.
-func (l *llauncher) endStart(alias string, ps *pendingStart) {
+// to children, records the Start's result and then marks it done.
+func (l *llauncher) endStart(alias string, ps *pendingStart, err error) {
 	l.mu.Lock()
 	if l.starting[alias] == ps {
 		delete(l.starting, alias)
 	}
 	l.mu.Unlock()
+	ps.err = err
 	close(ps.done)
+}
+
+// WaitStarting waits for the Start of alias in progress, if any, to end
+// (clown#315), and returns that Start's error: nil when it registered the
+// instance, or when no Start was in progress. It returns ctx's error instead
+// when ctx ends first; the Start goes on.
+func (l *llauncher) WaitStarting(ctx context.Context, alias string) (startErr, err error) {
+	l.mu.Lock()
+	ps, ok := l.starting[alias]
+	l.mu.Unlock()
+	if !ok {
+		return nil, nil
+	}
+	select {
+	case <-ps.done:
+		return ps.err, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 // PendingStarts lists, sorted, the aliases with a Start in progress, which
@@ -138,14 +164,14 @@ func startCancelled(ctx context.Context, alias, when string) error {
 // same alias fails at once without spawning, and only this Start touches
 // children[alias] until it returns. A Stop of the alias meanwhile cancels
 // this Start: it kills its child and registers nothing.
-func (l *llauncher) Start(ctx context.Context, p rm.StartInstanceParams) (rm.Instance, error) {
+func (l *llauncher) Start(ctx context.Context, p rm.StartInstanceParams) (_ rm.Instance, err error) {
 	ctx, cancelStart := context.WithCancelCause(ctx)
 	defer cancelStart(nil)
 	ps, err := l.reserveAlias(p.Alias, cancelStart)
 	if err != nil {
 		return rm.Instance{}, err
 	}
-	defer l.endStart(p.Alias, ps)
+	defer func() { l.endStart(p.Alias, ps, err) }()
 
 	bind := p.Bind
 	if bind == "" {

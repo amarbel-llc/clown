@@ -60,6 +60,39 @@ type pendingStarter interface {
 	PendingStarts() []string
 }
 
+// startWaiter is a Launcher that can wait for a Start of an alias in progress
+// (llauncher.WaitStarting), which ResolveModel joins (clown#315).
+type startWaiter interface {
+	WaitStarting(ctx context.Context, alias string) (startErr, err error)
+}
+
+// startOrJoin returns the instance of local model alias for ResolveModel,
+// starting it if needed. Where another Start of the alias is in progress
+// (two sessions resolving one model, or `juggler spawn` beside `juggler run`)
+// it waits for that Start instead of failing, then uses its instance, or
+// returns its error. A Start that ended because its own client left is not
+// this caller's failure, so the alias is tried again. StartInstance does not
+// come here: it still fails fast.
+func (s *server) startOrJoin(ctx context.Context, alias string) (rm.Instance, error) {
+	w, canJoin := s.launcher.(startWaiter)
+	for {
+		if in, ok := s.registry.Get(alias); ok {
+			return in, nil
+		}
+		in, err := s.launcher.Start(ctx, rm.StartInstanceParams{Alias: alias, Model: alias})
+		if err == nil || !canJoin || !errors.Is(err, errAlreadyStarting) {
+			return in, err
+		}
+		startErr, err := w.WaitStarting(ctx, alias)
+		if err != nil {
+			return rm.Instance{}, err
+		}
+		if startErr != nil && !errors.Is(startErr, context.Canceled) {
+			return rm.Instance{}, startErr
+		}
+	}
+}
+
 // stopAllAliases is what StopAll stops: the launcher's pending starts, then
 // every registered alias not already listed. Pending starts are read first,
 // so a start that registers between the two reads is still in the list.
@@ -406,7 +439,7 @@ func (s *server) dispatch(ctx context.Context, req rm.Envelope) rm.Envelope {
 			return rpcError(req.ID, -32000, "launcher not configured")
 		}
 		// As StartInstance: a client disconnect cancels the start.
-		in, err := s.launcher.Start(ctx, rm.StartInstanceParams{Alias: p.Name, Model: p.Name})
+		in, err := s.startOrJoin(ctx, p.Name)
 		if err != nil {
 			return rpcError(req.ID, -32000, err.Error())
 		}
