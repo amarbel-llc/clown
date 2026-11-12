@@ -3004,6 +3004,98 @@ explore-claude-binary-strings REGEX:
     echo "claude: $bin" >&2
     { grep -a -o -E '.{0,40}{{ REGEX }}.{0,40}' "$bin" || true; } | tr -c '[:print:]\n' '?' | sort -u | head -60
 
+# Live check that claude sends the `headers` of an MCP server entry (clown#288:
+# the per-bridge bearer token would ride there). No model call: it uses
+# `claude mcp list` against a throwaway CLAUDE_CONFIG_DIR whose user-scope
+# .claude.json names the servers, so nothing real is touched. Two parts:
+#   1. for each of sse and http, a raw listener (nc) captures what claude sends
+#      to an entry carrying `headers`; the Authorization line is the evidence;
+#   2. for http, a built clown-stdio-bridge started with CLOWN_BRIDGE_TOKEN
+#      wrapping the mock stdio server, listed with the right header, none and
+#      a wrong one (connected vs failed).
+# Builds the current tree's bridge and mock server, and by default runs the
+# claude pinned into the built clown (CLAUDE_BIN overrides, e.g. the devshell's
+# claude). Prints the claude version first. The probe token is random and
+# throwaway.
+#
+# live-check that claude sends manifest `headers` (sse and http) to a server
+[group("explore")]
+explore-claude-mcp-headers CLAUDE_BIN="":
+    #!/usr/bin/env bash
+    set -uo pipefail
+    out="$(nix build --no-link --print-out-paths)"
+    bridge="$out/bin/clown-stdio-bridge"
+    mock="$(nix build --no-link --print-out-paths .#mock-stdio-mcp)/bin/mock-stdio-mcp"
+    # nix prints one path per output (bin, man): take the one with bin/nc
+    nc="$(for p in $(nix build --no-link --print-out-paths 'nixpkgs#netcat-openbsd'); do [[ -x "$p/bin/nc" ]] && echo "$p/bin/nc"; done | head -1)"
+    [[ -n "$nc" ]] || { echo "FAIL: no nc found" >&2; exit 2; }
+    claude="{{ CLAUDE_BIN }}"
+    if [[ -z "$claude" ]]; then
+        # The built clown's closure holds the pinned claude-code package(s).
+        cands=()
+        while IFS= read -r p; do [[ -x "$p/bin/claude" ]] && cands+=("$p/bin/claude"); done < <(nix-store -qR "$out" | grep -E -- '-claude-code[^/]*$' | grep -v -E -- '-(man|doc|dev)$')
+        [[ ${#cands[@]} -gt 0 ]] || { echo "FAIL: no claude-code with bin/claude in the closure of $out" >&2; exit 2; }
+        echo "claude-code candidates in the built clown's closure:"
+        for c in "${cands[@]}"; do echo "  $c  ($("$c" --version 2>&1 | head -1))"; done
+        claude="${cands[0]}"
+        echo "claude: the first of them"
+    else
+        echo "claude: CLAUDE_BIN override"
+    fi
+    echo "claude path: $claude"
+    "$claude" --version
+    tmp="$(mktemp -d)"
+    pids=()
+    cleanup() { for p in "${pids[@]}"; do kill "$p" 2>/dev/null; done; rm -rf "$tmp"; }
+    trap cleanup EXIT
+    token="probe-$(head -c 12 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+    list() { # list NAME: write a user-scope config with the entry on stdin, run mcp list
+        mkdir -p "$tmp/cfg"
+        cat >"$tmp/cfg/.claude.json"
+        (cd "$tmp" && CLAUDE_CONFIG_DIR="$tmp/cfg" timeout 90 "$claude" mcp list 2>&1)
+    }
+
+    echo; echo "== part 1: what claude sends (raw listener)"
+    for type in sse http; do
+        port=$((34000 + RANDOM % 2000))
+        # stdin held open: a backgrounded nc reading /dev/null may quit at once
+        "$nc" -l 127.0.0.1 "$port" < <(sleep 25) >"$tmp/cap-$type.txt" 2>"$tmp/nc-$type.err" &
+        pids+=("$!")
+        sleep 0.5
+        kill -0 "${pids[-1]}" 2>/dev/null || { echo "(listener exited at once: $(cat "$tmp/nc-$type.err"))"; }
+        echo "-- type=$type: claude's own verdict, then what the listener on port $port saw"
+        list <<EOF | grep -i 'probe' || echo "(no probe line in mcp list output)"
+    {"hasCompletedOnboarding":true,"mcpServers":{"probe":{"type":"$type","url":"http://127.0.0.1:$port/mcp","headers":{"Authorization":"Bearer $token"}}}}
+    EOF
+        sleep 1
+        head -1 "$tmp/cap-$type.txt" | tr -d '\r'
+        if grep -i -q "^authorization: Bearer $token" "$tmp/cap-$type.txt"; then
+            echo "Authorization: Bearer <the probe token>   (MATCHES the configured header)"
+        else
+            echo "NO matching Authorization header seen (captured $(wc -c <"$tmp/cap-$type.txt") bytes)"
+            grep -i '^[a-z-]*:' "$tmp/cap-$type.txt" | cut -d: -f1 | tr '\n' ' '; echo
+        fi
+    done
+
+    echo; echo "== part 2: bridge with CLOWN_BRIDGE_TOKEN (http), connected vs failed"
+    CLOWN_BRIDGE_TOKEN="$token" "$bridge" --command "$mock" >"$tmp/bridge.out" 2>"$tmp/bridge.err" &
+    pids+=("$!")
+    for _ in $(seq 50); do [[ -s "$tmp/bridge.out" ]] && break; sleep 0.1; done
+    addr="$(cut -d'|' -f4 "$tmp/bridge.out")"
+    [[ -n "$addr" ]] || { echo "FAIL: bridge printed no handshake"; cat "$tmp/bridge.err"; exit 2; }
+    echo "bridge at $addr; direct: no auth -> $(curl -s -o /dev/null -w '%{http_code}' -X POST "http://$addr/mcp"), with token -> $(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Bearer $token" -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"ping"}' "http://$addr/mcp"), /healthz no auth -> $(curl -s -o /dev/null -w '%{http_code}' "http://$addr/healthz")"
+    for mode in right none wrong; do
+        case "$mode" in
+            right) hdr="\"headers\":{\"Authorization\":\"Bearer $token\"}," ;;
+            none)  hdr="" ;;
+            wrong) hdr="\"headers\":{\"Authorization\":\"Bearer not-the-token\"}," ;;
+        esac
+        echo "-- headers: $mode"
+        list <<EOF | grep -i 'probe' || echo "(no probe line in mcp list output)"
+    {"hasCompletedOnboarding":true,"mcpServers":{"probe":{"type":"http",$hdr"url":"http://$addr/mcp"}}}
+    EOF
+    done
+
 # Record which Claude Code hook events fire around a permission request and
 # what each one's stdin carries (clown#302, permission metrics). Each case runs
 # a throwaway `claude -p` in its own temp git repo with ONLY project settings
