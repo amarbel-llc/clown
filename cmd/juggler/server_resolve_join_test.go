@@ -66,7 +66,7 @@ func newJoinFixture(t *testing.T, hold func(context.Context, *child)) joinFixtur
 	return joinFixture{s: s, l: l, reg: reg, waiting: waiting, spawns: spawns}
 }
 
-func (f joinFixture) resolve(ctx context.Context, id string) rm.Envelope {
+func (f joinFixture) resolve(ctx context.Context, id json.Number) rm.Envelope {
 	return f.s.dispatch(ctx, rm.Envelope{
 		JSONRPC: "2.0", ID: id, Method: rm.MethodResolveModel,
 		Params: mustJSONNoT(rm.ResolveModelParams{Name: "m"}),
