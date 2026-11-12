@@ -134,6 +134,8 @@ func run(p parsedArgs) int {
 
 	cmd := exec.CommandContext(ctx, cmdPath, p.args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// The bridge's own credential is not the child's to see (clown#288).
+	cmd.Env = withoutEnv(os.Environ(), tokenEnvVar)
 	// The child's stderr goes through a pipe the bridge reads, so it can keep a
 	// scrubbed tail for the disconnect record (clown#344) while copying every
 	// byte on to its own stderr, which the host logs as before. If the pipe
@@ -221,7 +223,7 @@ func run(p parsedArgs) int {
 
 	handler := newHTTPHandler(tr, stdLogger, newStatsdFromEnv())
 	serveMode := network == "unix"
-	srv := &http.Server{Handler: newMux(handler, tr, childDone, serveMode)}
+	srv := &http.Server{Handler: requireToken(os.Getenv(tokenEnvVar), newMux(handler, tr, childDone, serveMode))}
 	if serveMode {
 		srv.ConnContext = serveConnContext
 	}

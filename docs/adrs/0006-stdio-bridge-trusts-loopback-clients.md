@@ -16,6 +16,24 @@ date: 2026-04-29
 > - Inside an agent unit, an in-unit bridge's loopback belongs to the
 >   worker (FDR 0020).
 
+> **Corrections (2026-11-12, clown#288; operator ruling: the threat model
+> includes other local users and confined processes).**
+> - The port is **not** private. It is announced to the parent on stdout, but
+>   any local user can list the host's listening sockets, so "announced only
+>   to the parent" and "a private channel" do not hold. Read "private stdout
+>   handshake" below as "not published anywhere a client is meant to look".
+> - "A local attacker who can reach the listener can already do worse things"
+>   holds for a process running as the same user, which can read the
+>   manifest and the bridge's environment anyway. It does not hold for another
+>   user on the host, or for a confined process (an agent unit) that can reach
+>   loopback but cannot read those files. Loopback reachability is not
+>   authority, and the bridge no longer relies on it alone: with
+>   `CLOWN_BRIDGE_TOKEN` set it requires `Authorization: Bearer <token>` on
+>   every route but `/healthz` (off by default; the host does not mint a token
+>   yet, `docs/plans/2026-11-11-clown-241-288-design.md`).
+> - The Slowloris decision itself (no HTTP read/write timeouts) is unchanged.
+>   The unix-socket mode with peer credentials is a separate, open discussion.
+
 ## Context
 
 `clown-stdio-bridge` (FDR-0002) wraps a stdio MCP server and exposes it
