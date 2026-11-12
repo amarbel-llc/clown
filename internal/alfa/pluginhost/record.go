@@ -66,7 +66,7 @@ func (s *ManagedServer) noteShutdown() {
 	if err != nil {
 		return
 	}
-	resp, err := s.handshake.Client().Do(req)
+	resp, err := s.Client().Do(req)
 	if err != nil {
 		s.logger().Debug("shutdown notice not delivered", "err", err)
 		return

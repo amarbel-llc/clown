@@ -747,6 +747,26 @@ and
 .Pa version-info
 files.
 Set automatically by the Nix wrapper; not intended for manual use.
+.It Ev CLOWN_BRIDGE_AUTH
+Set to
+.Li 1
+to guard each
+.Xr clown-stdio-bridge 1
+this launch starts with a per-session random bearer token (clown#288).
+The token is passed to the bridge as
+.Ev CLOWN_BRIDGE_TOKEN ,
+written into the manifest entry claude reads as an
+.Li Authorization
+header (the compiled manifest is then owner-only), and sent on clown's own
+calls to the bridge; it is never logged or shown in the launch plan.
+Off by default.
+Honoured only for the
+.Li claude
+provider without
+.Fl -agent-scope
+or
+.Fl -mcp-collapse ;
+otherwise a warning in the host log says why and nothing changes.
 .It Ev CLOWN_DISABLE_DISCONNECT_RECORDS
 Set to
 .Li 1

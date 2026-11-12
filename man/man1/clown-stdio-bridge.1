@@ -62,8 +62,15 @@ refuses, with a bodiless 401, a request that does not send
 .Li Authorization: Bearer Ar token .
 Unset, the bridge serves as before.
 The variable is not passed on to the wrapped server.
-Nothing in clown sets it yet, so a value set by hand also locks out the host's
-own control calls (shutdown notice, system-prompt fetch, tool exclusions).
+clown sets it, with a per-session random value, on every bridge it starts when
+launched with
+.Ev CLOWN_BRIDGE_AUTH Ns = Ns 1
+(see
+.Xr clown 1 ) ,
+and then sends it on its own control calls (shutdown notice, system-prompt
+fetch, tool catalog and exclusions) and names it in claude's manifest entry.
+A value set by hand without that is not known to the host, which would then be
+locked out of its own bridge.
 .Sh OPTIONS
 .Bl -tag -width Ds
 .It Fl -listen-unix Ar path Fl -peer-unit Ar unit

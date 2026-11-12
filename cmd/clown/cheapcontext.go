@@ -670,7 +670,7 @@ func pushExcludeTools(ctx context.Context, srv *pluginhost.ManagedServer, names 
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := hs.Client().Do(req)
+	resp, err := srv.Client().Do(req)
 	if err != nil {
 		return err
 	}

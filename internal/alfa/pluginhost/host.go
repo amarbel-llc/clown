@@ -87,6 +87,12 @@ type Host struct {
 	RecordRoot string
 	LogPath    string
 
+	// BridgeToken, when set, is the per-session bearer token (clown#288):
+	// Discover hands it to every bridge it desugars, the manifest entries for
+	// those bridges carry it as an Authorization header, and the host's own
+	// calls send it. Empty (the default) changes nothing. Never logged.
+	BridgeToken string
+
 	// BaseEnv is clown-injected identity (CLOWN_SESSION_ID, CLOWN_BIN) applied
 	// to every managed server clown spawns (clown#136). Threading it here is
 	// what lets clown stop stamping the per-instance key onto its own process
@@ -157,6 +163,10 @@ func (h *Host) Discover() ([]DiscoveredServer, error) {
 			// the records is excluded.
 			if h.RecordRoot != "" && h.BridgePath != "" && def.Command == h.BridgePath && pluginName != DiagnosticsPluginName {
 				def.Env = recordEnv(def.Env, pluginName, h.RecordRoot, h.LogPath)
+			}
+			// Every bridge, the diagnostics one included, gets the token.
+			if h.BridgeToken != "" && h.BridgePath != "" && def.Command == h.BridgePath {
+				def.Env = withBridgeToken(def.Env, h.BridgeToken)
 			}
 			found = append(found, DiscoveredServer{
 				PluginDir:  dir,
@@ -324,6 +334,7 @@ func (h *Host) serverEntryForManaged(srv *ManagedServer) MCPServerEntry {
 		Type:    typ,
 		URL:     hs.URLWithHostRewrite(h.URLHostRewrite),
 		Timeout: srv.Def.Timeout,
+		Headers: srv.manifestHeaders(),
 	}
 }
 
@@ -363,7 +374,7 @@ func (h *Host) fetchOnePromptFragment(ctx context.Context, srv *ManagedServer, p
 		h.logPromptSkip(srv, err)
 		return "", false
 	}
-	resp, err := hs.Client().Do(req)
+	resp, err := srv.Client().Do(req)
 	if err != nil {
 		h.logPromptSkip(srv, err)
 		return "", false
@@ -414,7 +425,7 @@ func (h *Host) FetchToolCatalog(ctx context.Context, srv *ManagedServer) ([]Tool
 
 	hs := srv.Handshake()
 	url := hs.URL()
-	client := hs.Client()
+	client := srv.Client()
 	// initialize is required by the MCP spec before tools/list is valid on a
 	// fresh session; the response BODY is unused, but the Mcp-Session-Id
 	// header it returns (when the server implements session continuity,

@@ -9,9 +9,10 @@ import (
 
 // tokenEnvVar names the optional per-bridge bearer token (clown#288). When it
 // is set in the bridge's environment, every route except /healthz refuses a
-// request that does not carry it; unset, the bridge serves as before. The
-// host does not mint or send one yet (the second slice of clown#288), so a
-// token set by hand also locks the host's own control calls out.
+// request that does not carry it; unset, the bridge serves as before. With
+// CLOWN_BRIDGE_AUTH=1 the host mints a per-session token, sets this variable
+// on every bridge it starts and sends the token itself; a token set by hand
+// is unknown to the host and locks its control calls out.
 const tokenEnvVar = "CLOWN_BRIDGE_TOKEN"
 
 // withoutEnv returns environ without any entry for the named variable. The

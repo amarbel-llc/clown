@@ -29,8 +29,16 @@ date: 2026-04-29
 >   loopback but cannot read those files. Loopback reachability is not
 >   authority, and the bridge no longer relies on it alone: with
 >   `CLOWN_BRIDGE_TOKEN` set it requires `Authorization: Bearer <token>` on
->   every route but `/healthz` (off by default; the host does not mint a token
->   yet, `docs/plans/2026-11-11-clown-241-288-design.md`).
+>   every route but `/healthz` (off by default). **Follow-up (2026-11-12):** the
+>   host now mints one random token per session when launched with
+>   `CLOWN_BRIDGE_AUTH=1` (default off, claude provider only, not with
+>   `--agent-scope` or `--mcp-collapse`), gives it to every bridge it starts,
+>   names it in claude's manifest `headers` (checked live on claude 2.1.318 and
+>   2.1.322, `just explore-claude-mcp-headers`) and sends it on its own control
+>   calls. It never logs the token. A process that cannot read the manifest or
+>   the bridge's environment can no longer use the port; a same-user process
+>   still can, as before. The design is in
+>   `docs/plans/2026-11-11-clown-241-288-design.md`.
 > - The Slowloris decision itself (no HTTP read/write timeouts) is unchanged.
 >   The unix-socket mode with peer credentials is a separate, open discussion.
 

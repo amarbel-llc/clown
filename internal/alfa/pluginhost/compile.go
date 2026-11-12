@@ -172,7 +172,16 @@ func writeCompiledManifest(sourcePath, stagedPath string, in CompileInputs) erro
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(stagedPath, out, 0o644); err != nil {
+	// A manifest that carries a credential (the bridge token's Authorization
+	// header, clown#288) is owner-only, on top of the 0700 staging root above it.
+	perm := os.FileMode(0o644)
+	for _, e := range in.Servers {
+		if len(e.Headers) > 0 {
+			perm = 0o600
+			break
+		}
+	}
+	if err := os.WriteFile(stagedPath, out, perm); err != nil {
 		return fmt.Errorf("writing compiled plugin.json: %w", err)
 	}
 	return nil

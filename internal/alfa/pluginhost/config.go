@@ -311,8 +311,14 @@ func Desugar(cfg *ClownConfig, bridgePath, pluginDir string) error {
 // wire format. Omitted from the marshalled output when zero so plugins
 // that do not set the field on the input side keep claude-code's
 // default behavior.
+//
+// Headers are sent by claude-code on every request to the server (verified
+// for claude 2.1.318 and 2.1.322 on both http and sse entries, clown#288):
+// the host puts the bridge token here when the opt-in is on. Omitted when
+// empty, so an entry without them marshals as before.
 type MCPServerEntry struct {
-	Type    string `json:"type"`
-	URL     string `json:"url"`
-	Timeout int    `json:"timeout,omitempty"`
+	Type    string            `json:"type"`
+	URL     string            `json:"url"`
+	Timeout int               `json:"timeout,omitempty"`
+	Headers map[string]string `json:"headers,omitempty"`
 }

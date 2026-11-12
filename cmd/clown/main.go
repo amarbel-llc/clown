@@ -2194,6 +2194,8 @@ func runWithPluginHost(executor Executor, pluginDirs []string, flags parsedFlags
 		// The bridges write their disconnect records here (clown#344).
 		RecordRoot: flags.disconnectRoot,
 		LogPath:    logPath,
+		// The opt-in per-session bridge token (clown#288); "" when off.
+		BridgeToken: bridgeTokenFor(flags, os.Getenv, randomSource, func(msg string) { logger.Warn(msg) }),
 	}
 	discovered, err := host.Discover()
 	if err != nil {
