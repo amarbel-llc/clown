@@ -1200,7 +1200,7 @@ func runWithFlags(flags parsedFlags) int {
 		countdown:    countdown.proceed,
 		profileCheck: profileCheck.checkWithPathClown,
 		postureCheck: func(p string) error { return relaunchPostureError(flags, p) },
-		postureArgv:  func(p string) []string { return restartArgvPosture(flags, attachedID, p) },
+		postureArgv:  func(p, mode string) []string { return restartArgvPosture(flags, attachedID, p, mode) },
 		busy:         turnRunning.Load,
 		notify:       os.Stderr,
 		worktree:     cwd,

@@ -96,7 +96,13 @@ runs with `CLOWN_UNATTENDED=1` and `--permission-mode dontAsk`), `attended`
   permission-mode (observed 2026-11-11 on claude 2.1.318 with
   `just explore-resume-permission-mode-tty`, spinclass#476), so when the
   launch's flags keep no mode, the attended relaunch appends
-  `--permission-mode default` (`attendedModeArgs`).
+  `--permission-mode <mode>` (`attendedModeArgs`). The mode is the
+  verdict's optional `"mode"` (spinclass/light-cedar e4393b0: `auto`, or
+  `acceptEdits` under disable-auto-mode), `default` when an older
+  spinclass sends none; a verdict naming any mode outside `auto`,
+  `acceptEdits`, `default` is refused before the stop as kind `posture`,
+  so an attended relaunch never takes more than an attended start
+  (operator-requested via circus/eager-holly/clarabell, 2026-11-12).
 
 The control message (`clown restart --posture ...`) carries the posture as
 the hand-off's argument, so the frontend can run the request-time gate

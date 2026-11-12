@@ -1,6 +1,10 @@
 package main
 
-import "strings"
+import (
+	"fmt"
+	"slices"
+	"strings"
+)
 
 // A restart may change the session's permission posture (clown#342): the
 // relaunch runs with CLOWN_UNATTENDED=1 (claude in dontAsk, FDR 0023) or
@@ -77,21 +81,45 @@ func postureArgs(args []string, posture string) []string {
 // the last permission-mode its transcript recorded, so a session narrowed to
 // dontAsk would come back in dontAsk however the flags and the marker were
 // cleared. When args (already rewritten by postureArgs) keep no mode flag,
-// `--permission-mode default` is appended; a mode they keep is left as the
-// one the relaunch runs in. Other postures and providers get args unchanged.
-func attendedModeArgs(args []string, provider, posture string) []string {
+// `--permission-mode <mode>` is appended, mode being the verdict's (spinclass's
+// attended spawn rule) or attendedDefaultMode when an older spinclass sent
+// none; a mode the args keep is left as the one the relaunch runs in. Other
+// postures and providers get args unchanged. mode must have passed
+// validAttendedMode.
+func attendedModeArgs(args []string, provider, posture, mode string) []string {
 	if posture != postureAttended || provider != "claude" {
 		return args
 	}
 	if len(withoutPermissionMode(args, func(string) bool { return true })) != len(args) {
 		return args
 	}
-	return append(args, "--permission-mode", attendedMode)
+	if mode == "" {
+		mode = attendedDefaultMode
+	}
+	return append(args, "--permission-mode", mode)
 }
 
-// attendedMode is the claude permission mode an attended relaunch names when
-// the launch named none.
-const attendedMode = "default"
+// attendedDefaultMode is the claude permission mode an attended relaunch names
+// when neither the launch nor the verdict named one.
+const attendedDefaultMode = "default"
+
+// attendedModes are the modes a verdict may name for an attended relaunch:
+// what spinclass's attended spawn rule can give (auto, or acceptEdits under
+// disable-auto-mode) and default. dontAsk, bypassPermissions and plan are not
+// attended starts, so a verdict naming them (or anything else) is refused.
+var attendedModes = []string{"auto", "acceptEdits", attendedDefaultMode}
+
+// validAttendedMode reports whether a verdict's mode may be applied: absent,
+// or one of attendedModes.
+func validAttendedMode(mode string) bool {
+	return mode == "" || slices.Contains(attendedModes, mode)
+}
+
+// restartModeRefusal is the dropped-restart reason for a verdict whose mode is
+// not one an attended relaunch may take.
+func restartModeRefusal(mode string) string {
+	return fmt.Sprintf("the relaunch could not take permission mode %q (want one of %s), so the session keeps running", mode, strings.Join(attendedModes, ", "))
+}
 
 // withoutPermissionMode drops each --permission-mode/--inherit-permission-mode
 // in args (either spelling, with the value in the same or the next token)

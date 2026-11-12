@@ -19,11 +19,16 @@ import (
 // (an obstacle; spinclass cleared the request and told the holders). Posture
 // is the permission posture spinclass recorded for the relaunch (clown#342):
 // unattended, attended, or absent to keep the launch's (restart_posture.go).
+// Mode is the claude permission mode an attended relaunch names when its
+// flags keep none (attendedModeArgs); absent from an older spinclass. It is
+// checked against attendedModes before the stop (frontendRestarter.restart),
+// where a refusal can be recorded, not here.
 type preflightVerdict struct {
 	Verdict string `json:"verdict"`
 	Reason  string `json:"reason"`
 	When    string `json:"when"`
 	Posture string `json:"posture"`
+	Mode    string `json:"mode"`
 }
 
 // parsePreflightVerdict accepts exactly one JSON line naming a known verdict.

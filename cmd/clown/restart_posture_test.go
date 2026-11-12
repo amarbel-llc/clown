@@ -75,69 +75,119 @@ func TestRestartArgvPosture(t *testing.T) {
 	f := parsedFlags{provider: "claude", profile: "worker", forwarded: []string{"--permission-mode", "auto", "--model", "m", "--", "op"}}
 	f.identity.Key = restartTestPrincipal
 
-	got := restartArgvPosture(f, "", postureUnattended)
+	got := restartArgvPosture(f, "", postureUnattended, "")
 	want := []string{"--provider", "claude", "--profile", "worker", "--", "--model", "m", "--permission-mode", "dontAsk", "--resume", restartTestPrincipal, "--", "op"}
 	if !slices.Equal(got, want) {
 		t.Errorf("unattended argv = %q, want %q", got, want)
 	}
 	f.forwarded = []string{"--permission-mode", "dontAsk", "--model", "m"}
-	if got := restartArgvPosture(f, "", postureUnattended); countOf(got, "dontAsk") != 1 {
+	if got := restartArgvPosture(f, "", postureUnattended, ""); countOf(got, "dontAsk") != 1 {
 		t.Errorf("unattended over a spliced launch: %q, want exactly one dontAsk", got)
 	}
 
 	f.forwarded = []string{"--permission-mode=dontAsk", "--inherit-permission-mode", "dontAsk", "--permission-mode", "auto", "--model", "m", "--", "--permission-mode", "dontAsk"}
-	got = restartArgvPosture(f, "", postureAttended)
+	got = restartArgvPosture(f, "", postureAttended, "")
 	want = []string{"--provider", "claude", "--profile", "worker", "--", "--permission-mode", "auto", "--model", "m", "--resume", restartTestPrincipal, "--", "--permission-mode", "dontAsk"}
 	if !slices.Equal(got, want) {
 		t.Errorf("attended argv = %q, want %q", got, want)
 	}
-	if keep := restartArgvPosture(f, "", postureKeep); !slices.Equal(keep, restartArgv(f, "")) {
+	if keep := restartArgvPosture(f, "", postureKeep, ""); !slices.Equal(keep, restartArgv(f, "")) {
 		t.Errorf("keep = %q, want restartArgv's %q", keep, restartArgv(f, ""))
 	}
 
 	f.forwarded = nil
-	if got := restartArgvPosture(f, restartTestPrincipal, postureUnattended); !slices.Contains(got, unattendedCarrierFlag) {
+	if got := restartArgvPosture(f, restartTestPrincipal, postureUnattended, ""); !slices.Contains(got, unattendedCarrierFlag) {
 		t.Errorf("attached unattended relaunch lacks the carrier: %q", got)
 	}
 	t.Setenv(unattendedEnv, "1")
-	if got := restartArgvPosture(f, restartTestPrincipal, postureAttended); slices.Contains(got, unattendedCarrierFlag) {
+	if got := restartArgvPosture(f, restartTestPrincipal, postureAttended, ""); slices.Contains(got, unattendedCarrierFlag) {
 		t.Errorf("attached attended relaunch carries the posture: %q", got)
 	}
-	if got := restartArgvPosture(f, restartTestPrincipal, postureKeep); !slices.Contains(got, unattendedCarrierFlag) {
+	if got := restartArgvPosture(f, restartTestPrincipal, postureKeep, ""); !slices.Contains(got, unattendedCarrierFlag) {
 		t.Errorf("attached keep relaunch of an unattended launch lacks the carrier: %q", got)
 	}
 }
 
 // spinclass#476: an interactive `claude --resume` with no mode flag runs in
 // the transcript's last mode, so an attended claude relaunch whose launch was
-// in dontAsk must name a mode; a mode the launch kept is the one it runs in,
+// in dontAsk must name a mode: the verdict's, or default from an older
+// spinclass that sends none. A mode the launch kept is the one it runs in,
 // and keep, unattended and other providers are not given one.
 func TestRestartArgvAttendedNamesAMode(t *testing.T) {
 	t.Setenv(unattendedEnv, "")
 	f := parsedFlags{provider: "claude", forwarded: []string{"--permission-mode", "dontAsk", "--model", "m", "--", "op"}}
 	f.identity.Key = restartTestPrincipal
 
-	got := restartArgvPosture(f, "", postureAttended)
+	got := restartArgvPosture(f, "", postureAttended, "")
 	want := []string{"--provider", "claude", "--", "--model", "m", "--permission-mode", "default", "--resume", restartTestPrincipal, "--", "op"}
 	if !slices.Equal(got, want) {
-		t.Errorf("attended over a dontAsk launch = %q, want %q", got, want)
+		t.Errorf("attended over a dontAsk launch, no verdict mode = %q, want %q", got, want)
+	}
+	for _, mode := range []string{"auto", "acceptEdits", "default"} {
+		got := restartArgvPosture(f, "", postureAttended, mode)
+		want := []string{"--provider", "claude", "--", "--model", "m", "--permission-mode", mode, "--resume", restartTestPrincipal, "--", "op"}
+		if !slices.Equal(got, want) {
+			t.Errorf("attended over a dontAsk launch, verdict mode %s = %q, want %q", mode, got, want)
+		}
 	}
 	f.forwarded = []string{"--model", "m"}
-	if got := restartArgvPosture(f, "", postureAttended); countOf(got, "default") != 1 || countOf(got, "--permission-mode") != 1 {
+	if got := restartArgvPosture(f, "", postureAttended, ""); countOf(got, "default") != 1 || countOf(got, "--permission-mode") != 1 {
 		t.Errorf("attended over a launch with no mode = %q, want exactly one --permission-mode default", got)
 	}
-	f.forwarded = []string{"--permission-mode", "auto", "--model", "m"}
-	if got := restartArgvPosture(f, "", postureAttended); countOf(got, "--permission-mode") != 1 || !slices.Contains(got, "auto") {
-		t.Errorf("attended over an auto launch = %q, want auto kept and no other mode", got)
+	f.forwarded = []string{"--permission-mode", "acceptEdits", "--model", "m"}
+	if got := restartArgvPosture(f, "", postureAttended, "auto"); countOf(got, "--permission-mode") != 1 || !slices.Contains(got, "acceptEdits") {
+		t.Errorf("attended over an acceptEdits launch, verdict auto = %q, want acceptEdits kept and no other mode", got)
 	}
 	f.forwarded = []string{"--model", "m"}
-	if got := restartArgvPosture(f, "", postureKeep); slices.Contains(got, "--permission-mode") {
+	if got := restartArgvPosture(f, "", postureKeep, "auto"); slices.Contains(got, "--permission-mode") {
 		t.Errorf("keep = %q, want no mode added", got)
 	}
+	if got := restartArgvPosture(f, "", postureUnattended, "auto"); slices.Contains(got, "auto") || countOf(got, "dontAsk") != 1 {
+		t.Errorf("unattended with a verdict mode = %q, want dontAsk only", got)
+	}
 	f.provider = "codex"
-	if got := restartArgvPosture(f, "", postureAttended); slices.Contains(got, "--permission-mode") {
+	if got := restartArgvPosture(f, "", postureAttended, "auto"); slices.Contains(got, "--permission-mode") {
 		t.Errorf("attended codex relaunch = %q, want no claude mode flag", got)
 	}
+}
+
+// The verdict's optional mode parses through; an older spinclass's verdict
+// without one leaves it empty.
+func TestParsePreflightVerdictMode(t *testing.T) {
+	v, err := parsePreflightVerdict([]byte(`{"verdict":"restart","posture":"attended","mode":"auto"}`))
+	if err != nil || v.Mode != "auto" || v.Posture != postureAttended {
+		t.Errorf("mode auto: %+v, %v", v, err)
+	}
+	if v, err := parsePreflightVerdict([]byte(`{"verdict":"restart","posture":"attended"}`)); err != nil || v.Mode != "" {
+		t.Errorf("no mode: %+v, %v", v, err)
+	}
+}
+
+// A verdict naming a mode no attended start gets is dropped before the stop
+// and recorded as a posture refusal; the provider keeps running.
+func TestRestartRefusedByAnUnknownModeLeavesTheProviderRunning(t *testing.T) {
+	for _, mode := range []string{"dontAsk", "bypassPermissions", "plan", "bogus"} {
+		pendingRelaunch.Store(nil)
+		stops := 0
+		var recorded []sessionstatus.RestartRefusal
+		fr := frontendRestarter{
+			principal: restartTestPrincipal, argv: []string{"--provider", "claude"},
+			stop:        func() { stops++ },
+			refusal:     func(r sessionstatus.RestartRefusal) { recorded = append(recorded, r) },
+			postureArgv: func(p, m string) []string { return []string{"--provider", "claude", "--mode-applied", m} },
+			logPath:     filepath.Join(t.TempDir(), "l.log"),
+		}
+		providerRunning.Store(true)
+		fr.restart(restartRequest{When: "idle"}, preflightVerdict{Verdict: "restart", Posture: postureAttended, Mode: mode})
+		providerRunning.Store(false)
+		if stops != 0 || pendingRelaunch.Load() != nil {
+			t.Fatalf("mode %s: a refused mode must stop nothing", mode)
+		}
+		if len(recorded) != 1 || recorded[0].Kind != sessionstatus.RefusalPosture || !strings.Contains(recorded[0].Text, mode) {
+			t.Fatalf("mode %s: recorded %+v; want one posture refusal naming the mode", mode, recorded)
+		}
+	}
+	pendingRelaunch.Store(nil)
 }
 
 // unattended is refused for what the marker cannot put in dontAsk; a forwarded
@@ -242,11 +292,11 @@ func TestRestartVerbRefusedByThePostureGateQueuesNothing(t *testing.T) {
 func TestFrontendRestarterAppliesTheVerdictsPosture(t *testing.T) {
 	pendingRelaunch.Store(nil)
 	t.Cleanup(func() { pendingRelaunch.Store(nil); providerRunning.Store(false) })
-	graceDone := make(chan struct{}, 2)
-	t.Cleanup(func() { <-graceDone; <-graceDone })
+	graceDone := make(chan struct{}, 3)
+	t.Cleanup(func() { <-graceDone; <-graceDone; <-graceDone })
 	fr := frontendRestarter{
 		principal: restartTestPrincipal, argv: []string{"--provider", "claude"},
-		postureArgv: func(p string) []string { return []string{"--provider", "claude", "--posture-applied", p} },
+		postureArgv: func(p, m string) []string { return []string{"--provider", "claude", "--posture-applied", p, m} },
 		stop:        func() {}, logPath: filepath.Join(t.TempDir(), "l.log"), stopGrace: time.Millisecond,
 		kill:         func() error { return nil },
 		graceChecked: func(bool) { graceDone <- struct{}{} },
@@ -256,6 +306,13 @@ func TestFrontendRestarterAppliesTheVerdictsPosture(t *testing.T) {
 	p := pendingRelaunch.Load()
 	if p == nil || p.posture != postureUnattended || !slices.Contains(p.argv, "--posture-applied") || !strings.Contains(p.reason, "posture unattended") {
 		t.Fatalf("plan = %+v; want the verdict's posture applied", p)
+	}
+
+	pendingRelaunch.Store(nil)
+	providerRunning.Store(true)
+	fr.restart(restartRequest{When: "idle"}, preflightVerdict{Verdict: "restart", Reason: "r", Posture: postureAttended, Mode: "auto"})
+	if p := pendingRelaunch.Load(); p == nil || p.posture != postureAttended || !slices.Contains(p.argv, "auto") {
+		t.Fatalf("plan = %+v; want the verdict's mode passed to the argv", p)
 	}
 
 	pendingRelaunch.Store(nil)

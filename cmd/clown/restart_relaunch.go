@@ -144,14 +144,15 @@ func storePlanIfRunning(plan *relaunchPlan) bool {
 // replaced by --resume <principal>, and the [attach] id kept for the inner
 // clown of a multiplexer so it does not wrap again. The posture is kept.
 func restartArgv(flags parsedFlags, attachedID string) []string {
-	return restartArgvPosture(flags, attachedID, postureKeep)
+	return restartArgvPosture(flags, attachedID, postureKeep, "")
 }
 
 // restartArgvPosture is restartArgv for a relaunch under posture (clown#342):
 // claude's flags before any `--` are rewritten by postureArgs, an attended
-// claude relaunch names its mode (attendedModeArgs), and the [attach]
-// inner's carrier follows the posture (postureCarrierArgs).
-func restartArgvPosture(flags parsedFlags, attachedID, posture string) []string {
+// claude relaunch names its mode, the verdict's mode or the default
+// (attendedModeArgs), and the [attach] inner's carrier follows the posture
+// (postureCarrierArgs).
+func restartArgvPosture(flags parsedFlags, attachedID, posture, mode string) []string {
 	f := flags
 	// The --resume goes before any `--`, after which claude reads operands.
 	kept := withoutSpawnBrief(withoutClaudeSessionArgs(flags.forwarded), flags.identity.Key)
@@ -159,7 +160,7 @@ func restartArgvPosture(flags parsedFlags, attachedID, posture string) []string 
 	if i := slices.Index(kept, "--"); i >= 0 {
 		end = i
 	}
-	claudeArgs := attendedModeArgs(postureArgs(kept[:end], posture), flags.provider, posture)
+	claudeArgs := attendedModeArgs(postureArgs(kept[:end], posture), flags.provider, posture, mode)
 	f.forwarded = slices.Concat(claudeArgs, []string{"--resume", flags.identity.Key}, kept[end:])
 	var argv []string
 	if attachedID != "" {
@@ -429,10 +430,11 @@ type frontendRestarter struct {
 	profileCheck func() error
 	// postureCheck says why the relaunch could not take the verdict's
 	// posture (relaunchPostureError, clown#342), before anything is stopped;
-	// nil skips it. postureArgv is the relaunch argv for a posture
-	// (restartArgvPosture); nil uses argv whatever the posture.
+	// nil skips it. postureArgv is the relaunch argv for a posture and the
+	// verdict's attended mode (restartArgvPosture); nil uses argv whatever
+	// the posture.
 	postureCheck func(posture string) error
-	postureArgv  func(posture string) []string
+	postureArgv  func(posture, mode string) []string
 	// busy reports a turn running (the UserPromptSubmit hook); nil: never.
 	busy func() bool
 	// stopGrace bounds the wait for the provider to exit after the stop;
@@ -514,9 +516,15 @@ func (fr frontendRestarter) restart(req restartRequest, v preflightVerdict) {
 			return
 		}
 	}
+	// An attended relaunch never takes a mode an attended start could not
+	// (attendedModes), whatever the verdict says.
+	if !validAttendedMode(v.Mode) {
+		fr.cancelled(sessionstatus.RefusalPosture, restartModeRefusal(v.Mode))
+		return
+	}
 	argv := fr.argv
 	if v.Posture != postureKeep && fr.postureArgv != nil {
-		argv = fr.postureArgv(v.Posture)
+		argv = fr.postureArgv(v.Posture, v.Mode)
 	}
 	// spinclass's own reason, from the verdict. The queued one came over the
 	// control socket, which any same-uid process can write, so it is not

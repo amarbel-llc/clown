@@ -100,7 +100,7 @@ with
 .Ev CLOWN_SESSION_ID
 set to the session's principal.
 The preflight prints one JSON line,
-.Li {\(dqverdict\(dq:\(dqrestart\(dq|\(dqnone\(dq|\(dqrefused\(dq,\(dqreason\(dq:...,\(dqwhen\(dq:...,\(dqposture\(dq:...} ,
+.Li {\(dqverdict\(dq:\(dqrestart\(dq|\(dqnone\(dq|\(dqrefused\(dq,\(dqreason\(dq:...,\(dqwhen\(dq:...,\(dqposture\(dq:...,\(dqmode\(dq:...} ,
 and consumes the request itself, so a relaunched session does not restart
 again.
 Its optional
@@ -113,9 +113,19 @@ added for
 .Li unattended ,
 only the dontAsk flags dropped for
 .Li attended .
-An unknown value does not restart.
-A relaunch that could not take the posture is dropped before the stop,
-recorded in the status file as kind
+An attended claude relaunch whose flags then keep no mode names one, since
+.Ic claude --resume
+with no mode flag runs in the mode its transcript last recorded
+(spinclass#476): the verdict's optional
+.Li mode
+.Pq Li auto , acceptEdits No or Li default ,
+spinclass's attended spawn rule, or
+.Cm default
+when the verdict has none (an older spinclass).
+A mode the launch's flags keep is left as it is.
+An unknown posture does not restart.
+A relaunch that could not take the posture, or a verdict naming any other
+mode, is dropped before the stop, recorded in the status file as kind
 .Li posture .
 Only
 .Li restart

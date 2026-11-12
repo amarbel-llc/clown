@@ -206,8 +206,12 @@ half (rights, the request record, the entry rewrite) is spinclass's.
   in the relaunch environment, drops every forwarded permission-mode flag and
   adds exactly one `--permission-mode dontAsk` (so argv and settings agree
   with spinclass's splice); `attended` removes the marker and drops the
-  dontAsk flags only (claude's default mode until the next `sc resume`, whose
-  mode is spinclass's spawn rule); the [attach] inner's carrier follows. The
+  dontAsk flags only, and a claude relaunch whose flags then keep no mode
+  adds `--permission-mode <mode>`, the verdict's optional `"mode"` (`auto`,
+  `acceptEdits` or `default`, spinclass's attended spawn rule) or `default`
+  from an older spinclass, since `claude --resume` with no mode flag runs in
+  the transcript's last mode (spinclass#476); any other mode is refused
+  before the stop (`RefusalPosture`); the [attach] inner's carrier follows. The
   same check runs again before the stop (`RefusalPosture` in the status file
   when it refuses), the restart notice names the posture, and the status
   file's `unattended` field shows the posture after the relaunch. Nothing is
