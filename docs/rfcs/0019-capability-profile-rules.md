@@ -195,6 +195,8 @@ name the finding. The `…` elisions below are abbreviations;
 | PH-8 | `mode = attended` with no `_base` (a root profile) | ok |
 | PH-9 | `role = reviewer` | refuse H-8 |
 | PH-10 | head with `- owner = me` | refuse H-9 |
+| PH-11 | `mode = unattended` with no `spend_cap_usd` | refuse H-5 |
+| PH-12 | `mode = attended` with `_base = blake2b256-…` (no `@`) | refuse H-7 |
 | PM-1 | unattended, body has `… [-> read !mcp-tool-v1 perm=ask]` | ok (M-1 retired: the enforcer resolves ask by posture) |
 | PM-2 | unattended, body has `[clown-builtin-jobs … [-> troupe !mcp-server-v1 [-> chat_send !mcp-tool-v1]]]` | refuse M-2 |
 | PM-3 | attended, body lacks `clown-builtin-jobs/troupe` | refuse M-3 |
