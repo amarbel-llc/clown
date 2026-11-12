@@ -2562,14 +2562,15 @@ func runManaged(
 	}
 
 	if len(report.Failed) > 0 {
-		switch {
-		case skipFailed:
+		unattended := unattendedValue() == "1"
+		switch pluginFailurePolicy(skipFailed, pluginhost.IsInteractive(), unattended) {
+		case failSkip:
 			fmt.Fprintf(os.Stderr, "clown: skipping %d failed server(s) (--skip-failed)\n", len(report.Failed))
 			logger.Info("continuing despite failures",
 				"failed", len(report.Failed),
 				"started", len(report.Started),
 				"reason", "skip_failed")
-		case pluginhost.IsInteractive():
+		case failPrompt:
 			cont, err := pluginhost.ConfirmContinueWithFailures(report.Failed)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "clown: prompt aborted: %v\n", err)
@@ -2584,8 +2585,14 @@ func runManaged(
 			}
 			logger.Info("user chose to continue despite failures")
 		default:
-			fmt.Fprintln(os.Stderr, "clown: aborting; pass --skip-failed or set CLOWN_SKIP_FAILED_PLUGINS=1 to continue with healthy servers")
-			logger.Error("aborting: plugin failures and not interactive")
+			if unattended {
+				// No prompt for a session nobody is watching (clown#346).
+				fmt.Fprintln(os.Stderr, "clown: aborting; this session is unattended and cannot ask. Pass --skip-failed or set CLOWN_SKIP_FAILED_PLUGINS=1 to continue with healthy servers")
+				logger.Error("aborting: plugin failures and unattended")
+			} else {
+				fmt.Fprintln(os.Stderr, "clown: aborting; pass --skip-failed or set CLOWN_SKIP_FAILED_PLUGINS=1 to continue with healthy servers")
+				logger.Error("aborting: plugin failures and not interactive")
+			}
 			host.Shutdown()
 			return 1
 		}
