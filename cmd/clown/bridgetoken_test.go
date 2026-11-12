@@ -38,12 +38,20 @@ func TestBridgeTokenIsMintedWhenOptedIn(t *testing.T) {
 	}
 }
 
+// A confined launch (--agent-scope) gets a token like any other claude launch.
+func TestBridgeTokenIsMintedForAConfinedLaunch(t *testing.T) {
+	src := bytes.NewReader(bytes.Repeat([]byte{0xcd}, 32))
+	got := bridgeTokenFor(parsedFlags{provider: "claude", agentScopeSpec: "/spec"}, envOf(map[string]string{bridgeAuthEnv: "1"}), src, func(m string) { t.Errorf("warned: %s", m) })
+	if got != strings.Repeat("cd", 32) {
+		t.Errorf("confined launch token = %q, want 32 bytes as hex", got)
+	}
+}
+
 // Launches whose bridges or clients would not send the token do not get one,
 // and the warning names why but never the token.
 func TestBridgeTokenRefusedWhereItCannotBeSent(t *testing.T) {
 	cases := map[string]parsedFlags{
 		"provider":     {provider: "opencode"},
-		"agent-scope":  {provider: "claude", agentScopeSpec: "/spec"},
 		"mcp-collapse": {provider: "claude", mcpCollapse: true},
 	}
 	for name, flags := range cases {

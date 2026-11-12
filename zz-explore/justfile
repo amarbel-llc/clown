@@ -2267,6 +2267,101 @@ explore-bridge-token-e2e PROMPT='Do two things. First use the Read tool to read 
     grep -h -i -E 'bridge token auth|Unauthorized' $(find "$logdir" -type f -newer "$stamp" 2>/dev/null) 2>/dev/null | cut -c1-200 | head -10
     rm -f "$stamp"
 
+# clown#288 confined slice end to end: the same check as explore-bridge-token-e2e
+# under a real `--agent-scope` launch (a transient systemd unit; one small model
+# call; the operator login is bound read-only as in explore-agent-scope-claude).
+# The throwaway plugin has two bridged servers, each a copy of `ringmaster mcp`:
+# `ringmaster` with scope frontend (runs on the host, reached through the unit's
+# relay) and `inunit` (started inside the unit by the relay). Reports: both
+# bridges have a token in their env (length only); the frontend bridge refuses a
+# request with no or a wrong header from the host and accepts the right one;
+# the in-unit bridge is probed from inside its network namespace with nsenter
+# (stated if that is not possible); the agent's answer, which reads a file and
+# calls a tool on each server through the manifest headers; and the count of
+# lines holding the token in the agent output, host logs and the unit journal.
+explore-bridge-token-confined-e2e PROMPT='Do three things. First use the Read tool to read hello.txt. Second find the MCP tool job_status on the server whose name ends in ringmaster (from the e2e plugin) and call it with job_id "nope". Third find the MCP tool job_status on the server whose name ends in inunit (from the e2e plugin) and call it with job_id "nope". Reply with exactly: READ=<file contents> RINGMASTER=<yes or no> INUNIT=<yes or no>.':
+    #!/usr/bin/env bash
+    set -uo pipefail
+    root=$(git rev-parse --show-toplevel)
+    cd "$root"
+    out=$(nix build --no-link --print-out-paths) || exit 2
+    work="$root/.tmp/btc-e2e"; wt="$work/wt"; specdir="$work/spec"
+    rm -rf "$work"; mkdir -p "$wt/iu" "$wt/plugin/.claude-plugin" "$work/fe" "$specdir"
+    cp -L "$out/bin/ringmaster" "$work/fe/ringmaster"; cp -L "$out/bin/ringmaster" "$wt/iu/ringmaster"
+    echo agent-bridge-token-confined-ok > "$wt/hello.txt"
+    printf '{"name":"e2e"}\n' > "$wt/plugin/.claude-plugin/plugin.json"
+    jq -n --arg fe "$work/fe/ringmaster" --arg iu "$wt/iu/ringmaster" \
+        '{version:1, stdioServers:{ringmaster:{command:$fe, args:["mcp"], scope:"frontend"}, inunit:{command:$iu, args:["mcp"]}}}' > "$wt/plugin/clown.json"
+    sockets='[]'
+    [[ -S ${SSH_AUTH_SOCK:-} ]] && sockets=$(jq -n --arg p "$SSH_AUTH_SOCK" '[{path:$p,purpose:"piggy-agent"}]')
+    jq -n --arg wt "$wt" --arg home "$HOME" --argjson s "$sockets" \
+        '{version:1, worktree:$wt, operator_home:$home, unit_name_hint:"clown-btc-e2e",
+          result_path:($wt+".result.json"), sockets:$s, binds_rw:[]}' > "$specdir/spec.json"
+    logdir=${XDG_LOG_HOME:-$HOME/.local/log}/clown
+    stamp=$(mktemp); touch "$stamp"
+    since=$(date '+%Y-%m-%d %H:%M:%S')
+    ver=$("$out/bin/clown" version 2>&1 | head -1)
+    echo ">> clown --agent-scope (claude -p) with CLOWN_BRIDGE_AUTH=1; $ver"
+    (cd "$wt" && env -u CLOWN_AGENT_SCOPE -u CLOWN_SESSION_ID -u CLOWN_NAME -u CLOWN_UNIT -u CLOWN_GROUP_ID -u CLOWN_GROUP_DESCRIPTION \
+        CLOWN_BRIDGE_AUTH=1 "$out/bin/clown" --plugin-dir "$wt/plugin" --agent-scope "$specdir/spec.json" -- \
+        --session-id "$(cat /proc/sys/kernel/random/uuid)" --allowedTools "Read,mcp__plugin_e2e_ringmaster,mcp__plugin_e2e_inunit" \
+        -p "{{PROMPT}}" < /dev/null > "$work/claude.out" 2> "$work/claude.err") &
+    run=$!
+    code() { curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$@"; }
+    envtok() { tr '\0' '\n' < "/proc/$1/environ" 2>/dev/null | sed -n 's/^CLOWN_BRIDGE_TOKEN=//p'; }
+    waitpid() { local p=""; for _ in $(seq 200); do p=$(pgrep -f "$1" | head -1); [[ -n $p ]] && break; sleep 0.2; done; echo "$p"; }
+    toks=()
+    fpid=$(waitpid "clown-stdio-bridge --command $work/fe/ringmaster")
+    if [[ -z $fpid ]]; then echo "!! the frontend bridge never appeared"; else
+        for _ in $(seq 50); do
+            faddr=$(ss -H -ltnp 2>/dev/null | awk -v p="pid=$fpid," 'index($0,p){print $4; exit}')
+            [[ -n $faddr ]] && break; sleep 0.2
+        done
+        ftok=$(envtok "$fpid"); toks+=("$ftok")
+        if [[ -n $ftok ]]; then seen="yes, length ${#ftok}"; else seen="NO"; fi
+        echo ">> frontend bridge pid $fpid on ${faddr:-<not found>}; token in its env: $seen"
+        if [[ -n ${faddr:-} ]]; then
+            echo "   POST /mcp, no header     -> $(code -X POST "http://$faddr/mcp")"
+            echo "   POST /mcp, wrong bearer  -> $(code -X POST -H 'Authorization: Bearer not-the-token' "http://$faddr/mcp")"
+            echo "   GET  /healthz, no header -> $(code "http://$faddr/healthz")"
+            [[ -n $ftok ]] && echo "   POST /mcp ping, right bearer -> $(code -X POST -K <(printf 'header = "Authorization: Bearer %s"\n' "$ftok") -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"ping"}' "http://$faddr/mcp")"
+        fi
+    fi
+    ipid=$(waitpid "clown-stdio-bridge --command $wt/iu/ringmaster")
+    if [[ -z $ipid ]]; then echo "!! the in-unit bridge never appeared"; else
+        itok=$(envtok "$ipid"); toks+=("$itok")
+        if [[ -n $itok ]]; then seen="yes, length ${#itok}"; else seen="NO"; fi
+        echo ">> in-unit bridge pid $ipid; token in its env: $seen"
+        ns() { nsenter --user --net --target "$ipid" -- "$@"; }
+        for _ in $(seq 30); do
+            iaddr=$(ns ss -H -ltn 2>&1 | awk '$4 ~ /^127\.0\.0\.1:/ && $4 !~ /:(19|2)[0-9]{4}$/ {print $4; exit}')
+            [[ -n $iaddr ]] && break; sleep 0.3
+        done
+        if [[ -z ${iaddr:-} ]]; then
+            echo "   (could not find or enter the in-unit bridge's network namespace: $(ns true 2>&1 | head -1))"
+        else
+            echo "   in-unit bridge listens on $iaddr (inside the unit)"
+            echo "   POST /mcp, no header     -> $(ns curl -s -o /dev/null -w '%{http_code}' --max-time 5 -X POST "http://$iaddr/mcp")"
+            echo "   POST /mcp, wrong bearer  -> $(ns curl -s -o /dev/null -w '%{http_code}' --max-time 5 -X POST -H 'Authorization: Bearer not-the-token' "http://$iaddr/mcp")"
+            echo "   GET  /healthz, no header -> $(ns curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://$iaddr/healthz")"
+            [[ -n $itok ]] && echo "   POST /mcp ping, right bearer -> $(ns curl -s -o /dev/null -w '%{http_code}' --max-time 5 -X POST -K <(printf 'header = "Authorization: Bearer %s"\n' "$itok") -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"ping"}' "http://$iaddr/mcp")"
+        fi
+    fi
+    wait "$run"; echo ">> clown exit=$?"
+    echo ">> agent answer"; cat "$work/claude.out"
+    echo ">> stderr (first 12 lines, bridge-token lines only if any)"; grep -i 'bridge token\|clown:.*fail\|refus' "$work/claude.err" | head -12
+    unit=$(jq -r .unit "$wt.result.json" 2>/dev/null)
+    hits=0
+    for tok in "${toks[@]}"; do
+        [[ -n $tok ]] || continue
+        for f in "$work/claude.out" "$work/claude.err" $(find "$logdir" -type f -newer "$stamp" 2>/dev/null); do
+            n=$(grep -c -F -- "$tok" "$f" 2>/dev/null); hits=$((hits + ${n:-0}))
+        done
+        if [[ -n $unit ]]; then n=$(journalctl --user -u "$unit" --since "$since" --no-pager 2>/dev/null | grep -c -F -- "$tok"); hits=$((hits + ${n:-0})); fi
+    done
+    echo ">> lines containing either token across the agent output, stderr, host logs and the unit journal: $hits"
+    rm -f "$stamp"
+
 # clown#241 end to end: a real claude -p session (one small model call) through
 # `clown` on a throwaway plugin with a NATIVE (non-bridge) server, the pluginhost
 # fixture `fakeserver` behind a script that writes two stderr lines. The recipe

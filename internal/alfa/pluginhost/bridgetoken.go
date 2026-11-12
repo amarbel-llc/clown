@@ -27,11 +27,11 @@ func withBridgeToken(env map[string]string, token string) map[string]string {
 }
 
 // token is the bearer token this server's bridge was given, or "" when it was
-// not given one (the flag is off, or the server is not a bridge).
+// not given one (the flag is off, or the server is not a bridge). A server
+// reserved for the agent unit (--agent-scope) has it too: the in-unit relay
+// starts the bridge with this same env, so the manifest entry must carry the
+// header even though the frontend never dials it.
 func (s *ManagedServer) token() string {
-	if s.reserved {
-		return ""
-	}
 	return s.Def.Env[EnvBridgeToken]
 }
 

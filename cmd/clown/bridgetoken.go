@@ -18,14 +18,14 @@ const bridgeAuthEnv = "CLOWN_BRIDGE_AUTH"
 
 // bridgeTokenUnsupported says why this launch cannot use the token, or "" when
 // it can. The token rides in claude's manifest `headers`, so only the claude
-// provider is covered; the aggregator and the confined unit start or reach
-// bridges by other paths that do not send it.
+// provider is covered, and the aggregator cannot send it to the bridges it
+// fronts. A confined launch (--agent-scope) is covered: the relays are byte
+// splices that pass the header through, the in-unit bridges are started with
+// the token in their env, and the unit's own calls to them send it.
 func bridgeTokenUnsupported(flags parsedFlags) string {
 	switch {
 	case flags.provider != "claude":
 		return "provider " + flags.provider + " does not take manifest headers"
-	case flags.agentScopeSpec != "":
-		return "--agent-scope reaches its bridges over serve sockets and in-unit relays, which do not send the token"
 	case flags.mcpCollapse:
 		return "--mcp-collapse's aggregator cannot send the token to the bridges it fronts"
 	}

@@ -84,9 +84,15 @@ func TestManifestEntryCarriesTheTokenHeaderOnlyWhenTheBridgeHasOne(t *testing.T)
 		t.Errorf("an entry with no token marshals with headers: %s", raw)
 	}
 
+	// A server reserved for the agent unit runs a bridge started with the same
+	// env, so its entry carries the header too; one with no token does not.
 	reserved := &ManagedServer{Name: "p/r", reserved: true, Def: guarded.Def, handshake: guarded.handshake}
-	if got := h.ServerEntry(reserved).Headers; got != nil {
-		t.Errorf("a reserved (elsewhere) server got headers %v", got)
+	if got := h.ServerEntry(reserved).Headers["Authorization"]; got != "Bearer "+testBridgeToken {
+		t.Errorf("a reserved bridge's entry header = %q, want the bearer token", got)
+	}
+	reservedOpen := &ManagedServer{Name: "p/ro", reserved: true, handshake: guarded.handshake}
+	if got := h.ServerEntry(reservedOpen).Headers; got != nil {
+		t.Errorf("a reserved server with no token got headers %v", got)
 	}
 }
 

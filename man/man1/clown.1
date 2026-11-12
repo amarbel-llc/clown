@@ -762,11 +762,18 @@ calls to the bridge; it is never logged or shown in the launch plan.
 Off by default.
 Honoured only for the
 .Li claude
-provider without
-.Fl -agent-scope
-or
+provider and not with
 .Fl -mcp-collapse ;
 otherwise a warning in the host log says why and nothing changes.
+With
+.Fl -agent-scope
+the same token guards the frontend bridges the unit reaches through its relays
+and the agent-side bridges the unit starts for itself, and the manifest inside
+the unit names it for both.
+Anything running in the unit can read it there (the manifest, the unit's
+servers file and an in-unit bridge's environment), exactly as the agent can
+read the manifest outside a unit; it is not a secret from the agent, only from
+other users and processes that cannot read those files.
 .It Ev CLOWN_DISABLE_DISCONNECT_RECORDS
 Set to
 .Li 1

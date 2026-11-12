@@ -32,13 +32,29 @@ date: 2026-04-29
 >   every route but `/healthz` (off by default). **Follow-up (2026-11-12):** the
 >   host now mints one random token per session when launched with
 >   `CLOWN_BRIDGE_AUTH=1` (default off, claude provider only, not with
->   `--agent-scope` or `--mcp-collapse`), gives it to every bridge it starts,
+>   `--mcp-collapse`; confined launches are covered since 2026-11-12, see
+>   below), gives it to every bridge it starts,
 >   names it in claude's manifest `headers` (checked live on claude 2.1.318 and
 >   2.1.322, `just explore-claude-mcp-headers`) and sends it on its own control
 >   calls. It never logs the token. A process that cannot read the manifest or
 >   the bridge's environment can no longer use the port; a same-user process
 >   still can, as before. The design is in
 >   `docs/plans/2026-11-11-clown-241-288-design.md`.
+> - **Confined launches (`--agent-scope`, 2026-11-12).** The relays into the
+>   unit are byte splices, so claude's `Authorization` header passes through
+>   them to the frontend bridges (ringmaster, troupe, the diagnostics server,
+>   spinclass's serve socket) unchanged. The agent-side bridges the in-unit relay
+>   starts get the token in their env (the servers file entry is the same env
+>   the frontend built), and the manifest entries for them carry the header; the
+>   relay's own tool-exclusion push and catalog fetch send it too. What a process
+>   in the unit can read: the manifest, the servers file (0600, the unit's own
+>   user) and an in-unit bridge's `/proc/<pid>/environ`, so the token is not
+>   secret from the agent, as with the manifest outside a unit. The frontend
+>   bridges' environments are outside the unit's pid namespace. For a confined
+>   launch the token therefore protects the frontend loopback bridges against
+>   other local users and against processes outside the unit; it adds nothing
+>   against the agent itself, and the peer-credential check on the serve socket
+>   stays the gate for that socket.
 > - The Slowloris decision itself (no HTTP read/write timeouts) is unchanged.
 >   The unix-socket mode with peer credentials is a separate, open discussion.
 
