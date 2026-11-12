@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"code.linenisgreat.com/clown/internal/0/disconnectlog"
 )
 
 // The disconnect record (clown#344, docs/plans/2026-11-06-clown-344-
@@ -72,7 +74,7 @@ func (s *ManagedServer) noteShutdown() {
 	resp.Body.Close()
 }
 
-// ExitEvent is a recording bridge that died while the session ran.
+// ExitEvent is a started server that died while the session ran.
 type ExitEvent struct {
 	Server     *ManagedServer
 	PluginName string
@@ -82,17 +84,23 @@ type ExitEvent struct {
 	StartedAt  time.Time
 	Code       int
 	Signal     string
+	// Bridge is true when the server is a recording bridge (which may have
+	// written its own record); false for any other started server.
+	Bridge bool
+	// StderrTail is the scrubbed tail of the process's stderr.
+	StderrTail []disconnectlog.StderrLine
 }
 
 // WatchExits calls onExit, once and from its own goroutine, for each started
-// recording bridge that ends without the host having begun to stop it: the
-// bridge crashed, was killed, or exited on a fault of its own. A bridge the
-// host stops (Stop, so Shutdown) is not reported. Servers that are not
-// recording bridges, or were reserved for a server running elsewhere, are not
-// watched. It returns at once.
+// server that ends without the host having begun to stop it: it crashed, was
+// killed, or exited on a fault of its own. A server the host stops (Stop, so
+// Shutdown) is not reported. Servers that were reserved for a server running
+// elsewhere, that have no plugin name (the aggregator), or that are the
+// diagnostics plugin itself (a failure of the thing that reports failures must
+// not recurse) are not watched. It returns at once.
 func (h *Host) WatchExits(onExit func(ExitEvent)) {
 	for _, srv := range h.Servers {
-		if srv.Reserved() || !srv.recorded() || srv.Done() == nil {
+		if srv.Reserved() || srv.Done() == nil || srv.PluginName == "" || srv.PluginName == DiagnosticsPluginName {
 			continue
 		}
 		go func(s *ManagedServer) {
@@ -100,7 +108,7 @@ func (h *Host) WatchExits(onExit func(ExitEvent)) {
 			if s.stopping.Load() {
 				return
 			}
-			ev := ExitEvent{Server: s, PluginName: s.PluginName, Name: s.Name, ServerName: strings.TrimPrefix(s.Name, s.PluginName+"/"), StartedAt: s.startedAt}
+			ev := ExitEvent{Server: s, PluginName: s.PluginName, Name: s.Name, ServerName: strings.TrimPrefix(s.Name, s.PluginName+"/"), StartedAt: s.startedAt, Bridge: s.recorded(), StderrTail: s.tail.Snapshot()}
 			if s.cmd != nil && s.cmd.Process != nil {
 				ev.PID = s.cmd.Process.Pid
 			}

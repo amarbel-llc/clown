@@ -234,7 +234,11 @@ resource URI and the MCP server
 .Li clown-builtin-diagnostics/disconnects
 that serves it.
 The host's death of a bridge is recorded by the host as kind
-.Li bridge_exit .
+.Li bridge_exit ;
+the host's death of any other server it started is recorded as kind
+.Li server_exit ,
+with the last stderr lines the host kept, also readable as the resource
+.Li clown://session/<id>/plugins/<plugin>/<server>/log .
 The records are read with
 .Xr clown 1
 .Cm disconnects .

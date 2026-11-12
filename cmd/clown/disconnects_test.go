@@ -91,7 +91,7 @@ func TestDisconnectsServerServesOnlyItsOwnSessionsRecords(t *testing.T) {
 	if !found {
 		t.Errorf("own record %s not listed: %v", mine.URI, listed)
 	}
-	if len(replies[2]["result"].(map[string]any)["resourceTemplates"].([]any)) != 2 {
+	if len(replies[2]["result"].(map[string]any)["resourceTemplates"].([]any)) != 3 {
 		t.Errorf("templates = %v", replies[2])
 	}
 	contents := replies[3]["result"].(map[string]any)["contents"].([]any)[0].(map[string]any)
@@ -153,14 +153,61 @@ func TestSynthDiagnosticsPluginDirDeclaresOneFrontendServer(t *testing.T) {
 func TestWriteBridgeExitSkipsADeathTheBridgeAlreadyRecorded(t *testing.T) {
 	root := t.TempDir()
 	start := time.Now().Add(-time.Minute)
-	ev := pluginhost.ExitEvent{PluginName: "cg", ServerName: "s", PID: 7, StartedAt: start, Code: 1}
+	ev := pluginhost.ExitEvent{PluginName: "cg", ServerName: "s", PID: 7, StartedAt: start, Code: 1, Bridge: true}
 
-	rec, wrote, err := writeBridgeExit(root, testSession, "/log", ev)
+	rec, wrote, err := writeServerExit(root, testSession, "/log", ev)
 	if err != nil || !wrote || rec.Kind != disconnectlog.KindBridgeExit {
 		t.Fatalf("first write = %+v, %v, %v", rec, wrote, err)
 	}
-	if _, wrote, _ := writeBridgeExit(root, testSession, "/log", ev); wrote {
+	if _, wrote, _ := writeServerExit(root, testSession, "/log", ev); wrote {
 		t.Error("a second record was written for the same life")
+	}
+}
+
+// A started server that is not a bridge has no one else to record its death:
+// it always gets a server_exit record carrying the stderr tail, and the tail is
+// readable as the server's log resource (clown#241).
+func TestNonBridgeServerDeathIsRecordedAndItsLogIsAResource(t *testing.T) {
+	root := t.TempDir()
+	ev := pluginhost.ExitEvent{
+		PluginName: "native", ServerName: "n", PID: 9, StartedAt: time.Now().Add(-time.Minute), Code: 3,
+		StderrTail: []disconnectlog.StderrLine{{At: "t1", Line: "boom: out of cheese"}, {At: "t2", Line: "fatal: giving up"}},
+	}
+	rec, wrote, err := writeServerExit(root, testSession, "/log", ev)
+	if err != nil || !wrote || rec.Kind != disconnectlog.KindServerExit || rec.ChildExit == nil || rec.ChildExit.Code != 3 {
+		t.Fatalf("write = %+v, %v, %v", rec, wrote, err)
+	}
+	// Not skipped the way a bridge that recorded itself is.
+	if _, wrote, _ := writeServerExit(root, testSession, "/log", ev); !wrote {
+		t.Error("a second death of a non-bridge server was not recorded")
+	}
+
+	logURI := disconnectlog.LogURI(testSession, "native", "n")
+	read := func(id int, uri string) string {
+		b, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": id, "method": "resources/read", "params": map[string]any{"uri": uri}})
+		return string(b)
+	}
+	replies := rpc(t, root, testSession,
+		`{"jsonrpc":"2.0","id":1,"method":"resources/list"}`,
+		read(2, logURI),
+		read(3, disconnectlog.LogURI("someone-else", "native", "n")),
+		read(4, disconnectlog.LogURI(testSession, "native", "nothing")),
+	)
+	listed, _ := json.Marshal(replies[0]["result"])
+	if !strings.Contains(string(listed), logURI) {
+		t.Errorf("the log resource is not listed: %s", listed)
+	}
+	c := replies[1]["result"].(map[string]any)["contents"].([]any)[0].(map[string]any)
+	if c["mimeType"] != "text/plain" || !strings.Contains(c["text"].(string), "fatal: giving up") || !strings.Contains(c["text"].(string), "boom: out of cheese") {
+		t.Errorf("log contents = %v", c)
+	}
+	for _, i := range []int{2, 3} { // another principal's log, a server with no records
+		if int(replies[i]["error"].(map[string]any)["code"].(float64)) != rpcResourceNotFound {
+			t.Errorf("reply %d = %v, want resource not found", i, replies[i])
+		}
+	}
+	if msg := disconnectWakeMessage(disconnectlog.Entry{Plugin: "native", Server: "n", Kind: rec.Kind, At: rec.At, URI: rec.URI}); !strings.Contains(msg, logURI) {
+		t.Errorf("the wake does not name the log resource %s: %s", logURI, msg)
 	}
 }
 

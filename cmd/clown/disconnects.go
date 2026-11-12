@@ -121,38 +121,53 @@ func addDiagnosticsPlugin(root *staging.Root, flags parsedFlags, recordRoot stri
 	return synthDiagnosticsPluginDir(root, exe, flags.identity.Key, recordRoot)
 }
 
-// writeBridgeExit records a bridge that died while the session ran, unless the
-// bridge wrote its own record in that life (it records before it exits for
-// every end it can see, so a record at or after the bridge's start means the
-// death is already told). hostLog is the host's own log path.
-func writeBridgeExit(root, session, hostLog string, ev pluginhost.ExitEvent) (disconnectlog.Record, bool, error) {
-	startedAt := ev.StartedAt.UTC().Format(disconnectlog.TimeFormat)
-	for _, e := range disconnectlog.List(root, session, ev.PluginName, ev.ServerName) {
-		if e.At >= startedAt {
-			return disconnectlog.Record{}, false, nil
+// writeServerExit records a started server that died while the session ran. A
+// bridge is skipped if it wrote its own record in that life (it records before
+// it exits for every end it can see, so a record at or after the bridge's
+// start means the death is already told). Any other started server (a native
+// httpServers plugin) has no one else to tell it, so it always gets a
+// server_exit record (clown#241). Both carry the scrubbed stderr tail the host
+// kept, which the session reads as the server's log resource. hostLog is the
+// host's own log path.
+func writeServerExit(root, session, hostLog string, ev pluginhost.ExitEvent) (disconnectlog.Record, bool, error) {
+	if ev.Bridge {
+		startedAt := ev.StartedAt.UTC().Format(disconnectlog.TimeFormat)
+		for _, e := range disconnectlog.List(root, session, ev.PluginName, ev.ServerName) {
+			if e.At >= startedAt {
+				return disconnectlog.Record{}, false, nil
+			}
 		}
 	}
 	closedBy := disconnectlog.ClosedByUnknown
 	if ev.Signal != "" {
 		closedBy = disconnectlog.ClosedByExternal
 	}
-	rec, err := disconnectlog.Write(root, disconnectlog.Record{
+	r := disconnectlog.Record{
 		Session:    session,
 		Plugin:     ev.PluginName,
 		Server:     ev.ServerName,
-		Kind:       disconnectlog.KindBridgeExit,
 		ClosedBy:   closedBy,
-		BridgePID:  ev.PID,
-		BridgeExit: &disconnectlog.Exit{Code: ev.Code, Signal: ev.Signal},
 		UptimeMS:   time.Since(ev.StartedAt).Milliseconds(),
+		StderrTail: ev.StderrTail,
 		HostLog:    hostLog,
-	})
+	}
+	exit := &disconnectlog.Exit{Code: ev.Code, Signal: ev.Signal}
+	if ev.Bridge {
+		r.Kind, r.BridgePID, r.BridgeExit = disconnectlog.KindBridgeExit, ev.PID, exit
+	} else {
+		r.Kind, r.ChildPID, r.ChildExit = disconnectlog.KindServerExit, ev.PID, exit
+	}
+	rec, err := disconnectlog.Write(root, r)
 	return rec, err == nil, err
 }
 
 // disconnectWakeMessage is the one line the session is woken with.
 func disconnectWakeMessage(e disconnectlog.Entry) string {
-	return fmt.Sprintf("plugin %s/%s disconnected (%s) at %s; the record is readable as the MCP resource %s (server clown-builtin-diagnostics/disconnects). Calls to that plugin in flight failed with an error that names it.", e.Plugin, e.Server, e.Kind, e.At, e.URI)
+	logHint := ""
+	if i := strings.LastIndex(e.URI, "/disconnects/"); i >= 0 {
+		logHint = " Its last log lines, if the record kept any, are the resource " + e.URI[:i] + "/log."
+	}
+	return fmt.Sprintf("plugin %s/%s disconnected (%s) at %s; the record is readable as the MCP resource %s (server clown-builtin-diagnostics/disconnects). Calls to that plugin in flight failed with an error that names it.%s", e.Plugin, e.Server, e.Kind, e.At, e.URI, logHint)
 }
 
 // disconnectBaseline is the marks of the records a session already has, taken
@@ -197,7 +212,7 @@ func watchDisconnectWakes(ctx context.Context, root, session string, seen map[st
 }
 
 // armDisconnectRecords is the launch step after the servers start: it reports a
-// recording bridge that dies mid-session as a record (writeBridgeExit), and
+// started server that dies mid-session as a record (writeServerExit), and
 // wakes the session for every new record. Neither does anything for a launch
 // without a record root.
 func armDisconnectRecords(ctx context.Context, host *pluginhost.Host, session, recordRoot, hostLog string, seen map[string]int, logf func(format string, args ...any)) {
@@ -205,12 +220,12 @@ func armDisconnectRecords(ctx context.Context, host *pluginhost.Host, session, r
 		return
 	}
 	host.WatchExits(func(ev pluginhost.ExitEvent) {
-		rec, wrote, err := writeBridgeExit(recordRoot, session, hostLog, ev)
+		rec, wrote, err := writeServerExit(recordRoot, session, hostLog, ev)
 		switch {
 		case err != nil:
-			logf("disconnect record for the bridge of %s/%s not written: %v", ev.PluginName, ev.ServerName, err)
+			logf("disconnect record for %s/%s not written: %v", ev.PluginName, ev.ServerName, err)
 		case wrote:
-			logf("bridge of %s/%s died (exit %d %s); record %s", ev.PluginName, ev.ServerName, ev.Code, ev.Signal, rec.URI)
+			logf("server %s/%s died (exit %d %s); record %s", ev.PluginName, ev.ServerName, ev.Code, ev.Signal, rec.URI)
 		}
 	})
 	var send wakeSender
@@ -328,6 +343,7 @@ func serveDisconnects(in io.Reader, out io.Writer, root, session string) error {
 			err = reply(req.ID, map[string]any{"resourceTemplates": []map[string]any{
 				{"uriTemplate": pluginsBase + "/{plugin}/{server}/disconnects", "name": "a plugin server's disconnect records", "mimeType": disconnectsMIME},
 				{"uriTemplate": pluginsBase + "/{plugin}/{server}/disconnects/{n}", "name": "one disconnect record", "mimeType": disconnectsMIME},
+				{"uriTemplate": pluginsBase + "/{plugin}/{server}/log", "name": "a plugin server's last stderr lines, from its newest record", "mimeType": "text/plain"},
 			}}, nil)
 		case "resources/read":
 			var p struct {
@@ -342,7 +358,11 @@ func serveDisconnects(in io.Reader, out io.Writer, root, session string) error {
 				err = reply(req.ID, nil, &rpcError{Code: rpcResourceNotFound, Message: "resource not found: " + p.URI})
 				break
 			}
-			err = reply(req.ID, map[string]any{"contents": []map[string]any{{"uri": p.URI, "mimeType": disconnectsMIME, "text": text}}}, nil)
+			mime := disconnectsMIME
+			if ref, perr := disconnectlog.ParseURI(p.URI); perr == nil && ref.Kind == disconnectlog.RefLog {
+				mime = "text/plain"
+			}
+			err = reply(req.ID, map[string]any{"contents": []map[string]any{{"uri": p.URI, "mimeType": mime, "text": text}}}, nil)
 		default:
 			err = reply(req.ID, nil, &rpcError{Code: rpcMethodNotFound, Message: "method not found: " + req.Method})
 		}
@@ -363,6 +383,9 @@ func listResources(root, session string) []map[string]any {
 		if u := disconnectlog.ListURI(session, e.Plugin, e.Server); !seenList[u] {
 			seenList[u] = true
 			res = append(res, map[string]any{"uri": u, "name": e.Plugin + "/" + e.Server + " disconnects", "mimeType": disconnectsMIME})
+			if _, ok := disconnectlog.LogTail(root, session, e.Plugin, e.Server); ok {
+				res = append(res, map[string]any{"uri": disconnectlog.LogURI(session, e.Plugin, e.Server), "name": e.Plugin + "/" + e.Server + " log", "mimeType": "text/plain"})
+			}
 		}
 	}
 	for _, e := range entries {
@@ -390,6 +413,8 @@ func readResource(root, session, uri string) (string, bool) {
 		return entriesJSON(disconnectlog.ListAll(root, session)), true
 	case disconnectlog.RefList:
 		return entriesJSON(disconnectlog.List(root, session, ref.Plugin, ref.Server)), true
+	case disconnectlog.RefLog:
+		return disconnectlog.LogTail(root, session, ref.Plugin, ref.Server)
 	case disconnectlog.RefOne:
 		b, err := disconnectlog.Read(root, session, ref.Plugin, ref.Server, ref.N)
 		if err != nil {

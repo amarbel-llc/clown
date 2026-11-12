@@ -16,6 +16,37 @@ func newRecord(kind string) Record {
 	return Record{Session: principal, Plugin: "cutting-garden", Server: "cg", Kind: kind, ClosedBy: ClosedByChild}
 }
 
+// A server's log is the stderr tail of its newest record that kept one; the
+// URI parses to RefLog and a server with no tail has no log (clown#241).
+func TestLogTailIsTheNewestRecordsStderr(t *testing.T) {
+	root := t.TempDir()
+	if _, ok := LogTail(root, principal, "cutting-garden", "cg"); ok {
+		t.Fatal("a log from nothing")
+	}
+	old := newRecord(KindServerExit)
+	old.StderrTail = []StderrLine{{At: "a", Line: "old line"}}
+	if _, err := Write(root, old); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Write(root, newRecord(KindServerExit)); err != nil { // newest, no tail
+		t.Fatal(err)
+	}
+	fresh := newRecord(KindServerExit)
+	fresh.StderrTail = []StderrLine{{At: "b", Line: "a new line"}}
+	if _, err := Write(root, fresh); err != nil {
+		t.Fatal(err)
+	}
+	text, ok := LogTail(root, principal, "cutting-garden", "cg")
+	if !ok || !strings.Contains(text, "a new line") || strings.Contains(text, "old line") {
+		t.Errorf("LogTail = %q, %v; want the newest tail only", text, ok)
+	}
+
+	ref, err := ParseURI(LogURI(principal, "cutting-garden", "cg"))
+	if err != nil || ref.Kind != RefLog || ref.Plugin != "cutting-garden" || ref.Server != "cg" || ref.Principal != principal {
+		t.Errorf("ParseURI(LogURI) = %+v, %v", ref, err)
+	}
+}
+
 func TestWriteReadAndListRoundTrip(t *testing.T) {
 	root := t.TempDir()
 	rec := newRecord(KindChildExit)

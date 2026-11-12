@@ -64,6 +64,10 @@ const (
 	KindParentGone       = "parent_gone"
 	KindHTTPServeError   = "http_serve_error"
 	KindBridgeExit       = "bridge_exit"
+	// KindServerExit is a started server that is not a bridge (a native
+	// httpServers plugin) ending while the host did not ask for it (clown#241).
+	// ChildExit holds how its process ended.
+	KindServerExit = "server_exit"
 )
 
 // Which side closed.
@@ -173,6 +177,12 @@ func ListURI(principal, plugin, server string) string {
 	return fmt.Sprintf("%s%s/plugins/%s/%s/disconnects", URIScheme, url.PathEscape(principal), Segment(plugin), Segment(server))
 }
 
+// LogURI is the resource URI of a server's log: the scrubbed stderr tail kept
+// with its newest record that has one (clown#241).
+func LogURI(principal, plugin, server string) string {
+	return fmt.Sprintf("%s%s/plugins/%s/%s/log", URIScheme, url.PathEscape(principal), Segment(plugin), Segment(server))
+}
+
 // AllURI is the resource URI of the list across every plugin of a session.
 func AllURI(principal string) string {
 	return URIScheme + url.PathEscape(principal) + "/plugins/disconnects"
@@ -185,6 +195,7 @@ const (
 	RefAll  RefKind = iota // every plugin's records of the session
 	RefList                // one server's records
 	RefOne                 // one record
+	RefLog                 // one server's log tail
 )
 
 // Ref is a parsed resource URI.
@@ -223,6 +234,8 @@ func ParseURI(uri string) (Ref, error) {
 		ref.Kind = RefAll
 	case len(parts) == 5 && parts[4] == "disconnects":
 		ref.Kind, ref.Plugin, ref.Server = RefList, parts[2], parts[3]
+	case len(parts) == 5 && parts[4] == "log":
+		ref.Kind, ref.Plugin, ref.Server = RefLog, parts[2], parts[3]
 	case len(parts) == 6 && parts[4] == "disconnects":
 		n, err := strconv.Atoi(parts[5])
 		if err != nil || n < 1 {
@@ -397,6 +410,27 @@ func List(root, principal, plugin, server string) []Entry {
 	}
 	sortNewestFirst(es)
 	return es
+}
+
+// LogTail returns the stderr tail of the newest record of the server that kept
+// one, as plain text, one "at line" row per line, and whether there was any.
+func LogTail(root, principal, plugin, server string) (string, bool) {
+	for _, e := range List(root, principal, plugin, server) { // newest first
+		b, err := Read(root, principal, plugin, server, e.N)
+		if err != nil {
+			continue
+		}
+		var r Record
+		if json.Unmarshal(b, &r) != nil || len(r.StderrTail) == 0 {
+			continue
+		}
+		var sb strings.Builder
+		for _, l := range r.StderrTail {
+			sb.WriteString(l.At + " " + l.Line + "\n")
+		}
+		return sb.String(), true
+	}
+	return "", false
 }
 
 // ListAll is every record of the session across its plugins and servers,

@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"code.linenisgreat.com/clown/internal/0/disconnectlog"
 )
 
 // writeBridgePlugin writes a plugin dir named name whose clown.json declares
@@ -147,31 +149,43 @@ func finishedServer(name, plugin string, recorded, stopping bool) *ManagedServer
 	return s
 }
 
-// A recording bridge that ends while the host is not stopping it is reported
-// once; one the host is stopping, one that does not record, and one reserved
-// for a server running elsewhere are not.
-func TestWatchExitsReportsOnlyUnintendedBridgeDeaths(t *testing.T) {
+// A started server that ends while the host is not stopping it is reported
+// once (a bridge flagged as such, any other server not); one the host is
+// stopping, one reserved for a server running elsewhere, one with no plugin
+// name and the diagnostics plugin's own server are not (clown#241).
+func TestWatchExitsReportsOnlyUnintendedDeaths(t *testing.T) {
 	died := finishedServer("dies", "cutting-garden", true, false)
 	stopped := finishedServer("stopped", "cutting-garden", true, true)
 	plain := finishedServer("plain", "other", false, false)
+	plain.tail = disconnectlog.NewRing()
+	plain.tail.Add("plain went down hard")
 	reserved := finishedServer("reserved", "other", true, false)
 	reserved.reserved = true
-	host := &Host{Servers: []*ManagedServer{died, stopped, plain, reserved}}
+	nameless := finishedServer("nameless", "", false, false)
+	diag := finishedServer("disconnects", DiagnosticsPluginName, false, false)
+	host := &Host{Servers: []*ManagedServer{died, stopped, plain, reserved, nameless, diag}}
 
-	got := make(chan ExitEvent, 4)
+	got := make(chan ExitEvent, 6)
 	host.WatchExits(func(ev ExitEvent) { got <- ev })
 
-	select {
-	case ev := <-got:
-		if ev.Name != "dies" || ev.PluginName != "cutting-garden" || ev.Server != died || ev.StartedAt.IsZero() {
-			t.Errorf("event = %+v; want the bridge that died", ev)
+	seen := map[string]ExitEvent{}
+	for range 2 {
+		select {
+		case ev := <-got:
+			seen[ev.Name] = ev
+		case <-time.After(5 * time.Second):
+			t.Fatalf("expected two deaths, got %v", seen)
 		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("the bridge's death was not reported")
+	}
+	if ev, ok := seen["dies"]; !ok || ev.PluginName != "cutting-garden" || ev.Server != died || ev.StartedAt.IsZero() || !ev.Bridge {
+		t.Errorf("bridge event = %+v", ev)
+	}
+	if ev, ok := seen["plain"]; !ok || ev.Bridge || len(ev.StderrTail) != 1 || ev.StderrTail[0].Line != "plain went down hard" {
+		t.Errorf("non-bridge event = %+v; want it reported with its stderr tail", ev)
 	}
 	select {
 	case ev := <-got:
-		t.Errorf("unexpected second event %+v", ev)
+		t.Errorf("unexpected third event %+v", ev)
 	case <-time.After(150 * time.Millisecond):
 	}
 }

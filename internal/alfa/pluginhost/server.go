@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"code.linenisgreat.com/clown/internal/0/disconnectlog"
 )
 
 func exitSignal(state *os.ProcessState) string {
@@ -52,6 +54,9 @@ type ManagedServer struct {
 	// exitLogged is set once the death has been logged (by reap, mid-session),
 	// so Stop does not log the same death again at shutdown.
 	exitLogged atomic.Bool
+	// tail keeps the scrubbed last lines of the process's stderr, for the
+	// record a death writes (clown#241). Set by Start.
+	tail *disconnectlog.Ring
 	// reserved marks an entry from Host.Reserve: no process here.
 	reserved bool
 	// manifestAddress, when set, is the TCP address claude's manifest names
@@ -146,6 +151,7 @@ func (s *ManagedServer) Start(ctx context.Context) error {
 	log.Info("plugin server process started", "pid", s.cmd.Process.Pid)
 
 	s.stderrDone = make(chan struct{})
+	s.tail = disconnectlog.NewRing()
 	go s.forwardStderr(stderr)
 
 	hs, err := s.readHandshake(ctx, stdout)
@@ -306,6 +312,7 @@ func (s *ManagedServer) forwardStderr(r io.Reader) {
 	log := s.logger()
 	for scanner.Scan() {
 		log.Info("plugin stderr", "line", scanner.Text())
+		s.tail.Add(scanner.Text())
 	}
 	if err := scanner.Err(); err != nil {
 		log.Warn("plugin stderr reader exited with error", "err", err)

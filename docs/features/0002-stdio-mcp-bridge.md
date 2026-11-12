@@ -259,6 +259,16 @@ new one appears. The host posts `/clown/shutdown` to a bridge before it stops
 it, so a stop on purpose writes no record. The design note is
 `docs/plans/2026-11-06-clown-344-disconnect-record.md`.
 
+Started servers that are not bridges (a native `httpServers` plugin) get the
+same treatment from the host (clown#241): when one ends without the host having
+begun to stop it, the host logs it at once, writes a `server_exit` record (the
+process's exit in `child_exit`, with the last 40 stderr lines the host kept,
+scrubbed as above), and the session is woken as for any record. The tail of the
+newest record that has one is also readable as the resource
+`clown://session/<id>/plugins/<plugin>/<server>/log` (plain text), which the
+wake names. A restart of a dead server is not done; `restart` stays under Future
+Work.
+
 ## Trust Boundary
 
 The bridge runs in the same trust tier as any other
