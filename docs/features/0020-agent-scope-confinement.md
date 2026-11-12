@@ -357,6 +357,19 @@ at all.
 | ssh / git signing | piggy-agent socket | spec `sockets[]`. Every act prompts the operator (piggy-agent(1) SCOPES: the boundary is the prompt surface and the home directory, not the socket). |
 | nix | nix-daemon socket | `/nix/var/nix/daemon-socket/socket` (visible: outside `/home`, read-only under ProtectSystem, which does not stop `connect`) |
 
+**Without the operator's card (clown#324, ruled 2026-10-26).** clown has no
+card handling of its own: it does not read the card, mint forge credentials, or
+offer `--allow-no-credential` (all spinclass's). What it does is bind exactly the
+sockets the spec lists and pass `SSH_AUTH_SOCK` only when it names one of them.
+So when spinclass finds no card and, per the ruling, does not fall back to the
+inherited agent, the spec carries no piggy-agent socket and the unit has no
+`SSH_AUTH_SOCK` and no ssh agent at all, whatever the launcher's own environment
+holds; the agent cannot push or sign, and says so when git or ssh fails. That is
+pinned by `TestNoInheritedAgentWhenTheSpecNamesNoAgentSocket` and
+`TestSSHAuthSockOnlyWhenTheSocketIsBound`. The same holds for an unattended
+session. Not clown's, and not covered here: refusing the launch for want of a
+card, and the wording a worker sees.
+
 ## Launcher interface (agreed with spinclass, FDR 0035)
 
 **Opt-in.** Use `clown --agent-scope <spec.json>` or

@@ -564,6 +564,38 @@ func TestSSHAuthSockOnlyWhenTheSocketIsBound(t *testing.T) {
 	}
 }
 
+// With the operator's card absent spinclass's spec names no piggy-agent socket
+// (clown#324, ruled 2026-10-26: no fallback to the inherited agent). The
+// launcher's own SSH_AUTH_SOCK is then neither bound into the unit nor handed
+// to it, even when the spec binds some other socket; the spec is the only
+// switch, and with the spec's agent socket present both happen.
+func TestNoInheritedAgentWhenTheSpecNamesNoAgentSocket(t *testing.T) {
+	const inherited = "/home/op/.local/state/ssh/agent.sock"
+	l := testLaunch()
+	l.Spec.Sockets = []Socket{{Path: "/run/user/1001/clown/troupe.sock", Purpose: "troupe-ipc"}}
+	set, _ := l.environment()
+	for _, kv := range set {
+		if strings.HasPrefix(kv, "SSH_AUTH_SOCK=") {
+			t.Errorf("the inherited agent reached the unit with no agent socket in the spec: %s", kv)
+		}
+	}
+	args, err := l.SystemdRunArgs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range args {
+		if strings.Contains(a, inherited) {
+			t.Errorf("the inherited agent socket is bound or named in the unit's arguments: %s", a)
+		}
+	}
+
+	l.Spec.Sockets = append(l.Spec.Sockets, Socket{Path: inherited, Purpose: "piggy-agent"})
+	set, _ = l.environment()
+	if !slices.Contains(set, "SSH_AUTH_SOCK="+inherited) {
+		t.Errorf("with the agent socket in the spec SSH_AUTH_SOCK should pass: %v", set)
+	}
+}
+
 func TestSystemdRunArgsRefusesWorkDirOutsideWorktree(t *testing.T) {
 	l := testLaunch()
 	l.WorkDir = "/home/op"
