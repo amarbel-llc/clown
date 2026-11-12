@@ -2192,6 +2192,150 @@ explore-agent-scope-claude PROMPT='Use the Read tool to read hello.txt, then rep
     echo ">> agent home"; find "$wt/.tmp/agent-home" -maxdepth 3 | head -30
     rm -f "$stamp"
 
+# clown#288 end to end: a real claude -p session (one small model call) through
+# `clown` with CLOWN_BRIDGE_AUTH=1, on a throwaway plugin whose stdio server is a
+# copy of the real `ringmaster mcp` behind a clown-stdio-bridge. Asserts, while
+# the session runs: the bridge was given a token (its length only is printed),
+# a request to its port with no header and with a wrong one is refused (401),
+# /healthz is open, and the right header is accepted; after: the agent's answer
+# (it read a file and called the guarded server's tool), and that the token
+# appears in no host log or output (counts only; the token is never printed).
+# Not --agent-scope: the opt-in is refused there (cmd/clown/bridgetoken.go), so
+# a confined launch would only show the warning. Builds the current tree.
+explore-bridge-token-e2e PROMPT='Do two things. First use the Read tool to read hello.txt. Second find the MCP tool named job_status from the e2e ringmaster server and call it with job_id "nope". Reply with exactly: READ=<file contents> CALLED=<yes or no> RESULT=<one short line of its result or error>.':
+    #!/usr/bin/env bash
+    set -uo pipefail
+    root=$(git rev-parse --show-toplevel)
+    cd "$root"
+    out=$(nix build --no-link --print-out-paths) || exit 2
+    work="$root/.tmp/bridge-token-e2e"
+    rm -rf "$work"; mkdir -p "$work/bin" "$work/cwd" "$work/plugin/.claude-plugin"
+    cp -L "$out/bin/ringmaster" "$work/bin/ringmaster"
+    echo agent-bridge-token-ok > "$work/cwd/hello.txt"
+    printf '{"name":"e2e"}\n' > "$work/plugin/.claude-plugin/plugin.json"
+    jq -n --arg c "$work/bin/ringmaster" '{version:1, stdioServers:{ringmaster:{command:$c, args:["mcp"]}}}' > "$work/plugin/clown.json"
+    logdir=${XDG_LOG_HOME:-$HOME/.local/log}/clown
+    stamp=$(mktemp); touch "$stamp"
+    ver=$("$out/bin/clown" version 2>&1 | head -1)
+    echo ">> clown (claude -p) with CLOWN_BRIDGE_AUTH=1; $ver"
+    # The caller may itself be a confined clown session: drop its scope, identity
+    # and unit, or this launch would be confined (the opt-in is refused there)
+    # and would borrow the caller's session key.
+    (cd "$work/cwd" && env -u CLOWN_AGENT_SCOPE -u CLOWN_SESSION_ID -u CLOWN_NAME -u CLOWN_UNIT -u CLOWN_GROUP_ID -u CLOWN_GROUP_DESCRIPTION \
+        CLOWN_BRIDGE_AUTH=1 "$out/bin/clown" --plugin-dir "$work/plugin" -- \
+        --session-id "$(cat /proc/sys/kernel/random/uuid)" --allowedTools "Read,mcp__plugin_e2e_ringmaster" \
+        -p "{{PROMPT}}" < /dev/null > "$work/claude.out" 2> "$work/claude.err") &
+    run=$!
+    bpid=""
+    for _ in $(seq 150); do
+        bpid=$(pgrep -f "clown-stdio-bridge --command $work/bin/ringmaster" | head -1)
+        [[ -n $bpid ]] && break; sleep 0.2
+    done
+    tok=""
+    if [[ -z $bpid ]]; then
+        echo "!! the e2e bridge never appeared"
+    else
+        for _ in $(seq 50); do
+            addr=$(ss -H -ltnp 2>/dev/null | awk -v p="pid=$bpid," 'index($0,p){print $4; exit}')
+            [[ -n $addr ]] && break; sleep 0.2
+        done
+        tok=$(tr '\0' '\n' < "/proc/$bpid/environ" 2>/dev/null | sed -n 's/^CLOWN_BRIDGE_TOKEN=//p')
+        if [[ -n $tok ]]; then seen="yes, length ${#tok}"; else seen="NO"; fi
+        echo ">> bridge pid $bpid listening on ${addr:-<not found>}; CLOWN_BRIDGE_TOKEN in its env: $seen"
+        if [[ -n ${addr:-} ]]; then
+            code() { curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$@"; }
+            echo "   POST /mcp, no header        -> $(code -X POST "http://$addr/mcp")"
+            echo "   POST /mcp, wrong bearer     -> $(code -X POST -H 'Authorization: Bearer not-the-token' "http://$addr/mcp")"
+            echo "   POST /clown/exclude-tools, no header -> $(code -X POST "http://$addr/clown/exclude-tools")"
+            echo "   GET  /healthz, no header    -> $(code "http://$addr/healthz")"
+            if [[ -n $tok ]]; then
+                echo "   POST /mcp ping, right bearer -> $(code -X POST -K <(printf 'header = "Authorization: Bearer %s"\n' "$tok") -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"ping"}' "http://$addr/mcp")"
+            fi
+        fi
+    fi
+    wait "$run"; echo ">> clown exit=$?"
+    echo ">> agent answer"; cat "$work/claude.out"
+    echo ">> stderr (first 15 lines)"; head -15 "$work/claude.err"
+    if [[ -n $tok ]]; then
+        hits=0
+        for f in "$work/claude.out" "$work/claude.err" $(find "$logdir" -type f -newer "$stamp" 2>/dev/null); do
+            n=$(grep -c -F -- "$tok" "$f" 2>/dev/null); hits=$((hits + ${n:-0}))
+        done
+        echo ">> lines containing the token across the agent output, stderr and host logs since launch: $hits"
+    fi
+    echo ">> host log lines about the token or bridge auth"
+    grep -h -i -E 'bridge token auth|Unauthorized' $(find "$logdir" -type f -newer "$stamp" 2>/dev/null) 2>/dev/null | cut -c1-200 | head -10
+    rm -f "$stamp"
+
+# clown#241 end to end: a real claude -p session (one small model call) through
+# `clown` on a throwaway plugin with a NATIVE (non-bridge) server, the pluginhost
+# fixture `fakeserver` behind a script that writes two stderr lines. The recipe
+# kills it with SIGKILL a few seconds in (before claude starts), and the session
+# lists the diagnostics resources and reads the server's log. Reports from
+# outside, model-independently: the host log's death line, the server_exit
+# record (kind, exit, scrubbed stderr tail), and the log resource read through
+# `clown disconnects-serve`; then the agent's own answer. Builds the current tree.
+explore-server-exit-e2e PROMPT='Use ReadMcpResourceTool with server plugin:clown-builtin-diagnostics:disconnects to read the resource uri URI_HERE and reply with its text exactly, or NO-LOG if it cannot be read.':
+    #!/usr/bin/env bash
+    set -uo pipefail
+    root=$(git rev-parse --show-toplevel)
+    cd "$root"
+    out=$(nix build --no-link --print-out-paths) || exit 2
+    fake=$(for p in $(nix build --no-link --print-out-paths .#fakeserver); do [[ -x $p/bin/fakeserver ]] && echo "$p/bin/fakeserver"; done | head -1)
+    [[ -n $fake ]] || { echo "FAIL: .#fakeserver has no bin/fakeserver" >&2; exit 2; }
+    work="$root/.tmp/server-exit-e2e"
+    rm -rf "$work"; mkdir -p "$work/bin" "$work/cwd" "$work/plugin/.claude-plugin"
+    printf '#!/bin/sh\necho "e2e-native: started" >&2\necho "e2e-native: about to be killed" >&2\nexec %s sleep\n' "$fake" > "$work/bin/e2e-native"
+    chmod +x "$work/bin/e2e-native"
+    printf '{"name":"e2e"}\n' > "$work/plugin/.claude-plugin/plugin.json"
+    jq -n --arg c "$work/bin/e2e-native" '{version:1, httpServers:{native:{command:$c}}}' > "$work/plugin/clown.json"
+    logdir=${XDG_LOG_HOME:-$HOME/.local/log}/clown
+    state=${XDG_STATE_HOME:-$HOME/.local/state}/clown/disconnects
+    stamp=$(mktemp); touch "$stamp"
+    echo ">> clown (claude -p); a native server will be SIGKILLed mid-session"
+    # Drop the caller's confinement and identity (see explore-bridge-token-e2e),
+    # and pin a fresh identity so the log's URI is known before the launch: the
+    # agent's resource list is taken when it connects, before the death, so it
+    # reads the URI directly instead of finding it in a listing.
+    sid=$(cat /proc/sys/kernel/random/uuid)
+    uri="clown://session/$sid/plugins/e2e/native/log"
+    prompt='{{PROMPT}}'; prompt=${prompt//URI_HERE/$uri}
+    echo ">> pinned identity $sid; the agent will read $uri"
+    (cd "$work/cwd" && env -u CLOWN_AGENT_SCOPE -u CLOWN_SESSION_ID -u CLOWN_NAME -u CLOWN_UNIT -u CLOWN_GROUP_ID -u CLOWN_GROUP_DESCRIPTION \
+        CLOWN_SESSION_ID="$sid" "$out/bin/clown" --plugin-dir "$work/plugin" -- \
+        --session-id "$(cat /proc/sys/kernel/random/uuid)" --allowedTools "ReadMcpResourceTool" \
+        -p "$prompt" < /dev/null > "$work/claude.out" 2> "$work/claude.err") &
+    run=$!
+    spid=""
+    for _ in $(seq 150); do
+        spid=$(pgrep -f "$fake sleep" | head -1)
+        [[ -n $spid ]] && break; sleep 0.2
+    done
+    if [[ -z $spid ]]; then echo "!! the native server never appeared"; else
+        # Long enough for the host to see it healthy, short enough that the death
+        # is on record before claude (which clown starts afterwards) asks. clown
+        # disables Bash by default, so the agent cannot wait for it.
+        sleep 1
+        echo ">> killing native server pid $spid (SIGKILL)"; kill -9 "$spid"
+    fi
+    wait "$run"; echo ">> clown exit=$?"
+    echo ">> host log lines about the death"
+    grep -h -E 'server=e2e/native.*(healthy|died unexpectedly)|died \(exit|server_exit|disconnect wake|not written'$(find "$logdir" -type f -newer "$stamp" 2>/dev/null) 2>/dev/null | cut -c1-240 | head -10
+    rec=$(find "$state" -type f -path '*/e2e/native/*.json' -newer "$stamp" 2>/dev/null | head -1)
+    if [[ -z $rec ]]; then echo "!! no disconnect record was written"; else
+        echo ">> record (scrubbed stderr tail included)"
+        jq '{kind, closed_by, plugin, server, child_exit, stderr_tail: [.stderr_tail[].line], uri}' "$rec"
+        session=$(jq -r .session "$rec")
+        logu=$(jq -r '.uri | sub("/disconnects/[0-9]+$"; "/log")' "$rec")
+        echo ">> reading $logu through the diagnostics server"
+        printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"resources/read\",\"params\":{\"uri\":\"$logu\"}}" \
+            | "$out/bin/clown" disconnects-serve --session "$session" --root "$state" | jq -c 'select(.id==2) | .result.contents[0] // .error'
+    fi
+    echo ">> agent answer"; cat "$work/claude.out"
+    echo ">> stderr (first 10 lines)"; head -10 "$work/claude.err"
+    rm -f "$stamp"
+
 # clown#273 probe: does a PrivatePIDs=yes user unit report an intermediate
 # MainPID (outside the pid namespace) before settling on the namespace's init?
 # Starts a throwaway `sleep` unit with --no-block and polls MainPID tightly,

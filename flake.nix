@@ -1830,6 +1830,9 @@
           # (the dry-run dev loop). The hook itself ships through the plugin.
           clown-hook-toolcost = clown-hook-toolcost;
           mock-stdio-mcp = mock-stdio-mcp;
+          # The pluginhost test fixture server, exposed for
+          # `just explore explore-server-exit-e2e` (a native server that dies).
+          fakeserver = fakeserver-go;
           synthetic-plugin = synthetic-plugin;
           # ringmaster + troupe: re-exported from their respective extracted
           # flake inputs (ringmaster = the job platform; troupe = the messaging
