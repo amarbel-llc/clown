@@ -3276,6 +3276,63 @@ explore-resume-permission-mode-tty model="haiku":
         poshterity replay "$root/step-$n.castx" 2>/dev/null | sed 's/[[:space:]]*$//' | grep -v '^$' | tail -8 | cut -c1-160
     done
 
+# What does Claude Code do when a plugin monitor exits, by exit code
+# (ringmaster#6: a refused duplicate `ringmaster monitor` is to exit 1, not 0)?
+# For each exit code in CODES, one interactive claude under a poshterity PTY
+# loads a throwaway plugin (--plugin-dir) whose only monitor prints one marker
+# line, appends a line to a start counter, sleeps 3 s and exits with that code.
+# The PTY answers folder trust, then sends nothing for WAIT seconds and /exit.
+# Reported per code: how many times claude started the monitor (respawns),
+# whether the marker reached the screen and transcript (the notification), and
+# any monitor wording on the final screen. CLAUDE_CONFIG_DIR is an isolated dir
+# per code (a copy of ~/.claude.json, a SYMLINK to the credentials) and only
+# project settings load. API spend: a few haiku turns per code at most (a
+# notification may prompt a turn). Output: .tmp/monitor-exit-code/ (keep out
+# of git: the casts hold a model's screen).
+#
+# record what claude does when a plugin monitor exits 0 or 1
+[group("explore")]
+explore-monitor-exit-code CODES="1 0" WAIT="75" model="haiku":
+    #!/usr/bin/env bash
+    set -uo pipefail
+    command -v claude >/dev/null || { echo "no claude on PATH"; exit 1; }
+    command -v poshterity >/dev/null || { echo "no poshterity on PATH"; exit 1; }
+    root="$PWD/.tmp/monitor-exit-code"
+    rm -rf "$root"; mkdir -p "$root"
+    claude --version
+    for code in {{ CODES }}; do
+        dir="$root/exit$code" iso="$root/exit$code/claude-config" plug="$root/exit$code/plugin"
+        mkdir -p "$dir/work/.claude" "$iso" "$plug/.claude-plugin"
+        git -C "$dir/work" init -q
+        printf '{}\n' >"$dir/work/.claude/settings.json"
+        [[ -f "$HOME/.claude.json" ]] && cp "$HOME/.claude.json" "$iso/.claude.json"
+        [[ -f "$HOME/.claude/.credentials.json" ]] && ln -s "$HOME/.claude/.credentials.json" "$iso/.credentials.json"
+        marker="MONPROBE-exit$code-$RANDOM"
+        jq -n --arg cmd "echo start >>$dir/starts; echo $marker; sleep 3; exit $code" \
+            '{name: "monprobe", version: "0.0.1", monitors: [{name: "probe", command: $cmd, description: "exit-code probe"}]}' \
+            >"$plug/.claude-plugin/plugin.json"
+        printf '%s\n' "wait-for --timeout 90 Yes, I trust this folder" "sleep 1" "send \\e[B" "sleep 1" "send \\r" \
+            "sleep {{ WAIT }}" "send /exit" "sleep 1" "send \\r" >"$dir/script"
+        sid="$(cat /proc/sys/kernel/random/uuid)"
+        (cd "$dir/work" && env -u CLOWN_SESSION_ID -u SPINCLASS_SESSION_ID -u CLAUDE_SESSION_ID -u CLOWN_UNATTENDED \
+            poshterity record --size 160x50 --out "$dir/cast.castx" --script "$dir/script" -- \
+            env CLAUDE_CONFIG_DIR="$iso" claude --setting-sources project --plugin-dir "$plug" \
+                --session-id "$sid" --model {{ quote(model) }} >"$dir/poshterity.log" 2>&1)
+        echo "== exit $code: poshterity exit=$? marker=$marker"
+        echo "monitor starts: $(wc -l <"$dir/starts" 2>/dev/null || echo 0) in about {{ WAIT }}s"
+        poshterity seek "$dir/cast.castx" --contains "$marker" >/dev/null 2>&1 && echo "marker on screen: yes" || echo "marker on screen: no"
+        transcript="$(ls "$iso"/projects/*/"$sid".jsonl 2>/dev/null | head -1)"
+        if [[ -n "$transcript" ]]; then
+            echo "marker lines in transcript: $(grep -c -- "$marker" "$transcript")"
+            echo "task statuses claude gave the model: $(grep -oE '(<|&lt;)status(>|&gt;)[a-z]+' "$transcript" | sed -E 's/.*(>|&gt;)//' | sort | uniq -c | paste -sd' ')"
+        else
+            echo "transcript: none"
+        fi
+        echo "-- what claude printed when the monitor ended:"
+        sed -E 's/\x1b\[[0-9;?<>]*[A-Za-z]/ /g; s/ +/ /g' "$dir/poshterity.log" \
+            | grep -oE 'Monitor "exit-code probe" [a-z ]+(\(exit [0-9]+\))?' | sort -u || echo "(none found)"
+    done
+
 # Wait (at most `max` seconds) until load1 < `load` and MemAvailable >
 # `mem_gb` GB, for agents gating nix runs on host resources; exits 1 on
 # timeout. Run it async and job_wait on it rather than polling.
