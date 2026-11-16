@@ -75,10 +75,30 @@ A session reads its own through the MCP server
 .Li clown-builtin-diagnostics/disconnects ,
 which serves them as resources and is told of a new one by a wake on the job
 channel.
-.It Cm disconnects-serve Fl -session Ar key Fl -root Ar dir
+.It Cm disconnects-serve Fl -session Ar key Fl -root Ar dir Op Fl -profiles Cm list | definitions
 The stdio MCP server behind
 .Li clown-builtin-diagnostics/disconnects ;
 not for manual use.
+Besides the session's disconnect records it serves the named profiles,
+read-only and read afresh on every request:
+.Li clown://profiles
+lists every profile (builtin and user) with its display name,
+provider and backend, source
+.Pq Li builtin , Li user No or Li user override
+and the digest
+.Nm Cm profile digest
+prints, or the reason this build cannot vouch for it.
+With
+.Fl -profiles Cm definitions ,
+which clown passes to an unconfined launch and never to one under
+.Fl -agent-scope ,
+.Li clown://profiles/ Ns Ar name
+is one profile's definition, redacted: the url as
+.Ar scheme Ns Li :// Ns Ar host Ns Op Li : Ns Ar port
+or redacted outright when it may carry a credential, whether a token is set
+but never the token, env as keys only, and the context keep-set, moxy table,
+base and digests.
+Profiles carry no prompts or permission posture, so neither is served.
 .It Cm catalog traversal-serve
 The cutting-garden traversal plugin (protocol
 .Li traversal-plugin/v1 )

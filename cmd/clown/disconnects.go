@@ -67,8 +67,11 @@ func disconnectRecordRoot(flags parsedFlags) string {
 // session's disconnect records and returns its directory (under the launch's
 // staging root, which removes it). One stdioServers entry, `clown
 // disconnects-serve`, scope frontend. Nothing secret is written: the server
-// reads only the session's own record directory.
-func synthDiagnosticsPluginDir(root *staging.Root, exe, session, recordRoot string) (string, error) {
+// reads only the session's own record directory and the profile registry,
+// which it serves redacted (profiles_resource.go). definitions serves the
+// profile definitions too, not only their list; the caller passes it for an
+// unconfined launch only.
+func synthDiagnosticsPluginDir(root *staging.Root, exe, session, recordRoot string, definitions bool) (string, error) {
 	dir, err := root.Dir("clown-diagnostics-plugin-*")
 	if err != nil {
 		return "", err
@@ -84,12 +87,16 @@ func synthDiagnosticsPluginDir(root *staging.Root, exe, session, recordRoot stri
 	if err := os.WriteFile(filepath.Join(manifestDir, "plugin.json"), manifest, 0o600); err != nil {
 		return "", err
 	}
+	profiles := profilesServeList
+	if definitions {
+		profiles = profilesServeDefinitions
+	}
 	cfg, err := json.MarshalIndent(map[string]any{
 		"version": 1,
 		"stdioServers": map[string]any{
 			disconnectsServerName: map[string]any{
 				"command": exe,
-				"args":    []string{"disconnects-serve", "--session", session, "--root", recordRoot},
+				"args":    []string{"disconnects-serve", "--session", session, "--root", recordRoot, "--profiles", profiles},
 				// Forwarded into a confined agent unit like ringmaster and
 				// troupe, so a confined worker can read its own records.
 				"scope": pluginhost.ScopeFrontend,
@@ -118,7 +125,7 @@ func addDiagnosticsPlugin(root *staging.Root, flags parsedFlags, recordRoot stri
 	if exe == "" {
 		return "", nil
 	}
-	return synthDiagnosticsPluginDir(root, exe, flags.identity.Key, recordRoot)
+	return synthDiagnosticsPluginDir(root, exe, flags.identity.Key, recordRoot, servesProfileDefinitions(flags))
 }
 
 // writeServerExit records a started server that died while the session ran. A
@@ -247,27 +254,38 @@ func sweepDisconnects(root string) {
 
 const disconnectsMIME = "application/json"
 
-// runDisconnectsServe is `clown disconnects-serve --session ID --root DIR`: a
-// stdio MCP server that serves the session's disconnect records as resources,
+const disconnectsServeUsage = "usage: clown disconnects-serve --session ID --root DIR [--profiles list|definitions]"
+
+// runDisconnectsServe is `clown disconnects-serve --session ID --root DIR
+// [--profiles list|definitions]`: a stdio MCP server that serves the
+// session's disconnect records and the profile registry (the list, and with
+// `definitions` each redacted definition; list when absent) as resources,
 // and nothing else. It is the diagnostics plugin's one server.
 func runDisconnectsServe(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	var session, root string
+	profiles := profilesServeList
 	for i := 0; i < len(args); i += 2 {
-		if i+1 >= len(args) || (args[i] != "--session" && args[i] != "--root") {
-			fmt.Fprintln(stderr, "usage: clown disconnects-serve --session ID --root DIR")
+		if i+1 >= len(args) {
+			fmt.Fprintln(stderr, disconnectsServeUsage)
 			return 2
 		}
-		if args[i] == "--session" {
+		switch args[i] {
+		case "--session":
 			session = args[i+1]
-		} else {
+		case "--root":
 			root = args[i+1]
+		case "--profiles":
+			profiles = args[i+1]
+		default:
+			fmt.Fprintln(stderr, disconnectsServeUsage)
+			return 2
 		}
 	}
-	if session == "" || !filepath.IsAbs(root) {
-		fmt.Fprintln(stderr, "usage: clown disconnects-serve --session ID --root DIR (an absolute path)")
+	if session == "" || !filepath.IsAbs(root) || (profiles != profilesServeList && profiles != profilesServeDefinitions) {
+		fmt.Fprintln(stderr, disconnectsServeUsage+" (DIR an absolute path)")
 		return 2
 	}
-	if err := serveDisconnects(stdin, stdout, root, session); err != nil {
+	if err := serveDisconnects(stdin, stdout, root, session, profilesView{Definitions: profiles == profilesServeDefinitions}); err != nil {
 		fmt.Fprintf(stderr, "clown disconnects-serve: %v\n", err)
 		return 1
 	}
@@ -296,8 +314,9 @@ const (
 const maxListedResources = 100
 
 // serveDisconnects answers MCP requests from in with the session's records
-// under root, one JSON-RPC message per line, until in ends.
-func serveDisconnects(in io.Reader, out io.Writer, root, session string) error {
+// under root and the profile resources prof serves, one JSON-RPC message per
+// line, until in ends.
+func serveDisconnects(in io.Reader, out io.Writer, root, session string, prof profilesView) error {
 	sc := bufio.NewScanner(in)
 	sc.Buffer(make([]byte, 64<<10), 1<<20)
 	enc := json.NewEncoder(out)
@@ -332,19 +351,23 @@ func serveDisconnects(in io.Reader, out io.Writer, root, session string) error {
 				"protocolVersion": p.ProtocolVersion,
 				"capabilities":    map[string]any{"resources": map[string]any{}},
 				"serverInfo":      map[string]any{"name": "clown-disconnects", "version": buildcfg.Version},
-				"instructions":    "Resources only: this session's plugin disconnect records. Read " + disconnectlog.AllURI(session) + " for the list.",
+				"instructions":    "Resources only: this session's plugin disconnect records (read " + disconnectlog.AllURI(session) + " for the list) and clown's named profiles (read " + profilesURI + profilesInstructionsTail(prof) + ").",
 			}, nil)
 		case "ping":
 			err = reply(req.ID, map[string]any{}, nil)
 		case "resources/list":
-			err = reply(req.ID, map[string]any{"resources": listResources(root, session)}, nil)
+			err = reply(req.ID, map[string]any{"resources": append(listResources(root, session), profileResources(prof)...)}, nil)
 		case "resources/templates/list":
 			pluginsBase := strings.TrimSuffix(disconnectlog.AllURI(session), "/disconnects")
-			err = reply(req.ID, map[string]any{"resourceTemplates": []map[string]any{
+			templates := []map[string]any{
 				{"uriTemplate": pluginsBase + "/{plugin}/{server}/disconnects", "name": "a plugin server's disconnect records", "mimeType": disconnectsMIME},
 				{"uriTemplate": pluginsBase + "/{plugin}/{server}/disconnects/{n}", "name": "one disconnect record", "mimeType": disconnectsMIME},
 				{"uriTemplate": pluginsBase + "/{plugin}/{server}/log", "name": "a plugin server's last stderr lines, from its newest record", "mimeType": "text/plain"},
-			}}, nil)
+			}
+			if prof.Definitions {
+				templates = append(templates, map[string]any{"uriTemplate": profilesURI + "/{name}", "name": "one profile's definition, redacted", "mimeType": disconnectsMIME})
+			}
+			err = reply(req.ID, map[string]any{"resourceTemplates": templates}, nil)
 		case "resources/read":
 			var p struct {
 				URI string `json:"uri"`
@@ -353,7 +376,13 @@ func serveDisconnects(in io.Reader, out io.Writer, root, session string) error {
 				err = reply(req.ID, nil, &rpcError{Code: rpcInvalidParams, Message: "resources/read needs a uri"})
 				break
 			}
-			text, ok := readResource(root, session, p.URI)
+			var text string
+			var ok bool
+			if isProfilesURI(p.URI) {
+				text, ok = prof.read(p.URI)
+			} else {
+				text, ok = readResource(root, session, p.URI)
+			}
 			if !ok {
 				err = reply(req.ID, nil, &rpcError{Code: rpcResourceNotFound, Message: "resource not found: " + p.URI})
 				break

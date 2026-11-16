@@ -34,7 +34,7 @@ func writeTestRecord(t *testing.T, root, session, plugin, server string) disconn
 func rpc(t *testing.T, root, session string, requests ...string) []map[string]any {
 	t.Helper()
 	var out bytes.Buffer
-	if err := serveDisconnects(strings.NewReader(strings.Join(requests, "\n")+"\n"), &out, root, session); err != nil {
+	if err := serveDisconnects(strings.NewReader(strings.Join(requests, "\n")+"\n"), &out, root, session, profilesView{RegistryPath: filepath.Join(t.TempDir(), "absent.toml")}); err != nil {
 		t.Fatal(err)
 	}
 	var replies []map[string]any
@@ -118,7 +118,7 @@ func TestSynthDiagnosticsPluginDirDeclaresOneFrontendServer(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer root.Close()
-	dir, err := synthDiagnosticsPluginDir(root, "/bin/clown", testSession, "/state/disconnects")
+	dir, err := synthDiagnosticsPluginDir(root, "/bin/clown", testSession, "/state/disconnects", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +145,7 @@ func TestSynthDiagnosticsPluginDirDeclaresOneFrontendServer(t *testing.T) {
 		t.Fatalf("stdioServers = %v", cfg.Stdio)
 	}
 	if s.Command != "/bin/clown" || s.Scope != string(pluginhost.ScopeFrontend) ||
-		strings.Join(s.Args, " ") != "disconnects-serve --session "+testSession+" --root /state/disconnects" {
+		strings.Join(s.Args, " ") != "disconnects-serve --session "+testSession+" --root /state/disconnects --profiles definitions" {
 		t.Errorf("server = %+v", s)
 	}
 }
