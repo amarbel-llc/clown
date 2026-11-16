@@ -2,10 +2,15 @@
 
 package profilerules
 
-import internal "code.linenisgreat.com/clown/internal/0/profilerules"
+import internal "code.linenisgreat.com/clown/internal/alfa/profilerules"
 
 // Expect is one finding a vector must produce, Count times.
 type Expect = internal.Expect
+
+// A Finding is one rule a document breaks: the rule's id and severity, the
+// node it is about (a path of ids, empty for a head or whole-document
+// finding) and the message, its template filled.
+type Finding = internal.Finding
 
 // RuleSpec is one row of RFC 0019 §2 to §4. Message is a template: the
 // placeholders in angle brackets are filled per finding.
@@ -25,6 +30,16 @@ var Rule = internal.Rule
 
 // Rules is the ruleset, in RFC 0019's order.
 var Rules = internal.Rules
+
+// Validate checks a capability profile: a hyphence document whose body is a
+// stencil (RFC 0019 §1). A document that does not open with a `---`
+// boundary is a head-less body, checked alone: the H-* and M-* rules do not
+// run on it.
+var Validate = internal.Validate
+
+// ValidatePatch checks an act's body as a patch: ajour.ParsePatch (every
+// leaf denies) and the rules marked "patches too" (RFC 0019 §1).
+var ValidatePatch = internal.ValidatePatch
 
 // Vectors parses the embedded vectors, refusing unknown keys.
 var Vectors = internal.Vectors
