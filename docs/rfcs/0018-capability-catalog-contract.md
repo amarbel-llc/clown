@@ -629,8 +629,11 @@ moxy's own hook. claude-code's ordering between them is unverified.
     - `digest`: the stencil's digest (cutting-garden's `Stencil.Digest()`,
       over the canonical stencil body), which clown verifies. Required for
       a stencil; absent for a patch, since ajour defines no patch digest.
-  - **Open (to circus/eager-holly):** where a capability-profile stencil
-    document lives, and who resolves it to `path` and `digest`.
+  - **Deferred (operator ruling d21, 2026-11-16):** where a
+    capability-profile stencil document lives, and who resolves it to
+    `path` and `digest`, waits until EPIC 0001's role profiles are
+    scheduled. Until then spinclass writes neither `path` nor `digest`.
+    Why it is open:
     - spinclass opens no profile document: it resolves the clown launch
       profile through `profilelookup` and keeps that digest.
     - clown's launch profiles carry no stencil, so `profilelookup` has no
