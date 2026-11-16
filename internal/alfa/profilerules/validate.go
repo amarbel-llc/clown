@@ -404,8 +404,6 @@ const whyOnePerm = "a node carries one `perm` atom"
 // the atom is well formed; nth counts the node's perm atoms so far.
 func permRefusal(atom trellis.TreeAtom, nth int, deny, patch bool) string {
 	switch {
-	case patch:
-		return "a patch may only deny; `perm` decides, so it belongs in a stencil"
 	case nth > 1:
 		return whyOnePerm
 	case atom.Negate:
@@ -414,13 +412,21 @@ func permRefusal(atom trellis.TreeAtom, nth int, deny, patch bool) string {
 		return "`perm` takes `=` only"
 	case len(atom.Pred.Values) != 1:
 		return "`perm` takes one value"
-	case !slices.Contains(permValues, trellis.ValueText(atom.Pred.Values[0])):
+	}
+	value := trellis.ValueText(atom.Pred.Values[0])
+	switch {
+	case patch && value != permAskValue:
+		// A patch only tightens (ajour 9e7b1be, operator ruling a1).
+		return "a patch may only deny or ask; `perm=allow` and `perm=dynamic` loosen, so they belong in a stencil"
+	case !slices.Contains(permValues, value):
 		return "`perm` is allow, ask or dynamic"
 	case deny:
 		return "a node that carries `deny` decides nothing else"
 	}
 	return ""
 }
+
+const permAskValue = "ask"
 
 // checkTool applies the tool-node warnings: W-1, W-2, W-5, W-6.
 func (v *validator) checkTool(n trellis.TreeNode, path []trellis.TreeNode, at string) {

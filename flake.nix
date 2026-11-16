@@ -116,7 +116,7 @@
     # hook link (clown#349; operator ruling j1, shadow mode first). Go-only, via
     # go.nix's flakeInputs. Pinned to a commit in the URL, not master, so a
     # relock cannot move it. Its shared inputs follow clown's.
-    cutting-garden.url = "https://code.linenisgreat.com/cutting-garden/archive/183c15f5925e874b5537087a7c4227015b9defc6.tar.gz";
+    cutting-garden.url = "https://code.linenisgreat.com/cutting-garden/archive/9e7b1bee457ac9a4ec2f80854dc122516ef5d947.tar.gz";
     cutting-garden.inputs.igloo.follows = "igloo";
     cutting-garden.inputs.nixpkgs-master.follows = "nixpkgs-master";
     cutting-garden.inputs.flake-utils.follows = "utils";

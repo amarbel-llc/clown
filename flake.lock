@@ -180,15 +180,15 @@
         ]
       },
       "locked": {
-        "lastModified": 1794822576,
-        "narHash": "sha256-ZCDV9bl1UPafY9MsoZWYNEqD00hTz/CryTrlORkO1pc=",
-        "rev": "183c15f5925e874b5537087a7c4227015b9defc6",
+        "lastModified": 1794824607,
+        "narHash": "sha256-EnEtVSz5YbYBif5rV62d6FV3ccurobe7bf9VHX2RkS4=",
+        "rev": "9e7b1bee457ac9a4ec2f80854dc122516ef5d947",
         "type": "tarball",
-        "url": "https://code.linenisgreat.com/cutting-garden/archive/183c15f5925e874b5537087a7c4227015b9defc6.tar.gz"
+        "url": "https://code.linenisgreat.com/cutting-garden/archive/9e7b1bee457ac9a4ec2f80854dc122516ef5d947.tar.gz"
       },
       "original": {
         "type": "tarball",
-        "url": "https://code.linenisgreat.com/cutting-garden/archive/183c15f5925e874b5537087a7c4227015b9defc6.tar.gz"
+        "url": "https://code.linenisgreat.com/cutting-garden/archive/9e7b1bee457ac9a4ec2f80854dc122516ef5d947.tar.gz"
       }
     },
     "doppelgang": {
