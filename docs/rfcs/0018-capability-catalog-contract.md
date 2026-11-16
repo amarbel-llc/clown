@@ -549,11 +549,34 @@ moxy's own hook. claude-code's ordering between them is unverified.
   presented tool records its `HarnessName`: the advertised name, with every
   character outside `[A-Za-z0-9_-]` replaced by `_`. That mangling rule is
   observed, not documented by Claude Code.
-- **Not yet built in clown:**
-  - the hook computing ajour's Verdict, which needs `pkgs/ajour` or the
-    `cutting-garden-ajour` binary in clown's closure (an operator call,
-    clown#349);
-  - setting the two environment variables.
+- **Shadow first (operator ruling, 2026-11-16).** clown links `pkgs/ajour`
+  through the pinned cutting-garden input. `internal/*/ajourshadow` builds
+  ajour's Call from a call (§3, §4: path and input fields; omitted
+  `resolve = "cwd"` fields resolved), evaluates it against the session's
+  layers, and records the verdict. It never denies or escalates while
+  `CurrentMode` is `ModeShadow`; enforcement is that one switch. A call it
+  cannot present yet (a reference, content or recipe field, a URI in a
+  path field, a field resolved from anything but cwd) is recorded as
+  `unbuilt`, never evaluated half-built.
+  - Layers: an operator-placed `$XDG_STATE_HOME/clown/ajour/<principal>/layers.json`,
+    a JSON array of the entries above; absent is no profile, and nothing
+    is recorded. A stencil's digest must match its tree; ajour defines no
+    patch digest, so a patch's is not checked.
+  - Record: `shadow.jsonl` beside it, one line per call (time, mode,
+    harness name, plugin/server/tool, outcome, admitted perm, the first
+    deciding layer and node), never the call's arguments. Capped at 4 MiB
+    with one rotated generation, so at most 8 MiB per session.
+  - clown does not set `MOXY_POSTURE` or `MOXY_PROFILE_LAYERS` in shadow:
+    moxy fails closed on layers, which would be enforcement.
+- **Open question (to the operator, via circus/eager-holly):** spinclass
+  writes no layers file today (spinclass/slim-myrtle, 2026-11-16), and the
+  shapes differ: spinclass FDR 0034 Phase 2 step 4 hands on `piggy act
+  verify`'s `layers` array, `{act, kind, role, profile or body}`, while this
+  section's entries are `{path, role, digest, act}`. Open: (a) who writes
+  the file; (b) how a session finds it, an env var set at launch or a path
+  derived from the principal; (c) one entry shape.
+- **Not yet built in clown:** the PreToolUse hook that calls
+  `ajourshadow`, its registration, and a tally of `shadow.jsonl`.
 
 ## More information
 
