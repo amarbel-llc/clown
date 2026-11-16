@@ -275,10 +275,29 @@ func writeFile(t *testing.T, dir, name, body string) string {
 
 const engineerStencil = "[clown-builtin-harness !clown-plugin-v1 [-> harness !mcp-server-v1 [-> Read !mcp-tool-v1 [-> file:a.go !fs-path-v1] [-> _ !tool-input-v1 open]]]]"
 
-func TestLoadLayers(t *testing.T) {
+// layersDoc is a layers file (RFC 0018 §11) holding entries, its header's
+// act_status agreeing with them.
+func layersDoc(entries ...LayerEntry) string {
+	status := ActVerified
+	for _, e := range entries {
+		if !e.verified() {
+			status = ActUnverified
+		}
+	}
+	b, _ := json.Marshal(LayersDocument{Schema: LayersSchema, ActStatus: status, Layers: entries})
+	return string(b)
+}
+
+// verified marks an entry as signed, for tests about something else.
+func verified(e LayerEntry) LayerEntry {
+	e.Act, e.ActStatus = "blake2b256-act", ActVerified
+	return e
+}
+
+func TestLoadStack(t *testing.T) {
 	dir := t.TempDir()
-	if layers, err := LoadLayers(filepath.Join(dir, "absent.json")); err != nil || layers != nil {
-		t.Fatalf("absent file: %v, %v; want no layers, no error", layers, err)
+	if stack, err := LoadStack(filepath.Join(dir, "absent.json")); err != nil || stack != nil {
+		t.Fatalf("absent file: %v, %v; want no stack, no error", stack, err)
 	}
 	st, err := ajour.ParseStencil(engineerStencil)
 	if err != nil {
@@ -287,28 +306,35 @@ func TestLoadLayers(t *testing.T) {
 	stencil := writeFile(t, dir, "s.espalier", "---\n- role = engineer-x\n! espalier-profile-v1\n---\n\n"+engineerStencil)
 	patch := writeFile(t, dir, "p.espalier", "[clown-builtin-harness [-> harness [-> Read [-> file:secret !fs-path-v1 deny]]]]")
 	entries := func(digest string) string {
-		b, _ := json.Marshal([]LayerEntry{
-			{Path: stencil, Role: RoleStencil, Digest: digest},
-			{Path: patch, Role: RolePatch},
-		})
-		return string(b)
+		return layersDoc(
+			verified(LayerEntry{Path: stencil, Role: RoleStencil, Digest: digest}),
+			verified(LayerEntry{Path: patch, Role: RolePatch}),
+		)
 	}
 	good := writeFile(t, dir, "good.json", entries(st.Digest()))
-	layers, err := LoadLayers(good)
-	if err != nil || len(layers) != 2 {
-		t.Fatalf("LoadLayers = %d layers, %v; want 2, nil", len(layers), err)
+	stack, err := LoadStack(good)
+	if err != nil || len(stack.Layers) != 2 || stack.Unverified != 0 {
+		t.Fatalf("LoadStack = %+v, %v; want 2 verified layers", stack, err)
 	}
 	purposeful := writeFile(t, dir, "purpose.json", entries(ajour.PurposeStencilDigest+"@"+st.Digest()))
-	if _, err := LoadLayers(purposeful); err != nil {
+	if _, err := LoadStack(purposeful); err != nil {
 		t.Errorf("a purpose-full digest: %v", err)
 	}
 	bad := writeFile(t, dir, "bad.json", entries("blake2b256-93wmjxtet0p42hxueuem6a7f3x3g6km5gnrd5yjcc27rugdy7v2qneuhc4"))
-	if _, err := LoadLayers(bad); err == nil || !strings.Contains(err.Error(), "digest") {
+	if _, err := LoadStack(bad); err == nil || !strings.Contains(err.Error(), "digest") {
 		t.Errorf("a digest mismatch: %v, want a digest error", err)
 	}
-	role := writeFile(t, dir, "role.json", `[{"path":"`+stencil+`","role":"base","digest":"x"}]`)
-	if _, err := LoadLayers(role); err == nil {
+	role := writeFile(t, dir, "role.json", layersDoc(verified(LayerEntry{Path: stencil, Role: "base", Digest: "x"})))
+	if _, err := LoadStack(role); err == nil {
 		t.Error("an unknown role loaded")
+	}
+	bare := writeFile(t, dir, "bare.json", `[{"path":"`+stencil+`","role":"stencil"}]`)
+	if _, err := LoadStack(bare); err == nil {
+		t.Error("a bare array (no schema header) loaded")
+	}
+	disagree := writeFile(t, dir, "disagree.json", strings.Replace(layersDoc(LayerEntry{Body: engineerStencil, Role: RoleStencil, Digest: st.Digest()}), `"act_status":"unverified"`, `"act_status":"verified"`, 1))
+	if _, err := LoadStack(disagree); err == nil || !strings.Contains(err.Error(), "disagrees") {
+		t.Errorf("a header that disagrees with its entries: %v", err)
 	}
 }
 
@@ -335,27 +361,88 @@ func TestLayersPathPrefersSpinclassVariable(t *testing.T) {
 }
 
 // The reconciled entry (RFC 0018 §11): a layer is a file (path) or an
-// inline document (body), never both, never neither.
-func TestLoadLayersReadsAnInlineBody(t *testing.T) {
+// inline document (body), never both; a verified layer never neither.
+func TestLoadStackReadsAnInlineBody(t *testing.T) {
 	dir := t.TempDir()
 	st, err := ajour.ParseStencil(engineerStencil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ok, _ := json.Marshal([]LayerEntry{
-		{Body: engineerStencil, Role: RoleStencil, Digest: st.Digest(), Act: "blake2b256-act", Kind: "profile-bless", Profile: "engineer@clown-profile-digest-v1@sha256-x"},
-		{Body: "[clown-builtin-harness [-> harness [-> Read [-> file:secret !fs-path-v1 deny]]]]", Role: RolePatch},
-	})
-	if layers, err := LoadLayers(writeFile(t, dir, "inline.json", string(ok))); err != nil || len(layers) != 2 {
-		t.Errorf("inline layers: %d, %v; want 2, nil", len(layers), err)
+	ok := layersDoc(
+		verified(LayerEntry{Body: engineerStencil, Role: RoleStencil, Digest: st.Digest(), Kind: "profile-bless", Profile: "engineer@clown-profile-digest-v1@sha256-x"}),
+		verified(LayerEntry{Body: "[clown-builtin-harness [-> harness [-> Read [-> file:secret !fs-path-v1 deny]]]]", Role: RolePatch}),
+	)
+	if stack, err := LoadStack(writeFile(t, dir, "inline.json", ok)); err != nil || len(stack.Layers) != 2 {
+		t.Errorf("inline layers: %+v, %v; want 2, nil", stack, err)
 	}
-	both, _ := json.Marshal([]LayerEntry{{Path: "/x", Body: engineerStencil, Role: RoleStencil, Digest: st.Digest()}})
-	if _, err := LoadLayers(writeFile(t, dir, "both.json", string(both))); err == nil {
+	both := layersDoc(verified(LayerEntry{Path: "/x", Body: engineerStencil, Role: RoleStencil, Digest: st.Digest()}))
+	if _, err := LoadStack(writeFile(t, dir, "both.json", both)); err == nil {
 		t.Error("an entry with both path and body loaded")
 	}
-	neither, _ := json.Marshal([]LayerEntry{{Role: RolePatch}})
-	if _, err := LoadLayers(writeFile(t, dir, "neither.json", string(neither))); err == nil {
-		t.Error("an entry with neither path nor body loaded")
+	neither := layersDoc(verified(LayerEntry{Role: RolePatch}))
+	if _, err := LoadStack(writeFile(t, dir, "neither.json", neither)); err == nil {
+		t.Error("a verified entry with neither path nor body loaded")
+	}
+}
+
+// d20 (operator ruling, 2026-11-16): an entry with no act, or act_status
+// other than verified, is unverified; spinclass writes such entries from
+// Phase 1 grants before acts exist, with no document yet. The loader
+// counts them and the documentless ones.
+func TestLoadStackCountsUnverifiedEntries(t *testing.T) {
+	st, err := ajour.ParseStencil(engineerStencil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := layersDoc(
+		LayerEntry{Body: engineerStencil, Role: RoleStencil, Digest: st.Digest()},
+		verified(LayerEntry{Body: engineerStencil, Role: RoleStencil, Digest: st.Digest()}),
+		LayerEntry{Kind: "grant", Role: RoleStencil, Profile: "engineer@clown-profile-digest-v1@sha256-x", ActStatus: ActUnverified},
+		LayerEntry{Body: engineerStencil, Role: RoleStencil, Digest: st.Digest(), Act: "blake2b256-act", ActStatus: ActUnverified},
+	)
+	stack, err := LoadStack(writeFile(t, t.TempDir(), "l.json", doc))
+	if err != nil || len(stack.Layers) != 3 || stack.Unverified != 3 || stack.Documentless != 1 {
+		t.Errorf("LoadStack = %+v, %v; want 3 layers, 3 unverified, 1 documentless", stack, err)
+	}
+}
+
+// A stack whose unverified entry has no document yet is recorded as
+// layers-unverified, not evaluated, and denied nothing in shadow.
+func TestHookRecordsADocumentlessStackAsUnverified(t *testing.T) {
+	home, dir := hookSession(t, "p-6", false)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, dir, LayersFile, layersDoc(LayerEntry{Kind: "grant", Role: RoleStencil, Profile: "engineer@x", ActStatus: ActUnverified}))
+	if d := Hook("p-6", "Read", args(t, `{"file_path":"a.go"}`), home, home); d.Deny {
+		t.Errorf("shadow denied: %+v", d)
+	}
+	if rs := shadowLines(t, dir); len(rs) != 1 || rs[0].Outcome != OutcomeLayersUnverified || rs[0].UnverifiedLayers != 1 {
+		t.Errorf("records %+v, want one layers-unverified", rs)
+	}
+}
+
+// RFC 0018 §11: an enforcer MUST refuse a stack holding an unverified entry;
+// shadow records it and denies nothing.
+func TestEnforceRefusesAnUnverifiedStack(t *testing.T) {
+	admitted := ajour.Verdict{Outcome: ajour.OutcomeAdmitted, Admitted: true}
+	if d := decideStack(ModeShadow, admitted, 1); d.Deny {
+		t.Errorf("shadow denied an unverified stack: %+v", d)
+	}
+	if d := decideStack(ModeEnforce, admitted, 1); !d.Deny || !strings.Contains(d.Reason, "unverified") {
+		t.Errorf("enforce on an unverified stack: %+v, want a deny naming it", d)
+	}
+	if d := decideStack(ModeEnforce, admitted, 0); d.Deny {
+		t.Errorf("enforce denied a verified, admitted call: %+v", d)
+	}
+}
+
+// The hook records how many of the stack's layers are unverified.
+func TestHookRecordsUnverifiedLayers(t *testing.T) {
+	home, dir := hookSession(t, "p-5", true) // its one entry has no act
+	Hook("p-5", "Read", args(t, `{"file_path":"a.go"}`), home, home)
+	if rs := shadowLines(t, dir); len(rs) != 1 || rs[0].UnverifiedLayers != 1 || rs[0].Outcome != "admitted" {
+		t.Errorf("records %+v, want one admitted with unverified_layers 1", rs)
 	}
 }
 
@@ -368,8 +455,7 @@ func TestHookFollowsTheSpinclassVariable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, _ := json.Marshal([]LayerEntry{{Body: engineerStencil, Role: RoleStencil, Digest: st.Digest()}})
-	t.Setenv(LayersEnv, writeFile(t, elsewhere, "profile-layers.json", string(b)))
+	t.Setenv(LayersEnv, writeFile(t, elsewhere, "profile-layers.json", layersDoc(LayerEntry{Body: engineerStencil, Role: RoleStencil, Digest: st.Digest()})))
 	Hook("p-4", "Read", args(t, `{"file_path":"a.go"}`), home, home)
 	if rs := shadowLines(t, dir); len(rs) != 1 || rs[0].Outcome != "admitted" {
 		t.Errorf("records %+v, want one admitted", rs)
@@ -440,8 +526,9 @@ func hookSession(t *testing.T, principal string, withLayers bool) (home, dir str
 		t.Fatal(err)
 	}
 	stencil := writeFile(t, dir, "engineer.espalier", engineerStencil)
-	b, _ := json.Marshal([]LayerEntry{{Path: stencil, Role: RoleStencil, Digest: st.Digest()}})
-	writeFile(t, dir, LayersFile, string(b))
+	// No act: unverified, as spinclass's interim entries are (d20), but with
+	// a document, so the hook still evaluates it.
+	writeFile(t, dir, LayersFile, layersDoc(LayerEntry{Path: stencil, Role: RoleStencil, Digest: st.Digest()}))
 	return home, dir
 }
 

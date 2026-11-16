@@ -405,6 +405,9 @@ type LayerEntry struct {
 	Act     string `json:"act,omitempty"`
 	Kind    string `json:"kind,omitempty"`
 	Profile string `json:"profile,omitempty"`
+	// ActStatus is verified or unverified; an entry is verified only when
+	// it says so and carries an act (d20).
+	ActStatus string `json:"act_status,omitempty"`
 }
 
 // LayersEnv names the layers file spinclass writes at spawn, under the
@@ -437,11 +440,43 @@ func Dir(principal string) (string, error) {
 	return userpath.StatePath("ajour", principal)
 }
 
-// LoadLayers reads the layers file at path: nil and no error when it is
-// absent. Every layer must parse; a stencil's digest must match its tree
-// (Stencil.Digest; purpose-full or bare). ajour defines no patch digest, so
-// a patch's is not checked.
-func LoadLayers(path string) ([]ajour.Layer, error) {
+// The layers file's schema and act statuses (RFC 0018 §11; operator ruling
+// d20: an entry with no signed act is unverified).
+const (
+	LayersSchema  = "clown-profile-layers-v1"
+	ActVerified   = "verified"
+	ActUnverified = "unverified"
+)
+
+// LayersDocument is the layers file: a header and its entries, chain start
+// first. The header's act_status is verified exactly when every entry is.
+type LayersDocument struct {
+	Schema    string       `json:"schema"`
+	ActStatus string       `json:"act_status"`
+	Layers    []LayerEntry `json:"layers"`
+}
+
+// verified is an entry with a signed act and act_status verified.
+func (e LayerEntry) verified() bool { return e.ActStatus == ActVerified && e.Act != "" }
+
+// Stack is a loaded layers file.
+type Stack struct {
+	Layers []ajour.Layer
+	// Unverified counts the entries with no signed act (RFC 0018 §11: an
+	// enforcer refuses a stack that has one).
+	Unverified int
+	// Documentless counts the unverified entries that carry no document yet
+	// (Phase 1 grants, d20): a stack with one cannot be evaluated.
+	Documentless int
+}
+
+// LoadStack reads the layers file at path: nil and no error when it is
+// absent. The schema must be LayersSchema and the header must agree with
+// its entries. A layer with a document must parse, and a stencil's digest
+// must match its tree (Stencil.Digest; purpose-full or bare); ajour
+// defines no patch digest, so a patch's is not checked. Only an unverified
+// entry may lack a document.
+func LoadStack(path string) (*Stack, error) {
 	b, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
@@ -449,26 +484,43 @@ func LoadLayers(path string) ([]ajour.Layer, error) {
 	if err != nil {
 		return nil, err
 	}
-	var entries []LayerEntry
+	var doc LayersDocument
 	dec := json.NewDecoder(strings.NewReader(string(b)))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&entries); err != nil {
+	if err := dec.Decode(&doc); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
-	layers := make([]ajour.Layer, 0, len(entries))
-	for i, e := range entries {
+	if doc.Schema != LayersSchema {
+		return nil, fmt.Errorf("%s: schema %q, want %q", path, doc.Schema, LayersSchema)
+	}
+	stack := &Stack{}
+	for _, e := range doc.Layers {
+		if !e.verified() {
+			stack.Unverified++
+		}
+	}
+	if want := map[bool]string{true: ActVerified, false: ActUnverified}[stack.Unverified == 0]; doc.ActStatus != want {
+		return nil, fmt.Errorf("%s: header act_status %q disagrees with its entries (%s)", path, doc.ActStatus, want)
+	}
+	for i, e := range doc.Layers {
 		var body string
 		switch {
-		case (e.Path == "") == (e.Body == ""):
-			return nil, fmt.Errorf("layer %d: give exactly one of path and body", i)
+		case e.Path != "" && e.Body != "":
+			return nil, fmt.Errorf("layer %d: give one of path and body, not both", i)
+		case e.Path == "" && e.Body == "":
+			if e.verified() {
+				return nil, fmt.Errorf("layer %d: a verified layer needs its document (path or body)", i)
+			}
+			stack.Documentless++
+			continue
 		case e.Body != "":
 			body = documentBody(e.Body)
 		default:
-			doc, err := os.ReadFile(e.Path)
+			text, err := os.ReadFile(e.Path)
 			if err != nil {
 				return nil, fmt.Errorf("layer %d: %w", i, err)
 			}
-			body = documentBody(string(doc))
+			body = documentBody(string(text))
 		}
 		switch e.Role {
 		case RoleStencil:
@@ -480,18 +532,18 @@ func LoadLayers(path string) ([]ajour.Layer, error) {
 			if got := st.Digest(); want != got {
 				return nil, fmt.Errorf("layer %d (%s): digest %s does not match the tree's %s", i, e.Path, e.Digest, got)
 			}
-			layers = append(layers, st)
+			stack.Layers = append(stack.Layers, st)
 		case RolePatch:
 			p, err := ajour.ParsePatch(body)
 			if err != nil {
 				return nil, fmt.Errorf("layer %d (%s): %w", i, e.Path, err)
 			}
-			layers = append(layers, p)
+			stack.Layers = append(stack.Layers, p)
 		default:
 			return nil, fmt.Errorf("layer %d: role %q is not stencil or patch", i, e.Role)
 		}
 	}
-	return layers, nil
+	return stack, nil
 }
 
 // documentBody strips a hyphence head (hyphence(7)) from doc, if it has one.
@@ -524,6 +576,17 @@ type Record struct {
 	Unbuilt  string `json:"unbuilt,omitempty"`
 	// Error is why the layers did not load (OutcomeLayersError).
 	Error string `json:"error,omitempty"`
+	// UnverifiedLayers counts the stack's entries with no signed act.
+	UnverifiedLayers int `json:"unverified_layers,omitempty"`
+}
+
+// decideStack is Decide over a stack: in enforce, a stack with an
+// unverified entry refuses whatever ajour said (RFC 0018 §11, d20).
+func decideStack(mode Mode, v ajour.Verdict, unverified int) Decision {
+	if mode == ModeEnforce && unverified > 0 {
+		return Decision{Deny: true, Reason: fmt.Sprintf("ajour: %d profile layer(s) carry an unverified act", unverified)}
+	}
+	return Decide(mode, v)
 }
 
 // The files in a session's Dir.
@@ -537,6 +600,9 @@ const (
 	OutcomeUnresolved  = "unresolved"   // the session's catalog does not name the tool
 	OutcomeUnbuilt     = "unbuilt"      // BuildCall could not present the call
 	OutcomeLayersError = "layers-error" // the layers file did not load
+	// OutcomeLayersUnverified: an unverified entry carries no document yet
+	// (Phase 1 grants, d20), so the stack cannot be evaluated.
+	OutcomeLayersUnverified = "layers-unverified"
 )
 
 // Hook is the PreToolUse hook for one call of the session principal: the
@@ -550,26 +616,33 @@ func Hook(principal, harnessName string, input map[string]json.RawMessage, cwd, 
 		return Decision{}
 	}
 	path, err := LayersPath(principal)
-	var layers []ajour.Layer
+	var stack *Stack
 	if err == nil {
-		layers, err = LoadLayers(path)
+		stack, err = LoadStack(path)
 	}
-	if err == nil && layers == nil {
+	if err == nil && stack == nil {
 		return Decision{}
 	}
 	rec := Recorder{Path: filepath.Join(dir, ShadowFile)}
 	r := Record{TS: time.Now().UTC().Format(time.RFC3339Nano), Mode: CurrentMode.String(), HarnessName: harnessName}
 	var v ajour.Verdict // zero: refused, so enforce fails closed on anything below
+	unverified := 0
 	switch node, c, ok := resolve(principal, harnessName); {
 	case err != nil:
 		r.Outcome, r.Error = OutcomeLayersError, err.Error()
+	case stack.Documentless > 0:
+		r.Outcome = OutcomeLayersUnverified
+		unverified = stack.Unverified
 	case !ok:
 		r.Outcome = OutcomeUnresolved
+		unverified = stack.Unverified
 	default:
-		r, v = Observe(layers, node, c, input, cwd, home)
+		r, v = Observe(stack.Layers, node, c, input, cwd, home)
+		unverified = stack.Unverified
 	}
+	r.UnverifiedLayers = unverified
 	_ = rec.Append(r) // a failed record must not change the call's fate
-	return Decide(CurrentMode, v)
+	return decideStack(CurrentMode, v, unverified)
 }
 
 // resolve maps harnessName to its catalog tool through the principal's

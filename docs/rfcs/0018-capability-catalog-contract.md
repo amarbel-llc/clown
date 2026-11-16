@@ -595,8 +595,25 @@ moxy's own hook. claude-code's ordering between them is unverified.
     name and enforce (it fails closed on layers), which shadow must not.
     clown alone decides, in enforce, whether to hand the path on to moxy as
     `MOXY_PROFILE_LAYERS`.
-  - **File:** `.spinclass/profile-layers.json` in the worktree: a JSON array
-    of entries, chain start first.
+  - **File:** `.spinclass/profile-layers.json` in the worktree: `{"schema":
+    "clown-profile-layers-v1", "act_status": "verified" | "unverified",
+    "layers": [...]}`, entries chain start first. The header's
+    `act_status` is `verified` exactly when every entry is; a header that
+    disagrees with its entries makes the file unparseable (a broken
+    pointer).
+  - **Unverified acts (operator ruling d20, 2026-11-16).**
+    - Until `piggy act verify` exists (piggy#361), spinclass writes the file
+      from Phase 1 grants: one stencil entry per bound profile, root to
+      leaf, `{"act": "", "kind": "grant", "role": "stencil", "profile":
+      …, "act_status": "unverified"}`, with no document yet.
+    - An entry is verified only when its `act_status` is `verified` and its
+      `act` is set; only an unverified entry may lack `path` and `body`.
+    - An enforcer MUST refuse a call whose stack holds an unverified entry.
+    - In shadow clown records the call with `unverified_layers` (the count).
+      A stack with a documentless entry is recorded as `layers-unverified`
+      and not evaluated; one whose unverified entries carry documents is
+      evaluated as usual.
+    - `explore-ajour-shadow-tally` counts these calls separately.
   - **Entry:** piggy's verdict entry as spinclass hands it on, `{act, kind,
     role, profile | body}` (spinclass maps it one-to-one and evaluates
     nothing), plus `path` and `digest`:

@@ -2599,6 +2599,8 @@ explore-ajour-shadow-tally PRINCIPAL:
     fi
     echo "== outcomes"
     jq -rs 'group_by(.outcome) | map("\(length)\t\(.[0].outcome)") | .[]' "${files[@]}"
+    echo "== calls over a stack with unverified acts (an enforcer refuses these, RFC 0018 §11)"
+    jq -rs '[.[] | select((.unverified_layers // 0) > 0)] | group_by(.outcome) | map("\(length)\t\(.[0].outcome)") | .[]' "${files[@]}"
     echo "== refusals by deciding layer"
     jq -rs '[.[] | select(.outcome == "refused")] | group_by(.deciding) | sort_by(-length) | map("\(length)\t\(.[0].deciding)") | .[]' "${files[@]}"
     echo "== not evaluated, by tool"
