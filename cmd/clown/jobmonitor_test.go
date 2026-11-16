@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -416,6 +417,59 @@ func TestJobMonitorPluginDirNoHookWhenHookAllowUnset(t *testing.T) {
 
 	if _, err := os.Stat(filepath.Join(dir, "hooks", "hooks.json")); !os.IsNotExist(err) {
 		t.Fatalf("hooks/hooks.json must be absent without a hook-allow path, stat err = %v", err)
+	}
+}
+
+// The ajour shadow hook (clown#349) runs for every tool beside
+// clown-hook-allow, with the session's principal threaded in as a scoped
+// CLOWN_SESSION_ID, and only when both its binary and a principal exist.
+func TestJobMonitorPluginDirRegistersAjourHookBesideAllow(t *testing.T) {
+	t.Setenv("CLOWN_DISABLE_JOB_WAKEUP", "")
+	origAllow, origAjour := buildcfg.HookAllowPath, buildcfg.HookAjourPath
+	buildcfg.HookAllowPath = "/nix/store/x/bin/clown-hook-allow"
+	buildcfg.HookAjourPath = "/nix/store/y/bin/clown-hook-ajour"
+	t.Cleanup(func() { buildcfg.HookAllowPath, buildcfg.HookAjourPath = origAllow, origAjour })
+
+	preToolUse := func(key string) []string {
+		t.Helper()
+		dir, err := synthJobMonitorPluginDir(testStagingRoot(t), key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := os.ReadFile(filepath.Join(dir, "hooks", "hooks.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var cfg struct {
+			Hooks struct {
+				PreToolUse []struct {
+					Matcher string `json:"matcher"`
+					Hooks   []struct {
+						Command string `json:"command"`
+					} `json:"hooks"`
+				} `json:"PreToolUse"`
+			} `json:"hooks"`
+		}
+		if err := json.Unmarshal(b, &cfg); err != nil {
+			t.Fatal(err)
+		}
+		var cmds []string
+		for _, e := range cfg.Hooks.PreToolUse {
+			if e.Matcher != ".*" {
+				t.Errorf("matcher %q, want .*", e.Matcher)
+			}
+			for _, h := range e.Hooks {
+				cmds = append(cmds, h.Command)
+			}
+		}
+		return cmds
+	}
+	want := []string{buildcfg.HookAllowPath, "env CLOWN_SESSION_ID=sess-1 " + buildcfg.HookAjourPath}
+	if got := preToolUse("sess-1"); !slices.Equal(got, want) {
+		t.Errorf("PreToolUse commands %q, want %q", got, want)
+	}
+	if got := preToolUse(""); !slices.Equal(got, want[:1]) {
+		t.Errorf("without a principal: %q, want only clown-hook-allow", got)
 	}
 }
 

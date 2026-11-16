@@ -2574,6 +2574,36 @@ explore-ajour-dry-run CG_REPO DIR:
         done
     done
 
+# Tally one session's ajour shadow record (clown#349, RFC 0018 §11): counts per
+# outcome, the refusals by deciding layer and node, and the calls the hook
+# could not evaluate (unbuilt, unresolved) by tool, so the operator sees what
+# enforcement would have refused before turning it on. PRINCIPAL is the
+# session's per-instance key. Reads shadow.jsonl and its rotated .1; the
+# record holds no call arguments.
+#
+# tally a session's ajour shadow verdicts by outcome and deciding layer
+[group("explore")]
+explore-ajour-shadow-tally PRINCIPAL:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    state="${XDG_STATE_HOME:-}"
+    [[ $state == /* ]] || state="$HOME/.local/state"
+    dir="$state/clown/ajour/{{ PRINCIPAL }}"
+    files=()
+    for f in "$dir/shadow.jsonl.1" "$dir/shadow.jsonl"; do
+        [[ -f $f ]] && files+=("$f")
+    done
+    if (( ${#files[@]} == 0 )); then
+        echo "no shadow record under $dir"
+        exit 0
+    fi
+    echo "== outcomes"
+    jq -rs 'group_by(.outcome) | map("\(length)\t\(.[0].outcome)") | .[]' "${files[@]}"
+    echo "== refusals by deciding layer"
+    jq -rs '[.[] | select(.outcome == "refused")] | group_by(.deciding) | sort_by(-length) | map("\(length)\t\(.[0].deciding)") | .[]' "${files[@]}"
+    echo "== not evaluated, by tool"
+    jq -rs '[.[] | select(.outcome == "unbuilt" or .outcome == "unresolved" or .outcome == "layers-error")] | group_by([.outcome, .harness_name]) | sort_by(-length) | map("\(length)\t\(.[0].outcome)\t\(.[0].harness_name)") | .[]' "${files[@]}"
+
 # Print `clown --print-launch-plan` for the built clown under PROFILE and
 # summarize what shapes the context floor: the --disallowed-tools set, the
 # --settings JSON (connector switches, env) and the --plugin-dir count. A saved

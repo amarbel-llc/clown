@@ -350,18 +350,84 @@ type Record struct {
 	Perm     string `json:"perm,omitempty"`
 	Deciding string `json:"deciding,omitempty"`
 	Unbuilt  string `json:"unbuilt,omitempty"`
+	// Error is why the layers did not load (OutcomeLayersError).
+	Error string `json:"error,omitempty"`
 }
 
-// Observe evaluates one resolved call against layers and returns its record.
-func Observe(layers []ajour.Layer, node catalogsnap.ToolNode, c catalogcontract.Contract, input map[string]json.RawMessage, cwd, home string) Record {
+// The files in a session's Dir.
+const (
+	LayersFile = "layers.json"
+	ShadowFile = "shadow.jsonl"
+)
+
+// The outcomes a record carries when no verdict was computed.
+const (
+	OutcomeUnresolved  = "unresolved"   // the session's catalog does not name the tool
+	OutcomeUnbuilt     = "unbuilt"      // BuildCall could not present the call
+	OutcomeLayersError = "layers-error" // the layers file did not load
+)
+
+// Hook is the PreToolUse hook for one call of the session principal: the
+// harness's tool name and input, the call's working directory and the
+// user's home. It records the verdict in the session's shadow.jsonl and
+// returns what to tell the harness under CurrentMode. With no layers file it
+// records and writes nothing. A failure to record never changes the answer.
+func Hook(principal, harnessName string, input map[string]json.RawMessage, cwd, home string) Decision {
+	dir, err := Dir(principal)
+	if err != nil {
+		return Decision{}
+	}
+	layers, err := LoadLayers(filepath.Join(dir, LayersFile))
+	if err == nil && layers == nil {
+		return Decision{}
+	}
+	rec := Recorder{Path: filepath.Join(dir, ShadowFile)}
+	r := Record{TS: time.Now().UTC().Format(time.RFC3339Nano), Mode: CurrentMode.String(), HarnessName: harnessName}
+	var v ajour.Verdict // zero: refused, so enforce fails closed on anything below
+	switch node, c, ok := resolve(principal, harnessName); {
+	case err != nil:
+		r.Outcome, r.Error = OutcomeLayersError, err.Error()
+	case !ok:
+		r.Outcome = OutcomeUnresolved
+	default:
+		r, v = Observe(layers, node, c, input, cwd, home)
+	}
+	_ = rec.Append(r) // a failed record must not change the call's fate
+	return Decide(CurrentMode, v)
+}
+
+// resolve maps harnessName to its catalog tool through the principal's
+// snapshot and the embedded contract.
+func resolve(principal, harnessName string) (catalogsnap.ToolNode, catalogcontract.Contract, bool) {
+	c, err := catalogcontract.Load()
+	if err != nil {
+		return catalogsnap.ToolNode{}, c, false
+	}
+	dir, err := catalogsnap.Dir()
+	if err != nil {
+		return catalogsnap.ToolNode{}, c, false
+	}
+	for _, s := range catalogsnap.List(dir) {
+		if s.Principal == principal {
+			node, ok := catalogsnap.Resolve(s, c, harnessName)
+			return node, c, ok
+		}
+	}
+	return catalogsnap.ToolNode{}, c, false
+}
+
+// Observe evaluates one resolved call against layers and returns its record
+// and ajour's verdict (the zero Verdict, a refusal, when the call is
+// unbuilt).
+func Observe(layers []ajour.Layer, node catalogsnap.ToolNode, c catalogcontract.Contract, input map[string]json.RawMessage, cwd, home string) (Record, ajour.Verdict) {
 	r := Record{
 		TS: time.Now().UTC().Format(time.RFC3339Nano), Mode: CurrentMode.String(),
 		HarnessName: node.HarnessName, Plugin: node.Plugin, Server: node.Server, Tool: node.Tool,
 	}
 	call, unbuilt := BuildCall(node, c, input, cwd, home)
 	if unbuilt != "" {
-		r.Outcome, r.Unbuilt = "unbuilt", unbuilt
-		return r
+		r.Outcome, r.Unbuilt = OutcomeUnbuilt, unbuilt
+		return r, ajour.Verdict{}
 	}
 	v := ajour.Evaluate(layers, call)
 	r.Outcome = v.Outcome.String()
@@ -369,7 +435,7 @@ func Observe(layers []ajour.Layer, node catalogsnap.ToolNode, c catalogcontract.
 		r.Perm = v.Perm.String()
 	}
 	r.Deciding = deciding(v)
-	return r
+	return r, v
 }
 
 // deciding names the first refusing (or else asking) layer and node.

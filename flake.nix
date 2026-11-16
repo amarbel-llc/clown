@@ -745,6 +745,21 @@
           ];
         };
 
+        # PreToolUse hook (matcher .*) that evaluates each call against the
+        # session's ajour layers and records the verdict, shadow only
+        # (internal/*/ajourshadow, RFC 0018 §11, clown#349). Its path is baked
+        # in via buildcfg.HookAjourPath and shipped THROUGH THE PLUGIN by
+        # synthJobMonitorPluginDir, like clown-hook-allow.
+        clown-hook-ajour = buildClownGo {
+          pname = "clown-hook-ajour";
+          version = clownVersion;
+          subPackages = [ "cmd/clown-hook-ajour" ];
+          ldflags = [
+            "-s"
+            "-w"
+          ];
+        };
+
         # Added for mcp-collapse permission-mux POC (throwaway; stage 1
         # mechanics). PreToolUse hook that demuxes the collapsed mcp_call tool by
         # tool_id back to a per-upstream-tool allow/ask/deny decision. Its path is
@@ -993,6 +1008,8 @@
                 "${clown-hook-tee}/bin/clown-hook-tee";
               "code.linenisgreat.com/clown/internal/0/buildcfg.HookToolcostPath" =
                 "${clown-hook-toolcost}/bin/clown-hook-toolcost";
+              "code.linenisgreat.com/clown/internal/0/buildcfg.HookAjourPath" =
+                "${clown-hook-ajour}/bin/clown-hook-ajour";
               # Added for mcp-collapse permission-mux POC
               "code.linenisgreat.com/clown/internal/0/buildcfg.McpCollapseHookPath" =
                 "${clown-hook-collapse}/bin/clown-hook-collapse";

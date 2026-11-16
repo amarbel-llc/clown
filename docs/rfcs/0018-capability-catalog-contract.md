@@ -575,8 +575,11 @@ moxy's own hook. claude-code's ordering between them is unverified.
   section's entries are `{path, role, digest, act}`. Open: (a) who writes
   the file; (b) how a session finds it, an env var set at launch or a path
   derived from the principal; (c) one entry shape.
-- **Not yet built in clown:** the PreToolUse hook that calls
-  `ajourshadow`, its registration, and a tally of `shadow.jsonl`.
+- **The hook.** `clown-hook-ajour` is a PreToolUse hook (matcher `.*`)
+  registered beside clown-hook-allow in the synthesized clown-builtin-jobs
+  plugin, with the principal threaded in as a scoped `CLOWN_SESSION_ID`.
+  In shadow it prints nothing, so it decides nothing. `just
+  explore-ajour-shadow-tally <principal>` summarizes a session's record.
 
 ## More information
 

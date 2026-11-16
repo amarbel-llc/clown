@@ -406,6 +406,20 @@ func synthJobMonitorPluginDir(root *staging.Root, sessionKey string) (string, er
 			},
 		}
 	}
+	// PreToolUse, beside clown-hook-allow: clown-hook-ajour records each call's
+	// ajour verdict against the session's layers, shadow only (RFC 0018 §11,
+	// clown#349); in shadow it prints nothing, so it decides nothing. It needs
+	// the principal to find the session's snapshot and layers.
+	if buildcfg.HookAjourPath != "" && sessionKey != "" {
+		addHookEntries(hookEvents, "PreToolUse", map[string]any{
+			"matcher": ".*",
+			"hooks": []any{map[string]any{
+				"type":    "command",
+				"command": "env CLOWN_SESSION_ID=" + sessionKey + " " + buildcfg.HookAjourPath,
+				"timeout": 5,
+			}},
+		})
+	}
 	if teeCmd := teeHookCommand(sessionKey); teeCmd != "" {
 		teeEntry := []any{
 			map[string]any{

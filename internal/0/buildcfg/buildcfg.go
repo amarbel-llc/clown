@@ -104,6 +104,13 @@ var (
 	// metrics in stats-me. Empty in dev builds (go build, go run); the hook
 	// is then omitted.
 	HookToolcostPath string
+	// HookAjourPath is the absolute path to the clown-hook-ajour binary in its
+	// own Nix store output, baked at build time. The synthesized
+	// clown-builtin-jobs plugin wires it as a PreToolUse hook (matcher .*)
+	// that records each call's ajour verdict, shadow only (RFC 0018 §11,
+	// clown#349). Empty in dev builds (go build, go run); the hook is then
+	// omitted.
+	HookAjourPath string
 	// McpCollapseHookPath is the absolute path to the clown-hook-collapse binary
 	// in its own Nix store output, baked at build time. Added for the mcp-collapse
 	// permission-mux POC (throwaway; stage 1 mechanics): the synthesized aggregator

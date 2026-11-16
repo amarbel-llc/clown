@@ -210,7 +210,7 @@ func TestObserveRecordsVerdictWithoutArguments(t *testing.T) {
 	rec := Recorder{Path: filepath.Join(t.TempDir(), "shadow.jsonl")}
 	node := catalogsnap.ToolNode{Plugin: "clown-builtin-harness", Server: "harness", Tool: "Read", Kind: "read", HarnessName: "Read"}
 	secret := "very-private-name.txt"
-	r := Observe([]ajour.Layer{st}, node, mustContract(t), args(t, `{"file_path":"`+secret+`"}`), home, home)
+	r, _ := Observe([]ajour.Layer{st}, node, mustContract(t), args(t, `{"file_path":"`+secret+`"}`), home, home)
 	if r.Outcome != "refused" || r.Deciding == "" {
 		t.Fatalf("record %+v, want refused with a deciding layer", r)
 	}
@@ -224,9 +224,97 @@ func TestObserveRecordsVerdictWithoutArguments(t *testing.T) {
 	if strings.Contains(string(b), secret) {
 		t.Errorf("the record carries an argument: %s", b)
 	}
-	admitted := Observe([]ajour.Layer{st}, node, mustContract(t), args(t, `{"file_path":"a.go"}`), home, home)
-	if admitted.Outcome != "admitted" {
+	admitted, v := Observe([]ajour.Layer{st}, node, mustContract(t), args(t, `{"file_path":"a.go"}`), home, home)
+	if admitted.Outcome != "admitted" || !v.Admitted {
 		t.Errorf("a.go: %+v, want admitted", admitted)
+	}
+}
+
+// hookSession lays out one session's state under a temporary
+// XDG_STATE_HOME: a claude-code snapshot (so the harness built-ins resolve)
+// and, when withLayers, the engineer stencil as its one layer.
+func hookSession(t *testing.T, principal string, withLayers bool) (home, dir string) {
+	t.Helper()
+	state := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", state)
+	home = t.TempDir()
+	home, _ = filepath.EvalSymlinks(home)
+	snapDir, err := catalogsnap.Dir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := catalogsnap.Write(snapDir, catalogsnap.Snapshot{Principal: principal, Harness: catalogsnap.HarnessClaudeCode}); err != nil {
+		t.Fatal(err)
+	}
+	dir, err = Dir(principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !withLayers {
+		return home, dir
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	st, err := ajour.ParseStencil(engineerStencil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stencil := writeFile(t, dir, "engineer.espalier", engineerStencil)
+	b, _ := json.Marshal([]LayerEntry{{Path: stencil, Role: RoleStencil, Digest: st.Digest()}})
+	writeFile(t, dir, LayersFile, string(b))
+	return home, dir
+}
+
+func shadowLines(t *testing.T, dir string) []Record {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(dir, ShadowFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []Record
+	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		var r Record
+		if err := json.Unmarshal([]byte(line), &r); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
+// The hook end to end in shadow: it records an admitted and a refused call
+// and denies neither.
+func TestHookRecordsAndNeverDeniesInShadow(t *testing.T) {
+	home, dir := hookSession(t, "p-1", true)
+	for _, file := range []string{"a.go", "secret.txt"} {
+		if d := Hook("p-1", "Read", args(t, `{"file_path":"`+file+`"}`), home, home); d.Deny {
+			t.Errorf("%s: shadow denied: %+v", file, d)
+		}
+	}
+	rs := shadowLines(t, dir)
+	if len(rs) != 2 || rs[0].Outcome != "admitted" || rs[1].Outcome != "refused" || rs[1].Mode != "shadow" {
+		t.Errorf("records %+v, want admitted then refused, in shadow", rs)
+	}
+}
+
+// No layers file is no profile: the hook records nothing and writes nothing.
+func TestHookWithoutLayersWritesNothing(t *testing.T) {
+	home, dir := hookSession(t, "p-2", false)
+	if d := Hook("p-2", "Read", args(t, `{"file_path":"a.go"}`), home, home); d.Deny {
+		t.Errorf("denied without a profile: %+v", d)
+	}
+	if _, err := os.Stat(dir); err == nil {
+		t.Errorf("%s exists; nothing may be written without a layers file", dir)
+	}
+}
+
+// A tool the session's catalog does not name is recorded as unresolved.
+func TestHookRecordsAnUnresolvedTool(t *testing.T) {
+	home, dir := hookSession(t, "p-3", true)
+	Hook("p-3", "mcp__plugin_nowhere_x__y", args(t, `{}`), home, home)
+	if rs := shadowLines(t, dir); len(rs) != 1 || rs[0].Outcome != OutcomeUnresolved || rs[0].HarnessName != "mcp__plugin_nowhere_x__y" {
+		t.Errorf("records %+v, want one unresolved", rs)
 	}
 }
 
