@@ -123,7 +123,7 @@ var Rules = []RuleSpec{
 	},
 	{
 		"H-2", Refuse, "role, harness and mode are present, once each",
-		"H-2: <key> is required",
+		"H-2: <key> is required / H-2: <key> appears twice",
 	},
 	{
 		"H-3", Refuse, "mode is attended or unattended",
