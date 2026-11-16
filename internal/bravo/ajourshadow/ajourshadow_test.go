@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -82,11 +83,11 @@ func TestBuildCallPathAndInput(t *testing.T) {
 	home := t.TempDir()
 	home, _ = filepath.EvalSymlinks(home)
 	node := catalogsnap.ToolNode{Plugin: "clown-builtin-harness", Server: "harness", Tool: "Read", Kind: "read"}
-	call, unbuilt := BuildCall(node, mustContract(t), args(t, `{"file_path":"a.go","limit":5,"offset":1.5}`), home, home)
+	calls, unbuilt := BuildCall(node, mustContract(t), args(t, `{"file_path":"a.go","limit":5,"offset":1.5}`), home, home)
 	if unbuilt != "" {
 		t.Fatalf("unbuilt: %s", unbuilt)
 	}
-	want := ajour.Call{
+	want := []ajour.Call{{
 		Path: []ajour.Subject{
 			{Type: "clown-plugin-v1", ID: "clown-builtin-harness"},
 			{Type: "mcp-server-v1", ID: "harness"},
@@ -98,9 +99,9 @@ func TestBuildCallPathAndInput(t *testing.T) {
 			{{Type: "tool-input-v1", ID: "offset", Fields: map[string][]string{"field": {"offset"}, "value": {"1.5"}}}},
 		},
 		Anchor: 1,
-	}
-	if !reflect.DeepEqual(call, want) {
-		t.Errorf("BuildCall =\n%+v\nwant\n%+v", call, want)
+	}}
+	if !reflect.DeepEqual(calls, want) {
+		t.Errorf("BuildCall =\n%+v\nwant\n%+v", calls, want)
 	}
 }
 
@@ -108,12 +109,12 @@ func TestBuildCallPathAndInput(t *testing.T) {
 // empty array one subject whose value is [].
 func TestBuildCallArrays(t *testing.T) {
 	node := catalogsnap.ToolNode{Plugin: "example", Server: "example", Tool: "unlisted"} // every field is input
-	call, unbuilt := BuildCall(node, mustContract(t), args(t, `{"subcommand":"status","flags":["a","b"],"none":[]}`), "/", "/nonexistent-home")
+	calls, unbuilt := BuildCall(node, mustContract(t), args(t, `{"subcommand":"status","flags":["a","b"],"none":[]}`), "/", "/nonexistent-home")
 	if unbuilt != "" {
 		t.Fatalf("unbuilt: %s", unbuilt)
 	}
 	var got []string
-	for _, v := range call.Values {
+	for _, v := range calls[0].Values {
 		got = append(got, v[0].ID+"="+strings.Join(v[0].Fields["value"], ","))
 	}
 	want := []string{"flags=a", "flags=b", "none=[]", "subcommand=status"}
@@ -128,25 +129,138 @@ func TestBuildCallResolvesCwdField(t *testing.T) {
 	home := t.TempDir()
 	home, _ = filepath.EvalSymlinks(home)
 	node := catalogsnap.ToolNode{Plugin: "clown-builtin-harness", Server: "harness", Tool: "Glob", Kind: "read"}
-	call, unbuilt := BuildCall(node, mustContract(t), args(t, `{"pattern":"*.go"}`), home, home)
+	calls, unbuilt := BuildCall(node, mustContract(t), args(t, `{"pattern":"*.go"}`), home, home)
 	if unbuilt != "" {
 		t.Fatalf("unbuilt: %s", unbuilt)
 	}
-	if len(call.Values) != 2 || call.Values[0][0].ID != "file:." || call.Values[0][0].Fields["field"][0] != "path" {
-		t.Errorf("values %+v, want the resolved path file:. first", call.Values)
+	if v := calls[0].Values; len(v) != 2 || v[0][0].ID != "file:." || v[0][0].Fields["field"][0] != "path" {
+		t.Errorf("values %+v, want the resolved path file:. first", v)
 	}
 }
 
 // Kinds the builder does not present yet are reported, never guessed: a
-// shadow verdict over a half-built call would mislead.
+// shadow verdict over a half-built call would mislead. A cutting-garden
+// reference needs its ancestry from cutting-garden (RFC 0018 §5.2), and a
+// recipe needs just-us's catalog presentation (§10).
 func TestBuildCallReportsUnbuiltKinds(t *testing.T) {
-	node := catalogsnap.ToolNode{Plugin: "cutting-garden", Server: "cutting-garden", Tool: "list_nodes"}
-	if _, unbuilt := BuildCall(node, mustContract(t), args(t, `{"uri":"caldav://x/"}`), "/", "/h"); !strings.Contains(unbuilt, "reference") {
-		t.Errorf("unbuilt = %q, want it to name the reference kind", unbuilt)
+	cg := catalogsnap.ToolNode{Plugin: "cutting-garden", Server: "cutting-garden", Tool: "list_nodes"}
+	if _, unbuilt := BuildCall(cg, mustContract(t), args(t, `{"uri":"caldav://x/"}`), "/", "/h"); !strings.Contains(unbuilt, "cutting-garden") {
+		t.Errorf("unbuilt = %q, want it to name cutting-garden's ancestry", unbuilt)
 	}
+	recipe := catalogsnap.ToolNode{Plugin: "just-us", Server: "just-us", Tool: "run_recipe"}
+	if _, unbuilt := BuildCall(recipe, mustContract(t), args(t, `{"recipe":"test"}`), "/", "/h"); !strings.Contains(unbuilt, "recipe") {
+		t.Errorf("unbuilt = %q, want it to name the recipe kind", unbuilt)
+	}
+	mutate := catalogsnap.ToolNode{Plugin: "cutting-garden", Server: "cutting-garden", Tool: "mutate_nodes"}
+	if _, unbuilt := BuildCall(mutate, mustContract(t), args(t, `{"groups":[]}`), "/", "/h"); unbuilt == "" {
+		t.Error("mutate_nodes (op from the body) was built, want unbuilt")
+	}
+	unknown := catalogsnap.ToolNode{Plugin: "moxy", Server: "chrest", Tool: "read-resource"}
+	if _, unbuilt := BuildCall(unknown, mustContract(t), args(t, `{"uri":"nowhere://x"}`), "/", "/h"); unbuilt == "" {
+		t.Error("a reference whose scheme no server owns was built, want unbuilt")
+	}
+}
+
+func surface(verb string, uri string) []ajour.Subject {
+	return []ajour.Subject{
+		{Type: "mcp-resources-v1", ID: "resources", Fields: map[string][]string{"op": {verb}}},
+		{Type: "mcp-resource-v1", ID: uri, Fields: map[string][]string{"op": {verb}}},
+	}
+}
+
+// A reference to the called server's own scheme hangs under its own
+// surface, in the tool's Call, with the field's verb on every step; the
+// scheme is lowercased (RFC 0018 §5.2).
+func TestBuildCallReferenceUnderItsOwnSurface(t *testing.T) {
+	node := catalogsnap.ToolNode{Plugin: "moxy", Server: "chrest", Tool: "read-resource"}
+	calls, unbuilt := BuildCall(node, mustContract(t), args(t, `{"uri":"Chrest://items/1"}`), "/", "/h")
+	if unbuilt != "" {
+		t.Fatalf("unbuilt: %s", unbuilt)
+	}
+	if len(calls) != 1 || !reflect.DeepEqual(calls[0].Resources, [][]ajour.Subject{surface("read", "chrest://items/1")}) || calls[0].Values != nil {
+		t.Errorf("calls %+v, want one call reading chrest://items/1 under its surface", calls)
+	}
+}
+
+// One door (RFC 0018 §5.1): a reference whose scheme another server owns is
+// a read under that owner's surface, presented as a second Call whose Path
+// ends at the owner's server.
+func TestBuildCallForeignOwnerIsASecondCall(t *testing.T) {
+	c := mustContract(t)
+	harness := catalogsnap.ToolNode{Plugin: "clown-builtin-harness", Server: "harness", Tool: "ReadMcpResourceTool"}
+	calls, unbuilt := BuildCall(harness, c, args(t, `{"server":"plugin:moxy:moxy","uri":"chrest://items/1"}`), "/", "/h")
+	if unbuilt != "" {
+		t.Fatalf("unbuilt: %s", unbuilt)
+	}
+	owner := ajour.Call{
+		Path:      []ajour.Subject{{Type: "clown-plugin-v1", ID: "moxy"}, {Type: "mcp-server-v1", ID: "chrest"}},
+		Resources: [][]ajour.Subject{surface("read", "chrest://items/1")},
+		Anchor:    1,
+	}
+	if len(calls) != 2 || calls[0].Resources != nil || calls[0].Values != nil || !reflect.DeepEqual(calls[1], owner) {
+		t.Errorf("calls %+v, want the tool's Call (the route field presents nothing) and the owner's read", calls)
+	}
+
+	// A madder blob in a content field reads under moxy/moxy; any other
+	// content value is an input value.
+	jq := catalogsnap.ToolNode{Plugin: "moxy", Server: "jq", Tool: "jq"}
+	calls, unbuilt = BuildCall(jq, c, args(t, `{"filter":".","stdin":"  madder://blobs/blake2b256-abc  "}`), "/", "/h")
+	if unbuilt != "" || len(calls) != 2 || !reflect.DeepEqual(calls[1].Resources, [][]ajour.Subject{surface("read", "madder://blobs/blake2b256-abc")}) {
+		t.Errorf("jq on a blob: %+v, %q", calls, unbuilt)
+	}
+	calls, _ = BuildCall(jq, c, args(t, `{"filter":".","stdin":"{\"a\":1}"}`), "/", "/h")
+	stdinIsInput := len(calls) == 1 && slices.ContainsFunc(calls[0].Values, func(v []ajour.Subject) bool {
+		return v[0].Type == "tool-input-v1" && v[0].ID == "stdin" && v[0].Fields["value"][0] == `{"a":1}`
+	})
+	if !stdinIsInput || calls[0].Resources != nil {
+		t.Errorf("jq on text: %+v, want stdin as an input value and no resource", calls)
+	}
+
+	// §4.2: a URI in a path field is a read under its owner's surface, and
+	// a scheme no server owns is a resource of the called server.
 	read := catalogsnap.ToolNode{Plugin: "clown-builtin-harness", Server: "harness", Tool: "Read"}
-	if _, unbuilt := BuildCall(read, mustContract(t), args(t, `{"file_path":"madder://blobs/x"}`), "/", "/h"); unbuilt == "" {
-		t.Error("a URI in a path field (§4.2) was built, want unbuilt")
+	calls, unbuilt = BuildCall(read, c, args(t, `{"file_path":"madder://blobs/x"}`), "/", "/h")
+	if unbuilt != "" || len(calls) != 2 || calls[1].Path[0].ID != "moxy" || calls[1].Path[1].ID != "moxy" {
+		t.Errorf("Read of a blob: %+v, %q", calls, unbuilt)
+	}
+	calls, unbuilt = BuildCall(read, c, args(t, `{"file_path":"https://example.org/r.git"}`), "/", "/h")
+	if unbuilt != "" || len(calls) != 1 || !reflect.DeepEqual(calls[0].Resources, [][]ajour.Subject{surface("read", "https://example.org/r.git")}) {
+		t.Errorf("Read of an unowned scheme: %+v, %q; want a read under the called server's own surface", calls, unbuilt)
+	}
+}
+
+// Evaluate over a tool-less owner Path (an RFC 0018 §5.1 owner Call): a
+// stencil that opens the owner's surface for reads admits the pair, one that
+// does not refuses it, and the verdict is the pair's.
+func TestObserveFoldsTheOwnerCall(t *testing.T) {
+	home := t.TempDir()
+	harness := catalogsnap.ToolNode{Plugin: "clown-builtin-harness", Server: "harness", Tool: "ReadMcpResourceTool", HarnessName: "ReadMcpResourceTool"}
+	input := args(t, `{"server":"plugin:moxy:moxy","uri":"chrest://items/1"}`)
+	tool := "[clown-builtin-harness !clown-plugin-v1 [-> harness !mcp-server-v1 [-> ReadMcpResourceTool !mcp-tool-v1]]]"
+	open := tool + "\n[moxy !clown-plugin-v1 [-> chrest !mcp-server-v1 [-> resources !mcp-resources-v1 op=[read] [-> chrest://items !mcp-resource-v1 subtree op=[read]]]]]"
+	for _, tc := range []struct {
+		stencil, want string
+	}{{open, "admitted"}, {tool, "refused"}} {
+		st, err := ajour.ParseStencil(tc.stencil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r, v := Observe([]ajour.Layer{st}, harness, mustContract(t), input, home, home)
+		if r.Outcome != tc.want || v.Admitted != (tc.want == "admitted") {
+			t.Errorf("stencil %q: record %+v, want %s", tc.stencil, r, tc.want)
+		}
+		if b, _ := json.Marshal(r); strings.Contains(string(b), "items/1") {
+			t.Errorf("the record carries the reference: %s", b)
+		}
+	}
+	// Neither a content value nor a blob reference reaches the record.
+	jq := catalogsnap.ToolNode{Plugin: "moxy", Server: "jq", Tool: "jq", HarnessName: "mcp__plugin_moxy_moxy__jq_jq"}
+	st, _ := ajour.ParseStencil(tool)
+	for _, stdin := range []string{"secret-content-text", "madder://blobs/blake2b256-secretdigest"} {
+		r, _ := Observe([]ajour.Layer{st}, jq, mustContract(t), args(t, `{"filter":".","stdin":"`+stdin+`"}`), home, home)
+		if b, _ := json.Marshal(r); strings.Contains(string(b), "secret") {
+			t.Errorf("the record carries a content argument: %s", b)
+		}
 	}
 }
 

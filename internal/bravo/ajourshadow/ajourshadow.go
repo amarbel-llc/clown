@@ -79,13 +79,119 @@ const (
 // single-letter "scheme" would be a Windows drive and is not one.
 var uriScheme = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]+:`)
 
-// BuildCall presents a call of node with input as ajour's Call (RFC 0018
-// §3, §4), cwd being the call's working directory and home the user's. It
-// presents path and input fields; for any other kind, a URI in a path
-// field, or a field resolved from an environment other than cwd, it
-// returns unbuilt saying which, and the caller records that instead of a
-// verdict over a half-built call.
-func BuildCall(node catalogsnap.ToolNode, c catalogcontract.Contract, input map[string]json.RawMessage, cwd, home string) (call ajour.Call, unbuilt string) {
+// BuildCall presents a call of node with input as ajour's Calls (RFC 0018
+// §3 to §5), cwd being the call's working directory and home the user's.
+// The first Call is the tool's; a resource whose scheme another server
+// owns is a read under that owner's surface, one more Call per owner, Path
+// [owner plugin, owner server] (§5.1 "one door"; cutting-garden/swift-plum's
+// option (b), 2026-11-16). The call is admitted only when every Call is.
+//
+// What each field kind contributes:
+//   - input: one tool-input-v1 value per element, its text or canonical JSON;
+//   - path: one fs-path-v1 value per path, its canonical file: id; a URI is
+//     a resource read instead (§4.2), under its owner, or the called server
+//     when no server owns the scheme;
+//   - reference: a read (the field's declared verb) of the URI under its
+//     owner's surface;
+//   - content: a whole madder://blobs URI is a read under moxy/moxy, any
+//     other value an input value;
+//   - route: nothing.
+//
+// It returns unbuilt, saying why, for a cutting-garden reference (its
+// ancestry comes from cutting-garden, §5.2), a recipe (just-us does not
+// present its recipes in the catalog snapshot yet, §10), a verb from the
+// body (mutate_nodes), a reference whose scheme no server owns, or a
+// field resolved from anything but cwd. The caller records that instead of
+// a verdict over a half-built call. The Calls hold the values ajour matches
+// on; they live only for one Evaluate and are never written.
+func BuildCall(node catalogsnap.ToolNode, c catalogcontract.Contract, input map[string]json.RawMessage, cwd, home string) (calls []ajour.Call, unbuilt string) {
+	b := builder{node: node, contract: c, owners: map[[2]string]int{}}
+	call, unbuilt := b.build(input, cwd, home)
+	if unbuilt != "" {
+		return nil, unbuilt
+	}
+	return append([]ajour.Call{call}, b.ownerCalls...), ""
+}
+
+// builder carries the owner Calls a tool call's resources add.
+type builder struct {
+	node       catalogsnap.ToolNode
+	contract   catalogcontract.Contract
+	ownerCalls []ajour.Call
+	owners     map[[2]string]int // [plugin, server] → index in ownerCalls
+}
+
+const (
+	typeSurface  = "mcp-resources-v1"
+	typeResource = "mcp-resource-v1"
+	surfaceID    = "resources"
+	verbRead     = "read"
+	pluginCG     = "cutting-garden"
+)
+
+var blobURI = regexp.MustCompile(`^madder://blobs/\S+$`)
+
+// owner is the server that owns uri's scheme (§5.1), and whether one does.
+func (b *builder) owner(scheme string) (plugin, server string, ok bool) {
+	for _, s := range b.contract.Schemes {
+		if s.Scheme == scheme {
+			return s.Plugin, s.Server, true
+		}
+	}
+	return "", "", false
+}
+
+// resource adds a read of uri with verb (§5.2: [resources, <uri>
+// !mcp-resource-v1], the verb on every step) under the surface of the
+// server that owns its scheme, or of the called server when unowned is
+// allowed and no server owns it. It returns why it cannot.
+func (b *builder) resource(call *ajour.Call, uri, verb string, unowned bool) string {
+	scheme, rest, _ := strings.Cut(uri, ":")
+	scheme = strings.ToLower(scheme)
+	plugin, server, owned := b.owner(scheme)
+	switch {
+	case owned && plugin == pluginCG:
+		return fmt.Sprintf("a %s: reference needs its ancestry from cutting-garden (RFC 0018 §5.2), which is not built", scheme)
+	case !owned && !unowned:
+		return fmt.Sprintf("no server owns the %s: scheme (RFC 0018 §5.1)", scheme)
+	case !owned:
+		plugin, server = b.node.Plugin, b.node.Server
+	}
+	op := map[string][]string{"op": {verb}}
+	path := []ajour.Subject{
+		{Type: typeSurface, ID: surfaceID, Fields: op},
+		{Type: typeResource, ID: scheme + ":" + rest, Fields: op},
+	}
+	if plugin == b.node.Plugin && server == b.node.Server {
+		call.Resources = append(call.Resources, path)
+		return ""
+	}
+	key := [2]string{plugin, server}
+	i, seen := b.owners[key]
+	if !seen {
+		i = len(b.ownerCalls)
+		b.owners[key] = i
+		b.ownerCalls = append(b.ownerCalls, ajour.Call{
+			Path:   []ajour.Subject{{Type: typePlugin, ID: plugin}, {Type: typeServer, ID: server}},
+			Anchor: 1,
+		})
+	}
+	b.ownerCalls[i].Resources = append(b.ownerCalls[i].Resources, path)
+	return ""
+}
+
+// inputValues appends field's values as tool-input-v1 subjects.
+func inputValues(call *ajour.Call, field string, values []string) {
+	for _, v := range values {
+		call.Values = append(call.Values, []ajour.Subject{{
+			Type: typeInput, ID: field,
+			Fields: map[string][]string{"field": {field}, "value": {v}},
+		}})
+	}
+}
+
+func (b *builder) build(input map[string]json.RawMessage, cwd, home string) (call ajour.Call, unbuilt string) {
+	node, c := b.node, b.contract
 	tool := ajour.Subject{Type: typeTool, ID: node.Tool, Digest: node.Lock}
 	if node.Kind != "" {
 		tool.Fields = map[string][]string{"kind": {node.Kind}}
@@ -136,12 +242,36 @@ func BuildCall(node catalogsnap.ToolNode, c catalogcontract.Contract, input map[
 			if err != nil {
 				return ajour.Call{}, fmt.Sprintf("field %s: %v", f.name, err)
 			}
-			for _, v := range values {
-				call.Values = append(call.Values, []ajour.Subject{{
-					Type: typeInput, ID: f.name,
-					Fields: map[string][]string{"field": {f.name}, "value": {v}},
-				}})
+			inputValues(&call, f.name, values)
+		case catalogcontract.KindContent:
+			values, err := presentValues(f.raw)
+			if err != nil {
+				return ajour.Call{}, fmt.Sprintf("field %s: %v", f.name, err)
 			}
+			for _, v := range values {
+				if trimmed := strings.TrimSpace(v); blobURI.MatchString(trimmed) {
+					if why := b.resource(&call, trimmed, verbRead, false); why != "" {
+						return ajour.Call{}, fmt.Sprintf("field %s: %s", f.name, why)
+					}
+					continue
+				}
+				inputValues(&call, f.name, []string{v})
+			}
+		case catalogcontract.KindReference:
+			if f.spec.Op == "" || f.spec.Op == catalogcontract.OpFromBody {
+				return ajour.Call{}, fmt.Sprintf("field %s takes its verb from the body, which is not built", f.name)
+			}
+			uris, err := pathValues(f.raw, "")
+			if err != nil {
+				return ajour.Call{}, fmt.Sprintf("field %s: %v", f.name, err)
+			}
+			for _, uri := range uris {
+				if why := b.resource(&call, uri, f.spec.Op, false); why != "" {
+					return ajour.Call{}, fmt.Sprintf("field %s: %s", f.name, why)
+				}
+			}
+		case catalogcontract.KindRecipe:
+			return ajour.Call{}, fmt.Sprintf("field %s is a recipe; just-us does not present its recipes in the catalog snapshot yet (RFC 0018 §10)", f.name)
 		case catalogcontract.KindPath:
 			if f.spec.RelativeTo != "" {
 				return ajour.Call{}, fmt.Sprintf("field %s is relative to %s, which is not built", f.name, f.spec.RelativeTo)
@@ -152,7 +282,10 @@ func BuildCall(node catalogsnap.ToolNode, c catalogcontract.Contract, input map[
 			}
 			for _, p := range paths {
 				if uriScheme.MatchString(p) && !strings.HasPrefix(p, "file:") {
-					return ajour.Call{}, fmt.Sprintf("field %s holds a URI (RFC 0018 §4.2, a resource read), which is not built", f.name)
+					if why := b.resource(&call, p, verbRead, true); why != "" {
+						return ajour.Call{}, fmt.Sprintf("field %s: %s", f.name, why)
+					}
+					continue
 				}
 				id, err := FileID(strings.TrimPrefix(p, "file:"), cwd, home)
 				if err != nil {
@@ -424,18 +557,38 @@ func Observe(layers []ajour.Layer, node catalogsnap.ToolNode, c catalogcontract.
 		TS: time.Now().UTC().Format(time.RFC3339Nano), Mode: CurrentMode.String(),
 		HarnessName: node.HarnessName, Plugin: node.Plugin, Server: node.Server, Tool: node.Tool,
 	}
-	call, unbuilt := BuildCall(node, c, input, cwd, home)
+	calls, unbuilt := BuildCall(node, c, input, cwd, home)
 	if unbuilt != "" {
 		r.Outcome, r.Unbuilt = OutcomeUnbuilt, unbuilt
 		return r, ajour.Verdict{}
 	}
-	v := ajour.Evaluate(layers, call)
+	v := evaluateAll(layers, calls)
 	r.Outcome = v.Outcome.String()
 	if v.Outcome == ajour.OutcomeAdmitted {
 		r.Perm = v.Perm.String()
 	}
 	r.Deciding = deciding(v)
 	return r, v
+}
+
+// evaluateAll is the verdict over a call and its owner Calls (RFC 0018 §5.1):
+// the strongest of their outcomes (refused over ask over admitted), and an
+// admitted pair's perm is allow only when every Call's is.
+func evaluateAll(layers []ajour.Layer, calls []ajour.Call) ajour.Verdict {
+	rank := map[ajour.Outcome]int{ajour.OutcomeAdmitted: 0, ajour.OutcomeAsk: 1, ajour.OutcomeRefused: 2}
+	var worst ajour.Verdict
+	allAllow := true
+	for i, call := range calls {
+		v := ajour.Evaluate(layers, call)
+		allAllow = allAllow && v.Perm == ajour.PermAllow
+		if i == 0 || rank[v.Outcome] > rank[worst.Outcome] {
+			worst = v
+		}
+	}
+	if worst.Outcome == ajour.OutcomeAdmitted && !allAllow {
+		worst.Perm = ajour.PermDefault
+	}
+	return worst
 }
 
 // deciding names the first refusing (or else asking) layer and node.

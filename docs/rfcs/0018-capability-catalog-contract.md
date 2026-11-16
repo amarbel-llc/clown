@@ -554,10 +554,27 @@ moxy's own hook. claude-code's ordering between them is unverified.
   ajour's Call from a call (§3, §4: path and input fields; omitted
   `resolve = "cwd"` fields resolved), evaluates it against the session's
   layers, and records the verdict. It never denies or escalates while
-  `CurrentMode` is `ModeShadow`; enforcement is that one switch. A call it
-  cannot present yet (a reference, content or recipe field, a URI in a
-  path field, a field resolved from anything but cwd) is recorded as
-  `unbuilt`, never evaluated half-built.
+  `CurrentMode` is `ModeShadow`; enforcement is that one switch.
+  - It presents input, path, reference and content fields (§4), and a URI
+    in a path field (§4.2).
+  - A resource whose scheme another server owns (§5.1, one door) is a
+    second Call per owner, `Path = [owner plugin, owner server]`, `Anchor
+    1`, with the reads as its Resources. The call is admitted only when
+    every Call is (cutting-garden/swift-plum's option (b), 2026-11-16: it
+    needs no change to ajour's Call). ajour at 183c15f evaluates such a
+    tool-less Path as expected; a test pins it.
+  - The Calls carry the values ajour matches on, only in memory for one
+    Evaluate; the record never does.
+  - Recorded as `unbuilt`, never evaluated half-built:
+    - a cutting-garden reference, whose ancestry comes from cutting-garden
+      (§5.2);
+    - a recipe field. Its groups, parameter names and lock come from `just
+      --dump`, and the hook runs no subprocess (operator ruling via
+      circus/eager-holly, 2026-11-16), so recipes wait until just-us
+      presents them in the catalog snapshot (§10);
+    - a verb taken from the body (`mutate_nodes`);
+    - a reference whose scheme no server owns;
+    - a field resolved from anything but cwd.
   - Layers: an operator-placed `$XDG_STATE_HOME/clown/ajour/<principal>/layers.json`,
     a JSON array of the entries above; absent is no profile, and nothing
     is recorded. A stencil's digest must match its tree; ajour defines no
