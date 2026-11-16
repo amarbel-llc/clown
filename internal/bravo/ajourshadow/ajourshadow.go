@@ -390,12 +390,43 @@ const (
 	RolePatch   = "patch"
 )
 
-// LayerEntry is one entry of the layers file, chain start first.
+// LayerEntry is one entry of the layers file, chain start first (RFC 0018
+// §11): piggy's verdict entry as spinclass hands it on (act, kind, role,
+// profile or body) plus the layer's document as a file (Path) when it is
+// not inline, and the stencil's digest (cutting-garden's Stencil.Digest),
+// which clown verifies. Profile is the bound clown launch profile,
+// name@clown-profile-digest-v1, carried for provenance like Act and Kind:
+// it digests clown's canonical profile, not the stencil.
 type LayerEntry struct {
-	Path   string `json:"path"`
-	Role   string `json:"role"`
-	Digest string `json:"digest,omitempty"`
-	Act    string `json:"act,omitempty"`
+	Path    string `json:"path,omitempty"`
+	Body    string `json:"body,omitempty"`
+	Role    string `json:"role"`
+	Digest  string `json:"digest,omitempty"`
+	Act     string `json:"act,omitempty"`
+	Kind    string `json:"kind,omitempty"`
+	Profile string `json:"profile,omitempty"`
+}
+
+// LayersEnv names the layers file spinclass writes at spawn, under the
+// worktree's .spinclass/ (operator ruling d7, 2026-11-16; RFC 0018 §11). It
+// is not MOXY_PROFILE_LAYERS: moxy, spawned by clown, would inherit that and
+// enforce, which shadow must not.
+const LayersEnv = "SPINCLASS_PROFILE_LAYERS"
+
+// LayersPath is where the principal's layers file is: LayersEnv when set
+// (an absolute path), else the operator-placed file in Dir.
+func LayersPath(principal string) (string, error) {
+	if p := os.Getenv(LayersEnv); p != "" {
+		if !filepath.IsAbs(p) {
+			return "", fmt.Errorf("%s=%q is not an absolute path", LayersEnv, p)
+		}
+		return p, nil
+	}
+	dir, err := Dir(principal)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, LayersFile), nil
 }
 
 // Dir is $XDG_STATE_HOME/clown/ajour/<principal>.
@@ -426,11 +457,19 @@ func LoadLayers(path string) ([]ajour.Layer, error) {
 	}
 	layers := make([]ajour.Layer, 0, len(entries))
 	for i, e := range entries {
-		doc, err := os.ReadFile(e.Path)
-		if err != nil {
-			return nil, fmt.Errorf("layer %d: %w", i, err)
+		var body string
+		switch {
+		case (e.Path == "") == (e.Body == ""):
+			return nil, fmt.Errorf("layer %d: give exactly one of path and body", i)
+		case e.Body != "":
+			body = documentBody(e.Body)
+		default:
+			doc, err := os.ReadFile(e.Path)
+			if err != nil {
+				return nil, fmt.Errorf("layer %d: %w", i, err)
+			}
+			body = documentBody(string(doc))
 		}
-		body := documentBody(string(doc))
 		switch e.Role {
 		case RoleStencil:
 			st, err := ajour.ParseStencil(body)
@@ -510,7 +549,11 @@ func Hook(principal, harnessName string, input map[string]json.RawMessage, cwd, 
 	if err != nil {
 		return Decision{}
 	}
-	layers, err := LoadLayers(filepath.Join(dir, LayersFile))
+	path, err := LayersPath(principal)
+	var layers []ajour.Layer
+	if err == nil {
+		layers, err = LoadLayers(path)
+	}
 	if err == nil && layers == nil {
 		return Decision{}
 	}

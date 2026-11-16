@@ -575,9 +575,9 @@ moxy's own hook. claude-code's ordering between them is unverified.
     - a verb taken from the body (`mutate_nodes`);
     - a reference whose scheme no server owns;
     - a field resolved from anything but cwd.
-  - Layers: an operator-placed `$XDG_STATE_HOME/clown/ajour/<principal>/layers.json`,
-    a JSON array of the entries above; absent is no profile, and nothing
-    is recorded. A stencil's digest must match its tree; ajour defines no
+  - Layers: the file `SPINCLASS_PROFILE_LAYERS` names, else an
+    operator-placed `$XDG_STATE_HOME/clown/ajour/<principal>/layers.json`
+    (below); absent is no profile, and nothing is recorded. A stencil's digest must match its tree; ajour defines no
     patch digest, so a patch's is not checked.
   - Record: `shadow.jsonl` beside it, one line per call (time, mode,
     harness name, plugin/server/tool, outcome, admitted perm, the first
@@ -585,13 +585,52 @@ moxy's own hook. claude-code's ordering between them is unverified.
     with one rotated generation, so at most 8 MiB per session.
   - clown does not set `MOXY_POSTURE` or `MOXY_PROFILE_LAYERS` in shadow:
     moxy fails closed on layers, which would be enforcement.
-- **Open question (to the operator, via circus/eager-holly):** spinclass
-  writes no layers file today (spinclass/slim-myrtle, 2026-11-16), and the
-  shapes differ: spinclass FDR 0034 Phase 2 step 4 hands on `piggy act
-  verify`'s `layers` array, `{act, kind, role, profile or body}`, while this
-  section's entries are `{path, role, digest, act}`. Open: (a) who writes
-  the file; (b) how a session finds it, an env var set at launch or a path
-  derived from the principal; (c) one entry shape.
+- **The layers file (operator ruling d7, 2026-11-16, via circus/eager-holly).**
+  spinclass writes it at spawn, under the worktree's `.spinclass/`, and
+  names it in an environment variable. Proposed, for spinclass/slim-myrtle
+  to confirm (the spinclass half is theirs):
+  - **Variable:** `SPINCLASS_PROFILE_LAYERS`, an absolute path; a relative
+    one is refused. It is not `MOXY_PROFILE_LAYERS` because of a clash:
+    clown spawns moxy with its own environment, so moxy would inherit that
+    name and enforce (it fails closed on layers), which shadow must not.
+    clown alone decides, in enforce, whether to hand the path on to moxy as
+    `MOXY_PROFILE_LAYERS`.
+  - **File:** `.spinclass/profile-layers.json` in the worktree: a JSON array
+    of entries, chain start first.
+  - **Entry:** piggy's verdict entry as spinclass hands it on, `{act, kind,
+    role, profile | body}` (spinclass maps it one-to-one and evaluates
+    nothing), plus `path` and `digest`:
+    - `role`: `stencil` or `patch`; the enforcer reads it.
+    - `act`, `kind`: the signed act's digest and kind, provenance only.
+    - `profile`: the bound clown launch profile, `name@` its
+      `clown-profile-digest-v1` (sha256 over clown's canonical profile,
+      `profilelookup.Resolved.DigestSHA256`), provenance only. It is not a
+      stencil digest.
+    - `body`: an act's patch body, inline.
+    - `path`: the absolute path of a layer's document when it is not
+      inline. Exactly one of `path` and `body`.
+    - `digest`: the stencil's digest (cutting-garden's `Stencil.Digest()`,
+      over the canonical stencil body), which clown verifies. Required for
+      a stencil; absent for a patch, since ajour defines no patch digest.
+  - **Open (to circus/eager-holly):** where a capability-profile stencil
+    document lives, and who resolves it to `path` and `digest`.
+    - spinclass opens no profile document: it resolves the clown launch
+      profile through `profilelookup` and keeps that digest.
+    - clown's launch profiles carry no stencil, so `profilelookup` has no
+      stencil path or digest to return.
+    - Making it return them would change clown's public API (a
+      `ProtocolVersion` bump) and needs a ruling.
+    - Until it is settled, a stencil layer reaches the hook only through
+      the operator-placed file or an inline `body`.
+  - **A broken pointer** (variable set; file missing, unreadable or
+    unparseable; a layer that does not parse; a digest mismatch) refuses
+    the call in enforce and records `layers-error` in shadow (agreed with
+    spinclass/slim-myrtle).
+  - **Clown side, built:** `ajourshadow.LayersPath` reads
+    `SPINCLASS_PROFILE_LAYERS` first and falls back to the operator-placed
+    `$XDG_STATE_HOME/clown/ajour/<principal>/layers.json`. `LoadLayers`
+    reads both entry forms. The shadow record stays in the principal's own
+    directory.
 - **The hook.** `clown-hook-ajour` is a PreToolUse hook (matcher `.*`)
   registered beside clown-hook-allow in the synthesized clown-builtin-jobs
   plugin, with the principal threaded in as a scoped `CLOWN_SESSION_ID`.

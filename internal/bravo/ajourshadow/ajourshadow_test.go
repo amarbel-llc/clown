@@ -312,6 +312,70 @@ func TestLoadLayers(t *testing.T) {
 	}
 }
 
+// d7 (operator ruling, 2026-11-16): spinclass names the layers file in
+// SPINCLASS_PROFILE_LAYERS; the operator-placed path is the fallback. A
+// relative value is refused, since the hook's working directory is the
+// call's.
+func TestLayersPathPrefersSpinclassVariable(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv(LayersEnv, "")
+	fallback, err := LayersPath("p-env")
+	dir, _ := Dir("p-env")
+	if err != nil || fallback != filepath.Join(dir, LayersFile) {
+		t.Errorf("unset: %q, %v; want the operator-placed %s", fallback, err, filepath.Join(dir, LayersFile))
+	}
+	t.Setenv(LayersEnv, "/wt/.spinclass/profile-layers.json")
+	if got, err := LayersPath("p-env"); err != nil || got != "/wt/.spinclass/profile-layers.json" {
+		t.Errorf("set: %q, %v; want the variable's path", got, err)
+	}
+	t.Setenv(LayersEnv, "relative/layers.json")
+	if _, err := LayersPath("p-env"); err == nil {
+		t.Error("a relative path was accepted")
+	}
+}
+
+// The reconciled entry (RFC 0018 §11): a layer is a file (path) or an
+// inline document (body), never both, never neither.
+func TestLoadLayersReadsAnInlineBody(t *testing.T) {
+	dir := t.TempDir()
+	st, err := ajour.ParseStencil(engineerStencil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ok, _ := json.Marshal([]LayerEntry{
+		{Body: engineerStencil, Role: RoleStencil, Digest: st.Digest(), Act: "blake2b256-act", Kind: "profile-bless", Profile: "engineer@clown-profile-digest-v1@sha256-x"},
+		{Body: "[clown-builtin-harness [-> harness [-> Read [-> file:secret !fs-path-v1 deny]]]]", Role: RolePatch},
+	})
+	if layers, err := LoadLayers(writeFile(t, dir, "inline.json", string(ok))); err != nil || len(layers) != 2 {
+		t.Errorf("inline layers: %d, %v; want 2, nil", len(layers), err)
+	}
+	both, _ := json.Marshal([]LayerEntry{{Path: "/x", Body: engineerStencil, Role: RoleStencil, Digest: st.Digest()}})
+	if _, err := LoadLayers(writeFile(t, dir, "both.json", string(both))); err == nil {
+		t.Error("an entry with both path and body loaded")
+	}
+	neither, _ := json.Marshal([]LayerEntry{{Role: RolePatch}})
+	if _, err := LoadLayers(writeFile(t, dir, "neither.json", string(neither))); err == nil {
+		t.Error("an entry with neither path nor body loaded")
+	}
+}
+
+// The hook follows SPINCLASS_PROFILE_LAYERS to a layers file outside the
+// operator-placed directory, and still records in the session's own one.
+func TestHookFollowsTheSpinclassVariable(t *testing.T) {
+	home, dir := hookSession(t, "p-4", false)
+	elsewhere := t.TempDir()
+	st, err := ajour.ParseStencil(engineerStencil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := json.Marshal([]LayerEntry{{Body: engineerStencil, Role: RoleStencil, Digest: st.Digest()}})
+	t.Setenv(LayersEnv, writeFile(t, elsewhere, "profile-layers.json", string(b)))
+	Hook("p-4", "Read", args(t, `{"file_path":"a.go"}`), home, home)
+	if rs := shadowLines(t, dir); len(rs) != 1 || rs[0].Outcome != "admitted" {
+		t.Errorf("records %+v, want one admitted", rs)
+	}
+}
+
 // End to end over the recorder: a refused read is recorded with its verdict
 // and deciding layer, never with the call's arguments.
 func TestObserveRecordsVerdictWithoutArguments(t *testing.T) {
@@ -351,6 +415,7 @@ func hookSession(t *testing.T, principal string, withLayers bool) (home, dir str
 	t.Helper()
 	state := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", state)
+	t.Setenv(LayersEnv, "")
 	home = t.TempDir()
 	home, _ = filepath.EvalSymlinks(home)
 	snapDir, err := catalogsnap.Dir()
