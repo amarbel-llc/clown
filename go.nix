@@ -3,6 +3,9 @@
 # the escape hatch (godyn-go) or by hand.
 {
   flakeInputs = {
+    "code.linenisgreat.com/cutting-garden" = {
+      input = "cutting-garden";
+    };
     "code.linenisgreat.com/purse-first/libs/dewey" = {
       input = "purse-first";
       subPath = "libs/dewey";

@@ -111,6 +111,19 @@
     troupe.inputs.ringmaster.follows = "ringmaster";
     troupe.inputs.nixpkgs-master.follows = "nixpkgs-master";
     bats.inputs.conformist.follows = "conformist";
+    # cutting-garden: the source of pkgs/ajour (cutting-garden FDR 0028), the
+    # stencil parser and verdict that profilerules.Validate and the PreToolUse
+    # hook link (clown#349; operator ruling j1, shadow mode first). Go-only, via
+    # go.nix's flakeInputs. Pinned to a commit in the URL, not master, so a
+    # relock cannot move it. Its shared inputs follow clown's.
+    cutting-garden.url = "https://code.linenisgreat.com/cutting-garden/archive/183c15f5925e874b5537087a7c4227015b9defc6.tar.gz";
+    cutting-garden.inputs.igloo.follows = "igloo";
+    cutting-garden.inputs.nixpkgs-master.follows = "nixpkgs-master";
+    cutting-garden.inputs.flake-utils.follows = "utils";
+    cutting-garden.inputs.bats.follows = "bats";
+    cutting-garden.inputs.purse-first.follows = "purse-first";
+    cutting-garden.inputs.conformist.follows = "conformist";
+    cutting-garden.inputs.tommy.follows = "tommy";
   };
 
   outputs =
@@ -129,6 +142,7 @@
       troupe,
       purse-first,
       tommy,
+      cutting-garden,
     }:
     (utils.lib.eachDefaultSystem (
       system:
