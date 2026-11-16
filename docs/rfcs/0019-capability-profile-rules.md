@@ -17,16 +17,20 @@ vocabulary defines it: a rule that names a node type or a field is RFC
 
 The vectors are also data: `internal/*/profilerules/vectors.json`, whose
 test checks that every rule here has a vector and every vector names a rule
-here. The validator that runs them is not built yet (it needs
-`pkgs/ajour`'s `ParseStencil`; see §6).
+here, and whose validator test runs every one (§6).
 
 Tracks clown#348. Companion: RFC 0018 (the catalog contract).
 
 ## 1. Where the rules run
 
-One library function, two callers:
+One library, two callers:
 
-    Validate(document string) []Finding     // Finding{Rule, Severity, Node, Message}
+    Validate(document string) []Finding     // a profile: hyphence head + stencil body
+    ValidatePatch(body string) []Finding    // an act's body, as a patch
+    // Finding{Rule, Severity, Node, Message}
+
+A document that does not open with a `---` boundary is a head-less body,
+checked alone.
 
 - **The bless path** (whatever blesses a profile: spinclass FDR 0034's
   bless, the card prompt). A finding of severity **refuse** blocks the
@@ -147,7 +151,7 @@ name the finding. The `…` elisions below are abbreviations;
 | PR-7 | PR-6 with `open` on the three `_` nodes | ok |
 | PR-8 | a patch `[moxy [-> folio [-> _ !mcp-tool-v1 [-> file:/wt/x !fs-path-v1 subtree deny]]]]` | ok (R-4 exempts patches) |
 | PR-9 | `[_ !clown-plugin-v1 open [-> _ !mcp-server-v1 open [-> _ !mcp-tool-v1 open]]]` | refuse R-5 (plugin), R-5 (server) |
-| PR-10 | `[moxy !clown-plugin-v1 [-> folio !mcp-server-v1 [-> _ !mcp-tool-v1 kind=read [-> file:/wt !fs-path-v1 subtree]]]]` | ok (a `_` tool with a declared atom) |
+| PR-10 | `[moxy !clown-plugin-v1 [-> folio !mcp-server-v1 [-> _ !mcp-tool-v1 kind=read [-> file:/wt !fs-path-v1 subtree]]]]` | warn W-6 (R-7 accepts a `_` tool with a declared atom; no moxy tool presents a kind yet) |
 | PR-11 | `[just-us !clown-plugin-v1 [-> just-us !mcp-server-v1 [-> run_recipe !mcp-tool-v1 [-> _ !just-recipe-v1 group=[test, lint]]]]]` | ok |
 | PR-12 | `… [-> _ !mcp-tool-v1 name^=job_]` | refuse R-7 |
 | PR-13 | `… [-> resources !mcp-resources-v1 [-> ynab:main !cg-root-v1 subtree op=[read, create]]]` | refuse R-6 |
@@ -156,7 +160,7 @@ name the finding. The `…` elisions below are abbreviations;
 | PR-16 | `… [-> ynab:main !cg-root-v1 subtree op=[list]]` | refuse R-8 |
 | PR-17 | `… [-> grit_stage !mcp-tool-v1 [-> status !tool-arg-v1 arg=subcommand]]` | refuse R-9 |
 | PR-18 | `… [-> ynab:main !cg-node-v1]` | refuse R-10 |
-| PR-19 | `… [-> run_recipe@blake2b256-s1 !mcp-tool-v1]` | refuse R-11 |
+| PR-19 | `… [-> run_recipe@<a blake2b256 markl id with a wrong checksum> !mcp-tool-v1]` | refuse R-11 (a malformed digest like `blake2b256-s1` is trellis's refusal, R-1) |
 | PR-20 | `… [-> run_recipe@<a valid blake2b256 markl id> !mcp-tool-v1]` | ok |
 | PR-21 | `… [-> resources !mcp-resources-v1 [-> ynab:main !cg-root-v1 subtree]]` | refuse R-12 |
 | PR-22 | `… [-> resources !mcp-resources-v1 [-> ynab:main !cg-root-v1 subtree op=[read]]]` | ok |
@@ -201,18 +205,25 @@ name the finding. The `…` elisions below are abbreviations;
 | PM-1 | unattended, body has `… [-> read !mcp-tool-v1 perm=ask]` | ok (M-1 retired: the enforcer resolves ask by posture) |
 | PM-2 | unattended, body has `[clown-builtin-jobs … [-> troupe !mcp-server-v1 [-> chat_send !mcp-tool-v1]]]` | refuse M-2 |
 | PM-3 | attended, body lacks `clown-builtin-jobs/troupe` | refuse M-3 |
-| PM-4 | D2 sample A, body rewritten per RFC 0018 (`tool-arg-v1` nodes as `tool-input-v1`, `!just-recipe-v1` given the id `_` and `open` rules applied) | ok |
+| PM-4 | D2 sample A, body rewritten per RFC 0018 (`tool-arg-v1` nodes as `tool-input-v1`, `!just-recipe-v1` given the id `_` and `open` rules applied) | warn W-6 ×2 (moxy `kind=read` atoms, clown#356) |
 
 ## 6. Status of the code
 
 `internal/*/profilerules` carries the rule table (`Rules`: id, severity,
-message template) and `vectors.json` (the rows above, the `…` elisions
-completed into whole documents). Its test pins that the two agree with
-each other. `Validate` is not written: it needs `pkgs/ajour`'s parser,
-which reaches clown through a new flake input; that input, and the
-validator, are clown#349. For R-7 on plugin cg types the validator would
-also read the live catalog listing (RFC 0018 §10). The listing's first cut
-carries no resource surfaces, so those types stay unchecked.
+message template), `vectors.json` (the rows above, the `…` elisions
+completed into whole documents), and `Validate`/`ValidatePatch` (clown#349),
+linking `pkgs/ajour` and `pkgs/trellis` through the pinned cutting-garden
+flake input. Its tests pin that the table and the vectors agree, and that
+the validator produces exactly each vector's findings.
+
+The body rules walk `trellis.ParseTree`'s tree, so a form ajour's parser
+also refuses (R-4's open-less wildcard, R-14's perm forms) is named by its
+rule. Any other ajour refusal is R-1; when R-4 or R-14 already fired,
+ajour's first refusal is that one, so a further, unnamed refusal in the
+same body surfaces once those are fixed. R-7 reads RFC 0018 §1's types
+only: for plugin cg types the validator would also read the live catalog
+listing (RFC 0018 §10), whose first cut carries no resource surfaces, so
+those types stay unchecked. The lint verb (§1) is not written.
 
 ## More information
 

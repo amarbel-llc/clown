@@ -1,11 +1,9 @@
 // Package profilerules is RFC 0019's named ruleset for capability profiles:
 // what a profile may write, beyond what ajour's parser accepts. Rules is the
 // rule table (id, severity, rule, message template); vectors.json is one
-// document per case with the findings it must produce. RFC 0019 is
+// document per case with the findings it must produce; Validate and
+// ValidatePatch run the rules, and their test runs every vector. RFC 0019 is
 // normative.
-//
-// TODO(#349): Validate(document) []Finding, once cutting-garden's pkgs/ajour
-// parser can be a clown flake input; it runs every vector here.
 package profilerules
 
 import (
