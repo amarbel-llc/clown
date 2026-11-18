@@ -2385,17 +2385,7 @@ func runProvider(executor Executor, bound Command, logger *slog.Logger, flags pa
 		cmd.Env = append(os.Environ(), extraEnv...)
 	}
 
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
-	go func() {
-		sig := <-sigCh
-		if logger != nil {
-			logger.Info("signal received; forwarding to downstream", "signal", sig.String())
-		}
-		if cmd.Process != nil {
-			cmd.Process.Signal(sig)
-		}
-	}()
+	forwardProviderSignals(cmd, logger)
 
 	if logger != nil {
 		logger.Info("running downstream", "binary", binary, "args", argv)
@@ -2445,6 +2435,27 @@ func runProvider(executor Executor, bound Command, logger *slog.Logger, flags pa
 	}
 	resetTerminal()
 	return 0
+}
+
+// providerForwardedSignals are the signals clown passes on to a provider it
+// runs as a plain child rather than dying of them, so runProvider returns and
+// the deferred plugin-host Shutdown stops the plugin servers.
+var providerForwardedSignals = []os.Signal{syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP}
+
+// forwardProviderSignals passes the first of providerForwardedSignals clown
+// receives on to cmd's process, once cmd has started.
+func forwardProviderSignals(cmd *exec.Cmd, logger *slog.Logger) {
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, providerForwardedSignals...)
+	go func() {
+		sig := <-sigCh
+		if logger != nil {
+			logger.Info("signal received; forwarding to downstream", "signal", sig.String())
+		}
+		if cmd.Process != nil {
+			cmd.Process.Signal(sig)
+		}
+	}()
 }
 
 // supportsPtySuspend reports whether the executor runs the provider as a direct

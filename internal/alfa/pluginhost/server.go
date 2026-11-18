@@ -59,6 +59,9 @@ type ManagedServer struct {
 	tail *disconnectlog.Ring
 	// reserved marks an entry from Host.Reserve: no process here.
 	reserved bool
+	// releaseThread lets the OS thread that started the process go once the
+	// process has been waited for (startPinned).
+	releaseThread func()
 	// manifestAddress, when set, is the TCP address claude's manifest names
 	// instead of the handshake's (RouteManifestThrough).
 	manifestAddress string
@@ -123,7 +126,7 @@ func (s *ManagedServer) Start(ctx context.Context) error {
 	}
 
 	s.cmd = exec.CommandContext(ctx, cmdPath, s.Def.Args...)
-	s.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	s.cmd.SysProcAttr = serverProcAttr()
 
 	// Apply clown-injected identity (BaseEnv) then the per-server Def.Env on
 	// top, so Def.Env wins on key collisions (clown#136). cmd.Env stays nil
@@ -143,10 +146,12 @@ func (s *ManagedServer) Start(ctx context.Context) error {
 	}
 
 	log.Info("starting plugin server", "command", cmdPath, "args", s.Def.Args, "plugin_dir", s.PluginDir)
-	if err := s.cmd.Start(); err != nil {
+	release, err := startPinned(s.cmd)
+	if err != nil {
 		log.Error("plugin server failed to start", "err", err)
 		return fmt.Errorf("server %s: start: %w", s.Name, err)
 	}
+	s.releaseThread = release
 	s.startedAt = time.Now()
 	log.Info("plugin server process started", "pid", s.cmd.Process.Pid)
 
@@ -233,6 +238,14 @@ func (s *ManagedServer) Stop() {
 	}
 }
 
+// releaseStartThread lets the thread that started the process go; a server
+// whose process was not started by Start has none.
+func (s *ManagedServer) releaseStartThread() {
+	if s.releaseThread != nil {
+		s.releaseThread()
+	}
+}
+
 func (s *ManagedServer) Done() <-chan struct{} {
 	return s.done
 }
@@ -244,6 +257,7 @@ func (s *ManagedServer) reap() {
 	// final diagnostic line reaches the log (clown#72).
 	<-s.stderrDone
 	_ = s.cmd.Wait()
+	s.releaseStartThread()
 	s.waitState = s.cmd.ProcessState
 	// A death the host did not ask for is logged when it happens, not only at
 	// session end (clown#241): until then nothing in the host log says a server
@@ -338,6 +352,7 @@ func (s *ManagedServer) kill() {
 				<-s.stderrDone
 			}
 			_ = s.cmd.Wait()
+			s.releaseStartThread()
 		}
 	}
 }

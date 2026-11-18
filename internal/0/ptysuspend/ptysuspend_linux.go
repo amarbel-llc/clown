@@ -132,10 +132,12 @@ func Run(argv []string, outer *os.File, opts Options) (int, error) {
 		}
 	}()
 
-	// Forward a process-level SIGTERM to the child's process group (keyboard ^C
-	// is a byte in raw mode and is relayed inline, so it needs no handler).
+	// Forward a process-level SIGTERM or SIGHUP to the child's process group
+	// (keyboard ^C is a byte in raw mode and is relayed inline, so it needs no
+	// handler). A hangup of the outer terminal must end the child and return
+	// from Run, so the caller unwinds; unhandled it would kill this process.
 	term3 := make(chan os.Signal, 1)
-	signal.Notify(term3, syscall.SIGTERM)
+	signal.Notify(term3, syscall.SIGTERM, syscall.SIGHUP)
 	defer signal.Stop(term3)
 	go func() {
 		for s := range term3 {

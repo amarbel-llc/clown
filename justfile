@@ -318,6 +318,31 @@ debug-godyn-test-drvs:
     [ -n "$runs" ] || { echo "debug-godyn-test-drvs: found no godyn test runs in clown-godyn-tests" >&2; exit 1; }
     awk '{n=$0; sub(/^\/nix\/store\/[^-]+-/, "", n); print n, $0}' <<<"$runs" | sort
 
+# Run only the godyn per-package test runs of the named packages (repo-relative
+# dirs, e.g. cmd/clown internal/0/ptysuspend), not the whole lane: the narrow
+# red/green loop for a change touching a few packages, so the full lane runs
+# once, at the merge gate. Evaluation still walks godyn's graph (IFD); only the
+# named runs and what their test binaries import build. --keep-going reports
+# every named package. Needs a godyn host (clown-godyn-tests exists only there).
+#
+# run only the named packages' godyn test runs
+[group("debug")]
+debug-test-go-godyn-pkgs +PKGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    runs=$(nix derivation show "$(nix eval --raw .#clown-godyn-tests.drvPath)" \
+        | jq -r '(.derivations // .) | to_entries[0].value | (.inputDrvs // .inputs.drvs) | keys[]' \
+        | sed 's|^\([^/]\)|/nix/store/\1|' | grep -- '-godyn-test-' || true)
+    [ -n "$runs" ] || { echo "debug-test-go-godyn-pkgs: found no godyn test runs in clown-godyn-tests" >&2; exit 1; }
+    sel=()
+    for pkg in {{PKGS}}; do
+        want="-godyn-test-code-linenisgreat-com-clown-${pkg//\//-}.drv"
+        run=$(grep -F -- "$want" <<<"$runs" | grep -E -- "${want//./\\.}\$" || true)
+        [ -n "$run" ] || { echo "debug-test-go-godyn-pkgs: no godyn test run for $pkg" >&2; exit 1; }
+        sel+=("$run^out")
+    done
+    nix build --no-link --print-build-logs --keep-going "${sel[@]}"
+
 # Smoke-run every Go binary bundled in the default package (version/help)
 # and check juggler's burned-in llama-server path — the godyn-migration
 # check that the linked binaries run (igloo FDR 0007).

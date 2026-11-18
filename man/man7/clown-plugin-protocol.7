@@ -354,6 +354,19 @@ reaches all child processes.
 Isolation between servers \(em one server's crash does not affect others.
 .El
 .Pp
+On Linux each server also carries a parent-death signal
+.Pq Dv PR_SET_PDEATHSIG .
+If clown dies without running the shutdown sequence above, from
+.Dv SIGKILL
+or a kill for memory, the kernel sends the server
+.Dv SIGTERM
+instead of leaving it running under init.
+A
+.Dv SIGHUP
+to clown (its terminal hanging up) is forwarded to the downstream like
+.Dv SIGTERM ,
+so the shutdown sequence runs.
+.Pp
 The server's stderr is forwarded to the host's stderr with a
 .Li [plugin-name/server-name]
 prefix, and each line is additionally captured as a structured record
@@ -403,7 +416,7 @@ clown (Go binary, manages plugin lifecycle directly)
        \(br\(em compile plugin manifests (inject url-based mcpServers
        \(br    entries for healthy servers) into staging dirs
        \(br\(em run claude as child with compiled --plugin-dir flags
-       \(br\(em forward signals (SIGTERM, SIGINT)
+       \(br\(em forward signals (SIGTERM, SIGINT, SIGHUP)
        \(br\(em wait for claude to exit
        \(br\(em check reaper: unexpected death \(-> ERROR log
        \(br\(em live servers: SIGTERM \(-> grace period \(-> SIGKILL
