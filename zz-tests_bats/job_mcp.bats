@@ -104,7 +104,9 @@ teardown() {
   req='{"jsonrpc":"2.0","id":1,"method":"prompts/get","params":{"name":"system-prompt-append"}}'
   run bash -c "printf '%s\n' '$req' | '$RINGMASTER_BIN' mcp"
   assert_success
-  assert_output --partial 'clown job platform'
+  # The heading is being renamed in ringmaster (ringmaster#2); either is the
+  # live fragment.
+  assert_output --regexp '(clown|ringmaster) job platform'
   assert_output --partial 'test/chan'
   assert_output --partial 'job_start'
 }
