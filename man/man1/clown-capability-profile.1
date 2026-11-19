@@ -1,0 +1,81 @@
+.\" Copyright (c) 2026 amarbel, LLC
+.\" SPDX-License-Identifier: MIT
+.Dd @MDOCDATE@
+.Dt CLOWN-CAPABILITY-PROFILE 1
+.Os
+.Sh NAME
+.Nm clown-capability-profile
+.Nd check a capability profile against the RFC 0019 ruleset
+.Sh SYNOPSIS
+.Nm clown capability-profile check
+.Op Fl -patch
+.Ar file
+.Sh DESCRIPTION
+.Nm clown capability-profile check
+runs the RFC 0019 ruleset over
+.Ar file
+and prints every finding, one per line:
+.Dl Ar severity node Ns : Ar message
+where
+.Ar severity
+is
+.Sy refuse
+or
+.Sy warn ,
+.Ar node
+is the path of ids the finding is about
+.Pq Ql - No for a head or whole-document finding ,
+and
+.Ar message
+begins with the rule's id
+.Pq e.g.\& Ql R-4: ,
+followed by what to write instead.
+A clean profile prints nothing.
+.Pp
+The rules go beyond what ajour's parser accepts: a profile that parses may
+still be one no one should bless.
+This verb is the advisory, authoring side; whatever blesses a profile runs the
+same rules and refuses on a
+.Sy refuse
+finding, showing
+.Sy warn
+findings at the prompt.
+.Pp
+.Ar file
+is a capability profile: a hyphence head over a stencil body.
+The head's type line is
+.Ql ! espalier-profile-v1
+and it carries
+.Sy role ,
+.Sy harness
+and
+.Sy mode .
+A file that does not open with a
+.Ql ---
+boundary is a head-less body, checked alone: the head rules
+.Pq Sy H-*
+and the mode rules
+.Pq Sy M-*
+do not run on it.
+.Bl -tag -width Ds
+.It Fl -patch
+Check
+.Ar file
+as an act's body, a patch, instead of a profile: every leaf must carry
+.Sy deny ,
+and only the rules RFC 0019 marks for patches run.
+.El
+.Sh EXIT STATUS
+.Sy 0
+when no finding refuses (warnings may be printed),
+.Sy 1
+when at least one does, and
+.Sy 2
+on a usage error or a file that cannot be read.
+.Sh SEE ALSO
+.Xr clown 1 ,
+.Xr clown-catalog 7 ,
+.Xr ajour 7
+.Sh STANDARDS
+RFC 0019 (the capability-profile ruleset) and RFC 0018 (the capability catalog
+contract whose vocabulary the rules read).

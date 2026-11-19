@@ -225,7 +225,9 @@ ajour's first refusal is that one, so a further, unnamed refusal in the
 same body surfaces once those are fixed. R-7 reads RFC 0018 §1's types
 only: for plugin cg types the validator would also read the live catalog
 listing (RFC 0018 §10), whose first cut carries no resource surfaces, so
-those types stay unchecked. The lint verb (§1) is not written.
+those types stay unchecked. The lint verb (§1) is `clown capability-profile
+check [--patch] FILE` (cmd/clown/capabilityprofile.go,
+clown-capability-profile(1)); its tests run it over the vectors above.
 
 ## More information
 

@@ -499,6 +499,8 @@ func run(rawArgs []string) int {
 			return runDisconnectsServe(rawArgs[1:], os.Stdin, os.Stdout, os.Stderr)
 		case "catalog":
 			return runCatalogVerb(rawArgs[1:], os.Stdin, os.Stdout, os.Stderr)
+		case "capability-profile":
+			return runCapabilityProfile(rawArgs[1:], os.Stdout, os.Stderr)
 		case "restart":
 			return runRestartVerb(rawArgs[1:], os.Stdout, os.Stderr)
 		case "agent-monitor":
@@ -3307,6 +3309,9 @@ Clown flags (must appear before --):
   sessions-complete          Emit fish-completion lines for sessions
   list [--json]              List live clown sessions (spinclass-list-shaped table)
   presence list              List live presence records (clown-presence(1))
+  capability-profile check [--patch] FILE
+                             Print a capability profile's RFC 0019 findings;
+                             exit 1 on a refusal (clown-capability-profile(1))
   restart --session KEY [--when idle|now] [--reason TEXT]
           [--posture unattended|attended|keep]
                              Ask KEY's live frontend to restart at its next idle
