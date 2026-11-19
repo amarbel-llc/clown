@@ -92,7 +92,7 @@ var Rules = []RuleSpec{
 		"R-13: cg-field-v1 under <parent> is unreachable unless <parent> admits op=patch or op=put",
 	},
 	{
-		"R-14", Refuse, "a perm atom is a decision (FDR 0028): at most one per node, perm= with one value of allow|ask|dynamic, never negated, never beside deny, and in a patch only perm=ask (operator ruling a1)",
+		"R-14", Refuse, "a perm atom is a decision (FDR 0028): at most one per node, perm= with one value of allow|ask|dynamic, never negated, never beside deny, and in a patch only perm=ask (a patch tightens)",
 		"R-14: atom `<atom>`: <why> (one of: a patch may only deny or ask; `perm=allow` and `perm=dynamic` loosen, so they belong in a stencil | a node carries one `perm` atom | `perm` is a decision, not a condition, so it cannot be negated | `perm` takes `=` only | `perm` takes one value | `perm` is allow, ask or dynamic | a node that carries `deny` decides nothing else)",
 	},
 	{

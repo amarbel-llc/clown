@@ -2,7 +2,7 @@
 // mode (clown#349): it turns a PreToolUse call into ajour's Call (RFC 0018
 // §4's presentation), evaluates it against the session's layers, and
 // records the verdict without acting on it. Enforcement is one switch,
-// CurrentMode, which stays ModeShadow until the operator rules otherwise.
+// CurrentMode, which stays ModeShadow until enforcement is decided.
 //
 // The layers file is operator-placed at
 // $XDG_STATE_HOME/clown/ajour/<principal>/layers.json until spinclass writes
@@ -48,8 +48,8 @@ func (m Mode) String() string {
 	return "shadow"
 }
 
-// CurrentMode is the hook's mode: shadow, by operator ruling (2026-11-16,
-// via circus/eager-holly). Turning enforcement on is this one constant.
+// CurrentMode is the hook's mode: shadow, until enforcement is decided.
+// Turning enforcement on is this one constant.
 const CurrentMode = ModeShadow
 
 // Decision is what the hook tells the harness: Deny with Reason, or nothing.
@@ -83,8 +83,8 @@ var uriScheme = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]+:`)
 // §3 to §5), cwd being the call's working directory and home the user's.
 // The first Call is the tool's; a resource whose scheme another server
 // owns is a read under that owner's surface, one more Call per owner, Path
-// [owner plugin, owner server] (§5.1 "one door"; cutting-garden/swift-plum's
-// option (b), 2026-11-16). The call is admitted only when every Call is.
+// [owner plugin, owner server] (§5.1 "one door", as agreed with
+// cutting-garden). The call is admitted only when every Call is.
 //
 // What each field kind contributes:
 //   - input: one tool-input-v1 value per element, its text or canonical JSON;
@@ -411,7 +411,7 @@ type LayerEntry struct {
 }
 
 // LayersEnv names the layers file spinclass writes at spawn, under the
-// worktree's .spinclass/ (operator ruling d7, 2026-11-16; RFC 0018 §11). It
+// worktree's .spinclass/ (RFC 0018 §11). It
 // is not MOXY_PROFILE_LAYERS: moxy, spawned by clown, would inherit that and
 // enforce, which shadow must not.
 const LayersEnv = "SPINCLASS_PROFILE_LAYERS"
@@ -440,8 +440,8 @@ func Dir(principal string) (string, error) {
 	return userpath.StatePath("ajour", principal)
 }
 
-// The layers file's schema and act statuses (RFC 0018 §11; operator ruling
-// d20: an entry with no signed act is unverified).
+// The layers file's schema and act statuses (RFC 0018 §11: an entry with no
+// signed act is unverified).
 const (
 	LayersSchema  = "clown-profile-layers-v1"
 	ActVerified   = "verified"

@@ -32,11 +32,11 @@ func args(t *testing.T, s string) map[string]json.RawMessage {
 	return m
 }
 
-// The hook runs in shadow until the operator rules enforcement: shadow never
+// The hook runs in shadow until enforcement is decided: shadow never
 // denies whatever ajour answers; enforce denies every answer but Admitted.
 func TestDecideShadowNeverDeniesEnforceDoes(t *testing.T) {
 	if CurrentMode != ModeShadow {
-		t.Fatalf("CurrentMode = %v, want shadow (RFC 0018 §11: enforcement is an operator ruling)", CurrentMode)
+		t.Fatalf("CurrentMode = %v, want shadow (RFC 0018 §11: enforcement is a separate decision)", CurrentMode)
 	}
 	for _, o := range []ajour.Outcome{ajour.OutcomeRefused, ajour.OutcomeAsk, ajour.OutcomeAdmitted} {
 		v := ajour.Verdict{Outcome: o, Admitted: o == ajour.OutcomeAdmitted}
@@ -338,7 +338,7 @@ func TestLoadStack(t *testing.T) {
 	}
 }
 
-// d7 (operator ruling, 2026-11-16): spinclass names the layers file in
+// RFC 0018 §11: spinclass names the layers file in
 // SPINCLASS_PROFILE_LAYERS; the operator-placed path is the fallback. A
 // relative value is refused, since the hook's working directory is the
 // call's.
@@ -385,7 +385,7 @@ func TestLoadStackReadsAnInlineBody(t *testing.T) {
 	}
 }
 
-// d20 (operator ruling, 2026-11-16): an entry with no act, or act_status
+// RFC 0018 §11: an entry with no act, or act_status
 // other than verified, is unverified; spinclass writes such entries from
 // Phase 1 grants before acts exist, with no document yet. The loader
 // counts them and the documentless ones.

@@ -416,7 +416,7 @@ func permRefusal(atom trellis.TreeAtom, nth int, deny, patch bool) string {
 	value := trellis.ValueText(atom.Pred.Values[0])
 	switch {
 	case patch && value != permAskValue:
-		// A patch only tightens (ajour 9e7b1be, operator ruling a1).
+		// A patch only tightens (ajour 9e7b1be).
 		return "a patch may only deny or ask; `perm=allow` and `perm=dynamic` loosen, so they belong in a stencil"
 	case !slices.Contains(permValues, value):
 		return "`perm` is allow, ask or dynamic"

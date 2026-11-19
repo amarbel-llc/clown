@@ -69,7 +69,7 @@ Severity: **refuse** blocks the bless; **warn** does not.
 | R-11 | a locked id's digest is a markl id that parses, purpose `blake2b256`, blech32 checksum valid | refuse | stencils, patches | `R-11: <id>@<digest> is not a valid markl id (<reason>): copy the lock from the catalog listing` |
 | R-12 | a resource-step node (`mcp-resources-v1`, `mcp-resource-v1`, `cg-root-v1`, a plugin's cg type) that admits a subject by itself (a leaf of its allowance, or a node carrying `subtree`) and is not `deny` carries an `op=` atom. A pass-through container step, whose only job is to lead to a child with its own `op`, may omit it; `+` and `cg-field-v1` nodes are exempt | refuse | stencils | `R-12: <node> admits every verb: say which, e.g. op=[read]` |
 | R-13 | a `cg-field-v1` node's parent carries `op=` including `patch` or `put` | refuse | stencils | `R-13: cg-field-v1 under <parent> is unreachable unless <parent> admits op=patch or op=put` |
-| R-14 | a `perm` atom is a decision, not a pin (cutting-garden FDR 0028 "Facts are pins, perm is a decision", 2026-11-10): at most one per node, `perm=` with one value of `allow`, `ask` or `dynamic`; never negated, never `perm^=` or another operator, never a list, never beside `deny`, and in a patch only `perm=ask` (operator ruling a1, 2026-11-16; ajour 9e7b1be: a patch tightens, so it may deny or ask, and a patch leaf may carry `perm=ask` instead of `deny`). ajour's parser refuses the same forms (R-1); R-14 names them with its wording | refuse | stencils, patches | `R-14: atom `<atom>`: <why>`, where `<why>` is ajour's: `a patch may only deny or ask; perm=allow and perm=dynamic loosen, so they belong in a stencil`, `a node carries one perm atom`, `perm is a decision, not a condition, so it cannot be negated`, `perm takes = only`, `perm takes one value`, `perm is allow, ask or dynamic`, `a node that carries deny decides nothing else` |
+| R-14 | a `perm` atom is a decision, not a pin (cutting-garden FDR 0028 "Facts are pins, perm is a decision", 2026-11-10): at most one per node, `perm=` with one value of `allow`, `ask` or `dynamic`; never negated, never `perm^=` or another operator, never a list, never beside `deny`, and in a patch only `perm=ask` (ajour 9e7b1be: a patch tightens, so it may deny or ask, and a patch leaf may carry `perm=ask` instead of `deny`). ajour's parser refuses the same forms (R-1); R-14 names them with its wording | refuse | stencils, patches | `R-14: atom `<atom>`: <why>`, where `<why>` is ajour's: `a patch may only deny or ask; perm=allow and perm=dynamic loosen, so they belong in a stencil`, `a node carries one perm atom`, `perm is a decision, not a condition, so it cannot be negated`, `perm takes = only`, `perm takes one value`, `perm is allow, ask or dynamic`, `a node that carries deny decides nothing else` |
 | W-1 | a stencil admits `harness/Bash` or `moxy/toolbox/run` with `command` open or unconstrained | warn | stencils | `W-1: <tool> admitted with an open command: the command line names files and hosts ajour cannot scope (RFC 0018 §7)` |
 | W-2 | a `ReadMcpResourceTool` or `ListMcpResourcesTool` node under `clown-builtin-harness/harness` | warn | stencils | `W-2: <tool> presents no tool step; this node is inert. Allow the resource under its owner's surface (RFC 0018 §7)` |
 | W-4 | `subtree` on a catalog node | warn | stencils, patches | `W-4: subtree on <type> is inert: catalog ids are not paths` |
@@ -84,7 +84,7 @@ Notes on the choices the brief left open:
   !mcp-tool-v1 open …]` is "every tool of this server". `_` on the plugin
   or server level would admit tools of plugins the writer never looked at,
   so it is legal only as the cross-cutting deny root FDR 0028's complete
-  document uses. Recommended; needs eager-holly's agreement for D2.
+  document uses. Recommended; D2 is to follow.
 - **Catalog predicates.** A `_` node with atoms on a catalog level
   (`[-> _ !just-recipe-v1 group=[test, lint]]`, `[-> _ !mcp-tool-v1
   kind=read]`) is legal when every atom names a field the type carries
@@ -100,10 +100,9 @@ Notes on the choices the brief left open:
 
 ## 3. Head rules (hyphence metadata)
 
-circus D2 §2 owns the head's semantics; these are its rules as the
-validator enforces them. The operator ruled H-6 and H-7 as written
-(2026-11-10, via circus/eager-holly, recorded in D2). The rest are to be
-agreed with circus/eager-holly before the validator ships.
+D2 §2 owns the head's semantics; these are its rules as the validator
+enforces them. H-6 and H-7 are settled as written (recorded in D2); the rest
+are to be agreed with D2's owner.
 
 | Id | Rule | Severity | Message |
 |---|---|---|---|
@@ -130,7 +129,7 @@ profile, and the enforcer resolves it by its posture: attended prompts;
 unattended escalates when a channel exists, else refuses. The head's `mode`
 is a declaration, not that posture. RFC 0018 §11 has the contract: clown's
 hook is the one escalator, and posture reaches moxy as `MOXY_POSTURE`. D2 §5's
-text follows (circus/eager-holly).
+text follows.
 
 ## 5. Vectors
 
@@ -186,7 +185,7 @@ name the finding. The `…` elisions below are abbreviations;
 | PR-42 | `… [-> read !mcp-tool-v1 perm=allow perm=ask …]` | refuse R-14 (one per node) |
 | PR-43 | `… [-> file:/wt/secrets !fs-path-v1 subtree perm=ask deny]` | refuse R-14 (never beside deny) |
 | PR-44 | `… [-> read !mcp-tool-v1 perm=never …]` | refuse R-14 (allow, ask or dynamic) |
-| PR-45 | a patch `… [-> read !mcp-tool-v1 perm=ask [-> file:/wt/x !fs-path-v1 subtree deny]]` | ok (a patch may ask, operator ruling a1) |
+| PR-45 | a patch `… [-> read !mcp-tool-v1 perm=ask [-> file:/wt/x !fs-path-v1 subtree deny]]` | ok (a patch may ask; ajour 9e7b1be) |
 | PR-48 | a patch `… [-> read !mcp-tool-v1 perm=allow [-> … deny]]` | refuse R-14 (allow and dynamic loosen) |
 | PR-49 | a patch `[moxy [-> folio [-> read [-> file:/wt/x !fs-path-v1 subtree perm=ask]]]]` | ok (a patch leaf may ask instead of deny) |
 | PR-46 | `… [-> resources !mcp-resources-v1 perm=ask [-> ynab:main !cg-root-v1 subtree op=[read]]]` | ok (perm may sit on any node; R-7 exempts it) |
@@ -234,6 +233,6 @@ clown-capability-profile(1)); its tests run it over the vectors above.
 - RFC 0018 (the vocabulary these rules read).
 - cutting-garden FDR 0028 "The stencil fragment", "Matching", "Open items"
   3 (`open`); `ajour(7)`.
-- circus `docs/plans/2026-10-22-d2-profile-schema.md` §2 (the head), §5
-  (the two rulesets), §7 (V-D2-* vectors).
-- The ajour writing probes, runs 2 to 4 (cutting-garden swift-plum).
+- D2, the capability-profile schema design (not published here): §2 (the
+  head), §5 (the two rulesets), §7 (V-D2-* vectors).
+- The ajour writing probes, runs 2 to 4 (cutting-garden).

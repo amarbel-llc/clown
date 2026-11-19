@@ -32,9 +32,9 @@ The key words MUST, MUST NOT, SHOULD, SHOULD NOT and MAY are as in RFC 2119.
 "Subject" and the `Subject` fields (`Type`, `ID`, `New`, `Digest`,
 `Fields`), "Path", "Values", "Resources" and "Anchor" are FDR 0028's
 `ajour.Call`. A **stencil** is a capability profile body; a **writer** is
-whoever authors one. Evidence labels as in FDR 0028: **R** an operator
-ruling, dated; **P** a writing-probe finding (cutting-garden's ajour probe,
-runs 1 to 4, 2026-11-09/10), with its convergence count.
+whoever authors one. Evidence labels as in FDR 0028: **R** a recorded
+design decision; **P** a writing-probe finding (cutting-garden's ajour probe,
+runs 1 to 4), with its convergence count.
 
 ## 1. Node types
 
@@ -53,7 +53,7 @@ runs 1 to 4, 2026-11-09/10), with its convergence count.
 | the plugin's own type | instance | every step below a cg root | `cg-root-v1` or a plugin type | the node's id relative to its parent, as `cg organize` prints it | `op`, and on a `New` step the proposed object's fields |
 | `cg-field-v1` | instance | the last step of a patch or put path | a plugin type | the field's name | `field`, `value`, `op` |
 
-Retired (R 2026-11-09): `cg-roots-v1` and `cg-node-v1`. A cg object carries
+Retired (R): `cg-roots-v1` and `cg-node-v1`. A cg object carries
 the plugin's own node type at every step; "any node type" is a type-less
 node. `tool-arg-v1` is retired too (§9 item 1): an enumerable subcommand is
 `[-> _ !tool-input-v1 field=subcommand value=[…]]`.
@@ -61,7 +61,7 @@ node. `tool-arg-v1` is retired too (§9 item 1): an enumerable subcommand is
 A tool's `Path` is exactly three steps (`[plugin, server, tool]`), a
 `run_recipe` call included. `Anchor` is always `1`, the server.
 
-**`run_recipe`** (cutting-garden/swift-plum, 2026-11-10; this replaces FDR
+**`run_recipe`** (agreed with cutting-garden; this replaces FDR
 0028's "the path continues into the recipe"). The recipe is a **value
 path** under the tool step, as a resource path is under the surface:
 `[{just-recipe-v1 release, group…}, {recipe-arg-v1 verb, position 1,
@@ -166,7 +166,7 @@ removed, symlinks resolved, no trailing slash. Then:
 
 - a path at or under the user's home directory is presented as `file:`
   followed by the path **relative to home**, with no leading `/` and no
-  `~` (`file:eng/repos/circus/.worktrees/swift-plum/src/a.go`); home itself
+  `~` (`file:src/project/.worktrees/feature/a.go`); home itself
   is `file:.`;
 - any other path is `file:` followed by the absolute path
   (`file:/nix/store/abc-x/bin/x`, `file:/etc/hosts`).
@@ -379,16 +379,15 @@ op=[read]]]]]`.
 
 ## 9. Open items
 
-1. **Retire `tool-arg-v1`** (agreed with cutting-garden/swift-plum
-   2026-11-10; D2's table and sample A follow, eager-holly). D2 sample A spells an enumerable subcommand as
+1. **Retire `tool-arg-v1`** (agreed with cutting-garden; D2's table and
+   sample A follow). D2 sample A spells an enumerable subcommand as
    `[-> status !tool-arg-v1 arg=subcommand]`; every probe writer who scoped
    a subcommand (P ×5) wrote `[-> _ !tool-input-v1 field=subcommand
    value=[…]]` instead, and "one kind per field" forbids presenting
    `subcommand` both ways. Proposal: no field is presented as
    `tool-arg-v1`; RFC 0019 refuses the type with a pointer to the
-   `tool-input-v1` spelling. Needs circus D2 §2's table to follow
-   (eager-holly).
-2. (Decided 2026-11-10, §1: the recipe is a value path under
+   `tool-input-v1` spelling. Needs D2 §2's table to follow.
+2. (Decided, §1: the recipe is a value path under
    `run_recipe`.)
 3. **`async` and `impure` pins have no source.** D2 §2 lists them with
    `kind` and `perm` as manifest pins, but no manifest declares them, so
@@ -401,7 +400,7 @@ op=[read]]]]]`.
    (moxy#489's lane).
 5. **Segment wildcards in `file:` ids** (`file:eng/repos/*/.worktrees/x`).
    Not in the stencil fragment; `_` inside an id is a literal character.
-6. **A verb on paths** (deferred, cutting-garden/swift-plum 2026-11-10).
+6. **A verb on paths** (deferred, agreed with cutting-garden).
    `folio mv`'s `source` is read AND delete: presenting `op=[read, delete]`
    lets `[-> file:/wt !fs-path-v1 subtree op=[read]]` admit the move by
    FDR 0028's existential rule, and picking one verb depends on a per-tool
@@ -478,8 +477,7 @@ op=[read]]]]]`.
     cutting-garden's conformance driver and portable bats cases against it.
   - **Locks.** A tool's body carries its `lock`: `catalogcontract.LockDigest`
     of the snapshot's verbatim `inputSchema` (canonical JSON, then
-    blake2b256, then blech32; `golang.org/x/crypto`, allowed by the operator
-    2026-11-10, clown#354). An enforcer that links `pkgs/catalogcontract`
+    blake2b256, then blech32; `golang.org/x/crypto`, clown#354). An enforcer that links `pkgs/catalogcontract`
     calls the same function, so a lock is spelled the same by both (FDR
     0028 rule 3). The test vectors are toolbox(1)'s independent `digest -a
     blake2b256`.
@@ -506,8 +504,8 @@ op=[read]]]]]`.
 
 ## 11. Enforcers: one escalator, posture and layers
 
-Agreed by clown/ready-elder, moxy/live-aspen and spinclass/slim-myrtle
-(2026-11-10, via cutting-garden/swift-plum). These are contracts, because both
+Agreed between clown, moxy, spinclass and cutting-garden. These are
+contracts, because both
 enforcers fire on a moxy call: clown's PreToolUse hook (matcher `.*`) and
 moxy's own hook. claude-code's ordering between them is unverified.
 
@@ -517,8 +515,7 @@ moxy's own hook. claude-code's ordering between them is unverified.
   - clown's hook is the only enforcer that escalates. A hook is
     synchronous and cannot wait for a human, so escalating means denying
     the call with a reason that names the escalation and sending one
-    troupe DM (to the coordinator, or the operator's channel) carrying
-    the call.
+    message to the session's escalation channel carrying the call.
   - The session retries when the answer arrives on its wake channel.
   - Neither enforcer escalates the same call twice.
 - **Posture reaches moxy as `MOXY_POSTURE=attended|unattended`.** clown
@@ -528,8 +525,8 @@ moxy's own hook. claude-code's ordering between them is unverified.
   moxyfile is writable by the agent. A running server's environment is out
   of reach of the session's tool calls. That makes posture unforgeable
   only for a confined session (FDR 0020); an unconfined session's Bash can
-  restart moxy, so there posture is as soft as spinclass's handles, and the
-  operator is told so.
+  restart moxy, so there posture is as soft as spinclass's handles, and
+  this is documented.
 - **The profile stack reaches moxy as `MOXY_PROFILE_LAYERS=<absolute path>`,**
   set the same way. spinclass writes the per-session layers file: ordered
   entries `{path, role: stencil|patch, digest, act}` (role as in
@@ -549,7 +546,7 @@ moxy's own hook. claude-code's ordering between them is unverified.
   presented tool records its `HarnessName`: the advertised name, with every
   character outside `[A-Za-z0-9_-]` replaced by `_`. That mangling rule is
   observed, not documented by Claude Code.
-- **Shadow first (operator ruling, 2026-11-16).** clown links `pkgs/ajour`
+- **Shadow first.** clown links `pkgs/ajour`
   through the pinned cutting-garden input. `internal/*/ajourshadow` builds
   ajour's Call from a call (§3, §4: path and input fields; omitted
   `resolve = "cwd"` fields resolved), evaluates it against the session's
@@ -560,8 +557,8 @@ moxy's own hook. claude-code's ordering between them is unverified.
   - A resource whose scheme another server owns (§5.1, one door) is a
     second Call per owner, `Path = [owner plugin, owner server]`, `Anchor
     1`, with the reads as its Resources. The call is admitted only when
-    every Call is (cutting-garden/swift-plum's option (b), 2026-11-16: it
-    needs no change to ajour's Call). ajour at 183c15f evaluates such a
+    every Call is (agreed with cutting-garden: it needs no change to
+    ajour's Call). ajour at 183c15f evaluates such a
     tool-less Path as expected; a test pins it.
   - The Calls carry the values ajour matches on, only in memory for one
     Evaluate; the record never does.
@@ -569,8 +566,8 @@ moxy's own hook. claude-code's ordering between them is unverified.
     - a cutting-garden reference, whose ancestry comes from cutting-garden
       (§5.2);
     - a recipe field. Its groups, parameter names and lock come from `just
-      --dump`, and the hook runs no subprocess (operator ruling via
-      circus/eager-holly, 2026-11-16), so recipes wait until just-us
+      --dump`, and the hook runs no subprocess (a design rule), so
+      recipes wait until just-us
       presents them in the catalog snapshot (§10);
     - a verb taken from the body (`mutate_nodes`);
     - a reference whose scheme no server owns;
@@ -585,10 +582,10 @@ moxy's own hook. claude-code's ordering between them is unverified.
     with one rotated generation, so at most 8 MiB per session.
   - clown does not set `MOXY_POSTURE` or `MOXY_PROFILE_LAYERS` in shadow:
     moxy fails closed on layers, which would be enforcement.
-- **The layers file (operator ruling d7, 2026-11-16, via circus/eager-holly).**
+- **The layers file.**
   spinclass writes it at spawn, under the worktree's `.spinclass/`, and
-  names it in an environment variable. Proposed, for spinclass/slim-myrtle
-  to confirm (the spinclass half is theirs):
+  names it in an environment variable. Proposed, for spinclass to confirm
+  (the spinclass half is spinclass's):
   - **Variable:** `SPINCLASS_PROFILE_LAYERS`, an absolute path; a relative
     one is refused. It is not `MOXY_PROFILE_LAYERS` because of a clash:
     clown spawns moxy with its own environment, so moxy would inherit that
@@ -601,7 +598,7 @@ moxy's own hook. claude-code's ordering between them is unverified.
     `act_status` is `verified` exactly when every entry is; a header that
     disagrees with its entries makes the file unparseable (a broken
     pointer).
-  - **Unverified acts (operator ruling d20, 2026-11-16).**
+  - **Unverified acts.**
     - Until `piggy act verify` exists (piggy#361), spinclass writes the file
       from Phase 1 grants: one stencil entry per bound profile, root to
       leaf, `{"act": "", "kind": "grant", "role": "stencil", "profile":
@@ -629,7 +626,7 @@ moxy's own hook. claude-code's ordering between them is unverified.
     - `digest`: the stencil's digest (cutting-garden's `Stencil.Digest()`,
       over the canonical stencil body), which clown verifies. Required for
       a stencil; absent for a patch, since ajour defines no patch digest.
-  - **Deferred (operator ruling d21, 2026-11-16):** where a
+  - **Deferred:** where a
     capability-profile stencil document lives, and who resolves it to
     `path` and `digest`, waits until EPIC 0001's role profiles are
     scheduled. Until then spinclass writes neither `path` nor `digest`.
@@ -639,13 +636,13 @@ moxy's own hook. claude-code's ordering between them is unverified.
     - clown's launch profiles carry no stencil, so `profilelookup` has no
       stencil path or digest to return.
     - Making it return them would change clown's public API (a
-      `ProtocolVersion` bump) and needs a ruling.
+      `ProtocolVersion` bump) and needs a decision.
     - Until it is settled, a stencil layer reaches the hook only through
       the operator-placed file or an inline `body`.
   - **A broken pointer** (variable set; file missing, unreadable or
     unparseable; a layer that does not parse; a digest mismatch) refuses
     the call in enforce and records `layers-error` in shadow (agreed with
-    spinclass/slim-myrtle).
+    spinclass).
   - **Clown side, built:** `ajourshadow.LayersPath` reads
     `SPINCLASS_PROFILE_LAYERS` first and falls back to the operator-placed
     `$XDG_STATE_HOME/clown/ajour/<principal>/layers.json`. `LoadLayers`
@@ -661,9 +658,10 @@ moxy's own hook. claude-code's ordering between them is unverified.
 
 - cutting-garden FDR 0028 (ajour) "The two inputs", "Matching", "Resources
   as subjects", "Asks to the other lanes" item 2; `ajour(7)`.
-- circus `docs/plans/2026-10-22-d2-profile-schema.md` §2 (the node-type
-  table this RFC refines), §6 (the catalog as a cutting-garden tree).
+- D2, the capability-profile schema design (not published here): §2 (the
+  node-type table this RFC refines), §6 (the catalog as a cutting-garden
+  tree).
 - RFC 0019 (the profile ruleset); RFC 0008 (plugin tool-permission hooks);
   FDR 0020 (agent-scope confinement); moxin(7) PERMISSIONS, TOOL KIND.
-- The ajour writing probes, runs 2 to 4 (cutting-garden swift-plum), whose
+- The ajour writing probes, runs 2 to 4 (cutting-garden), whose
   writers' guesses this RFC conforms to where it could.
