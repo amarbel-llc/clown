@@ -15,7 +15,9 @@
 runs the RFC 0019 ruleset over
 .Ar file
 and prints every finding, one per line:
-.Dl Ar severity node Ns : Ar message
+.Bd -literal -offset indent
+severity node: message
+.Ed
 where
 .Ar severity
 is
@@ -74,8 +76,8 @@ when at least one does, and
 on a usage error or a file that cannot be read.
 .Sh SEE ALSO
 .Xr clown 1 ,
-.Xr clown-catalog 7 ,
-.Xr ajour 7
+.Xr ajour 7 ,
+.Xr clown-catalog 7
 .Sh STANDARDS
 RFC 0019 (the capability-profile ruleset) and RFC 0018 (the capability catalog
 contract whose vocabulary the rules read).
