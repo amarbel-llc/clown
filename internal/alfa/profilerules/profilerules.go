@@ -133,7 +133,7 @@ var Rules = []RuleSpec{
 	},
 	{
 		"H-5", Refuse, "provider and spend_cap_usd absent when attended, present when unattended",
-		"H-5: <key> is <forbidden|required> in <mode> profiles",
+		"H-5: <key> is <forbidden|required> in <mode> profiles / H-5: spend_cap_usd=<v> is not a positive decimal",
 	},
 	{
 		"H-6", Refuse, "model is present when unattended",

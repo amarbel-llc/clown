@@ -110,7 +110,7 @@ D2 §2).
 | H-2 | `role`, `harness` and `mode` are present, once each | refuse | `H-2: <key> is required` / `H-2: <key> appears twice` |
 | H-3 | `mode` is `attended` or `unattended` | refuse | `H-3: mode=<v>: attended or unattended` |
 | H-4 | `harness` is `claude-code` when attended, `juggler-run` when unattended | refuse | `H-4: harness=<v> with mode=<m>: <m> profiles run <harness>` |
-| H-5 | `provider` and `spend_cap_usd` are absent when attended, present when unattended; `spend_cap_usd` is a positive decimal | refuse | `H-5: <key> is <forbidden|required> in <mode> profiles` |
+| H-5 | `provider` and `spend_cap_usd` are absent when attended, present when unattended; `spend_cap_usd` is a positive decimal | refuse | `H-5: <key> is <forbidden|required> in <mode> profiles` / `H-5: spend_cap_usd=<v> is not a positive decimal` |
 | H-6 | `model` is present when unattended | refuse | `H-6: model is required in unattended profiles (it is what the spend cap buys)` |
 | H-7 | `_base` is absent or one `@<markl id>` (R-11's check); required when unattended; a root profile omits it | refuse | `H-7: _base …` |
 | H-8 | `role` matches `(manager|engineer)-<leaf>`, the leaf lowercase letters, digits and hyphens | refuse | `H-8: role=<v>: manager-<leaf> or engineer-<leaf>` |
@@ -203,6 +203,7 @@ name the finding. The `…` elisions below are abbreviations;
 | PH-11 | `mode = unattended` with no `spend_cap_usd` | refuse H-5 |
 | PH-12 | `mode = attended` with `_base = blake2b256-…` (no `@`) | refuse H-7 |
 | PH-13 | `mode = attended` written twice | refuse H-2 (appears twice) |
+| PH-14 | `mode = unattended` with `spend_cap_usd = 0` | refuse H-5 (not a positive decimal) |
 | PM-1 | unattended, body has `… [-> read !mcp-tool-v1 perm=ask]` | ok (M-1 retired: the enforcer resolves ask by posture) |
 | PM-2 | unattended, body has `[clown-builtin-jobs … [-> troupe !mcp-server-v1 [-> chat_send !mcp-tool-v1]]]` | refuse M-2 |
 | PM-3 | attended, body lacks `clown-builtin-jobs/troupe` | refuse M-3 |
