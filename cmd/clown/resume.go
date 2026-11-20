@@ -260,6 +260,33 @@ func resumeLaunchFlags(id string, args resumeArgs, requested, recorded, agentSco
 	return flags
 }
 
+// restoreResumePin gives a direct `--provider claude ... -- --resume <uuid>`
+// launch that names no profile the session's recorded pin, as `clown resume`
+// does (profileFromRecord, clown#295): an explicit --provider turns profile
+// defaulting off, so without this a pinned session could only be resumed by
+// a launcher that knew its profile name. lookup is resumeProfile, so the
+// name must still resolve to the recorded digest (or the launcher approved
+// one with CLOWN_PROFILE_DIGEST); a drifted pin refuses. A session with no
+// pin, a launch that names a profile, and the inner clown of an [attach]
+// re-exec (whose argv already carries the outer's --profile) are unchanged.
+func restoreResumePin(flags *parsedFlags, attachInner, approved bool, lookup func(id string, approved bool, opts profilelookup.Options) (string, error)) error {
+	if attachInner || flags.profile != "" || flags.profileFromRecord || flags.resumeDefaultProfile || flags.naked ||
+		!flags.providerExplicit || flags.provider != "claude" {
+		return nil
+	}
+	id := claudeResumeValue(flags.forwarded)
+	if !isUUID(id) {
+		return nil
+	}
+	name, err := lookup(id, approved, profilelookup.Options{})
+	if err != nil || name == "" {
+		return err
+	}
+	flags.profile = name
+	flags.profileFromRecord = true
+	return nil
+}
+
 // resumeDefaultSkipReason says why the default profile p must not be applied
 // to the unpinned resume of session id (decision 13), or "" when it may.
 // A default whose provider is not claude would switch the resumed claude

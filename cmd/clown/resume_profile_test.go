@@ -14,6 +14,55 @@ import (
 	"code.linenisgreat.com/clown/pkg/profilelookup"
 )
 
+// A direct `--provider claude -- --resume <uuid>` launch with no profile
+// takes the session's recorded pin, as `clown resume` does; every other
+// launch is left alone, and a lookup refusal refuses the launch.
+func TestRestoreResumePin(t *testing.T) {
+	const id = "11111111-2222-3333-4444-555555555555"
+	pinned := func(string, bool, profilelookup.Options) (string, error) { return "p1", nil }
+	unpinned := func(string, bool, profilelookup.Options) (string, error) { return "", nil }
+	direct := func() parsedFlags {
+		return parsedFlags{provider: "claude", providerExplicit: true, forwarded: []string{"--resume", id, "hello"}}
+	}
+
+	f := direct()
+	if err := restoreResumePin(&f, false, false, pinned); err != nil || f.profile != "p1" || !f.profileFromRecord {
+		t.Fatalf("pinned direct resume: profile %q fromRecord %v err %v; want p1 from the record", f.profile, f.profileFromRecord, err)
+	}
+
+	untouched := map[string]func() (parsedFlags, bool){
+		"unpinned":           func() (parsedFlags, bool) { return direct(), false },
+		"attach inner":       func() (parsedFlags, bool) { return direct(), true },
+		"profile named":      func() (parsedFlags, bool) { f := direct(); f.profile = "p2"; return f, false },
+		"provider defaulted": func() (parsedFlags, bool) { f := direct(); f.providerExplicit = false; return f, false },
+		"search term": func() (parsedFlags, bool) {
+			f := direct()
+			f.forwarded = []string{"--resume", "old chat"}
+			return f, false
+		},
+		"fresh launch":        func() (parsedFlags, bool) { f := direct(); f.forwarded = []string{"--session-id", id}; return f, false },
+		"naked":               func() (parsedFlags, bool) { f := direct(); f.naked = true; return f, false },
+		"clown resume record": func() (parsedFlags, bool) { f := direct(); f.resumeDefaultProfile = true; return f, false },
+	}
+	for name, mk := range untouched {
+		f, inner := mk()
+		want := f.profile
+		lookup := pinned
+		if name == "unpinned" {
+			lookup = unpinned
+		}
+		if err := restoreResumePin(&f, inner, false, lookup); err != nil || f.profile != want || (f.profileFromRecord && name != "clown resume record") {
+			t.Errorf("%s: profile %q fromRecord %v err %v; want it unchanged (%q)", name, f.profile, f.profileFromRecord, err, want)
+		}
+	}
+
+	f = direct()
+	drift := func(string, bool, profilelookup.Options) (string, error) { return "", os.ErrInvalid }
+	if err := restoreResumePin(&f, false, false, drift); err == nil {
+		t.Fatal("a lookup refusal (drifted pin) must refuse the launch")
+	}
+}
+
 // FDR 0022 slice 1 (clown#295): `clown resume` restores the profile a
 // session was launched with, and refuses rather than resume under a profile
 // that changed since.

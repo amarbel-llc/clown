@@ -662,6 +662,11 @@ func runWithFlags(flags parsedFlags) int {
 	// (clown#178).
 	flags.cheapContextSave = cheapContextSaveContext{merged: profiles, user: userProfiles, path: profilesPath}
 
+	if err := restoreResumePin(&flags, attachedID != "", os.Getenv("CLOWN_PROFILE_DIGEST") != "", resumeProfile); err != nil {
+		fmt.Fprintf(os.Stderr, "clown: %v\n", err)
+		return 1
+	}
+
 	var selectedProfile *profile.Profile
 	if flags.profile != "" {
 		for i, p := range profiles {

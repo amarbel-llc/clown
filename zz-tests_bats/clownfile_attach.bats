@@ -232,3 +232,67 @@ EOF
   [ "$status" -eq 0 ]
   [ "$output" = "1" ]
 }
+
+# A start of a session that was launched with a profile: the start form names
+# no profile (--provider claude turns defaulting off), so clown restores the
+# session's recorded pin, as `clown resume` does, instead of refusing to resume
+# it without that profile (clown#295). The pin is laid down first by a
+# defaulted (clownfile) launch of the same session, which pins on first use
+# before the multiplexer wrap.
+@test "clownfile [attach] spawn resume of a profile-pinned session restores its pin" {
+  local principal=1c8d3f5a-6e2b-4d4c-8f90-2b3c4d5e6f70
+  local msg="merge job merge-2 landed: continue"
+  local names="$XDG_STATE_HOME/clown/session-names.jsonl"
+
+  cat >"$HOME/clownfile" <<'EOF'
+[profile]
+profile = "claude-anthropic"
+
+[attach]
+multiplexer = "zmx"
+spawn = ["zmx", "attach", "{id}", "--detach", "{entry}"]
+EOF
+  cd "$HOME"
+  run env CLOWN_SESSION_ID="$principal" \
+    "$CLOWN_BIN" --clown-attach=spawn -- --resume "$principal" "first"
+  [ "$status" -eq 0 ]
+  run grep -c "\"session_id\":\"$principal\".*\"profile\":\"claude-anthropic\",\"profile_digest\":\"[0-9a-f]\{64\}\"" "$names"
+  [ "$output" = "1" ]
+
+  # The start: spinclass's start-handoff form, with the clownfile no longer
+  # naming a profile.
+  cat >"$HOME/clownfile" <<'EOF'
+[attach]
+multiplexer = "zmx"
+spawn = ["zmx", "attach", "{id}", "--detach", "{entry}"]
+EOF
+  rm -f "$MUX_ARGV"
+  run env CLOWN_SESSION_ID="$principal" \
+    "$CLOWN_BIN" --clown-attach=spawn --provider claude -- --resume "$principal" "$msg"
+  [ "$status" -eq 0 ]
+  [ -f "$MUX_ARGV" ]
+  run cat "$MUX_ARGV"
+  [[ " ${lines[*]} " == *" --profile claude-anthropic "* ]] # the restored pin rides into the inner clown
+  local n=${#lines[@]}
+  [ "${lines[$((n - 3))]}" = "--resume" ]
+  [ "${lines[$((n - 2))]}" = "$principal" ]
+  [ "${lines[$((n - 1))]}" = "$msg" ]
+}
+
+# A session with no recorded pin starts as before: no profile is applied.
+@test "clownfile [attach] spawn resume of an unpinned session applies no profile" {
+  cat >"$HOME/clownfile" <<'EOF'
+[attach]
+multiplexer = "zmx"
+spawn = ["zmx", "attach", "{id}", "--detach", "{entry}"]
+EOF
+  local principal=2d9e4a6b-7f3c-4e5d-9a01-3c4d5e6f7081
+
+  cd "$HOME"
+  run env CLOWN_SESSION_ID="$principal" \
+    "$CLOWN_BIN" --clown-attach=spawn --provider claude -- --resume "$principal" "hello"
+  [ "$status" -eq 0 ]
+  [ -f "$MUX_ARGV" ]
+  run cat "$MUX_ARGV"
+  [[ " ${lines[*]} " != *" --profile "* ]]
+}
