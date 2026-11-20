@@ -1,6 +1,6 @@
 ---
 status: proposed
-date: 2026-11-10
+date: 2026-11-20
 ---
 
 # The capability-profile ruleset: what a profile may write
@@ -101,8 +101,8 @@ Notes on the choices the brief left open:
 ## 3. Head rules (hyphence metadata)
 
 D2 §2 owns the head's semantics; these are its rules as the validator
-enforces them. H-6 and H-7 are settled as written (recorded in D2); the rest
-are to be agreed with D2's owner.
+enforces them. All nine are agreed with D2's owner as written (recorded in
+D2 §2).
 
 | Id | Rule | Severity | Message |
 |---|---|---|---|
