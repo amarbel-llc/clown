@@ -329,6 +329,13 @@ definition changed is refused, with a short field diff that never prints
 tokens, environment values or credentialed URLs.
 A session with no pin takes a defaulted profile on first resume, while an
 explicitly requested one needs the launcher's approval.
+A resume that names no profile, by
+.Cm clown resume
+or by
+.Fl -provider Ar claude
+with
+.Fl -resume Ar uuid ,
+applies the session's pin itself, under the same name and digest check.
 .Pp
 A launcher approves a change by passing
 .Fl -profile
