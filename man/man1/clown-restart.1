@@ -100,9 +100,15 @@ with
 .Ev CLOWN_SESSION_ID
 set to the session's principal.
 The preflight prints one JSON line,
-.Li {\(dqverdict\(dq:\(dqrestart\(dq|\(dqnone\(dq|\(dqrefused\(dq,\(dqreason\(dq:...,\(dqwhen\(dq:...,\(dqposture\(dq:...,\(dqmode\(dq:...} ,
+.Li {\(dqverdict\(dq:\(dqrestart\(dq|\(dqstop\(dq|\(dqnone\(dq|\(dqrefused\(dq,\(dqreason\(dq:...,\(dqwhen\(dq:...,\(dqposture\(dq:...,\(dqmode\(dq:...} ,
 and consumes the request itself, so a relaunched session does not restart
 again.
+The frontend lists the verdicts it acts on in the preflight's
+.Ev CLOWN_RESTART_VERDICTS
+.Pq comma-separated, exact tokens ;
+spinclass sends
+.Li stop
+only to a frontend that lists it.
 Its optional
 .Li posture
 .Pq Li unattended , attended No or Li keep ; absent is keep
@@ -129,7 +135,17 @@ mode, is dropped before the stop, recorded in the status file as kind
 .Li posture .
 Only
 .Li restart
-proceeds.
+and
+.Li stop
+proceed.
+.Li stop
+stops the provider without a relaunch, so the frontend exits: the profile,
+posture and countdown steps below do not apply; under any
+.Li when
+but
+.Li now
+a running turn defers it to the next idle transition, as for a restart, and
+it is retried as a stop.
 .Li none
 (for example because the close in step 1 landed),
 .Li refused ,

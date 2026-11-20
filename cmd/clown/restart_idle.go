@@ -15,8 +15,9 @@ import (
 )
 
 // preflightVerdict is `spinclass restart-preflight`'s one JSON line (spinclass
-// FDR 0037): restart (consumed, go ahead), none (nothing to restart), refused
-// (an obstacle; spinclass cleared the request and told the holders). Posture
+// FDR 0037): restart (consumed, go ahead), stop (consumed, stop without a
+// relaunch), none (nothing to restart), refused (an obstacle; spinclass
+// cleared the request and told the holders). Posture
 // is the permission posture spinclass recorded for the relaunch (clown#342):
 // unattended, attended, or absent to keep the launch's (restart_posture.go).
 // Mode is the claude permission mode an attended relaunch names when its
@@ -46,7 +47,7 @@ func parsePreflightVerdict(out []byte) (preflightVerdict, error) {
 		return preflightVerdict{}, fmt.Errorf("not a verdict: %w", err)
 	}
 	switch v.Verdict {
-	case "restart", "none", "refused":
+	case "restart", "none", "refused", verdictStop:
 	default:
 		return preflightVerdict{}, fmt.Errorf("unknown verdict %q", v.Verdict)
 	}
@@ -56,6 +57,15 @@ func parsePreflightVerdict(out []byte) (preflightVerdict, error) {
 	}
 	return v, nil
 }
+
+// restartVerdictsEnv names, in restart-preflight's environment, the verdicts
+// this clown acts on, comma-separated, matched as exact tokens. spinclass
+// sends "stop" only to a clown that lists it: an older one would read it as
+// an unknown verdict and keep running after spinclass consumed the request.
+const (
+	restartVerdictsEnv = "CLOWN_RESTART_VERDICTS"
+	understoodVerdicts = "restart,none,refused," + verdictStop
+)
 
 // preflightTimeout bounds `spinclass restart-preflight`; a hung preflight must
 // not wedge the idle runner, which also runs close-self-run.
@@ -80,7 +90,7 @@ func (p *restartPreflight) run() (preflightVerdict, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), preflightTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, p.bin, "restart-preflight")
-	cmd.Env = append(os.Environ(), "CLOWN_SESSION_ID="+p.principal)
+	cmd.Env = append(environWithout(os.Environ(), restartVerdictsEnv), "CLOWN_SESSION_ID="+p.principal, restartVerdictsEnv+"="+understoodVerdicts)
 	cmd.Stderr = log
 	out, err := outputViaFile(cmd)
 	fmt.Fprintf(log, "%s restart-preflight %s: %q\n", time.Now().UTC().Format(time.RFC3339), p.principal, out)
@@ -308,7 +318,7 @@ func (r *idleRunner) onIdle() {
 }
 
 // preflightQueued takes the queued request, if any, asks spinclass, and
-// restarts only on a "restart" verdict. Called with mu held.
+// restarts on a "restart" verdict and stops on a "stop". Called with mu held.
 func (r *idleRunner) preflightQueued() {
 	req, ok := r.queue.take()
 	if !ok {
@@ -333,6 +343,10 @@ func (r *idleRunner) preflightQueued() {
 	case err != nil:
 		countMetric(metricPreflightError)
 		logSelfClose(r.logPath, "restart-preflight failed (%s); not restarting: %v", principal, err)
+	case v.Verdict == verdictStop:
+		countMetric(metricPreflightVerdict + v.Verdict)
+		logSelfClose(r.logPath, "restart-preflight verdict stop (%s): %s; stopping without a relaunch", principal, sanitizeRestartReason(v.Reason))
+		r.restart(req, v)
 	case v.Verdict != "restart":
 		countMetric(metricPreflightVerdict + v.Verdict)
 		logSelfClose(r.logPath, "restart-preflight verdict %s (%s): %s; not restarting", v.Verdict, principal, sanitizeRestartReason(v.Reason))

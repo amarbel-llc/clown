@@ -87,12 +87,19 @@ var (
 	// providerRunning, under providerMu.
 	providerKill func() error
 	providerMu   sync.Mutex
+	// pendingStop is set, like pendingRelaunch, just before a stop verdict
+	// stops the provider; main then exits instead of relaunching.
+	pendingStop atomic.Bool
 )
+
+// verdictStop is spinclass's restart-preflight verdict for a stop without a
+// relaunch (P1, spinclass's stop right).
+const verdictStop = "stop"
 
 // restartUnderway reports that a restart has recorded its plan: from then
 // until the relaunch, the idle poke runs nothing and the control socket
 // refuses another restart.
-func restartUnderway() bool { return pendingRelaunch.Load() != nil }
+func restartUnderway() bool { return pendingRelaunch.Load() != nil || pendingStop.Load() }
 
 // setProviderRunning marks the provider running (its SIGTERM forwarding is
 // in place) with how to kill it.
@@ -136,6 +143,19 @@ func storePlanIfRunning(plan *relaunchPlan) bool {
 		return false
 	}
 	pendingRelaunch.Store(plan)
+	return true
+}
+
+// markStopIfRunning is storePlanIfRunning for a stop: it marks the stop only
+// while the provider still runs, so a provider that has just exited is not
+// reported as stopped.
+func markStopIfRunning() bool {
+	providerMu.Lock()
+	defer providerMu.Unlock()
+	if !providerRunning.Load() {
+		return false
+	}
+	pendingStop.Store(true)
 	return true
 }
 
@@ -501,6 +521,10 @@ func (fr frontendRestarter) restart(req restartRequest, v preflightVerdict) {
 		fr.cancelled(attempt.kind, why)
 		return
 	}
+	if v.Verdict == verdictStop {
+		fr.stopWithoutRelaunch(v, attempt)
+		return
+	}
 	if fr.profileCheck != nil {
 		if err := fr.profileCheck(); err != nil {
 			fr.cancelled(sessionstatus.RefusalProfileGate, fmt.Sprintf("the relaunch's profile gate would refuse, so the session keeps running: %v", err))
@@ -575,9 +599,35 @@ func (fr frontendRestarter) restart(req restartRequest, v preflightVerdict) {
 	}
 	countMetric(metricRestartStopping)
 	logSelfClose(fr.logPath, "restart (%s): stopping the provider to relaunch (%s)", fr.principal, reason)
+	// The plan stays through a grace kill: whenever the provider does exit,
+	// main relaunches.
+	fr.stopProvider()
+}
+
+// stopWithoutRelaunch acts on a "stop" verdict: the provider is stopped and no
+// plan is stored, so main exits instead of relaunching. Nothing relaunches,
+// so the profile, posture and countdown gates do not apply; a turn running
+// under an idle stop defers it to the next idle transition (turnCancelled),
+// and a retry under a running merge/check job was already cancelled
+// (retryBlockedByJob in restart).
+func (fr frontendRestarter) stopWithoutRelaunch(v preflightVerdict, attempt deferredRestart) {
+	if v.When != "now" && fr.busy != nil && fr.busy() {
+		fr.turnCancelled(sessionstatus.RefusalTurnStarted, "stop: a turn is running", attempt)
+		return
+	}
+	if !markStopIfRunning() {
+		logSelfClose(fr.logPath, "stop (%s): the provider already exited; nothing to stop", fr.principal)
+		return
+	}
+	countMetric(metricStopStopping)
+	logSelfClose(fr.logPath, "stop (%s): stopping the provider without a relaunch (%s)", fr.principal, cmp.Or(sanitizeRestartReason(v.Reason), restartFallbackReason))
+	fr.stopProvider()
+}
+
+// stopProvider SIGTERMs the provider (fr.stop) and SIGKILLs it if it has not
+// exited after the grace period.
+func (fr frontendRestarter) stopProvider() {
 	fr.stop()
-	// A provider that ignores the SIGTERM is killed after the grace period.
-	// The plan stays: whenever the provider does exit, main relaunches.
 	grace := fr.stopGrace
 	if grace == 0 {
 		grace = defaultStopGrace

@@ -188,3 +188,47 @@ EOF
   run cat "$MUX_GROUP"
   [ -z "$output" ]
 }
+
+# P1 start: spinclass starts a stopped session detached under the SAME principal
+# and conversation, with a first message. The hand-off resumes at argv level
+# (--resume <principal>, as a restart's relaunch does) with --clown-attach=spawn,
+# so the [attach].spawn template is resolved, the inner worker is pinned to the
+# principal, and the first message is recorded as the spawn brief: a later
+# restart's relaunch leaves it out instead of sending it again.
+@test "clownfile [attach] spawn resumes the same principal detached with a first message" {
+  cat >"$HOME/clownfile" <<'EOF'
+[attach]
+multiplexer = "zmx"
+spawn = ["zmx", "attach", "{id}", "--detach", "{entry}"]
+EOF
+  local principal=0b7c2f4e-5d1a-4c3b-9e8f-1a2b3c4d5e6f
+  local msg="merge job merge-1 landed: continue"
+
+  cd "$HOME"
+  run env CLOWN_SESSION_ID="$principal" \
+    "$CLOWN_BIN" --clown-attach=spawn --provider claude -- --resume "$principal" "$msg"
+  [ "$status" -eq 0 ]
+  [ -f "$MUX_ARGV" ]
+
+  run cat "$MUX_ARGV"
+  [ "${lines[0]}" = "attach" ]
+  [ "${lines[1]}" = "$principal" ] # the multiplexer session is the principal
+  [ "${lines[2]}" = "--detach" ]   # the spawn template: no terminal attached
+  [[ ${lines[3]} == *clown ]]
+  [ "${lines[4]}" = "--clown-attach-id" ]
+  [ "${lines[5]}" = "$principal" ] # the inner clown keeps the principal
+  # The forwarded tail resumes the same conversation (no fresh --session-id is
+  # injected) and carries the first message as claude's operand.
+  [[ " ${lines[*]} " != *" --session-id "* ]]
+  local n=${#lines[@]}
+  [ "${lines[$((n - 3))]}" = "--resume" ]
+  [ "${lines[$((n - 2))]}" = "$principal" ]
+  [ "${lines[$((n - 1))]}" = "$msg" ]
+
+  # The first message is recorded as the brief for this principal.
+  local digest
+  digest=$(printf '%s' "$msg" | sha256sum | cut -d' ' -f1)
+  run grep -c "\"session_id\":\"$principal\".*\"spawn_brief_sha256\":\"$digest\"" "$XDG_STATE_HOME/clown/session-names.jsonl"
+  [ "$status" -eq 0 ]
+  [ "$output" = "1" ]
+}

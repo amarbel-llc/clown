@@ -9,13 +9,14 @@ import "code.linenisgreat.com/clown/internal/alfa/toolcost"
 // sent best effort (CLOWN_DISABLE_STATSD=1 turns them off with the rest).
 //
 //	clown.restart.preflight.asked            spinclass restart-preflight was run
-//	clown.restart.preflight.verdict.<v>      its verdict: restart, none or refused
+//	clown.restart.preflight.verdict.<v>      its verdict: restart, stop, none or refused
 //	clown.restart.preflight.error            it failed, timed out or was unparsable
 //	clown.restart.request.refused            `clown restart` was refused at request time by the profile gate (nothing consumed)
 //	clown.restart.cancelled                  a consumed request was dropped (profile gate, countdown, busy)
 //	clown.restart.deferred                   a turn start cancelled a restart; it is retried at the next idle
 //	clown.restart.refused                    the relaunch's own resume gate refused, after the stop
 //	clown.restart.stopping                 the provider was told to stop for a relaunch
+//	clown.restart.stop                       a stop verdict stopped the provider, with no relaunch
 //	clown.restart.relaunch.exec              the old frontend is exec'ing the new one
 //	clown.restart.relaunch.aborted           the relaunch did not happen (session closed, no clown, exec failed)
 //	clown.restart.relaunched                 a frontend started as a restart's relaunch
@@ -31,6 +32,7 @@ const (
 	metricRestartDeferred       = "clown.restart.deferred"
 	metricRestartRefused        = "clown.restart.refused"
 	metricRestartStopping       = "clown.restart.stopping"
+	metricStopStopping          = "clown.restart.stop"
 	metricRelaunchExec          = "clown.restart.relaunch.exec"
 	metricRelaunchAborted       = "clown.restart.relaunch.aborted"
 	metricRelaunched            = "clown.restart.relaunched"
