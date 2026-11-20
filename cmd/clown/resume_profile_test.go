@@ -14,6 +14,17 @@ import (
 	"code.linenisgreat.com/clown/pkg/profilelookup"
 )
 
+// `clown resume <id> -- <message>` keeps the message as claude's last
+// operand: the --resume clown adds goes before the forwarded args, so the
+// spawn brief clown records (the last operand) is the message, not the id.
+func TestResumeLaunchFlagsKeepTheMessageLast(t *testing.T) {
+	const id = "11111111-2222-3333-4444-555555555555"
+	got := resumeLaunchFlags(id, resumeArgs{forwarded: []string{"--model", "x", "hello"}}, "", "", "").forwarded
+	if want := []string{"--resume", id, "--model", "x", "hello"}; !slices.Equal(got, want) {
+		t.Fatalf("forwarded = %q, want %q", got, want)
+	}
+}
+
 // A direct `--provider claude -- --resume <uuid>` launch with no profile
 // takes the session's recorded pin, as `clown resume` does; every other
 // launch is left alone, and a lookup refusal refuses the launch.

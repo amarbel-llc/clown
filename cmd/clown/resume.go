@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"regexp"
-	"slices"
 	"strings"
 	"time"
 
@@ -246,7 +245,10 @@ func resumeLaunchFlags(id string, args resumeArgs, requested, recorded, agentSco
 		mcpCollapse:      args.mcpCollapse,
 		noAttach:         args.noAttach,
 		agentScopeSpec:   agentScope,
-		forwarded:        append(slices.Clone(args.forwarded), "--resume", id),
+		// --resume goes first so a message in the forwarded args stays the
+		// last operand: claude reads it as the prompt, and clown records it
+		// as the spawn brief.
+		forwarded: append([]string{"--resume", id}, args.forwarded...),
 	}
 	switch {
 	case requested != "":
