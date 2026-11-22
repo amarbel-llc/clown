@@ -17,7 +17,7 @@
       input = "tommy";
     };
   };
-  go = "1.26.0";
+  go = "1.26.1";
   module = "code.linenisgreat.com/clown";
   replace = { };
   require = {
@@ -129,6 +129,12 @@
       indirect = true;
       version = "v0.0.0-20211004153227-1c3628e74d0f";
     };
+    "github.com/google/go-cmp" = {
+      go = "1.21";
+      hash = "sha256-JbxZFBFGCh/Rj5XZ1vG94V2x7c18L8XKB0N9ZD5F2rM=";
+      indirect = true;
+      version = "v0.7.0";
+    };
     "github.com/itchyny/gojq" = {
       go = "1.24.0";
       hash = "sha256-egaBNHKKzwDwaUN4GT+Xvt11Nz6ojNMSIrXbcEisyI4=";
@@ -209,6 +215,12 @@
       hash = "sha256-/R74sc1mcOaOuBeXRQzrXrHAgA5VhNWc6SfQJaxb17U=";
       version = "v0.51.0";
     };
+    "golang.org/x/exp" = {
+      go = "1.25.0";
+      hash = "sha256-JaDJGLIRoJjjvsg3dgfFuo7XApEJO2V4kUDmd58qTLI=";
+      indirect = true;
+      version = "v0.0.0-20260410095643-746e56fc9e2f";
+    };
     "golang.org/x/sys" = {
       go = "1.26.0";
       hash = "sha256-/1S3yy3in72ygZT1CKymvOzJZqCMYiGSqZDfvSyB3LI=";
@@ -224,6 +236,12 @@
       hash = "sha256-8XDOnlPIybcDRy89fkjG5VqtIt5Ku+LmaqYhgKl7i1E=";
       indirect = true;
       version = "v0.37.0";
+    };
+    "golang.org/x/xerrors" = {
+      go = "1.18";
+      hash = "sha256-bE7CcrnAvryNvM26ieJGXqbAtuLwHaGcmtVMsVnksqo=";
+      indirect = true;
+      version = "v0.0.0-20240903120638-7835f813f4da";
     };
   };
 }
