@@ -311,6 +311,9 @@ func TestSystemdRunArgsCarryTheRequiredSandbox(t *testing.T) {
 		"--user", "--wait", "--pipe", "--collect", "--expand-environment=no", "--slice=clown-agent.slice", "--unit=u-1.service",
 		"--property=PrivateUsers=self", "--property=PrivatePIDs=yes", "--property=ProtectHome=tmpfs",
 		"--property=TemporaryFileSystem=/dev/pts", "--property=PrivateTmp=yes", "--property=ProtectSystem=strict",
+		// A same-uid unit could otherwise write a sibling unit's cgroup.procs
+		// and move itself there (seen on flic, 2026-11-24).
+		"--property=ProtectControlGroups=yes",
 		"--property=NoNewPrivileges=yes", "--property=WorkingDirectory=/home/op/repos/x/.worktrees/w/sub",
 		"--property=BindPaths=/home/op/repos/x/.worktrees/w",
 		"--property=BindPaths=/home/op/.local/state/ssh/agent.sock",

@@ -60,6 +60,7 @@ unconfined fallback.
 | `PrivateTmp=` | `yes` | Hides `/tmp/.X11-unix` and the operator's `/tmp`. | works |
 | `ProtectSystem=` | `strict` | `/usr`, `/etc` and `/boot` become read-only; the worktree is re-allowed with `ReadWritePaths=`. | works |
 | `NoNewPrivileges=` | `yes` | No setuid escalation from inside. | works |
+| `ProtectControlGroups=` | `yes` | cgroupfs read-only. Without it a same-uid unit wrote a sibling unit's `cgroup.procs` and moved itself there (seen on flic 2026-11-24, real `agent-scope-run`). With it the direct write is refused ("Read-only file system") and a fresh `cgroup2` mount from inside (`unshare -Urm`, also `-Urmc`) is refused too (`explore-full-unit-cgroup-probe`, systemd 261.3). A cgroup is still no identity for units started before this property, or for anything that probe did not try. | works: direct write refused (host bats), fresh mount refused (probe) |
 | `BindPaths=` | the worktree; spec `binds_rw[]`; each spec `sockets[].path` as a single inode | What the unit must see (spinclass's list). | works for the worktree and the ssh-agent socket |
 | `BindReadOnlyPaths=` | spec `binds_ro[]` (e.g. the madder store) | | |
 | `InaccessiblePaths=` | spec `deny_paths[]` | Belt and braces: ProtectHome already hides `/run/user`. | |

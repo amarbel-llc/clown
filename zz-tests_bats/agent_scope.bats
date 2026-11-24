@@ -11,6 +11,8 @@
 # --agent-scope` uses for claude, with a probe script in place of the
 # provider. Units are --collect'ed and --wait'ed; nothing outlives a test.
 
+bats_require_minimum_version 1.5.0
+
 setup() {
   if [[ -z ${CLOWN_BIN:-} || ! -x $CLOWN_BIN ]]; then
     skip "CLOWN_BIN unset (run via 'just verify-agent-scope')"
@@ -21,6 +23,19 @@ setup() {
   # The launcher binds the session's own XMPP credential; the caller's (often
   # a clown session) is not this test's business.
   unset TROUPE_XMPP_USER TROUPE_XMPP_PASSWORD_FILE
+  # Credentials pass into a unit (the ANTHROPIC_ and CLAUDE_CODE_ prefixes when
+  # the model proxy is off; NIX_CONFIG's access-tokens and TROUPE_ identity in
+  # the caller's environment), and several tests echo the launcher's output:
+  # never let the caller's reach a test's output. Unset by prefix, not by a
+  # list of names that the next credential variable escapes.
+  # NIX_SSL_CERT_FILE stays: the egress tests' curl may need its CA bundle.
+  local v
+  for v in $(compgen -e); do
+    case $v in
+      NIX_SSL_CERT_FILE) ;;
+      ANTHROPIC_* | CLAUDE_CODE_* | NIX_* | TROUPE_*) unset "$v" ;;
+    esac
+  done
   # Hermetic about the model credential (clown#336): no token file, so every
   # test but the model-proxy ones below takes the login-file fallback however
   # the operator's real runtime dir looks.
@@ -140,6 +155,38 @@ run_probe() {
   grep -q '^PASS pidns-private' <<<"$output"
   [ -e "$WT/written-from-unit" ]
   [ ! -e "$HOME/.agent-scope-probe" ]
+}
+
+@test "agent_scope: the launcher's start line names the environment but logs no value" {
+  # Pins that Run calls the redaction (the Go test of Run is the unit-level
+  # twin): the spec's env entry is logged by key only.
+  run run_probe
+  echo "$output"
+  [ "$status" -eq 0 ]
+  grep -q -- '--setenv=SPINCLASS_PROBE=<redacted>' <<<"$output"
+  run ! grep -q 'SPINCLASS_PROBE=yes' <<<"$output"
+}
+
+@test "agent_scope: a process in the unit cannot move itself into a sibling unit's cgroup" {
+  # A same-uid unit that can write another unit's cgroup.procs can pose as it,
+  # so a cgroup is no identity (seen on flic, 2026-11-24; ProtectControlGroups).
+  local sib="clown-agent-bats-sibling-$$"
+  systemd-run --user --quiet --collect --slice=clown-agent.slice --unit="$sib" sleep 60
+  sibling="$(systemctl --user show -p ControlGroup --value "$sib.service")"
+  [ -n "$sibling" ]
+  # The probe must reach the write: the sibling's cgroup exists inside the unit
+  # (else rc=1 would be ENOENT and prove nothing), and the refusal is the
+  # read-only filesystem, not any other error.
+  run run_in_unit "test -f /sys/fs/cgroup$sibling/cgroup.procs && echo sibling-visible; echo \$\$ > /sys/fs/cgroup$sibling/cgroup.procs; echo rc=\$?; cat /proc/self/cgroup"
+  systemctl --user stop "$sib.service"
+  echo "$output"
+  grep -q '^sibling-visible$' <<<"$output"
+  grep -q 'Read-only file system' <<<"$output"
+  grep -q 'rc=1' <<<"$output"
+  # The logged argv names the sibling too, so look only at the unit's own
+  # cgroup line, which `cat /proc/self/cgroup` printed. `run !` so the negation
+  # counts wherever it stands (a bare `! cmd` is ignored by errexit).
+  run ! grep -q "^0::.*$sib" <<<"$output"
 }
 
 @test "agent_scope: the result names the unit and a cgroup under clown-agent.slice that holds the probe" {

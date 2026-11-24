@@ -2035,6 +2035,170 @@ debug-tent-claude-tty CLAUDE_BIN='/nix/store/dii6cpbdqzjcjqcy18x6n56cql0fmdg9-cl
         clown-tent:0.3.2 \
         sh -c "$inner_cmd"
 
+# Lane 1 probe: way 7 against the REAL full confined unit. Runs the installed
+# `clown agent-scope-run` with a scratch spec (spec and result live outside the
+# worktree, in $XDG_RUNTIME_DIR, and are removed after) and tries, from inside,
+# to write a sibling unit's cgroup.procs. HOLE means the full unit lacks
+# ProtectControlGroups, and (second and third attempt) whether a fresh cgroup2
+# mount from inside (unshare -Urm, -Urmc) gets a writable instance. CLOWN is
+# the clown binary to run (default: the installed one; pass a built store path
+# to test a build); MODE=view needs a clown that has the view variant. CLOWN
+# MAY BE AN UNFIXED BUILD, one that logs every --setenv value: the launcher is
+# run under `env -i` with a short allowlist, its start line is dropped and any
+# --setenv value masked, so no token of the caller's can reach this output.
+# Uses no card, agent socket or credential.
+explore-full-unit-cgroup-probe CLOWN='clown' MODE='full':
+    #!/usr/bin/env bash
+    set -uo pipefail
+    wt=$(git rev-parse --show-toplevel)
+    [ -n "$wt" ] || { echo "no worktree"; exit 1; }
+    # No model credential of the caller may reach the unit or its logs.
+    unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_CUSTOM_HEADERS CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CODE_OAUTH_REFRESH_TOKEN
+    rt=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+    out="$wt/.tmp/full-unit-cgroup-probe"
+    rm -rf "${out:?}"; mkdir -p "$out/masked"
+    sibunit="clown-full-sibling-$$"
+    systemd-run --user --quiet --collect --slice=clown-agent.slice --unit="$sibunit" sleep 90
+    sibling=$(systemctl --user show -p ControlGroup --value "$sibunit.service")
+    probe="$out/probe.sh"
+    cat > "$probe" <<'EOF'
+    #!/usr/bin/env bash
+    echo "cgroup now: $(cat /proc/self/cgroup)"
+    echo "mount: $(grep ' /sys/fs/cgroup ' /proc/self/mountinfo | head -1)"
+    echo "sibling alive: $([ -f /sys/fs/cgroup$SIBLING/cgroup.procs ] && echo yes || echo NO)"
+    echo ">> 1. direct write into the sibling's cgroup.procs"
+    if err=$( { echo $$ > "/sys/fs/cgroup$SIBLING/cgroup.procs"; } 2>&1 ); then
+        echo "HOLE direct: now in $(cat /proc/self/cgroup)"
+    else
+        echo "REFUSED direct: $err"
+    fi
+    # M1 (review): a FRESH cgroup2 mount in a new user+mount namespace.
+    D="$(mktemp -d)"
+    echo ">> 2. unshare -Urm; mount -t cgroup2 none \$D; write the sibling's cgroup.procs"
+    unshare -Urm sh -c "mount -t cgroup2 none $D && ls $D | head -3 && { echo \$\$ > $D$SIBLING/cgroup.procs && echo \"HOLE fresh-mount: now in \$(cat /proc/self/cgroup)\"; }" 2>&1 | sed 's/^/   /'
+    echo "   (exit of the pipeline's shell: ${PIPESTATUS[0]})"
+    echo ">> 3. unshare -Urmc (new cgroup namespace too); mount; the sibling is not under its root"
+    unshare -Urmc sh -c "mount -t cgroup2 none $D && echo mounted && cat /proc/self/cgroup && ls $D | head -3 && echo \$\$ > $D$SIBLING/cgroup.procs" 2>&1 | sed 's/^/   /'
+    echo "   (exit: ${PIPESTATUS[0]})"
+    echo "cgroup at end: $(cat /proc/self/cgroup)"
+    EOF
+    chmod +x "$probe"
+    spec="$rt/clown-full-probe-$$.json"; res="$rt/clown-full-probe-$$.result.json"
+    if [ "{{MODE}}" = view ]; then
+      cat > "$spec" <<EOF
+    {"version":1,"mode":"view","worktree":"$wt","operator_home":"$HOME","unit_name_hint":"clown-view-probe","result_path":"$res","deny_paths":["$out/masked"],"env":{"SIBLING":"$sibling"}}
+    EOF
+    else
+      cat > "$spec" <<EOF
+    {"version":1,"worktree":"$wt","operator_home":"$HOME","unit_name_hint":"clown-full-probe","result_path":"$res","binds_rw":[],"binds_ro":[],"sockets":[],"deny_paths":[],"env":{"SIBLING":"$sibling"}}
+    EOF
+    fi
+    echo ">> clown: {{CLOWN}} ({{MODE}} unit); version: $({{CLOWN}} version 2>&1 | head -1)"
+    # CLOWN may be an unfixed build whose start log prints every --setenv value:
+    # so the launcher gets only an allowlisted environment (nothing of the
+    # caller's tokens to leak), and its stderr loses the start line and masks any
+    # --setenv value that still gets through.
+    env -i PATH="$PATH" HOME="$HOME" USER="${USER:-$(id -un)}" XDG_RUNTIME_DIR="$rt" \
+        XDG_STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}" XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}" \
+        XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}" TERM=dumb LANG="${LANG:-C}" \
+        {{CLOWN}} agent-scope-run --spec "$spec" -- "$probe" < /dev/null \
+        2> >(grep -v 'starting unit' | sed -E 's/--setenv=([A-Za-z0-9_]+)=[^ ]*/--setenv=\1=<masked>/g' >&2)
+    echo "   exit=$?"
+    echo ">> result: $(cat "$res" 2>/dev/null)"
+    systemctl --user stop "$sibunit.service" 2>/dev/null || true
+    rm -f "$spec" "$res"
+
+# Lane 1 cleanup: kill leftover canary/holder listeners and remove the short
+# /tmp/cvb.* fixture dirs a killed agent_scope.bats run (verify-agent-scope)
+# leaves behind, and stop any leftover clown-view-bats / clown-agent-bats
+# units. Touches only those names.
+debug-clean-view-bats:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    pkill -f '/tmp/cvb\.' || true
+    systemctl --user list-units --plain --no-legend 'clown-view-bats-*' 'clown-agent-bats-*' 'clown-view-sibling-*' 'clown-agent-bats-sibling-*' \
+        | awk '{print $1}' | xargs -r systemctl --user stop || true
+    rm -rf /tmp/cvb.* || true
+    echo "cleaned"
+
+# Lane 1 probe (read-only): list listening abstract unix sockets (names
+# starting with @) with their owning process, and the pathname sockets whose
+# path mentions an agent, so a path mask's blind spots are visible. Reads only
+# `ss`; connects to nothing.
+explore-abstract-sockets:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    echo ">> listening abstract unix sockets (@...), with owner:"
+    ss -xlpn 2>/dev/null | awk 'NR==1 || $5 ~ /^@/' || true
+    echo ">> listening pathname sockets mentioning agent/ssh/gpg/piggy/fibby/pivy:"
+    ss -xlpn 2>/dev/null | grep -Ei 'agent|ssh|gpg|piggy|fibby|pivy' | grep -v ' @' || true
+
+# Lane 1 probe (private-view mode, spinclass note 2026-11-24): a transient USER
+# service with ONLY PrivateUsers=self, PrivatePIDs=yes, NoNewPrivileges and
+# InaccessiblePaths on a SCRATCH dir (never the operator's agent dir or card).
+# Reports from inside: masked dir hidden, pid count, /proc/<pid>/root walk-out
+# of a host process, user-bus reachability and whether a nested
+# `systemd-run --user` can read the masked file (the bus hole), abstract unix
+# sockets visible. MASKBUS=1 also masks the bus + systemd private socket.
+# Units are --collect'ed and --wait'ed.
+explore-private-view-probe MASKBUS='0' PROTECTCG='0':
+    #!/usr/bin/env bash
+    set -uo pipefail
+    wt=$(git rev-parse --show-toplevel)
+    rt=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+    [ -n "$wt" ] || { echo "no worktree"; exit 1; }
+    out="$wt/.tmp/private-view-probe"
+    rm -rf "${out:?}"; mkdir -p "$out/masked" "$out/home"
+    echo secret > "$out/masked/secret"
+    # A host process of the same uid, whose root is walked through /proc.
+    mkdir -p "$out/hostproc"; echo hostfile > "$out/hostproc/f"
+    sleep 60 & hostpid=$!
+    probe="$out/probe.sh"
+    cat > "$probe" <<'EOF'
+    #!/usr/bin/env bash
+    chk() { if eval "$2" >/dev/null 2>&1; then echo "PASS $1"; else echo "FAIL $1"; fi; }
+    echo "systemd: $(systemctl --version | head -1)"
+    chk "masked-dir-hidden"      "! cat $MASKED/secret"
+    npids=$(ls /proc | grep -c '^[0-9]')
+    echo "visible pids: $npids"
+    chk "pidns-private"          "[ $npids -lt 10 ]"
+    chk "host-pid-invisible"     "[ ! -e /proc/$HOSTPID ]"
+    chk "no-proc-root-walkout"   "! ls /proc/*/root$MASKED/secret"
+    chk "user-bus-reachable"     "timeout 3 busctl --user status"
+    echo ">> bus hole: nested systemd-run --user reads the masked file from the HOST mount ns"
+    if timeout 10 systemd-run --user --quiet --collect --wait --pipe -- cat "$MASKED/secret" 2>/dev/null | grep -q secret; then
+        echo "HOLE bus-escape: masked file readable via the user manager"
+    else
+        echo "PASS bus-escape-closed"
+    fi
+    echo "abstract unix sockets visible: $(grep -c ' @' /proc/net/unix)"
+    echo ">> way 7: cgroup self-move into a sibling unit ($SIBLING)"
+    chk "cgroupfs-writable"      "[ -w /sys/fs/cgroup$SIBLING/cgroup.procs ]"
+    if echo $$ > "/sys/fs/cgroup$SIBLING/cgroup.procs" 2>/dev/null; then
+        echo "HOLE cgroup-self-move: now in $(cat /proc/self/cgroup)"
+    else
+        echo "PASS cgroup-self-move-refused"
+    fi
+    chk "pty-works"              "script -qec tty /dev/null"
+    EOF
+    chmod +x "$probe"
+    sibunit="clown-view-sibling-$$"
+    systemd-run --user --quiet --collect --slice=clown-agent.slice --unit="$sibunit" sleep 90
+    sibling=$(systemctl --user show -p ControlGroup --value "$sibunit.service")
+    deny=("InaccessiblePaths=$out/masked")
+    if [ "{{MASKBUS}}" = 1 ]; then deny+=("InaccessiblePaths=-$rt/bus" "InaccessiblePaths=-$rt/systemd"); fi
+    props=(-p PrivateUsers=self -p PrivatePIDs=yes -p NoNewPrivileges=yes)
+    if [ "{{PROTECTCG}}" = 1 ]; then props+=(-p ProtectControlGroups=yes); fi
+    for d in "${deny[@]}"; do props+=(-p "$d"); done
+    echo ">> PROTECTCG={{PROTECTCG}}; MASKBUS={{MASKBUS}}; systemd: $(systemctl --version | head -1)"
+    systemd-run --user --quiet --collect --wait --pipe --slice=clown-agent.slice \
+        --unit="clown-view-probe-$$" "${props[@]}" \
+        -E "PATH=$PATH" -E "MASKED=$out/masked" -E "HOSTPID=$hostpid" -E "XDG_RUNTIME_DIR=$rt" -E "SIBLING=$sibling" \
+        -- "$probe" < /dev/null
+    echo "   exit=$?"
+    kill "$hostpid" 2>/dev/null || true
+    systemctl --user stop "$sibunit.service" 2>/dev/null || true
+
 # clown#244 feasibility probe: start a throwaway transient USER service with
 # the proposed agent-scope sandbox (PrivateUsers, ProtectHome=tmpfs, worktree
 # bind, PrivateTmp, PrivateDevices, no bus/display env) and report, from

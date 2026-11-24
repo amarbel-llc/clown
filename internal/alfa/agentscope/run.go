@@ -237,7 +237,12 @@ func Run(l Launch, tools Tools, logger *slog.Logger) (int, error) {
 	}
 	argv := append([]string{tools.systemdRun()}, args...)
 	if logger != nil {
-		logger.Info("agent scope: starting unit", "unit", l.Unit, "argv", argv)
+		// Never log environment values: a view session carries the operator's
+		// own environment (a token in NIX_CONFIG reached a job log), and the
+		// full unit passes ANTHROPIC_ and CLAUDE_CODE_ credentials through
+		// when the model proxy is off. Keys only, and the provider's own
+		// arguments (claude's --settings among them) as a count.
+		logger.Info("agent scope: starting unit", "unit", l.Unit, "argv", LoggedArgv(argv, len(l.Argv)))
 	}
 
 	interactive := term.IsTerminal(int(os.Stdin.Fd()))

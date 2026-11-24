@@ -238,6 +238,9 @@ func (l Launch) properties() []string {
 		"PrivateTmp=yes",
 		"ProtectSystem=strict",
 		"NoNewPrivileges=yes",
+		// cgroupfs read-only: without it a same-uid unit can write a sibling
+		// unit's cgroup.procs and move itself there, so a cgroup is no identity.
+		"ProtectControlGroups=yes",
 		"WorkingDirectory=" + l.WorkDir,
 		"PrivateNetwork=yes",
 		"BindPaths=" + l.EgressSocket,
