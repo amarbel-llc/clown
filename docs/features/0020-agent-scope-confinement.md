@@ -264,7 +264,10 @@ where the fetcher supports it.
   spec's `env{}` carries, and in-unit servers get the same path.
 - `STATSD_HOST`/`STATSD_PORT` (the in-unit statsd relay), or
   `CLOWN_DISABLE_STATSD=1` when the frontend has it.
-- `SSH_AUTH_SOCK`, only when the spec passes the agent socket.
+- `SSH_AUTH_SOCK`, only when it names a socket the spec binds: the
+  frontend's own value if it is one, or the spec's `env` value, which must
+  equal a `sockets[]` path (the session's key holder) and wins over the
+  frontend's.
 - `CLAUDE_CONFIG_DIR` (see the socket table).
 
 **Passed but hollow:** `XDG_RUNTIME_DIR` and `XDG_{CONFIG,STATE,CACHE,DATA,LOG}_HOME`
@@ -276,7 +279,7 @@ are absent).
 **Scrubbed** (never set, and unset if the manager had them):
 - `DBUS_SESSION_BUS_ADDRESS`
 - `DISPLAY`, `WAYLAND_DISPLAY`, `XAUTHORITY`
-- `SSH_AUTH_SOCK`, unless passed
+- `SSH_AUTH_SOCK`, unless it names a bound socket (above)
 - credential paths other than `TROUPE_XMPP_PASSWORD_FILE`, which passes as
   a path to the session's own password file, bound read-only (see the
   `TROUPE_` row above)
@@ -361,7 +364,9 @@ at all.
 **Without the operator's card (clown#324, ruled 2026-10-26).** clown has no
 card handling of its own: it does not read the card, mint forge credentials, or
 offer `--allow-no-credential` (all spinclass's). What it does is bind exactly the
-sockets the spec lists and pass `SSH_AUTH_SOCK` only when it names one of them.
+sockets the spec lists and pass `SSH_AUTH_SOCK` only when it names one of them
+(from the frontend's environment or from the spec's `env`; a spec `env` value
+that names no listed socket is refused at load).
 So when spinclass finds no card and, per the ruling, does not fall back to the
 inherited agent, the spec carries no piggy-agent socket and the unit has no
 `SSH_AUTH_SOCK` and no ssh agent at all, whatever the launcher's own environment

@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -152,6 +153,16 @@ func (s Spec) Validate() error {
 	for k := range s.Env {
 		if k == "" || strings.ContainsAny(k, "=\x00") {
 			return fmt.Errorf("env key %q is not a valid variable name", k)
+		}
+		if k == "SSH_AUTH_SOCK" {
+			// The one scrubbed key a spec may set: the session's own key holder
+			// (its socket is in sockets[]). It must name a socket the spec binds,
+			// so no variable points at a path that is not in the unit, and the
+			// operator's agent is never named by accident or by a typo.
+			if !slices.ContainsFunc(s.Sockets, func(so Socket) bool { return so.Path == s.Env[k] }) {
+				return fmt.Errorf("env SSH_AUTH_SOCK=%q names no socket the spec binds (sockets[]); the unit has no agent unless the spec binds one", s.Env[k])
+			}
+			continue
 		}
 		if scrubbedKeys[k] {
 			return fmt.Errorf("env key %q is scrubbed from the agent scope and may not be set by the spec", k)

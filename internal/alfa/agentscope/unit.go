@@ -333,7 +333,9 @@ var modelCredentialKeys = []string{
 var tmpDirKeys = map[string]bool{"TMPDIR": true, "CLAUDE_CODE_TMPDIR": true}
 
 // scrubbedKeys never reach the unit from the frontend and the spec may not
-// set them. XDG_RUNTIME_DIR is NOT here: it is passed so job-platform tools
+// set them, with ONE exception: a spec may set SSH_AUTH_SOCK, to exactly a
+// socket it binds in sockets[] (Spec.Validate), which then wins over anything
+// inherited. XDG_RUNTIME_DIR is NOT here: it is passed so job-platform tools
 // agree with the frontend on paths, and under ProtectHome=tmpfs it holds only
 // what was bound in.
 //

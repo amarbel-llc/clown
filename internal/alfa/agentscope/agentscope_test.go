@@ -68,6 +68,54 @@ func TestValidateRefusesUnbindablePathsAndScrubbedEnv(t *testing.T) {
 	}
 }
 
+// The session's own key holder (key-holder step): a spec may set SSH_AUTH_SOCK,
+// the one scrubbed key it may, but only to a socket it binds in sockets[]. The
+// unit then has exactly that agent and no other. Red without the rule: the
+// bound case was refused as a scrubbed key, and with only the scrub lifted an
+// unbound path would pass.
+func TestSpecMaySetSSHAuthSockOnlyToABoundSocket(t *testing.T) {
+	const holder = "/run/user/1001/clown/holder/s1/agent.sock"
+	ok := validSpec()
+	ok.Sockets = append(ok.Sockets, Socket{Path: holder, Purpose: "key-holder"})
+	ok.Env = map[string]string{"SSH_AUTH_SOCK": holder}
+	if err := ok.Validate(); err != nil {
+		t.Fatalf("a bound holder socket as SSH_AUTH_SOCK was refused: %v", err)
+	}
+	for name, mutate := range map[string]func(*Spec){
+		"names no bound socket": func(s *Spec) { s.Env["SSH_AUTH_SOCK"] = "/run/user/1001/not-bound.sock" },
+		"empty value":           func(s *Spec) { s.Env["SSH_AUTH_SOCK"] = "" },
+		"a bound socket's parent": func(s *Spec) {
+			s.Env["SSH_AUTH_SOCK"] = "/run/user/1001/clown/holder/s1"
+		},
+		"another scrubbed key still refused": func(s *Spec) { s.Env["NIX_CONFIG"] = "access-tokens = x" },
+		"unclean spelling of a bound path":   func(s *Spec) { s.Env["SSH_AUTH_SOCK"] = "/run/user/1001/clown/holder/x/../s1/agent.sock" },
+		"trailing slash":                     func(s *Spec) { s.Env["SSH_AUTH_SOCK"] = holder + "/" },
+		"relative":                           func(s *Spec) { s.Env["SSH_AUTH_SOCK"] = "agent.sock" },
+	} {
+		s := ok
+		s.Env = map[string]string{"SSH_AUTH_SOCK": holder}
+		mutate(&s)
+		if err := s.Validate(); err == nil {
+			t.Errorf("%s: want refusal", name)
+		}
+	}
+	// And it reaches the unit as given, with the socket bound, and wins over an
+	// inherited (even bound) SSH_AUTH_SOCK in the frontend's environment.
+	l := testLaunch()
+	l.Spec = ok
+	l.FrontendEnv = append(l.FrontendEnv, "SSH_AUTH_SOCK=/home/op/.local/state/ssh/agent.sock")
+	args, err := l.SystemdRunArgs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(args, "--setenv=SSH_AUTH_SOCK="+holder) || !slices.Contains(args, "--property=BindPaths="+holder) {
+		t.Errorf("the holder socket is not bound and named in the unit's arguments: %v", args)
+	}
+	if slices.Contains(args, "--setenv=SSH_AUTH_SOCK=/home/op/.local/state/ssh/agent.sock") {
+		t.Errorf("the inherited agent socket won over the spec's holder socket: %v", args)
+	}
+}
+
 // The issue-filer service token's directory is kept out of the unit by the
 // mount namespace alone (the unit keeps the operator's uid), so a bind of any
 // kind over it, its parent, or a link into it is refused, read-only too.
