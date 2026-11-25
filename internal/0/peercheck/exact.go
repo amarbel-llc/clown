@@ -37,34 +37,62 @@ func CheckCgroupExact(cg, want string) error {
 // cgroup is read, so a recycled pid is not mistaken for the peer. A kernel
 // without SO_PEERPIDFD fails closed.
 func CheckPeerExact(c net.Conn, want string) error {
+	return checkPeerExactWith(c, want, realPeerOps)
+}
+
+// peerOps are the four kernel interactions CheckPeerExact makes, separated so
+// a test can pin each safety property by removing it (round 1, A-M5): that no
+// pidfd means refused (never a fallback to SO_PEERCRED), that the cgroup read is
+// of the pid the pidfd names, that liveness is confirmed AFTER that read, and
+// that the pidfd is closed on every path.
+type peerOps struct {
+	pidfdOf  func(c *net.UnixConn) (int, error) // SO_PEERPIDFD
+	pidOf    func(pidfd int) (int, error)       // the pid the pidfd names
+	cgroupOf func(pid int) (string, error)      // /proc/<pid>/cgroup
+	alive    func(pidfd int) error              // the pidfd still names a live process
+	close    func(pidfd int)
+}
+
+var realPeerOps = peerOps{
+	pidfdOf: func(uc *net.UnixConn) (int, error) {
+		raw, err := uc.SyscallConn()
+		if err != nil {
+			return -1, err
+		}
+		pidfd := -1
+		var gerr error
+		if err := raw.Control(func(fd uintptr) {
+			pidfd, gerr = unix.GetsockoptInt(int(fd), unix.SOL_SOCKET, soPeerPIDFD)
+		}); err != nil {
+			return -1, err
+		}
+		return pidfd, gerr
+	},
+	pidOf:    func(pidfd int) (int, error) { return pidfdPID("/proc", pidfd) },
+	cgroupOf: ProcCgroup,
+	alive:    func(pidfd int) error { return unix.PidfdSendSignal(pidfd, 0, nil, 0) },
+	close:    func(pidfd int) { _ = unix.Close(pidfd) },
+}
+
+func checkPeerExactWith(c net.Conn, want string, ops peerOps) error {
 	uc, ok := c.(*net.UnixConn)
 	if !ok {
 		return errors.New("not a unix connection")
 	}
-	raw, err := uc.SyscallConn()
+	pidfd, err := ops.pidfdOf(uc)
+	if err != nil {
+		return fmt.Errorf("peer pidfd: %w (needs Linux 6.5+; failing closed)", err)
+	}
+	defer ops.close(pidfd)
+	pid, err := ops.pidOf(pidfd)
 	if err != nil {
 		return err
 	}
-	pidfd := -1
-	var gerr error
-	if err := raw.Control(func(fd uintptr) {
-		pidfd, gerr = unix.GetsockoptInt(int(fd), unix.SOL_SOCKET, soPeerPIDFD)
-	}); err != nil {
-		return err
-	}
-	if gerr != nil {
-		return fmt.Errorf("peer pidfd: %w (needs Linux 6.5+; failing closed)", gerr)
-	}
-	defer unix.Close(pidfd)
-	pid, err := pidfdPID("/proc", pidfd)
+	cg, err := ops.cgroupOf(pid)
 	if err != nil {
 		return err
 	}
-	cg, err := ProcCgroup(pid)
-	if err != nil {
-		return err
-	}
-	if err := unix.PidfdSendSignal(pidfd, 0, nil, 0); err != nil {
+	if err := ops.alive(pidfd); err != nil {
 		return fmt.Errorf("the peer (pid %d) is gone: %w", pid, err)
 	}
 	return CheckCgroupExact(cg, want)
