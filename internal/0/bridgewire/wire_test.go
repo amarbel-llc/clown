@@ -307,6 +307,21 @@ func TestSocketPath(t *testing.T) {
 	}
 }
 
+// Round 2, M4: a listener refuses an unadmitted peer with `ERR refused`, and a
+// reader parses it back as that code; hostile text cannot break the line.
+func TestRefusedUnadmittedIsAnErrRefusedLine(t *testing.T) {
+	for _, reason := range []string{"no cgroup file yet", "caller is in \"/x\", not in \"/y\"", "evil\r\n\x00\x1b[31m" + strings.Repeat("z", 2000)} {
+		b := RefusedUnadmitted(reason)
+		if !strings.HasPrefix(string(b), "ERR refused ") || !strings.HasSuffix(string(b), "\n") || strings.Count(string(b), "\n") != 1 {
+			t.Fatalf("RefusedUnadmitted(%.20q) = %q", reason, b)
+		}
+		ok, code, text, err := ReadReply(bytes.NewReader(b))
+		if err != nil || ok || code != CodeRefused || !strings.HasPrefix(text, "the peer is not admitted: ") {
+			t.Errorf("ReadReply = %v %q %q %v", ok, code, text, err)
+		}
+	}
+}
+
 func TestDownMessageIsTheFixedForm(t *testing.T) {
 	want := "clown: the bridge is down (EOF on control); no tool or model call can leave this session; the session's frontend is gone or restarting"
 	if got := DownMessage("EOF on control"); got != want {

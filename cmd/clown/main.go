@@ -2259,6 +2259,7 @@ func runWithPluginHost(executor Executor, pluginDirs []string, flags parsedFlags
 			flags.agentScopeUnit != "" && os.Getenv(bridgeSwitchEnv) == "1")
 		if err != nil {
 			logger.Warn("bridge: not started", "err", err)
+			flags.bridgeOff = err.Error() // the result says it (round 2, M3)
 		}
 		discovered = routed
 		// The serve's variables are its own: removed from clown's environment so
@@ -2371,6 +2372,7 @@ func runProvider(executor Executor, bound Command, logger *slog.Logger, flags pa
 			serve:        flags.agentScopeServe,
 			broker:       flags.agentScopeBroker,
 			bridge:       flags.bridge,
+			bridgeOff:    flags.bridgeOff,
 			monitors:     flags.agentScopeMonitors,
 			argv:         append([]string{binary}, argv...),
 			extraEnv:     extraEnv,
@@ -3519,6 +3521,9 @@ type parsedFlags struct {
 	// bridge is the session's bridge (FDR 0048), set only when the operator's
 	// switch is on and the launch is confined; zero otherwise.
 	bridge sessionBridge
+	// bridgeOff is why routeBridge refused a bridge the operator asked for ("" if
+	// it did not).
+	bridgeOff string
 	// mcpCollapse opts this launch into MCP-collapse mode (all-or-nothing for
 	// the prototype): after the discovered upstream MCP servers are started,
 	// clown launches ONE clown-mcp-collapse aggregator fronting them all and

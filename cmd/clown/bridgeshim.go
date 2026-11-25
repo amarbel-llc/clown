@@ -122,8 +122,15 @@ func runBridgeListenCtx(ctx context.Context, args []string, stdout, stderr io.Wr
 	defer sh.Close()
 	// The control stream: its end means the bridge is down. A bridge that
 	// cannot be reached after the retry window is down from the start.
+	opened := make(chan struct{}, 1)
+	finished := make(chan struct{})
 	go func() {
-		reason, err := bridgeshim.ControlOpen(ctx, sock, func() { sh.SetControlHeld(true) }, func(bridgeshim.Frame) {})
+		defer close(finished)
+		reason, err := bridgeshim.ControlOpen(ctx, sock, func() {
+			sh.SetControlHeld(true)
+			sh.ClearDown() // a dial that failed before control opened does not outlive it
+			opened <- struct{}{}
+		}, func(bridgeshim.Frame) {})
 		var down *bridgeshim.DownError
 		var refused *bridgeshim.RefusedError
 		switch {
@@ -131,7 +138,7 @@ func runBridgeListenCtx(ctx context.Context, args []string, stdout, stderr io.Wr
 			sh.MarkDown(down.Reason)
 		case errors.As(err, &refused) && refused.Code == bridgewire.CodeVersion:
 			// One side was upgraded alone: the bridge is unusable (round 1, M5).
-			sh.MarkDown(err.Error())
+			sh.MarkUnusable(err.Error())
 		case err != nil:
 			// A refusal of the control service itself (a server without one, or
 			// one that still will not admit this unit after the window): the shim
@@ -142,6 +149,15 @@ func runBridgeListenCtx(ctx context.Context, args []string, stdout, stderr io.Wr
 			sh.MarkDown(reason)
 		}
 	}()
+	// "ready" means the control stream is held, or the attempt is over (the
+	// retry window ran out and the down line is already said): the provider
+	// starts only after this line, so no dial of its own can come before the
+	// server can admit the unit (round 2, M2).
+	select {
+	case <-opened:
+	case <-finished:
+	case <-ctx.Done():
+	}
 	fmt.Fprintln(stdout, "bridge-listen: ready")
 	<-ctx.Done()
 	return 0

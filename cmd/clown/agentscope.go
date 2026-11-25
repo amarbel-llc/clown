@@ -26,6 +26,7 @@ import (
 
 	"code.linenisgreat.com/clown/internal/0/logcap"
 	"code.linenisgreat.com/clown/internal/alfa/agentscope"
+	"code.linenisgreat.com/clown/internal/alfa/bridgeshim"
 	"code.linenisgreat.com/clown/internal/alfa/pluginhost"
 	"code.linenisgreat.com/clown/internal/alfa/sessionstatus"
 	"code.linenisgreat.com/clown/internal/alfa/toolcost"
@@ -50,13 +51,19 @@ func runInAgentScope(req agentScopeRequest, logger *slog.Logger) int {
 	launch.Serve = req.serve
 	launch.Broker = req.broker
 	bridge := req.bridge
+	if bridge.Dir != "" || req.bridgeOff != "" {
+		// The operator's switch was set: whatever becomes of the bridge, the
+		// result says (round 2, M3).
+		launch.BridgeStatus = &agentscope.BridgeStatus{}
+	}
+	if req.bridgeOff != "" {
+		reportBridgeOff(&launch, logger, req.bridgeOff)
+	}
 	if bridge.Dir != "" && !bridge.awaitSocket(bridgeSocketWait) {
 		// The serve's listener has its own second gate (a trusted [bridge]
 		// enable); without it no socket appears. The session then has no bridge:
 		// the unit is not told there is one.
-		if logger != nil {
-			logger.Warn("bridge: the serve created no bridge socket; the session has no bridge (is spinclass's trusted [bridge] enable set? CLOWN_BRIDGE_V1 alone starts nothing there)", "socket", bridge.Socket, "waited", bridgeSocketWait)
-		}
+		reportBridgeOff(&launch, logger, fmt.Sprintf("the serve created no bridge socket in %v (is spinclass's trusted [bridge] enable set? CLOWN_BRIDGE_V1 alone starts nothing there)", bridgeSocketWait))
 		bridge.orphan(logger) // a late socket must not become a live one
 		bridge = sessionBridge{}
 	}
@@ -108,9 +115,24 @@ func wireBridge(launch *agentscope.Launch, b sessionBridge, logger *slog.Logger)
 	launch.OnCgroup = func(cgroup string) {
 		err := b.writeCgroup(cgroup)
 		ready.Store(err == nil)
-		if err != nil && logger != nil {
-			logger.Warn("bridge: could not record the unit's cgroup; the bridge admits no peer", "err", err)
+		if err != nil {
+			reportBridgeOff(launch, logger, fmt.Sprintf("could not record the unit's cgroup, so the serve admits nobody: %v", err))
 		}
+	}
+}
+
+// reportBridgeOff says, on clown's stderr, in its log and in the launch's result,
+// that the operator asked for the bridge and this launch has none, and why. It
+// never fails the launch (principle: a failure of the bridge never widens
+// anything); whether a given reason should refuse the launch instead is the
+// operator's to decide (README, round 2).
+func reportBridgeOff(launch *agentscope.Launch, logger *slog.Logger, reason string) {
+	if launch.BridgeStatus != nil {
+		launch.BridgeStatus.Off(reason)
+	}
+	fmt.Fprintf(os.Stderr, "clown: bridge: off: %s\n", reason)
+	if logger != nil {
+		logger.Warn("bridge: off", "reason", reason)
 	}
 }
 
@@ -130,9 +152,7 @@ func dropBridgeIfWritable(launch *agentscope.Launch, b sessionBridge, logger *sl
 		bad = append(bad, launch.WritableCovering(b.CgroupFile)...)
 	}
 	if len(bad) > 0 {
-		if logger != nil {
-			logger.Warn("bridge: a writable mount covers the bridge directory or its cgroup file; the session has no bridge", "dir", launch.BridgeDir, "mounts", bad)
-		}
+		reportBridgeOff(launch, logger, fmt.Sprintf("a writable mount covers the bridge directory or its cgroup file (%v)", bad))
 		launch.BridgeDir, launch.OnCgroup, launch.BridgeReady = "", nil, nil
 		b.orphan(logger)
 	}
@@ -187,6 +207,9 @@ type agentScopeRequest struct {
 	// bound into the unit read-only and the unit's cgroup is written to its
 	// cgroup file once known.
 	bridge sessionBridge
+	// bridgeOff is why the bridge was asked for and refused before the launch
+	// (routeBridge's error); "" when it was not asked for or is on.
+	bridgeOff string
 	// onStarted is called once a SIGTERM to clown reaches systemd-run, with
 	// a kill of the unit.
 	onStarted func(kill func() error)
@@ -968,28 +991,37 @@ func startBridgeListen(sock string) error {
 	if err != nil {
 		return err
 	}
-	defer r.Close()
 	cmd := exec.Command(clownExePath(), "bridge-listen", "--socket", sock)
 	cmd.Stdout = w
 	cmd.Stderr = os.Stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {
 		w.Close()
+		r.Close()
 		return err
 	}
 	w.Close()
+	// The read end is never closed under the child (a closed pipe would kill a
+	// slow bridge-listen with SIGPIPE on its ready line, round 2 L5): a goroutine
+	// reads it for good and drains what follows.
 	line := make(chan string, 1)
 	go func() {
-		s, _ := bufio.NewReader(r).ReadString('\n')
+		rd := bufio.NewReader(r)
+		s, _ := rd.ReadString('\n')
 		line <- s
+		_, _ = io.Copy(io.Discard, rd)
+		r.Close()
 	}()
+	// bridge-listen says ready once `control` is held, or once its retry window
+	// has run out; the wait covers that window and a margin.
+	wait := bridgeshim.ControlRetryWindow + 5*time.Second
 	select {
 	case s := <-line:
 		if strings.TrimSpace(s) != "bridge-listen: ready" {
 			return errors.New("bridge-listen exited before it was ready")
 		}
-	case <-time.After(5 * time.Second):
-		return errors.New("bridge-listen was not ready in 5s")
+	case <-time.After(wait):
+		return fmt.Errorf("bridge-listen was not ready in %v", wait)
 	}
 	return nil
 }

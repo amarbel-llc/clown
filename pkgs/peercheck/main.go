@@ -10,6 +10,11 @@ import internal "code.linenisgreat.com/clown/internal/0/peercheck"
 // (clown#301).
 type ServeConn = internal.ServeConn
 
+// AdmitCgroup is the listener's admission decision for a peer whose cgroup is
+// peerCgroup: it reads the file now and admits only on strict equality
+// (CheckCgroupExact). nil admits; every error refuses.
+var AdmitCgroup = internal.AdmitCgroup
+
 // BrokerSocketPath is the per-session policy-broker socket (clown#333):
 // <runtimeDir>/clown/serve/<principal>/broker.sock, in the session's own
 // directory beside its serve socket. Clown only names it; `spinclass serve`
@@ -78,6 +83,16 @@ var ProcCgroup = internal.ProcCgroup
 
 // ProcCgroupAt is ProcCgroup against the proc tree at procRoot.
 var ProcCgroupAt = internal.ProcCgroupAt
+
+// ReadUnitCgroupFile reads the file clown writes with the unit's exact cgroup
+// (FDR 0048: <runtime>/clown/launch/<key>/bridge.cgroup), the listener's side of
+// the seam. It is read FRESH on every call (a listener calls it per connection),
+// and fails closed: a missing, empty, unreadable, over-long or non-regular file
+// (a symlink, a directory, a socket) is an error, as is a value that is not an
+// absolute path or holds a newline (one trailing newline is tolerated) or a NUL.
+// The error is what a listener logs; the answer to the peer is always
+// `ERR refused` (bridgewire.RefusedUnadmitted), never a silent close.
+var ReadUnitCgroupFile = internal.ReadUnitCgroupFile
 
 // ServeSocketPath is the per-session serve socket for server:
 // <runtimeDir>/clown/serve/<principal>/<server>.sock. The directory is the

@@ -203,7 +203,9 @@ func TestRouteBridgeStartsFromACleanDirectory(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	stale := []string{filepath.Join(dir, "bridge.sock"), filepath.Join(launch, "bridge.cgroup"), filepath.Join(launch, "bridge.cgroup.tmp")}
+	// "junk" is anything else an earlier launch (or a unit that outlived it) left
+	// in the directory: the directory is replaced, not reused (round 2, L4).
+	stale := []string{filepath.Join(dir, "bridge.sock"), filepath.Join(launch, "bridge.cgroup"), filepath.Join(launch, "bridge.cgroup.tmp"), filepath.Join(dir, "junk")}
 	for _, f := range stale {
 		if err := os.WriteFile(f, []byte("old"), 0o600); err != nil {
 			t.Fatal(err)
@@ -345,17 +347,14 @@ func TestBridgeListenHoldsControlAndSaysWhenItEnds(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	for { // control is held once the third hello was answered OK
-		mu.Lock()
-		n := hellos
-		mu.Unlock()
-		if n >= 3 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("control never held: %d hellos, err %q", n, errb.String())
-		}
-		time.Sleep(10 * time.Millisecond)
+	// Round 2, M2: "ready" means control is HELD (the third hello was answered
+	// OK), not merely that the verb started: the provider starts after this line.
+	// Red with the old verb, which printed ready before dialling.
+	mu.Lock()
+	n := hellos
+	mu.Unlock()
+	if n < 3 {
+		t.Fatalf("ready was printed after %d hellos; control was not yet held (err %q)", n, errb.String())
 	}
 	if strings.Contains(errb.String(), "the bridge is down") || strings.Contains(errb.String(), "no control stream") {
 		t.Fatalf("said down or no-control while control was held: %q", errb.String())
@@ -370,6 +369,70 @@ func TestBridgeListenHoldsControlAndSaysWhenItEnds(t *testing.T) {
 	cancel()
 	if code := <-done; code != 0 {
 		t.Errorf("exit %d", code)
+	}
+}
+
+// Round 2, M2/L6: a server that never admits the unit: "ready" still comes, once
+// the retry window has run out, with the no-control line already said (the
+// provider must not wait for ever), and a `version` answer on control marks the
+// shim unusable with the server's own text.
+func TestBridgeListenReadyAfterTheWindowWhenControlIsNeverAdmitted(t *testing.T) {
+	oldW, oldD := bridgeshim.ControlRetryWindow, bridgeshim.ControlRetryDelay
+	bridgeshim.ControlRetryWindow, bridgeshim.ControlRetryDelay = 300*time.Millisecond, 10*time.Millisecond
+	t.Cleanup(func() { bridgeshim.ControlRetryWindow, bridgeshim.ControlRetryDelay = oldW, oldD })
+	for name, answer := range map[string][]byte{
+		"refused": bridgewire.FormatErr(bridgewire.CodeRefused, "not admitted"),
+		"version": bridgewire.FormatErr(bridgewire.CodeVersion, "server=2 shim=1: rebuild or restart this session"),
+	} {
+		dir, err := os.MkdirTemp("/tmp", "cbn")
+		if err != nil {
+			t.Fatal(err)
+		}
+		sock := filepath.Join(dir, "bridge.sock")
+		ln, err := net.Listen("unix", sock)
+		if err != nil {
+			t.Fatal(err)
+		}
+		go func() {
+			for {
+				c, err := ln.Accept()
+				if err != nil {
+					return
+				}
+				go func() {
+					defer c.Close()
+					if _, err := bridgewire.ReadHello(c); err == nil {
+						_, _ = c.Write(answer)
+					}
+				}()
+			}
+		}()
+		ctx, cancel := context.WithCancel(context.Background())
+		var out, errb safeBuffer
+		done := make(chan int, 1)
+		start := time.Now()
+		go func() { done <- runBridgeListenCtx(ctx, []string{"--socket", sock}, &out, &errb) }()
+		deadline := time.Now().Add(5 * time.Second)
+		for !strings.Contains(out.String(), "bridge-listen: ready") {
+			if time.Now().After(deadline) {
+				t.Fatalf("%s: never ready: err %q", name, errb.String())
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		if name == "refused" {
+			if took := time.Since(start); took < 150*time.Millisecond {
+				t.Errorf("refused: ready after %v, before the retry window ran out", took)
+			}
+			if !strings.Contains(errb.String(), "no control stream") {
+				t.Errorf("refused: the no-control line was not said before ready: %q", errb.String())
+			}
+		} else if !strings.Contains(errb.String(), "rebuild or restart this session") || strings.Contains(errb.String(), "frontend is gone") {
+			t.Errorf("version: stderr = %q, want the server's own text and not the frontend sentence", errb.String())
+		}
+		cancel()
+		<-done
+		_ = ln.Close()
+		_ = os.RemoveAll(dir)
 	}
 }
 

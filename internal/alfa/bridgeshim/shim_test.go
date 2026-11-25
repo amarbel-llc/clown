@@ -444,8 +444,8 @@ func TestControlRetriesAnUnreadyServerThenGivesUp(t *testing.T) {
 	}
 }
 
-// Round 1, M1: a stream that dies while the client still has stdin open is the
-// bridge going down: said at once as a DownError, not at the next stdin byte.
+// Round 1, M1: a stream that dies while the client still has stdin open is said
+// at once, not at the next stdin byte.
 // Red with the old Stdio: it blocked in io.Copy(c, in) until stdin had bytes.
 func TestStdioReportsAStreamThatDiesMidCall(t *testing.T) {
 	srv := newFakeServer(t, map[string]handler{"mcp-env": func(c net.Conn) {
@@ -459,18 +459,46 @@ func TestStdioReportsAStreamThatDiesMidCall(t *testing.T) {
 	go func() { done <- Stdio(srv.sock, "mcp-env", pr, &out) }()
 	select {
 	case err := <-done:
-		var down *DownError
-		if !errors.As(err, &down) {
-			t.Fatalf("err = %v, want a DownError", err)
+		// Round 2, L2/L3: said as what it is (this service's stream ended), NOT as
+		// "the bridge is down, the frontend is gone": a service may end a stream
+		// on purpose, and the control stream is what says the bridge is down.
+		var ended *StreamEndedError
+		if !errors.As(err, &ended) {
+			t.Fatalf("err = %v, want a *StreamEndedError", err)
 		}
-		if !strings.Contains(err.Error(), "the bridge is down") {
-			t.Errorf("not the fixed down text: %v", err)
+		if strings.Contains(err.Error(), "frontend is gone") {
+			t.Errorf("the down text was used for a stream that merely ended: %v", err)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("Stdio hung on a dead stream until the next stdin byte")
 	}
 	if out.String() != "partial" {
 		t.Errorf("output = %q", out.String())
+	}
+}
+
+// Round 2, L1: a shim marked down by a dial that failed before control was held
+// is not down once control opens; and a version mismatch is shown with its own
+// text, not the "frontend is gone" sentence (L2).
+func TestClearDownAndMarkUnusable(t *testing.T) {
+	var log bytes.Buffer
+	sh := &Shim{Log: &log}
+	sh.MarkDown("cannot connect")
+	if sh.Down() == "" {
+		t.Fatal("not down after MarkDown")
+	}
+	sh.ClearDown()
+	if sh.Down() != "" {
+		t.Error("still down after ClearDown")
+	}
+	var log2 bytes.Buffer
+	sh2 := &Shim{Log: &log2}
+	sh2.MarkUnusable("the bridge refused service \"x\": version: rebuild or restart this session")
+	if got := log2.String(); strings.Contains(got, "frontend is gone") || !strings.Contains(got, "rebuild or restart") {
+		t.Errorf("version text = %q", got)
+	}
+	if got := sh2.downMessage(); strings.Contains(got, "frontend is gone") {
+		t.Errorf("refused clients are told %q", got)
 	}
 }
 

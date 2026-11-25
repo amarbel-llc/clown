@@ -8,9 +8,8 @@ import (
 // RedactSetenv returns argv with the value of every environment assignment
 // removed, so a log line names what a unit gets without its values. The start
 // log of every launch goes through it: the full unit passes ANTHROPIC_ and
-// CLAUDE_CODE_ credentials when the model proxy is off, and a view session
-// carries the operator's own environment (a token in NIX_CONFIG once reached a
-// job log).
+// CLAUDE_CODE_ credentials when the model proxy is off, and a launch can carry
+// the operator's own environment (a token in NIX_CONFIG once reached a job log).
 //
 // It covers systemd-run's three spellings of an assignment, none of which may
 // reopen the leak when a later change picks another:

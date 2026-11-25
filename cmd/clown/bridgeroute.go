@@ -152,7 +152,14 @@ func prepareBridgeDir(launchDir, dir, sock, cgFile string) error {
 			return fmt.Errorf("removing the stale %s: %w", f, err)
 		}
 	}
-	if err := os.Mkdir(dir, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+	// A FRESH directory, not the inode an old unit (one that outlived its killed
+	// frontend, still inside the dead-man grace) may still have bound: it then
+	// cannot see the new serve's socket (round 2, L4). The directory was just
+	// checked to be a real directory of ours, and its files are gone.
+	if err := os.RemoveAll(dir); err != nil {
+		return fmt.Errorf("replacing %s: %w", dir, err)
+	}
+	if err := os.Mkdir(dir, 0o700); err != nil {
 		return err
 	}
 	return os.Chmod(dir, 0o700)
@@ -168,8 +175,14 @@ type writtenCgroup struct {
 // writeCgroup records the unit's exact cgroup for the serve to read per
 // connection: 0600, a regular file written to a temporary name and renamed over
 // (so a reader sees the old value or the new, never a part), replacing a
-// symlink rather than following one. It is called again on a relaunch that
-// makes a new unit.
+// symlink rather than following one. It is called once per unit; a relaunch is a
+// new clown process with a new unit, a new serve and a new file.
+//
+// The identity this file carries holds under two conditions the file cannot
+// check: the unit cannot move processes between cgroups (read-only cgroupfs) and
+// a process outside the unit that can write this file (any process of the same
+// account, or root through the nix daemon the unit is a trusted user of, by the
+// operator's stopgap ruling) is outside the model. See clown-agent-scope(7).
 func (b sessionBridge) writeCgroup(cgroup string) error {
 	if b.CgroupFile == "" {
 		return nil

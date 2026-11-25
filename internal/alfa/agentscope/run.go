@@ -248,7 +248,7 @@ func Run(l Launch, tools Tools, logger *slog.Logger) (int, error) {
 	}
 	argv := append([]string{tools.systemdRun()}, args...)
 	if logger != nil {
-		// Never log environment values: a view session carries the operator's
+		// Never log environment values: a launch can carry the operator's
 		// own environment (a token in NIX_CONFIG reached a job log), and the
 		// full unit passes ANTHROPIC_ and CLAUDE_CODE_ credentials through
 		// when the model proxy is off. Keys only, and the provider's own

@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"code.linenisgreat.com/clown/internal/0/bridgewire"
@@ -125,6 +126,54 @@ type Launch struct {
 	// written: only then does the result claim bridge-v1 (round 1, A-L2: the
 	// capability must not mean just "the directory is bound").
 	BridgeReady *atomic.Bool
+	// BridgeStatus carries the frontend's own reason when the operator asked for
+	// the bridge and it is missing (round 2, M3); the result says it. Nil: the
+	// bridge was never asked for.
+	BridgeStatus *BridgeStatus
+}
+
+// BridgeStatus is the first reason the bridge is off for this launch, set by
+// whichever frontend step found out, read when the result is written.
+type BridgeStatus struct {
+	mu     sync.Mutex
+	reason string
+}
+
+// Off records why the bridge is off; the first reason is kept.
+func (s *BridgeStatus) Off(reason string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.reason == "" {
+		s.reason = reason
+	}
+}
+
+// Reason is why the bridge is off, "" while no step has said so.
+func (s *BridgeStatus) Reason() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.reason
+}
+
+// bridgeField is the result's `bridge` value: "" when the bridge was never asked
+// for, "on" when it is bound and the cgroup file was written, else
+// "off: <reason>", so a switched-on launch that has no bridge says why.
+func (l Launch) bridgeField() string {
+	if l.BridgeStatus != nil {
+		if r := l.BridgeStatus.Reason(); r != "" {
+			return "off: " + r
+		}
+	}
+	if l.BridgeDir == "" {
+		if l.BridgeStatus != nil {
+			return "off: the bridge was asked for and is not set up"
+		}
+		return ""
+	}
+	if l.BridgeReady != nil && l.BridgeReady.Load() {
+		return "on"
+	}
+	return "off: the unit's cgroup was not recorded for the serve"
 }
 
 // resourceLimits are every agent unit's limits (clown#320, the operator's
@@ -172,7 +221,7 @@ func (l Launch) relays() []Relay {
 
 // baseResult is the result fields known from the launch alone.
 func (l Launch) baseResult() Result {
-	return Result{Unit: l.Unit, Principal: l.Principal, UID: os.Getuid(), ServeSocket: l.Serve.Socket, ModelCredential: l.ModelCredential, Capabilities: l.resultCapabilities()}
+	return Result{Unit: l.Unit, Principal: l.Principal, UID: os.Getuid(), ServeSocket: l.Serve.Socket, ModelCredential: l.ModelCredential, Capabilities: l.resultCapabilities(), Bridge: l.bridgeField()}
 }
 
 // UnitName turns spinclass's hint into a valid, unique service name.

@@ -1,0 +1,33 @@
+[
+  {"name": "equal admits", "steps": [{"file": "abs:/u/clown-agent.slice/a.service", "peer": "/u/clown-agent.slice/a.service", "admit": true}]},
+  {"name": "one trailing newline is tolerated", "steps": [{"file": "raw:/u/clown-agent.slice/a.service\n", "peer": "/u/clown-agent.slice/a.service", "admit": true}]},
+  {"name": "two trailing newlines refuse", "steps": [{"file": "raw:/u/clown-agent.slice/a.service\n\n", "peer": "/u/clown-agent.slice/a.service", "admit": false}]},
+  {"name": "a missing file admits nobody", "steps": [{"file": "absent", "peer": "/u/clown-agent.slice/a.service", "admit": false}]},
+  {"name": "an empty file admits nobody", "steps": [{"file": "raw:", "peer": "/u/clown-agent.slice/a.service", "admit": false}]},
+  {"name": "only a newline admits nobody", "steps": [{"file": "raw:\n", "peer": "/u/clown-agent.slice/a.service", "admit": false}]},
+  {"name": "a directory admits nobody", "steps": [{"file": "dir", "peer": "/u/clown-agent.slice/a.service", "admit": false}]},
+  {"name": "a symlink to a good file admits nobody", "steps": [{"file": "symlink:/u/clown-agent.slice/a.service", "peer": "/u/clown-agent.slice/a.service", "admit": false}]},
+  {"name": "a relative value admits nobody", "steps": [{"file": "abs:u/clown-agent.slice/a.service", "peer": "u/clown-agent.slice/a.service", "admit": false}]},
+  {"name": "a value with a NUL admits nobody", "steps": [{"file": "raw:/u/a\u0000b", "peer": "/u/a\u0000b", "admit": false}]},
+  {"name": "a trailing slash value admits nobody", "steps": [{"file": "abs:/u/clown-agent.slice/a.service/", "peer": "/u/clown-agent.slice/a.service/", "admit": false}]},
+  {"name": "the root admits nobody", "steps": [{"file": "abs:/", "peer": "/", "admit": false}]},
+  {"name": "an over-long file admits nobody", "steps": [{"file": "long", "peer": "/x", "admit": false}]},
+  {"name": "a sub-cgroup of the unit is refused (strict equality)", "steps": [{"file": "abs:/u/clown-agent.slice/a.service", "peer": "/u/clown-agent.slice/a.service/app.scope", "admit": false}]},
+  {"name": "a look-alike suffix is refused", "steps": [{"file": "abs:/u/clown-agent.slice/a.service", "peer": "/evil/clown-agent.slice/a.service", "admit": false}]},
+  {"name": "a sibling unit is refused", "steps": [{"file": "abs:/u/clown-agent.slice/a.service", "peer": "/u/clown-agent.slice/b.service", "admit": false}]},
+  {"name": "the parent slice is refused", "steps": [{"file": "abs:/u/clown-agent.slice/a.service", "peer": "/u/clown-agent.slice", "admit": false}]},
+  {"name": "an empty peer cgroup is refused", "steps": [{"file": "abs:/u/clown-agent.slice/a.service", "peer": "", "admit": false}]},
+  {"name": "the file is read per connection: a rewrite takes effect at once", "steps": [
+    {"file": "abs:/u/clown-agent.slice/a.service", "peer": "/u/clown-agent.slice/a.service", "admit": true},
+    {"file": "abs:/u/clown-agent.slice/b.service", "peer": "/u/clown-agent.slice/a.service", "admit": false},
+    {"file": "abs:/u/clown-agent.slice/b.service", "peer": "/u/clown-agent.slice/b.service", "admit": true}
+  ]},
+  {"name": "a file written after the first refusal takes effect (late write)", "steps": [
+    {"file": "absent", "peer": "/u/clown-agent.slice/a.service", "admit": false},
+    {"file": "abs:/u/clown-agent.slice/a.service", "peer": "/u/clown-agent.slice/a.service", "admit": true}
+  ]},
+  {"name": "removing the file stops admitting (a dropped bridge)", "steps": [
+    {"file": "abs:/u/clown-agent.slice/a.service", "peer": "/u/clown-agent.slice/a.service", "admit": true},
+    {"file": "absent", "peer": "/u/clown-agent.slice/a.service", "admit": false}
+  ]}
+]

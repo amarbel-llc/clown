@@ -64,7 +64,9 @@ func Dial(sock, service string) (net.Conn, error) {
 		return nil, err
 	}
 	if len(sock) > bridgewire.MaxSocketPath {
-		return nil, &DownError{Reason: fmt.Sprintf("the socket path is %d bytes, over the unix limit of %d", len(sock), bridgewire.MaxSocketPath)}
+		// A local fault, not a dead frontend: a plain error, not the down text
+		// (round 2, L2).
+		return nil, fmt.Errorf("clown: the bridge socket path is %d bytes, over the unix limit of %d; the bridge cannot be reached", len(sock), bridgewire.MaxSocketPath)
 	}
 	c, err := net.DialTimeout("unix", sock, DialTimeout)
 	if err != nil {
@@ -138,11 +140,22 @@ func Stdio(sock, service string, in io.Reader, out io.Writer) error {
 	case <-inDone:
 		return nil
 	default:
-		// The server ended the stream while the client had not finished: the
-		// bridge died mid-call. Said at once, not at the client's next byte
-		// (round 1, M1). The copy goroutine ends with the process.
-		return &DownError{Reason: "the stream ended while the call was open"}
+		// The server ended the stream while the client had not finished. Said at
+		// once, not at the client's next byte (round 1, M1), and as what it is:
+		// this one stream ended. It is not claimed to be the bridge (round 2,
+		// L2/L3: a service may end a stream on purpose); the control stream and
+		// the next dial are what say the bridge is down. The copy goroutine ends
+		// with the process.
+		return &StreamEndedError{Service: service}
 	}
+}
+
+// StreamEndedError is a service's stream ending while the client still had
+// input to send.
+type StreamEndedError struct{ Service string }
+
+func (e *StreamEndedError) Error() string {
+	return fmt.Sprintf("clown: the bridge service %q ended the stream before the client was done", e.Service)
 }
 
 // Endpoint is one ordinary endpoint the shim offers inside the unit and the
@@ -165,22 +178,37 @@ type Shim struct {
 	held      bool      // the control stream is open
 	lastLog   time.Time // the last rate-limited refusal line
 	down      string    // the reason, "" while up
+	downMsg   string    // the whole text a refused client is told
 	listeners []net.Listener
 	wg        sync.WaitGroup
 }
 
 // MarkDown makes the shim answer every endpoint with the down text.
-func (s *Shim) MarkDown(reason string) {
+func (s *Shim) MarkDown(reason string) { s.markDown(reason, bridgewire.DownMessage(reason)) }
+
+// MarkUnusable is MarkDown for a cause that is not "the frontend is gone": a
+// version mismatch, say, whose own text says what to do (round 2, L2). The
+// text is shown as given.
+func (s *Shim) MarkUnusable(text string) { s.markDown(text, text) }
+
+func (s *Shim) markDown(reason, msg string) {
 	s.mu.Lock()
 	first := s.down == ""
 	s.down = reason
+	s.downMsg = msg
 	if first {
 		s.lastLog = time.Now() // this line is the first of the rate-limited refusals
 	}
 	s.mu.Unlock()
 	if first && s.Log != nil {
-		fmt.Fprintln(s.Log, bridgewire.DownMessage(reason))
+		fmt.Fprintln(s.Log, msg)
 	}
+}
+
+func (s *Shim) downMessage() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.downMsg
 }
 
 // SetControlHeld records whether the `control` stream is open. While it is, a
@@ -213,6 +241,15 @@ func (s *Shim) logRefusal(text string) {
 	if ok {
 		fmt.Fprintln(s.Log, text)
 	}
+}
+
+// ClearDown undoes a mark-down: the control stream opening is proof the bridge
+// is up (round 2, L1). A shim is marked down by a dial that failed before
+// control was held; control opening later must not leave it down.
+func (s *Shim) ClearDown() {
+	s.mu.Lock()
+	s.down = ""
+	s.mu.Unlock()
 }
 
 // Down returns the reason the bridge is marked down, "" while it is up.
@@ -260,8 +297,9 @@ func (s *Shim) serve(c net.Conn, e Endpoint) {
 	if reason := s.Down(); reason != "" {
 		// A unix endpoint cannot carry the text to its client (ssh's agent
 		// protocol, say): the terminal log is where it shows, rate-limited.
-		s.logRefusal(bridgewire.DownMessage(reason))
-		s.refuseDown(c, e, reason)
+		msg := s.downMessage()
+		s.logRefusal(msg)
+		s.refuseText(c, e, msg)
 		return
 	}
 	up, err := Dial(s.Sock, e.Service)
@@ -272,8 +310,8 @@ func (s *Shim) serve(c net.Conn, e Endpoint) {
 		case errors.As(err, &refused) && refused.Code == bridgewire.CodeVersion:
 			// One side was upgraded alone: every stream fails this way, so the
 			// bridge is unusable, not just this service (round 1, M5).
-			s.MarkDown(err.Error())
-			s.refuseDown(c, e, err.Error())
+			s.MarkUnusable(err.Error())
+			s.refuseText(c, e, err.Error())
 		case errors.As(err, &down):
 			// One failed dial fails THIS connection with the down text. It marks
 			// the whole shim down only when `control` is not held: while the

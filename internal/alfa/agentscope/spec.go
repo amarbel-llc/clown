@@ -125,10 +125,10 @@ func (s Spec) Validate() error {
 	// the state dir reached through a symlink slips past.
 	clownState := filepath.Join(OperatorXDG(os.Environ(), s.OperatorHome, "XDG_STATE_HOME"), "clown")
 	realState := ResolvePath(clownState)
-	for _, p := range append([]string{s.Worktree}, s.BindsRW...) {
+	for _, p := range s.writableBinds() {
 		real := ResolvePath(p)
 		if exposesWhole(p, clownState) || within(p, clownState) || exposesWhole(real, realState) || within(real, realState) {
-			return fmt.Errorf("worktree or binds_rw entry %q makes clown's state %q writable from inside the unit", p, clownState)
+			return fmt.Errorf("worktree, binds_rw or sockets entry %q makes clown's state %q writable from inside the unit", p, clownState)
 		}
 	}
 	// Every session's launch directory (<runtime>/clown/launch/<key>) holds its
@@ -139,10 +139,14 @@ func (s Spec) Validate() error {
 	if rt := os.Getenv("XDG_RUNTIME_DIR"); filepath.IsAbs(rt) {
 		launchRoot := filepath.Join(rt, "clown", "launch")
 		realLaunch := ResolvePath(launchRoot)
-		for _, p := range append([]string{s.Worktree}, s.BindsRW...) {
+		// Every writable bind, `sockets` included (they are bound read-write and
+		// may be any file type), and also the read-only ones: a read-only bind of
+		// the root makes every session's socket connectable from the unit
+		// (round 2, M1).
+		for _, p := range append(s.writableBinds(), s.BindsRO...) {
 			real := ResolvePath(p)
 			if exposesWhole(p, launchRoot) || within(p, launchRoot) || exposesWhole(real, realLaunch) || within(real, realLaunch) {
-				return fmt.Errorf("worktree or binds_rw entry %q makes the launch directories %q writable from inside the unit", p, launchRoot)
+				return fmt.Errorf("worktree, binds_rw, sockets or binds_ro entry %q exposes the launch directories %q to the unit", p, launchRoot)
 			}
 		}
 	}
@@ -184,6 +188,17 @@ func (s Spec) Validate() error {
 		}
 	}
 	return nil
+}
+
+// writableBinds is every path of the spec the unit gets a read-write bind of:
+// the worktree, binds_rw and each socket (BindPaths= is read-write whatever the
+// file type).
+func (s Spec) writableBinds() []string {
+	out := append([]string{s.Worktree}, s.BindsRW...)
+	for _, sock := range s.Sockets {
+		out = append(out, sock.Path)
+	}
+	return out
 }
 
 // maxSymlinkHops bounds ResolvePath, as the kernel bounds a lookup (40).
@@ -307,6 +322,11 @@ type Result struct {
 	// operator's login bound read-only, the fallback). Absent when the launch
 	// routes the model API itself (a gateway profile). Read-only for consumers.
 	ModelCredential string `json:"model_credential,omitempty"`
+	// Bridge says what became of the bridge (FDR 0048): absent when it was never
+	// asked for, "on", or "off: <reason>" when the operator's switch was set and
+	// the bridge is missing, so a missing bridge never looks like one never
+	// switched on. Written by the frontend; read-only for consumers.
+	Bridge string `json:"bridge,omitempty"`
 	// ExitCode is set once the unit has exited after its provider started.
 	ExitCode *int   `json:"exit_code,omitempty"`
 	Error    string `json:"error,omitempty"`

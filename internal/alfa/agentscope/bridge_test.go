@@ -70,6 +70,44 @@ func TestWritableCoveringSeesParentsAndNotSiblings(t *testing.T) {
 	}
 }
 
+// Round 2, M3: the result says what became of the bridge: nothing when it was
+// never asked for, "on", or "off: <reason>" when the operator asked and the
+// frontend knows why it is missing. Red without the field.
+func TestTheResultSaysWhyTheBridgeIsOff(t *testing.T) {
+	l := testLaunch()
+	if got := l.baseResult().Bridge; got != "" {
+		t.Errorf("never asked for: bridge = %q, want empty", got)
+	}
+	l.BridgeStatus = &BridgeStatus{}
+	if got := l.baseResult().Bridge; !strings.HasPrefix(got, "off: ") {
+		t.Errorf("asked for, no dir, no reason: bridge = %q, want an off line", got)
+	}
+	l.BridgeStatus.Off("the serve created no bridge socket in 10s")
+	l.BridgeStatus.Off("a second reason is ignored")
+	if got := l.baseResult().Bridge; got != "off: the serve created no bridge socket in 10s" {
+		t.Errorf("bridge = %q, want the first reason", got)
+	}
+	ok := testLaunch()
+	ok.BridgeDir = testBridgeDir
+	ok.BridgeStatus = &BridgeStatus{}
+	ok.BridgeReady = &atomic.Bool{}
+	if got := ok.baseResult().Bridge; !strings.HasPrefix(got, "off: ") {
+		t.Errorf("dir bound but cgroup not recorded: bridge = %q, want an off line", got)
+	}
+	ok.BridgeReady.Store(true)
+	if got := ok.baseResult().Bridge; got != "on" {
+		t.Errorf("bridge = %q, want on", got)
+	}
+	path := filepath.Join(t.TempDir(), "r", "result.json")
+	if err := WriteResult(path, ok.baseResult()); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(path)
+	if !strings.Contains(string(raw), `"bridge": "on"`) {
+		t.Errorf("the result file does not carry the field: %s", raw)
+	}
+}
+
 // Round 1, A-M2: a writable bind of the cgroup file itself is a covering mount
 // for THAT path (the trust anchor), and a bind reaching the runtime dir through
 // a symlink is seen. Red with the lexical-only rule.
@@ -149,6 +187,21 @@ func TestValidateRefusesWritableLaunchDirs(t *testing.T) {
 		s.BindsRW = []string{bad}
 		if err := s.Validate(); err == nil || !strings.Contains(err.Error(), "launch directories") {
 			t.Errorf("binds_rw %q: err %v, want the launch-directory refusal", bad, err)
+		}
+	}
+	// Round 2, M1: a `sockets` entry is a read-write bind of whatever file type it
+	// names, and a read-only bind of the root makes every session's socket
+	// connectable: both are refused too.
+	for _, bad := range []string{launch, filepath.Join(launch, "k1", "bridge.cgroup"), filepath.Join(launch, "k1", "bridge", "bridge.sock"), filepath.Join(link, "clown", "launch")} {
+		s := validSpec()
+		s.Sockets = []Socket{{Path: bad, Purpose: "x"}}
+		if err := s.Validate(); err == nil || !strings.Contains(err.Error(), "launch directories") {
+			t.Errorf("sockets %q: err %v, want the launch-directory refusal", bad, err)
+		}
+		s = validSpec()
+		s.BindsRO = []string{bad}
+		if err := s.Validate(); err == nil || !strings.Contains(err.Error(), "launch directories") {
+			t.Errorf("binds_ro %q: err %v, want the launch-directory refusal", bad, err)
 		}
 	}
 	s := validSpec()

@@ -293,6 +293,15 @@ func ReadReply(r io.Reader) (ok bool, code, text string, err error) {
 	return false, code, text, nil
 }
 
+// RefusedUnadmitted is what a listener answers a peer it does not admit (no
+// cgroup file yet, a file it cannot use, a peer outside the unit): always
+// `ERR refused <text>`, never a silent close. The shim's retry of `control`
+// rests on it (a close is retried too, but `refused` is the contract's answer;
+// round 2, M4). The text is escaped and bounded.
+func RefusedUnadmitted(reason string) []byte {
+	return FormatErr(CodeRefused, "the peer is not admitted: "+reason)
+}
+
 // SocketPath is the bridge socket inside a bridge directory: <dir>/bridge.sock,
 // refused when the path would pass the unix limit (the bridge then stays off, a
 // launch never fails for it).
@@ -315,8 +324,10 @@ const (
 	EnvUnit    = "CLOWN_BRIDGE_UNIT"
 	// EnvCgroupFile names the file clown writes, once the unit's ControlGroup is
 	// known, holding that exact cgroup path (option A, agreed with spinclass);
-	// serve reads it per connection and admits a peer only on equality or
-	// beneath it. It lives beside, never inside, the read-only bridge directory.
+	// serve reads it per connection and admits a peer only if the peer's cgroup
+	// EQUALS it (strictly: not a descendant; peercheck.CheckCgroupExact). A
+	// missing, empty or unreadable file admits nobody. It lives beside, never
+	// inside, the read-only bridge directory.
 	EnvCgroupFile = "CLOWN_BRIDGE_CGROUP_FILE"
 	// CgroupFileName is that file's name, under <runtime>/clown/launch/<key>/.
 	CgroupFileName = "bridge.cgroup"
