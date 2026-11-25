@@ -353,13 +353,15 @@ func TestControlDeliversFramesIgnoresJunkAndEOFIsTheDownSignal(t *testing.T) {
 	}
 }
 
-// The first connection to control can come before the server has the cgroup
-// (it closes the stream, or answers busy): it is retried, a bounded number of
-// times, and a final refusal of the service is not.
+// The first connection to control can come before the server has the cgroup:
+// the reviewed listener answers `ERR refused` to a peer it cannot yet identify
+// (round 1, H1), or is busy. Both are retried inside a window; a final refusal
+// of the service (unknown-service) is not. Red without the `refused` retry: the
+// first answer ends it.
 func TestControlRetriesAnUnreadyServerThenGivesUp(t *testing.T) {
-	oldN, oldD := ControlAttempts, ControlRetryDelay
-	ControlAttempts, ControlRetryDelay = 3, 10*time.Millisecond
-	t.Cleanup(func() { ControlAttempts, ControlRetryDelay = oldN, oldD })
+	oldW, oldD := ControlRetryWindow, ControlRetryDelay
+	ControlRetryWindow, ControlRetryDelay = 400*time.Millisecond, 10*time.Millisecond
+	t.Cleanup(func() { ControlRetryWindow, ControlRetryDelay = oldW, oldD })
 
 	var mu sync.Mutex
 	var hellos int
@@ -392,7 +394,8 @@ func TestControlRetriesAnUnreadyServerThenGivesUp(t *testing.T) {
 				mu.Unlock()
 				switch {
 				case n < ra-1:
-					// not ready: close with no answer (the serve's peer check failing)
+					// not ready: what the reviewed listener answers a peer it cannot admit yet
+					_, _ = c.Write(bridgewire.FormatErr(bridgewire.CodeRefused, "not admitted yet"))
 				case n == ra-1:
 					_, _ = c.Write(bridgewire.FormatErr(bridgewire.CodeBusy, "starting"))
 				default:
@@ -414,24 +417,167 @@ func TestControlRetriesAnUnreadyServerThenGivesUp(t *testing.T) {
 		t.Errorf("the server saw %d hellos, want 3 (two refused, one served)", got)
 	}
 
-	// Never ready: gives up after exactly ControlAttempts and reports the last error.
+	// Never ready: retried for the window, then the last refusal is the error.
 	mu.Lock()
 	hellos, readyAfter = 0, 1000
 	mu.Unlock()
-	if _, err := Control(context.Background(), sock, func(Frame) {}); err == nil {
-		t.Error("a server that never becomes ready must be an error")
+	start := time.Now()
+	_, err = Control(context.Background(), sock, func(Frame) {})
+	var refused *RefusedError
+	if !errors.As(err, &refused) || refused.Code != bridgewire.CodeRefused {
+		t.Errorf("a server that never becomes ready must end in its last refusal, got %v", err)
+	}
+	if took := time.Since(start); took < 150*time.Millisecond || took > 3*time.Second {
+		t.Errorf("gave up after %v; want about the %v window", took, ControlRetryWindow)
 	}
 	mu.Lock()
 	got = hellos
 	mu.Unlock()
-	if got != 3 {
-		t.Errorf("the server saw %d hellos on a never-ready server, want ControlAttempts = 3", got)
+	if got < 3 {
+		t.Errorf("the server saw only %d hellos in the window", got)
 	}
 
 	// A refusal of the service itself is final: one hello, no retry.
 	srv := newFakeServer(t, map[string]handler{})
 	if _, err := Control(context.Background(), srv.sock, func(Frame) {}); err == nil {
 		t.Error("an unknown service must be an error")
+	}
+}
+
+// Round 1, M1: a stream that dies while the client still has stdin open is the
+// bridge going down: said at once as a DownError, not at the next stdin byte.
+// Red with the old Stdio: it blocked in io.Copy(c, in) until stdin had bytes.
+func TestStdioReportsAStreamThatDiesMidCall(t *testing.T) {
+	srv := newFakeServer(t, map[string]handler{"mcp-env": func(c net.Conn) {
+		_, _ = io.WriteString(c, "partial")
+		// returns: the server closes the stream
+	}})
+	pr, pw := io.Pipe() // stdin that never has another byte and never ends
+	defer pw.Close()
+	done := make(chan error, 1)
+	var out bytes.Buffer
+	go func() { done <- Stdio(srv.sock, "mcp-env", pr, &out) }()
+	select {
+	case err := <-done:
+		var down *DownError
+		if !errors.As(err, &down) {
+			t.Fatalf("err = %v, want a DownError", err)
+		}
+		if !strings.Contains(err.Error(), "the bridge is down") {
+			t.Errorf("not the fixed down text: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Stdio hung on a dead stream until the next stdin byte")
+	}
+	if out.String() != "partial" {
+		t.Errorf("output = %q", out.String())
+	}
+}
+
+// Round 1, M2 (and A's L1): while control is held, one failed data dial fails
+// that connection only; the shim stays up. Without control it still goes down.
+func TestADataDialFailureDoesNotMarkTheShimDownWhileControlIsHeld(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "cbd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "bridge.sock") // nothing listens: every dial is a DownError
+	for _, held := range []bool{true, false} {
+		var log bytes.Buffer
+		sh := &Shim{Sock: sock, Log: &log}
+		sh.SetControlHeld(held)
+		addr := shortTCP(t)
+		if err := sh.Listen([]Endpoint{{Network: "tcp", Addr: addr, Service: "model"}}); err != nil {
+			t.Fatal(err)
+		}
+		c, err := net.Dial("tcp", addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(c)
+		c.Close()
+		sh.Close()
+		if !strings.Contains(string(body), "503") || !strings.Contains(string(body), "the bridge is down") {
+			t.Errorf("held=%v: client got %q, want the 503 with the down text", held, body)
+		}
+		if got := sh.Down() != ""; got == held {
+			t.Errorf("held=%v: shim marked down = %v; a held control stream keeps it up, none marks it down", held, got)
+		}
+		if !strings.Contains(log.String(), "the bridge is down") {
+			t.Errorf("held=%v: the refusal is not in the log: %q", held, log.String())
+		}
+	}
+}
+
+// Round 1, M5: a `version` refusal on a data stream means every stream will
+// fail: the shim is down, not just that service.
+func TestAVersionRefusalMarksTheShimDown(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "cbv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "bridge.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				_, _ = bridgewire.ReadHello(c)
+				_, _ = c.Write(bridgewire.FormatErr(bridgewire.CodeVersion, "server=2 shim=1: rebuild"))
+			}()
+		}
+	}()
+	sh := &Shim{Sock: sock}
+	sh.SetControlHeld(true) // even with control held
+	addr := shortTCP(t)
+	if err := sh.Listen([]Endpoint{{Network: "tcp", Addr: addr, Service: "model"}}); err != nil {
+		t.Fatal(err)
+	}
+	defer sh.Close()
+	c, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.ReadAll(c)
+	c.Close()
+	if !strings.Contains(sh.Down(), "version") {
+		t.Errorf("a version refusal left the shim up: down = %q", sh.Down())
+	}
+}
+
+// Round 1, L6: a control line over MaxFrame is dropped, the stream goes on, and
+// the frames around it arrive.
+func TestAnOverlongControlFrameIsSkippedNotFatal(t *testing.T) {
+	srv := newFakeServer(t, map[string]handler{"control": func(c net.Conn) {
+		_, _ = io.WriteString(c, `{"type":"before"}`+"\n")
+		_, _ = io.WriteString(c, `{"type":"huge","pad":"`+strings.Repeat("x", MaxFrame+10)+`"}`+"\n")
+		_, _ = io.WriteString(c, `{"type":"after"}`+"\n")
+	}})
+	var types []string
+	reason, err := Control(context.Background(), srv.sock, func(f Frame) { types = append(types, f.Type) })
+	if err != nil || reason != "EOF on control" {
+		t.Fatalf("reason %q err %v: an over-long frame ended the stream", reason, err)
+	}
+	if strings.Join(types, ",") != "before,after" {
+		t.Errorf("frames = %v, want before,after", types)
+	}
+}
+
+func TestControlOpenSaysWhenTheStreamIsHeld(t *testing.T) {
+	srv := newFakeServer(t, map[string]handler{"control": func(c net.Conn) {}})
+	opened := false
+	if _, err := ControlOpen(context.Background(), srv.sock, func() { opened = true }, func(Frame) {}); err != nil || !opened {
+		t.Errorf("opened=%v err=%v", opened, err)
 	}
 }
 

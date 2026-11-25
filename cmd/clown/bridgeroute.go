@@ -3,14 +3,18 @@ package main
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	"code.linenisgreat.com/clown/internal/0/bridgewire"
+	"code.linenisgreat.com/clown/internal/alfa/agentscope"
 	"code.linenisgreat.com/clown/internal/alfa/pluginhost"
 )
 
@@ -30,6 +34,11 @@ type sessionBridge struct {
 	Dir        string
 	Socket     string
 	CgroupFile string
+	// Unit is the agent unit's name (".service" included); the cgroup written
+	// must end in it.
+	Unit string
+	// written is what this process wrote to CgroupFile (shared by copies).
+	written *writtenCgroup
 }
 
 // bridgeEnvKeys are the serve's three bridge variables.
@@ -93,13 +102,10 @@ func routeBridge(discovered []pluginhost.DiscoveredServer, bridgePath, runtimeDi
 		if err != nil {
 			return off(err)
 		}
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return off(fmt.Errorf("bridge off: %w", err))
-		}
-		if err := os.Chmod(dir, 0o700); err != nil {
-			return off(fmt.Errorf("bridge off: %w", err))
-		}
 		cgFile := filepath.Join(launchDir, bridgewire.CgroupFileName)
+		if err := prepareBridgeDir(launchDir, dir, sock, cgFile); err != nil {
+			return off(fmt.Errorf("bridge off: %w", err))
+		}
 		env := maps.Clone(d.Def.Env)
 		if env == nil {
 			env = map[string]string{}
@@ -108,12 +114,55 @@ func routeBridge(discovered []pluginhost.DiscoveredServer, bridgePath, runtimeDi
 		env[bridgewire.EnvUnit] = strings.TrimSuffix(unit, ".service") + ".service"
 		env[bridgewire.EnvCgroupFile] = cgFile
 		out[i].Def.Env = env
-		b = sessionBridge{Dir: dir, Socket: sock, CgroupFile: cgFile}
+		b = sessionBridge{Dir: dir, Socket: sock, CgroupFile: cgFile, Unit: strings.TrimSuffix(unit, ".service") + ".service", written: &writtenCgroup{}}
 	}
 	if b.Dir == "" {
 		return discovered, sessionBridge{}, nil
 	}
 	return out, b, nil
+}
+
+// prepareBridgeDir makes the launch's bridge directory ready for a fresh
+// serve and trusts nothing an earlier launch of this key left (round 1, A-M3,
+// B-M3): the launch directory and the bridge directory must each be a real
+// directory owned by this user (a symlink or foreign directory is refused, never
+// followed), and a socket, cgroup file or temporary file left by a frontend that
+// was killed is removed first, so a stale file can neither admit the old unit
+// nor pass for the new serve's socket.
+func prepareBridgeDir(launchDir, dir, sock, cgFile string) error {
+	if err := os.MkdirAll(launchDir, 0o700); err != nil {
+		return err
+	}
+	for _, d := range []string{launchDir, dir} {
+		fi, err := os.Lstat(d)
+		switch {
+		case errors.Is(err, os.ErrNotExist):
+			continue
+		case err != nil:
+			return err
+		case !fi.IsDir() || fi.Mode()&os.ModeSymlink != 0:
+			return fmt.Errorf("%s is not a real directory", d)
+		}
+		if st, ok := fi.Sys().(*syscall.Stat_t); ok && int(st.Uid) != os.Getuid() {
+			return fmt.Errorf("%s is owned by uid %d, not this user", d, st.Uid)
+		}
+	}
+	for _, f := range []string{sock, cgFile, cgFile + ".tmp"} {
+		if err := os.Remove(f); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("removing the stale %s: %w", f, err)
+		}
+	}
+	if err := os.Mkdir(dir, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+		return err
+	}
+	return os.Chmod(dir, 0o700)
+}
+
+// writtenCgroup is the value this process last wrote to the cgroup file, so
+// cleanup removes only its own file.
+type writtenCgroup struct {
+	mu  sync.Mutex
+	val string
 }
 
 // writeCgroup records the unit's exact cgroup for the serve to read per
@@ -127,6 +176,12 @@ func (b sessionBridge) writeCgroup(cgroup string) error {
 	}
 	if !strings.HasPrefix(cgroup, "/") || strings.HasSuffix(cgroup, "/") || strings.ContainsAny(cgroup, "\n\x00") {
 		return fmt.Errorf("bridge: unusable cgroup %q", cgroup)
+	}
+	// Identity, not just shape (round 1, A-L5): the value must be this agent
+	// unit's own cgroup, so a tooling fault (CLOWN_SYSTEMCTL is an override)
+	// cannot publish a broad path such as the user manager's.
+	if b.Unit != "" && !strings.HasSuffix(cgroup, "/"+agentscope.Slice+"/"+b.Unit) {
+		return fmt.Errorf("bridge: cgroup %q is not this unit's (%s/%s)", cgroup, agentscope.Slice, b.Unit)
 	}
 	tmp := b.CgroupFile + ".tmp"
 	_ = os.Remove(tmp)
@@ -144,7 +199,30 @@ func (b sessionBridge) writeCgroup(cgroup string) error {
 		_ = os.Remove(tmp)
 		return err
 	}
+	if b.written != nil {
+		b.written.mu.Lock()
+		b.written.val = cgroup
+		b.written.mu.Unlock()
+	}
 	return nil
+}
+
+// orphan is what clown does when it drops the bridge after the serve started
+// (a covering writable mount, a late socket): the serve cannot be told through
+// its environment any more, so the socket and the cgroup file are removed. With
+// no cgroup file the serve admits nobody (it fails closed on a missing file);
+// with no socket nothing can connect. Logged, because the serve's listener is
+// still running (round 1, A-M1).
+func (b sessionBridge) orphan(logger *slog.Logger) {
+	if b.Dir == "" {
+		return
+	}
+	_ = os.Remove(b.Socket)
+	_ = os.Remove(b.CgroupFile)
+	_ = os.Remove(b.CgroupFile + ".tmp")
+	if logger != nil {
+		logger.Warn("bridge: dropped after the serve started; its socket and cgroup file are removed and its listener is orphaned until the session ends", "dir", b.Dir)
+	}
 }
 
 // bridgeSocketWait is how long the launch waits for the serve to create
@@ -178,7 +256,14 @@ func (b sessionBridge) cleanup() {
 	}
 	_ = os.Remove(b.Socket)
 	_ = os.Remove(b.Dir)
-	if b.CgroupFile != "" {
-		_ = os.Remove(b.CgroupFile)
+	// The cgroup file only if it still holds what this process wrote: a
+	// frontend that took over the key since must not lose its own (round 1, B-L1).
+	if b.CgroupFile != "" && b.written != nil {
+		b.written.mu.Lock()
+		mine := b.written.val
+		b.written.mu.Unlock()
+		if got, err := os.ReadFile(b.CgroupFile); mine != "" && err == nil && string(got) == mine {
+			_ = os.Remove(b.CgroupFile)
+		}
 	}
 }

@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -54,11 +55,13 @@ func runInAgentScope(req agentScopeRequest, logger *slog.Logger) int {
 		// enable); without it no socket appears. The session then has no bridge:
 		// the unit is not told there is one.
 		if logger != nil {
-			logger.Warn("bridge: the serve created no bridge socket; the session has no bridge", "socket", bridge.Socket, "waited", bridgeSocketWait)
+			logger.Warn("bridge: the serve created no bridge socket; the session has no bridge (is spinclass's trusted [bridge] enable set? CLOWN_BRIDGE_V1 alone starts nothing there)", "socket", bridge.Socket, "waited", bridgeSocketWait)
 		}
+		bridge.orphan(logger) // a late socket must not become a live one
 		bridge = sessionBridge{}
 	}
 	wireBridge(&launch, bridge, logger)
+	launchBridge := bridge
 	wireAgentScopeStatus(&launch, req.status, req.onStarted)
 	// The unit's MainPID is this session's provider pid; a restart's
 	// relaunch tells its session so (clown#329).
@@ -73,7 +76,7 @@ func runInAgentScope(req agentScopeRequest, logger *slog.Logger) int {
 		return 1
 	}
 	defer stopEndpoints()
-	dropBridgeIfWritable(&launch, logger)
+	dropBridgeIfWritable(&launch, launchBridge, logger)
 	// clown#341 ask 3: names-only difference between the launcher's
 	// environment and the unit's, logged before any enforcement tightens. After
 	// the endpoints start, so the variables they add (STATSD_*, the model
@@ -100,8 +103,12 @@ func wireBridge(launch *agentscope.Launch, b sessionBridge, logger *slog.Logger)
 		return
 	}
 	launch.BridgeDir = b.Dir
+	ready := &atomic.Bool{}
+	launch.BridgeReady = ready
 	launch.OnCgroup = func(cgroup string) {
-		if err := b.writeCgroup(cgroup); err != nil && logger != nil {
+		err := b.writeCgroup(cgroup)
+		ready.Store(err == nil)
+		if err != nil && logger != nil {
 			logger.Warn("bridge: could not record the unit's cgroup; the bridge admits no peer", "err", err)
 		}
 	}
@@ -112,15 +119,22 @@ func wireBridge(launch *agentscope.Launch, b sessionBridge, logger *slog.Logger)
 // runtime directory read-write, say): the unit could replace the socket. It
 // runs after every bind is in place, just before the unit starts. The session
 // then has no bridge; the launch goes on.
-func dropBridgeIfWritable(launch *agentscope.Launch, logger *slog.Logger) {
+func dropBridgeIfWritable(launch *agentscope.Launch, b sessionBridge, logger *slog.Logger) {
 	if launch.BridgeDir == "" {
 		return
 	}
-	if bad := launch.WritableCovering(launch.BridgeDir); len(bad) > 0 {
+	// The directory AND the cgroup file: the file is the trust anchor, and a
+	// writable mount of it alone is as bad as one of the directory (round 1, A-M2).
+	bad := launch.WritableCovering(launch.BridgeDir)
+	if b.CgroupFile != "" {
+		bad = append(bad, launch.WritableCovering(b.CgroupFile)...)
+	}
+	if len(bad) > 0 {
 		if logger != nil {
-			logger.Warn("bridge: a writable mount covers the bridge directory; the session has no bridge", "dir", launch.BridgeDir, "mounts", bad)
+			logger.Warn("bridge: a writable mount covers the bridge directory or its cgroup file; the session has no bridge", "dir", launch.BridgeDir, "mounts", bad)
 		}
-		launch.BridgeDir, launch.OnCgroup = "", nil
+		launch.BridgeDir, launch.OnCgroup, launch.BridgeReady = "", nil, nil
+		b.orphan(logger)
 	}
 }
 

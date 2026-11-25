@@ -2261,6 +2261,14 @@ func runWithPluginHost(executor Executor, pluginDirs []string, flags parsedFlags
 			logger.Warn("bridge: not started", "err", err)
 		}
 		discovered = routed
+		// The serve's variables are its own: removed from clown's environment so
+		// no other server, and no session a serve spawns, inherits a parent's
+		// values (round 1, A-L3). The switch itself stays: it is per tree, set by
+		// the operator in the launching environment, and a child session is
+		// still gated by its own confinement and spinclass's [bridge] enable.
+		for _, k := range bridgeEnvKeys {
+			_ = os.Unsetenv(k)
+		}
 		if br.Dir != "" {
 			flags.bridge = br
 			defer br.cleanup() // after runManaged has stopped the bridge

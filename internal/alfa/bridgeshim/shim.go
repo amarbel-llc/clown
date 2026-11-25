@@ -38,10 +38,13 @@ type RefusedError struct {
 }
 
 func (e *RefusedError) Error() string {
-	if e.Text == "" {
+	// The text comes off the socket: printable ASCII only on the terminal
+	// (round 1, A-L6), so a replaced socket cannot write escape sequences.
+	text := bridgewire.Printable(e.Text)
+	if text == "" {
 		return fmt.Sprintf("the bridge refused service %q: %s", e.Service, e.Code)
 	}
-	return fmt.Sprintf("the bridge refused service %q: %s: %s", e.Service, e.Code, e.Text)
+	return fmt.Sprintf("the bridge refused service %q: %s: %s", e.Service, e.Code, text)
 }
 
 // DownError is a bridge that cannot be reached at all (no socket, a refused
@@ -124,15 +127,22 @@ func Stdio(sock, service string, in io.Reader, out io.Writer) error {
 		return err
 	}
 	defer c.Close()
-	done := make(chan struct{})
+	inDone := make(chan struct{})
 	go func() {
-		_, _ = io.Copy(out, c)
-		close(done)
+		_, _ = io.Copy(c, in)
+		close(inDone) // before the half-close, so the server's close that follows is ordered after it
+		closeWrite(c)
 	}()
-	_, _ = io.Copy(c, in)
-	closeWrite(c)
-	<-done
-	return nil
+	_, _ = io.Copy(out, c)
+	select {
+	case <-inDone:
+		return nil
+	default:
+		// The server ended the stream while the client had not finished: the
+		// bridge died mid-call. Said at once, not at the client's next byte
+		// (round 1, M1). The copy goroutine ends with the process.
+		return &DownError{Reason: "the stream ended while the call was open"}
+	}
 }
 
 // Endpoint is one ordinary endpoint the shim offers inside the unit and the
@@ -152,7 +162,9 @@ type Shim struct {
 	Log  io.Writer
 
 	mu        sync.Mutex
-	down      string // the reason, "" while up
+	held      bool      // the control stream is open
+	lastLog   time.Time // the last rate-limited refusal line
+	down      string    // the reason, "" while up
 	listeners []net.Listener
 	wg        sync.WaitGroup
 }
@@ -162,9 +174,44 @@ func (s *Shim) MarkDown(reason string) {
 	s.mu.Lock()
 	first := s.down == ""
 	s.down = reason
+	if first {
+		s.lastLog = time.Now() // this line is the first of the rate-limited refusals
+	}
 	s.mu.Unlock()
 	if first && s.Log != nil {
 		fmt.Fprintln(s.Log, bridgewire.DownMessage(reason))
+	}
+}
+
+// SetControlHeld records whether the `control` stream is open. While it is, a
+// failed data dial fails only that connection.
+func (s *Shim) SetControlHeld(held bool) {
+	s.mu.Lock()
+	s.held = held
+	s.mu.Unlock()
+}
+
+func (s *Shim) controlHeld() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.held
+}
+
+// logRefusal writes a refusal to Log at most once a second, so a client that
+// retries in a loop does not flood the terminal.
+func (s *Shim) logRefusal(text string) {
+	if s.Log == nil {
+		return
+	}
+	s.mu.Lock()
+	now := time.Now()
+	ok := now.Sub(s.lastLog) >= time.Second
+	if ok {
+		s.lastLog = now
+	}
+	s.mu.Unlock()
+	if ok {
+		fmt.Fprintln(s.Log, text)
 	}
 }
 
@@ -211,22 +258,37 @@ func (s *Shim) accept(ln net.Listener, e Endpoint) {
 func (s *Shim) serve(c net.Conn, e Endpoint) {
 	defer c.Close()
 	if reason := s.Down(); reason != "" {
+		// A unix endpoint cannot carry the text to its client (ssh's agent
+		// protocol, say): the terminal log is where it shows, rate-limited.
+		s.logRefusal(bridgewire.DownMessage(reason))
 		s.refuseDown(c, e, reason)
 		return
 	}
 	up, err := Dial(s.Sock, e.Service)
 	if err != nil {
 		var down *DownError
-		if errors.As(err, &down) {
-			s.MarkDown(down.Reason)
+		var refused *RefusedError
+		switch {
+		case errors.As(err, &refused) && refused.Code == bridgewire.CodeVersion:
+			// One side was upgraded alone: every stream fails this way, so the
+			// bridge is unusable, not just this service (round 1, M5).
+			s.MarkDown(err.Error())
+			s.refuseDown(c, e, err.Error())
+		case errors.As(err, &down):
+			// One failed dial fails THIS connection with the down text. It marks
+			// the whole shim down only when `control` is not held: while the
+			// control stream is open the server still sees the session, and only
+			// its end means the bridge is gone (round 1, M2).
+			if !s.controlHeld() {
+				s.MarkDown(down.Reason)
+			}
+			s.logRefusal(bridgewire.DownMessage(down.Reason))
 			s.refuseDown(c, e, down.Reason)
-			return
+		default:
+			// A refusal of THIS service: said to the client, the bridge stays up.
+			s.logRefusal(fmt.Sprintf("clown: %v", err))
+			s.refuseText(c, e, err.Error())
 		}
-		// A refusal of THIS service: said to the client, the bridge stays up.
-		if s.Log != nil {
-			fmt.Fprintf(s.Log, "clown: %v\n", err)
-		}
-		s.refuseText(c, e, err.Error())
 		return
 	}
 	defer up.Close()
@@ -255,39 +317,45 @@ func (s *Shim) Close() {
 	s.wg.Wait()
 }
 
-// ControlAttempts and ControlRetryDelay: the first connection to `control` can
-// land before the server has the unit's cgroup (clown writes it a moment after
-// the provider starts) or while the server is still coming up, so it is tried
-// this many times, this far apart, before the bridge is reported down or busy.
-// Only an unreachable bridge or a busy answer is retried: a refusal of the
-// service itself is final. The shim never half-closes `control` (CloseWrite): it
-// writes nothing after the hello, and the stream's end is the signal, not ours.
+// ControlRetryWindow and ControlRetryDelay: the first connection to `control`
+// can land before the server can admit this unit (clown writes the unit's
+// cgroup file once systemd reports it, a moment after the unit starts; the
+// server answers `refused` to a peer it cannot yet identify) or while the server
+// is still coming up. It is retried for this long, starting this far apart and
+// doubling to a second, before the bridge is reported down. Retried: an
+// unreachable bridge, `busy`, and `refused`. Final: every other refusal
+// (`unknown-service`, `error`, `version`). The shim never half-closes `control`
+// (CloseWrite): it writes nothing after the hello, and the stream's end is the
+// signal, not ours.
 var (
-	ControlAttempts   = 3
-	ControlRetryDelay = 200 * time.Millisecond
+	ControlRetryWindow = 15 * time.Second
+	ControlRetryDelay  = 100 * time.Millisecond
 )
 
+const controlRetryMaxDelay = time.Second
+
 func dialControl(ctx context.Context, sock string) (net.Conn, error) {
-	var err error
-	for i := 0; i < ControlAttempts; i++ {
-		if i > 0 {
-			select {
-			case <-ctx.Done():
-				return nil, err
-			case <-time.After(ControlRetryDelay):
-			}
-		}
-		var c net.Conn
-		if c, err = Dial(sock, bridgewire.ServiceControl); err == nil {
+	deadline := time.Now().Add(ControlRetryWindow)
+	delay := ControlRetryDelay
+	for {
+		c, err := Dial(sock, bridgewire.ServiceControl)
+		if err == nil {
 			return c, nil
 		}
 		var down *DownError
 		var refused *RefusedError
-		if !errors.As(err, &down) && !(errors.As(err, &refused) && refused.Code == bridgewire.CodeBusy) {
+		retry := errors.As(err, &down) ||
+			(errors.As(err, &refused) && (refused.Code == bridgewire.CodeBusy || refused.Code == bridgewire.CodeRefused))
+		if !retry || time.Now().Add(delay).After(deadline) {
 			return nil, err
 		}
+		select {
+		case <-ctx.Done():
+			return nil, err
+		case <-time.After(delay):
+		}
+		delay = min(delay*2, controlRetryMaxDelay)
 	}
-	return nil, err
 }
 
 // Frame is one NDJSON frame the server pushes on the control stream. Type says
@@ -307,16 +375,30 @@ const MaxFrame = 1 << 20
 // ones). It returns when the stream ends: nil error with the end of stream as
 // the reason ("EOF on control"), or the dial error. ctx cancels it.
 func Control(ctx context.Context, sock string, onFrame func(Frame)) (reason string, err error) {
+	return ControlOpen(ctx, sock, nil, onFrame)
+}
+
+// ControlOpen is Control that calls onOpen once the stream is open (the server
+// answered OK), so the caller knows `control` is held.
+func ControlOpen(ctx context.Context, sock string, onOpen func(), onFrame func(Frame)) (reason string, err error) {
 	c, err := dialControl(ctx, sock)
 	if err != nil {
 		return "", err
 	}
 	defer c.Close()
 	go func() { <-ctx.Done(); _ = c.Close() }()
-	sc := bufio.NewScanner(c)
-	sc.Buffer(make([]byte, 0, 64<<10), MaxFrame)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
+	if onOpen != nil {
+		onOpen()
+	}
+	rd := bufio.NewReaderSize(c, 64<<10)
+	var readErr error
+	for {
+		line, err := readFrameLine(rd)
+		if err != nil {
+			readErr = err
+			break
+		}
+		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
@@ -330,8 +412,38 @@ func Control(ctx context.Context, sock string, onFrame func(Frame)) (reason stri
 	if ctx.Err() != nil {
 		return "the shim was stopped", nil
 	}
-	if err := sc.Err(); err != nil {
-		return "the control stream failed: " + shortErr(err), nil
+	if !errors.Is(readErr, io.EOF) {
+		return "the control stream failed: " + shortErr(readErr), nil
 	}
 	return "EOF on control", nil
+}
+
+// readFrameLine reads one line. A line over MaxFrame is skipped (read to its
+// newline and dropped, returned as an empty line): one over-long frame does not
+// end the stream, so it cannot mark the bridge down. io.EOF ends the stream.
+func readFrameLine(rd *bufio.Reader) (string, error) {
+	var sb strings.Builder
+	tooLong := false
+	for {
+		part, err := rd.ReadSlice('\n')
+		if !tooLong {
+			if sb.Len()+len(part) > MaxFrame {
+				tooLong = true
+				sb.Reset()
+			} else {
+				sb.Write(part)
+			}
+		}
+		switch {
+		case err == nil:
+			if tooLong {
+				return "", nil
+			}
+			return sb.String(), nil
+		case errors.Is(err, bufio.ErrBufferFull):
+			continue
+		default:
+			return "", err
+		}
+	}
 }

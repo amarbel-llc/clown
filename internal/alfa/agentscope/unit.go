@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"code.linenisgreat.com/clown/internal/0/bridgewire"
 	"code.linenisgreat.com/clown/internal/0/peercheck"
@@ -120,6 +121,10 @@ type Launch struct {
 	// peer check that needs the cgroup (the bridge's) can have it before the
 	// provider's first connection.
 	OnCgroup func(cgroup string)
+	// BridgeReady is set true by the launcher once the unit's cgroup file was
+	// written: only then does the result claim bridge-v1 (round 1, A-L2: the
+	// capability must not mean just "the directory is bound").
+	BridgeReady *atomic.Bool
 }
 
 // resourceLimits are every agent unit's limits (clown#320, the operator's
@@ -249,6 +254,10 @@ func (l Launch) SystemdRunArgs() ([]string, error) {
 // socket. For "src:dst" the in-unit path is dst.
 func (l Launch) WritableCovering(path string) []string {
 	var out []string
+	// Both sides are compared lexically and with symlinks resolved, as
+	// Spec.Validate does for clown's state: a bind reaching the runtime
+	// directory through a link (/var/run -> /run) is still a mount over it.
+	realPath := ResolvePath(path)
 	for _, p := range l.properties() {
 		v, ok := strings.CutPrefix(p, "BindPaths=")
 		if !ok {
@@ -267,7 +276,9 @@ func (l Launch) WritableCovering(path string) []string {
 			src = dst
 		}
 		src = filepath.Clean(src)
-		if src == "/" || src == path || strings.HasPrefix(path, src+"/") {
+		realSrc := ResolvePath(src)
+		if src == "/" || src == path || strings.HasPrefix(path, src+"/") ||
+			realSrc == "/" || realSrc == realPath || strings.HasPrefix(realPath, realSrc+"/") {
 			out = append(out, p)
 		}
 	}
@@ -463,6 +474,11 @@ func (l Launch) environment() (set, unset []string) {
 	env["CLOWN_UNIT"] = l.Unit
 	// The bridge (FDR 0048): the socket the in-unit shim and every program that
 	// talks to a service reach it by. Set only with a bridge, never inherited.
+	// The serve's variables and the operator's switch never reach a unit, from
+	// the frontend's environment or from a spec's env (round 1, A-L3).
+	for _, k := range []string{bridgewire.EnvDir, bridgewire.EnvUnit, bridgewire.EnvCgroupFile, "CLOWN_BRIDGE_V1"} {
+		delete(env, k)
+	}
 	delete(env, "CLOWN_BRIDGE_SOCKET")
 	if l.BridgeDir != "" {
 		env["CLOWN_BRIDGE_SOCKET"] = l.BridgeSocket()

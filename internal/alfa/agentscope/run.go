@@ -117,6 +117,14 @@ func (t Tools) Show(unit string) (Status, error) {
 // the shim, which may still refuse (its relays or in-unit servers failing),
 // so "active" alone does not mean the launch succeeded.
 func (t Tools) waitActive(ctx context.Context, unit string) (Status, error) {
+	return t.waitActiveNotify(ctx, unit, nil)
+}
+
+// waitActiveNotify is waitActive that calls onSettled, once, with the unit's
+// ControlGroup the first time the main process has settled, which is before the
+// provider has started: the earliest moment the exact cgroup is known, and so
+// the moment a peer check that needs it (the bridge's) can be given it.
+func (t Tools) waitActiveNotify(ctx context.Context, unit string, onSettled func(cgroup string)) (Status, error) {
 	show := t.show
 	if show == nil {
 		show = t.Show
@@ -125,6 +133,9 @@ func (t Tools) waitActive(ctx context.Context, unit string) (Status, error) {
 	for {
 		st, err := show(unit)
 		if err == nil && st.ActiveState == "active" && st.MainPID > 0 && st.ControlGroup != "" && t.settledMain(st.MainPID, unit) {
+			if !seen && onSettled != nil {
+				onSettled(st.ControlGroup)
+			}
 			seen = true
 			if t.providerStarted(st.MainPID) {
 				st.ShimSeen = true
@@ -290,7 +301,11 @@ func Run(l Launch, tools Tools, logger *slog.Logger) (int, error) {
 			l.OnStarted(killUnit)
 		}
 		go func() {
-			st, err := tools.waitActive(ctx, l.Unit)
+			// The cgroup is handed over as soon as the main process settles,
+			// before the shim has started the provider: the in-unit bridge
+			// dials its control stream from the shim, so the file must not wait
+			// for the provider (round 1, H1).
+			st, err := tools.waitActiveNotify(ctx, l.Unit, l.OnCgroup)
 			res := l.baseResult()
 			res.Cgroup, res.InvocationID, res.Pty, res.MainPID = st.ControlGroup, st.InvocationID, pty, st.MainPID
 			if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, errUnitEnded) {
@@ -299,9 +314,6 @@ func Run(l Launch, tools Tools, logger *slog.Logger) (int, error) {
 				_ = l.fail(err)
 			}
 			if err == nil {
-				if l.OnCgroup != nil {
-					l.OnCgroup(st.ControlGroup)
-				}
 				l.writeResult(res, logger)
 				if l.OnActive != nil {
 					l.OnActive(st.MainPID)

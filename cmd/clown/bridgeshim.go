@@ -10,6 +10,7 @@ import (
 	"strings"
 	"syscall"
 
+	"code.linenisgreat.com/clown/internal/0/bridgewire"
 	"code.linenisgreat.com/clown/internal/alfa/bridgeshim"
 )
 
@@ -98,6 +99,16 @@ func parseBridgeListenArgs(args []string) (sock string, eps []bridgeshim.Endpoin
 }
 
 func runBridgeListen(args []string, stdout, stderr io.Writer) int {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	defer stop()
+	return runBridgeListenCtx(ctx, args, stdout, stderr)
+}
+
+// runBridgeListenCtx is the verb until ctx ends. The control stream is opened
+// in the background AFTER the ready line, with the retry window in
+// bridgeshim.Control: a server that cannot yet admit this unit answers
+// `refused` for a moment (round 1, H1) and the launch must not wait for it.
+func runBridgeListenCtx(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	sock, eps, err := parseBridgeListenArgs(args)
 	if err != nil {
 		fmt.Fprintf(stderr, "clown bridge-listen: %v\nusage: clown bridge-listen [--socket S] [--tcp ADDR=SVC]... [--unix PATH=SVC]...\n", err)
@@ -109,21 +120,25 @@ func runBridgeListen(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	defer sh.Close()
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
-	defer stop()
 	// The control stream: its end means the bridge is down. A bridge that
-	// cannot be reached at start is down from the start.
+	// cannot be reached after the retry window is down from the start.
 	go func() {
-		reason, err := bridgeshim.Control(ctx, sock, func(bridgeshim.Frame) {})
+		reason, err := bridgeshim.ControlOpen(ctx, sock, func() { sh.SetControlHeld(true) }, func(bridgeshim.Frame) {})
 		var down *bridgeshim.DownError
+		var refused *bridgeshim.RefusedError
 		switch {
 		case errors.As(err, &down):
 			sh.MarkDown(down.Reason)
+		case errors.As(err, &refused) && refused.Code == bridgewire.CodeVersion:
+			// One side was upgraded alone: the bridge is unusable (round 1, M5).
+			sh.MarkDown(err.Error())
 		case err != nil:
-			// A refusal of the control service itself (a server without one): the
-			// shim cannot tell when the bridge goes; it says so once and carries on.
+			// A refusal of the control service itself (a server without one, or
+			// one that still will not admit this unit after the window): the shim
+			// cannot tell when the bridge goes; it says so once and carries on.
 			fmt.Fprintf(stderr, "clown bridge-listen: no control stream (%v); the bridge's end will only show on the next connection\n", err)
 		case ctx.Err() == nil:
+			sh.SetControlHeld(false)
 			sh.MarkDown(reason)
 		}
 	}()

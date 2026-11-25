@@ -153,6 +153,10 @@ func parseMajor(s string) (int, bool) {
 	return n, true
 }
 
+// Printable is s with every byte outside printable ASCII escaped, at most
+// MaxReplyTextBytes of it: what a text read off the socket may be shown as.
+func Printable(s string) string { return escape(s, MaxReplyTextBytes) }
+
 // escape makes s printable and at most n bytes (an error text must not carry
 // raw control bytes from the peer).
 func escape(s string, n int) string {

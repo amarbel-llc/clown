@@ -131,6 +131,21 @@ func (s Spec) Validate() error {
 			return fmt.Errorf("worktree or binds_rw entry %q makes clown's state %q writable from inside the unit", p, clownState)
 		}
 	}
+	// Every session's launch directory (<runtime>/clown/launch/<key>) holds its
+	// plugin sockets and, with the bridge, bridge.sock and bridge.cgroup: a
+	// worktree or binds_rw entry covering or inside the launch root would let the
+	// unit write another session's cgroup file and reach its sockets (FDR 0048,
+	// round 1, A-M1). Refused, not continued.
+	if rt := os.Getenv("XDG_RUNTIME_DIR"); filepath.IsAbs(rt) {
+		launchRoot := filepath.Join(rt, "clown", "launch")
+		realLaunch := ResolvePath(launchRoot)
+		for _, p := range append([]string{s.Worktree}, s.BindsRW...) {
+			real := ResolvePath(p)
+			if exposesWhole(p, launchRoot) || within(p, launchRoot) || exposesWhole(real, realLaunch) || within(real, realLaunch) {
+				return fmt.Errorf("worktree or binds_rw entry %q makes the launch directories %q writable from inside the unit", p, launchRoot)
+			}
+		}
+	}
 	// The issue-filer service token lives in $XDG_STATE_HOME/circus and is read
 	// only by the frontend-side moxin; the unit keeps the operator's uid, so
 	// only the mount namespace keeps it out. No bind of any kind (read-only
@@ -262,7 +277,7 @@ var Capabilities = []string{
 // resultCapabilities is what a unit of this launch reports: Capabilities, plus
 // bridge-v1 when the bridge directory is bound.
 func (l Launch) resultCapabilities() []string {
-	if l.BridgeDir != "" {
+	if l.BridgeDir != "" && l.BridgeReady != nil && l.BridgeReady.Load() {
 		return append(slices.Clone(Capabilities), "bridge-v1")
 	}
 	return Capabilities
