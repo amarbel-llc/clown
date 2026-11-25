@@ -60,12 +60,12 @@ func TestBridgeStdioVerb(t *testing.T) {
 			}
 			go func() {
 				defer c.Close()
-				svc, err := bridgewire.ReadHello(c)
-				if err != nil || svc != "hook" {
-					_, _ = c.Write(bridgewire.ErrLine(bridgewire.CodeUnknownService, "no "+svc))
+				h, err := bridgewire.ReadHello(c)
+				if err != nil || h.Service != "hook" {
+					_, _ = c.Write(bridgewire.FormatErr(bridgewire.CodeUnknownService, h.Service))
 					return
 				}
-				_, _ = io.WriteString(c, bridgewire.OKLine)
+				_, _ = c.Write(bridgewire.OK())
 				_, _ = io.Copy(c, c)
 			}()
 		}

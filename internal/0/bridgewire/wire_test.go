@@ -2,130 +2,305 @@ package bridgewire
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
+	"os"
 	"strings"
 	"testing"
 )
 
-func TestHelloIsTheContractsExactBytes(t *testing.T) {
-	b, err := Hello("session")
-	if err != nil || string(b) != "BRIDGE/1 session\n" {
-		t.Fatalf("Hello = %q, %v", b, err)
+const vectorsFile = "testdata/bridge-vectors.json"
+
+// vectorsSHA256 is the digest spinclass publishes beside its vectors
+// (internal/0/bridge/testdata/vectors.json.sha256); the copy here must be those
+// bytes. `just verify-bridge-vectors DIR` compares the copy and this pin with
+// spinclass's own files.
+const vectorsSHA256 = "219c9060906a119e660260c71609ff5fea116f686a64b47a658cdcc1cd5c43e1"
+
+func TestVendoredVectorsAreSpinclasssBytes(t *testing.T) {
+	b, err := os.ReadFile(vectorsFile)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, s := range []string{strings.Repeat("a", 32), "a", "a-b-9"} {
-		if _, err := Hello(s); err != nil {
-			t.Errorf("%q refused: %v", s, err)
+	sum := sha256.Sum256(b)
+	if got := hex.EncodeToString(sum[:]); got != vectorsSHA256 {
+		t.Errorf("%s has sha256 %s, want %s (spinclass's); re-copy it, never re-create it, and move the pin in the same commit", vectorsFile, got, vectorsSHA256)
+	}
+}
+
+// gen builds a long string without writing it out in the vectors file.
+type gen struct {
+	Prefix string `json:"prefix"`
+	Repeat string `json:"repeat"`
+	N      int    `json:"n"`
+	Suffix string `json:"suffix"`
+}
+
+func (g *gen) String() string { return g.Prefix + strings.Repeat(g.Repeat, g.N) + g.Suffix }
+
+type vector struct {
+	Name       string   `json:"name"`
+	Op         string   `json:"op"`
+	Input      string   `json:"input"`
+	InputGen   *gen     `json:"input_gen"`
+	Served     []string `json:"served"`
+	ParseErr   string   `json:"parse_err"`
+	Major      int      `json:"major"`
+	Service    string   `json:"service"`
+	ServiceGen *gen     `json:"service_gen"`
+	Reply      string   `json:"reply"`
+	ReplyGen   *gen     `json:"reply_gen"`
+	Accept     bool     `json:"accept"`
+	Rest       string   `json:"rest"`
+	OK         bool     `json:"ok"`
+	Code       string   `json:"code"`
+	Text       string   `json:"text"`
+	TextGen    *gen     `json:"text_gen"`
+}
+
+func (v vector) input() string {
+	if v.InputGen != nil {
+		return v.InputGen.String()
+	}
+	return v.Input
+}
+
+func (v vector) wantReply() string {
+	if v.ReplyGen != nil {
+		return v.ReplyGen.String()
+	}
+	return v.Reply
+}
+
+func (v vector) wantService() string {
+	if v.ServiceGen != nil {
+		return v.ServiceGen.String()
+	}
+	return v.Service
+}
+
+func (v vector) text() string {
+	if v.TextGen != nil {
+		return v.TextGen.String()
+	}
+	return v.Text
+}
+
+func errClass(err error) string {
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, ErrTooLong):
+		return "too-long"
+	case errors.Is(err, ErrMalformed):
+		return "malformed"
+	}
+	return "other: " + err.Error()
+}
+
+// onlyOneByte fails the test if a reader is asked for more than one byte at a
+// time: that is what keeps service bytes out of the handshake's buffers.
+type onlyOneByte struct {
+	t *testing.T
+	r io.Reader
+}
+
+func (o onlyOneByte) Read(p []byte) (int, error) {
+	if len(p) > 1 {
+		o.t.Errorf("a read asked for %d bytes; the handshake must read one byte at a time", len(p))
+		p = p[:1]
+	}
+	return o.r.Read(p)
+}
+
+func loadVectors(t *testing.T) []vector {
+	t.Helper()
+	b, err := os.ReadFile(vectorsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var vs []vector
+	if err := json.Unmarshal(b, &vs); err != nil {
+		t.Fatal(err)
+	}
+	if len(vs) < 70 {
+		t.Fatalf("only %d vectors", len(vs))
+	}
+	return vs
+}
+
+func servedSet(v vector) map[string]bool {
+	labels := v.Served
+	if labels == nil {
+		labels = ReservedServices
+	}
+	m := map[string]bool{}
+	for _, l := range labels {
+		m[l] = true
+	}
+	return m
+}
+
+// Every case of spinclass's vectors, driven through this package.
+func TestVectors(t *testing.T) {
+	ops := map[string]int{}
+	for _, v := range loadVectors(t) {
+		ops[v.Op]++
+		t.Run(v.Name, func(t *testing.T) {
+			switch v.Op {
+			case "hello":
+				runHello(t, v)
+			case "reply":
+				runReply(t, v)
+			case "format-err":
+				if got := string(FormatErr(v.Code, v.text())); got != v.wantReply() {
+					t.Errorf("FormatErr(%q, ...) = %q, want %q", v.Code, got, v.wantReply())
+				}
+			default:
+				t.Fatalf("unknown op %q: this build does not understand the vectors file", v.Op)
+			}
+		})
+	}
+	for _, op := range []string{"hello", "reply", "format-err"} {
+		if ops[op] == 0 {
+			t.Errorf("no vector for op %q", op)
 		}
 	}
-	for _, s := range []string{"", strings.Repeat("a", 33), "Session", "9a", "-a", "a b", "a\n", "a_b", "é"} {
-		if _, err := Hello(s); err == nil {
-			t.Errorf("%q must be refused", s)
+}
+
+func runHello(t *testing.T, v vector) {
+	in := v.input()
+	rd := bytes.NewReader([]byte(in))
+	h, err := ReadHello(onlyOneByte{t, rd})
+	if got := errClass(err); got != v.ParseErr {
+		t.Fatalf("ReadHello error class = %q (%v), want %q", got, err, v.ParseErr)
+	}
+	if v.ParseErr == "" {
+		if h.Major != v.Major || h.Service != v.wantService() {
+			t.Errorf("ReadHello = %+v, want major %d service %q", h, v.Major, v.wantService())
+		}
+		if rest := in[len(in)-rd.Len():]; rest != v.Rest {
+			t.Errorf("ReadHello left %q unread, want %q", rest, v.Rest)
+		}
+	} else if len(in)-rd.Len() > MaxHelloBytes {
+		t.Errorf("ReadHello consumed %d bytes, more than %d", len(in)-rd.Len(), MaxHelloBytes)
+	}
+	// The line parser sees the line the stream reader would have delivered.
+	line := in
+	if i := strings.IndexByte(in, '\n'); i >= 0 {
+		line = in[:i+1]
+	}
+	ph, perr := ParseHello([]byte(line))
+	if got := errClass(perr); got != v.ParseErr {
+		t.Fatalf("ParseHello error class = %q (%v), want %q", got, perr, v.ParseErr)
+	}
+	if perr == nil && ph != h {
+		t.Errorf("ParseHello = %+v, ReadHello = %+v", ph, h)
+	}
+	var reply []byte
+	var accept bool
+	if perr != nil {
+		reply, accept = MalformedReply(), false
+	} else {
+		reply, accept = Decide(ph, servedSet(v))
+	}
+	if string(reply) != v.wantReply() || accept != v.Accept {
+		t.Errorf("answer = %q accept %v, want %q accept %v", reply, accept, v.wantReply(), v.Accept)
+	}
+}
+
+func runReply(t *testing.T, v vector) {
+	in := v.input()
+	rd := bytes.NewReader([]byte(in))
+	ok, code, text, err := ReadReply(onlyOneByte{t, rd})
+	if got := errClass(err); got != v.ParseErr {
+		t.Fatalf("ReadReply error class = %q (%v), want %q", got, err, v.ParseErr)
+	}
+	if v.ParseErr != "" {
+		if len(in)-rd.Len() > MaxHelloBytes+MaxReplyTextBytes {
+			t.Errorf("ReadReply consumed %d bytes, more than %d", len(in)-rd.Len(), MaxHelloBytes+MaxReplyTextBytes)
+		}
+		return
+	}
+	if ok != v.OK || code != v.Code || text != v.text() {
+		t.Errorf("ReadReply = %v %q %q, want %v %q %q", ok, code, text, v.OK, v.Code, v.text())
+	}
+	if rest := in[len(in)-rd.Len():]; rest != v.Rest {
+		t.Errorf("ReadReply left %q unread, want %q", rest, v.Rest)
+	}
+}
+
+func TestConstantsAreTheContracts(t *testing.T) {
+	if SocketName != "bridge.sock" || EnvDir != "CLOWN_BRIDGE_DIR" || EnvUnit != "CLOWN_BRIDGE_UNIT" {
+		t.Errorf("names: %q %q %q", SocketName, EnvDir, EnvUnit)
+	}
+	if MaxHelloBytes != 64 || MaxReplyTextBytes != 512 || MaxStreamsPerSession != 64 || MaxSocketPath != 107 || Major != 1 {
+		t.Error("limits drifted from the contract")
+	}
+	if HelloTimeout.Seconds() != 5 {
+		t.Errorf("HelloTimeout = %v", HelloTimeout)
+	}
+	if got := strings.Join(ReservedServices, " "); got != "egress control session hook chat model keys status" {
+		t.Errorf("ReservedServices = %q", got)
+	}
+}
+
+func TestFormatHelloRoundTripsAndRefusesWhatParseRefuses(t *testing.T) {
+	b, err := FormatHello(1, "egress")
+	if err != nil || string(b) != "BRIDGE/1 egress\n" {
+		t.Fatalf("FormatHello = %q, %v", b, err)
+	}
+	if h, err := ParseHello(b); err != nil || h != (Hello{Major: 1, Service: "egress"}) {
+		t.Errorf("ParseHello = %+v, %v", h, err)
+	}
+	for _, c := range []struct {
+		major   int
+		service string
+	}{{0, "egress"}, {1000, "egress"}, {-1, "egress"}, {1, "Egress"}, {1, ""}, {1, strings.Repeat("a", 33)}} {
+		if b, err := FormatHello(c.major, c.service); !errors.Is(err, ErrMalformed) {
+			t.Errorf("FormatHello(%d, %q) = %q, %v; want ErrMalformed", c.major, c.service, b, err)
 		}
 	}
 }
 
-func TestParseHello(t *testing.T) {
-	if svc, err := ParseHello("BRIDGE/1 control\n"); err != nil || svc != "control" {
-		t.Errorf("good hello: %q, %v", svc, err)
+// An error text never carries raw bytes from the peer.
+func TestMalformedErrorEchoIsEscapedAndCapped(t *testing.T) {
+	_, err := ParseHello([]byte("BRIDGE/1 \x00\x1b[31m\xff" + strings.Repeat("z", 30) + "\n"))
+	if !errors.Is(err, ErrMalformed) {
+		t.Fatalf("err = %v", err)
 	}
-	// A 32-character label is the longest legal one; 33 is refused.
-	if _, err := ParseHello("BRIDGE/1 " + strings.Repeat("a", 32) + "\n"); err != nil {
-		t.Errorf("32-char label: %v", err)
-	}
-	if _, err := ParseHello("BRIDGE/1 " + strings.Repeat("a", 33) + "\n"); err == nil {
-		t.Error("33-char label must be refused")
-	}
-	var ve *VersionError
-	if _, err := ParseHello("BRIDGE/2 session\n"); !errors.As(err, &ve) || ve.Shim != 2 {
-		t.Errorf("another major: %v", err)
-	}
-	for name, line := range map[string]string{
-		"no newline":     "BRIDGE/1 session",
-		"wrong prefix":   "HELLO/1 session\n",
-		"no label":       "BRIDGE/1\n",
-		"empty label":    "BRIDGE/1 \n",
-		"major word":     "BRIDGE/x session\n",
-		"major zero":     "BRIDGE/0 session\n",
-		"leading zero":   "BRIDGE/01 session\n",
-		"two spaces":     "BRIDGE/1  session\n",
-		"carriage ret":   "BRIDGE/1 session\r\n",
-		"over the limit": "BRIDGE/1 " + strings.Repeat("a", 60) + "\n",
-	} {
-		if _, err := ParseHello(line); err == nil {
-			t.Errorf("%s: want a refusal", name)
+	for _, r := range err.Error() {
+		if r < 0x20 || r > 0x7e {
+			t.Errorf("error text holds the raw rune %q: %q", r, err.Error())
 		}
 	}
-}
-
-// A hello of exactly 64 bytes passes the length bound; 65 does not.
-func TestHelloLineBound(t *testing.T) {
-	r := strings.NewReader("BRIDGE/1 " + strings.Repeat("a", 32) + "\n")
-	if _, err := ReadHello(r); err != nil {
-		t.Errorf("a legal hello: %v", err)
-	}
-	// 70 bytes without a newline: too long, read no further than the bound.
-	long := strings.Repeat("x", 70)
-	r2 := strings.NewReader(long)
-	if _, err := ReadHello(r2); !errors.Is(err, ErrHelloTooLong) {
-		t.Errorf("an over-long hello: %v", err)
-	}
-	if r2.Len() != 70-MaxHelloLine {
-		t.Errorf("read %d bytes past the bound's limit, want exactly %d read", 70-r2.Len(), MaxHelloLine)
-	}
-	// A hello cut short by the end of the stream, before its newline.
-	if _, err := ReadHello(strings.NewReader("BRIDGE/1 sess")); err == nil {
-		t.Error("a hello cut short must be refused")
+	if !strings.Contains(err.Error(), `\x00`) {
+		t.Errorf("the NUL byte is not escaped: %q", err.Error())
 	}
 }
 
-// The reply is read exactly to its newline: the service's first bytes, which can
-// follow the answer at once, stay in the stream (the proof of concept swallowed
-// them through a buffered reader).
-func TestReadReplyLeavesTheServicesFirstBytes(t *testing.T) {
-	r := strings.NewReader("OK\nfirst service bytes")
-	rep, err := ReadReply(r)
-	if err != nil || !rep.OK {
-		t.Fatalf("reply: %+v, %v", rep, err)
+func TestSocketPath(t *testing.T) {
+	got, err := SocketPath("/run/user/1000/clown/launch/abc/bridge/")
+	if err != nil || got != "/run/user/1000/clown/launch/abc/bridge/bridge.sock" {
+		t.Errorf("SocketPath = %q, %v", got, err)
 	}
-	rest, _ := io.ReadAll(r)
-	if string(rest) != "first service bytes" {
-		t.Errorf("the stream after the answer = %q", rest)
+	// A 36-character key under /run/user/1001: 83 bytes (the figure first agreed,
+	// 79, left out 4 bytes of the launch path).
+	if p, err := SocketPath("/run/user/1001/clown/launch/" + strings.Repeat("k", 36) + "/bridge"); err != nil || len(p) != 83 {
+		t.Errorf("a real key's path: %q (%d), %v", p, len(p), err)
 	}
-}
-
-func TestReplies(t *testing.T) {
-	rep, err := ParseReply("ERR refused restart-child-session needs the right \"restart\"\n")
-	if err != nil || rep.OK || rep.Code != "refused" || !strings.HasPrefix(rep.Text, "restart-child-session needs") {
-		t.Errorf("ERR reply: %+v, %v", rep, err)
+	dir := "/" + strings.Repeat("d", MaxSocketPath-len("/"+"/"+SocketName))
+	if p, err := SocketPath(dir); err != nil || len(p) != MaxSocketPath {
+		t.Errorf("107-byte path: %q (%d), %v", p, len(p), err)
 	}
-	if rep, err := ParseReply("ERR busy\n"); err != nil || rep.Code != "busy" || rep.Text != "" {
-		t.Errorf("ERR without text: %+v, %v", rep, err)
+	if _, err := SocketPath(dir + "d"); err == nil || !strings.Contains(err.Error(), "bridge stays off") {
+		t.Errorf("a 108-byte path: %v", err)
 	}
-	for _, bad := range []string{"", "OK \n", "ok\n", "ERR\n", "ERR \n", "HELLO\n", "OKAY\n"} {
-		if _, err := ParseReply(bad); err == nil {
-			t.Errorf("%q must be refused", bad)
-		}
-	}
-	// An answer that never ends is cut at the bound, not read forever.
-	if _, err := ReadReply(strings.NewReader(strings.Repeat("E", 5000))); err == nil {
-		t.Error("an endless answer must fail")
-	}
-}
-
-func TestErrLineIsOneBoundedLine(t *testing.T) {
-	got := ErrLine(CodeRefused, "line one\nline two\r"+strings.Repeat("x", 600))
-	if !bytes.HasSuffix(got, []byte("\n")) || bytes.Count(got, []byte("\n")) != 1 {
-		t.Errorf("not one line: %q", got)
-	}
-	if len(got) > len("ERR refused ")+MaxErrText+1 {
-		t.Errorf("text not bounded: %d bytes", len(got))
-	}
-	if string(VersionErrLine(2)[:len("ERR version server=1 shim=2")]) != "ERR version server=1 shim=2" {
-		t.Errorf("version line: %q", VersionErrLine(2))
-	}
-	if rep, err := ParseReply(string(VersionErrLine(3))); err != nil || rep.Code != CodeVersion {
-		t.Errorf("a version line must parse: %+v, %v", rep, err)
+	if _, err := SocketPath(""); err == nil {
+		t.Error("an empty directory was accepted")
 	}
 }
 
@@ -133,16 +308,5 @@ func TestDownMessageIsTheFixedForm(t *testing.T) {
 	want := "clown: the bridge is down (EOF on control); no tool or model call can leave this session; the session's frontend is gone or restarting"
 	if got := DownMessage("EOF on control"); got != want {
 		t.Errorf("down message\n got %q\nwant %q", got, want)
-	}
-}
-
-func TestReservedLabelsAreLegal(t *testing.T) {
-	for _, s := range ReservedServices {
-		if !ValidService(s) {
-			t.Errorf("reserved label %q is not a legal label", s)
-		}
-	}
-	if len(ReservedServices) != 8 {
-		t.Errorf("the contract reserves 8 labels, have %d", len(ReservedServices))
 	}
 }

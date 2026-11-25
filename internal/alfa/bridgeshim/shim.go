@@ -56,7 +56,7 @@ func (e *DownError) Error() string { return bridgewire.DownMessage(e.Reason) }
 // connection carries the service's bytes. An unreachable bridge is a *DownError;
 // an ERR answer is a *RefusedError (a version refusal carries the server's hint).
 func Dial(sock, service string) (net.Conn, error) {
-	hello, err := bridgewire.Hello(service)
+	hello, err := bridgewire.FormatHello(bridgewire.Major, service)
 	if err != nil {
 		return nil, err
 	}
@@ -72,14 +72,14 @@ func Dial(sock, service string) (net.Conn, error) {
 		c.Close()
 		return nil, &DownError{Reason: "writing the hello: " + shortErr(err)}
 	}
-	rep, err := bridgewire.ReadReply(c)
+	ok, code, text, err := bridgewire.ReadReply(c)
 	if err != nil {
 		c.Close()
 		return nil, &DownError{Reason: "no answer to the hello: " + shortErr(err)}
 	}
-	if !rep.OK {
+	if !ok {
 		c.Close()
-		return nil, &RefusedError{Service: service, Code: rep.Code, Text: rep.Text}
+		return nil, &RefusedError{Service: service, Code: code, Text: text}
 	}
 	_ = c.SetDeadline(time.Time{})
 	return c, nil

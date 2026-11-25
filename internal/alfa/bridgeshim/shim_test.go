@@ -56,26 +56,29 @@ func newFakeServer(t *testing.T, services map[string]handler) *fakeServer {
 func (s *fakeServer) serve(c net.Conn, services map[string]handler) {
 	defer c.Close()
 	_ = c.SetReadDeadline(time.Now().Add(bridgewire.HelloTimeout))
-	svc, err := bridgewire.ReadHello(c)
+	hello, err := bridgewire.ReadHello(c)
 	_ = c.SetReadDeadline(time.Time{})
-	var ve *bridgewire.VersionError
-	switch {
-	case errors.As(err, &ve):
-		_, _ = c.Write(bridgewire.VersionErrLine(ve.Shim))
-		return
-	case err != nil:
-		_, _ = c.Write(bridgewire.ErrLine(bridgewire.CodeError, err.Error()))
+	if err != nil {
+		if errors.Is(err, bridgewire.ErrMalformed) || errors.Is(err, bridgewire.ErrTooLong) {
+			_, _ = c.Write(bridgewire.MalformedReply())
+		}
 		return
 	}
+	if hello.Major != bridgewire.Major {
+		reply, _ := bridgewire.Decide(hello, nil)
+		_, _ = c.Write(reply)
+		return
+	}
+	svc := hello.Service
 	h, ok := services[svc]
 	if !ok {
-		_, _ = c.Write(bridgewire.ErrLine(bridgewire.CodeUnknownService, "no service "+svc))
+		_, _ = c.Write(bridgewire.FormatErr(bridgewire.CodeUnknownService, svc))
 		return
 	}
 	s.mu.Lock()
 	s.seen = append(s.seen, svc)
 	s.mu.Unlock()
-	_, _ = io.WriteString(c, bridgewire.OKLine)
+	_, _ = c.Write(bridgewire.OK())
 	h(c)
 }
 
@@ -126,9 +129,9 @@ func TestDialMapsAnswersToErrors(t *testing.T) {
 	}
 	defer c.Close()
 	_, _ = io.WriteString(c, "BRIDGE/2 good\n")
-	rep, err := bridgewire.ReadReply(c)
-	if err != nil || rep.Code != bridgewire.CodeVersion || !strings.Contains(rep.Text, "server=1 shim=2") {
-		t.Errorf("version answer: %+v, %v", rep, err)
+	ok, code, text, err := bridgewire.ReadReply(c)
+	if err != nil || ok || code != bridgewire.CodeVersion || !strings.Contains(text, "server=1 shim=2") {
+		t.Errorf("version answer: %v %q %q, %v", ok, code, text, err)
 	}
 }
 

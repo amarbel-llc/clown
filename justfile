@@ -493,6 +493,28 @@ verify-agent-scope:
     echo "agent-scope: clown=$CLOWN_BIN"
     "$bats_bin" zz-tests_bats/agent_scope.bats
 
+# Compare clown's vendored copy of spinclass's bridge wire vectors, and the
+# digest clown pins for it, with what spinclass PUBLISHES in DIR (its
+# internal/0/bridge/testdata): the check that can see spinclass change the
+# vectors (the Go pin test compares with a constant clown wrote itself). Fails
+# naming what differs. Run it before cutting a review package.
+#
+# check the vendored bridge vectors against spinclass's published file
+[group("test")]
+verify-bridge-vectors DIR:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "$(git rev-parse --show-toplevel)"
+    mine=internal/0/bridgewire/testdata/bridge-vectors.json
+    theirs="{{DIR}}/vectors.json"
+    [ -f "$theirs" ] || { echo "MISSING in spinclass: $theirs"; exit 1; }
+    bad=0
+    cmp -s "$mine" "$theirs" || { echo "DIFFERS from spinclass: vectors.json"; bad=1; }
+    pub="$(cut -d' ' -f1 "$theirs.sha256")"
+    grep -q "const vectorsSHA256 = \"$pub\"" internal/0/bridgewire/wire_test.go || { echo "PINNED DIGEST is not the published $pub"; bad=1; }
+    [ "$bad" -eq 0 ] && echo "vendored bridge vectors equal spinclass's published file and digest"
+    exit "$bad"
+
 # Integration test: launch clown-plugin-host with the synthetic plugin's
 # clown.json and verify URL-based MCP compilation, name preservation,
 # and agents field passthrough. Runs the full bats suite via the nix
