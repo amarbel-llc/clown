@@ -290,6 +290,87 @@ func TestOrphanRemovesTheSocketAndTheCgroupFile(t *testing.T) {
 	(sessionBridge{}).orphan(nil) // a zero bridge: no-op, no panic
 }
 
+// Joint round, C-M2: a serve that binds AFTER clown gave up (a bind at 10.1 s)
+// finds no bridge directory, so it cannot leave a live listener for a session
+// clown reported as `bridge: off`. Red with the old orphan (remove by path only).
+func TestAnOrphanedBridgeCannotBeBoundLate(t *testing.T) {
+	rt, err := os.MkdirTemp("/tmp", "cbo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(rt)
+	_, b, err := routeBridge(serveFixture(nil), "/bin/bridge", rt, "k1", "u", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.orphan(nil)
+	if ln, err := net.Listen("unix", b.Socket); err == nil {
+		_ = ln.Close()
+		t.Fatal("a serve bound the socket after clown dropped the bridge")
+	}
+	if _, err := os.Lstat(b.Dir); !os.IsNotExist(err) {
+		t.Errorf("the bridge directory survived the drop: %v", err)
+	}
+}
+
+// Joint round, C-M2: cleanup removes by path only the socket this launch saw.
+// A socket at the same path that is another inode (a relaunch of the key whose
+// serve bound meanwhile) is left alone. Red with removal by path alone.
+func TestCleanupRemovesOnlyTheSocketItSaw(t *testing.T) {
+	rt, err := os.MkdirTemp("/tmp", "cbs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(rt)
+	_, b, err := routeBridge(serveFixture(nil), "/bin/bridge", rt, "k1", "u", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := net.Listen("unix", b.Socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !b.awaitSocket(time.Second) {
+		t.Fatal("the socket was not seen")
+	}
+	// Our own socket is removed.
+	first.(*net.UnixListener).SetUnlinkOnClose(false)
+	_ = first.Close()
+	b.cleanup()
+	if _, err := os.Lstat(b.Socket); !os.IsNotExist(err) {
+		t.Errorf("cleanup left the socket it saw: %v", err)
+	}
+	// Another inode at the path survives.
+	_, b2, err := routeBridge(serveFixture(nil), "/bin/bridge", rt, "k1", "u", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mine, err := net.Listen("unix", b2.Socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !b2.awaitSocket(time.Second) {
+		t.Fatal("the socket was not seen")
+	}
+	mine.(*net.UnixListener).SetUnlinkOnClose(false)
+	_ = mine.Close()
+	// Another launch's socket, created while ours still exists (so its inode is
+	// a different one: inodes are reused once freed), then renamed over the path.
+	other := filepath.Join(rt, "other.sock")
+	theirs, err := net.Listen("unix", other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer theirs.Close()
+	if err := os.Rename(other, b2.Socket); err != nil {
+		t.Fatal(err)
+	}
+	b2.cleanup()
+	if _, err := os.Lstat(b2.Socket); err != nil {
+		t.Errorf("cleanup removed a socket it never saw: %v", err)
+	}
+}
+
 // Round 1, M7: the verb that the in-unit start path runs, against a fake
 // server that answers like the reviewed listener (refused until it can admit
 // the unit), end to end: ready line, control held after the retries, and the

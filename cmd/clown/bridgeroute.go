@@ -36,6 +36,8 @@ type sessionBridge struct {
 	Unit string
 	// written is what this process wrote to CgroupFile (shared by copies).
 	written *writtenCgroup
+	// sock is the identity of the socket this launch saw (shared by copies).
+	sock *socketIdentity
 }
 
 // bridgeSwitchOn is the whole switch: a confined launch (it has a unit) whose
@@ -116,7 +118,7 @@ func routeBridge(discovered []pluginhost.DiscoveredServer, bridgePath, runtimeDi
 		env[bridgewire.EnvUnit] = strings.TrimSuffix(unit, ".service") + ".service"
 		env[bridgewire.EnvCgroupFile] = cgFile
 		out[i].Def.Env = env
-		b = sessionBridge{Dir: dir, Socket: sock, CgroupFile: cgFile, Unit: strings.TrimSuffix(unit, ".service") + ".service", written: &writtenCgroup{}}
+		b = sessionBridge{Dir: dir, Socket: sock, CgroupFile: cgFile, Unit: strings.TrimSuffix(unit, ".service") + ".service", written: &writtenCgroup{}, sock: &socketIdentity{}}
 	}
 	if b.Dir == "" {
 		return discovered, sessionBridge{}, nil
@@ -228,16 +230,75 @@ func (b sessionBridge) writeCgroup(cgroup string) error {
 // no cgroup file the serve admits nobody (it fails closed on a missing file);
 // with no socket nothing can connect. Logged, because the serve's listener is
 // still running (round 1, A-M1).
+//
+// The bridge DIRECTORY is renamed away first (joint round, C-M2) and then
+// removed with what is in it: a serve that binds after clown gave up (a loaded
+// host, a bind at 10.1 s) finds no directory (its own check of it fails), and
+// cannot leave a live listener for a session clown reported as `bridge: off`.
 func (b sessionBridge) orphan(logger *slog.Logger) {
 	if b.Dir == "" {
 		return
 	}
-	_ = os.Remove(b.Socket)
+	gone := fmt.Sprintf("%s.orphan-%d", b.Dir, os.Getpid())
+	if err := os.Rename(b.Dir, gone); err == nil {
+		_ = os.RemoveAll(gone)
+	} else {
+		// No directory to rename (never created, or already gone): the socket,
+		// if any, is ours to remove only if it is the one this launch saw.
+		b.removeSocketIfMine()
+	}
 	_ = os.Remove(b.CgroupFile)
 	_ = os.Remove(b.CgroupFile + ".tmp")
 	if logger != nil {
-		logger.Warn("bridge: dropped after the serve started; its socket and cgroup file are removed and its listener is orphaned until the session ends", "dir", b.Dir)
+		logger.Warn("bridge: dropped after the serve started; its directory, socket and cgroup file are removed and its listener is orphaned until the session ends", "dir", b.Dir)
 	}
+}
+
+// socketIdentity is the device and inode of the socket this launch saw the
+// serve create, so removal by path cannot take another launch's socket (a
+// relaunch of the same key whose serve bound after this process' cleanup began).
+type socketIdentity struct {
+	mu       sync.Mutex
+	dev, ino uint64
+	set      bool
+}
+
+func (s *socketIdentity) record(fi os.FileInfo) {
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return
+	}
+	s.mu.Lock()
+	s.dev, s.ino, s.set = uint64(st.Dev), uint64(st.Ino), true
+	s.mu.Unlock()
+}
+
+func (s *socketIdentity) is(fi os.FileInfo) bool {
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.set && s.dev == uint64(st.Dev) && s.ino == uint64(st.Ino)
+}
+
+// removeSocketIfMine unlinks the socket path only when it is the inode this
+// launch recorded; a socket it never saw, or another one at the same path, is
+// left alone.
+func (b sessionBridge) removeSocketIfMine() {
+	if b.Socket == "" || b.sock == nil {
+		return
+	}
+	if fi, err := os.Lstat(b.Socket); err == nil && b.sock.is(fi) {
+		_ = os.Remove(b.Socket)
+	}
+}
+
+// ownedByUs reports whether the file belongs to this user.
+func ownedByUs(fi os.FileInfo) bool {
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	return ok && int(st.Uid) == os.Getuid()
 }
 
 // bridgeSocketWait is how long the launch waits for the serve to create
@@ -253,7 +314,12 @@ func (b sessionBridge) awaitSocket(timeout time.Duration) bool {
 	}
 	deadline := time.Now().Add(timeout)
 	for {
-		if fi, err := os.Lstat(b.Socket); err == nil && fi.Mode().Type() == os.ModeSocket {
+		if fi, err := os.Lstat(b.Socket); err == nil && fi.Mode().Type() == os.ModeSocket && ownedByUs(fi) {
+			// Remembered: only this inode is ever removed by path (C-M2), and
+			// only a socket of this user counts as the serve's (C-L1).
+			if b.sock != nil {
+				b.sock.record(fi)
+			}
 			return true
 		}
 		if time.Now().After(deadline) {
@@ -269,7 +335,7 @@ func (b sessionBridge) cleanup() {
 	if b.Dir == "" {
 		return
 	}
-	_ = os.Remove(b.Socket)
+	b.removeSocketIfMine()
 	_ = os.Remove(b.Dir)
 	// The cgroup file only if it still holds what this process wrote: a
 	// frontend that took over the key since must not lose its own (round 1, B-L1).
