@@ -16,6 +16,19 @@ type ServeConn = internal.ServeConn
 // creates it. The same limits as ServeSocketPath apply.
 var BrokerSocketPath = internal.BrokerSocketPath
 
+// CheckCgroupExact reports whether cg is exactly the unit's control group
+// (want, the ControlGroup property read once from the manager) or a sub-group
+// of it. Unlike CheckUnitCgroup's suffix match it cannot be satisfied by a
+// look-alike path another process made under a delegated subtree.
+var CheckCgroupExact = internal.CheckCgroupExact
+
+// CheckPeerExact admits the peer of c only if it runs in the control group
+// want (or below it). The peer is taken as a pidfd (SO_PEERPIDFD), its pid
+// is read from that pidfd, and the pidfd is confirmed still live after the
+// cgroup is read, so a recycled pid is not mistaken for the peer. A kernel
+// without SO_PEERPIDFD fails closed.
+var CheckPeerExact = internal.CheckPeerExact
+
 // CheckUnitCgroup reports whether pid runs in the agent unit's cgroup:
 // .../clown-agent.slice/<unitName>. read resolves a pid's cgroup (nil:
 // ProcCgroup).
