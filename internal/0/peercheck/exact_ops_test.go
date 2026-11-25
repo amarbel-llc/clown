@@ -86,7 +86,7 @@ func (f *fakeOps) ops() peerOps {
 // Red if the liveness line moves before the read or is removed (the pid-reuse
 // defence), or if the read uses any other pid.
 func TestCheckPeerExactOrderAndPid(t *testing.T) {
-	f := &fakeOps{cgroup: opsUnit + "/app.scope"}
+	f := &fakeOps{cgroup: opsUnit}
 	if err := checkPeerExactWith(oneConn(t), opsUnit, f.ops()); err != nil {
 		t.Fatalf("a peer in the unit was refused: %v", err)
 	}
@@ -117,6 +117,7 @@ func TestCheckPeerExactRefusesEachFailure(t *testing.T) {
 		"peer gone (pid reused)": {fakeOps{cgroup: opsUnit, aliveErr: boom}, 1, "is gone"},
 		"another cgroup":         {fakeOps{cgroup: "/user.slice/user-1000.slice/session-3.scope"}, 1, "not in"},
 		"look-alike path":        {fakeOps{cgroup: "/x/clown-agent.slice/clown-agent-x.service"}, 1, "not in"},
+		"a sub-cgroup of it":     {fakeOps{cgroup: opsUnit + "/app.scope"}, 1, "not in"},
 	}
 	for name, c := range cases {
 		f := c.f

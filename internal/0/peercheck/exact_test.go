@@ -1,10 +1,13 @@
 package peercheck
 
 import (
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 func TestCheckCgroupExact(t *testing.T) {
@@ -13,8 +16,9 @@ func TestCheckCgroupExact(t *testing.T) {
 		cg, want string
 		ok       bool
 	}{
-		"equal":             {u, u, true},
-		"sub-cgroup":        {u + "/app.scope", u, true},
+		"equal": {u, u, true},
+		// Strict equality (round 1, M2): a sub-cgroup is NOT the unit.
+		"sub-cgroup":        {u + "/app.scope", u, false},
 		"look-alike suffix": {"/user.slice/evil/clown.slice/clown-agent.slice/clown-agent-x.service", u, false},
 		"sibling prefix":    {u + "-2", u, false},
 		"parent":            {"/user.slice/user-1000.slice/user@1000.service/clown.slice/clown-agent.slice", u, false},
@@ -67,7 +71,9 @@ func TestCheckPeerExactAgainstASelfConnection(t *testing.T) {
 		t.Skip("no cgroup v2 entry:", err)
 	}
 	if err := CheckPeerExact(srv, me); err != nil {
-		if _, perr := PeerPID(srv); perr == nil && isNoPidfd(err) {
+		// Only the specific "this kernel has no SO_PEERPIDFD" answer skips
+		// (round 1, M4); every other failure is a failure.
+		if errors.Is(err, unix.ENOPROTOOPT) {
 			t.Skip("kernel without SO_PEERPIDFD:", err)
 		}
 		t.Fatalf("own cgroup refused: %v", err)
@@ -78,8 +84,4 @@ func TestCheckPeerExactAgainstASelfConnection(t *testing.T) {
 	if err := CheckPeerExact(srv, "/somewhere/else"); err == nil {
 		t.Error("another cgroup was accepted")
 	}
-}
-
-func isNoPidfd(err error) bool {
-	return err != nil && len(err.Error()) >= 11 && err.Error()[:11] == "peer pidfd:"
 }

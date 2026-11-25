@@ -17,25 +17,41 @@ import (
 // the connection was made, so the pid cannot be recycled under us.
 const soPeerPIDFD = 77
 
-// CheckCgroupExact reports whether cg is exactly the unit's control group
-// (want, the ControlGroup property read once from the manager) or a sub-group
-// of it. Unlike CheckUnitCgroup's suffix match it cannot be satisfied by a
-// look-alike path another process made under a delegated subtree.
+// CheckCgroupExact reports whether cg IS the unit's control group (want, the
+// ControlGroup property read once from the manager): strict equality, not "this
+// group and below". Passing a slice or a delegated group therefore admits
+// nobody who is merely beneath it, and a look-alike path under a delegated
+// subtree (unlike CheckUnitCgroup's suffix match) cannot satisfy it.
+//
+// Why strict is safe for a clown agent unit: seen on flic (just explore
+// explore-unit-cgroup-probe), every process of a confined unit, including a
+// setsid child, lives in the unit's own cgroup, the unit's tree has no
+// sub-cgroup, and the unit cannot make one (cgroupfs is read-only in it:
+// ProtectControlGroups=yes). If a unit is ever given Delegate=, its processes
+// may live below, and this function must be relaxed on purpose, not by accident.
 func CheckCgroupExact(cg, want string) error {
 	if want == "" || !strings.HasPrefix(want, "/") || strings.HasSuffix(want, "/") {
 		return fmt.Errorf("the unit's control group %q is not an absolute path", want)
 	}
-	if cg == want || strings.HasPrefix(cg, want+"/") {
+	if cg == want {
 		return nil
 	}
 	return fmt.Errorf("caller is in %q, not in %q", cg, want)
 }
 
-// CheckPeerExact admits the peer of c only if it runs in the control group
-// want (or below it). The peer is taken as a pidfd (SO_PEERPIDFD), its pid
-// is read from that pidfd, and the pidfd is confirmed still live after the
-// cgroup is read, so a recycled pid is not mistaken for the peer. A kernel
-// without SO_PEERPIDFD fails closed.
+// CheckPeerExact admits the peer of c only if it runs in exactly the control
+// group want. The peer is taken as a pidfd (SO_PEERPIDFD), its pid is read from
+// that pidfd, and the pidfd is confirmed still live after the cgroup is read,
+// so a recycled pid is not mistaken for the peer. A kernel without
+// SO_PEERPIDFD fails closed.
+//
+// What the guarantee rests on (round 1, M1), which this function cannot check:
+// the peer cannot move itself into want's cgroup or out of it, so it cannot
+// write a cgroup.procs (a confined unit has cgroupfs read-only,
+// ProtectControlGroups=yes in agentscope's properties()), and it cannot ask
+// the user manager to move a process (seen: a confined unit has no
+// /run/user/<uid>/systemd and `systemctl --user` fails to connect). A caller
+// whose peers can do either gets no identity from this check.
 func CheckPeerExact(c net.Conn, want string) error {
 	return checkPeerExactWith(c, want, realPeerOps)
 }
