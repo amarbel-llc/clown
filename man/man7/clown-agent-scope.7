@@ -1,0 +1,184 @@
+.\" Copyright (c) 2026 amarbel, LLC
+.\" SPDX-License-Identifier: MIT
+.Dd @MDOCDATE@
+.Dt CLOWN-AGENT-SCOPE 7
+.Os
+.Sh NAME
+.Nm clown-agent-scope
+.Nd what a confined clown session's unit is: home, network, binds, environment, proxies, bridge
+.Sh DESCRIPTION
+A confined clown session runs its provider (claude) in an
+.Em agent unit :
+a transient systemd user service started by
+.Nm clown
+(FDR 0020, clown#244).
+The frontend, the clown that holds the terminal, stays outside it and relays the
+terminal.
+This page says what the unit has, what it does not, and which sentences are
+seen on a real host and which are read from the code.
+The code is
+.Pa internal/*/agentscope/unit.go ,
+function
+.Fn properties ;
+a test (TestPropertyNamesAreTheDocumentedSet) fails when a property is added
+or removed without this page's list below changing with it.
+.Pp
+Markers: (code) read from the source; (seen) observed on flic (NixOS, systemd
+user manager) by the named recipe; (not tried) neither.
+.Sh WHAT THE UNIT HAS
+.Bl -tag -width Ds
+.It Sy Home
+.Ev HOME
+is
+.Pa <worktree>/.tmp/agent-home ,
+inside the worktree (code).
+The operator's home and
+.Pa /run/user
+are an empty tmpfs (ProtectHome=tmpfs) holding only what is bound in (code).
+.It Sy Claude config
+.Ev CLAUDE_CONFIG_DIR
+is a per-session directory in that home; the operator's
+.Pa ~/.claude*
+is not mounted (code).
+With the model injection proxy the unit's credentials file is empty and the
+environment holds only a placeholder; claude answered a one-line prompt in
+such a unit (seen: explore-model-live-run, 2026-11-25).
+.It Sy Network
+None: PrivateNetwork=yes (code), so the host's loopback services and abstract
+sockets are unreachable.
+The only ways out are unix sockets bound in and relayed to loopback ports by
+.Nm clown agent-exec :
+the egress proxy (an HTTP CONNECT proxy with a host:port allow-list), forwarded
+frontend servers, the statsd relay, the model injection proxy, the serve and
+broker sockets, and the dead-man socket (code).
+.It Sy Processes
+A private pid namespace (PrivatePIDs=yes); the shim is the unit's init and
+reaps what is reparented to it (code).
+.It Sy cgroups
+Every process of the unit, including a setsid child, is in the unit's own
+cgroup; the tree has no sub-cgroup; creating one fails with a read-only file
+system error (seen: explore-unit-cgroup-probe).
+cgroupfs is read-only in the unit (ProtectControlGroups=yes, code).
+.It Sy The user manager
+Not reachable: no
+.Pa /run/user/<uid>/systemd ,
+an empty bus address, and
+.Dq systemctl --user
+fails to connect (seen: explore-unit-cgroup-probe).
+.It Sy Files
+Read-only view of the rest of the filesystem (ProtectSystem=strict), including
+.Pa /etc
+as the host has it (code); writable: the worktree, the spec's
+.Em binds_rw ,
+the single-inode sockets, and clown's plumbing paths (claude's projects
+directory, hook state, moxy's log).
+No bind may cover the launch directories (Spec.Validate).
+.It Sy Environment
+Built from an allow-list of the frontend's variables plus the spec's; the
+user manager's own variables are unset (code, FDR 0020 "Environment").
+.El
+.Sh PROPERTIES
+The properties of
+.Fn properties
+(the list the test pins; values in the source):
+.Bd -literal -offset indent
+PrivateUsers  PrivatePIDs  ProtectHome  TemporaryFileSystem
+PrivateTmp  ProtectSystem  NoNewPrivileges  ProtectControlGroups
+WorkingDirectory  PrivateNetwork  BindPaths  ReadWritePaths
+BindReadOnlyPaths  InaccessiblePaths  MemoryHigh  MemoryMax
+MemorySwapMax  TasksMax  CPUQuota  IOWeight  OOMPolicy  Restart
+RuntimeMaxSec (unattended launches only)
+.Ed
+.Sh WHAT A WORKER CAN DO IN THE UNIT TODAY
+Seen on flic, 2026-11-25 (explore-full-unit-probe, one run each):
+.Bl -bullet
+.It
+.Dq nix build
+of a tiny derivation works, and
+.Dq nix develop
+on a throwaway flake works.
+.It
+The nix daemon is reachable without being bound in (ProtectSystem=strict leaves
+.Pa /nix/var
+visible, and the unit keeps the operator's uid), and the unit is a
+.Em trusted
+user of it: the unit's
+.Dq nix store info
+says
+.Dq Trusted: 1 .
+A confined unit is therefore not a boundary for nix.
+This is the operator's stopgap ruling, recorded here as seen, not changed.
+.It
+.Dq git ls-remote
+and
+.Dq git fetch
+over HTTPS through the egress proxy work with no credential.
+.Dq git push --dry-run
+fails with no credential (no token file, no agent socket, no
+.Pa ~/.ssh
+in the agent home).
+A real push and ssh were not tried.
+.It
+The unit cannot reach the operator's MCP servers, hooks or CLAUDE.md: it has no
+access to the operator's claude config.
+Servers clown starts for it are delivered as plugin servers.
+.El
+.Sh THE BRIDGE (FDR 0048)
+Off unless the operator sets
+.Ev CLOWN_BRIDGE_V1=1
+in the launching clown's environment, the session is confined, and spinclass's
+own trusted [bridge] enable is on.
+.Bl -tag -width Ds
+.It Ev CLOWN_BRIDGE_DIR , CLOWN_BRIDGE_UNIT , CLOWN_BRIDGE_CGROUP_FILE
+Set by clown on spinclass's serve only (set empty when the bridge is off);
+never passed into a unit.
+.It Pa <runtime>/clown/launch/<key>/bridge/
+The bridge directory, bound into the unit read-only at its own path; the serve
+creates
+.Pa bridge.sock
+in it.
+.It Pa <runtime>/clown/launch/<key>/bridge.cgroup
+The unit's exact cgroup path, written by clown when systemd reports the unit
+active (before the provider starts), mode 0600; not bound into the unit.
+The serve admits a peer only if its cgroup equals this value
+.Pq Fn CheckPeerExact .
+The guarantee depends on the unit not being able to move processes between
+cgroups (read-only cgroupfs) and not reaching the user manager (both above).
+.It Ev CLOWN_BRIDGE_SOCKET
+Set in the unit only, naming the socket.
+.It Nm clown bridge-stdio , Nm clown bridge-listen
+The inside half.
+.Nm bridge-listen
+holds the
+.Em control
+stream (retried for 15 s) and answers every endpoint with the fixed
+.Dq the bridge is down
+text once it ends.
+.It Sy bridge-v1
+Reported in the result's capabilities only after the cgroup file was written.
+.El
+.Sh KNOWN LIMITS
+.Bl -bullet
+.It
+.Pa /etc
+is the host's, read-only, including
+.Pa /etc/claude-code ;
+a trimmed per-unit
+.Pa /etc
+is ruled but not built.
+.It
+A process of the same account outside the unit can write
+.Pa bridge.cgroup
+and can move itself into any cgroup; cgroup identity means nothing against it.
+.It
+The operator's uid is the unit's uid (no dynamic user).
+.El
+.Sh SEE ALSO
+.Xr clown 1 ,
+.Xr clown-restart 1 ,
+.Xr clown-stdio-bridge 1 ,
+.Xr clownfile 5
+.Pp
+FDR 0020 (docs/features/0020-agent-scope-confinement.md) and FDR 0048 (circus
+docs/features/0048-the-bridge.md) are the design records; this page is the
+reference.
