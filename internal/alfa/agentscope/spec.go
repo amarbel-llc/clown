@@ -41,7 +41,24 @@ type Spec struct {
 	DenyPaths    []string          `json:"deny_paths"`
 	EgressAllow  []string          `json:"egress_allow"`
 	Env          map[string]string `json:"env"`
+	// Bridge is what the launch asked of the bridge (FDR 0048): "" or "offered"
+	// (the default): the bridge is used when it can be set up, and `bridge:
+	// off: <reason>` is reported when it cannot; "required": a launch whose
+	// bridge cannot come up is REFUSED with the same reason, before the unit's
+	// provider starts. A unit whose only way out is the bridge must not start
+	// without one. Which mode is the default is the operator's decision.
+	Bridge string `json:"bridge,omitempty"`
 }
+
+// The Bridge modes a spec may name.
+const (
+	BridgeOffered  = "offered"
+	BridgeRequired = "required"
+)
+
+// BridgeIsRequired reports whether the spec makes a missing bridge refuse the
+// launch.
+func (s Spec) BridgeIsRequired() bool { return s.Bridge == BridgeRequired }
 
 // LoadSpec reads and validates a spec. Unknown fields are refused: a field
 // this build does not understand may be one it was meant to enforce.
@@ -72,6 +89,11 @@ func ParseSpec(path string, raw []byte) (Spec, error) {
 func (s Spec) Validate() error {
 	if s.Version != SpecVersion {
 		return fmt.Errorf("version %d unsupported (this clown understands %d)", s.Version, SpecVersion)
+	}
+	switch s.Bridge {
+	case "", BridgeOffered, BridgeRequired:
+	default:
+		return fmt.Errorf("bridge %q: must be %q or %q", s.Bridge, BridgeOffered, BridgeRequired)
 	}
 	if err := requireAbs("worktree", s.Worktree); err != nil {
 		return err

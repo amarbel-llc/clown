@@ -84,6 +84,11 @@ func runInAgentScope(req agentScopeRequest, logger *slog.Logger) int {
 	}
 	defer stopEndpoints()
 	dropBridgeIfWritable(&launch, launchBridge, logger)
+	if err := requireBridge(&launch); err != nil {
+		err = launch.Fail(err)
+		fmt.Fprintf(os.Stderr, "clown: agent scope: %v\n", err)
+		return 1
+	}
 	// clown#341 ask 3: names-only difference between the launcher's
 	// environment and the unit's, logged before any enforcement tightens. After
 	// the endpoints start, so the variables they add (STATSD_*, the model
@@ -121,11 +126,29 @@ func wireBridge(launch *agentscope.Launch, b sessionBridge, logger *slog.Logger)
 	}
 }
 
+// requireBridge refuses a launch whose spec says the bridge is required
+// (spec.bridge = "required") and which has none by now: whatever the reason
+// (the switch is off, routing refused, no socket, a writable mount), the unit
+// must not start. The reason is the one reportBridgeOff recorded. An offered
+// bridge (the default) never refuses. A cgroup that cannot be recorded is only
+// known once the unit is up and is refused in agentscope.Run.
+func requireBridge(launch *agentscope.Launch) error {
+	if !launch.Spec.BridgeIsRequired() || launch.BridgeDir != "" {
+		return nil
+	}
+	reason := "the bridge switch is off (CLOWN_BRIDGE_V1 is not 1)"
+	if launch.BridgeStatus != nil && launch.BridgeStatus.Reason() != "" {
+		reason = launch.BridgeStatus.Reason()
+	}
+	return fmt.Errorf("the spec requires the bridge and it is off: %s; refusing to start the unit", reason)
+}
+
 // reportBridgeOff says, on clown's stderr, in its log and in the launch's result,
 // that the operator asked for the bridge and this launch has none, and why. It
-// never fails the launch (principle: a failure of the bridge never widens
-// anything); whether a given reason should refuse the launch instead is the
-// operator's to decide (README, round 2).
+// does not fail the launch itself: with the spec's bridge "offered" (the
+// default) the launch goes on; with "required", requireBridge (before the unit
+// starts) or agentscope.Run (a cgroup that could not be recorded) refuses it
+// with this reason.
 func reportBridgeOff(launch *agentscope.Launch, logger *slog.Logger, reason string) {
 	if launch.BridgeStatus != nil {
 		launch.BridgeStatus.Off(reason)

@@ -176,6 +176,11 @@ func (l Launch) bridgeField() string {
 	return "off: the unit's cgroup was not recorded for the serve"
 }
 
+// bridgeOffReason is the reason part of an "off: <reason>" bridge field.
+func (l Launch) bridgeOffReason() string {
+	return strings.TrimPrefix(l.bridgeField(), "off: ")
+}
+
 // resourceLimits are every agent unit's limits (clown#320, the operator's
 // 2026-10-26 ruling), rendered clown-side: the spec has no field for them,
 // and there is no override. MemoryHigh throttles and reclaims before

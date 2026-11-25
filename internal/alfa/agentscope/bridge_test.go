@@ -251,6 +251,76 @@ func TestTheCgroupIsHandedOverBeforeTheProviderStarts(t *testing.T) {
 	}
 }
 
+// Spec.Bridge is "", "offered" or "required"; anything else is refused (a mode
+// this build does not know may be one it was meant to enforce).
+func TestSpecBridgeModeIsValidated(t *testing.T) {
+	for _, m := range []string{"", BridgeOffered, BridgeRequired} {
+		s := validSpec()
+		s.Bridge = m
+		if err := s.Validate(); err != nil {
+			t.Errorf("bridge %q refused: %v", m, err)
+		}
+	}
+	s := validSpec()
+	s.Bridge = "mandatory"
+	if err := s.Validate(); err == nil || !strings.Contains(err.Error(), "bridge") {
+		t.Errorf("an unknown mode: err = %v", err)
+	}
+	if validSpec().BridgeIsRequired() {
+		t.Error("the default is required; the default is the operator's call, and today it is offered")
+	}
+}
+
+// A required bridge whose unit's cgroup cannot be recorded refuses the launch
+// and kills the unit; an offered one (the default) goes on. The fake onCgroup
+// leaves BridgeReady false, as a failed write does. Red without the wrapper in
+// Run: the launch then succeeds with no bridge.
+func TestARequiredBridgeThatCannotBeSetUpRefusesTheLaunch(t *testing.T) {
+	for _, mode := range []string{BridgeRequired, "", BridgeOffered} {
+		t.Run("mode="+mode, func(t *testing.T) {
+			l := testLaunch()
+			l.Spec.Bridge = mode
+			l.Spec.ResultPath = filepath.Join(t.TempDir(), "result.json")
+			l.BridgeDir = testBridgeDir
+			l.BridgeReady = &atomic.Bool{}
+			l.BridgeStatus = &BridgeStatus{}
+			l.BridgeStatus.Off("could not record the unit's cgroup")
+			l.OnCgroup = func(string) {} // the write "failed": BridgeReady stays false
+			cg := "/user.slice/user-1001.slice/user@1001.service/clown.slice/" + Slice + "/" + l.Unit
+			root := t.TempDir()
+			fakeProc(t, root, 100, cg, "100 1")
+			sdrun := filepath.Join(t.TempDir(), "systemd-run")
+			if err := os.WriteFile(sdrun, []byte("#!/bin/sh\nsleep 1\nexit 0\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			systemctl, calls := fakeSystemctl(t)
+			tools := Tools{SystemdRun: sdrun, Systemctl: systemctl, procRoot: root, show: func(string) (Status, error) {
+				return Status{ActiveState: "active", ControlGroup: cg, MainPID: 100}, nil
+			}}
+			_, err := Run(l, tools, nil)
+			killed := false
+			if b, _ := os.ReadFile(calls); strings.Contains(string(b), "--user kill --signal=SIGKILL "+l.Unit) {
+				killed = true
+			}
+			if mode == BridgeRequired {
+				if err == nil || !strings.Contains(err.Error(), "the bridge is required") || !strings.Contains(err.Error(), "could not record the unit's cgroup") {
+					t.Errorf("required: err = %v, want the refusal with the reason", err)
+				}
+				if !killed {
+					t.Error("required: the unit was not killed")
+				}
+				return
+			}
+			if err != nil && strings.Contains(err.Error(), "the bridge is required") {
+				t.Errorf("%q: the launch was refused: %v", mode, err)
+			}
+			if killed {
+				t.Errorf("%q: the unit was killed", mode)
+			}
+		})
+	}
+}
+
 // Off by default: no bridge dir means no bridge wiring and no capability.
 func TestNoBridgeDirMeansNoBridgeWiring(t *testing.T) {
 	l := testLaunch()

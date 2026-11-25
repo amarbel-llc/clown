@@ -372,6 +372,42 @@ func TestBridgeListenHoldsControlAndSaysWhenItEnds(t *testing.T) {
 	}
 }
 
+// The spec's bridge mode (operator ruling via clarabell, 2026-11-25): a launch
+// whose spec REQUIRES the bridge and has none is refused with the recorded
+// reason before the unit starts; an offered bridge (the default) is not. Red
+// without requireBridge.
+func TestRequireBridgeRefusesOnlyWhenTheSpecRequiresIt(t *testing.T) {
+	mk := func(mode string, dir string, why string) agentscope.Launch {
+		var l agentscope.Launch
+		l.Spec.Bridge = mode
+		l.BridgeDir = dir
+		if why != "" {
+			l.BridgeStatus = &agentscope.BridgeStatus{}
+			l.BridgeStatus.Off(why)
+		}
+		return l
+	}
+	for name, tc := range map[string]struct {
+		l       agentscope.Launch
+		refuse  bool
+		mention string
+	}{
+		"required, no bridge, a reason":   {mk(agentscope.BridgeRequired, "", "the serve created no bridge socket in 10s"), true, "no bridge socket in 10s"},
+		"required, no bridge, switch off": {mk(agentscope.BridgeRequired, "", ""), true, "CLOWN_BRIDGE_V1"},
+		"required, bridge wired":          {mk(agentscope.BridgeRequired, "/run/x/bridge", ""), false, ""},
+		"offered, no bridge":              {mk(agentscope.BridgeOffered, "", "no socket"), false, ""},
+		"default, no bridge":              {mk("", "", "no socket"), false, ""},
+	} {
+		err := requireBridge(&tc.l)
+		if (err != nil) != tc.refuse {
+			t.Errorf("%s: err = %v, want refuse=%v", name, err, tc.refuse)
+		}
+		if err != nil && !strings.Contains(err.Error(), tc.mention) {
+			t.Errorf("%s: err = %v, want it to name %q", name, err, tc.mention)
+		}
+	}
+}
+
 // Round 2, M2/L6: a server that never admits the unit: "ready" still comes, once
 // the retry window has run out, with the no-control line already said (the
 // provider must not wait for ever), and a `version` answer on control marks the

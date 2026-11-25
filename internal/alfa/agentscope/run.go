@@ -305,7 +305,26 @@ func Run(l Launch, tools Tools, logger *slog.Logger) (int, error) {
 			// before the shim has started the provider: the in-unit bridge
 			// dials its control stream from the shim, so the file must not wait
 			// for the provider (round 1, H1).
-			st, err := tools.waitActiveNotify(ctx, l.Unit, l.OnCgroup)
+			onCgroup := l.OnCgroup
+			var bridgeRefusal atomic.Pointer[error]
+			if onCgroup != nil && l.Spec.BridgeIsRequired() {
+				// A required bridge that cannot admit the unit refuses the launch:
+				// the unit is killed the moment its cgroup could not be recorded,
+				// before the shim's retry window lets the provider start.
+				inner := onCgroup
+				onCgroup = func(cgroup string) {
+					inner(cgroup)
+					if l.BridgeReady != nil && !l.BridgeReady.Load() {
+						e := fmt.Errorf("the bridge is required and could not be set up: %s", l.bridgeOffReason())
+						bridgeRefusal.Store(&e)
+						_ = killUnit()
+					}
+				}
+			}
+			st, err := tools.waitActiveNotify(ctx, l.Unit, onCgroup)
+			if e := bridgeRefusal.Load(); e != nil {
+				err = *e
+			}
 			res := l.baseResult()
 			res.Cgroup, res.InvocationID, res.Pty, res.MainPID = st.ControlGroup, st.InvocationID, pty, st.MainPID
 			if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, errUnitEnded) {
