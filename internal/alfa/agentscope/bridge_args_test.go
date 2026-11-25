@@ -34,6 +34,23 @@ func TestTheUnitIsToldTheBridgeSocketOnlyWithABridge(t *testing.T) {
 		t.Errorf("the provider's environment does not name the bridge socket: %v", args)
 	}
 
+	// --bridge-required follows the spec's mode and only that: an offered or
+	// absent mode never tells the shim to refuse (joint round, J-M4).
+	if slices.Contains(args, "--bridge-required") {
+		t.Errorf("--bridge-required for a spec that does not require the bridge: %v", args)
+	}
+	req := testLaunch()
+	req.BridgeDir = testBridgeDir
+	req.Spec.Bridge = BridgeRequired
+	rargs, err := req.SystemdRunArgs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	j, k := slices.Index(rargs, "--bridge"), slices.Index(rargs, "--bridge-required")
+	if k < 0 || j < 0 || k < j {
+		t.Errorf("a required bridge does not pass --bridge-required to the shim: %v", rargs)
+	}
+
 	off := testLaunch()
 	off.FrontendEnv = append(off.FrontendEnv, "CLOWN_BRIDGE_SOCKET=/elsewhere/bridge.sock")
 	args, err = off.SystemdRunArgs()

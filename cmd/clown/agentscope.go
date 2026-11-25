@@ -799,10 +799,13 @@ func touch(path string) error {
 func runAgentExec(args []string) int {
 	var relayArgs []string
 	var deadman, bridgeSock string
+	var bridgeRequired bool
 	for len(args) > 0 && args[0] != "--" {
 		switch {
 		case args[0] == "--deadman" && len(args) > 1:
 			deadman, args = args[1], args[2:]
+		case args[0] == "--bridge-required":
+			bridgeRequired, args = true, args[1:]
 		case args[0] == "--bridge" && len(args) > 1:
 			bridgeSock, args = args[1], args[2:]
 		case (args[0] == "--relay" || args[0] == "--serve") && len(args) > 1:
@@ -843,12 +846,18 @@ func runAgentExec(args []string) int {
 		}
 	}
 	// The bridge's inside half (FDR 0048): holds the `control` stream so the end
-	// of the bridge is seen and said. A failure here does not refuse the launch:
-	// the session has no bridge to lose that it had, and the down text shows on
-	// first use.
+	// of the bridge is seen and said. With the spec's bridge "offered" a failure
+	// here does not refuse the launch (the down text shows on first use); with
+	// "required" a listener that did not come up, or whose control stream did not
+	// open, refuses it before the provider starts.
 	if bridgeSock != "" {
-		if err := startBridgeListen(bridgeSock); err != nil {
+		held, err := startBridgeListen(bridgeSock)
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "clown agent-exec: bridge: %v\n", err)
+		}
+		if refuse, msg := bridgeGate(bridgeRequired, held, err); refuse {
+			fmt.Fprintf(os.Stderr, "clown agent-exec: %s\n", msg)
+			return agentscope.ShimExitRefused
 		}
 	}
 	if term.IsTerminal(0) {
@@ -1011,11 +1020,12 @@ func startRelays(relayArgs []string) error {
 // outlives the exec (same unit cgroup, dies with it) and waits for its ready
 // line, bounded, so the control stream is already being opened when the
 // provider starts. Its stderr is the agent's terminal: that is where the
-// bridge-is-down text must show.
-func startBridgeListen(sock string) error {
+// bridge-is-down text must show. held says whether its ready line said the
+// `control` stream is held (never true when err is set).
+func startBridgeListen(sock string) (held bool, err error) {
 	r, w, err := os.Pipe()
 	if err != nil {
-		return err
+		return false, err
 	}
 	cmd := exec.Command(clownExePath(), "bridge-listen", "--socket", sock)
 	cmd.Stdout = w
@@ -1024,7 +1034,7 @@ func startBridgeListen(sock string) error {
 	if err := cmd.Start(); err != nil {
 		w.Close()
 		r.Close()
-		return err
+		return false, err
 	}
 	w.Close()
 	// The read end is never closed under the child (a closed pipe would kill a
@@ -1043,13 +1053,10 @@ func startBridgeListen(sock string) error {
 	wait := bridgeshim.ControlRetryWindow + 5*time.Second
 	select {
 	case s := <-line:
-		if strings.TrimSpace(s) != "bridge-listen: ready" {
-			return errors.New("bridge-listen exited before it was ready")
-		}
+		return parseBridgeReady(s)
 	case <-time.After(wait):
-		return fmt.Errorf("bridge-listen was not ready in %v", wait)
+		return false, fmt.Errorf("bridge-listen was not ready in %v", wait)
 	}
-	return nil
 }
 
 // runAgentRelay is `clown agent-relay [--serve FILE] [--relay [udp:]ADDR=SOCK]...`,

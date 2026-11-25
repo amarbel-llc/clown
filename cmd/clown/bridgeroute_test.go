@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -356,8 +357,11 @@ func TestBridgeListenHoldsControlAndSaysWhenItEnds(t *testing.T) {
 	if n < 3 {
 		t.Fatalf("ready was printed after %d hellos; control was not yet held (err %q)", n, errb.String())
 	}
-	if strings.Contains(errb.String(), "the bridge is down") || strings.Contains(errb.String(), "no control stream") {
+	if strings.Contains(errb.String(), "the bridge is down") || strings.Contains(errb.String(), "did not admit") {
 		t.Fatalf("said down or no-control while control was held: %q", errb.String())
+	}
+	if !strings.Contains(out.String(), bridgeReadyControl) {
+		t.Fatalf("control was held but the ready line is %q, want %q", out.String(), bridgeReadyControl)
 	}
 	close(endControl) // the server ends control: the bridge is down
 	for !strings.Contains(errb.String(), "clown: the bridge is down (EOF on control)") {
@@ -485,16 +489,59 @@ func TestBridgeListenReadyAfterTheWindowWhenControlIsNeverAdmitted(t *testing.T)
 			if took := time.Since(start); took < 150*time.Millisecond {
 				t.Errorf("refused: ready after %v, before the retry window ran out", took)
 			}
-			if !strings.Contains(errb.String(), "no control stream") {
-				t.Errorf("refused: the no-control line was not said before ready: %q", errb.String())
+			if !strings.Contains(errb.String(), "did not admit this unit's control stream") {
+				t.Errorf("refused: the unusable line was not said before ready: %q", errb.String())
 			}
 		} else if !strings.Contains(errb.String(), "rebuild or restart this session") || strings.Contains(errb.String(), "frontend is gone") {
 			t.Errorf("version: stderr = %q, want the server's own text and not the frontend sentence", errb.String())
+		}
+		// Never held: the ready line says so, in both cases (joint round, J-M4).
+		if !strings.Contains(out.String(), bridgeReadyDown) || strings.Contains(out.String(), bridgeReadyControl) {
+			t.Errorf("%s: ready line = %q, want %q", name, out.String(), bridgeReadyDown)
 		}
 		cancel()
 		<-done
 		_ = ln.Close()
 		_ = os.RemoveAll(dir)
+	}
+}
+
+// The ready line is parsed strictly and a required bridge refuses on anything
+// but "control held" (joint round, J-M4). Red with a gate that ignores held, or
+// a parser that takes any "ready" line for held.
+func TestBridgeGateRefusesARequiredBridgeThatIsNotHeld(t *testing.T) {
+	for line, want := range map[string]struct {
+		held bool
+		err  bool
+	}{
+		bridgeReadyControl + "\n": {true, false},
+		bridgeReadyDown + "\n":    {false, false},
+		"bridge-listen: ready\n":  {false, true}, // an older listener's line is not "held"
+		"":                        {false, true},
+		"garbage\n":               {false, true},
+	} {
+		held, err := parseBridgeReady(line)
+		if held != want.held || (err != nil) != want.err {
+			t.Errorf("parseBridgeReady(%q) = %v, %v; want held %v err %v", line, held, err, want.held, want.err)
+		}
+	}
+	boom := errors.New("boom")
+	for name, tc := range map[string]struct {
+		required, held bool
+		err            error
+		refuse         bool
+	}{
+		"required, held":             {true, true, nil, false},
+		"required, not held":         {true, false, nil, true},
+		"required, listener failed":  {true, false, boom, true},
+		"offered, not held":          {false, false, nil, false},
+		"offered, listener failed":   {false, false, boom, false},
+		"offered, held":              {false, true, nil, false},
+		"required, held but errored": {true, true, boom, true},
+	} {
+		if refuse, msg := bridgeGate(tc.required, tc.held, tc.err); refuse != tc.refuse || (refuse && msg == "") {
+			t.Errorf("%s: refuse = %v (%q), want %v", name, refuse, msg, tc.refuse)
+		}
 	}
 }
 

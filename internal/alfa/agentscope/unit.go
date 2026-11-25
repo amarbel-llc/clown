@@ -294,6 +294,9 @@ func (l Launch) SystemdRunArgs() ([]string, error) {
 	}
 	if l.BridgeDir != "" {
 		args = append(args, "--bridge", l.BridgeSocket())
+		if l.Spec.BridgeIsRequired() {
+			args = append(args, "--bridge-required")
+		}
 	}
 	if l.ServeFile != "" {
 		args = append(args, "--serve", l.ServeFile)

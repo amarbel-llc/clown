@@ -141,24 +141,71 @@ func runBridgeListenCtx(ctx context.Context, args []string, stdout, stderr io.Wr
 			sh.MarkUnusable(err.Error())
 		case err != nil:
 			// A refusal of the control service itself (a server without one, or
-			// one that still will not admit this unit after the window): the shim
-			// cannot tell when the bridge goes; it says so once and carries on.
-			fmt.Fprintf(stderr, "clown bridge-listen: no control stream (%v); the bridge's end will only show on the next connection\n", err)
+			// one that still will not admit this unit after the window): without
+			// `control` the shim can never be told when the bridge goes, which is
+			// the "looks working" case, so the bridge is unusable from here
+			// (joint round, J-M3 row 3). What to check is in the text.
+			sh.MarkUnusable(fmt.Sprintf("the bridge did not admit this unit's control stream (%v); check the serve's log and spinclass's session-health, and that the spec's bridge field matches the serve's bridge setting", err))
 		case ctx.Err() == nil:
 			sh.SetControlHeld(false)
 			sh.MarkDown(reason)
 		}
 	}()
-	// "ready" means the control stream is held, or the attempt is over (the
-	// retry window ran out and the down line is already said): the provider
-	// starts only after this line, so no dial of its own can come before the
-	// server can admit the unit (round 2, M2).
+	// "ready control" means the control stream is held; "ready down" means the
+	// attempt is over without it (the retry window ran out and the down line is
+	// already said). The provider starts only after this line, so no dial of its
+	// own can come before the server can admit the unit (round 2, M2); a
+	// required bridge refuses the launch on "ready down" (joint round, J-M4).
+	held := false
 	select {
 	case <-opened:
+		held = true
 	case <-finished:
+		select {
+		case <-opened:
+			held = true // opened and ended at once
+		default:
+		}
 	case <-ctx.Done():
 	}
-	fmt.Fprintln(stdout, "bridge-listen: ready")
+	if held {
+		fmt.Fprintln(stdout, bridgeReadyControl)
+	} else {
+		fmt.Fprintln(stdout, bridgeReadyDown)
+	}
 	<-ctx.Done()
 	return 0
+}
+
+// The two ready lines of `bridge-listen` (its stdout, read by agent-exec).
+const (
+	bridgeReadyControl = "bridge-listen: ready control"
+	bridgeReadyDown    = "bridge-listen: ready down"
+)
+
+// parseBridgeReady reads bridge-listen's first stdout line: whether `control` is
+// held. Anything else (an exit before the line, a line from another version) is
+// an error, never "held".
+func parseBridgeReady(line string) (held bool, err error) {
+	switch strings.TrimSpace(line) {
+	case bridgeReadyControl:
+		return true, nil
+	case bridgeReadyDown:
+		return false, nil
+	}
+	return false, errors.New("bridge-listen exited before it was ready")
+}
+
+// bridgeGate decides what agent-exec does with the listener's answer. A
+// bridge that is not required never refuses (the down text and the result
+// already say what is wrong). A required one refuses when `control` is not
+// held, or the listener never answered: the unit's only way out is unusable.
+func bridgeGate(required, held bool, err error) (refuse bool, msg string) {
+	switch {
+	case required && err != nil:
+		return true, fmt.Sprintf("the bridge is required and its listener did not come up: %v", err)
+	case required && !held:
+		return true, "the bridge is required and its control stream did not open; refusing to start the provider"
+	}
+	return false, ""
 }
