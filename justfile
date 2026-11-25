@@ -535,26 +535,31 @@ verify-agent-scope:
     echo "agent-scope: clown=$CLOWN_BIN"
     "$bats_bin" zz-tests_bats/agent_scope.bats
 
-# Compare clown's vendored copy of spinclass's bridge wire vectors, and the
-# digest clown pins for it, with what spinclass PUBLISHES in DIR (its
-# internal/0/bridge/testdata): the check that can see spinclass change the
-# vectors (the Go pin test compares with a constant clown wrote itself). Fails
-# naming what differs. Run it before cutting a review package.
+# Compare clown's vendored copies of spinclass's two vectors files (the wire's
+# and the admission decision's) and their .sha256 files, byte for byte, with what
+# spinclass PUBLISHES in DIR (its internal/0/bridge/testdata). clown's own gate
+# pins each copy to the digest file vendored beside it (so a hand edit fails
+# there); this recipe is the check that can see spinclass change a file, and it
+# has no flake input to run in clown's gate: spinclass's gate, which locks
+# clown, is where the same comparison runs on every change. Fails naming what
+# differs. Run it before cutting a review package.
 #
-# check the vendored bridge vectors against spinclass's published file
+# check the vendored bridge vectors against spinclass's published files
 [group("test")]
 verify-bridge-vectors DIR:
     #!/usr/bin/env bash
     set -euo pipefail
     cd "$(git rev-parse --show-toplevel)"
-    mine=internal/0/bridgewire/testdata/bridge-vectors.json
-    theirs="{{DIR}}/vectors.json"
-    [ -f "$theirs" ] || { echo "MISSING in spinclass: $theirs"; exit 1; }
     bad=0
-    cmp -s "$mine" "$theirs" || { echo "DIFFERS from spinclass: vectors.json"; bad=1; }
-    pub="$(cut -d' ' -f1 "$theirs.sha256")"
-    grep -q "const vectorsSHA256 = \"$pub\"" internal/0/bridgewire/wire_test.go || { echo "PINNED DIGEST is not the published $pub"; bad=1; }
-    [ "$bad" -eq 0 ] && echo "vendored bridge vectors equal spinclass's published file and digest"
+    check() { # <clown dir> <file>
+        for f in "$2" "$2.sha256"; do
+            [ -f "{{DIR}}/$f" ] || { echo "MISSING in spinclass: {{DIR}}/$f"; bad=1; continue; }
+            cmp -s "$1/$f" "{{DIR}}/$f" || { echo "DIFFERS from spinclass: $f"; bad=1; }
+        done
+    }
+    check internal/0/bridgewire/testdata vectors.json
+    check internal/0/peercheck/testdata admission-vectors.json
+    [ "$bad" -eq 0 ] && echo "vendored bridge vectors equal spinclass's published files and digests"
     exit "$bad"
 
 # Integration test: launch clown-plugin-host with the synthetic plugin's

@@ -5,10 +5,12 @@
 // (internal/*/bridgeshim) and the tests' fake servers build on it.
 //
 // spinclass keeps the other implementation of the same wire (internal/0/bridge,
-// stdlib only) and publishes testdata/vectors.json with its sha256; this repo
-// vendors the file (testdata/bridge-vectors.json) and runs every case against
-// THIS package (vectors_test.go), and `just verify-bridge-vectors DIR` compares
-// the copy with the published file.
+// stdlib only) and publishes testdata/vectors.json with its sha256 file; this
+// repo vendors both byte for byte (testdata/vectors.json and .sha256), runs every
+// case against THIS package (wire_test.go), and pins the copy to the vendored
+// digest file there. The comparison with spinclass's published files is
+// `just verify-bridge-vectors DIR` (by hand, here) and spinclass's own gate,
+// which locks this repo.
 //
 //	stream     one connection; no multiplexer
 //	hello      "BRIDGE/1 <service>\n", the first and only bytes the client sends
@@ -308,11 +310,11 @@ func RefusedUnadmitted(reason string) []byte {
 func SocketPath(dir string) (string, error) {
 	dir = strings.TrimRight(dir, "/")
 	if dir == "" {
-		return "", errors.New("bridge: no bridge directory")
+		return "", errors.New("bridge: the bridge directory is empty; the bridge stays off")
 	}
 	p := dir + "/" + SocketName
 	if len(p) > MaxSocketPath {
-		return "", fmt.Errorf("bridge: the socket path %q is %d bytes, over the unix limit of %d; the bridge stays off", p, len(p), MaxSocketPath)
+		return "", fmt.Errorf("bridge: the socket path %q is %d bytes, over the unix socket limit of %d; the bridge stays off", p, len(p), MaxSocketPath)
 	}
 	return p, nil
 }

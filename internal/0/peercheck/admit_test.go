@@ -1,7 +1,9 @@
 package peercheck
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -50,12 +52,27 @@ func place(t *testing.T, path, spec string) {
 	}
 }
 
-// The listener's admission decision, as vectors a second repository runs
-// against the same function (round 2, M4: the four behaviours of the listener
-// are pinned as vectors, not prose): a missing, empty, unreadable or
-// non-regular file admits nobody; the file is read per connection; equality is
-// strict. Steps in one case share one file path, so a rewrite or removal
-// between steps shows whether the file is re-read.
+// The vectors are spinclass's (internal/0/bridge/testdata, the contract's one
+// home), vendored byte for byte with their digest file: the pin is that file.
+func TestAdmissionVectorsAreSpinclasssBytes(t *testing.T) {
+	b, err := os.ReadFile("testdata/admission-vectors.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := os.ReadFile("testdata/admission-vectors.json.sha256")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fmt.Sprintf("%x  admission-vectors.json\n", sha256.Sum256(b)); got != string(want) {
+		t.Errorf("admission-vectors.json drifted from its .sha256 (%q); re-copy both files from spinclass", got)
+	}
+}
+
+// The listener's admission decision as vectors (round 2, M4), run by both
+// repositories: a missing, empty, unreadable or non-regular file admits nobody;
+// the file is read per connection; equality is strict. Steps in one case share
+// one file path, so a rewrite or removal between steps shows whether the file
+// is re-read.
 func TestAdmissionVectors(t *testing.T) {
 	b, err := os.ReadFile("testdata/admission-vectors.json")
 	if err != nil {
