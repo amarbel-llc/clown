@@ -2248,6 +2248,19 @@ func runWithPluginHost(executor Executor, pluginDirs []string, flags parsedFlags
 		defer broker.cleanup() // after runManaged has stopped the bridge
 	}
 
+	// FDR 0048: the bridge, off unless the operator's switch is set in the
+	// launching environment and the session is confined (the unit's name is
+	// what the serve checks its peers against). A refused bridge is logged and
+	// the launch goes on without it.
+	if flags.agentScopeUnit != "" {
+		if routed, br, err := routeBridge(discovered, host.BridgePath, os.Getenv("XDG_RUNTIME_DIR"), flags.identity.Key, flags.agentScopeUnit, os.Getenv(bridgeSwitchEnv) == "1"); err != nil {
+			logger.Warn("bridge: not started", "err", err)
+		} else if br.Dir != "" {
+			discovered = routed
+			defer br.cleanup() // after runManaged has stopped the bridge
+		}
+	}
+
 	// v2 (unlike v1): the --cheap-context picker no longer runs here, before
 	// any server starts. Fetching a per-tool catalog for grouping requires a
 	// resolved handshake address, so every discovered server is started
