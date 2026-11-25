@@ -2252,11 +2252,17 @@ func runWithPluginHost(executor Executor, pluginDirs []string, flags parsedFlags
 	// launching environment and the session is confined (the unit's name is
 	// what the serve checks its peers against). A refused bridge is logged and
 	// the launch goes on without it.
-	if flags.agentScopeUnit != "" {
-		if routed, br, err := routeBridge(discovered, host.BridgePath, os.Getenv("XDG_RUNTIME_DIR"), flags.identity.Key, flags.agentScopeUnit, os.Getenv(bridgeSwitchEnv) == "1"); err != nil {
+	// Always called: with the bridge off the serve is told so in writing (its
+	// three bridge variables empty).
+	{
+		routed, br, err := routeBridge(discovered, host.BridgePath, os.Getenv("XDG_RUNTIME_DIR"), flags.identity.Key, flags.agentScopeUnit,
+			flags.agentScopeUnit != "" && os.Getenv(bridgeSwitchEnv) == "1")
+		if err != nil {
 			logger.Warn("bridge: not started", "err", err)
-		} else if br.Dir != "" {
-			discovered = routed
+		}
+		discovered = routed
+		if br.Dir != "" {
+			flags.bridge = br
 			defer br.cleanup() // after runManaged has stopped the bridge
 		}
 	}
@@ -2356,6 +2362,7 @@ func runProvider(executor Executor, bound Command, logger *slog.Logger, flags pa
 			unit:         flags.agentScopeUnit,
 			serve:        flags.agentScopeServe,
 			broker:       flags.agentScopeBroker,
+			bridge:       flags.bridge,
 			monitors:     flags.agentScopeMonitors,
 			argv:         append([]string{binary}, argv...),
 			extraEnv:     extraEnv,
@@ -3501,6 +3508,9 @@ type parsedFlags struct {
 	// the unit, set in runManaged only when serve created the socket.
 	policyBroker     policyBroker
 	agentScopeBroker agentscope.Relay
+	// bridge is the session's bridge (FDR 0048), set only when the operator's
+	// switch is on and the launch is confined; zero otherwise.
+	bridge sessionBridge
 	// mcpCollapse opts this launch into MCP-collapse mode (all-or-nothing for
 	// the prototype): after the discovered upstream MCP servers are started,
 	// clown launches ONE clown-mcp-collapse aggregator fronting them all and

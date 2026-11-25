@@ -299,6 +299,9 @@ func Run(l Launch, tools Tools, logger *slog.Logger) (int, error) {
 				_ = l.fail(err)
 			}
 			if err == nil {
+				if l.OnCgroup != nil {
+					l.OnCgroup(st.ControlGroup)
+				}
 				l.writeResult(res, logger)
 				if l.OnActive != nil {
 					l.OnActive(st.MainPID)

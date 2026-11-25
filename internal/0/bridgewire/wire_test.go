@@ -237,6 +237,9 @@ func TestConstantsAreTheContracts(t *testing.T) {
 	if SocketName != "bridge.sock" || EnvDir != "CLOWN_BRIDGE_DIR" || EnvUnit != "CLOWN_BRIDGE_UNIT" {
 		t.Errorf("names: %q %q %q", SocketName, EnvDir, EnvUnit)
 	}
+	if EnvCgroupFile != "CLOWN_BRIDGE_CGROUP_FILE" || CgroupFileName != "bridge.cgroup" {
+		t.Errorf("cgroup file names: %q %q", EnvCgroupFile, CgroupFileName)
+	}
 	if MaxHelloBytes != 64 || MaxReplyTextBytes != 512 || MaxStreamsPerSession != 64 || MaxSocketPath != 107 || Major != 1 {
 		t.Error("limits drifted from the contract")
 	}

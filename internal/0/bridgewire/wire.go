@@ -309,6 +309,13 @@ const (
 	SocketName = "bridge.sock"
 	EnvDir     = "CLOWN_BRIDGE_DIR"
 	EnvUnit    = "CLOWN_BRIDGE_UNIT"
+	// EnvCgroupFile names the file clown writes, once the unit's ControlGroup is
+	// known, holding that exact cgroup path (option A, agreed with spinclass);
+	// serve reads it per connection and admits a peer only on equality or
+	// beneath it. It lives beside, never inside, the read-only bridge directory.
+	EnvCgroupFile = "CLOWN_BRIDGE_CGROUP_FILE"
+	// CgroupFileName is that file's name, under <runtime>/clown/launch/<key>/.
+	CgroupFileName = "bridge.cgroup"
 )
 
 // DownMessage is the fixed text a shim shows when the bridge is unreachable

@@ -114,6 +114,11 @@ type Launch struct {
 	// never create, replace or unlink anything in it. Never in BindPaths or
 	// ReadWritePaths (a test pins that). Empty: the bridge is off.
 	BridgeDir string
+	// OnCgroup, when set, is called with the unit's exact ControlGroup as soon
+	// as it is known, before the result is written and before OnActive, so a
+	// peer check that needs the cgroup (the bridge's) can have it before the
+	// provider's first connection.
+	OnCgroup func(cgroup string)
 }
 
 // resourceLimits are every agent unit's limits (clown#320, the operator's

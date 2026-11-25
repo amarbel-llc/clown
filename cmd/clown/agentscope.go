@@ -47,6 +47,7 @@ func runInAgentScope(req agentScopeRequest, logger *slog.Logger) int {
 	launch.IdleSocket = req.idleSocket
 	launch.Serve = req.serve
 	launch.Broker = req.broker
+	wireBridge(&launch, req.bridge, logger)
 	wireAgentScopeStatus(&launch, req.status, req.onStarted)
 	// The unit's MainPID is this session's provider pid; a restart's
 	// relaunch tells its session so (clown#329).
@@ -75,6 +76,23 @@ func runInAgentScope(req agentScopeRequest, logger *slog.Logger) int {
 	}
 	resetTerminal()
 	return code
+}
+
+// wireBridge gives the unit its read-only bridge directory and has the launch
+// record the unit's exact cgroup for the serve once it is known. A failed
+// cgroup write is logged: the serve then fails closed (no cgroup, no peer is
+// admitted) and the session carries on with no bridge, never a failed launch.
+// A zero bridge changes nothing.
+func wireBridge(launch *agentscope.Launch, b sessionBridge, logger *slog.Logger) {
+	if b.Dir == "" {
+		return
+	}
+	launch.BridgeDir = b.Dir
+	launch.OnCgroup = func(cgroup string) {
+		if err := b.writeCgroup(cgroup); err != nil && logger != nil {
+			logger.Warn("bridge: could not record the unit's cgroup; the bridge admits no peer", "err", err)
+		}
+	}
 }
 
 // wireAgentScopeStatus has the launch report its unit name (once started) and
@@ -122,6 +140,10 @@ type agentScopeRequest struct {
 	// broker is the session's policy-broker socket relay (clown#333); zero:
 	// none.
 	broker agentscope.Relay
+	// bridge is the session's bridge (FDR 0048); zero: none. Its directory is
+	// bound into the unit read-only and the unit's cgroup is written to its
+	// cgroup file once known.
+	bridge sessionBridge
 	// onStarted is called once a SIGTERM to clown reaches systemd-run, with
 	// a kill of the unit.
 	onStarted func(kill func() error)
