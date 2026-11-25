@@ -37,7 +37,17 @@ Unknown, not tested: whether project-scope `.mcp.json` files inside the worktree
 content); if that matters, the probe to run next is the same recipe with a `.mcp.json` in the worktree and
 `--setting-sources` limited.
 
-## What the coordinator needs to decide
+## Decided (coordinator, 2026-11-25)
 
-1. Accept "per-session config dir, no strict flag" as the answer for user-scope MCP (reversible, no rename).
-2. Whether project-scope `.mcp.json` in the worktree is in the threat model (one more probe).
+No `--strict-mcp-config`; the per-session `CLAUDE_CONFIG_DIR` is the mechanism. A project-scope `.mcp.json` in the
+worktree starts servers inside the unit as the session's own processes: outside the boundary's threat model, not probed.
+
+## For the bridge's stdio-client services (servers that move outside the unit)
+
+They must keep their `mcp__plugin_<p>_<s>__*` names, so they stay plugin-delivered. Whether a plugin's server entry
+can simply name `clown bridge-stdio --service X` as its `command`: BELIEVED yes (an entry is a command and args that
+claude execs and speaks MCP over stdio to; `bridge-stdio` is exactly that pipe, exit 1 plus the down text on stderr
+when the bridge is down), and that would be the whole change on the unit side. NOT run: the one thing to check is
+that the entry's `command` resolves inside the unit (the unit's `CLOWN_BIN` is the shim's own binary, so an entry
+should use it, not a PATH lookup) and that claude shows the server `connected` through a fake service. A hermetic
+probe is the same recipe with `bridge-stdio` against a fake service; not written.
