@@ -301,6 +301,48 @@ debug-godyn-tests-verbose *flags:
     done <<<"$runs"
     echo "total skips: $total_skip"
 
+# The same unsandboxed re-run as debug-godyn-tests-verbose, but only for the
+# packages whose import path ends in PKG (e.g. internal/0/peercheck), and it
+# prints the failing tests' own output instead of counts: what the parity run's
+# "fail N" column hides. Needs a godyn host. Extra flags (plain words only) go
+# to the test binary.
+#
+# print the failing tests of one package under the unsandboxed godyn re-run
+[group("debug")]
+debug-godyn-test-failures PKG *flags:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    need() { [ -n "$2" ] || { echo "debug-godyn-test-failures: found no $1" >&2; exit 1; }; }
+    input_drvs() { nix derivation show "$1" | jq -r '(.derivations // .) | to_entries[0].value | (.inputDrvs // .inputs.drvs) | keys[]' | sed 's|^\([^/]\)|/nix/store/\1|'; }
+    out() { nix build --no-link --print-out-paths "$1^out"; }
+    runs=$(input_drvs "$(nix eval --raw .#clown-godyn-tests.drvPath)" | grep -- '-godyn-test-' || true)
+    need "godyn test runs in clown-godyn-tests" "$runs"
+    fixtures=$(input_drvs "$(head -n1 <<<"$runs")")
+    fakeserver=$(out "$(grep -- '-fakeserver-' <<<"$fixtures")")
+    fakellama=$(out "$(grep -- '-fake-llama-server-' <<<"$fixtures")")
+    git=$(out "$(grep -- '-git-[0-9]' <<<"$fixtures")")
+    work=$(mktemp -d)
+    trap 'chmod -R u+w "$work"; rm -rf "$work"' EXIT
+    found=0
+    while read -r run; do
+        cmd=$(nix derivation show "$run" | jq -r '(.derivations // .) | to_entries[0].value.env.buildCommand')
+        ip=$(grep -o 'echo "ok [^"]*"' <<<"$cmd" | sed 's/^echo "ok //; s/"$//')
+        case "$ip" in *"/{{PKG}}") ;; *) continue ;; esac
+        found=1
+        cwd=$(sed -n 's/^cd //p' <<<"$cmd")
+        bin=$(ls "$(out "$(input_drvs "$run" | grep -- '-godyn-testbin-')")"/*.test)
+        tree=$(sed -E 's|^(/nix/store/[^/]+).*|\1|' <<<"$cwd")
+        sub=${cwd#"$tree"}
+        cp -r --no-preserve=mode "$tree" "$work/cwd"
+        log=$(cd "$work/cwd$sub" && env HOME="$work" PATH="$git/bin:$PATH" \
+            CLOWN_TEST_FAKESERVER="$fakeserver/bin/fakeserver" \
+            CLOWN_TEST_FAKE_LLAMA_SERVER="$fakellama/bin/fake-llama-server" \
+            "$bin" -test.v {{flags}} 2>&1 || true)
+        echo "== $ip"
+        grep -E -B8 -A3 '^ *--- FAIL' <<<"$log" | head -150 || echo "(no failing test)"
+    done <<<"$runs"
+    [ "$found" = 1 ] || { echo "debug-godyn-test-failures: no run for $PKG" >&2; exit 1; }
+
 # List each godyn per-package test run's derivation path, one line per run
 # ("<name> <path>", sorted by name), to see which packages' runs an edit
 # invalidates: diff the output before and after the edit. Evaluates only
