@@ -3048,6 +3048,77 @@ explore-unit-cgroup-probe:
     done
     wait
 
+# Operator ruling 2026-11-25 (full unit plus the bridge is the one confined
+# mode): run the rows that were doubtful in a REAL full unit, through
+# `clown agent-scope-run`, and print what is seen, nothing more. Two units, one
+# after the other: A as the unit is today (no daemon socket), B with the nix
+# daemon socket bound in (spec sockets[]). In each: a tiny real `nix build`
+# (a derivation built with the unit's own bash), `nix store info` (trust), git
+# ls-remote and fetch of the repo's own origin over HTTPS (through the egress
+# proxy; no credential is given) and `git push --dry-run` (contacts the remote,
+# writes nothing), and in B one `nix develop` that runs `just --version` from a
+# throwaway flake whose nixpkgs is a store path. No model call, no token read.
+# Output: .tmp/full-unit-probe/unit-{A,B}.out. Scratch only.
+explore-full-unit-probe:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    for t in git jq nix; do command -v "$t" >/dev/null || { echo "FAIL: no $t on PATH" >&2; exit 2; }; done
+    root=$(git rev-parse --show-toplevel)
+    dir="$root/.tmp/full-unit-probe"
+    rm -rf "$dir"; mkdir -p "$dir"
+    res=$(mktemp -d); trap 'rm -rf "$res"' EXIT
+    nixbin=$(command -v nix); gitbin=$(command -v git)
+    url=$(git -C "$root" remote get-url origin 2>/dev/null || true)
+    case "$url" in
+      git@*:*) h=${url#git@}; url="https://${h%%:*}/${h#*:}" ;;
+      ssh://git@*) h=${url#ssh://git@}; url="https://${h%%/*}/${h#*/}" ;;
+    esac
+    np=$(nix eval --raw nixpkgs#path 2>/dev/null || true)
+    cat >"$dir/flake.nix" <<EOF
+    {
+      inputs.np.url = "path:${np}";
+      outputs = { np, ... }: let p = np.legacyPackages.x86_64-linux; in {
+        devShells.x86_64-linux.default = p.mkShell { packages = [ p.just ]; };
+      };
+    }
+    EOF
+    cat >"$dir/common.sh" <<EOF
+    export PATH="\$(dirname $nixbin):\$(dirname $gitbin):\$PATH"
+    b=\$(dirname "\$(dirname "\$(readlink -f "\$(command -v bash)")")")
+    echo "-- nix build (tiny derivation, unit's own bash)"
+    $nixbin build --no-link --print-out-paths --impure --expr "derivation { name = \"probe\"; system = builtins.currentSystem; builder = builtins.storePath \"\$b\" + \"/bin/bash\"; args = [ \"-c\" \"echo ok > \\\$out\" ]; }" 2>&1 | tail -n 6; echo "nix_build_exit=\${PIPESTATUS[0]}"
+    echo "-- nix store info (trust)"
+    $nixbin store info 2>&1 | tail -n 6
+    echo "-- git (https via the egress proxy, no credential given)"
+    cd "$dir" && $gitbin init -q . 2>&1 | tail -n 1
+    $gitbin remote add origin "$url" 2>/dev/null
+    echo "ls-remote:"; $gitbin ls-remote origin 2>&1 | head -n 3 | sed 's/^\(.\{60\}\).*/\1/'; echo "ls_remote_exit=\${PIPESTATUS[0]}"
+    echo "fetch:"; $gitbin fetch --depth 1 origin HEAD 2>&1 | tail -n 3; echo "fetch_exit=\${PIPESTATUS[0]}"
+    $gitbin -c user.name=probe -c user.email=probe@example.invalid commit -q --allow-empty -m probe 2>&1 | tail -n 1
+    echo "push --dry-run (a throwaway ref; writes nothing):"; $gitbin push --dry-run origin HEAD:refs/heads/scratch-full-unit-probe 2>&1 | tail -n 3; echo "push_dry_exit=\${PIPESTATUS[0]}"
+    EOF
+    cat >"$dir/extra-b.sh" <<EOF
+    echo "-- nix develop (throwaway flake, nixpkgs as a store path): just --version"
+    cd "$dir" && $nixbin develop --no-write-lock-file path:. --command just --version 2>&1 | tail -n 6; echo "develop_exit=\${PIPESTATUS[0]}"
+    EOF
+    unset TROUPE_XMPP_USER TROUPE_XMPP_PASSWORD_FILE ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN
+    export CLOWN_MODEL_CREDENTIAL=proxy-only
+    clown_out=$(nix build --no-link --print-out-paths "$root#default") || exit 1
+    cd "$dir" || exit 1
+    for unit in A B; do
+      if [ "$unit" = B ]; then
+        jq -n --arg wt "$dir" --arg home "$HOME" --arg res "$res/result.json" \
+          '{version: 1, worktree: $wt, operator_home: $home, unit_name_hint: "clown-full-probe", result_path: $res, sockets: [{path: "/nix/var/nix/daemon-socket/socket", purpose: "nix daemon"}]}' >"$res/spec.json"
+        script='bash '"$dir"'/common.sh; bash '"$dir"'/extra-b.sh'
+      else
+        jq -n --arg wt "$dir" --arg home "$HOME" --arg res "$res/result.json" \
+          '{version: 1, worktree: $wt, operator_home: $home, unit_name_hint: "clown-full-probe", result_path: $res}' >"$res/spec.json"
+        script='bash '"$dir"'/common.sh; bash '"$dir"'/extra-b.sh'
+      fi
+      echo "=================== unit $unit"
+      "$clown_out/bin/clown" agent-scope-run --spec "$res/spec.json" -- bash -c "$script" </dev/null 2>&1 | grep -v -E '^(time=|clown: agent scope: )' | tee "$dir/unit-$unit.out"
+    done
+
 # Allow-list batch probe (FDR 0048 lane): does `claude --strict-mcp-config` also
 # drop MCP servers that come from a --plugin-dir (how clown hands its servers
 # over today)? Two confined `claude -p` runs through the injection proxy (two
