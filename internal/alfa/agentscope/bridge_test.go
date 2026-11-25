@@ -36,6 +36,50 @@ func TestTheBridgeDirIsBoundReadOnlyAndNeverWritable(t *testing.T) {
 	}
 }
 
+// WritableCovering is what the launch uses to refuse a bridge whose directory a
+// writable mount would cover; it must see a parent, the dir itself and a
+// relocated destination, and must not flag a sibling.
+func TestWritableCoveringSeesParentsAndNotSiblings(t *testing.T) {
+	l := testLaunch()
+	l.BridgeDir = testBridgeDir
+	if got := l.WritableCovering(testBridgeDir + "/bridge.sock"); len(got) != 0 {
+		t.Errorf("a stock launch has writable mounts over the bridge dir: %q", got)
+	}
+	for name, spec := range map[string]string{
+		"runtime dir":      "/run/user/1001",
+		"clown dir":        "/run/user/1001/clown/",
+		"the launch dir":   "/run/user/1001/clown/launch/key-1",
+		"the bridge dir":   testBridgeDir,
+		"optional":         "-/run/user/1001",
+		"relocated source": "/elsewhere:/run/user/1001/clown/launch",
+	} {
+		l := testLaunch()
+		l.BridgeDir = testBridgeDir
+		l.Spec.BindsRW = append(l.Spec.BindsRW, spec)
+		if got := l.WritableCovering(testBridgeDir + "/bridge.sock"); len(got) == 0 {
+			t.Errorf("%s (%q) was not seen as covering the bridge dir", name, spec)
+		}
+	}
+	l.Spec.BindsRW = append(l.Spec.BindsRW, "/run/user/1001/clown/launch/key-1/bridge.cgroup", "/run/user/1001/clown/launch/other")
+	if got := l.WritableCovering(testBridgeDir + "/bridge.sock"); len(got) != 0 {
+		t.Errorf("a sibling was flagged: %q", got)
+	}
+}
+
+// The file the serve reads the unit's cgroup from sits beside the bridge dir:
+// nothing the unit has bound reaches it, read-only or not.
+func TestTheCgroupFileIsNotReachableFromTheUnit(t *testing.T) {
+	l := testLaunch()
+	l.BridgeDir = testBridgeDir
+	args, err := l.SystemdRunArgs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := bindsCovering(args, "/run/user/1001/clown/launch/key-1/bridge.cgroup"); len(got) != 0 {
+		t.Errorf("the cgroup file or a parent of it is bound in: %q", got)
+	}
+}
+
 // Off by default: no bridge dir means no bridge wiring and no capability.
 func TestNoBridgeDirMeansNoBridgeWiring(t *testing.T) {
 	l := testLaunch()

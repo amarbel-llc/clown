@@ -209,6 +209,25 @@ func TestAwaitSocketSeesTheServesSocketAndGivesUp(t *testing.T) {
 	}
 }
 
+func TestABridgeUnderAWritableMountIsDroppedNotTheLaunch(t *testing.T) {
+	rt := t.TempDir()
+	_, b, err := routeBridge(serveFixture(nil), "/bin/bridge", rt, "k1", "u", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var l agentscope.Launch
+	wireBridge(&l, b, nil)
+	dropBridgeIfWritable(&l, nil)
+	if l.BridgeDir != b.Dir || l.OnCgroup == nil {
+		t.Fatalf("a stock launch lost its bridge: %+v", l)
+	}
+	l.Spec.BindsRW = []string{rt} // the runtime directory, read-write: covers the bridge dir
+	dropBridgeIfWritable(&l, nil)
+	if l.BridgeDir != "" || l.OnCgroup != nil {
+		t.Errorf("the bridge survived a writable mount over it: %+v", l)
+	}
+}
+
 func TestRouteBridgeRefusesTheBridgeNotTheLaunch(t *testing.T) {
 	rt := t.TempDir()
 	in := serveFixture(nil)

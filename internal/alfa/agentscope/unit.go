@@ -242,6 +242,38 @@ func (l Launch) SystemdRunArgs() ([]string, error) {
 	return args, nil
 }
 
+// WritableCovering returns the writable properties of this launch's unit
+// (BindPaths=, ReadWritePaths=) whose path inside the unit is path or a
+// directory above it. The bridge directory must have none: it is bound
+// read-only, and a writable mount at or above it would let the unit replace the
+// socket. For "src:dst" the in-unit path is dst.
+func (l Launch) WritableCovering(path string) []string {
+	var out []string
+	for _, p := range l.properties() {
+		v, ok := strings.CutPrefix(p, "BindPaths=")
+		if !ok {
+			v, ok = strings.CutPrefix(p, "ReadWritePaths=")
+		}
+		if !ok {
+			continue
+		}
+		v = strings.TrimPrefix(v, "-")
+		if v == "" {
+			continue // an empty entry binds nothing
+		}
+		src, dst, hasDst := strings.Cut(v, ":")
+		if hasDst {
+			dst, _, _ = strings.Cut(dst, ":")
+			src = dst
+		}
+		src = filepath.Clean(src)
+		if src == "/" || src == path || strings.HasPrefix(path, src+"/") {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 // BridgeSocket is the bridge's socket, at the same path inside the unit as
 // outside (the directory is bound at its own path). Empty without a bridge.
 func (l Launch) BridgeSocket() string {

@@ -73,6 +73,7 @@ func runInAgentScope(req agentScopeRequest, logger *slog.Logger) int {
 		return 1
 	}
 	defer stopEndpoints()
+	dropBridgeIfWritable(&launch, logger)
 	// clown#341 ask 3: names-only difference between the launcher's
 	// environment and the unit's, logged before any enforcement tightens. After
 	// the endpoints start, so the variables they add (STATSD_*, the model
@@ -103,6 +104,23 @@ func wireBridge(launch *agentscope.Launch, b sessionBridge, logger *slog.Logger)
 		if err := b.writeCgroup(cgroup); err != nil && logger != nil {
 			logger.Warn("bridge: could not record the unit's cgroup; the bridge admits no peer", "err", err)
 		}
+	}
+}
+
+// dropBridgeIfWritable removes the bridge from a launch whose unit has a
+// writable mount at or above the bridge directory (a spec that binds the
+// runtime directory read-write, say): the unit could replace the socket. It
+// runs after every bind is in place, just before the unit starts. The session
+// then has no bridge; the launch goes on.
+func dropBridgeIfWritable(launch *agentscope.Launch, logger *slog.Logger) {
+	if launch.BridgeDir == "" {
+		return
+	}
+	if bad := launch.WritableCovering(launch.BridgeDir); len(bad) > 0 {
+		if logger != nil {
+			logger.Warn("bridge: a writable mount covers the bridge directory; the session has no bridge", "dir", launch.BridgeDir, "mounts", bad)
+		}
+		launch.BridgeDir, launch.OnCgroup = "", nil
 	}
 }
 
