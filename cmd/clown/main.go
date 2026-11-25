@@ -503,6 +503,10 @@ func run(rawArgs []string) int {
 			return runCapabilityProfile(rawArgs[1:], os.Stdout, os.Stderr)
 		case "restart":
 			return runRestartVerb(rawArgs[1:], os.Stdout, os.Stderr)
+		case "bridge-stdio": // the inside half of the bridge (bridgeshim.go); off unless a launch starts it
+			return runBridgeStdio(rawArgs[1:], os.Stdin, os.Stdout, os.Stderr)
+		case "bridge-listen":
+			return runBridgeListen(rawArgs[1:], os.Stdout, os.Stderr)
 		case "agent-monitor":
 			return runAgentMonitor(rawArgs[1:])
 		case "agent-monitor-serve":
