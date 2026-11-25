@@ -255,6 +255,41 @@ func (s *Shim) Close() {
 	s.wg.Wait()
 }
 
+// ControlAttempts and ControlRetryDelay: the first connection to `control` can
+// land before the server has the unit's cgroup (clown writes it a moment after
+// the provider starts) or while the server is still coming up, so it is tried
+// this many times, this far apart, before the bridge is reported down or busy.
+// Only an unreachable bridge or a busy answer is retried: a refusal of the
+// service itself is final. The shim never half-closes `control` (CloseWrite): it
+// writes nothing after the hello, and the stream's end is the signal, not ours.
+var (
+	ControlAttempts   = 3
+	ControlRetryDelay = 200 * time.Millisecond
+)
+
+func dialControl(ctx context.Context, sock string) (net.Conn, error) {
+	var err error
+	for i := 0; i < ControlAttempts; i++ {
+		if i > 0 {
+			select {
+			case <-ctx.Done():
+				return nil, err
+			case <-time.After(ControlRetryDelay):
+			}
+		}
+		var c net.Conn
+		if c, err = Dial(sock, bridgewire.ServiceControl); err == nil {
+			return c, nil
+		}
+		var down *DownError
+		var refused *RefusedError
+		if !errors.As(err, &down) && !(errors.As(err, &refused) && refused.Code == bridgewire.CodeBusy) {
+			return nil, err
+		}
+	}
+	return nil, err
+}
+
 // Frame is one NDJSON frame the server pushes on the control stream. Type says
 // what it is ("restart", "stop", "turn", "idle", "wake", "bridge-down", ...);
 // the rest of the object is the frame's own fields, kept raw.
@@ -272,7 +307,7 @@ const MaxFrame = 1 << 20
 // ones). It returns when the stream ends: nil error with the end of stream as
 // the reason ("EOF on control"), or the dial error. ctx cancels it.
 func Control(ctx context.Context, sock string, onFrame func(Frame)) (reason string, err error) {
-	c, err := Dial(sock, bridgewire.ServiceControl)
+	c, err := dialControl(ctx, sock)
 	if err != nil {
 		return "", err
 	}

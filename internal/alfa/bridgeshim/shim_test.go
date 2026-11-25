@@ -353,6 +353,88 @@ func TestControlDeliversFramesIgnoresJunkAndEOFIsTheDownSignal(t *testing.T) {
 	}
 }
 
+// The first connection to control can come before the server has the cgroup
+// (it closes the stream, or answers busy): it is retried, a bounded number of
+// times, and a final refusal of the service is not.
+func TestControlRetriesAnUnreadyServerThenGivesUp(t *testing.T) {
+	oldN, oldD := ControlAttempts, ControlRetryDelay
+	ControlAttempts, ControlRetryDelay = 3, 10*time.Millisecond
+	t.Cleanup(func() { ControlAttempts, ControlRetryDelay = oldN, oldD })
+
+	var mu sync.Mutex
+	var hellos int
+	dir, err := os.MkdirTemp("/tmp", "cbr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "bridge.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	readyAfter := 3 // the third hello is served
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				if _, err := bridgewire.ReadHello(c); err != nil {
+					return
+				}
+				mu.Lock()
+				hellos++
+				n, ra := hellos, readyAfter
+				mu.Unlock()
+				switch {
+				case n < ra-1:
+					// not ready: close with no answer (the serve's peer check failing)
+				case n == ra-1:
+					_, _ = c.Write(bridgewire.FormatErr(bridgewire.CodeBusy, "starting"))
+				default:
+					_, _ = c.Write(bridgewire.OK())
+					_, _ = io.WriteString(c, `{"type":"wake"}`+"\n")
+				}
+			}()
+		}
+	}()
+	var types []string
+	reason, err := Control(context.Background(), sock, func(f Frame) { types = append(types, f.Type) })
+	if err != nil || reason != "EOF on control" || strings.Join(types, ",") != "wake" {
+		t.Fatalf("after the retries: reason %q, err %v, frames %v", reason, err, types)
+	}
+	mu.Lock()
+	got := hellos
+	mu.Unlock()
+	if got != 3 {
+		t.Errorf("the server saw %d hellos, want 3 (two refused, one served)", got)
+	}
+
+	// Never ready: gives up after exactly ControlAttempts and reports the last error.
+	mu.Lock()
+	hellos, readyAfter = 0, 1000
+	mu.Unlock()
+	if _, err := Control(context.Background(), sock, func(Frame) {}); err == nil {
+		t.Error("a server that never becomes ready must be an error")
+	}
+	mu.Lock()
+	got = hellos
+	mu.Unlock()
+	if got != 3 {
+		t.Errorf("the server saw %d hellos on a never-ready server, want ControlAttempts = 3", got)
+	}
+
+	// A refusal of the service itself is final: one hello, no retry.
+	srv := newFakeServer(t, map[string]handler{})
+	if _, err := Control(context.Background(), srv.sock, func(Frame) {}); err == nil {
+		t.Error("an unknown service must be an error")
+	}
+}
+
 func TestControlStopsWithItsContextAndReportsADialFailure(t *testing.T) {
 	srv := newFakeServer(t, map[string]handler{"control": func(c net.Conn) { _, _ = io.Copy(io.Discard, c) }})
 	ctx, cancel := context.WithCancel(context.Background())
