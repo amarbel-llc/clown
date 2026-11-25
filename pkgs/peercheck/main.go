@@ -55,6 +55,11 @@ var CheckPeerExact = internal.CheckPeerExact
 // ProcCgroup).
 var CheckUnitCgroup = internal.CheckUnitCgroup
 
+// ErrNoCgroupV2 is what ProcCgroupAt returns when the process's cgroup file has
+// no `0::<path>` line (a cgroup v1 host): the one answer a test may skip on.
+// Every other failure (an unreadable file, a vanished pid) is a failure.
+var ErrNoCgroupV2 = internal.ErrNoCgroupV2
+
 // ListenServeSocket creates the serve socket at path (its directory 0700,
 // the socket 0600) and returns a listener whose Accept yields only callers
 // that run in unit's cgroup, or that are the frontend itself: the pid

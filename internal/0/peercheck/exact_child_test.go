@@ -77,8 +77,10 @@ func startPeer(t *testing.T) (net.Conn, *exec.Cmd, func()) {
 func TestRealOpsAgainstAChildThatIsKilledAndReaped(t *testing.T) {
 	srv, cmd, killAndReap := startPeer(t)
 	me, err := ProcCgroup(os.Getpid())
-	if err != nil {
-		t.Skip("no cgroup v2 entry:", err)
+	if errors.Is(err, ErrNoCgroupV2) {
+		t.Skip("no cgroup v2 entry:", err) // the one skippable answer
+	} else if err != nil {
+		t.Fatalf("reading our own cgroup: %v", err)
 	}
 	uc := srv.(*net.UnixConn)
 	pidfd, err := realPeerOps.pidfdOf(uc)

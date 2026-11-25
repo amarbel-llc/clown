@@ -78,6 +78,11 @@ func ListenUnix(path string) (net.Listener, error) {
 	return ln, nil
 }
 
+// ErrNoCgroupV2 is what ProcCgroupAt returns when the process's cgroup file has
+// no `0::<path>` line (a cgroup v1 host): the one answer a test may skip on.
+// Every other failure (an unreadable file, a vanished pid) is a failure.
+var ErrNoCgroupV2 = errors.New("no cgroup v2 entry")
+
 // ProcCgroup returns pid's cgroup v2 path from /proc/<pid>/cgroup.
 func ProcCgroup(pid int) (string, error) { return ProcCgroupAt("/proc", pid) }
 
@@ -92,5 +97,5 @@ func ProcCgroupAt(procRoot string, pid int) (string, error) {
 			return string(rest), nil
 		}
 	}
-	return "", fmt.Errorf("no cgroup v2 entry for pid %d", pid)
+	return "", fmt.Errorf("%w for pid %d", ErrNoCgroupV2, pid)
 }

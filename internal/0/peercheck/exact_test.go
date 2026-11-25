@@ -67,8 +67,10 @@ func TestCheckPeerExactAgainstASelfConnection(t *testing.T) {
 	}
 	defer srv.Close()
 	me, err := ProcCgroup(os.Getpid())
-	if err != nil {
-		t.Skip("no cgroup v2 entry:", err)
+	if errors.Is(err, ErrNoCgroupV2) {
+		t.Skip("no cgroup v2 entry:", err) // the one skippable answer (round 2 follow-up)
+	} else if err != nil {
+		t.Fatalf("reading our own cgroup: %v", err)
 	}
 	if err := CheckPeerExact(srv, me); err != nil {
 		// Only the specific "this kernel has no SO_PEERPIDFD" answer skips
