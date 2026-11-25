@@ -23,7 +23,6 @@ func TestParseBridgeListenArgs(t *testing.T) {
 		t.Errorf("socket from the environment: %q, %v", sock, err)
 	}
 	for name, args := range map[string][]string{
-		"no endpoint":   {"--socket", "/s"},
 		"bad endpoint":  {"--socket", "/s", "--tcp", "noequals"},
 		"empty service": {"--socket", "/s", "--tcp", "a="},
 		"unknown flag":  {"--socket", "/s", "--frob", "x"},
@@ -32,6 +31,10 @@ func TestParseBridgeListenArgs(t *testing.T) {
 		if _, _, err := parseBridgeListenArgs(args); err == nil {
 			t.Errorf("%s: want an error", name)
 		}
+	}
+	// Control only: no endpoint is valid.
+	if sock, eps, err := parseBridgeListenArgs([]string{"--socket", "/s"}); err != nil || sock != "/s" || len(eps) != 0 {
+		t.Errorf("control only: %q %v %v", sock, eps, err)
 	}
 	t.Setenv("CLOWN_BRIDGE_SOCKET", "")
 	if _, _, err := parseBridgeListenArgs([]string{"--tcp", "127.0.0.1:1=model"}); err == nil {

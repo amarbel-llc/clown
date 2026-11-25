@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -47,7 +48,17 @@ func runInAgentScope(req agentScopeRequest, logger *slog.Logger) int {
 	launch.IdleSocket = req.idleSocket
 	launch.Serve = req.serve
 	launch.Broker = req.broker
-	wireBridge(&launch, req.bridge, logger)
+	bridge := req.bridge
+	if bridge.Dir != "" && !bridge.awaitSocket(bridgeSocketWait) {
+		// The serve's listener has its own second gate (a trusted [bridge]
+		// enable); without it no socket appears. The session then has no bridge:
+		// the unit is not told there is one.
+		if logger != nil {
+			logger.Warn("bridge: the serve created no bridge socket; the session has no bridge", "socket", bridge.Socket, "waited", bridgeSocketWait)
+		}
+		bridge = sessionBridge{}
+	}
+	wireBridge(&launch, bridge, logger)
 	wireAgentScopeStatus(&launch, req.status, req.onStarted)
 	// The unit's MainPID is this session's provider pid; a restart's
 	// relaunch tells its session so (clown#329).
@@ -706,11 +717,13 @@ func touch(path string) error {
 // provider. Finally it execs argv.
 func runAgentExec(args []string) int {
 	var relayArgs []string
-	var deadman string
+	var deadman, bridgeSock string
 	for len(args) > 0 && args[0] != "--" {
 		switch {
 		case args[0] == "--deadman" && len(args) > 1:
 			deadman, args = args[1], args[2:]
+		case args[0] == "--bridge" && len(args) > 1:
+			bridgeSock, args = args[1], args[2:]
 		case (args[0] == "--relay" || args[0] == "--serve") && len(args) > 1:
 			relayArgs, args = append(relayArgs, args[0], args[1]), args[2:]
 		default:
@@ -746,6 +759,15 @@ func runAgentExec(args []string) int {
 		if err := startRelays(relayArgs); err != nil {
 			fmt.Fprintf(os.Stderr, "clown agent-exec: relays: %v\n", err)
 			return agentscope.ShimExitRefused
+		}
+	}
+	// The bridge's inside half (FDR 0048): holds the `control` stream so the end
+	// of the bridge is seen and said. A failure here does not refuse the launch:
+	// the session has no bridge to lose that it had, and the down text shows on
+	// first use.
+	if bridgeSock != "" {
+		if err := startBridgeListen(bridgeSock); err != nil {
+			fmt.Fprintf(os.Stderr, "clown agent-exec: bridge: %v\n", err)
 		}
 	}
 	if term.IsTerminal(0) {
@@ -900,6 +922,42 @@ func startRelays(relayArgs []string) error {
 	buf := make([]byte, 1)
 	if n, _ := r.Read(buf); n != 1 {
 		return errors.New("relay exited before listening")
+	}
+	return nil
+}
+
+// startBridgeListen starts `clown bridge-listen --socket SOCK` as a child that
+// outlives the exec (same unit cgroup, dies with it) and waits for its ready
+// line, bounded, so the control stream is already being opened when the
+// provider starts. Its stderr is the agent's terminal: that is where the
+// bridge-is-down text must show.
+func startBridgeListen(sock string) error {
+	r, w, err := os.Pipe()
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+	cmd := exec.Command(clownExePath(), "bridge-listen", "--socket", sock)
+	cmd.Stdout = w
+	cmd.Stderr = os.Stderr
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		w.Close()
+		return err
+	}
+	w.Close()
+	line := make(chan string, 1)
+	go func() {
+		s, _ := bufio.NewReader(r).ReadString('\n')
+		line <- s
+	}()
+	select {
+	case s := <-line:
+		if strings.TrimSpace(s) != "bridge-listen: ready" {
+			return errors.New("bridge-listen exited before it was ready")
+		}
+	case <-time.After(5 * time.Second):
+		return errors.New("bridge-listen was not ready in 5s")
 	}
 	return nil
 }

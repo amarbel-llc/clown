@@ -91,9 +91,9 @@ func parseBridgeListenArgs(args []string) (sock string, eps []bridgeshim.Endpoin
 	if sock = bridgeSocket(sock); sock == "" {
 		return "", nil, errors.New("no bridge socket (--socket or $" + bridgeshim.EnvSocket + ")")
 	}
-	if len(eps) == 0 {
-		return "", nil, errors.New("no endpoint (--tcp ADDR=SVC or --unix PATH=SVC)")
-	}
+	// No endpoint is valid: the verb then only holds the control stream, which
+	// is what a session with a bridge but no service endpoints yet needs (the
+	// down text still reaches the log).
 	return sock, eps, nil
 }
 

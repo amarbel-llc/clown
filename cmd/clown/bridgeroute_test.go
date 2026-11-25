@@ -1,10 +1,12 @@
 package main
 
 import (
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"code.linenisgreat.com/clown/internal/alfa/agentscope"
 	"code.linenisgreat.com/clown/internal/alfa/pluginhost"
@@ -167,6 +169,43 @@ func TestWireBridgeBindsTheDirAndRecordsTheCgroup(t *testing.T) {
 	l.OnCgroup("not-absolute")
 	if got, _ := os.ReadFile(b.CgroupFile); string(got) != "/a/b/u.service" {
 		t.Errorf("a bad cgroup replaced the file: %q", got)
+	}
+}
+
+func TestAwaitSocketSeesTheServesSocketAndGivesUp(t *testing.T) {
+	if (sessionBridge{}).awaitSocket(time.Millisecond) {
+		t.Error("a zero bridge is never ready")
+	}
+	dir, err := os.MkdirTemp("/tmp", "cbw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	b := sessionBridge{Dir: dir, Socket: filepath.Join(dir, "bridge.sock")}
+	start := time.Now()
+	if b.awaitSocket(120 * time.Millisecond) {
+		t.Error("no socket yet, but ready")
+	}
+	if time.Since(start) < 100*time.Millisecond {
+		t.Error("gave up before the timeout")
+	}
+	// A regular file there is not a socket.
+	if err := os.WriteFile(b.Socket, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if b.awaitSocket(60 * time.Millisecond) {
+		t.Error("a regular file counted as the socket")
+	}
+	_ = os.Remove(b.Socket)
+	// The serve creating it a moment later is seen.
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		if ln, err := net.Listen("unix", b.Socket); err == nil {
+			t.Cleanup(func() { _ = ln.Close() })
+		}
+	}()
+	if !b.awaitSocket(3 * time.Second) {
+		t.Error("the socket appeared but was not seen")
 	}
 }
 

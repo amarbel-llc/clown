@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"code.linenisgreat.com/clown/internal/0/bridgewire"
 	"code.linenisgreat.com/clown/internal/alfa/pluginhost"
@@ -144,6 +145,29 @@ func (b sessionBridge) writeCgroup(cgroup string) error {
 		return err
 	}
 	return nil
+}
+
+// bridgeSocketWait is how long the launch waits for the serve to create
+// bridge.sock before it decides the session has no bridge (the serve's own gate
+// may be off, or it may have refused).
+var bridgeSocketWait = 10 * time.Second
+
+// awaitSocket reports whether the serve created a unix socket at b.Socket
+// within timeout, polling. A zero bridge is never ready.
+func (b sessionBridge) awaitSocket(timeout time.Duration) bool {
+	if b.Socket == "" {
+		return false
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		if fi, err := os.Lstat(b.Socket); err == nil && fi.Mode().Type() == os.ModeSocket {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }
 
 // cleanup removes a socket the serve left behind, the cgroup file, and the

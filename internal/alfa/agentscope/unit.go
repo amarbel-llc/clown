@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"code.linenisgreat.com/clown/internal/0/bridgewire"
 	"code.linenisgreat.com/clown/internal/0/peercheck"
 )
 
@@ -227,6 +228,9 @@ func (l Launch) SystemdRunArgs() ([]string, error) {
 	if l.DeadManSocket != "" {
 		args = append(args, "--deadman", l.DeadManSocket)
 	}
+	if l.BridgeDir != "" {
+		args = append(args, "--bridge", l.BridgeSocket())
+	}
 	if l.ServeFile != "" {
 		args = append(args, "--serve", l.ServeFile)
 	}
@@ -236,6 +240,15 @@ func (l Launch) SystemdRunArgs() ([]string, error) {
 	args = append(args, "--")
 	args = append(args, l.Argv...)
 	return args, nil
+}
+
+// BridgeSocket is the bridge's socket, at the same path inside the unit as
+// outside (the directory is bound at its own path). Empty without a bridge.
+func (l Launch) BridgeSocket() string {
+	if l.BridgeDir == "" {
+		return ""
+	}
+	return filepath.Join(l.BridgeDir, bridgewire.SocketName)
 }
 
 // properties is the sandbox, in the order FDR 0020 tabulates it.
@@ -416,6 +429,12 @@ func (l Launch) environment() (set, unset []string) {
 	// absent. A hint for choosing defer-vs-ask, not a boundary: an agent inside
 	// can still set any variable in its own processes.
 	env["CLOWN_UNIT"] = l.Unit
+	// The bridge (FDR 0048): the socket the in-unit shim and every program that
+	// talks to a service reach it by. Set only with a bridge, never inherited.
+	delete(env, "CLOWN_BRIDGE_SOCKET")
+	if l.BridgeDir != "" {
+		env["CLOWN_BRIDGE_SOCKET"] = l.BridgeSocket()
+	}
 	// The frontend decides which clown the unit runs: CLOWN_BIN (what
 	// producers and in-unit servers call) is the shim's own binary, never a
 	// value inherited from the frontend's env or set by the spec. A stray
