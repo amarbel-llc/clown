@@ -372,10 +372,31 @@ func TestBridgeListenHoldsControlAndSaysWhenItEnds(t *testing.T) {
 	}
 }
 
+// The ONE switch (operator ruling via clarabell, 2026-11-25) is the spec's
+// bridge field: empty or absent is off, "offered" and "required" are on, and
+// only for a confined launch (it has a unit). No environment variable turns it
+// on. Red with a switch that is always on, or that reads the environment.
+func TestTheSpecFieldIsTheOnlyBridgeSwitch(t *testing.T) {
+	t.Setenv("CLOWN_BRIDGE_V1", "1") // the old switch: now nothing
+	for name, tc := range map[string]struct {
+		unit, mode string
+		want       bool
+	}{
+		"unconfined, offered":    {"", agentscope.BridgeOffered, false},
+		"confined, field absent": {"u.service", "", false},
+		"confined, offered":      {"u.service", agentscope.BridgeOffered, true},
+		"confined, required":     {"u.service", agentscope.BridgeRequired, true},
+	} {
+		if got := bridgeSwitchOn(tc.unit, tc.mode); got != tc.want {
+			t.Errorf("%s: bridgeSwitchOn(%q, %q) = %v, want %v", name, tc.unit, tc.mode, got, tc.want)
+		}
+	}
+}
+
 // The spec's bridge mode (operator ruling via clarabell, 2026-11-25): a launch
 // whose spec REQUIRES the bridge and has none is refused with the recorded
-// reason before the unit starts; an offered bridge (the default) is not. Red
-// without requireBridge.
+// reason before the unit starts; an offered bridge is not, and an absent field
+// is off, not a bridge. Red without requireBridge.
 func TestRequireBridgeRefusesOnlyWhenTheSpecRequiresIt(t *testing.T) {
 	mk := func(mode string, dir string, why string) agentscope.Launch {
 		var l agentscope.Launch
@@ -392,11 +413,11 @@ func TestRequireBridgeRefusesOnlyWhenTheSpecRequiresIt(t *testing.T) {
 		refuse  bool
 		mention string
 	}{
-		"required, no bridge, a reason":   {mk(agentscope.BridgeRequired, "", "the serve created no bridge socket in 10s"), true, "no bridge socket in 10s"},
-		"required, no bridge, switch off": {mk(agentscope.BridgeRequired, "", ""), true, "CLOWN_BRIDGE_V1"},
-		"required, bridge wired":          {mk(agentscope.BridgeRequired, "/run/x/bridge", ""), false, ""},
-		"offered, no bridge":              {mk(agentscope.BridgeOffered, "", "no socket"), false, ""},
-		"default, no bridge":              {mk("", "", "no socket"), false, ""},
+		"required, no bridge, a reason":  {mk(agentscope.BridgeRequired, "", "the serve created no bridge socket in 10s"), true, "no bridge socket in 10s"},
+		"required, no bridge, no reason": {mk(agentscope.BridgeRequired, "", ""), true, "no bridge was set up"},
+		"required, bridge wired":         {mk(agentscope.BridgeRequired, "/run/x/bridge", ""), false, ""},
+		"offered, no bridge":             {mk(agentscope.BridgeOffered, "", "no socket"), false, ""},
+		"default, no bridge":             {mk("", "", "no socket"), false, ""},
 	} {
 		err := requireBridge(&tc.l)
 		if (err != nil) != tc.refuse {
@@ -407,6 +428,11 @@ func TestRequireBridgeRefusesOnlyWhenTheSpecRequiresIt(t *testing.T) {
 		}
 	}
 }
+
+// The spec field also has to REACH the routing: with a spec that says offered
+// the switch is read from the spec the launch loaded, not from anything else.
+// (Wiring seen only by reading runWithPluginHost: the one place that sets
+// flags.agentScopeBridgeMode is the loadLaunchSpec branch.)
 
 // Round 2, M2/L6: a server that never admits the unit: "ready" still comes, once
 // the retry window has run out, with the no-control line already said (the

@@ -51,19 +51,22 @@ func runInAgentScope(req agentScopeRequest, logger *slog.Logger) int {
 	launch.Serve = req.serve
 	launch.Broker = req.broker
 	bridge := req.bridge
-	if bridge.Dir != "" || req.bridgeOff != "" {
-		// The operator's switch was set: whatever becomes of the bridge, the
-		// result says (round 2, M3).
+	if launch.Spec.Bridge != "" {
+		// The operator's switch (the spec's `bridge` field) was set: whatever
+		// becomes of the bridge, the result says (round 2, M3).
 		launch.BridgeStatus = &agentscope.BridgeStatus{}
-	}
-	if req.bridgeOff != "" {
-		reportBridgeOff(&launch, logger, req.bridgeOff)
+		switch {
+		case req.bridgeOff != "":
+			reportBridgeOff(&launch, logger, req.bridgeOff)
+		case bridge.Dir == "":
+			reportBridgeOff(&launch, logger, "no plugin declares the spinclass serve the bridge is routed to")
+		}
 	}
 	if bridge.Dir != "" && !bridge.awaitSocket(bridgeSocketWait) {
 		// The serve's listener has its own second gate (a trusted [bridge]
 		// enable); without it no socket appears. The session then has no bridge:
 		// the unit is not told there is one.
-		reportBridgeOff(&launch, logger, fmt.Sprintf("the serve created no bridge socket in %v (is spinclass's trusted [bridge] enable set? CLOWN_BRIDGE_V1 alone starts nothing there)", bridgeSocketWait))
+		reportBridgeOff(&launch, logger, fmt.Sprintf("the serve created no bridge socket in %v (is the serve built with the bridge, and spinclass's own gate for it on? the spec's bridge field alone starts no listener there)", bridgeSocketWait))
 		bridge.orphan(logger) // a late socket must not become a live one
 		bridge = sessionBridge{}
 	}
@@ -136,7 +139,7 @@ func requireBridge(launch *agentscope.Launch) error {
 	if !launch.Spec.BridgeIsRequired() || launch.BridgeDir != "" {
 		return nil
 	}
-	reason := "the bridge switch is off (CLOWN_BRIDGE_V1 is not 1)"
+	reason := "no bridge was set up"
 	if launch.BridgeStatus != nil && launch.BridgeStatus.Reason() != "" {
 		reason = launch.BridgeStatus.Reason()
 	}

@@ -71,7 +71,7 @@ func TestWritableCoveringSeesParentsAndNotSiblings(t *testing.T) {
 }
 
 // Round 2, M3: the result says what became of the bridge: nothing when it was
-// never asked for, "on", or "off: <reason>" when the operator asked and the
+// never asked for, "recorded", or "off: <reason>" when the operator asked and the
 // frontend knows why it is missing. Red without the field.
 func TestTheResultSaysWhyTheBridgeIsOff(t *testing.T) {
 	l := testLaunch()
@@ -95,15 +95,15 @@ func TestTheResultSaysWhyTheBridgeIsOff(t *testing.T) {
 		t.Errorf("dir bound but cgroup not recorded: bridge = %q, want an off line", got)
 	}
 	ok.BridgeReady.Store(true)
-	if got := ok.baseResult().Bridge; got != "on" {
-		t.Errorf("bridge = %q, want on", got)
+	if got := ok.baseResult().Bridge; got != "recorded" {
+		t.Errorf("bridge = %q, want recorded (never \"on\": nothing here knows the listener admits the unit)", got)
 	}
 	path := filepath.Join(t.TempDir(), "r", "result.json")
 	if err := WriteResult(path, ok.baseResult()); err != nil {
 		t.Fatal(err)
 	}
 	raw, _ := os.ReadFile(path)
-	if !strings.Contains(string(raw), `"bridge": "on"`) {
+	if !strings.Contains(string(raw), `"bridge": "recorded"`) {
 		t.Errorf("the result file does not carry the field: %s", raw)
 	}
 }
@@ -134,18 +134,19 @@ func TestWritableCoveringCoversTheCgroupFileAndSymlinks(t *testing.T) {
 	}
 }
 
-// Round 1, A-L3: the serve's variables and the switch never reach the unit,
-// not from the frontend's environment and not from a spec's env.
+// Round 1, A-L3: the serve's variables never reach the unit, not from the
+// frontend's environment and not from a spec's env. (The switch is the spec's
+// `bridge` field now; there is no environment switch to scrub.)
 func TestTheBridgeVariablesNeverReachTheUnit(t *testing.T) {
 	l := testLaunch()
-	l.FrontendEnv = append(l.FrontendEnv, "CLOWN_BRIDGE_DIR=/x", "CLOWN_BRIDGE_UNIT=u.service", "CLOWN_BRIDGE_CGROUP_FILE=/y", "CLOWN_BRIDGE_V1=1")
-	l.Spec.Env = map[string]string{"CLOWN_BRIDGE_DIR": "/spec", "CLOWN_BRIDGE_V1": "1", "CLOWN_BRIDGE_CGROUP_FILE": "/spec"}
+	l.FrontendEnv = append(l.FrontendEnv, "CLOWN_BRIDGE_DIR=/x", "CLOWN_BRIDGE_UNIT=u.service", "CLOWN_BRIDGE_CGROUP_FILE=/y")
+	l.Spec.Env = map[string]string{"CLOWN_BRIDGE_DIR": "/spec", "CLOWN_BRIDGE_CGROUP_FILE": "/spec"}
 	args, err := l.SystemdRunArgs()
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, a := range args {
-		for _, k := range []string{"CLOWN_BRIDGE_DIR", "CLOWN_BRIDGE_UNIT", "CLOWN_BRIDGE_CGROUP_FILE", "CLOWN_BRIDGE_V1"} {
+		for _, k := range []string{"CLOWN_BRIDGE_DIR", "CLOWN_BRIDGE_UNIT", "CLOWN_BRIDGE_CGROUP_FILE"} {
 			if strings.Contains(a, "--setenv="+k+"=") {
 				t.Errorf("%s reached the unit: %q", k, a)
 			}
@@ -267,7 +268,7 @@ func TestSpecBridgeModeIsValidated(t *testing.T) {
 		t.Errorf("an unknown mode: err = %v", err)
 	}
 	if validSpec().BridgeIsRequired() {
-		t.Error("the default is required; the default is the operator's call, and today it is offered")
+		t.Error("an unset bridge field means required; it means OFF (the one switch is off by default)")
 	}
 }
 

@@ -2226,6 +2226,7 @@ func runWithPluginHost(executor Executor, pluginDirs []string, flags parsedFlags
 		// by runInAgentScope as before; nothing is routed then.
 		if spec, err := loadLaunchSpec(flags.agentScopeSpec, flags.agentScopeDigest); err == nil {
 			flags.agentScopeUnit = agentscope.UnitName(spec.UnitNameHint)
+			flags.agentScopeBridgeMode = spec.Bridge
 			discovered, flags.agentScopeServeRoutes, err = routeServeSockets(discovered, host.BridgePath, os.Getenv("XDG_RUNTIME_DIR"), flags.identity.Key, flags.agentScopeUnit)
 			if err != nil {
 				err = agentscope.Launch{Spec: spec, Unit: flags.agentScopeUnit}.Fail(err)
@@ -2248,15 +2249,16 @@ func runWithPluginHost(executor Executor, pluginDirs []string, flags parsedFlags
 		defer broker.cleanup() // after runManaged has stopped the bridge
 	}
 
-	// FDR 0048: the bridge, off unless the operator's switch is set in the
-	// launching environment and the session is confined (the unit's name is
-	// what the serve checks its peers against). A refused bridge is logged and
-	// the launch goes on without it.
+	// FDR 0048: the bridge, off unless the spec's `bridge` field says "offered"
+	// or "required" (the one operator switch, set by spinclass from a trusted
+	// sweatfile) and the session is confined (the unit's name is what the serve
+	// checks its peers against). A refused bridge is logged and the launch goes
+	// on without it, or is refused when the spec says "required".
 	// Always called: with the bridge off the serve is told so in writing (its
 	// three bridge variables empty).
 	{
 		routed, br, err := routeBridge(discovered, host.BridgePath, os.Getenv("XDG_RUNTIME_DIR"), flags.identity.Key, flags.agentScopeUnit,
-			flags.agentScopeUnit != "" && os.Getenv(bridgeSwitchEnv) == "1")
+			bridgeSwitchOn(flags.agentScopeUnit, flags.agentScopeBridgeMode))
 		if err != nil {
 			logger.Warn("bridge: not started", "err", err)
 			flags.bridgeOff = err.Error() // the result says it (round 2, M3)
@@ -2264,9 +2266,8 @@ func runWithPluginHost(executor Executor, pluginDirs []string, flags parsedFlags
 		discovered = routed
 		// The serve's variables are its own: removed from clown's environment so
 		// no other server, and no session a serve spawns, inherits a parent's
-		// values (round 1, A-L3). The switch itself stays: it is per tree, set by
-		// the operator in the launching environment, and a child session is
-		// still gated by its own confinement and spinclass's [bridge] enable.
+		// values (round 1, A-L3). There is no switch in the environment any more:
+		// a child session's switch is its own spec's `bridge` field.
 		for _, k := range bridgeEnvKeys {
 			_ = os.Unsetenv(k)
 		}
@@ -3508,6 +3509,9 @@ type parsedFlags struct {
 	// servers start (set in runWithPluginHost) because the serve bridge's peer
 	// check needs it (F12).
 	agentScopeUnit string
+	// agentScopeBridgeMode is the spec's `bridge` field ("", "offered",
+	// "required"): the ONE operator switch for the bridge. "" is off.
+	agentScopeBridgeMode string
 	// agentScopeServeRoutes are the servers routed to a serve socket
 	// (routeServeSockets), keyed by "<plugin>/<server>"; agentScopeServe is
 	// the started one's relay (set in runManaged), bound into the unit.

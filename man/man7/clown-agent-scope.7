@@ -124,10 +124,36 @@ access to the operator's claude config.
 Servers clown starts for it are delivered as plugin servers.
 .El
 .Sh THE BRIDGE (FDR 0048)
-Off unless the operator sets
-.Ev CLOWN_BRIDGE_V1=1
-in the launching clown's environment, the session is confined, and spinclass's
-own trusted [bridge] enable is on.
+There is one switch: the spec's
+.Sy bridge
+field, which spinclass writes from a trusted sweatfile knob.
+Empty or absent is off: nothing is created and the serve is told so (its three
+variables below are set empty).
+.Sy offered
+is on, and the launch goes on without a bridge if one cannot be set up (the
+reason is in the result and on stderr).
+.Sy required
+is on, and a launch whose bridge cannot be set up is refused with the same
+reason: before the unit starts when the cause is known then (no socket in 10 s,
+a writable mount over the bridge directory or its cgroup file, routing refused,
+no serve to route to), and by killing the unit when its cgroup cannot be
+recorded.
+Nothing in an environment turns the bridge on.
+The session must be confined.
+.Pp
+The order, which both repositories keep:
+clown prepares the launch directory and starts the serve with the three
+variables; the serve binds the socket at once; clown waits up to 10 s for it,
+then starts the unit; clown writes
+.Pa bridge.cgroup
+when systemd shows the unit's main process settled, before the provider;
+.Nm bridge-listen
+opens
+.Em control
+(admitted on identity alone: same user, the cgroup file, strict equality), says
+ready, and only then does the provider start; clown writes the result (the
+unit record) once the provider has started; the spawn's hello makes the
+principal mapping, and only then are the verbs ready.
 .Bl -tag -width Ds
 .It Ev CLOWN_BRIDGE_DIR , CLOWN_BRIDGE_UNIT , CLOWN_BRIDGE_CGROUP_FILE
 Set by clown on spinclass's serve only (set empty when the bridge is off);
@@ -156,6 +182,19 @@ stream (retried for 15 s) and answers every endpoint with the fixed
 text once it ends.
 .It Sy bridge-v1
 Reported in the result's capabilities only after the cgroup file was written.
+.It The result's Sy bridge No field
+Absent when the spec did not ask for a bridge;
+.Sy recorded
+when the directory is bound and the unit's cgroup was written for the serve;
+.Sy off: <reason>
+when it was asked for and is missing.
+.Sy recorded
+is all the launch can know: the result is written once, at provider start, and
+cannot see whether the listener admits the unit or whether
+.Em control
+opens.
+That live state is the serve's: spinclass's state file, its counters and its
+wake.
 .El
 .Sh KNOWN LIMITS
 .Bl -bullet

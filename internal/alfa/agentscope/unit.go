@@ -156,8 +156,13 @@ func (s *BridgeStatus) Reason() string {
 }
 
 // bridgeField is the result's `bridge` value: "" when the bridge was never asked
-// for, "on" when it is bound and the cgroup file was written, else
-// "off: <reason>", so a switched-on launch that has no bridge says why.
+// for, "recorded" when the directory is bound and the unit's cgroup was written
+// to the file the serve reads, else "off: <reason>", so a switched-on launch
+// that has no bridge says why. "recorded" is all this launch can know: the
+// result is written once, at provider start, and cannot see whether the
+// listener admits the unit or whether `control` opens; that live state is the
+// serve's (spinclass's state file and wake). The word is not "on" because
+// nothing here knows that.
 func (l Launch) bridgeField() string {
 	if l.BridgeStatus != nil {
 		if r := l.BridgeStatus.Reason(); r != "" {
@@ -171,7 +176,7 @@ func (l Launch) bridgeField() string {
 		return ""
 	}
 	if l.BridgeReady != nil && l.BridgeReady.Load() {
-		return "on"
+		return "recorded"
 	}
 	return "off: the unit's cgroup was not recorded for the serve"
 }
@@ -530,7 +535,7 @@ func (l Launch) environment() (set, unset []string) {
 	// talks to a service reach it by. Set only with a bridge, never inherited.
 	// The serve's variables and the operator's switch never reach a unit, from
 	// the frontend's environment or from a spec's env (round 1, A-L3).
-	for _, k := range []string{bridgewire.EnvDir, bridgewire.EnvUnit, bridgewire.EnvCgroupFile, "CLOWN_BRIDGE_V1"} {
+	for _, k := range []string{bridgewire.EnvDir, bridgewire.EnvUnit, bridgewire.EnvCgroupFile} {
 		delete(env, k)
 	}
 	delete(env, "CLOWN_BRIDGE_SOCKET")

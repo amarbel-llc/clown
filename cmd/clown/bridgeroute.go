@@ -18,14 +18,11 @@ import (
 	"code.linenisgreat.com/clown/internal/alfa/pluginhost"
 )
 
-// bridgeSwitchEnv is the operator's switch for the bridge (FDR 0048): set to
-// "1" in the environment of the clown that launches the session, never read
-// from the agent's side. Unset (the default) means no bridge: nothing is
-// created, and the serve is told so explicitly (its three bridge variables
-// set empty, so a value in a parent environment cannot turn its listener on).
-// The listener in serve has its own second gate (a trusted `[bridge] enable`),
-// so setting this alone starts nothing there.
-const bridgeSwitchEnv = "CLOWN_BRIDGE_V1"
+// The bridge's one operator switch is the spec's `bridge` field (FDR 0048:
+// "offered" or "required"; empty or absent is off), which spinclass writes from
+// a trusted sweatfile knob. Off means nothing is created and the serve is told
+// so explicitly (its three bridge variables set empty, so a value in a parent
+// environment cannot turn its listener on).
 
 // sessionBridge is a session's bridge: clown creates the directory (0700) and
 // names it to the serve; the serve creates <Dir>/bridge.sock. CgroupFile is
@@ -40,6 +37,11 @@ type sessionBridge struct {
 	// written is what this process wrote to CgroupFile (shared by copies).
 	written *writtenCgroup
 }
+
+// bridgeSwitchOn is the whole switch: a confined launch (it has a unit) whose
+// spec's `bridge` field is "offered" or "required". Nothing in any environment
+// turns the bridge on.
+func bridgeSwitchOn(unit, mode string) bool { return unit != "" && mode != "" }
 
 // bridgeEnvKeys are the serve's three bridge variables.
 var bridgeEnvKeys = []string{bridgewire.EnvDir, bridgewire.EnvUnit, bridgewire.EnvCgroupFile}

@@ -41,12 +41,13 @@ type Spec struct {
 	DenyPaths    []string          `json:"deny_paths"`
 	EgressAllow  []string          `json:"egress_allow"`
 	Env          map[string]string `json:"env"`
-	// Bridge is what the launch asked of the bridge (FDR 0048): "" or "offered"
-	// (the default): the bridge is used when it can be set up, and `bridge:
-	// off: <reason>` is reported when it cannot; "required": a launch whose
-	// bridge cannot come up is REFUSED with the same reason, before the unit's
-	// provider starts. A unit whose only way out is the bridge must not start
-	// without one. Which mode is the default is the operator's decision.
+	// Bridge is the ONE switch of the bridge (FDR 0048), set by spinclass from a
+	// trusted-only knob: "" or absent is OFF (no bridge offered, nothing
+	// created); "offered": on, and the launch continues if the bridge cannot be
+	// set up (`bridge: off: <reason>` in the result and on stderr); "required":
+	// on, and the launch is REFUSED if it cannot, with the same reason, before
+	// the unit's provider starts. A unit whose only way out is the bridge must
+	// not start without one.
 	Bridge string `json:"bridge,omitempty"`
 }
 
@@ -345,9 +346,12 @@ type Result struct {
 	// routes the model API itself (a gateway profile). Read-only for consumers.
 	ModelCredential string `json:"model_credential,omitempty"`
 	// Bridge says what became of the bridge (FDR 0048): absent when it was never
-	// asked for, "on", or "off: <reason>" when the operator's switch was set and
-	// the bridge is missing, so a missing bridge never looks like one never
-	// switched on. Written by the frontend; read-only for consumers.
+	// asked for, "recorded" (the directory is bound and the unit's cgroup was
+	// written for the serve; NOT a claim that the listener admits the unit or
+	// that `control` opened: this result is written once and cannot know), or
+	// "off: <reason>" when the spec's switch was set and the bridge is missing,
+	// so a missing bridge never looks like one never switched on. Written by the
+	// frontend; read-only for consumers.
 	Bridge string `json:"bridge,omitempty"`
 	// ExitCode is set once the unit has exited after its provider started.
 	ExitCode *int   `json:"exit_code,omitempty"`
