@@ -259,6 +259,15 @@ var Capabilities = []string{
 	"model-inject-proxy",    // the model API credential is injected by the frontend (InjectProxy); the unit holds a placeholder. Result.ModelCredential says which path a launch took
 }
 
+// resultCapabilities is what a unit of this launch reports: Capabilities, plus
+// bridge-v1 when the bridge directory is bound.
+func (l Launch) resultCapabilities() []string {
+	if l.BridgeDir != "" {
+		return append(slices.Clone(Capabilities), "bridge-v1")
+	}
+	return Capabilities
+}
+
 // Result is what clown reports back once the unit is active (FDR 0020
 // "Launcher interface"). Unit is authoritative.
 type Result struct {
@@ -291,7 +300,9 @@ type Result struct {
 // WriteResult writes r to path atomically (tmp + rename in the same dir).
 func WriteResult(path string, r Result) error {
 	r.Version = SpecVersion
-	r.Capabilities = Capabilities
+	if r.Capabilities == nil { // a result from a Launch already names its own (bridge-v1)
+		r.Capabilities = Capabilities
+	}
 	raw, err := json.MarshalIndent(r, "", "  ")
 	if err != nil {
 		return err

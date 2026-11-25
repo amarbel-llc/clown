@@ -109,6 +109,11 @@ type Launch struct {
 	// bound in as a single inode; the shim (--deadman) stops the unit when
 	// its connection to it ends. Empty: none.
 	DeadManSocket string
+	// BridgeDir is the bridge directory (<runtime>/clown/launch/<key>/bridge,
+	// FDR 0048), bound in READ-ONLY so the unit can connect to bridge.sock but
+	// never create, replace or unlink anything in it. Never in BindPaths or
+	// ReadWritePaths (a test pins that). Empty: the bridge is off.
+	BridgeDir string
 }
 
 // resourceLimits are every agent unit's limits (clown#320, the operator's
@@ -156,7 +161,7 @@ func (l Launch) relays() []Relay {
 
 // baseResult is the result fields known from the launch alone.
 func (l Launch) baseResult() Result {
-	return Result{Unit: l.Unit, Principal: l.Principal, UID: os.Getuid(), ServeSocket: l.Serve.Socket, ModelCredential: l.ModelCredential}
+	return Result{Unit: l.Unit, Principal: l.Principal, UID: os.Getuid(), ServeSocket: l.Serve.Socket, ModelCredential: l.ModelCredential, Capabilities: l.resultCapabilities()}
 }
 
 // UnitName turns spinclass's hint into a valid, unique service name.
@@ -287,6 +292,9 @@ func (l Launch) properties() []string {
 	}
 	for _, p := range l.PlumbingRO {
 		props = append(props, "BindReadOnlyPaths=-"+p)
+	}
+	if l.BridgeDir != "" {
+		props = append(props, "BindReadOnlyPaths="+l.BridgeDir)
 	}
 	for _, p := range l.Spec.DenyPaths {
 		props = append(props, "InaccessiblePaths=-"+p)
