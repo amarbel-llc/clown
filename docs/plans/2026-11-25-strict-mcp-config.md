@@ -31,8 +31,9 @@ allow-list that names a tool would change. That is a fleet-wide rename, not a fl
 
 Do not add `--strict-mcp-config`. The user-scope config it was meant to exclude lives under `CLAUDE_CONFIG_DIR`;
 the full unit already sets that to a per-session directory with no user MCP configuration (seen: today's confined
-run, credentials file 0 bytes, claude answered). The view unit is the only one that shows the operator's home; if
-the view is kept, give it the same per-session `CLAUDE_CONFIG_DIR` and never mount the operator's `~/.claude*`.
+run, credentials file 0 bytes, claude answered). (When this note was written a private-view unit was still planned,
+the one mode that would have shown the operator's home; the operator ruled 2026-11-25 that the full unit plus the
+bridge is the one confined mode and the view was not built, so there is no unit that mounts `~/.claude*`.)
 Unknown, not tested: whether project-scope `.mcp.json` files inside the worktree still load (they are agent-writable
 content); if that matters, the probe to run next is the same recipe with a `.mcp.json` in the worktree and
 `--setting-sources` limited.
