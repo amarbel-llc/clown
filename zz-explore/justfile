@@ -2996,6 +2996,45 @@ explore-model-live-report:
         echo "token file $path absent; cannot grep for it"
     fi
 
+# Export the named commits (a review package's patches/, lane.diff, FILES.txt)
+# into DEST: for a package whose commits are not a contiguous range. A relative
+# DEST is relative to the REPOSITORY ROOT, not to this module's directory.
+explore-export-commits DEST +REVS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    top="$(git rev-parse --show-toplevel)"
+    dest="{{DEST}}"; case "$dest" in /*) ;; *) dest="$top/$dest" ;; esac
+    [ ! -e "$dest" ] || { echo "$dest exists; refusing" >&2; exit 1; }
+    mkdir -p "$dest/patches"
+    : >"$dest/FILES.txt"
+    : >"$dest/lane.diff"
+    n=0
+    for r in {{REVS}}; do
+      n=$((n+1))
+      git -C "$top" show --format='commit %H%n%s%n' "$r" >>"$dest/lane.diff"
+      git -C "$top" format-patch -1 --stdout "$r" >"$dest/patches/$(printf %02d "$n")-$(git -C "$top" rev-parse --short "$r").patch"
+      git -C "$top" show --name-only --format= "$r" >>"$dest/FILES.txt"
+    done
+    sort -u -o "$dest/FILES.txt" "$dest/FILES.txt"
+    # Check what was written, where it was written: never trust the echo alone.
+    got="$(find "$dest/patches" -type f | wc -l)"
+    [ "$got" -eq "$n" ] && [ -s "$dest/lane.diff" ] && [ -s "$dest/FILES.txt" ] || { echo "export check FAILED: $got patches for $n commits in $dest" >&2; exit 1; }
+    echo "exported $n commits to $dest: $(wc -l <"$dest/FILES.txt") files touched, $(wc -l <"$dest/lane.diff") diff lines; present: $(ls "$dest" | tr '\n' ' ')"
+
+# Export the tracked tree at REV into DEST (a review package's tree/): `git
+# archive`, nothing else; DEST must not exist yet.
+explore-export-tree REV DEST:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    top="$(git rev-parse --show-toplevel)"
+    dest="{{DEST}}"; case "$dest" in /*) ;; *) dest="$top/$dest" ;; esac
+    [ ! -e "$dest" ] || { echo "$dest exists; refusing" >&2; exit 1; }
+    mkdir -p "$dest"
+    git -C "$top" archive "{{REV}}" | tar -x -C "$dest"
+    files="$(find "$dest" -type f | wc -l)"
+    [ "$files" -gt 0 ] && [ -f "$dest/AGENTS.md" ] || { echo "export check FAILED: $files files, no AGENTS.md in $dest" >&2; exit 1; }
+    echo "exported $(git -C "$top" rev-parse --short "{{REV}}") to $dest: $files files"
+
 # Peercheck review (M1, M2): in a REAL full unit, (a) which cgroups do the
 # unit's processes live in (any sub-cgroup of the unit's ControlGroup? if none,
 # CheckPeerExact can require strict equality), and (b) can a process inside
