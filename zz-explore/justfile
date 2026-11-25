@@ -2996,6 +2996,58 @@ explore-model-live-report:
         echo "token file $path absent; cannot grep for it"
     fi
 
+# Peercheck review (M1, M2): in a REAL full unit, (a) which cgroups do the
+# unit's processes live in (any sub-cgroup of the unit's ControlGroup? if none,
+# CheckPeerExact can require strict equality), and (b) can a process inside
+# reach the user manager (systemd's private socket, the session bus, `systemctl
+# --user`)? The unit runs a main shell with background children, one under
+# `setsid`; the host side lists the unit's cgroup tree and every member's
+# /proc/<pid>/cgroup. Prints only what is seen. No model call.
+explore-unit-cgroup-probe:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    for t in git jq nix systemctl; do command -v "$t" >/dev/null || { echo "FAIL: no $t on PATH" >&2; exit 2; }; done
+    root=$(git rev-parse --show-toplevel)
+    dir="$root/.tmp/unit-cgroup-probe"
+    rm -rf "$dir"; mkdir -p "$dir"
+    res=$(mktemp -d); trap 'rm -rf "$res"' EXIT
+    sysctl_bin=$(command -v systemctl)
+    unset TROUPE_XMPP_USER TROUPE_XMPP_PASSWORD_FILE ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN
+    export CLOWN_MODEL_CREDENTIAL=proxy-only
+    clown_out=$(nix build --no-link --print-out-paths "$root#default") || exit 1
+    jq -n --arg wt "$dir" --arg home "$HOME" --arg res "$res/result.json" \
+      '{version: 1, worktree: $wt, operator_home: $home, unit_name_hint: "clown-cg-probe", result_path: $res}' >"$res/spec.json"
+    cat >"$dir/inside.sh" <<EOF
+    echo "-- inside: can the unit reach the user manager?"
+    echo "uid=\$(id -u) DBUS_SESSION_BUS_ADDRESS=[\${DBUS_SESSION_BUS_ADDRESS:-}]"
+    ls -la /run/user/\$(id -u) 2>&1 | head -n 8
+    ls -la /run/user/\$(id -u)/systemd 2>&1 | head -n 4
+    $sysctl_bin --user show -p Version 2>&1 | head -n 3
+    echo "-- inside: creating a sub-cgroup under the unit's own cgroup"
+    cg=\$(sed -n 's/^0:://p' /proc/self/cgroup); echo "own cgroup as the unit sees it: [\$cg]"
+    mkdir "/sys/fs/cgroup\$cg/sub-probe" 2>&1 | head -n 2
+    echo "-- inside: background children"
+    sleep 25 & setsid sleep 25 & bash -c 'sleep 25' &
+    sleep 25
+    EOF
+    cd "$dir" || exit 1
+    "$clown_out/bin/clown" agent-scope-run --spec "$res/spec.json" -- bash "$dir/inside.sh" </dev/null 2>&1 | grep -v -E '^(time=|clown: agent scope: )' &
+    for _ in $(seq 40); do
+      unit=$(systemctl --user list-units --plain --no-legend --all 'clown-cg-probe*' 2>/dev/null | awk '{print $1}' | head -n 1)
+      [ -n "$unit" ] && break; sleep 0.5
+    done
+    sleep 6
+    echo "=== host side: unit [$unit]"
+    cg=$(systemctl --user show -p ControlGroup --value "$unit")
+    echo "ControlGroup=$cg"
+    echo "-- directories under it (a sub-cgroup would show as a second line):"
+    find "/sys/fs/cgroup$cg" -type d 2>/dev/null | sed "s|^/sys/fs/cgroup||"
+    echo "-- every member and its /proc/<pid>/cgroup:"
+    find "/sys/fs/cgroup$cg" -name cgroup.procs 2>/dev/null | while read -r f; do
+      while read -r pid; do printf '%s %s %s\n' "$pid" "$(tr '\0' ' ' </proc/$pid/cmdline 2>/dev/null | cut -c1-40)" "$(cat /proc/$pid/cgroup 2>/dev/null)"; done <"$f"
+    done
+    wait
+
 # Smoke of the terminal-2 recipe against a DUMMY-bearer probe (never a real
 # one): starts the probe on a scratch port, runs the three claude variants
 # without pauses and isolated, stops the probe and prints its log. claude is
