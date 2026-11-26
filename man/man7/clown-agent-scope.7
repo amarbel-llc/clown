@@ -76,6 +76,18 @@ No bind may cover the launch directories (Spec.Validate).
 .It Sy Environment
 Built from an allow-list of the frontend's variables plus the spec's; the
 user manager's own variables are unset (code, FDR 0020 "Environment").
+.Ev SSH_AUTH_SOCK
+is never inherited: a unit has no agent unless the spec binds one.
+The spec may set it, the only scrubbed variable it may, and only to the exact
+path of a socket it lists in
+.Em sockets
+(the session's own key-holder socket, bound as a single inode and named as
+given); the spec's value then wins over any inherited one.
+A value that names no bound socket (empty, unbound, relative, not clean, a
+trailing slash, a parent of a bound socket) is refused when the spec is loaded
+(Spec.Validate, tested), so no variable can point at a path that is not in the
+unit.
+Every other scrubbed variable stays refused in the spec.
 .El
 .Sh PROPERTIES
 The properties of
@@ -166,6 +178,13 @@ in it.
 .It Pa <runtime>/clown/launch/<key>/bridge.cgroup
 The unit's exact cgroup path, written by clown when systemd reports the unit
 active (before the provider starts), mode 0600; not bound into the unit.
+The launch directory holding it is closed to 0700 at every launch.
+The writer and the reader are one package's pair
+.Pq bridgewire.WriteCgroupFile / ReadCgroupFile ;
+the reader refuses a file that is not a regular file of the serve's own user, is
+writable by group or others, is over 4096 bytes, or holds anything but one
+absolute path (no control character, no trailing slash; one trailing newline is
+tolerated).
 The serve admits a peer only if its cgroup equals this value
 .Pq Fn CheckPeerExact .
 The guarantee depends on the unit not being able to move processes between

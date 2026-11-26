@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"code.linenisgreat.com/clown/internal/0/peercheck"
+	"code.linenisgreat.com/clown/internal/alfa/peercheck"
 )
 
 // clown#301: on the serve socket the control routes (/clown/system-prompt,

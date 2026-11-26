@@ -14,8 +14,8 @@ import (
 	"github.com/charmbracelet/huh"
 
 	"code.linenisgreat.com/clown/internal/0/profile"
-	"code.linenisgreat.com/clown/internal/alfa/agentscope"
 	"code.linenisgreat.com/clown/internal/alfa/pluginhost"
+	"code.linenisgreat.com/clown/internal/bravo/agentscope"
 )
 
 // cheapContextSaveContext carries the profile data run() already loaded once

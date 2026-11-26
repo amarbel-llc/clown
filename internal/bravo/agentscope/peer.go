@@ -3,7 +3,7 @@ package agentscope
 import (
 	"net"
 
-	"code.linenisgreat.com/clown/internal/0/peercheck"
+	"code.linenisgreat.com/clown/internal/alfa/peercheck"
 )
 
 // ServePortBase is the in-unit loopback port claude's manifest names for the

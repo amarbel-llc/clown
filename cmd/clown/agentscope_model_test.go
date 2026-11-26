@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"code.linenisgreat.com/clown/internal/alfa/agentscope"
+	"code.linenisgreat.com/clown/internal/bravo/agentscope"
 )
 
 // The tokens in this file are fakes. None is, or stands for, a real credential.

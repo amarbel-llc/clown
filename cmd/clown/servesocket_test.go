@@ -4,8 +4,8 @@ import (
 	"slices"
 	"testing"
 
-	"code.linenisgreat.com/clown/internal/alfa/agentscope"
 	"code.linenisgreat.com/clown/internal/alfa/pluginhost"
+	"code.linenisgreat.com/clown/internal/bravo/agentscope"
 )
 
 // F12 (FDR 0020): under --agent-scope only spinclass's bridged frontend

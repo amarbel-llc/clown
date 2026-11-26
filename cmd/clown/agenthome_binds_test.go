@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"code.linenisgreat.com/clown/internal/alfa/agentscope"
+	"code.linenisgreat.com/clown/internal/bravo/agentscope"
 	"code.linenisgreat.com/clown/internal/bravo/permstat"
 )
 

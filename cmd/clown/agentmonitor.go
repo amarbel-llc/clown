@@ -15,7 +15,7 @@ import (
 	"syscall"
 	"time"
 
-	"code.linenisgreat.com/clown/internal/alfa/agentscope"
+	"code.linenisgreat.com/clown/internal/bravo/agentscope"
 )
 
 // runAgentMonitor is `clown agent-monitor SOCK`, the monitor claude runs inside

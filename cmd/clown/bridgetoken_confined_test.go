@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"code.linenisgreat.com/clown/internal/alfa/agentscope"
 	"code.linenisgreat.com/clown/internal/alfa/pluginhost"
+	"code.linenisgreat.com/clown/internal/bravo/agentscope"
 )
 
 // A confined-launch fixture for the bridge token (clown#288, confined slice):

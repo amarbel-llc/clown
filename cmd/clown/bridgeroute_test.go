@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"code.linenisgreat.com/clown/internal/0/bridgewire"
-	"code.linenisgreat.com/clown/internal/alfa/agentscope"
 	"code.linenisgreat.com/clown/internal/alfa/bridgeshim"
 	"code.linenisgreat.com/clown/internal/alfa/pluginhost"
+	"code.linenisgreat.com/clown/internal/bravo/agentscope"
 )
 
 func serveFixture(env map[string]string) []pluginhost.DiscoveredServer {
@@ -222,6 +222,12 @@ func TestRouteBridgeStartsFromACleanDirectory(t *testing.T) {
 	}
 	if fi, err := os.Stat(dir); err != nil || fi.Mode().Perm() != 0o700 {
 		t.Errorf("dir mode: %v %v", fi, err)
+	}
+	// The launch directory held the cgroup file's slot and was made 0755 above:
+	// it is closed to 0700 (joint round, C-L1), not left as an earlier build or
+	// umask made it.
+	if fi, err := os.Stat(launch); err != nil || fi.Mode().Perm() != 0o700 {
+		t.Errorf("launch dir mode: %v %v, want 0700", fi, err)
 	}
 
 	// A symlink where the bridge dir should be: refused, the target untouched.

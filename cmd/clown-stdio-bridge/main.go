@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"code.linenisgreat.com/clown/internal/0/disconnectlog"
-	"code.linenisgreat.com/clown/internal/0/peercheck"
+	"code.linenisgreat.com/clown/internal/alfa/peercheck"
 )
 
 const stopGracePeriod = 5 * time.Second

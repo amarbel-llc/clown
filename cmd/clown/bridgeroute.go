@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"code.linenisgreat.com/clown/internal/0/bridgewire"
-	"code.linenisgreat.com/clown/internal/alfa/agentscope"
 	"code.linenisgreat.com/clown/internal/alfa/pluginhost"
+	"code.linenisgreat.com/clown/internal/bravo/agentscope"
 )
 
 // The bridge's one operator switch is the spec's `bridge` field (FDR 0048:
@@ -150,6 +150,12 @@ func prepareBridgeDir(launchDir, dir, sock, cgFile string) error {
 		if st, ok := fi.Sys().(*syscall.Stat_t); ok && int(st.Uid) != os.Getuid() {
 			return fmt.Errorf("%s is owned by uid %d, not this user", d, st.Uid)
 		}
+	}
+	// MkdirAll leaves an existing directory's mode alone: a launch directory a
+	// looser umask or an older build made 0755 is closed to 0700 here, since the
+	// cgroup file inside it is what admits the unit (joint round, C-L1).
+	if err := os.Chmod(launchDir, 0o700); err != nil {
+		return err
 	}
 	for _, f := range []string{sock, cgFile, cgFile + ".tmp"} {
 		if err := os.Remove(f); err != nil && !errors.Is(err, os.ErrNotExist) {

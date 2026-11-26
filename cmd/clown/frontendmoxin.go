@@ -11,8 +11,8 @@ import (
 
 	"code.linenisgreat.com/clown/internal/0/buildcfg"
 	"code.linenisgreat.com/clown/internal/0/staging"
-	"code.linenisgreat.com/clown/internal/alfa/agentscope"
 	"code.linenisgreat.com/clown/internal/alfa/pluginhost"
+	"code.linenisgreat.com/clown/internal/bravo/agentscope"
 )
 
 // Frontend-side moxins (clown#325, docs/plans/2026-10-26-confined-moxy-sequencing.md).

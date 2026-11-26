@@ -50,6 +50,16 @@ var ParseHello = internal.ParseHello
 // MaxReplyTextBytes of it: what a text read off the socket may be shown as.
 var Printable = internal.Printable
 
+// ReadCgroupFile reads the file WriteCgroupFile writes, the listener's side of
+// the seam. It is read FRESH on every call and fails closed: a missing, empty,
+// unreadable, over-long or non-regular file (a symlink, a directory, a socket),
+// a file owned by another user or writable by group or others, or a value that
+// is not an absolute path with no trailing slash and no control character (one
+// trailing newline is tolerated) is an error. The error is what a listener
+// logs; the answer to the peer is always `ERR refused` (RefusedUnadmitted),
+// never a silent close.
+var ReadCgroupFile = internal.ReadCgroupFile
+
 // ReadHello reads a client's hello from r (exactly up to its newline, at most
 // MaxHelloBytes) and parses it.
 var ReadHello = internal.ReadHello
@@ -97,10 +107,10 @@ var ValidService = internal.ValidService
 // with no trailing newline, written to path+".tmp" and renamed over so a reader
 // sees the old value or the new, never a part, and a symlink at path is
 // replaced rather than followed. It refuses a value that is not an absolute
-// path with no trailing slash, newline or NUL. This is the writer clown uses
-// at launch (cmd/clown's writeCgroup adds the check that the value is the
-// unit's own); peercheck.ReadUnitCgroupFile is the reader. Exported so an
-// end-to-end test can stand in for clown's half of the seam.
+// path with no trailing slash and no control character. This is the writer
+// clown uses at launch (cmd/clown's writeCgroup adds the check that the value
+// is the unit's own); ReadCgroupFile is the reader. Exported so an end-to-end
+// test can stand in for clown's half of the seam.
 var WriteCgroupFile = internal.WriteCgroupFile
 
 // CgroupFileName is that file's name, under <runtime>/clown/launch/<key>/.
@@ -131,6 +141,10 @@ const HelloTimeout = internal.HelloTimeout
 
 // Major is the wire's major version.
 const Major = internal.Major
+
+// MaxCgroupFileBytes bounds the file a reader accepts: a cgroup path is far
+// shorter; a larger file is not clown's.
+const MaxCgroupFileBytes = internal.MaxCgroupFileBytes
 
 // MaxHelloBytes bounds a hello line, newline included.
 const MaxHelloBytes = internal.MaxHelloBytes

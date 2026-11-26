@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"code.linenisgreat.com/clown/internal/0/bridgewire"
 )
 
 type admitStep struct {
@@ -32,7 +34,7 @@ func place(t *testing.T, path, spec string) {
 			t.Fatal(err)
 		}
 	case spec == "long":
-		if err := os.WriteFile(path, []byte("/"+strings.Repeat("x", 2*maxCgroupFileBytes)), 0o600); err != nil {
+		if err := os.WriteFile(path, []byte("/"+strings.Repeat("x", 2*bridgewire.MaxCgroupFileBytes)), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	case strings.HasPrefix(spec, "symlink:"):

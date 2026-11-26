@@ -14,8 +14,8 @@ import (
 	"testing"
 
 	"code.linenisgreat.com/clown/internal/0/profile"
-	"code.linenisgreat.com/clown/internal/alfa/agentscope"
 	"code.linenisgreat.com/clown/internal/alfa/pluginhost"
+	"code.linenisgreat.com/clown/internal/bravo/agentscope"
 )
 
 // Servers a confined (--agent-scope) launch reserves for the unit: the

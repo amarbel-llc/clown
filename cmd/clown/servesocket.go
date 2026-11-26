@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"slices"
 
-	"code.linenisgreat.com/clown/internal/0/peercheck"
-	"code.linenisgreat.com/clown/internal/alfa/agentscope"
+	"code.linenisgreat.com/clown/internal/alfa/peercheck"
 	"code.linenisgreat.com/clown/internal/alfa/pluginhost"
+	"code.linenisgreat.com/clown/internal/bravo/agentscope"
 )
 
 // servePlugin is the plugin whose frontend server is moved to a serve socket

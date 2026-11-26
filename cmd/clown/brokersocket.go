@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"slices"
 
-	"code.linenisgreat.com/clown/internal/0/peercheck"
-	"code.linenisgreat.com/clown/internal/alfa/agentscope"
+	"code.linenisgreat.com/clown/internal/alfa/peercheck"
 	"code.linenisgreat.com/clown/internal/alfa/pluginhost"
+	"code.linenisgreat.com/clown/internal/bravo/agentscope"
 )
 
 // policyBrokerEnv is the one variable that names the session's policy-broker

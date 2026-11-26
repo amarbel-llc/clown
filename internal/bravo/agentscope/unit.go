@@ -13,7 +13,7 @@ import (
 	"sync/atomic"
 
 	"code.linenisgreat.com/clown/internal/0/bridgewire"
-	"code.linenisgreat.com/clown/internal/0/peercheck"
+	"code.linenisgreat.com/clown/internal/alfa/peercheck"
 )
 
 // Slice is the systemd slice every agent unit runs in. Its cgroup prefix,

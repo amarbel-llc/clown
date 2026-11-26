@@ -2,7 +2,7 @@
 
 package peercheck
 
-import internal "code.linenisgreat.com/clown/internal/0/peercheck"
+import internal "code.linenisgreat.com/clown/internal/alfa/peercheck"
 
 // ServeConn is a connection the serve socket accepted, with its peer class:
 // Frontend is true for the frontend clown itself, false for a caller in the
@@ -91,11 +91,11 @@ var ProcCgroupAt = internal.ProcCgroupAt
 
 // ReadUnitCgroupFile reads the file clown writes with the unit's exact cgroup
 // (FDR 0048: <runtime>/clown/launch/<key>/bridge.cgroup), the listener's side of
-// the seam. It is read FRESH on every call (a listener calls it per connection),
-// and fails closed: a missing, empty, unreadable, over-long or non-regular file
-// (a symlink, a directory, a socket) is an error, as is a value that is not an
-// absolute path or holds a newline (one trailing newline is tolerated) or a NUL.
-// The error is what a listener logs; the answer to the peer is always
+// the seam. The reader and the writer are one package's pair
+// (bridgewire.ReadCgroupFile / WriteCgroupFile), so they cannot drift; this is
+// the name spinclass's listener calls. It is read FRESH on every call (a
+// listener calls it per connection), and fails closed (see ReadCgroupFile). The
+// error is what a listener logs; the answer to the peer is always
 // `ERR refused` (bridgewire.RefusedUnadmitted), never a silent close.
 var ReadUnitCgroupFile = internal.ReadUnitCgroupFile
 

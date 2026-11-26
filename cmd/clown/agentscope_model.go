@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"code.linenisgreat.com/clown/internal/alfa/agentscope"
+	"code.linenisgreat.com/clown/internal/bravo/agentscope"
 )
 
 // The model credential of a confined launch (clown#336). With a token file the

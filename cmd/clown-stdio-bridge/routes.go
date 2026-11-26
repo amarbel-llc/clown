@@ -6,7 +6,7 @@ import (
 	"net"
 	"net/http"
 
-	"code.linenisgreat.com/clown/internal/0/peercheck"
+	"code.linenisgreat.com/clown/internal/alfa/peercheck"
 )
 
 // peerClassKey carries, on a serve-socket request's context, whether the

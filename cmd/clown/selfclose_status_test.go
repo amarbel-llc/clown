@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"code.linenisgreat.com/clown/internal/alfa/agentscope"
 	"code.linenisgreat.com/clown/internal/alfa/sessionstatus"
+	"code.linenisgreat.com/clown/internal/bravo/agentscope"
 )
 
 // The hung-session status file (clown#322): the idle listener writes the

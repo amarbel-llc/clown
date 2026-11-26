@@ -2042,12 +2042,12 @@ debug-tent-claude-tty CLAUDE_BIN='/nix/store/dii6cpbdqzjcjqcy18x6n56cql0fmdg9-cl
 # ProtectControlGroups, and (second and third attempt) whether a fresh cgroup2
 # mount from inside (unshare -Urm, -Urmc) gets a writable instance. CLOWN is
 # the clown binary to run (default: the installed one; pass a built store path
-# to test a build); MODE=view needs a clown that has the view variant. CLOWN
-# MAY BE AN UNFIXED BUILD, one that logs every --setenv value: the launcher is
+# to test a build). The one confined mode is the full unit (the view mode was
+# not built). CLOWN MAY BE AN UNFIXED BUILD, one that logs every --setenv value: the launcher is
 # run under `env -i` with a short allowlist, its start line is dropped and any
 # --setenv value masked, so no token of the caller's can reach this output.
 # Uses no card, agent socket or credential.
-explore-full-unit-cgroup-probe CLOWN='clown' MODE='full':
+explore-full-unit-cgroup-probe CLOWN='clown':
     #!/usr/bin/env bash
     set -uo pipefail
     wt=$(git rev-parse --show-toplevel)
@@ -2084,16 +2084,10 @@ explore-full-unit-cgroup-probe CLOWN='clown' MODE='full':
     EOF
     chmod +x "$probe"
     spec="$rt/clown-full-probe-$$.json"; res="$rt/clown-full-probe-$$.result.json"
-    if [ "{{MODE}}" = view ]; then
-      cat > "$spec" <<EOF
-    {"version":1,"mode":"view","worktree":"$wt","operator_home":"$HOME","unit_name_hint":"clown-view-probe","result_path":"$res","deny_paths":["$out/masked"],"env":{"SIBLING":"$sibling"}}
-    EOF
-    else
-      cat > "$spec" <<EOF
+    cat > "$spec" <<EOF
     {"version":1,"worktree":"$wt","operator_home":"$HOME","unit_name_hint":"clown-full-probe","result_path":"$res","binds_rw":[],"binds_ro":[],"sockets":[],"deny_paths":[],"env":{"SIBLING":"$sibling"}}
     EOF
-    fi
-    echo ">> clown: {{CLOWN}} ({{MODE}} unit); version: $({{CLOWN}} version 2>&1 | head -1)"
+    echo ">> clown: {{CLOWN}} (full unit); version: $({{CLOWN}} version 2>&1 | head -1)"
     # CLOWN may be an unfixed build whose start log prints every --setenv value:
     # so the launcher gets only an allowlisted environment (nothing of the
     # caller's tokens to leak), and its stderr loses the start line and masks any

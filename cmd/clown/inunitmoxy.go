@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"code.linenisgreat.com/clown/internal/alfa/agentscope"
+	"code.linenisgreat.com/clown/internal/bravo/agentscope"
 )
 
 // The in-unit moxy's ceiling (V3 structural moxy, clown#339;
