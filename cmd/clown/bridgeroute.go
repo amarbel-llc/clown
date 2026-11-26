@@ -292,8 +292,9 @@ func ownedByUs(fi os.FileInfo) bool {
 }
 
 // bridgeSocketWait is how long the launch waits for the serve to create
-// bridge.sock before it decides the session has no bridge (the serve's own gate
-// may be off, or it may have refused).
+// bridge.sock before it decides the session has no bridge (the serve may be
+// built without the bridge, or it may have refused; noBridgeSocketReason says
+// what the operator is told).
 var bridgeSocketWait = 10 * time.Second
 
 // awaitSocket reports whether the serve created a unix socket at b.Socket

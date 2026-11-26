@@ -63,10 +63,10 @@ func runInAgentScope(req agentScopeRequest, logger *slog.Logger) int {
 		}
 	}
 	if bridge.Dir != "" && !bridge.awaitSocket(bridgeSocketWait) {
-		// The serve's listener has its own second gate (a trusted [bridge]
-		// enable); without it no socket appears. The session then has no bridge:
-		// the unit is not told there is one.
-		reportBridgeOff(&launch, logger, fmt.Sprintf("the serve created no bridge socket in %v (is the serve built with the bridge, and spinclass's own gate for it on? the spec's bridge field alone starts no listener there)", bridgeSocketWait))
+		// One switch: the spec's bridge field, which spinclass sets from its
+		// trusted [confinement] bridge. The serve that was told to listen made no
+		// socket; the session then has no bridge: the unit is not told there is one.
+		reportBridgeOff(&launch, logger, noBridgeSocketReason(bridgeSocketWait))
 		bridge.orphan(logger) // a late socket must not become a live one
 		bridge = sessionBridge{}
 	}
@@ -1014,6 +1014,14 @@ func startRelays(relayArgs []string) error {
 		return errors.New("relay exited before listening")
 	}
 	return nil
+}
+
+// noBridgeSocketReason is the reason recorded (in the unit's result and `sc
+// list`) when the serve made no bridge socket in time. There is ONE switch, the
+// spec's bridge field (spinclass's trusted [confinement] bridge), so the text
+// names it and what to check; it must not name a second gate.
+func noBridgeSocketReason(wait time.Duration) string {
+	return fmt.Sprintf("the serve created no bridge socket in %v (the session's bridge was asked for by spinclass's [confinement] bridge setting; check that the serve running for this session is built with the bridge and that its log shows a listener; a serve without the bridge starts none)", wait)
 }
 
 // startBridgeListen starts `clown bridge-listen --socket SOCK` as a child that
