@@ -558,7 +558,7 @@ verify-bridge-vectors DIR:
         done
     }
     check internal/0/bridgewire/testdata vectors.json
-    check internal/0/peercheck/testdata admission-vectors.json
+    check internal/alfa/peercheck/testdata admission-vectors.json
     [ "$bad" -eq 0 ] && echo "vendored bridge vectors equal spinclass's published files and digests"
     exit "$bad"
 
