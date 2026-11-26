@@ -144,8 +144,9 @@ func runBridgeListenCtx(ctx context.Context, args []string, stdout, stderr io.Wr
 			// one that still will not admit this unit after the window): without
 			// `control` the shim can never be told when the bridge goes, which is
 			// the "looks working" case, so the bridge is unusable from here
-			// (joint round, J-M3 row 3). What to check is in the text.
-			sh.MarkUnusable(fmt.Sprintf("the bridge did not admit this unit's control stream (%v); check the serve's log and spinclass's session-health, and that the spec's bridge field matches the serve's bridge setting", err))
+			// (joint round, J-M3 row 3). The reason is the last refusal; what to
+			// check is in the contract's unusable text.
+			sh.MarkUnusable(err.Error())
 		case ctx.Err() == nil:
 			sh.SetControlHeld(false)
 			sh.MarkDown(reason)

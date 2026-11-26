@@ -570,7 +570,7 @@ func TestBridgeListenReadyAfterTheWindowWhenControlIsNeverAdmitted(t *testing.T)
 			if took := time.Since(start); took < 150*time.Millisecond {
 				t.Errorf("refused: ready after %v, before the retry window ran out", took)
 			}
-			if !strings.Contains(errb.String(), "did not admit this unit's control stream") {
+			if !strings.Contains(errb.String(), "the bridge is unusable (") || !strings.Contains(errb.String(), "not admitted") {
 				t.Errorf("refused: the unusable line was not said before ready: %q", errb.String())
 			}
 		} else if !strings.Contains(errb.String(), "rebuild or restart this session") || strings.Contains(errb.String(), "frontend is gone") {

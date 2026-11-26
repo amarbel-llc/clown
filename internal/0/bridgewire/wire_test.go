@@ -71,8 +71,10 @@ type vector struct {
 	PathLen int    `json:"path_len"`
 	PathErr string `json:"path_err"`
 	// down-message
-	Reason  string `json:"reason"`
-	Message string `json:"message"`
+	Reason     string `json:"reason"`
+	ReasonGen  *gen   `json:"reason_gen"`
+	Message    string `json:"message"`
+	MessageGen *gen   `json:"message_gen"`
 	// constants
 	Constants map[string]any `json:"constants"`
 }
@@ -103,6 +105,20 @@ func (v vector) text() string {
 		return v.TextGen.String()
 	}
 	return v.Text
+}
+
+func (v vector) reason() string {
+	if v.ReasonGen != nil {
+		return v.ReasonGen.String()
+	}
+	return v.Reason
+}
+
+func (v vector) message() string {
+	if v.MessageGen != nil {
+		return v.MessageGen.String()
+	}
+	return v.Message
 }
 
 func errClass(err error) string {
@@ -142,7 +158,7 @@ func loadVectors(t *testing.T) []vector {
 	if err := json.Unmarshal(b, &vs); err != nil {
 		t.Fatal(err)
 	}
-	if len(vs) < 82 {
+	if len(vs) < 92 {
 		t.Fatalf("only %d vectors", len(vs))
 	}
 	return vs
@@ -181,6 +197,10 @@ func TestVectors(t *testing.T) {
 				if got := DownMessage(v.Reason); got != v.Message {
 					t.Errorf("DownMessage(%q) = %q, want %q", v.Reason, got, v.Message)
 				}
+			case "unusable-message":
+				if got := UnusableMessage(v.reason()); got != v.message() {
+					t.Errorf("UnusableMessage(%d bytes) = %q, want %q", len(v.reason()), got, v.message())
+				}
 			case "constants":
 				runConstants(t, v)
 			default:
@@ -188,7 +208,7 @@ func TestVectors(t *testing.T) {
 			}
 		})
 	}
-	for _, op := range []string{"hello", "reply", "format-err", "socket-path", "down-message", "constants"} {
+	for _, op := range []string{"hello", "reply", "format-err", "socket-path", "down-message", "unusable-message", "constants"} {
 		if ops[op] == 0 {
 			t.Errorf("no vector for op %q", op)
 		}

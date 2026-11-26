@@ -494,8 +494,9 @@ func TestClearDownAndMarkUnusable(t *testing.T) {
 	var log2 bytes.Buffer
 	sh2 := &Shim{Log: &log2}
 	sh2.MarkUnusable("the bridge refused service \"x\": version: rebuild or restart this session")
-	if got := log2.String(); strings.Contains(got, "frontend is gone") || !strings.Contains(got, "rebuild or restart") {
-		t.Errorf("version text = %q", got)
+	want := bridgewire.UnusableMessage("the bridge refused service \"x\": version: rebuild or restart this session")
+	if got := log2.String(); strings.Contains(got, "frontend is gone") || strings.TrimSpace(got) != want {
+		t.Errorf("version text = %q, want the contract's unusable text %q", got, want)
 	}
 	if got := sh2.downMessage(); strings.Contains(got, "frontend is gone") {
 		t.Errorf("refused clients are told %q", got)

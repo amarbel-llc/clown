@@ -186,10 +186,14 @@ type Shim struct {
 // MarkDown makes the shim answer every endpoint with the down text.
 func (s *Shim) MarkDown(reason string) { s.markDown(reason, bridgewire.DownMessage(reason)) }
 
-// MarkUnusable is MarkDown for a cause that is not "the frontend is gone": a
-// version mismatch, say, whose own text says what to do (round 2, L2). The
-// text is shown as given.
-func (s *Shim) MarkUnusable(text string) { s.markDown(text, text) }
+// MarkUnusable is MarkDown for a cause that is not "the frontend is gone": an
+// `ERR version`, or a control stream that was never admitted (round 2, L2).
+// reason is the server's own text (the last refusal); it is shown inside the
+// contract's fixed unusable text, bounded and on one line
+// (bridgewire.UnusableMessage, vector op unusable-message).
+func (s *Shim) MarkUnusable(reason string) {
+	s.markDown(reason, bridgewire.UnusableMessage(reason))
+}
 
 func (s *Shim) markDown(reason, msg string) {
 	s.mu.Lock()
@@ -311,7 +315,7 @@ func (s *Shim) serve(c net.Conn, e Endpoint) {
 			// One side was upgraded alone: every stream fails this way, so the
 			// bridge is unusable, not just this service (round 1, M5).
 			s.MarkUnusable(err.Error())
-			s.refuseText(c, e, err.Error())
+			s.refuseText(c, e, s.downMessage())
 		case errors.As(err, &down):
 			// One failed dial fails THIS connection with the down text. It marks
 			// the whole shim down only when `control` is not held: while the

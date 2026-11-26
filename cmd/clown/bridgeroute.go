@@ -191,29 +191,13 @@ func (b sessionBridge) writeCgroup(cgroup string) error {
 	if b.CgroupFile == "" {
 		return nil
 	}
-	if !strings.HasPrefix(cgroup, "/") || strings.HasSuffix(cgroup, "/") || strings.ContainsAny(cgroup, "\n\x00") {
-		return fmt.Errorf("bridge: unusable cgroup %q", cgroup)
-	}
 	// Identity, not just shape (round 1, A-L5): the value must be this agent
 	// unit's own cgroup, so a tooling fault (CLOWN_SYSTEMCTL is an override)
 	// cannot publish a broad path such as the user manager's.
 	if b.Unit != "" && !strings.HasSuffix(cgroup, "/"+agentscope.Slice+"/"+b.Unit) {
 		return fmt.Errorf("bridge: cgroup %q is not this unit's (%s/%s)", cgroup, agentscope.Slice, b.Unit)
 	}
-	tmp := b.CgroupFile + ".tmp"
-	_ = os.Remove(tmp)
-	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return err
-	}
-	_, werr := f.WriteString(cgroup) // no trailing newline: the file is exactly the path
-	cerr := f.Close()
-	if err := errors.Join(werr, cerr); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	if err := os.Rename(tmp, b.CgroupFile); err != nil {
-		_ = os.Remove(tmp)
+	if err := bridgewire.WriteCgroupFile(b.CgroupFile, cgroup); err != nil {
 		return err
 	}
 	if b.written != nil {

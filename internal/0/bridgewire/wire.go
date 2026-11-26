@@ -26,10 +26,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -340,4 +342,81 @@ const (
 // control stream, a version refusal.
 func DownMessage(reason string) string {
 	return fmt.Sprintf("clown: the bridge is down (%s); no tool or model call can leave this session; the session's frontend is gone or restarting", reason)
+}
+
+// WriteCgroupFile records the unit's exact cgroup for the serve at path (the
+// bridge.cgroup file, CgroupFileName): 0600, a regular file, exactly the path
+// with no trailing newline, written to path+".tmp" and renamed over so a reader
+// sees the old value or the new, never a part, and a symlink at path is
+// replaced rather than followed. It refuses a value that is not an absolute
+// path with no trailing slash, newline or NUL. This is the writer clown uses
+// at launch (cmd/clown's writeCgroup adds the check that the value is the
+// unit's own); peercheck.ReadUnitCgroupFile is the reader. Exported so an
+// end-to-end test can stand in for clown's half of the seam.
+func WriteCgroupFile(path, cgroup string) error {
+	if path == "" {
+		return errors.New("bridge: no cgroup file path")
+	}
+	if !strings.HasPrefix(cgroup, "/") || strings.HasSuffix(cgroup, "/") || strings.ContainsAny(cgroup, "\n\x00") {
+		return fmt.Errorf("bridge: unusable cgroup %q", cgroup)
+	}
+	tmp := path + ".tmp"
+	_ = os.Remove(tmp)
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	_, werr := f.WriteString(cgroup)
+	cerr := f.Close()
+	if err := errors.Join(werr, cerr); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+// MaxUnusableReasonBytes bounds the reason UnusableMessage prints: the reason is
+// cut at a rune boundary to at most this many bytes and then ends in "...".
+// DownMessage applies no bound; its reasons are the shim's own fixed strings.
+const MaxUnusableReasonBytes = 200
+
+// UnusableMessage is the fixed text a shim shows when the bridge cannot be used
+// although a frontend answered or was reachable: an `ERR version` on control or
+// on a data stream (the reason is the server's text), or a control stream that
+// was not admitted within the retry window (the reason is the last refusal
+// text). DownMessage stays for an unreachable bridge and an ended control
+// stream. spinclass's bridge.UnusableMessage is the other implementation; the
+// vectors (op unusable-message) pin both.
+//
+// The reason is printed on one line with no control characters: every control
+// rune, every format rune (the bidi overrides among them), U+2028, U+2029 and
+// every byte that is not valid UTF-8 becomes one space, and what remains is cut
+// to MaxUnusableReasonBytes.
+func UnusableMessage(reason string) string {
+	return fmt.Sprintf("clown: the bridge is unusable (%s); no tool or model call can leave this session; check the serve's log and spinclass session-health, and that the session's bridge setting matches the serve's", boundedReason(reason))
+}
+
+func boundedReason(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r == utf8.RuneError, unicode.IsControl(r), unicode.Is(unicode.Cf, r), r == ' ', r == ' ':
+			b.WriteByte(' ')
+		default:
+			b.WriteRune(r)
+		}
+	}
+	clean := b.String()
+	if len(clean) <= MaxUnusableReasonBytes {
+		return clean
+	}
+	cut := MaxUnusableReasonBytes
+	for cut > 0 && !utf8.RuneStart(clean[cut]) {
+		cut--
+	}
+	return clean[:cut] + "..."
 }
