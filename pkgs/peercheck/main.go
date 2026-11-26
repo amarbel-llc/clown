@@ -123,9 +123,9 @@ var ReadUnitCgroupFile = internal.ReadUnitCgroupFile
 var ServeSocketPath = internal.ServeSocketPath
 
 // AdmissionVectorsSHA256 is the sha256 (hex) of testdata/admission-vectors.json
-// as vendored from spinclass (the same commit as bridgewire.VectorsSource).
+// as vendored from spinclass (the same commit as bridgevectors.Source).
 // spinclass's gate compares it with the sha256 of its own file, as it does for
-// bridgewire.VectorsSHA256; clown's test pins it to the vendored file.
+// bridgevectors.SHA256; clown's test pins it to the vendored file.
 const AdmissionVectorsSHA256 = internal.AdmissionVectorsSHA256
 
 // Slice is the systemd slice every agent unit runs in. Its cgroup prefix,

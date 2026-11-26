@@ -3,9 +3,10 @@
 // pid, the capabilities this launch offers and what became of the bridge. It
 // holds only the shape and the atomic writer, with no launch code, so another
 // module (spinclass, whose end-to-end test stands in for clown's half of the
-// bridge seam) can write and read the same file through the pkgs/unitresult
-// facade. internal/*/agentscope re-exports Result and wraps WriteResult with
-// its own version and capability defaults.
+// bridge seam) can write and read the same file. No facade is published for it
+// (nothing outside this repo imports it; the test seam is a binary,
+// cmd/clown-bridge-seam, .#bridge-seam). internal/*/agentscope re-exports
+// Result and wraps WriteResult with its own version and capability defaults.
 package unitresult
 
 import (

@@ -11,6 +11,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"code.linenisgreat.com/clown/internal/0/bridgevectors"
 )
 
 // The vectors are spinclass's (internal/0/bridge/testdata/vectors.json and its
@@ -41,11 +43,11 @@ func TestRecordedVectorsDigestIsTheVendoredFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	sum := sha256.Sum256(b)
-	if got := hex.EncodeToString(sum[:]); got != VectorsSHA256 {
-		t.Errorf("VectorsSHA256 = %s but %s hashes to %s: update vectors.go when re-vendoring", VectorsSHA256, vectorsFile, got)
+	if got := hex.EncodeToString(sum[:]); got != bridgevectors.SHA256 {
+		t.Errorf("bridgevectors.SHA256 = %s but %s hashes to %s: update internal/*/bridgevectors when re-vendoring", bridgevectors.SHA256, vectorsFile, got)
 	}
-	if VectorsSource == "" {
-		t.Error("VectorsSource is empty: record the spinclass commit the vectors came from")
+	if bridgevectors.Source == "" {
+		t.Error("bridgevectors.Source is empty: record the spinclass commit the vectors came from")
 	}
 }
 

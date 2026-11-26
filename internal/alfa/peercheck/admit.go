@@ -7,9 +7,9 @@ import (
 )
 
 // AdmissionVectorsSHA256 is the sha256 (hex) of testdata/admission-vectors.json
-// as vendored from spinclass (the same commit as bridgewire.VectorsSource).
+// as vendored from spinclass (the same commit as bridgevectors.Source).
 // spinclass's gate compares it with the sha256 of its own file, as it does for
-// bridgewire.VectorsSHA256; clown's test pins it to the vendored file.
+// bridgevectors.SHA256; clown's test pins it to the vendored file.
 const AdmissionVectorsSHA256 = "c7ed934b2fc6d2661d752d9279ba7137c278dd17680b4f41559a8dc5785c6599"
 
 // ReadUnitCgroupFile reads the file clown writes with the unit's exact cgroup

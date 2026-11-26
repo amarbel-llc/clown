@@ -449,6 +449,21 @@
           ];
         };
 
+        # clown-bridge-seam: a TEST SEAM, its own flake output (.#bridge-seam), not
+        # part of .#default and not a verb of clown. It calls the real writers a
+        # launch uses (the bridge's cgroup file, the unit record) so spinclass's
+        # two-real-halves proof does not hand-write the formats. See
+        # cmd/clown-bridge-seam.
+        clown-bridge-seam = buildClownGo {
+          pname = "clown-bridge-seam";
+          version = clownVersion;
+          subPackages = [ "cmd/clown-bridge-seam" ];
+          ldflags = [
+            "-s"
+            "-w"
+          ];
+        };
+
         # Mock stdio MCP server used by the test-stdio-bridge integration
         # test. Built as a derivation so the test recipe consumes a store
         # path instead of dropping a binary into the worktree. The
@@ -1863,6 +1878,9 @@
           # (the dry-run dev loop). The hook itself ships through the plugin.
           clown-hook-toolcost = clown-hook-toolcost;
           mock-stdio-mcp = mock-stdio-mcp;
+          # The bridge seam (test-only writers of the cgroup file and unit
+          # record), apart from .#default on purpose.
+          bridge-seam = clown-bridge-seam;
           # The pluginhost test fixture server, exposed for
           # `just explore explore-server-exit-e2e` (a native server that dies).
           fakeserver = fakeserver-go;
