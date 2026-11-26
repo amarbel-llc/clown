@@ -572,15 +572,21 @@ func TestBridgeListenReadyAfterTheWindowWhenControlIsNeverAdmitted(t *testing.T)
 			}
 			time.Sleep(10 * time.Millisecond)
 		}
+		// The exact text of the contract (vector op unusable-message), built from
+		// the refusal the fake serve really sent: asked of the same fake with the
+		// same Dial the shim uses.
+		_, derr := bridgeshim.Dial(sock, bridgewire.ServiceControl)
+		if derr == nil {
+			t.Fatalf("%s: the fake serve admitted a dial", name)
+		}
+		wantLine := bridgewire.UnusableMessage(derr.Error())
 		if name == "refused" {
 			if took := time.Since(start); took < 150*time.Millisecond {
 				t.Errorf("refused: ready after %v, before the retry window ran out", took)
 			}
-			if !strings.Contains(errb.String(), "the bridge is unusable (") || !strings.Contains(errb.String(), "not admitted") {
-				t.Errorf("refused: the unusable line was not said before ready: %q", errb.String())
-			}
-		} else if !strings.Contains(errb.String(), "rebuild or restart this session") || strings.Contains(errb.String(), "frontend is gone") {
-			t.Errorf("version: stderr = %q, want the server's own text and not the frontend sentence", errb.String())
+		}
+		if !strings.Contains(errb.String(), wantLine) || strings.Contains(errb.String(), "frontend is gone") {
+			t.Errorf("%s: stderr = %q, want exactly the contract's unusable text %q (and not the frontend sentence)", name, errb.String(), wantLine)
 		}
 		// Never held: the ready line says so, in both cases (joint round, J-M4).
 		if !strings.Contains(out.String(), bridgeReadyDown) || strings.Contains(out.String(), bridgeReadyControl) {

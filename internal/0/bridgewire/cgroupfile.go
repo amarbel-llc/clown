@@ -76,6 +76,23 @@ func WriteCgroupFile(path, cgroup string) error {
 // logs; the answer to the peer is always `ERR refused` (RefusedUnadmitted),
 // never a silent close.
 func ReadCgroupFile(path string) (string, error) {
+	return readCgroupFile(path, os.Geteuid(), statOwner)
+}
+
+// statOwner is the file's owning uid, and false when the platform's stat does
+// not say (which refuses: a check that cannot be made is not passed).
+func statOwner(fi os.FileInfo) (int, bool) {
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, false
+	}
+	return int(st.Uid), true
+}
+
+// readCgroupFile is ReadCgroupFile with the expected owner and the stat read as
+// seams, so the owner check can be tested (a test cannot chown) and so a stat
+// that does not say who owns the file is a refusal, never a skipped check.
+func readCgroupFile(path string, wantUID int, ownerOf func(os.FileInfo) (int, bool)) (string, error) {
 	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return "", fmt.Errorf("the unit's cgroup is not recorded yet (%s: %w)", path, err)
@@ -89,8 +106,12 @@ func ReadCgroupFile(path string) (string, error) {
 	if !fi.Mode().IsRegular() {
 		return "", fmt.Errorf("%s is not a regular file", path)
 	}
-	if st, ok := fi.Sys().(*syscall.Stat_t); ok && int(st.Uid) != os.Geteuid() {
-		return "", fmt.Errorf("%s is owned by uid %d, not by this user", path, st.Uid)
+	owner, ok := ownerOf(fi)
+	if !ok {
+		return "", fmt.Errorf("%s: the file's owner cannot be read; refusing", path)
+	}
+	if owner != wantUID {
+		return "", fmt.Errorf("%s is owned by uid %d, not by this user", path, owner)
 	}
 	if fi.Mode().Perm()&0o022 != 0 {
 		return "", fmt.Errorf("%s is writable by group or others (mode %04o)", path, fi.Mode().Perm())

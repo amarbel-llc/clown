@@ -577,10 +577,24 @@ func TestAVersionRefusalMarksTheShimDown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, _ = io.ReadAll(c)
+	body, _ := io.ReadAll(c)
 	c.Close()
 	if !strings.Contains(sh.Down(), "version") {
 		t.Errorf("a version refusal left the shim up: down = %q", sh.Down())
+	}
+	// What the client of that connection, and every later one, is told is the
+	// contract's unusable text (vector op unusable-message), built from the
+	// refusal the fake serve sent: not the frontend-is-gone text, not raw.
+	_, derr := Dial(sock, "model")
+	if derr == nil {
+		t.Fatal("the fake serve admitted a dial")
+	}
+	want := bridgewire.UnusableMessage(derr.Error())
+	if !strings.Contains(string(body), want) {
+		t.Errorf("the 503 body = %q, want it to hold %q", body, want)
+	}
+	if got := sh.downMessage(); got != want {
+		t.Errorf("down message = %q, want %q", got, want)
 	}
 }
 

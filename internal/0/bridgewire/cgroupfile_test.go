@@ -4,7 +4,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 // The file is exactly the path: 0600, a regular file, no trailing newline, no
@@ -109,6 +111,68 @@ func TestReadCgroupFileRefusesWhatIsNotTrustworthy(t *testing.T) {
 	// a readable-by-all file is fine: only write bits are refused
 	if got, err := ReadCgroupFile(write("ro", "/a/b", 0o644)); err != nil || got != "/a/b" {
 		t.Errorf("0644: %q, %v", got, err)
+	}
+}
+
+// The owner check, through the seam (a test cannot chown): another uid is
+// refused, and a stat that does not say who owns the file is refused too (a
+// check that cannot be made is not passed). The honest case still reads.
+func TestReadCgroupFileOwnerCheckFailsClosed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), CgroupFileName)
+	if err := WriteCgroupFile(path, "/a/b"); err != nil {
+		t.Fatal(err)
+	}
+	mine := os.Geteuid()
+	if got, err := readCgroupFile(path, mine, statOwner); err != nil || got != "/a/b" {
+		t.Fatalf("own file: %q, %v", got, err)
+	}
+	if got, err := readCgroupFile(path, mine+1, statOwner); err == nil {
+		t.Errorf("a file of another uid was accepted: %q", got)
+	}
+	unknown := func(os.FileInfo) (int, bool) { return 0, false }
+	if got, err := readCgroupFile(path, mine, unknown); err == nil {
+		t.Errorf("a stat that does not name the owner was accepted: %q", got)
+	}
+	// the owner seam says the owner is "me" while the stat holds another: the
+	// stat's answer is what counts
+	other := func(os.FileInfo) (int, bool) { return mine + 1, true }
+	if got, err := readCgroupFile(path, mine, other); err == nil {
+		t.Errorf("a stat naming another owner was accepted: %q", got)
+	}
+}
+
+// A path that is not a regular file of ours never reads, and never hangs the
+// reader: a FIFO is not opened for blocking (O_NONBLOCK), a directory and a
+// symlink are refused.
+func TestReadCgroupFileRefusesAFIFOADirectoryAndASymlink(t *testing.T) {
+	dir := t.TempDir()
+	fifo := filepath.Join(dir, "fifo")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Skipf("no mkfifo here: %v", err)
+	}
+	sub := filepath.Join(dir, "dir")
+	if err := os.Mkdir(sub, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(dir, "target")
+	if err := os.WriteFile(target, []byte("/a/b"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	for name, p := range map[string]string{"fifo": fifo, "directory": sub, "symlink": link} {
+		done := make(chan error, 1)
+		go func() { _, err := ReadCgroupFile(p); done <- err }()
+		select {
+		case err := <-done:
+			if err == nil {
+				t.Errorf("%s: accepted", name)
+			}
+		case <-time.After(3 * time.Second):
+			t.Errorf("%s: the reader hung", name)
+		}
 	}
 }
 
