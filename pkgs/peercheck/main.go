@@ -12,8 +12,18 @@ type ServeConn = internal.ServeConn
 
 // AdmitCgroup is the listener's admission decision for a peer whose cgroup is
 // peerCgroup: it reads the file now and admits only on strict equality
-// (CheckCgroupExact). nil admits; every error refuses.
+// (CheckCgroupExact). It is the vectors' entry point (they supply the peer's
+// cgroup as a string); a listener calls AdmitPeer, which cannot be handed a
+// cgroup read by a pid that could be recycled. nil admits; every error refuses.
 var AdmitCgroup = internal.AdmitCgroup
+
+// AdmitPeer is the listener's admission decision for a connection: it reads the
+// cgroup file now and admits the peer only on strict equality through
+// CheckPeerExact (the peer taken by SO_PEERPIDFD, its cgroup read through the
+// pidfd, liveness confirmed after). This is the ONE name a listener should call;
+// AdmitCgroup takes a cgroup string the caller read by some other route and is
+// for the vectors. nil admits; every error refuses.
+var AdmitPeer = internal.AdmitPeer
 
 // BrokerSocketPath is the per-session policy-broker socket (clown#333):
 // <runtimeDir>/clown/serve/<principal>/broker.sock, in the session's own
@@ -30,9 +40,15 @@ var BrokerSocketPath = internal.BrokerSocketPath
 // Why strict is safe for a clown agent unit: seen on flic (just explore
 // explore-unit-cgroup-probe), every process of a confined unit, including a
 // setsid child, lives in the unit's own cgroup, the unit's tree has no
-// sub-cgroup, and the unit cannot make one (cgroupfs is read-only in it:
-// ProtectControlGroups=yes). If a unit is ever given Delegate=, its processes
-// may live below, and this function must be relaxed on purpose, not by accident.
+// sub-cgroup, and the unit could not make one by the two routes tried (seen on
+// flic, 2026-11-26, one run each: a direct mkdir is refused, cgroupfs being
+// read-only in the unit, ProtectControlGroups=yes; and in a new user+mount
+// namespace, with and without a cgroup namespace, mounting a fresh cgroup2 is
+// refused, "permission denied" / "must be superuser", so no sub-cgroup was ever
+// made and no process moved; the reason for that refusal was not established, so
+// it is one host's evidence, not a proof for every kernel). If a unit is ever
+// given Delegate=, its processes may live below, and this function must be
+// relaxed on purpose, not by accident.
 var CheckCgroupExact = internal.CheckCgroupExact
 
 // CheckPeerExact admits the peer of c only if it runs in exactly the control
@@ -105,6 +121,12 @@ var ReadUnitCgroupFile = internal.ReadUnitCgroupFile
 // or server that is not one path segment, and a path over the unix socket
 // limit.
 var ServeSocketPath = internal.ServeSocketPath
+
+// AdmissionVectorsSHA256 is the sha256 (hex) of testdata/admission-vectors.json
+// as vendored from spinclass (the same commit as bridgewire.VectorsSource).
+// spinclass's gate compares it with the sha256 of its own file, as it does for
+// bridgewire.VectorsSHA256; clown's test pins it to the vendored file.
+const AdmissionVectorsSHA256 = internal.AdmissionVectorsSHA256
 
 // Slice is the systemd slice every agent unit runs in. Its cgroup prefix,
 // .../clown-agent.slice/<unit>, is what CheckUnitCgroup matches.

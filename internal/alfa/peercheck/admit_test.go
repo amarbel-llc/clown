@@ -68,6 +68,9 @@ func TestAdmissionVectorsAreSpinclasssBytes(t *testing.T) {
 	if got := fmt.Sprintf("%x  admission-vectors.json\n", sha256.Sum256(b)); got != string(want) {
 		t.Errorf("admission-vectors.json drifted from its .sha256 (%q); re-copy both files from spinclass", got)
 	}
+	if got := fmt.Sprintf("%x", sha256.Sum256(b)); got != AdmissionVectorsSHA256 {
+		t.Errorf("AdmissionVectorsSHA256 = %s but the vendored file hashes to %s: update admit.go when re-vendoring", AdmissionVectorsSHA256, got)
+	}
 }
 
 // The listener's admission decision as vectors (round 2, M4), run by both

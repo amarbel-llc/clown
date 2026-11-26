@@ -189,6 +189,11 @@ The serve admits a peer only if its cgroup equals this value
 .Pq Fn CheckPeerExact .
 The guarantee depends on the unit not being able to move processes between
 cgroups (read-only cgroupfs) and not reaching the user manager (both above).
+Also seen on flic, 2026-11-26 (explore-cgroupns-host-view-probe,
+explore-full-unit-cgroup-probe, one run each): in a new user and mount
+namespace, with or without a cgroup namespace, mounting a fresh cgroup2 is
+refused, so a process of the unit made no child cgroup and did not move; the
+reason for the refusal was not established, and this is one host's evidence.
 .It Ev CLOWN_BRIDGE_SOCKET
 Set in the unit only, naming the socket.
 .It Nm clown bridge-stdio , Nm clown bridge-listen
@@ -196,9 +201,16 @@ The inside half.
 .Nm bridge-listen
 holds the
 .Em control
-stream (retried for 15 s) and answers every endpoint with the fixed
+stream (retried for 15 s, 100 ms doubling to 1 s) and, once it ends or was never
+admitted, refuses every endpoint: a tcp endpoint gets an HTTP 503 whose body is
+the fixed text, the
 .Dq the bridge is down
-text once it ends.
+text for an unreachable bridge or an ended stream, or the
+.Dq the bridge is unusable
+text (with the server's reason, one line, at most 200 bytes) for an
+.Sy ERR version
+or a stream never admitted; a unix endpoint is closed with no text, and the
+same text goes to the terminal log, at most once a second.
 .It Sy bridge-v1
 Reported in the result's capabilities only after the cgroup file was written.
 .It The result's Sy bridge No field

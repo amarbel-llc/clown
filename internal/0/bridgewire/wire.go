@@ -300,7 +300,8 @@ func ReadReply(r io.Reader) (ok bool, code, text string, err error) {
 // cgroup file yet, a file it cannot use, a peer outside the unit): always
 // `ERR refused <text>`, never a silent close. The shim's retry of `control`
 // rests on it (a close is retried too, but `refused` is the contract's answer;
-// round 2, M4). The text is escaped and bounded.
+// round 2, M4). The text is one line (FormatErr replaces CR and LF) and cut to
+// 512 bytes; it is not otherwise escaped, so pass the listener's own errors.
 func RefusedUnadmitted(reason string) []byte {
 	return FormatErr(CodeRefused, "the peer is not admitted: "+reason)
 }

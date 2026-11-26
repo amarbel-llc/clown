@@ -2102,6 +2102,94 @@ explore-full-unit-cgroup-probe CLOWN='clown':
     systemctl --user stop "$sibunit.service" 2>/dev/null || true
     rm -f "$spec" "$res"
 
+# Review r6 M3 probe: what does the HOST's /proc/PID/cgroup say about a process
+# that, inside a REAL full confined unit, makes a new user+mount+cgroup
+# namespace, mounts a fresh cgroup2 and moves itself into a child cgroup it
+# made? The bridge listener reads the host's view, and admits only a peer whose
+# cgroup EQUALS the unit's path. Prints: the unit's own view, whether the launch
+# directory is visible in the unit, what the namespaced process did and saw, then
+# (from the host, while it is alive) every cgroup.procs under the unit's cgroup,
+# each pid's /proc/PID/cgroup, every process on the host whose cgroup equals the
+# unit's exact path, and a sibling unit's cgroup.procs before and after. Runs a
+# sibling unit and the unit as transient units, removed after; uses no card,
+# agent socket or credential; the launcher runs under `env -i` with a short
+# allowlist and its start line is dropped, as in explore-full-unit-cgroup-probe.
+explore-cgroupns-host-view-probe CLOWN='clown':
+    #!/usr/bin/env bash
+    set -uo pipefail
+    wt=$(git rev-parse --show-toplevel)
+    [ -n "$wt" ] || { echo "no worktree"; exit 1; }
+    unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_CUSTOM_HEADERS CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CODE_OAUTH_REFRESH_TOKEN
+    rt=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
+    out="$wt/.tmp/cgroupns-host-view-probe"
+    rm -rf "${out:?}"; mkdir -p "$out"
+    sibunit="clown-nsprobe-sibling-$$"
+    systemd-run --user --quiet --collect --slice=clown-agent.slice --unit="$sibunit" sleep 150
+    sibling=$(systemctl --user show -p ControlGroup --value "$sibunit.service")
+    probe="$out/probe.sh"
+    cat > "$probe" <<'EOF'
+    #!/usr/bin/env bash
+    OUT="$1"; export OUT
+    own=$(sed -n 's/^0:://p' /proc/self/cgroup)
+    {
+      echo "unit's own view of its cgroup: $(cat /proc/self/cgroup)"
+      echo "launch directory visible in the unit: $(ls -d "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/clown/launch" 2>&1)"
+      echo "direct mkdir of a sub-cgroup in the unit: $(mkdir "/sys/fs/cgroup$own/direct" 2>&1 && echo CREATED || true)"
+    } > "$OUT/inside.txt"
+    unshare -Urmc sh -c '
+      D=$(mktemp -d)
+      if ! mount -t cgroup2 none "$D"; then echo "fresh cgroup2 mount: REFUSED"; : > "$OUT/ready"; exit 0; fi
+      echo "fresh cgroup2 mount: ok"
+      echo "view in the new namespace: $(cat /proc/self/cgroup)"
+      if mkdir "$D/x" 2>/dev/null; then echo "mkdir child x: CREATED"; else echo "mkdir child x: refused"; fi
+      if echo $$ > "$D/x/cgroup.procs" 2>/dev/null; then echo "move self into x: DONE"; else echo "move self into x: refused"; fi
+      echo "view in the new namespace after: $(cat /proc/self/cgroup)"
+      if echo $$ > "$D$SIBLING/cgroup.procs" 2>/dev/null; then echo "write the sibling cgroup.procs via the fresh mount: DONE"; else echo "write the sibling cgroup.procs via the fresh mount: refused or not present"; fi
+      if echo $$ > "/sys/fs/cgroup$SIBLING/cgroup.procs" 2>/dev/null; then echo "write the sibling cgroup.procs via the unit mount: DONE"; else echo "write the sibling cgroup.procs via the unit mount: refused"; fi
+      echo "pid in the new pid view: $$"
+      : > "$OUT/ready"
+      i=0; while [ ! -e "$OUT/done" ] && [ "$i" -lt 160 ]; do sleep 0.5; i=$((i+1)); done
+    ' > "$OUT/ns.txt" 2>&1
+    EOF
+    chmod +x "$probe"
+    spec="$rt/clown-nsprobe-$$.json"; res="$rt/clown-nsprobe-$$.result.json"
+    cat > "$spec" <<EOF
+    {"version":1,"worktree":"$wt","operator_home":"$HOME","unit_name_hint":"clown-nsprobe","result_path":"$res","binds_rw":[],"binds_ro":[],"sockets":[],"deny_paths":[],"env":{"SIBLING":"$sibling"}}
+    EOF
+    echo ">> clown: {{CLOWN}}; version: $({{CLOWN}} version 2>&1 | head -1)"
+    sibprocs_before=$(tr '\n' ' ' < "/sys/fs/cgroup$sibling/cgroup.procs")
+    env -i PATH="$PATH" HOME="$HOME" USER="${USER:-$(id -un)}" XDG_RUNTIME_DIR="$rt" \
+        XDG_STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}" XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}" \
+        XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}" TERM=dumb LANG="${LANG:-C}" \
+        {{CLOWN}} agent-scope-run --spec "$spec" -- "$probe" "$out" < /dev/null \
+        2> >(grep -v 'starting unit' | sed -E 's/--setenv=([A-Za-z0-9_]+)=[^ ]*/--setenv=\1=<masked>/g' >"$out/clown.err") >"$out/clown.out" &
+    cpid=$!
+    for _ in $(seq 1 120); do [ -e "$out/ready" ] && break; sleep 0.5; done
+    if [ ! -e "$out/ready" ]; then echo "the namespaced process never got ready; see $out/clown.err"; else
+      unitcg=$(grep -o '"cgroup": *"[^"]*"' "$res" 2>/dev/null | head -1 | sed -E 's/.*: *"([^"]*)"/\1/')
+      echo ">> the unit's cgroup (from the result file): ${unitcg:-<none>}"
+      echo ">> HOST view: every cgroup.procs at or under the unit's cgroup, and each pid's /proc/PID/cgroup"
+      if [ -n "$unitcg" ]; then
+        find "/sys/fs/cgroup$unitcg" -name cgroup.procs 2>/dev/null | sort | while read -r f; do
+          echo "   ${f#/sys/fs/cgroup}: [$(tr '\n' ' ' < "$f")]"
+          for p in $(cat "$f"); do
+            echo "     pid $p: $(tr '\n' ' ' < /proc/$p/cgroup 2>/dev/null) cmd: $(tr '\0' ' ' < /proc/$p/cmdline 2>/dev/null | cut -c1-70)"
+          done
+        done
+        echo ">> HOST view: processes anywhere whose cgroup EQUALS the unit's exact path (what the listener would admit)"
+        for d in /proc/[0-9]*; do
+          if [ "$(sed -n 's/^0:://p' "$d/cgroup" 2>/dev/null)" = "$unitcg" ]; then echo "   pid ${d#/proc/}: $(tr '\0' ' ' < "$d/cmdline" 2>/dev/null | cut -c1-70)"; fi
+        done
+      fi
+      echo ">> sibling unit's cgroup.procs: before [$sibprocs_before] after [$(tr '\n' ' ' < "/sys/fs/cgroup$sibling/cgroup.procs")]"
+    fi
+    : > "$out/done"
+    wait "$cpid"; echo ">> launcher exit=$?"
+    echo ">> inside the unit:"; cat "$out/inside.txt" 2>/dev/null | sed 's/^/   /'
+    echo ">> the namespaced process, its own account:"; cat "$out/ns.txt" 2>/dev/null | sed 's/^/   /'
+    systemctl --user stop "$sibunit.service" 2>/dev/null || true
+    rm -f "$spec" "$res"
+
 # Lane 1 cleanup: kill leftover canary/holder listeners and remove the short
 # /tmp/cvb.* fixture dirs a killed agent_scope.bats run (verify-agent-scope)
 # leaves behind, and stop any leftover clown-view-bats / clown-agent-bats

@@ -34,6 +34,21 @@ func TestVendoredVectorsAreSpinclasssBytes(t *testing.T) {
 	}
 }
 
+// The recorded digest (what spinclass's gate compares) is the vendored file's.
+func TestRecordedVectorsDigestIsTheVendoredFiles(t *testing.T) {
+	b, err := os.ReadFile(vectorsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(b)
+	if got := hex.EncodeToString(sum[:]); got != VectorsSHA256 {
+		t.Errorf("VectorsSHA256 = %s but %s hashes to %s: update vectors.go when re-vendoring", VectorsSHA256, vectorsFile, got)
+	}
+	if VectorsSource == "" {
+		t.Error("VectorsSource is empty: record the spinclass commit the vectors came from")
+	}
+}
+
 // gen builds a long string without writing it out in the vectors file.
 type gen struct {
 	Prefix string `json:"prefix"`

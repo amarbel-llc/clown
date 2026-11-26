@@ -74,7 +74,8 @@ var ReadReply = internal.ReadReply
 // cgroup file yet, a file it cannot use, a peer outside the unit): always
 // `ERR refused <text>`, never a silent close. The shim's retry of `control`
 // rests on it (a close is retried too, but `refused` is the contract's answer;
-// round 2, M4). The text is escaped and bounded.
+// round 2, M4). The text is one line (FormatErr replaces CR and LF) and cut to
+// 512 bytes; it is not otherwise escaped, so pass the listener's own errors.
 var RefusedUnadmitted = internal.RefusedUnadmitted
 
 // ReservedServices is every label the contract reserves, in the contract's order.
@@ -173,6 +174,15 @@ const (
 	ServiceStatus          = internal.ServiceStatus
 	SocketName             = internal.SocketName
 )
+
+// VectorsSHA256 is the sha256 (hex) of testdata/vectors.json as vendored.
+const VectorsSHA256 = internal.VectorsSHA256
+
+// VectorsSource names where the vendored files came from. The commit was on
+// spinclass's branch slim-myrtle--bridge-cut, local and unpushed when it was
+// vendored; spinclass says when it lands and this line is then updated to the
+// landed commit (the sha above, not this text, is what is compared).
+const VectorsSource = internal.VectorsSource
 
 // VersionHint is the server's hint in a version refusal.
 const VersionHint = internal.VersionHint

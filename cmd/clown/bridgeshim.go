@@ -24,8 +24,9 @@ import (
 //	clown bridge-listen [--socket S] [--tcp ADDR=SVC]... [--unix PATH=SVC]...
 //	    the endpoints programs already know (a loopback port, an agent socket path)
 //	    forwarded to services; it opens the `control` stream and, when that ends,
-//	    answers every endpoint with the bridge-is-down text. Prints
-//	    "bridge-listen: ready" on stdout once every endpoint listens.
+//	    refuses every endpoint (the down or unusable text). Prints on stdout
+//	    "bridge-listen: ready control" once the control stream is held, or
+//	    "bridge-listen: ready down" once the attempt is over without it.
 
 // bridgeSocketFlag returns the socket from --socket or the environment.
 func bridgeSocket(flagValue string) string {
@@ -105,9 +106,10 @@ func runBridgeListen(args []string, stdout, stderr io.Writer) int {
 }
 
 // runBridgeListenCtx is the verb until ctx ends. The control stream is opened
-// in the background AFTER the ready line, with the retry window in
-// bridgeshim.Control: a server that cannot yet admit this unit answers
-// `refused` for a moment (round 1, H1) and the launch must not wait for it.
+// in the background, with the retry window in bridgeshim.Control (a server that
+// cannot yet admit this unit answers `refused` for a moment, round 1, H1), and
+// the ready line waits for the outcome: `ready control` once it is held,
+// `ready down` once the window ran out or the stream failed.
 func runBridgeListenCtx(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	sock, eps, err := parseBridgeListenArgs(args)
 	if err != nil {

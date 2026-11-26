@@ -26,9 +26,15 @@ const soPeerPIDFD = 77
 // Why strict is safe for a clown agent unit: seen on flic (just explore
 // explore-unit-cgroup-probe), every process of a confined unit, including a
 // setsid child, lives in the unit's own cgroup, the unit's tree has no
-// sub-cgroup, and the unit cannot make one (cgroupfs is read-only in it:
-// ProtectControlGroups=yes). If a unit is ever given Delegate=, its processes
-// may live below, and this function must be relaxed on purpose, not by accident.
+// sub-cgroup, and the unit could not make one by the two routes tried (seen on
+// flic, 2026-11-26, one run each: a direct mkdir is refused, cgroupfs being
+// read-only in the unit, ProtectControlGroups=yes; and in a new user+mount
+// namespace, with and without a cgroup namespace, mounting a fresh cgroup2 is
+// refused, "permission denied" / "must be superuser", so no sub-cgroup was ever
+// made and no process moved; the reason for that refusal was not established, so
+// it is one host's evidence, not a proof for every kernel). If a unit is ever
+// given Delegate=, its processes may live below, and this function must be
+// relaxed on purpose, not by accident.
 func CheckCgroupExact(cg, want string) error {
 	if want == "" || !strings.HasPrefix(want, "/") || strings.HasSuffix(want, "/") {
 		return fmt.Errorf("the unit's control group %q is not an absolute path", want)
