@@ -507,6 +507,8 @@ func run(rawArgs []string) int {
 			return runBridgeStdio(rawArgs[1:], os.Stdin, os.Stdout, os.Stderr)
 		case "bridge-listen":
 			return runBridgeListen(rawArgs[1:], os.Stdout, os.Stderr)
+		case "bridge-seam-write": // hidden: the real cgroup-file and unit-record writers, for the two-real-halves proof (bridgeseam.go)
+			return runBridgeSeamWrite(rawArgs[1:], os.Stdout, os.Stderr)
 		case "agent-monitor":
 			return runAgentMonitor(rawArgs[1:])
 		case "agent-monitor-serve":
